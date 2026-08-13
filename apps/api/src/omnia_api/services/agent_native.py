@@ -18,6 +18,7 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import posixpath
 import re
@@ -53,6 +54,7 @@ _MAX_PROVIDER_TIMEOUT_RESUMES = 2
 _MAX_FREE_AMBIGUOUS_RESUMES = 2
 _MAX_TRUNCATED_WRITE_ABORT_AT = 2
 _STABLE_MAX_NOOP_WRITE_ABORT_AT = 2
+_STABLE_MAX_WORKING_MEMORY_CHARS = 6_000
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
 # One batched inspection turn is enough because the headless runtime contract
 # includes the exact managed API signatures. The next provider turn must create
@@ -679,6 +681,78 @@ def _with_incremental_cache(convo: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [*convo[:-1], {**last, "content": new_content}]
 
 
+def _with_working_memory(
+    convo: list[dict[str, Any]], working_memory: str,
+) -> list[dict[str, Any]]:
+    """Inject one ephemeral server-owned note into the current provider turn.
+
+    The note is derived from executed tools and checkpoint state, never from hidden
+    model reasoning.  It is deliberately not appended to ``convo``: otherwise the
+    same progress summary would accumulate on every turn and become the context
+    pollution it is meant to prevent.  When the turn carries tool results, attach
+    the note to the final result so OpenAI-compatible adapters preserve tool order.
+    """
+
+    note = str(working_memory or "").strip()[:_STABLE_MAX_WORKING_MEMORY_CHARS]
+    if not note or not convo or convo[-1].get("role") != "user":
+        return convo
+    last = convo[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        return [*convo[:-1], {**last, "content": f"{content}\n\n{note}"}]
+    if not isinstance(content, list):
+        return convo
+    blocks = [dict(block) if isinstance(block, dict) else block for block in content]
+    for index in range(len(blocks) - 1, -1, -1):
+        block = blocks[index]
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            block["content"] = f"{block.get('content') or ''!s}\n\n{note}"
+            return [*convo[:-1], {**last, "content": blocks}]
+    for index in range(len(blocks) - 1, -1, -1):
+        block = blocks[index]
+        if isinstance(block, dict) and block.get("type") == "text":
+            block["text"] = f"{block.get('text') or ''!s}\n\n{note}"
+            return [*convo[:-1], {**last, "content": blocks}]
+    blocks.append({"type": "text", "text": note})
+    return [*convo[:-1], {**last, "content": blocks}]
+
+
+def _observation_signature(action: Action) -> str | None:
+    """Stable, secret-safe identity for repeatable read-only observations."""
+
+    if action.name == "read_file":
+        return f"read:{action.path}"
+    if action.name == "list_dir":
+        return f"list:{action.path}"
+    if action.name == "grep":
+        raw = f"{action.path}\0{action.args.get('pattern', '')}"
+    elif action.name == "docs":
+        raw = f"{action.args.get('library', '')}\0{action.args.get('query', '')}"
+    elif action.name == "bash" and not action.args.get("mutation_paths"):
+        raw = str(action.args.get("cmd") or "")
+    else:
+        return None
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:20]
+    return f"{action.name}:{digest}"
+
+
+def _repeat_observation_error(action: Action) -> dict[str, Any]:
+    target = action.path or action.name
+    return {
+        "ok": False,
+        "status": "warning",
+        "error": (
+            f"Unchanged observation already collected for `{target}`. Its current-version "
+            "result is in the server working note/transcript; repeating it is not progress."
+        ),
+        "summary": f"Skipped repeated unchanged {action.name} observation.",
+        "next_actions": [
+            "Use the known result now: write/edit the required source or run build."
+        ],
+        "artifacts": [action.path] if action.path else [],
+    }
+
+
 def _tool_use_to_action(block: dict[str, Any]) -> Action:
     inp = block.get("input") or {}
     if not isinstance(inp, dict):
@@ -1059,7 +1133,9 @@ _MAX_NATIVE_PREAMBLE = (
     "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
     "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
     "скриншоты и независимая mobile/MAX-критика, bash — реальные команды, тесты и "
-    "диагностика внутри изолированного контейнера текущего проекта. Пиши полноценно, "
+    "диагностика внутри изолированного Node/pnpm-контейнера текущего проекта. Не предполагай "
+    "наличие Python: сначала проверь command -v, используй Node/shell для штатной работы. "
+    "Пиши полноценно, "
     "без TODO, заглушек, "
     "декоративных кнопок и симулированного успеха. В начале существенной сборки уточни "
     "наблюдаемый план через plan_task, затем фиксируй реальные milestones инструментом "
@@ -1357,6 +1433,92 @@ def _is_stable_max_source_gap(gap: str | None) -> bool:
     )
 
 
+def _stable_max_working_memory(
+    *,
+    product_entry_required: bool,
+    written: Mapping[str, str],
+    last_build_ok: bool | None,
+    last_build_error_paths: frozenset[str],
+    wrote_since_build: bool,
+    proof_after_write: set[str],
+    no_write_turns: int,
+    provider_turn_index: int,
+    recent_mutation_paths: list[str],
+    repeated_observation_paths: list[str],
+    completion_gap: str | None,
+    public_progress: str,
+) -> str:
+    """Render compact factual memory for every stable MAX provider call."""
+
+    entry_written = _STABLE_MAX_PRODUCT_ENTRY in written
+    entry_state = (
+        "created_this_run"
+        if entry_written
+        else "required_now"
+        if product_entry_required
+        else "existing_snapshot"
+    )
+    if product_entry_required and not entry_written:
+        phase = "compose_product_entry"
+        next_action = (
+            f"Write the complete usable `{_STABLE_MAX_PRODUCT_ENTRY}` now. Do not create or "
+            "reread more support files."
+        )
+    elif wrote_since_build:
+        phase = "compile_latest_source"
+        next_action = "Run build now; repair only its concrete errors."
+    elif last_build_ok is False:
+        phase = "repair_red_build"
+        targets = ", ".join(sorted(last_build_error_paths)) or "the compiler-reported source"
+        next_action = f"Fix {targets}, then rebuild."
+    elif last_build_ok is True and completion_gap:
+        phase = "finish_acceptance_proof"
+        next_action = completion_gap[:1_200]
+    elif last_build_ok is True:
+        phase = "ready_to_finish"
+        next_action = "Call done; do not redesign or reread the product."
+    elif not product_entry_required and not written:
+        phase = "edit_existing_product"
+        next_action = (
+            "Apply the requested surgical change to the existing live product, then build."
+        )
+    else:
+        phase = "implement_vertical_slice"
+        next_action = "Create the user-facing product, then run build."
+
+    paths = sorted(written)
+    build_state = (
+        "clean" if last_build_ok is True else "red" if last_build_ok is False else "not_run"
+    )
+    progress = str(public_progress or "").strip()[:2_800]
+    rows = [
+        "[SERVER WORKING NOTE v1 — observed facts, not hidden reasoning]",
+        f"Provider turn: {max(0, provider_turn_index)}",
+        f"Phase: {phase}",
+        f"Product entry state: {entry_state}",
+        f"Build after latest mutation: {build_state}",
+        "Written artifacts: " + (", ".join(paths[-20:]) if paths else "none"),
+        "Recent mutations: "
+        + (", ".join(recent_mutation_paths[-12:]) if recent_mutation_paths else "none"),
+        "Proof after latest mutation: "
+        + (", ".join(sorted(proof_after_write)) if proof_after_write else "none"),
+        f"Consecutive turns without source progress: {max(0, no_write_turns)}",
+    ]
+    if repeated_observation_paths:
+        rows.append(
+            "Already observed unchanged; do not reread: "
+            + ", ".join(dict.fromkeys(repeated_observation_paths[-12:]))
+        )
+    rows.append(f"NEXT REQUIRED ACTION: {next_action}")
+    if progress:
+        rows.extend(("", progress))
+    rows.append(
+        "Treat this note as the authoritative checkpoint. Continue from live files; never "
+        "restart planning or repeat completed observations."
+    )
+    return "\n".join(rows)[:_STABLE_MAX_WORKING_MEMORY_CHARS]
+
+
 async def _call_messages(
     client: httpx.AsyncClient,
     url: str,
@@ -1374,6 +1536,7 @@ async def _call_messages(
     thinking_budget: int = _THINKING_BUDGET,
     turn_id: str | None = None,
     resume_count: int = 0,
+    working_memory: str = "",
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
@@ -1386,7 +1549,7 @@ async def _call_messages(
         "system": _system_blocks(system),
         "tools": tools if tools is not None else _TOOLS_CACHED,
         "tool_choice": {"type": "auto"},
-        "messages": _with_incremental_cache(convo),
+        "messages": _with_working_memory(_with_incremental_cache(convo), working_memory),
     }
     if user_id:
         payload["user"] = user_id
@@ -1528,6 +1691,7 @@ async def run_native_build(
     provider_turn_offset: int = 0,
     resume_checkpoint: Mapping[str, Any] | None = None,
     checkpoint: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
+    progress_context: Callable[[], str] | None = None,
 ) -> AgentResult:
     """Drive one native tool-use loop until the model calls ``done`` after a clean
     build or reaches ``max_steps``. MAX uses the same bounded loop as the proven
@@ -1580,6 +1744,11 @@ async def run_native_build(
     prewrite_inspection_paths: set[str] = set()
     prewrite_inspection_ops = 0
     prewrite_inspection_exhausted = False
+    workspace_revision = 0
+    source_revisions: dict[str, int] = {}
+    observed_revisions: dict[str, int] = {}
+    recent_mutation_paths: list[str] = []
+    repeated_observation_paths: list[str] = []
 
     # A durable MAX continuation restores the exact transcript and provider
     # cursor.  Persisting immediately before every provider call means an API or
@@ -1634,13 +1803,63 @@ async def run_native_build(
         prewrite_inspection_exhausted = bool(
             resume_checkpoint.get("prewrite_inspection_exhausted")
         )
+        no_write_turns = int(resume_checkpoint.get("no_write_turns") or 0)
+        noop_write_turns = int(resume_checkpoint.get("noop_write_turns") or 0)
+        infra_dead_turns = int(resume_checkpoint.get("infra_dead_turns") or 0)
+        truncated_no_write_turns = int(
+            resume_checkpoint.get("truncated_no_write_turns") or 0
+        )
+        turns_without_product_entry = int(
+            resume_checkpoint.get("turns_without_product_entry") or 0
+        )
+        entry_focus_compacted = bool(resume_checkpoint.get("entry_focus_compacted"))
+        repair_reads_since_build = set(
+            resume_checkpoint.get("repair_reads_since_build") or []
+        )
+        repair_reread_paths = set(resume_checkpoint.get("repair_reread_paths") or [])
+        repair_source_cache = {
+            str(path): str(content)
+            for path, content in dict(resume_checkpoint.get("repair_source_cache") or {}).items()
+            if isinstance(path, str) and isinstance(content, str)
+        }
+        repair_context_compacted = bool(
+            resume_checkpoint.get("repair_context_compacted")
+        )
+        visual_context_compacted_step = resume_checkpoint.get(
+            "visual_context_compacted_step"
+        )
+        visual_media_generated_step = resume_checkpoint.get("visual_media_generated_step")
+        visual_repair_paths = set(resume_checkpoint.get("visual_repair_paths") or [])
+        visual_finish_pending = bool(resume_checkpoint.get("visual_finish_pending"))
+        source_repair_context_gap = (
+            str(resume_checkpoint.get("source_repair_context_gap") or "") or None
+        )
+        workspace_revision = int(resume_checkpoint.get("workspace_revision") or 0)
+        source_revisions = {
+            str(path): int(revision)
+            for path, revision in dict(resume_checkpoint.get("source_revisions") or {}).items()
+            if isinstance(path, str) and isinstance(revision, (int, str))
+        }
+        observed_revisions = {
+            str(signature): int(revision)
+            for signature, revision in dict(
+                resume_checkpoint.get("observed_revisions") or {}
+            ).items()
+            if isinstance(signature, str) and isinstance(revision, (int, str))
+        }
+        recent_mutation_paths = [
+            str(path) for path in resume_checkpoint.get("recent_mutation_paths", [])
+        ][-20:]
+        repeated_observation_paths = [
+            str(path) for path in resume_checkpoint.get("repeated_observation_paths", [])
+        ][-20:]
 
     async def _persist_checkpoint() -> None:
         if checkpoint is None:
             return
         await checkpoint(
             {
-                "version": 1,
+                "version": 2,
                 "system": system,
                 "convo": convo,
                 "written": written,
@@ -1662,6 +1881,26 @@ async def run_native_build(
                 "prewrite_inspection_paths": sorted(prewrite_inspection_paths),
                 "prewrite_inspection_ops": prewrite_inspection_ops,
                 "prewrite_inspection_exhausted": prewrite_inspection_exhausted,
+                "no_write_turns": no_write_turns,
+                "noop_write_turns": noop_write_turns,
+                "infra_dead_turns": infra_dead_turns,
+                "truncated_no_write_turns": truncated_no_write_turns,
+                "turns_without_product_entry": turns_without_product_entry,
+                "entry_focus_compacted": entry_focus_compacted,
+                "repair_reads_since_build": sorted(repair_reads_since_build),
+                "repair_reread_paths": sorted(repair_reread_paths),
+                "repair_source_cache": repair_source_cache,
+                "repair_context_compacted": repair_context_compacted,
+                "visual_context_compacted_step": visual_context_compacted_step,
+                "visual_media_generated_step": visual_media_generated_step,
+                "visual_repair_paths": sorted(visual_repair_paths),
+                "visual_finish_pending": visual_finish_pending,
+                "source_repair_context_gap": source_repair_context_gap,
+                "workspace_revision": workspace_revision,
+                "source_revisions": source_revisions,
+                "observed_revisions": observed_revisions,
+                "recent_mutation_paths": recent_mutation_paths[-20:],
+                "repeated_observation_paths": repeated_observation_paths[-20:],
             }
         )
 
@@ -1977,6 +2216,29 @@ async def run_native_build(
             )
             try:
                 await _persist_checkpoint()
+                try:
+                    public_progress = progress_context() if progress_context else ""
+                except Exception:
+                    log.exception("agent_native.progress_context_failed")
+                    public_progress = ""
+                working_memory = (
+                    _stable_max_working_memory(
+                        product_entry_required=product_first,
+                        written=written,
+                        last_build_ok=last_build_ok,
+                        last_build_error_paths=last_build_error_paths,
+                        wrote_since_build=wrote_since_build,
+                        proof_after_write=proof_after_write,
+                        no_write_turns=no_write_turns,
+                        provider_turn_index=provider_turn_index,
+                        recent_mutation_paths=recent_mutation_paths,
+                        repeated_observation_paths=repeated_observation_paths,
+                        completion_gap=completion_gap,
+                        public_progress=public_progress,
+                    )
+                    if stable_max_loop
+                    else ""
+                )
                 remaining_seconds = (
                     max(0.1, runtime_deadline - asyncio.get_running_loop().time())
                     if runtime_deadline is not None
@@ -1999,6 +2261,7 @@ async def run_native_build(
                             f"{max(0, int(provider_turn_offset)) + provider_turn_index}"
                         ),
                         resume_count=provider_timeout_resumes + free_ambiguous_resumes,
+                        working_memory=working_memory,
                         tools=(
                             _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
                             if force_entry_write
@@ -2474,6 +2737,22 @@ async def run_native_build(
                     if force_progress
                     else {"write_file", "edit_file"}
                 )
+                observation_signature = _observation_signature(action)
+                observation_revision = (
+                    source_revisions.get(action.path, 0)
+                    if action.name == "read_file"
+                    else workspace_revision
+                )
+                repeated_observation = bool(
+                    stable_max_loop
+                    and observation_signature
+                    and observed_revisions.get(observation_signature) == observation_revision
+                    and not (
+                        repair_mode
+                        and action.name == "read_file"
+                        and action.path in repair_reread_paths
+                    )
+                )
                 if _contains_history_placeholder(action):
                     # The gateway replaces large historical tool arguments with
                     # explicit markers. A long-running model can occasionally
@@ -2488,6 +2767,10 @@ async def run_native_build(
                         # remains in the transcript and can be echoed repeatedly.
                         visual_context_compacted_step = None
                     obs = {"ok": False, "error": _HISTORY_PLACEHOLDER_WRITE_REJECTED}
+                elif repeated_observation:
+                    repeated_observation_paths.append(action.path or action.name)
+                    repeated_observation_paths = repeated_observation_paths[-20:]
+                    obs = _repeat_observation_error(action)
                 elif visual_proof_unavailable_this_turn and name == "see":
                     # Tool calls in one assistant response are planned before
                     # their results return. Execute at most one unavailable
@@ -2648,6 +2931,8 @@ async def run_native_build(
                         # green proof and tell the model that nothing changed.
                         obs = {"ok": False, "error": _NOOP_WRITE_REJECTED}
                         noop_write_this_turn = True
+                if tool_executed and obs.get("ok") and observation_signature:
+                    observed_revisions[observation_signature] = observation_revision
                 # Emit AFTER execute so the step carries a `detail` — what the tool
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
@@ -2680,6 +2965,7 @@ async def run_native_build(
                     repair_reads_since_build.discard(action.path)
                     repair_reread_paths.add(action.path)
                     repair_source_cache.pop(action.path, None)
+                    observed_revisions.pop(f"read:{action.path}", None)
                 if tool_executed and name in ("write_file", "edit_file") and obs.get("ok"):
                     repair_reread_paths.discard(action.path)
                     repair_source_cache.pop(action.path, None)
@@ -2693,6 +2979,11 @@ async def run_native_build(
                         written[action.path] = action.args.get("content", "")
                     wrote_since_build = True
                     wrote_this_turn = True
+                    workspace_revision += 1
+                    source_revisions[action.path] = source_revisions.get(action.path, 0) + 1
+                    observed_revisions.pop(f"read:{action.path}", None)
+                    recent_mutation_paths.append(action.path)
+                    recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
                     if force_visual_finish and action.path == "src/app/globals.css":
                         visual_finish_satisfied_this_turn = True
                     if force_source_repair:
@@ -2713,6 +3004,16 @@ async def run_native_build(
                         if bash_files:
                             wrote_since_build = True
                             wrote_this_turn = True
+                            workspace_revision += 1
+                            for path in bash_files:
+                                if not isinstance(path, str):
+                                    continue
+                                source_revisions[path] = source_revisions.get(path, 0) + 1
+                                observed_revisions.pop(f"read:{path}", None)
+                                recent_mutation_paths.append(path)
+                            recent_mutation_paths = list(
+                                dict.fromkeys(recent_mutation_paths)
+                            )[-20:]
                             proof_after_write.clear()
                             last_green_see_step = None
                 elif tool_executed and name == "build":

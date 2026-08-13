@@ -90,6 +90,8 @@ async def test_worker_death_replays_same_logical_provider_turn(
         )
 
     assert checkpoints[-1]["provider_turn_index"] == 0
+    assert checkpoints[-1]["version"] == 2
+    assert checkpoints[-1]["no_write_turns"] == 0
 
     async def resumed_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -123,3 +125,5 @@ async def test_worker_death_replays_same_logical_provider_turn(
     assert systems == ["system", "system"]
     assert result.files == {"src/x.ts": "export default 1"}
     assert checkpoints[-1]["provider_turn_index"] == 1
+    assert checkpoints[-1]["workspace_revision"] == 1
+    assert checkpoints[-1]["recent_mutation_paths"] == ["src/x.ts"]

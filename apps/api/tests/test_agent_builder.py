@@ -635,9 +635,13 @@ def test_green_gate_cap_prevents_hang():
 # ── K1 knowledge layer: skills injection ─────────────────────────────────────
 
 
-def test_build_system_prompt_without_skills_is_unchanged():
+def test_build_system_prompt_without_skills_keeps_base_contract():
     p = ab.build_system_prompt("STACK GUIDE")
-    assert p == ab.LOOP_PROTOCOL + "\n\n" + "STACK GUIDE"
+    assert p == (
+        ab.LOOP_PROTOCOL
+        + "\n\nSTACK GUIDE\n\n"
+        + ab.DEPTH_EXPERIENCE_CONTRACT
+    )
     # None / empty skills must not alter the output
     assert ab.build_system_prompt("STACK GUIDE", skills=None) == p
     assert ab.build_system_prompt("STACK GUIDE", skills="   ") == p

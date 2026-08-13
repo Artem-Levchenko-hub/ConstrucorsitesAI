@@ -203,6 +203,25 @@ def test_generic_native_prompt_stays_unchanged_outside_max() -> None:
     assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" in prompt
 
 
+def test_server_working_memory_is_ephemeral_and_preserves_tool_result_order() -> None:
+    convo = [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "r1"}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "r1", "content": "read ok"}
+            ],
+        },
+    ]
+
+    enriched = agent_native._with_working_memory(convo, "SERVER NOTE")
+
+    assert enriched is not convo
+    assert "SERVER NOTE" not in str(convo)
+    assert enriched[-1]["content"][0]["type"] == "tool_result"
+    assert "SERVER NOTE" in enriched[-1]["content"][0]["content"]
+
+
 def test_legacy_reference_flags_do_not_change_the_stable_prompt() -> None:
     baseline = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
     prompt = agent_native.native_system_prompt(
@@ -240,7 +259,8 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "MAX_STUDIO_LLM_MODEL" in source
     assert 'stable_max_loop=project_template == "max_miniapp"' in source
     assert "enforce_max_skill_lifecycle=False" in source
-    assert "stable_max_product_first=False" in source
+    assert 'project_template == "max_miniapp" and not _max_has_generated_snapshot' in source
+    assert "progress_context=" in source
     assert "_max_design_dna = None" in source
     assert "Определяю арт-дирекцию и продуктовые возможности" not in source
     assert "load_stack_skill_index(_orch_name)" in source
@@ -1185,6 +1205,135 @@ async def test_stable_max_edit_can_change_support_file_without_rewriting_entry(
     assert executed_paths == ["src/components/product/StatsCard.tsx"]
     assert "edit_file" in advertised[0]
     assert agent_native._STABLE_MAX_PRODUCT_ENTRY not in result.files
+
+
+@pytest.mark.asyncio
+async def test_stable_max_skips_repeated_unchanged_reads_and_injects_working_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_reads = 0
+    notes: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        notes.append(str(kwargs.get("working_memory") or ""))
+        if calls <= 2:
+            return _turn(("read_file", {"path": "src/lib/omnia/max-config.ts"}))
+        if calls == 3:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/StatsCard.tsx",
+                        "content": "export default function StatsCard(){return <div>42</div>}",
+                    },
+                )
+            )
+        if calls == 4:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+            return {"ok": True, "content": "export const maxConfig = {}"}
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+        }
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="edit existing product",
+        execute=execute,
+        max_steps=8,
+        stable_max_loop=True,
+        stable_max_product_first=False,
+        progress_context=lambda: "RECOVERED EXECUTION CHECKPOINT",
+    )
+
+    assert result.done is True
+    assert executed_reads == 1
+    assert "Phase: edit_existing_product" in notes[0]
+    assert "Product entry state: existing_snapshot" in notes[0]
+    assert any("Already observed unchanged" in note for note in notes)
+    assert all("RECOVERED EXECUTION CHECKPOINT" in note for note in notes)
+
+
+@pytest.mark.asyncio
+async def test_stable_max_restores_observation_memory_after_worker_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = "src/lib/omnia/max-config.ts"
+    calls = 0
+    executed_reads = 0
+    notes: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        notes.append(str(kwargs.get("working_memory") or ""))
+        if calls == 1:
+            return _turn(("read_file", {"path": path}))
+        if calls == 2:
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/product/StatsCard.tsx",
+                        "content": "export default function StatsCard(){return <div>42</div>}",
+                    },
+                )
+            )
+        if calls == 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "clean",
+        }
+
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="resume existing product",
+        execute=execute,
+        max_steps=8,
+        stable_max_loop=True,
+        stable_max_product_first=False,
+        resume_checkpoint={
+            "version": 2,
+            "system": "MAX runtime",
+            "convo": [{"role": "user", "content": "resume existing product"}],
+            "provider_turn_index": 7,
+            "workspace_revision": 3,
+            "source_revisions": {path: 2},
+            "observed_revisions": {f"read:{path}": 2},
+            "no_write_turns": 4,
+        },
+    )
+
+    assert result.done is True
+    assert executed_reads == 0
+    assert "Consecutive turns without source progress: 4" in notes[0]
+    assert any("Already observed unchanged" in note for note in notes[1:])
 
 
 @pytest.mark.asyncio

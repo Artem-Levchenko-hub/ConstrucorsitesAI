@@ -4488,6 +4488,7 @@ async def _process_prompt(
                     "runtime_check",
                     "see",
                     "read_skill",
+                    "bash",
                     "probe",
                     "verify_isolation",
                     "generate_media",
@@ -4504,6 +4505,9 @@ async def _process_prompt(
                             or obs.get("error")
                             or f"{action.name} completed"
                         )[:1000]
+                    summary = str(
+                        sanitize_agent_step({"detail": summary}).get("detail") or ""
+                    )[:1000]
                     artifact = action.path if action.name in {"write_file", "edit_file"} else ""
                     _agent_state = agent_plan.record_tool_evidence(
                         _agent_state,
@@ -4901,7 +4905,10 @@ async def _process_prompt(
                     )
                     if gap:
                         return gap
-                    return agent_plan.completion_gap(_agent_state)
+                    # The plan is durable working memory and user-visible progress,
+                    # not a ceremonial release gate. Source/runtime/visual facts above
+                    # decide completion even if the model skipped manual update_plan.
+                    return None
 
                 from omnia_api.services.generation_continuity import (
                     load_native_checkpoint,
@@ -4946,13 +4953,20 @@ async def _process_prompt(
                         else PRIMARY_LLM_MODEL
                     ),
                     stable_max_loop=project_template == "max_miniapp",
-                    stable_max_product_first=False,
+                    stable_max_product_first=(
+                        project_template == "max_miniapp" and not _max_has_generated_snapshot
+                    ),
                     provider_turn_offset=_continuity_provider_epoch * 1000,
                     resume_checkpoint=_native_resume,
                     checkpoint=(
                         _save_native_resume
                         if project_template == "max_miniapp"
                         else None
+                    ),
+                    progress_context=(
+                        lambda: agent_plan.recovery_context(_agent_state)
+                        if project_template == "max_miniapp"
+                        else ""
                     ),
                 )
             elif _agent_res is None:

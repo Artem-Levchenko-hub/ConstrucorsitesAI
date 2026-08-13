@@ -73,6 +73,22 @@ unknown, recovery sends the identical transcript and logical turn ID so the
 gateway can replay its settled result without a duplicate provider request.
 Hidden model reasoning never enters the public `GenerationRun.agent_state`.
 
+Every provider call also receives a compact server-owned working note. It is
+derived only from executed tools: current phase, changed artifacts, product-entry
+state, latest build/proof facts, repeated observations and the next required
+action. The note is ephemeral in the provider transcript, while its counters and
+file revisions live in the Redis checkpoint; it therefore survives a worker/time
+slice without accumulating another copy on every turn. The public plan remains a
+user-visible notebook, not a ceremonial completion gate.
+
+Fresh builds allow one bounded inspection turn, then require the real
+`ProductApp.tsx` vertical slice and compile it before more exploration. Existing
+products keep unrestricted surgical support-file edits. Reading the same unchanged
+file or repeating the same read-only shell/search observation is rejected until a
+source mutation changes its revision. A focused product-entry checkpoint replaces
+stale exploratory history, so continuation resumes from authoritative live files
+instead of replaying hundreds of old reads.
+
 Each execution slice may end, but the accepted run does not: internal compile,
 dependency, import, managed-API, runtime, persistence, design or proof debt is
 classified as repair and automatically continued from the same live files and
