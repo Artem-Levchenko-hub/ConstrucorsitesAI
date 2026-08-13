@@ -6,6 +6,7 @@ import { ArrowRight, CircleAlert, MoreVertical, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { MaxHowToDialog } from "@/components/max/MaxHowToDialog";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,8 +16,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
+import { getMaxHowToGuide } from "@/lib/max-how-to";
 import { getMaxJourney } from "@/lib/max-journey";
-import { getMaxNativeGuidance } from "@/lib/max-native-guidance";
 
 export function MaxStudioProjectCard({
   project,
@@ -37,8 +38,9 @@ export function MaxStudioProjectCard({
   });
   const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
-  const nativeGuidance = getMaxNativeGuidance(nextStage?.id);
+  const howToGuide = getMaxHowToGuide(readiness.isError ? "demo" : nextStage?.id);
   const nextHref = nextStage?.href ?? `/max/${project.id}/dashboard`;
+  const howToHref = readiness.isError ? `/max/${project.id}` : nextHref;
 
   return (
     <article className="group relative overflow-hidden rounded-[12px] border border-border-default bg-surface-raised transition-colors hover:border-border-strong">
@@ -150,16 +152,18 @@ export function MaxStudioProjectCard({
                   : nextStage?.label ?? "Приложение готово к работе"}
             </p>
           </div>
-          {readiness.isSuccess && (
-            <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-[#6d6962]">
-              <span className="font-semibold text-[#171716]">Сейчас:</span>{" "}
-              {nativeGuidance.userAction}
-            </p>
+          {!readiness.isLoading && (
+            <MaxHowToDialog
+              guide={howToGuide}
+              actionHref={howToHref}
+              actionLabel={readiness.isError ? "Открыть редактор" : nextStage?.actionLabel ?? "Открыть управление"}
+              triggerClassName="mt-4 w-full"
+            />
           )}
 
           <Link
             href={nextHref}
-            className="mt-4 flex min-h-11 items-center justify-between rounded-[8px] border border-border-default px-3 text-xs font-semibold text-fg-primary transition-colors hover:border-accent hover:bg-accent/[.04]"
+            className="mt-2 flex min-h-11 items-center justify-between rounded-[8px] border border-border-default px-3 text-xs font-semibold text-fg-primary transition-colors hover:border-accent hover:bg-accent/[.04]"
           >
             {nextStage?.actionLabel ?? "Открыть управление"}
             <ArrowRight className="size-3.5 text-accent transition-transform group-hover:translate-x-0.5" />

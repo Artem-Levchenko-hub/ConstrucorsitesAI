@@ -12,6 +12,7 @@ import {
   ExternalLink,
   FileCheck2,
   LayoutGrid,
+  MailCheck,
   Plug,
   Rocket,
   ShieldCheck,
@@ -271,6 +272,124 @@ export function ProjectCreationVisual() {
         { number: 1, target: "project-new", offset: [-14, 8] },
         { number: 2, target: "project-description", offset: [20, -4] },
         { number: 3, target: "project-create", offset: [-16, 7] },
+      ]} />
+    </ScreenshotFrame>
+  );
+}
+
+export function AppSettingsVisual() {
+  return (
+    <ScreenshotFrame label="Снимок 03" title="Приложение → карточка, функции и документы">
+      <div className="flex h-full text-[#171716]">
+        <Sidebar active="MAX и приложение" />
+        <div className="min-w-0 flex-1 bg-[#f5f3ee] p-[4%]">
+          <div className="flex items-end justify-between gap-4">
+            <div>
+              <p className="font-mono text-[7px] uppercase tracking-[.17em] text-accent">Настройки приложения</p>
+              <h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">Карточка и документы</h3>
+            </div>
+            <span className="rounded-full bg-[#fff4df] px-2.5 py-1 text-[7px] font-semibold text-[#946714]">Нужно заполнить</span>
+          </div>
+          <div className="mt-[4%] grid grid-cols-[1.15fr_.85fr] gap-[3%]">
+            <div className="rounded-xl border border-[#d8d4cb] bg-[#fcfbf7] p-[5%]">
+              <p className="text-[10px] font-semibold">Основные данные</p>
+              <div data-guide-target="app-identity" className="mt-[5%] grid grid-cols-2 gap-2 text-[7px]">
+                <label className="font-medium">Название<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal">Кофе рядом</div></label>
+                <label className="font-medium">Поддержка<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal">help@coffee.ru</div></label>
+                <label className="col-span-2 font-medium">Короткое описание<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal text-[#6d6962]">Баллы, награды и быстрый заказ кофе</div></label>
+              </div>
+              <p className="mt-[5%] text-[8px] font-semibold">Что есть в приложении?</p>
+              <div data-guide-target="app-capabilities" className="mt-2 grid grid-cols-2 gap-1.5 text-[7px]">
+                {["Продажи", "Персональные данные", "Уведомления", "Контент пользователей"].map((item, index) => (
+                  <div key={item} className="flex items-center gap-1.5 rounded-md border border-[#d8d4cb] bg-white p-2">
+                    <span className={`grid size-3 place-items-center rounded border ${index < 3 ? "border-accent bg-accent text-white" : "border-[#c9c4b9]"}`}>
+                      {index < 3 && <Check className="size-2" />}
+                    </span>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-[#d8d4cb] bg-[#fcfbf7] p-[6%]">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-semibold">Документы</p>
+                <FileCheck2 className="size-4 text-accent" />
+              </div>
+              <div data-guide-target="app-legal" className="mt-[7%] space-y-2">
+                {["Политика данных", "Согласие на обработку", "Условия использования"].map((item, index) => (
+                  <div key={item} className="flex items-center gap-2 rounded-md border border-[#d8d4cb] bg-white p-2 text-[7px]">
+                    <span className={`grid size-4 place-items-center rounded-full ${index < 2 ? "bg-[#248a4b]/10 text-[#248a4b]" : "bg-[#fff4df] text-[#946714]"}`}>
+                      {index < 2 ? <Check className="size-2.5" /> : <CircleAlert className="size-2.5" />}
+                    </span>
+                    <span className="font-semibold">{item}</span>
+                    <span className="ml-auto text-[#8d887f]">{index < 2 ? "готово" : "проверить"}</span>
+                  </div>
+                ))}
+              </div>
+              <button data-guide-target="app-save" className="mt-[9%] w-full rounded-md bg-accent px-3 py-2 text-[8px] font-semibold text-white">Сохранить и проверить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <CalloutLayer callouts={[
+        { number: 1, target: "app-identity", offset: [20, -10] },
+        { number: 2, target: "app-capabilities", offset: [-15, 15] },
+        { number: 3, target: "app-legal", offset: [13, -15] },
+        { number: 4, target: "app-save", offset: [-12, 7] },
+      ]} />
+    </ScreenshotFrame>
+  );
+}
+
+export function OwnerAccessVisual() {
+  return (
+    <ScreenshotFrame label="Снимок 04" title="Настройка владельца → email, реквизиты и проверка">
+      <div className="h-full bg-[#f5f3ee] p-[4%] text-[#171716]">
+        <div className="flex items-end justify-between">
+          <div>
+            <p className="font-mono text-[7px] uppercase tracking-[.17em] text-accent">Настройка владельца</p>
+            <h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">Подготовим запуск в MAX</h3>
+          </div>
+          <span className="text-[8px] text-[#8d887f]">Шаг 2 из 4</span>
+        </div>
+        <div className="mt-[4%] grid grid-cols-4 gap-2 text-[7px]">
+          {["Email", "Владелец", "Проверка", "Публикация"].map((item, index) => (
+            <div key={item} data-guide-target={index === 0 ? "owner-email" : undefined} className={`flex items-center gap-1.5 rounded-md border p-2 ${index === 0 ? "border-[#248a4b]/30 bg-[#248a4b]/5 text-[#248a4b]" : index === 1 ? "border-accent/50 bg-accent/5" : "border-[#d8d4cb] text-[#8d887f]"}`}>
+              {index === 0 ? <Check className="size-3" /> : <span className="grid size-3 place-items-center rounded-full border text-[6px]">{index + 1}</span>}
+              {item}
+            </div>
+          ))}
+        </div>
+        <div className="mt-[4%] grid grid-cols-[.72fr_1.28fr] gap-[3%]">
+          <div className="rounded-xl border border-[#d8d4cb] bg-[#fcfbf7] p-[6%]">
+            <MailCheck className="size-4 text-[#248a4b]" />
+            <p className="mt-[7%] text-[10px] font-semibold">Email подтверждён</p>
+            <p className="mt-2 text-[7px] leading-3 text-[#8d887f]">owner@coffee.ru</p>
+            <div className="mt-[9%] rounded-md bg-[#248a4b]/[.07] p-2 text-[7px] leading-3 text-[#476451]">Ссылка из письма открыта. Можно указать владельца.</div>
+          </div>
+          <div className="rounded-xl border border-[#d8d4cb] bg-[#fcfbf7] p-[5%]">
+            <p className="text-[10px] font-semibold">Кто владеет приложением?</p>
+            <div data-guide-target="owner-kind" className="mt-[4%] grid grid-cols-3 gap-2 text-[7px]">
+              {["Самозанятый", "ИП", "Организация"].map((item, index) => (
+                <div key={item} className={`rounded-md border p-2 ${index === 0 ? "border-accent bg-accent/5 font-semibold" : "border-[#d8d4cb]"}`}>{item}</div>
+              ))}
+            </div>
+            <div data-guide-target="owner-details" className="mt-[4%] grid grid-cols-2 gap-2 text-[7px]">
+              <label className="font-medium">ФИО / название<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal">Иван Петров</div></label>
+              <label className="font-medium">ИНН<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-mono font-normal">222200000000</div></label>
+            </div>
+            <div className="mt-[5%] flex items-center justify-between">
+              <p className="max-w-[55%] text-[7px] leading-3 text-[#8d887f]">Данные должны совпадать с владельцем будущего MAX-бота.</p>
+              <button data-guide-target="owner-submit" className="rounded-md bg-accent px-3 py-2 text-[7px] font-semibold text-white">Сохранить реквизиты</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <CalloutLayer callouts={[
+        { number: 1, target: "owner-email", offset: [17, 9] },
+        { number: 2, target: "owner-kind", offset: [-16, -10] },
+        { number: 3, target: "owner-details", offset: [16, 12] },
+        { number: 4, target: "owner-submit", offset: [-12, 8] },
       ]} />
     </ScreenshotFrame>
   );

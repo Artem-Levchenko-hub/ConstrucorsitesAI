@@ -4,23 +4,23 @@ import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
-  Bot,
   Building2,
   Check,
   CircleAlert,
   CreditCard,
   Eye,
+  Images,
   Loader2,
   MailCheck,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   UserRoundCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { MaxHowToDialog } from "@/components/max/MaxHowToDialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -34,6 +34,7 @@ import {
   useMaxDemoDraft,
 } from "@/hooks/useMaxDemoDraft";
 import { cn } from "@/lib/utils";
+import { getMaxHowToGuide } from "@/lib/max-how-to";
 
 const kinds: Array<{
   id: BusinessKind;
@@ -118,30 +119,7 @@ export function MaxOnboarding({ email }: { email: string }) {
       : business.status !== "verified"
         ? 3
         : 4;
-  const stepGuidance = {
-    1: {
-      now: `Откройте письмо на ${email}, нажмите ссылку и вернитесь на эту страницу.`,
-      prepare: "Если письма нет две минуты, проверьте «Спам» и запросите отправку ещё раз.",
-      max: "В MAX Partner пока ничего делать не нужно.",
-    },
-    2: {
-      now: "Выберите реального владельца будущего бота и внесите реквизиты точно как в ФНС.",
-      prepare: "Подготовьте ФИО или название, ИНН и ОГРН/ОГРНИП, если он нужен для вашего типа.",
-      max: "Позже создайте бота в MAX от этого же владельца — иначе подключение не пройдёт проверку.",
-    },
-    3: {
-      now: "Дождитесь результата на этой странице. Повторно регистрироваться или создавать проект не нужно.",
-      prepare: "Если появится замечание, исправьте только указанные реквизиты и отправьте их снова.",
-      max: "Пока можно подготовить название, описание и изображение для карточки бота, но не передавайте токен третьим лицам.",
-    },
-    4: {
-      now: data?.can_launch
-        ? "Вернитесь к проекту: Studio покажет следующий обязательный шаг."
-        : "Подключите Pro, когда готовы получить постоянный HTTPS и запускать приложение.",
-      prepare: "Демо, превью и описание проекта сохраняются независимо от тарифа.",
-      max: "Создание и модерация бота понадобятся на отдельном следующем этапе — Studio покажет точную инструкцию.",
-    },
-  }[step];
+  const ownerGuide = getMaxHowToGuide("access");
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -206,34 +184,21 @@ export function MaxOnboarding({ email }: { email: string }) {
         </div>
 
         <section
-          data-testid="max-onboarding-native-guide"
-          className="mt-5 overflow-hidden rounded-[12px] border border-accent/25 bg-[#fcfbf7]"
+          data-testid="max-onboarding-how-to"
+          className="mt-5 flex flex-col gap-4 rounded-[14px] border border-accent/35 bg-[#fcfbf7] p-5 shadow-[0_12px_36px_var(--color-accent-subtle)] sm:flex-row sm:items-center sm:justify-between"
         >
-          <div className="border-b border-[#e7e3da] bg-accent/[.045] px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[.14em] text-accent">
-              Что делать на этом шаге
-            </p>
+          <div className="flex items-center gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-[12px] bg-accent text-accent-fg">
+              <Images className="size-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold">Не уверены, что заполнять?</p>
+              <p className="mt-1 text-xs leading-5 text-[#6d6962]">
+                Покажем весь путь владельца на изображении — от email до проверки реквизитов.
+              </p>
+            </div>
           </div>
-          <div className="grid divide-y divide-[#e7e3da] sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-            {[
-              [UserRoundCheck, "Сейчас", stepGuidance.now],
-              [Sparkles, "Подготовьте", stepGuidance.prepare],
-              [Bot, "Что насчёт MAX", stepGuidance.max],
-            ].map(([Icon, label, copy]) => {
-              const GuideIcon = Icon as typeof UserRoundCheck;
-              return (
-                <div key={String(label)} className="p-5">
-                  <p className="flex items-center gap-2 text-xs font-semibold">
-                    <GuideIcon className="size-3.5 text-accent" />
-                    {String(label)}
-                  </p>
-                  <p className="mt-2 text-xs leading-5 text-[#6d6962]">
-                    {String(copy)}
-                  </p>
-                </div>
-              );
-            })}
-          </div>
+          <MaxHowToDialog guide={ownerGuide} triggerClassName="w-full shrink-0 sm:w-auto" />
         </section>
 
         {!data?.email_verified && (

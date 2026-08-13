@@ -20,14 +20,15 @@ import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { RuntimeButton } from "@/components/workspace/RuntimeButton";
+import { MaxHowToDialog } from "./MaxHowToDialog";
 import { MaxProjectSetupDialog } from "./MaxProjectSetupDialog";
 import { MaxLaunchButton } from "./MaxLaunchButton";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import {
   copyMaxLaunchUrl,
 } from "@/lib/max-launch-steps";
+import { getMaxHowToGuide } from "@/lib/max-how-to";
 import { getMaxJourney, getMaxJourneyItemHref } from "@/lib/max-journey";
-import { getMaxNativeGuidance } from "@/lib/max-native-guidance";
 import { cn } from "@/lib/utils";
 
 export function MaxLaunchPanel({
@@ -73,7 +74,9 @@ export function MaxLaunchPanel({
   const readinessAvailable = readiness.isSuccess && items.length > 0;
   const journey = getMaxJourney(project.id, items);
   const currentStage = readinessAvailable ? journey.currentStage : undefined;
-  const nativeGuidance = getMaxNativeGuidance(currentStage?.id);
+  const howToGuide = getMaxHowToGuide(
+    readiness.isError || !readinessAvailable ? "demo" : currentStage?.id,
+  );
   const nextItem = currentStage
     ? items.find(
         (item) =>
@@ -174,23 +177,6 @@ export function MaxLaunchPanel({
             />
           </div>
 
-          <div className="mt-4 grid gap-2 text-[11px] leading-4">
-            <div className="rounded-md bg-accent/[.07] px-3 py-2 text-[#4f4a72]">
-              <span className="font-semibold">Сейчас вы:</span>{" "}
-              {nativeGuidance.userAction}
-            </div>
-            <div className="rounded-md bg-success/[.06] px-3 py-2 text-[#476451]">
-              <span className="font-semibold">Omnia подготовит:</span>{" "}
-              {nativeGuidance.omniaAction}
-            </div>
-            <div className="rounded-md bg-[#f5f3ee] px-3 py-2 text-[#6d6962]">
-              <span className="font-semibold text-[#171716]">
-                Вы делаете в MAX Partner:
-              </span>{" "}
-              {nativeGuidance.maxAction}
-            </div>
-          </div>
-
           <div aria-live="polite" data-testid="max-launch-current-step" className="mt-5 border-l-2 border-accent/70 pl-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
               {currentStage ? `Этап ${currentStage.position} из ${journey.total}` : "Запуск завершён"}
@@ -206,11 +192,13 @@ export function MaxLaunchPanel({
                 Действие: {nextItem.action}
               </p>
             )}
-            <p className="mt-2 text-[10px] leading-4 text-[#476451]">
-              <span className="font-semibold">Готово, когда:</span>{" "}
-              {nativeGuidance.successSignal}
-            </p>
           </div>
+          <MaxHowToDialog
+            guide={howToGuide}
+            actionHref={currentStage?.href}
+            actionLabel={currentStage?.actionLabel}
+            triggerClassName="mt-4 w-full bg-[#171716] text-white shadow-[0_8px_24px_rgba(23,23,22,.16)] hover:bg-[#31312f]"
+          />
           {currentStage ? (
             <Button asChild className="mt-4 h-11 w-full">
               <Link href={currentStage.href}>

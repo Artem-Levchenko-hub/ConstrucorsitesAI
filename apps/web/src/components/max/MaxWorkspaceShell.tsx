@@ -25,6 +25,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import { MaxHowToDialog } from "@/components/max/MaxHowToDialog";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { getLatestGeneration } from "@/lib/api/messages";
@@ -39,8 +40,8 @@ import {
 } from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project, Snapshot } from "@/lib/api/types";
+import { getMaxHowToGuide } from "@/lib/max-how-to";
 import { getMaxJourney } from "@/lib/max-journey";
-import { getMaxNativeGuidance } from "@/lib/max-native-guidance";
 import {
   isGenerationActive,
   shouldDeferMaxRuntimeStart,
@@ -211,7 +212,7 @@ function MaxWorkspaceContent({
   });
   const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
-  const nativeGuidance = getMaxNativeGuidance(nextStage?.id);
+  const howToGuide = getMaxHowToGuide(readiness.isError ? "demo" : nextStage?.id);
   const launchLabel = readiness.isLoading
     ? "Проверяем…"
     : nextStage
@@ -588,48 +589,40 @@ function MaxWorkspaceContent({
           </div>
         </header>
 
-        <button
-          type="button"
-          onClick={() => setLaunchOpen(true)}
-          className="flex min-h-16 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 py-2 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
-          data-testid="max-next-action-bar"
+        <MaxHowToDialog
+          guide={howToGuide}
+          actionHref={nextStage?.href}
+          actionLabel={nextStage?.actionLabel}
         >
-          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-accent-fg">
-            {readiness.isSuccess
-              ? nextStage?.position ?? journey.total
-              : "…"}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[9px] font-medium uppercase tracking-[0.12em] text-[#8d887f]">
-              {nextStage ? "Следующий шаг" : "Путь до запуска"}
+          <button
+            type="button"
+            className="flex min-h-[72px] shrink-0 items-center gap-3 border-b border-accent/30 bg-accent/[.06] px-4 py-3 text-left transition-colors hover:bg-accent/[.11] sm:px-5"
+            data-testid="max-next-action-bar"
+          >
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-accent-fg shadow-[0_6px_18px_var(--color-accent-subtle)]">
+              {readiness.isSuccess ? nextStage?.position ?? journey.total : "…"}
             </span>
-            <span className="mt-0.5 block truncate text-xs font-semibold text-[#171716]">
-              {readiness.isError
-                ? "Не удалось проверить готовность — откройте панель для повтора"
-                : readiness.isLoading
-                  ? "Проверяем состояние проекта…"
-                  : nativeGuidance.title}
-            </span>
-            {readiness.isSuccess && (
-              <span className="mt-0.5 block truncate text-[10px] text-[#6d6962]">
-                {nativeGuidance.userAction}
+            <span className="min-w-0 flex-1">
+              <span className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-accent">
+                {nextStage ? "Следующий шаг" : "Финальная проверка"}
               </span>
-            )}
-          </span>
-          <span className="hidden max-w-[220px] shrink-0 text-right text-[10px] leading-4 text-[#8d887f] lg:block">
-            {readiness.isSuccess ? (
-              <>
-                <strong className="block text-[#6d6962]">
-                  {nativeGuidance.maxRequiredNow ? "Сейчас в MAX" : "MAX пока не нужен"}
-                </strong>
-                <span className="line-clamp-2">{nativeGuidance.maxAction}</span>
-              </>
-            ) : (
-              "Статус обновляется"
-            )}
-          </span>
-          <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
-        </button>
+              <span className="mt-0.5 block truncate text-xs font-semibold text-[#171716]">
+                {readiness.isError
+                  ? "Открыть общую инструкцию"
+                  : readiness.isLoading
+                    ? "Готовим наглядную инструкцию…"
+                    : howToGuide.title}
+              </span>
+              <span className="mt-0.5 block text-[10px] text-[#6d6962]">
+                4 шага с изображением экрана и отметками, куда нажимать
+              </span>
+            </span>
+            <span className="hidden shrink-0 items-center gap-2 rounded-[8px] bg-accent px-3 py-2 text-[11px] font-semibold text-accent-fg sm:inline-flex">
+              Показать, как сделать
+              <ChevronDown className="size-3.5 -rotate-90" />
+            </span>
+          </button>
+        </MaxHowToDialog>
 
         <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">
           <ChatPanel
