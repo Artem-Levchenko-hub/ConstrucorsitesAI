@@ -576,7 +576,8 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
 
 def test_model_directive_is_headless_and_matches_locked_max_runtime_api() -> None:
     assert "MAX HEADLESS PLATFORM ADAPTER" in MAX_MODEL_DIRECTIVE
-    assert "first product write" in MAX_MODEL_DIRECTIVE
+    assert "order that best fits the implementation" in MAX_MODEL_DIRECTIVE
+    assert "first product write" not in MAX_MODEL_DIRECTIVE
     assert "src/components/product/ProductApp.tsx" in MAX_MODEL_DIRECTIVE
     assert "@/components/MaxAppProvider" in MAX_MODEL_DIRECTIVE
     assert "firstName" in MAX_MODEL_DIRECTIVE

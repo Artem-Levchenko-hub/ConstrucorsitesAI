@@ -823,12 +823,6 @@ def build_max_product_contract(prompt: str) -> str:
     capabilities = requested_max_capabilities(prompt)
     lines = [
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
-        "- Before product code, write .omnia/max-design-spec.json as valid JSON with: "
-        "product_promise, primary_action, three distinct directions_considered, "
-        "chosen_direction, chosen_rationale, screens, visual_system, motion and states. "
-        "The three directions must differ in composition/type/density/motion, not colour. "
-        "Keep this project-specific spec aligned with the final implementation so a later "
-        "continuation preserves the art direction instead of inventing a new template.",
         "- No product UI or visual template exists initially. Replace "
         "src/components/product/ProductApp.tsx and create the product styling, "
         "screens and navigation from scratch. Never edit the locked root page.",
@@ -1280,7 +1274,12 @@ def max_completion_gap(
     intentionally not blocking for MAX.
     """
 
-    source_gap = max_source_completion_gap(prompt, files, require_native_legal_nav=True)
+    source_gap = max_source_completion_gap(
+        prompt,
+        files,
+        require_design_spec=False,
+        require_native_legal_nav=True,
+    )
     if source_gap:
         return source_gap
     if build_plan is not None:
@@ -1295,33 +1294,10 @@ def max_completion_gap(
         design_gap = completion_gap(design_dna, files)
         if design_gap:
             return design_gap
-        missing_director_skills = [
-            skill for skill in design_dna.skill_slices if evidence.get(f"skill:{skill}", 0) < 1
-        ]
-        if missing_director_skills:
-            return (
-                "Read the Design Director capability slices before done: "
-                + ", ".join(missing_director_skills)
-                + "."
-            )
-    if evidence.get("plan_task", 0) < 1:
-        return "Create the observable MAX execution plan with plan_task before done."
-    if evidence.get("update_plan", 0) < 1:
-        return "Update the observable MAX execution plan with factual evidence before done."
-    missing_skills = [
-        skill for skill in MAX_REQUIRED_PREWRITE_SKILLS if evidence.get(f"skill:{skill}", 0) < 1
-    ]
-    if missing_skills:
-        return "Read required MAX capability packs: " + ", ".join(missing_skills) + "."
     if evidence.get("runtime_check_after_write", 0) < 1:
         return "Run runtime_check on the finished product after the last source write."
     if evidence.get("see_after_write", 0) < 1:
         return "Run see once through the signed MAX preview after the last source write."
-    if evidence.get("visual_evaluation_after_see", 0) < 1:
-        return (
-            "Read visual-evaluation after the first rendered see and apply its critique "
-            "before done."
-        )
     return None
 
 

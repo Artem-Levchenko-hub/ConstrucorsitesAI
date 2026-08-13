@@ -45,6 +45,7 @@ class NativeRunReservation:
     requests_before: int
     cost_rub_before: Decimal
     provider_cost_usd_before: Decimal
+    unmetered: bool = False
 
 _RESOLVED_ACCOUNT = """
     SELECT ba.id
@@ -105,7 +106,12 @@ async def reserve_native_run_request(
             run_id,
         )
         run = await conn.fetchrow(
-            "SELECT user_id, project_id, status FROM generation_runs WHERE id = $1",
+            """
+            SELECT gr.user_id, gr.project_id, gr.status, p.template
+              FROM generation_runs gr
+              JOIN projects p ON p.id = gr.project_id
+             WHERE gr.id = $1
+            """,
             run_id,
         )
         if run is None:
@@ -129,7 +135,13 @@ async def reserve_native_run_request(
         requests = int(row["requests"] if row else 0)
         cost_rub = Decimal(row["cost_rub"] if row else 0)
         provider_cost_usd = Decimal(row["provider_cost_usd"] if row else 0)
-        if (
+        # MAX Studio is an operator-managed agent workspace, not the metered
+        # one-shot generator. Determine that privilege from the server-owned
+        # project row (never from request metadata): calls remain reserved and
+        # settled in ``usage`` for audit/cost visibility, but neither a wallet
+        # floor nor a per-run spend ceiling may strand a real MAX build halfway.
+        unmetered = str(run["template"]) == "max_miniapp"
+        if not unmetered and (
             requests >= max_requests
             or cost_rub + reserved_cost_rub > max_cost_rub
             or provider_cost_usd + reserved_provider_cost_usd > max_provider_cost_usd
@@ -162,6 +174,7 @@ async def reserve_native_run_request(
         requests_before=requests,
         cost_rub_before=cost_rub,
         provider_cost_usd_before=provider_cost_usd,
+        unmetered=unmetered,
     )
 
 

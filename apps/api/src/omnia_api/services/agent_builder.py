@@ -1490,6 +1490,66 @@ def make_container_executor(
                     "detail": f"docs: {_lib} / {_q}",
                 }
 
+            if action.name == "bash":
+                cmd = action.args.get("cmd")
+                raw_paths = action.args.get("mutation_paths")
+                if not isinstance(cmd, str) or not cmd.strip():
+                    return {"ok": False, "error": "bash needs a non-empty cmd"}
+                if not isinstance(raw_paths, list) or any(
+                    not isinstance(path, str) or not path for path in raw_paths
+                ):
+                    return {
+                        "ok": False,
+                        "error": "bash needs mutation_paths (use [] for a read-only command)",
+                    }
+                mutation_paths = list(dict.fromkeys(raw_paths))
+                before_contents = await asyncio.gather(
+                    *(
+                        orchestrator_client.agent_read_file(project_id, slug, path)
+                        for path in mutation_paths
+                    )
+                )
+                await orchestrator_client.track_mutation_paths(mutation_paths)
+                result = await orchestrator_client.agent_exec(project_id, slug, cmd)
+                if not bool(result.get("ok")):
+                    rollback = {
+                        path: content if isinstance(content, str) else ""
+                        for path, content in zip(
+                            mutation_paths, before_contents, strict=True
+                        )
+                    }
+                    if rollback:
+                        await orchestrator_client.hot_reload_exact(project_id, slug, rollback)
+                    return {
+                        "ok": False,
+                        "error": result.get("detail") or "shell command failed",
+                    }
+                after_contents = await asyncio.gather(
+                    *(
+                        orchestrator_client.agent_read_file(project_id, slug, path)
+                        for path in mutation_paths
+                    )
+                )
+                files = {
+                    path: content if isinstance(content, str) else ""
+                    for path, before, content in zip(
+                        mutation_paths, before_contents, after_contents, strict=True
+                    )
+                    if content != before
+                }
+                return {
+                    "ok": True,
+                    "detail": result.get("detail") or "command completed",
+                    "files": files,
+                    "changed_paths": sorted(files),
+                    "_previous_files": {
+                        path: content if isinstance(content, str) else ""
+                        for path, content in zip(
+                            mutation_paths, before_contents, strict=True
+                        )
+                    },
+                }
+
             if action.name == "write_file":
                 content = action.args.get("content")
                 if not isinstance(content, str) or not action.path:

@@ -65,6 +65,7 @@ class _ReservationConnection:
         cost_rub: Decimal = Decimal("20"),
         provider_cost_usd: Decimal = Decimal("0.10"),
         status: str = "running",
+        template: str = "fullstack",
     ) -> None:
         self.user_id = user_id
         self.project_id = project_id
@@ -72,6 +73,7 @@ class _ReservationConnection:
         self.cost_rub = cost_rub
         self.provider_cost_usd = provider_cost_usd
         self.status = status
+        self.template = template
         self.statements: list[tuple[str, tuple[object, ...]]] = []
 
     def transaction(self) -> _AsyncContext:
@@ -84,6 +86,7 @@ class _ReservationConnection:
                 "user_id": self.user_id,
                 "project_id": self.project_id,
                 "status": self.status,
+                "template": self.template,
             }
         if "FROM usage" in query:
             return {
@@ -217,6 +220,39 @@ async def test_native_reservation_rejects_budget_before_usage_insert(
         )
 
     assert not any("INSERT INTO usage" in query for query, _ in connection.statements)
+
+
+async def test_max_native_reservation_is_unmetered_but_still_accounted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = uuid4()
+    project_id = uuid4()
+    connection = _ReservationConnection(
+        user_id=user_id,
+        project_id=project_id,
+        requests=999,
+        cost_rub=Decimal("99999"),
+        provider_cost_usd=Decimal("999"),
+        template="max_miniapp",
+    )
+    monkeypatch.setattr(billing, "get_pool", lambda: _FakePool(connection))
+
+    reservation = await billing.reserve_native_run_request(
+        run_id=uuid4(),
+        user_id=user_id,
+        project_id=project_id,
+        message_id=None,
+        model_id="claude-sonnet-5",
+        stage="native_agent",
+        reserved_cost_rub=Decimal("100"),
+        reserved_provider_cost_usd=Decimal("0.35"),
+        max_requests=1,
+        max_cost_rub=Decimal("1"),
+        max_provider_cost_usd=Decimal("0.01"),
+    )
+
+    assert reservation.unmetered is True
+    assert any("INSERT INTO usage" in query for query, _ in connection.statements)
 
 
 async def test_charge_reconciles_existing_native_reservation(

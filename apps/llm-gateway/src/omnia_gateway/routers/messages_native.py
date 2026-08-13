@@ -797,9 +797,11 @@ async def native_messages(request: Request) -> Response:
             "run usage accounting is temporarily unavailable",
         )
 
-    # Fail closed before the provider call. A native build must never keep
-    # spending after the user's wallet floor or when accounting is unavailable.
-    if not free:
+    # Ordinary native builds fail closed at the user's wallet floor. MAX Studio
+    # runs are server-attested as unmetered by ``reserve_native_run_request``:
+    # usage is still settled for audit/cost visibility, but the wallet cannot
+    # interrupt an autonomous project build halfway through.
+    if not free and not reservation.unmetered:
         try:
             await billing.precheck_balance(user_id, estimated_cost_rub)
         except WalletEmptyError as exc:
@@ -927,7 +929,7 @@ async def native_messages(request: Request) -> Response:
             tokens_out=tokens_out,
             cost_rub=cost_rub,
             description=f"Native agent · {stage}",
-            free=free,
+            free=free or reservation.unmetered,
             stage=stage,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,

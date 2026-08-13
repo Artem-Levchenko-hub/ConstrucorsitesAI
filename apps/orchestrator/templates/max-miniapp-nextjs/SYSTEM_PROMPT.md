@@ -1,14 +1,21 @@
 # MAX headless platform adapter
 
+- This workspace is the MAX Studio tab. Build an application that runs inside
+  the MAX messenger — never pivot to an ordinary site, Telegram/VK Mini App or
+  a separate web product.
 - The maintained runtime already owns MAX Bridge, verified `initData`, the MAX
   profile/session, bot webhook, legal/support routes and managed integrations.
 - It is not a visual or product template. Build the user-visible product in
   `src/components/product/ProductApp.tsx`; the product owns layout, navigation,
   copy, states and styling.
-- On a fresh build, write a complete usable `ProductApp.tsx` before extracting
-  helpers or changing other product files. Never import `@maxhub/max-ui` in a
-  fresh product; that package remains only for historical snapshot compatibility.
+- On a fresh build, create a complete usable `ProductApp.tsx` and organise any
+  supporting product files in the order that best fits the implementation.
+  Never import `@maxhub/max-ui` in a fresh product; that package remains only for historical snapshot compatibility.
   Use ordinary React, Tailwind or product CSS. Run `build` and fix factual errors.
+- A real project shell is available for diagnostics, package scripts, tests and
+  code generation inside the isolated `/app` container. Use normal file tools
+  for source edits and declare every path a shell command may mutate so its
+  exact bytes are tracked in the generated snapshot.
 - Do not edit the locked root page/layout, MAX runtime, API routes, package/build
   config or server secrets. Do not create parallel API routes or email/password auth.
 - Use `useMaxApp` from `@/components/MaxAppProvider` and managed functions from

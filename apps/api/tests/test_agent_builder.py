@@ -320,6 +320,47 @@ async def test_runtime_check_never_invents_http_200_when_probe_has_no_response(
     }
 
 
+@pytest.mark.asyncio
+async def test_native_bash_runs_in_project_and_tracks_declared_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    state = {"src/components/product/Card.tsx": "before"}
+    tracked: list[tuple[str, ...]] = []
+
+    async def read_file(_project: object, _slug: str, path: str) -> str | None:
+        return state.get(path)
+
+    async def track(paths: object) -> None:
+        tracked.append(tuple(paths))
+
+    async def exec_cmd(_project: object, _slug: str, cmd: str) -> dict[str, object]:
+        assert cmd == "pnpm test && generate-card"
+        state["src/components/product/Card.tsx"] = "after"
+        return {"ok": True, "exit_code": "0", "detail": "tests passed"}
+
+    monkeypatch.setattr(orchestrator_client, "agent_read_file", read_file)
+    monkeypatch.setattr(orchestrator_client, "track_mutation_paths", track)
+    monkeypatch.setattr(orchestrator_client, "agent_exec", exec_cmd)
+    execute = ab.make_container_executor(project_id="project", slug="slug")
+
+    result = await execute(
+        ab.Action(
+            "bash",
+            {
+                "cmd": "pnpm test && generate-card",
+                "mutation_paths": ["src/components/product/Card.tsx"],
+            },
+            "",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["files"] == {"src/components/product/Card.tsx": "after"}
+    assert tracked == [("src/components/product/Card.tsx",)]
+
+
 def test_runtime_debug_loop_recovers_then_done():
     """build clean → runtime_check 5xx → read_logs → fix → re-check ok → done.
 

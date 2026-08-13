@@ -142,7 +142,7 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     )
 
     assert "OMNIA MAX APP ENGINEER" in prompt
-    assert "АРТ-ДИРЕКЦИЯ ДО КОДА" in prompt
+    assert "АРТ-ДИРЕКЦИЯ ПРИНАДЛЕЖИТ ТЕБЕ" in prompt
     assert "ProductApp.tsx" in prompt
     assert "защищённое ядро" in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
@@ -150,7 +150,7 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert "Sonnet" not in prompt
     assert "Gemini" not in prompt
     assert "read_skill" in prompt
-    assert "read_skill(`premium-mobile-foundation`)" in prompt
+    assert "Ни один навык не является обязательной" in prompt
     assert "MAX capability catalog" not in prompt
     assert "signed MAX preview session" in prompt
     assert "build" in prompt
@@ -175,11 +175,14 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
         "read_skill",
         "discover_capabilities",
         "call_capability",
+        "bash",
         "generate_media",
         "done",
     } == stable_names
     assert not ({"probe", "verify_isolation"} & stable_names)
     assert agent_native._MAX_TOKENS == 32_768
+    assert "именно во вкладке MAX" in prompt
+    assert "не Telegram/VK Mini App" in prompt
 
 
 def test_max_edit_prompt_requires_runtime_proof_without_visual_ceremony() -> None:
@@ -236,6 +239,10 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "model=(" in source
     assert "MAX_STUDIO_LLM_MODEL" in source
     assert 'stable_max_loop=project_template == "max_miniapp"' in source
+    assert "enforce_max_skill_lifecycle=False" in source
+    assert "stable_max_product_first=False" in source
+    assert "_max_design_dna = None" in source
+    assert "Определяю арт-дирекцию и продуктовые возможности" not in source
     assert "load_stack_skill_index(_orch_name)" in source
     assert 'if action.name == "read_skill"' in source
     assert 'if action.name == "plan_task"' in source
@@ -263,7 +270,9 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "pg_advisory_xact_lock" in source
     assert "project.current_snapshot_id != current_snapshot_id" in source
     assert "Direct DB access is forbidden in MAX product files." in source
+    assert "Environment and secret files are not agent-readable." in source
     assert "max_model_write_rejection" in source
+    assert 'and not _agent_res.stop_reason.startswith("spend_budget")' in source
     assert "max_demo_data_rejection" not in source
     assert "_run_max_visual_qa" in source
     assert "_recover_max_resume_prompt" in source
@@ -850,6 +859,79 @@ async def test_stable_max_loop_forces_a_first_write_after_bounded_exploration(
 
 
 @pytest.mark.asyncio
+async def test_stable_max_entry_focus_still_allows_required_skills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    executed_skills: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        names = {tool["name"] for tool in kwargs["tools"]}
+        if calls <= agent_native._STABLE_MAX_ENTRY_FOCUS_AT:
+            return _turn(("read_file", {"path": agent_native._STABLE_MAX_PRODUCT_ENTRY}))
+        if calls == agent_native._STABLE_MAX_ENTRY_FOCUS_AT + 1:
+            assert "read_skill" in names
+            return _turn(
+                *(
+                    ("read_skill", {"skill": skill, "reason": "required"})
+                    for skill in MAX_REQUIRED_PREWRITE_SKILLS
+                )
+            )
+        if calls == agent_native._STABLE_MAX_ENTRY_FOCUS_AT + 2:
+            assert names == {"write_file"}
+            return _turn(
+                (
+                    "write_file",
+                    {
+                        "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                        "content": "export default function ProductApp(){return <main>MAX</main>}",
+                    },
+                )
+            )
+        if calls == agent_native._STABLE_MAX_ENTRY_FOCUS_AT + 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "read_skill":
+            executed_skills.append(str(action.args["skill"]))
+            return {"ok": True, "content": "loaded"}
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        if action.name == "read_file":
+            return {"ok": True, "content": "starter"}
+        return {"ok": True, "detail": "clean"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if agent_native._STABLE_MAX_PRODUCT_ENTRY not in files:
+            return "missing ProductApp"
+        if not all(evidence.get(f"skill:{skill}") for skill in MAX_REQUIRED_PREWRITE_SKILLS):
+            return "missing required skill"
+        return None if evidence.get("build_after_write") else "missing build"
+
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build MAX app",
+        execute=execute,
+        completion_check=complete,
+        enforce_max_skill_lifecycle=True,
+        stable_max_loop=True,
+        stable_max_product_first=True,
+        max_steps=20,
+    )
+
+    assert result.done is True
+    assert set(executed_skills) == set(MAX_REQUIRED_PREWRITE_SKILLS)
+    assert agent_native._STABLE_MAX_PRODUCT_ENTRY in result.files
+
+
+@pytest.mark.asyncio
 async def test_stable_max_caps_bundled_prewrite_inspection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1036,6 +1118,7 @@ def test_stable_max_preentry_surface_allows_only_product_entry_write() -> None:
         "read_skill",
         "discover_capabilities",
         "call_capability",
+        "bash",
         "write_file",
     }
     assert not ({"edit_file", "build", "done"} & names)

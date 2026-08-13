@@ -286,8 +286,24 @@ _MAX_READ_SKILL_TOOL = _tool(
     {"skill": _STR, "reason": _STR},
     ["skill", "reason"],
 )
+_MAX_BASH_TOOL = _tool(
+    "bash",
+    "Run a real shell command inside this MAX project's isolated /app container. "
+    "Use it for project diagnostics, package scripts, tests and code generation; it "
+    "cannot access the host, Docker, other projects, environment secrets or credentials. "
+    "If the command may create, edit or delete product source, list every affected "
+    "project-relative path in mutation_paths so the exact bytes are tracked, validated, "
+    "checkpointed and published. Use write_file/edit_file for ordinary source edits.",
+    {"cmd": _STR, "mutation_paths": _STR_ARRAY},
+    ["cmd", "mutation_paths"],
+)
 _MAX_BASE_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
-_MAX_TOOLS = [*_MAX_BASE_TOOLS[:-1], _MAX_READ_SKILL_TOOL, _MAX_BASE_TOOLS[-1]]
+_MAX_TOOLS = [
+    *_MAX_BASE_TOOLS[:-1],
+    _MAX_READ_SKILL_TOOL,
+    _MAX_BASH_TOOL,
+    _MAX_BASE_TOOLS[-1],
+]
 
 # --- Anthropic prompt caching (AITunnel honours it on the native surface —
 # live-verified 15.07: cache_read ≈ 90% cheaper than a fresh write) ------------
@@ -326,6 +342,7 @@ _STABLE_MAX_TOOL_NAMES = frozenset(
         "read_skill",
         "discover_capabilities",
         "call_capability",
+        "bash",
         "write_file",
         "edit_file",
         "build",
@@ -596,6 +613,7 @@ _STABLE_MAX_PREENTRY_READ_TOOLS = [
         "read_skill",
         "discover_capabilities",
         "call_capability",
+        "bash",
     }
 ]
 _STABLE_MAX_PREENTRY_TOOLS_CACHED = [
@@ -1033,26 +1051,26 @@ _NATIVE_PREAMBLE = (
 _MAX_NATIVE_PREAMBLE = (
     "OMNIA MAX APP ENGINEER — ты автономная senior-команда уровня сильного "
     "code-agent: продуктовый директор, продуктовый дизайнер, "
-    "motion-дизайнер и инженер MAX Mini Apps в одном агенте. Твоя цель — не просто "
+    "motion-дизайнер и инженер MAX Mini Apps в одном агенте. Ты работаешь именно во "
+    "вкладке MAX и создаёшь приложение внутри мессенджера MAX — не обычный сайт, не "
+    "Telegram/VK Mini App и не отдельное веб-приложение. Твоя цель — не просто "
     "зелёная сборка, а цельный production-grade мобильный продукт с характером, "
     "реальными сценариями и профессиональной детализацией. Инструменты вызывай "
     "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
     "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
-    "скриншоты и независимая mobile/MAX-критика. Пиши полноценно, без TODO, заглушек, "
+    "скриншоты и независимая mobile/MAX-критика, bash — реальные команды, тесты и "
+    "диагностика внутри изолированного контейнера текущего проекта. Пиши полноценно, "
+    "без TODO, заглушек, "
     "декоративных кнопок и симулированного успеха. В начале существенной сборки уточни "
     "наблюдаемый план через plan_task, затем фиксируй реальные milestones инструментом "
     "update_plan. Не записывай скрытые рассуждения. Для свежей внешней документации и "
     "исследований доступны разрешённые read-only MCP capabilities: сначала "
     "discover_capabilities, затем один точный call_capability; не подменяй ими работу "
     "с живым проектом и не зацикливайся на внешнем сервере.\n\n"
-    "АРТ-ДИРЕКЦИЯ ДО КОДА. Внутренне сформируй ТРИ действительно разных направления "
-    "для этого брифа — они должны различаться композицией, плотностью, типографическим "
-    "голосом, формой и хореографией движения, а не только цветом. Выбери одно по "
-    "соответствию аудитории и главному действию. Зафиксируй для себя product promise, "
-    "информационную иерархию, экраны/состояния, визуальную систему и motion language, "
-    "запиши выбранную систему в `.omnia/max-design-spec.json` по acceptance contract и "
-    "после этого последовательно реализуй концепцию. Никогда не воспроизводи "
-    "универсальный dashboard, прошлую генерацию или маркетинговый лендинг.\n\n"
+    "АРТ-ДИРЕКЦИЯ ПРИНАДЛЕЖИТ ТЕБЕ. Выбери продуктовую структуру, визуальную систему и "
+    "motion language прямо из брифа и реализуй их без промежуточного дизайн-шаблона. "
+    "Никогда не воспроизводи универсальный dashboard, прошлую генерацию или "
+    "маркетинговый лендинг.\n\n"
     "ВИЗУАЛЬНАЯ СВОБОДА БЕЗ ШАБЛОНА. Ты владеешь "
     "src/components/product/ProductApp.tsx, src/app/globals.css и новыми клиентскими "
     "продуктовыми компонентами. globals.css можно и нужно "
@@ -1091,21 +1109,11 @@ _MAX_NATIVE_PREAMBLE = (
     "прежде всего transform/opacity; не строй UX на hover, не запускай бесконечный декор, "
     "не анимируй всё одновременно и обязательно уважай `prefers-reduced-motion`. Каждая "
     "анимация должна объяснять действие, изменение состояния или навигационный контекст.\n\n"
-    "УСИЛЕНИЕ НАВЫКАМИ, НЕ ШАБЛОНАМИ. Серверный каталог MAX-навыков доступен "
-    "через read_skill. На первой полной сборке до первой записи продуктового кода "
-    "обязательно по одному разу вызови read_skill(`premium-mobile-foundation`), "
-    "read_skill(`ui-ux-pro-max`), "
-    "read_skill(`product-flow`), read_skill(`art-direction`) и "
-    "read_skill(`production-readiness`). Это расширяет "
-    "творческий диапазон, но не выбирает пресет. После первого `see`, перед финальным "
-    "`done`, ровно один раз вызови read_skill(`visual-evaluation`) и примени честную "
-    "критику к уже отрисованному продукту. Дополнительно загрузи `interaction-motion`, "
-    "ровно один подходящий domain-pack, `trust-safety` или `growth-analytics` только "
-    "когда их trigger из каталога реально присутствует в брифе; не более трёх таких "
-    "triggered packs за сборку. На точечной правке "
-    "не трать ход на skill, если уже знаешь решение. Навык — это оптика, эвристики и "
-    "сырьё для мышления: он не меняет бриф, не выбирает за тебя арт-дирекцию и не "
-    "обязывает к конкретной компоновке. Не загружай всё подряд.\n\n"
+    "НАВЫКИ ПО ПОТРЕБНОСТИ, НЕ ЦЕРЕМОНИЯ. Серверный каталог MAX-навыков доступен "
+    "через read_skill. Загружай только тот capability pack, который реально помогает "
+    "текущему брифу или конкретной ошибке. Ни один навык не является обязательной "
+    "стадией перед записью кода или завершением. Если контекста достаточно — сразу "
+    "создавай продукт, проверяй его и исправляй факты.\n\n"
     "ДОКАЗАТЕЛЬСТВО КАЧЕСТВА. Цикл: реализуй целиком → build до чистоты → "
     "runtime_check после последней записи → see через подписанную MAX-сессию. Если see "
     "возвращает broken/generic или конкретные проблемы, не объявляй done: примени "
@@ -2543,6 +2551,10 @@ async def run_native_build(
                 elif (
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
+                    and name != "read_skill"
+                    and not (
+                        name == "bash" and not action.args.get("mutation_paths")
+                    )
                     and (name != "write_file" or action.path != _STABLE_MAX_PRODUCT_ENTRY)
                 ):
                     obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
@@ -2692,6 +2704,17 @@ async def run_native_build(
                         visual_repair_paths.add(action.path)
                     proof_after_write.clear()
                     last_green_see_step = None
+                elif tool_executed and name == "bash" and obs.get("ok"):
+                    bash_files = obs.get("files")
+                    if isinstance(bash_files, dict):
+                        for path, content in bash_files.items():
+                            if isinstance(path, str) and isinstance(content, str):
+                                written[path] = content
+                        if bash_files:
+                            wrote_since_build = True
+                            wrote_this_turn = True
+                            proof_after_write.clear()
+                            last_green_see_step = None
                 elif tool_executed and name == "build":
                     if force_visual_finish:
                         visual_finish_satisfied_this_turn = True

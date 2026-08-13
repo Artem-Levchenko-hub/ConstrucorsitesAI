@@ -171,8 +171,8 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "never dump a long unbroken AI paragraph" in contract
     assert "fake timers" in contract
     assert "loading, empty, error/retry" in contract
-    assert ".omnia/max-design-spec.json" in contract
-    assert "three distinct directions_considered" in contract
+    assert ".omnia/max-design-spec.json" not in contract
+    assert "three distinct directions_considered" not in contract
     assert "validated MAX initData" in contract
     assert "hardcoded demo" in contract
     assert "static business menus" in contract.lower()
@@ -801,16 +801,15 @@ def test_completion_requires_only_max_compatible_runtime_proof() -> None:
     files = _complete_files()
     gap = max_completion_gap(COMPLEX_BRIEF, files, {})
     assert gap is not None
-    assert "plan_task" in gap
-
-    skill_evidence = {
-        "plan_task": 1,
-        "update_plan": 1,
-        **{f"skill:{skill}": 1 for skill in MAX_REQUIRED_PREWRITE_SKILLS},
-    }
-    gap = max_completion_gap(COMPLEX_BRIEF, files, skill_evidence)
-    assert gap is not None
     assert "runtime_check" in gap
+
+    gap = max_completion_gap(
+        COMPLEX_BRIEF,
+        files,
+        {"runtime_check_after_write": 1},
+    )
+    assert gap is not None
+    assert "signed MAX preview" in gap
 
     evidence = _complete_evidence()
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None

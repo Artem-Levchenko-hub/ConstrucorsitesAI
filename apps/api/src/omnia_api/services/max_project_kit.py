@@ -869,10 +869,10 @@ The maintained runtime already provides MAX Bridge, verified initData, the MAX
 profile, bot webhook, legal/support routes and managed integrations. It is not a
 visual or product template. The model owns ProductApp and all visible UI.
 
-For a fresh build, the first product write must be the complete usable
-`src/components/product/ProductApp.tsx`. Use Tailwind utilities or inline styles so
-that first vertical slice already contains the requested screens, navigation and
-states. Extract helpers or rewrite `src/app/globals.css` only after ProductApp exists.
+For a fresh build, create a complete usable
+`src/components/product/ProductApp.tsx` and organise supporting product files in
+the order that best fits the implementation. The finished vertical slice must
+contain the requested screens, navigation and states.
 
 Platform boundaries only:
 - Do not edit locked runtime files, root layout/page, package/build config or create
@@ -908,7 +908,6 @@ Product design contract:
   They do not replace semantic buttons/links, labels or actual behavior.
 
 Do not recreate MAX-owned chrome. Keep reachable links to the managed support,
-privacy and terms routes. Persist the selected art direction in
-`.omnia/max-design-spec.json`, then prove build, signed runtime interactions,
-reload persistence, accessibility and visual quality before completion.
+privacy and terms routes. Prove build, signed runtime interactions, reload
+persistence, accessibility and visual quality before completion.
 """.strip()

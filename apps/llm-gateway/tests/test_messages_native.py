@@ -464,6 +464,67 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     precheck.assert_awaited_once()
 
 
+def test_max_native_unmetered_run_skips_wallet_but_records_usage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    precheck = AsyncMock(side_effect=AssertionError("wallet must not gate MAX"))
+    charge = AsyncMock(return_value=UUID("55555555-5555-5555-5555-555555555555"))
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", precheck)
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(
+        messages_native.billing,
+        "reserve_native_run_request",
+        AsyncMock(
+            return_value=messages_native.billing.NativeRunReservation(
+                usage_id=UUID("99999999-9999-9999-9999-999999999999"),
+                requests_before=999,
+                cost_rub_before=Decimal("99999"),
+                provider_cost_usd_before=Decimal("999"),
+                unmetered=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
+    )
+
+    def fake_post(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "provider-request-max",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "ok", "tool_calls": []},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        )
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-5",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "project_id": "22222222-2222-2222-2222-222222222222",
+                "run_id": "33333333-3333-3333-3333-333333333333",
+            },
+            "messages": [{"role": "user", "content": "finish MAX"}],
+        },
+    )
+
+    assert response.status_code == 200
+    precheck.assert_not_awaited()
+    charge.assert_awaited_once()
+    assert charge.await_args.kwargs["free"] is True
+
+
 def test_native_endpoint_stops_free_run_before_provider_when_run_budget_is_reached(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

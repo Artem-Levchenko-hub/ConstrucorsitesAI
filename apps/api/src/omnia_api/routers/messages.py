@@ -4002,6 +4002,23 @@ async def _process_prompt(
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
                     nonlocal _max_visual_proof
+                    bash_before_tree: dict[str, str] | None = None
+                    if action.name in {"read_file", "grep"}:
+                        read_path = action.path or ("src" if action.name == "grep" else "")
+                        folded_path = read_path.casefold()
+                        if (
+                            folded_path == ".env"
+                            or folded_path.startswith(".env.")
+                            or "/.env" in folded_path
+                            or (action.name == "grep" and read_path in {"", "."})
+                        ):
+                            return {
+                                "ok": False,
+                                "error": (
+                                    "Environment and secret files are not agent-readable. "
+                                    "Inspect project source or the documented managed contracts."
+                                ),
+                            }
                     if action.name == "read_skill":
                         from omnia_api.services.max_agent_skills import read_max_skill
 
@@ -4010,6 +4027,51 @@ async def _process_prompt(
                             prompt=_max_product_brief,
                             project_id=str(project_id),
                         )
+                    if action.name == "bash":
+                        raw_mutation_paths = action.args.get("mutation_paths")
+                        if not isinstance(raw_mutation_paths, list) or any(
+                            not isinstance(path, str) or not path
+                            for path in raw_mutation_paths
+                        ):
+                            return {
+                                "ok": False,
+                                "error": (
+                                    "bash needs mutation_paths with every product file it may "
+                                    "change (use [] for read-only commands)"
+                                ),
+                            }
+                        for mutation_path in raw_mutation_paths:
+                            if mutation_path in MAX_MODEL_LOCKED_FILES:
+                                return {
+                                    "ok": False,
+                                    "error": f"{mutation_path} is managed by MAX Studio",
+                                }
+                            path_rejection = max_model_path_rejection(mutation_path)
+                            if path_rejection:
+                                return {"ok": False, "error": path_rejection}
+                        # Snapshot every source path, not only model-declared
+                        # mutations. Shell is intentionally powerful; this makes
+                        # its actual delta authoritative and lets policy rollback
+                        # an undeclared/locked mutation before it can influence
+                        # proof or publication.
+                        bash_before_paths = await orchestrator_client.agent_list_source_files(
+                            project_id, project_slug
+                        )
+                        bash_before_contents = await asyncio.gather(
+                            *(
+                                orchestrator_client.agent_read_file(
+                                    project_id, project_slug, path
+                                )
+                                for path in bash_before_paths
+                            )
+                        )
+                        bash_before_tree = {
+                            path: content
+                            for path, content in zip(
+                                bash_before_paths, bash_before_contents, strict=True
+                            )
+                            if isinstance(content, str)
+                        }
                     if action.name == "see":
                         # MAX previews authenticate through signed initData/session,
                         # not the generic email login. Bootstrap a short-lived
@@ -4180,6 +4242,117 @@ async def _process_prompt(
                                 ),
                             }
                     _observation = await _base_agent_executor(action)
+                    if action.name == "bash" and bash_before_tree is not None:
+                        bash_after_paths = await orchestrator_client.agent_list_source_files(
+                            project_id, project_slug
+                        )
+                        bash_after_contents = await asyncio.gather(
+                            *(
+                                orchestrator_client.agent_read_file(
+                                    project_id, project_slug, path
+                                )
+                                for path in bash_after_paths
+                            )
+                        )
+                        bash_after_tree = {
+                            path: content
+                            for path, content in zip(
+                                bash_after_paths, bash_after_contents, strict=True
+                            )
+                            if isinstance(content, str)
+                        }
+                        actual_changed_paths = sorted(
+                            path
+                            for path in set(bash_before_tree) | set(bash_after_tree)
+                            if bash_before_tree.get(path) != bash_after_tree.get(path)
+                        )
+                        if actual_changed_paths:
+                            await orchestrator_client.track_mutation_paths(actual_changed_paths)
+                        actual_previous_files = {
+                            path: bash_before_tree.get(path, "")
+                            for path in actual_changed_paths
+                        }
+                        actual_shell_files = {
+                            path: bash_after_tree.get(path, "")
+                            for path in actual_changed_paths
+                        }
+                        if not _observation.get("ok"):
+                            if actual_previous_files:
+                                await orchestrator_client.hot_reload_exact(
+                                    project_id, project_slug, actual_previous_files
+                                )
+                            _observation.pop("_previous_files", None)
+                            return _observation
+                        _observation["files"] = actual_shell_files
+                        _observation["changed_paths"] = actual_changed_paths
+                        _observation["_previous_files"] = actual_previous_files
+
+                    if action.name == "bash" and _observation.get("ok"):
+                        shell_files = _observation.get("files")
+                        previous_files = _observation.get("_previous_files")
+                        if isinstance(shell_files, dict):
+                            shell_rejection: str | None = None
+                            normalized_shell_files: dict[str, str] = {}
+                            for shell_path, shell_content in shell_files.items():
+                                if not isinstance(shell_path, str) or not isinstance(
+                                    shell_content, str
+                                ):
+                                    shell_rejection = "bash returned an invalid source mutation"
+                                    break
+                                if shell_path in MAX_MODEL_LOCKED_FILES:
+                                    shell_rejection = f"{shell_path} is managed by MAX Studio"
+                                    break
+                                shell_rejection = max_model_path_rejection(shell_path)
+                                if shell_rejection:
+                                    break
+                                candidate = shell_content
+                                if shell_path == "src/app/globals.css":
+                                    from omnia_api.services.max_generation_contract import (
+                                        normalize_max_globals_css,
+                                    )
+
+                                    candidate = normalize_max_globals_css(candidate)
+                                shell_rejection = (
+                                    max_model_write_rejection(shell_path, candidate)
+                                    or _fresh_max_product_write_rejection(
+                                        candidate,
+                                        has_generated_snapshot=_max_has_generated_snapshot,
+                                    )
+                                )
+                                if shell_rejection:
+                                    break
+                                from omnia_api.services.sast_gate import check_sast
+
+                                sast = check_sast({shell_path: candidate})
+                                if not sast.safe:
+                                    shell_rejection = sast.summary
+                                    break
+                                if "@/lib/db" in candidate or "drizzle-orm" in candidate:
+                                    shell_rejection = (
+                                        "Direct DB access is forbidden in MAX product files. "
+                                        "Use the managed integration client."
+                                    )
+                                    break
+                                normalized_shell_files[shell_path] = candidate
+                            if shell_rejection:
+                                if isinstance(previous_files, dict) and previous_files:
+                                    await orchestrator_client.hot_reload_exact(
+                                        project_id,
+                                        project_slug,
+                                        {
+                                            path: content
+                                            for path, content in previous_files.items()
+                                            if isinstance(path, str)
+                                            and isinstance(content, str)
+                                        },
+                                    )
+                                return {"ok": False, "error": shell_rejection}
+                            if normalized_shell_files != shell_files:
+                                await orchestrator_client.hot_reload_exact(
+                                    project_id, project_slug, normalized_shell_files
+                                )
+                                _observation["files"] = normalized_shell_files
+                        _observation.pop("_previous_files", None)
                     if action.name == "runtime_check" and not _max_runtime_probe_is_green(
                         _observation
                     ):
@@ -4533,63 +4706,11 @@ async def _process_prompt(
                 raise
             except Exception as _bp_exc:
                 print(f"[PP] build_plan skipped: {_bp_exc!r}", flush=True)
-            # Deterministic pre-code Design Director for the MAX App Engineer.
-            # It persists one selected art direction, all three explored concepts
-            # and truthful managed capability contracts alongside the shared plan.
+            # MAX is a headless platform adapter. The native coding agent owns
+            # product structure and art direction directly; no deterministic
+            # design template or mandatory pre-code ceremony constrains it.
             if project_template == "max_miniapp":
-                from omnia_api.services import max_design_director as _max_director
-
-                _stored_dna = _max_director.read_from_discovery(
-                    (proj.discovery_spec if proj is not None else None) or project_discovery_spec
-                )
-                _fresh_dna = _max_director.compile_max_design_dna(
-                    _max_product_brief,
-                    project_id=str(project_id),
-                    build_plan=_build_plan,
-                )
-                # Surgical edits inherit the established visual identity, while
-                # newly requested integrations refresh their truth contracts.
-                _max_design_dna = (
-                    replace(
-                        _stored_dna,
-                        capabilities=_fresh_dna.capabilities,
-                        skill_slices=_fresh_dna.skill_slices,
-                    )
-                    if _stored_dna is not None and (_is_edit or _is_continue)
-                    else _fresh_dna
-                )
-                if proj is None:
-                    raise RuntimeError("MAX Design Director cannot persist: project missing")
-                proj.discovery_spec = _max_director.merge_into_discovery(
-                    proj.discovery_spec, _max_design_dna
-                )
-                await session.commit()
-                project_discovery_spec = dict(proj.discovery_spec or {})
-                _seed_block += _max_design_dna.prompt_block()
-                _agent_state = agent_plan.record_tool_evidence(
-                    _agent_state,
-                    tool="design_director",
-                    ok=True,
-                    summary=(
-                        f"selected={_max_design_dna.chosen_id}; concepts=3; capabilities="
-                        + ",".join(item.id for item in _max_design_dna.capabilities)
-                    ),
-                )
-                await save_generation_agent_state(run_id, _agent_state)
-                await _agent_emit(
-                    "agent.step",
-                    {
-                        "step": 0,
-                        "action": "design_director",
-                        "human": "Определяю арт-дирекцию и продуктовые возможности",
-                        "path": ".omnia/max-design-spec.json",
-                        "detail": (
-                            f"Сравнил 3 концепции, выбрал {_max_design_dna.chosen.name}; "
-                            f"зафиксировал {len(_max_design_dna.capabilities)} контрактов."
-                        ),
-                        "ok": True,
-                    },
-                )
+                _max_design_dna = None
             if _is_continue:
                 # Resume: finish the partial app the agent left in the live
                 # container (the prior turn committed + hot-reloaded what it had).
@@ -4816,7 +4937,7 @@ async def _process_prompt(
                     completion_check=(
                         _max_completion_check if project_template == "max_miniapp" else None
                     ),
-                    enforce_max_skill_lifecycle=(project_template == "max_miniapp"),
+                    enforce_max_skill_lifecycle=False,
                     reference_max_loop=False,
                     max_steps=_agent_steps,
                     model=(
@@ -4825,9 +4946,7 @@ async def _process_prompt(
                         else PRIMARY_LLM_MODEL
                     ),
                     stable_max_loop=project_template == "max_miniapp",
-                    stable_max_product_first=(
-                        project_template == "max_miniapp" and not _max_has_generated_snapshot
-                    ),
+                    stable_max_product_first=False,
                     provider_turn_offset=_continuity_provider_epoch * 1000,
                     resume_checkpoint=_native_resume,
                     checkpoint=(
@@ -4863,6 +4982,7 @@ async def _process_prompt(
                 and not _max_has_generated_snapshot
                 and _max_runtime_checkpoint is not None
                 and not _agent_res.files
+                and not _agent_res.stop_reason.startswith("spend_budget")
             ):
                 await _agent_emit(
                     "agent.stalled",
@@ -6074,12 +6194,6 @@ async def _process_prompt(
                 )
                 if project_template == "max_miniapp":
                     from omnia_api.services.functional_gate import Check, summarize
-                    from omnia_api.services.max_design_director import evidence_verdict
-
-                    _design_proof = evidence_verdict(
-                        _max_design_dna,
-                        {**current_files, **_max_seed_files, **files},
-                    )
                     _visual_gate = _max_visual_proof or summarize(
                         [
                             Check(
@@ -6089,14 +6203,12 @@ async def _process_prompt(
                             )
                         ]
                     )
-                    # The final signed release record contains design choice,
-                    # capability coverage and the independent 360/390 verdict.
-                    # Missing proof is red; the existing rollback path below
-                    # therefore prevents a snapshot from claiming completion.
+                    # The final signed release record keeps factual runtime,
+                    # capability and independent 360/390 proof. Art direction
+                    # belongs to the coding agent rather than a server template.
                     _release_verdict = summarize(
                         [
                             *_release_verdict.checks,
-                            *_design_proof.checks,
                             *_visual_gate.checks,
                         ]
                     )
