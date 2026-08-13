@@ -83,3 +83,52 @@ async def test_max_release_proof_requires_hydrated_product(monkeypatch) -> None:
 
     assert not verdict.passed
     assert verdict.checks[-1] == failed
+
+
+async def test_max_release_proof_includes_signed_functional_gate(monkeypatch) -> None:
+    project_id = uuid4()
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "agent_build",
+        AsyncMock(return_value={"ok": True, "detail": "clean"}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "runtime_status",
+        AsyncMock(return_value={"ok": True, "status_code": 200}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"dev_url": "https://max-dev.example.test"}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "create_max_preview_session",
+        AsyncMock(return_value={"bootstrap_url": "https://max-dev.example.test/signed"}),
+    )
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+
+    async def signed_gate(url: str, *, require_persistence: bool) -> FunctionalVerdict:
+        assert url.endswith("/signed")
+        assert require_persistence is True
+        return FunctionalVerdict(
+            passed=False,
+            checks=[Check("max_reload_persistence", False, "reload read missing")],
+            summary="failed",
+        )
+
+    monkeypatch.setattr(
+        "omnia_api.services.max_functional_gate.run_max_functional_gate",
+        signed_gate,
+    )
+    verdict = await release_proof.run_release_proof(
+        project_id,
+        "max-app",
+        require_max_functional=True,
+        max_require_persistence=True,
+    )
+
+    assert not verdict.passed
+    assert verdict.checks[-1].name == "max_reload_persistence"

@@ -81,3 +81,20 @@ def test_plan_observation_uses_uniform_harness_contract() -> None:
     assert observation["summary"] == "Execution plan persisted."
     assert observation["next_actions"]
     assert observation["artifacts"] == []
+
+
+def test_completion_gap_is_fail_closed_until_every_public_step_is_attested() -> None:
+    state = agent_plan.initial_plan("Собери приложение", max_product=True)
+
+    assert "step-1" in str(agent_plan.completion_gap(state))
+    for item in list(state["steps"]):
+        state = agent_plan.update_plan(
+            state,
+            step_id=item["id"],
+            status="completed",
+            summary="Проверено живым инструментом",
+            evidence=["build/runtime/see green"],
+        )
+
+    assert agent_plan.completion_gap(state) is None
+    assert "plan_task" in str(agent_plan.completion_gap(None))

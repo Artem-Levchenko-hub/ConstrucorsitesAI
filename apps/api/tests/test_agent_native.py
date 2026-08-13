@@ -29,7 +29,8 @@ from omnia_api.services.max_generation_contract import (
 async def test_max_visual_qa_recovers_after_transient_preview_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.services import agent_vision
+    from omnia_api.services import agent_vision, max_functional_gate
+    from omnia_api.services.functional_gate import Check, summarize
 
     project_id = uuid4()
     session_calls = 0
@@ -57,12 +58,17 @@ async def test_max_visual_qa_recovers_after_transient_preview_failure(
     async def fake_sleep(delay: int) -> None:
         sleeps.append(delay)
 
+    async def fake_functional(_url: str, *, require_persistence: bool) -> Any:
+        assert require_persistence is False
+        return summarize([Check("max_signed_functional", True, "green")])
+
     monkeypatch.setattr(
         messages.orchestrator_client,
         "create_max_preview_session",
         fake_session,
     )
     monkeypatch.setattr(agent_vision, "see_page", fake_see)
+    monkeypatch.setattr(max_functional_gate, "run_max_functional_gate", fake_functional)
     monkeypatch.setattr(messages.asyncio, "sleep", fake_sleep)
 
     result = await messages._run_max_visual_qa(
@@ -135,21 +141,17 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
         stable_max_loop=True,
     )
 
-    assert "один непрерывный проход" in prompt
-    assert "ПЕРВОЙ продуктовой записью" in prompt
+    assert "MAX PRODUCT STUDIO" in prompt
+    assert "АРТ-ДИРЕКЦИЯ ДО КОДА" in prompt
     assert "ProductApp.tsx" in prompt
-    assert "защищённое ядро" not in prompt
-    assert "короче 24 000 символов" in prompt
+    assert "защищённое ядро" in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
-    assert "MAX PRODUCT STUDIO" not in prompt
     assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in prompt
     assert "Sonnet" not in prompt
     assert "Gemini" not in prompt
-    assert "read_skill" not in prompt
-    assert "MAX capability catalog" not in prompt
-    assert "Демо-данные и локальные примеры разрешены" in prompt
-    assert "обязательно вызови see" not in prompt
-    assert "design/legal" in prompt
+    assert "read_skill" in prompt
+    assert "MAX capability catalog" in prompt
+    assert "signed MAX preview session" in prompt
     assert "build" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= names
@@ -157,6 +159,8 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert agent_native._TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
     stable_names = {tool["name"] for tool in agent_native._STABLE_MAX_TOOLS_CACHED}
     assert {
+        "plan_task",
+        "update_plan",
         "list_dir",
         "read_file",
         "grep",
@@ -166,6 +170,10 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
         "build",
         "read_logs",
         "runtime_check",
+        "see",
+        "read_skill",
+        "discover_capabilities",
+        "call_capability",
         "generate_media",
         "done",
     } == stable_names
@@ -219,16 +227,15 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "_publishable_agent_files" in source
     assert "must_restore_previous=_must_restore_previous" in source
     assert "agent_native.run_native_build" in source
-    assert "build_max_product_contract" not in source
-    assert "completion_check=max_completion_gap" not in source
-    assert "_reference_max_completion_gap" in source
-    assert "require_product_entry=not _max_has_generated_snapshot" in source
+    assert "build_max_product_contract" in source
+    assert "max_completion_gap" in source
+    assert "_max_completion_check" in source
     assert "reference_max_loop=False" in source
     assert "max_steps=_agent_steps" in source
     assert "model=(" in source
     assert "MAX_STUDIO_LLM_MODEL" in source
     assert 'stable_max_loop=project_template == "max_miniapp"' in source
-    assert "load_stack_skill_index(_orch_name)" not in source
+    assert "load_stack_skill_index(_orch_name)" in source
     assert 'if action.name == "read_skill"' in source
     assert 'if action.name == "plan_task"' in source
     assert 'if action.name == "update_plan"' in source
@@ -260,14 +267,14 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "_run_max_visual_qa" in source
     assert "_recover_max_resume_prompt" in source
     assert "_merge_max_product_brief" in source
-    assert "max_source_completion_gap" not in source
+    assert "max_completion_gap" in source
     assert "src/components/product/ProductApp.tsx" in source
     assert "normalize_max_globals_css" in source
     assert "await asyncio.sleep(2)" in source
-    assert 'and project_template != "max_miniapp"' in source
+    assert 'max_runtime=project_template == "max_miniapp"' in source
     assert 'product_kind="max_miniapp"' in inspect.getsource(messages._run_max_visual_qa)
     assert "EXISTING MAX ART DIRECTION" not in source
-    assert "require_native_legal_nav=True" not in source
+    assert "enforce_max_skill_lifecycle" in source
     assert "run_max_hydration_check(project_id)" in source
     assert "_max_terminal_failure(" in source
 
@@ -325,13 +332,13 @@ def test_fresh_max_reference_gate_rejects_css_only_or_managed_empty_entry() -> N
         {
             "src/components/product/ProductApp.tsx": (
                 "export default function ProductApp() { return "
-                "<main data-max-product-canvas=\"empty\" />; }"
+                '<main data-max-product-canvas="empty" />; }'
             )
         },
         evidence,
         require_product_entry=True,
     )
-    entry = 'export default function ProductApp() { return <main>Рабочий продукт</main>; }'
+    entry = "export default function ProductApp() { return <main>Рабочий продукт</main>; }"
     assert (
         messages._reference_max_completion_gap(
             {"src/components/product/ProductApp.tsx": entry},
@@ -350,14 +357,17 @@ def test_fresh_max_reference_gate_does_not_judge_css_architecture() -> None:
     )
     starter_css = ".max-shell { padding: 20px; }\n" + ("/* starter */\n" * 40)
 
-    assert messages._reference_max_completion_gap(
-        {
-            "src/components/product/ProductApp.tsx": entry,
-            "src/app/globals.css": starter_css,
-        },
-        {"runtime_check_after_write": 1, "see_after_write": 1},
-        require_product_entry=True,
-    ) is None
+    assert (
+        messages._reference_max_completion_gap(
+            {
+                "src/components/product/ProductApp.tsx": entry,
+                "src/app/globals.css": starter_css,
+            },
+            {"runtime_check_after_write": 1, "see_after_write": 1},
+            require_product_entry=True,
+        )
+        is None
+    )
 
 
 def test_fresh_max_reference_gate_rejects_legacy_max_ui_but_edit_allows_it() -> None:
@@ -405,14 +415,17 @@ def test_fresh_max_reference_gate_does_not_require_runtime_ceremony() -> None:
         ".unrelated { padding: 20px; }\n" + ("/* enough bytes but no product selectors */\n" * 20)
     )
 
-    assert messages._reference_max_completion_gap(
-        {
-            "src/components/product/ProductApp.tsx": entry,
-            "src/app/globals.css": deceptive_css,
-        },
-        {},
-        require_product_entry=True,
-    ) is None
+    assert (
+        messages._reference_max_completion_gap(
+            {
+                "src/components/product/ProductApp.tsx": entry,
+                "src/app/globals.css": deceptive_css,
+            },
+            {},
+            require_product_entry=True,
+        )
+        is None
+    )
 
 
 def test_fresh_max_reference_gate_finishes_after_runtime_without_visual_ceremony() -> None:
@@ -1012,7 +1025,18 @@ async def test_stable_max_rejects_support_files_before_product_entry(
 
 def test_stable_max_preentry_surface_allows_only_product_entry_write() -> None:
     names = {tool["name"] for tool in agent_native._STABLE_MAX_PREENTRY_TOOLS_CACHED}
-    assert names == {"list_dir", "read_file", "grep", "docs", "write_file"}
+    assert names == {
+        "plan_task",
+        "update_plan",
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "read_skill",
+        "discover_capabilities",
+        "call_capability",
+        "write_file",
+    }
     assert not ({"edit_file", "build", "done"} & names)
 
     write_tool = next(
@@ -2341,12 +2365,10 @@ async def test_stable_max_reopens_editing_after_actionable_visual_feedback(
         "{ return <main>polished</main>; }"
     )
     assert advertised[2] == {"runtime_check"}
-    # Stable MAX does not advertise subjective visual judging. The injected
-    # legacy action is still handled defensively without corrupting the tree.
-    assert "see" not in advertised[3]
+    assert "see" in advertised[3]
     assert "write_file" in advertised[4]
     assert advertised[6] == {"runtime_check"}
-    assert "see" not in advertised[7]
+    assert "see" in advertised[7]
 
 
 @pytest.mark.asyncio
@@ -2699,7 +2721,7 @@ async def test_stable_max_css_only_visual_repair_resumes_rendered_proof(
     assert advertised[4] == {"write_file", "edit_file", "generate_media"}
     assert advertised[5] == {"build"}
     assert advertised[6] == {"runtime_check"}
-    assert "see" not in advertised[7]
+    assert "see" in advertised[7]
 
 
 @pytest.mark.asyncio
@@ -3694,11 +3716,7 @@ async def test_active_max_safe_surface_survives_timeout_and_reaches_verified_con
     )
 
     assert calls[0]["tools"] == {
-        "list_dir",
-        "read_file",
-        "grep",
-        "docs",
-        "write_file",
+        tool["name"] for tool in agent_native._STABLE_MAX_PREENTRY_TOOLS_CACHED
     }
     assert calls[2]["turn_id"] == calls[3]["turn_id"]
     assert (calls[2]["resume_count"], calls[3]["resume_count"]) == (0, 1)

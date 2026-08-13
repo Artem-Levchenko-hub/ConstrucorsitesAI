@@ -310,25 +310,33 @@ _MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     {**_MAX_TOOLS[-1], "cache_control": _CACHE},
 ]
 
-# The stable MAX loop is an engineering loop, not a design orchestrator. Keep
-# only tools that directly create or prove the product; planning, skills, MCP
-# discovery and visual judging add paid turns without making completion safer.
+# Stable MAX uses the same mature native-agent lifecycle as ordinary container
+# apps, with MAX-only schemas removing unsafe generic login/isolation probes.
+# Planning, server-owned skills, signed vision and read-only capability research
+# are part of the production proof; file/path/secret safety remains enforced by
+# the MAX executor independently of which schemas are advertised.
 _STABLE_MAX_TOOL_NAMES = frozenset(
     {
+        "plan_task",
+        "update_plan",
         "list_dir",
         "read_file",
         "grep",
         "docs",
+        "read_skill",
+        "discover_capabilities",
+        "call_capability",
         "write_file",
         "edit_file",
         "build",
         "read_logs",
         "runtime_check",
+        "see",
         "generate_media",
         "done",
     }
 )
-_STABLE_MAX_TOOLS = [tool for tool in _TOOLS if tool["name"] in _STABLE_MAX_TOOL_NAMES]
+_STABLE_MAX_TOOLS = [tool for tool in _MAX_TOOLS if tool["name"] in _STABLE_MAX_TOOL_NAMES]
 _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_TOOLS[:-1],
     {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
@@ -577,7 +585,18 @@ _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
 _STABLE_MAX_PREENTRY_READ_TOOLS = [
     tool
     for tool in _STABLE_MAX_TOOLS
-    if tool["name"] in {"list_dir", "read_file", "grep", "docs"}
+    if tool["name"]
+    in {
+        "plan_task",
+        "update_plan",
+        "list_dir",
+        "read_file",
+        "grep",
+        "docs",
+        "read_skill",
+        "discover_capabilities",
+        "call_capability",
+    }
 ]
 _STABLE_MAX_PREENTRY_TOOLS_CACHED = [
     *_STABLE_MAX_PREENTRY_READ_TOOLS,
@@ -1156,6 +1175,14 @@ _MAX_REFERENCE_EDIT_PREAMBLE = (
     "email-авторизацию, API или прямой доступ к БД."
 )
 
+_MAX_NATIVE_EDIT_OVERRIDE = (
+    "MAX EDIT OVERRIDE: preserve the existing product promise, art direction, screens, "
+    "managed data and integrations unless the user explicitly changes them. Inspect only "
+    "the affected source, make the smallest coherent repair, update the observable plan, "
+    "then repeat build/runtime_check/signed see and every functional proof affected by the "
+    "edit. Do not redesign unrelated screens or weaken production acceptance."
+)
+
 
 def native_system_prompt(
     stack_guide: str,
@@ -1170,19 +1197,21 @@ def native_system_prompt(
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    # The stable MAX path needs a short product-first preamble. The generic web
-    # prompt advertises unavailable planning/probe tools and is large enough to
-    # encourage repeated exploration of the already-known starter.
+    # MAX keeps the bounded product-first loop but uses the full product/design/
+    # verification contract. Generic login probes remain excluded by MAX schemas.
     _ = reference_max_loop, reference_max_edit
     parts = [
-        (_MAX_REFERENCE_EDIT_PREAMBLE if stable_max_edit else _MAX_REFERENCE_PREAMBLE)
+        (
+            f"{_MAX_NATIVE_PREAMBLE}\n\n{_MAX_NATIVE_EDIT_OVERRIDE}"
+            if stable_max_edit
+            else _MAX_NATIVE_PREAMBLE
+        )
         if stable_max_loop
         else _NATIVE_PREAMBLE,
+        _MAX_NATIVE_VERIFICATION_OVERRIDE if stable_max_loop else "",
         guide,
     ]
-    # Stable MAX deliberately omits read_skill and its catalog: advertising
-    # unavailable design ceremony wastes paid turns and prompt budget.
-    if skills and skills.strip() and not stable_max_loop:
+    if skills and skills.strip():
         parts.append(skills.strip())
     return "\n\n".join(p for p in parts if p)
 
@@ -1733,6 +1762,10 @@ async def run_native_build(
             force_entry_write = (
                 product_first
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
+                and (
+                    not max_lifecycle
+                    or all(skill in successful_skill_ids for skill in MAX_REQUIRED_PREWRITE_SKILLS)
+                )
                 and (
                     turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
                     or entry_focus_compacted

@@ -886,8 +886,10 @@ Platform boundaries only:
 - `createMaxAction`, `getMaxActions` and `requestOmniaAI` come from
   `@/lib/omnia/integration-client`. The AI call is
   `requestOmniaAI({ message, instructions, context })`.
-- Demo/local data is allowed when the brief requests it or preview needs a useful
-  first state. Never present demo identity as the authenticated MAX user.
+- Static product reference content (catalogs, services, plans, exercises) is
+  allowed when the brief needs it. Never invent user identity, history, metrics,
+  orders, completed activity or successful integrations. Restore managed user
+  activity with `getMaxActions` after reload and await every `createMaxAction`.
 
 Product design contract:
 - Derive the visual system from the product's audience, task and content. Do not
@@ -900,8 +902,13 @@ Product design contract:
   card pattern across every screen.
 - Build and verify every requested navigation destination and primary action.
   Tabs must remain responsive through repeated ordinary clicks with editor mode off.
+- Expose inert production-test hooks on real controls/views:
+  `data-omnia-screen-nav`, `data-omnia-screen`, `data-omnia-primary-action`,
+  `data-omnia-persisted-action` and planner-supplied `data-omnia-capability` ids.
+  They do not replace semantic buttons/links, labels or actual behavior.
 
-Do not add MAX-owned chrome, a required legal footer/marker, a design spec or other
-ceremony. Implement the user's product, run build, repair factual compiler errors,
-then finish. Independent runtime hydration is checked after the agent loop.
+Do not recreate MAX-owned chrome. Keep reachable links to the managed support,
+privacy and terms routes. Persist the selected art direction in
+`.omnia/max-design-spec.json`, then prove build, signed runtime interactions,
+reload persistence, accessibility and visual quality before completion.
 """.strip()

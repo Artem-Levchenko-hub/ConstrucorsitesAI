@@ -112,8 +112,7 @@ def make_plan(
         "objective": clean_objective,
         "steps": planned,
         "acceptance_criteria": clean_criteria,
-        "next_action": _text((previous or {}).get("next_action"), limit=800)
-        or planned[0]["title"],
+        "next_action": _text((previous or {}).get("next_action"), limit=800) or planned[0]["title"],
         "last_tool": _text((previous or {}).get("last_tool"), limit=80),
         "last_summary": _text((previous or {}).get("last_summary"), limit=1000),
         "created_at": str((previous or {}).get("created_at") or now),
@@ -243,3 +242,41 @@ def recovery_context(state: Mapping[str, Any] | None) -> str:
         + f"\nNext action: {_text(state.get('next_action'), limit=800)}\n"
         "Continue from the live files and re-verify evidence; do not repeat completed work."
     )
+
+
+def completion_gap(state: Mapping[str, Any] | None) -> str | None:
+    """Return the first observable plan item that still blocks completion.
+
+    This deliberately judges only the public checkpoint, never hidden reasoning.
+    A native agent may refine the deterministic initial plan, but it cannot attest
+    a product as complete while one of its own declared steps is still pending,
+    in progress, or blocked.
+    """
+
+    if not state or not isinstance(state.get("steps"), list):
+        return "Create an observable execution plan with plan_task before completion."
+    incomplete: list[str] = []
+    for item in state["steps"]:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("status") or "pending") != "completed":
+            step_id = _text(item.get("id"), limit=40) or "step"
+            title = _text(item.get("title"), limit=180) or "untitled"
+            incomplete.append(f"{step_id} ({title})")
+    if incomplete:
+        return (
+            "Execution plan is not fully attested. Complete and update these steps with "
+            "factual tool evidence: " + ", ".join(incomplete[:6]) + "."
+        )
+    return None
+
+
+__all__ = [
+    "completion_gap",
+    "initial_plan",
+    "make_plan",
+    "observation",
+    "record_tool_evidence",
+    "recovery_context",
+    "update_plan",
+]

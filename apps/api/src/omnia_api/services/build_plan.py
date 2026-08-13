@@ -269,7 +269,7 @@ class BuildPlan:
             log.warning("build_plan.from_dict degraded to empty: %r", exc)
             return cls()
 
-    def checklist_block(self) -> str:
+    def checklist_block(self, *, max_runtime: bool = False) -> str:
         """The plan rendered as the build-prompt checklist (and the human-facing
         contract). Empty plan → ``""`` so the caller appends nothing."""
         if self.is_empty:
@@ -284,7 +284,8 @@ class BuildPlan:
             lines.append("ЭКРАНЫ (каждый ОБЯЗАН существовать и открываться без ошибки):")
             for s in self.screens:
                 tail = f" — {s.purpose}" if s.purpose else ""
-                lines.append(f"  - {s.route} «{s.name}»{tail}")
+                marker = f' [маркер data-omnia-screen="{s.route}"]' if max_runtime else ""
+                lines.append(f"  - {s.route} «{s.name}»{tail}{marker}")
         if self.entities:
             lines.append("СУЩНОСТИ (данные):")
             for e in self.entities:
@@ -298,8 +299,17 @@ class BuildPlan:
             for c in self.capabilities:
                 where = f" → {c.method} {c.path}" if c.path else " (через UI)"
                 star = "" if c.must_have else " (доп.)"
-                lines.append(f"  - [{c.actor_role}] {c.action}{where} ⇒ {c.expect}{star}")
-        if self.blocking_capabilities():
+                marker = f' [маркер data-omnia-capability="{c.id}"]' if max_runtime else ""
+                lines.append(f"  - [{c.actor_role}] {c.action}{where} ⇒ {c.expect}{star}{marker}")
+        if max_runtime:
+            lines.append(
+                "MAX RUNTIME PROOF: use semantic <nav> controls with "
+                "data-omnia-screen-nav on every main view switch; mark the main usable "
+                "CTA data-omnia-primary-action. Mark an action that writes managed user "
+                "data data-omnia-persisted-action so the signed browser gate can click it, "
+                "reload, and prove restoration. Markers are test hooks, not decoration."
+            )
+        elif self.blocking_capabilities():
             lines.append(
                 "ПЕРЕД done: проверь КАЖДУЮ обязательную возможность инструментом "
                 "`probe` (реальный авторизованный запрос) — она ОБЯЗАНА вернуть "
@@ -345,6 +355,9 @@ _PLANNER_SYSTEM = """\
 - fullstack / drizzle: пишешь сам, обычно /api/<resource> и /api/<resource>/[id].
 - nextjs-realtime: сообщения /api/realtime/<channel>, каналы /api/channels.
 - vite-react-spa: без бэка -> UI-действия (path: "", must_have: false).
+- max-miniapp-nextjs: один browser route `/`, а screens — внутренние мобильные views. \
+Не выдумывай API routes: действия через managed integration client, поэтому path: "" и \
+must_have: false; дай каждой возможности стабильный id для UI/runtime-маркера.
 Не уверен в пути — path: "" + must_have: false, не выдумывай эндпойнт.
 
 Верни СТРОГО валидный JSON (и больше НИЧЕГО — без markdown-ограждений, без \

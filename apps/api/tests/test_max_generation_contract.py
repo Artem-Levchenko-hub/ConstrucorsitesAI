@@ -4,10 +4,12 @@ import json
 
 import pytest
 
+from omnia_api.services.build_plan import BuildPlan
 from omnia_api.services.max_generation_contract import (
     MAX_REQUIRED_POST_SEE_SKILL,
     MAX_REQUIRED_PREWRITE_SKILLS,
     build_max_product_contract,
+    max_build_plan_completion_gap,
     max_completion_gap,
     max_demo_data_rejection,
     max_source_completion_gap,
@@ -57,7 +59,10 @@ def _complete_files() -> dict[str, str]:
             "export default function Page(){ const { user } = useMaxApp(); "
             "useEffect(() => { async function restore(){ await getMaxActions(); } "
             "void restore(); }, []); "
-            'return <main data-omnia-native-legal-nav="true"><button onClick={persist}>'
+            'return <main data-omnia-native-legal-nav="true" data-omnia-screen="/">'
+            "<button data-omnia-screen-nav onClick={() => {}}>Обзор</button>"
+            "<button data-omnia-screen-nav onClick={() => {}}>История</button>"
+            "<button data-omnia-primary-action data-omnia-persisted-action onClick={persist}>"
             "Сохранить</button>ИИ тренер: тренировки, сон, "
             "питание, статистика, график, профиль, история, уведомления, loading, empty, "
             'error, retry, {user?.firstName}<nav><a href="/support">Поддержка</a>'
@@ -85,6 +90,8 @@ def _complete_evidence() -> dict[str, int]:
     return {
         **{f"skill:{skill}": 1 for skill in MAX_REQUIRED_PREWRITE_SKILLS},
         f"skill:{MAX_REQUIRED_POST_SEE_SKILL}": 1,
+        "plan_task": 1,
+        "update_plan": 1,
         "visual_evaluation_after_see": 1,
         "build_after_write": 1,
         "runtime_check_after_write": 1,
@@ -123,15 +130,20 @@ export default function Page() {
       setEmpty(false);
     } catch { setFailure("Ошибка анализа — повторите"); } finally { setLoading(false); }
   }
-  return <main data-omnia-native-legal-nav="true">
+  return <main data-omnia-native-legal-nav="true" data-omnia-screen="/">
     <header><h1>Фитнес для {user?.firstName || "спортсмена"}</h1></header>
     <nav aria-label="Разделы">
       {["Тренировки", "Сон", "Питание", "Статистика", "Профиль",
         "История", "Уведомления"].map(label =>
-        <button key={label} onClick={() => setView(label)}>{label}</button>)}
+        <button data-omnia-screen-nav key={label} onClick={() => setView(label)}>{label}</button>)}
     </nav>
     <section><h2>{view}</h2><p>График динамики и восстановление после тренировок.</p></section>
-    <button onClick={analyze} disabled={loading}>
+    <button
+      data-omnia-primary-action
+      data-omnia-persisted-action
+      onClick={analyze}
+      disabled={loading}
+    >
       {loading ? "Загрузка" : "Разобрать тренировку"}
     </button>
     {empty && <p>Пусто: добавьте первую тренировку</p>}
@@ -190,9 +202,9 @@ def test_completion_requires_persistent_project_specific_design_spec() -> None:
 def test_completion_requires_product_owned_legal_navigation_when_enabled() -> None:
     files = _complete_files()
     page = files["src/app/page.tsx"]
-    files["src/app/page.tsx"] = page.replace(
-        ' data-omnia-native-legal-nav="true"', ""
-    ).replace('<a href="/legal/terms">Условия</a>', "")
+    files["src/app/page.tsx"] = page.replace(' data-omnia-native-legal-nav="true"', "").replace(
+        '<a href="/legal/terms">Условия</a>', ""
+    )
 
     gap = max_source_completion_gap(
         COMPLEX_BRIEF,
@@ -216,35 +228,28 @@ def test_completion_requires_product_owned_legal_navigation_when_enabled() -> No
     files["src/app/page.tsx"] = (
         'const unusedLegalUrls = ["/support", "/legal/privacy", "/legal/terms"];\n'
         'const unusedMarkup = \'<a href="/support">x</a>'
-        '<a href="/legal/privacy">x</a><a href="/legal/terms">x</a>\';\n'
-        + page
+        '<a href="/legal/privacy">x</a><a href="/legal/terms">x</a>\';\n' + page
     )
-    assert (
-        "Native MAX support/legal navigation is incomplete"
-        in str(
-            max_source_completion_gap(
-                COMPLEX_BRIEF,
-                files,
-                require_design_spec=False,
-                require_native_legal_nav=True,
-            )
+    assert "Native MAX support/legal navigation is incomplete" in str(
+        max_source_completion_gap(
+            COMPLEX_BRIEF,
+            files,
+            require_design_spec=False,
+            require_native_legal_nav=True,
         )
     )
 
     files = _complete_files()
     page = files["src/app/page.tsx"].replace(' data-omnia-native-legal-nav="true"', "")
     files["src/app/page.tsx"] = (
-        'const unusedMarker = \'<main data-omnia-native-legal-nav="true">\';\n' + page
+        "const unusedMarker = '<main data-omnia-native-legal-nav=\"true\">';\n" + page
     )
-    assert (
-        "Native MAX support/legal navigation is incomplete"
-        in str(
-            max_source_completion_gap(
-                COMPLEX_BRIEF,
-                files,
-                require_design_spec=False,
-                require_native_legal_nav=True,
-            )
+    assert "Native MAX support/legal navigation is incomplete" in str(
+        max_source_completion_gap(
+            COMPLEX_BRIEF,
+            files,
+            require_design_spec=False,
+            require_native_legal_nav=True,
         )
     )
 
@@ -796,15 +801,42 @@ def test_completion_requires_only_max_compatible_runtime_proof() -> None:
     files = _complete_files()
     gap = max_completion_gap(COMPLEX_BRIEF, files, {})
     assert gap is not None
-    assert "capability packs" in gap
+    assert "plan_task" in gap
 
-    skill_evidence = {f"skill:{skill}": 1 for skill in MAX_REQUIRED_PREWRITE_SKILLS}
+    skill_evidence = {
+        "plan_task": 1,
+        "update_plan": 1,
+        **{f"skill:{skill}": 1 for skill in MAX_REQUIRED_PREWRITE_SKILLS},
+    }
     gap = max_completion_gap(COMPLEX_BRIEF, files, skill_evidence)
     assert gap is not None
     assert "runtime_check" in gap
 
     evidence = _complete_evidence()
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
+
+
+def test_max_build_plan_completion_requires_every_screen_and_capability_hook() -> None:
+    plan = BuildPlan.from_dict(
+        {
+            "screens": [{"route": "/"}, {"route": "/history"}],
+            "capabilities": [
+                {"id": "start_workout", "action": "Начать тренировку", "must_have": False}
+            ],
+        }
+    )
+    files = {
+        "src/components/product/ProductApp.tsx": (
+            '<main data-omnia-screen="/"><button '
+            'data-omnia-capability="start_workout">Старт</button></main>'
+        )
+    }
+
+    assert "/history" in str(max_build_plan_completion_gap(plan, files))
+    files["src/components/product/ProductApp.tsx"] += (
+        '<section data-omnia-screen="/history">История</section>'
+    )
+    assert max_build_plan_completion_gap(plan, files) is None
 
 
 def test_source_gap_is_independent_from_broken_max_preview_tooling() -> None:
@@ -1035,7 +1067,7 @@ def test_managed_core_copy_cannot_fake_product_coverage() -> None:
     gap = max_source_completion_gap(COMPLEX_BRIEF, files)
 
     assert gap is not None
-    assert "missing" in gap.lower()
+    assert "runtime-testable" in gap.lower()
 
 
 def test_completion_rejects_product_db_bypass_but_allows_managed_routes() -> None:

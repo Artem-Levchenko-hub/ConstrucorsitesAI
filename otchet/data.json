@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 49,
+  "version": 50,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Обычный клик в MAX preview полностью отделён от редактора",
   "subtitle": "Inspector не регистрирует обработчики в режиме просмотра; heartbeat остался отдельным ограниченным таймером.",
   "items": [
+   {
+    "s": "testing",
+    "t": "MAX снова завершается только как полноценное приложение",
+    "d": "Production-path больше не использует минимальный demo-as-done gate: общий BuildPlan, observable plan, серверные skills, signed see и MAX functional gate включены в один bounded native-loop. Финал требует полного source-контракта, всех plan markers, build/runtime/visual evidence, кликабельной навигации и primary action, managed write + reload-read при пользовательских данных, mobile/a11y/browser checks; красный proof откатывает runtime и не создаёт snapshot, а signed attestation сохраняется в той же транзакции. Локально зелёные 194 целевых теста, Ruff и mypy; живая production-генерация ожидает доставку."
+   },
    {
     "s": "testing",
     "t": "Зависший ответ MAX теперь ограничен и всегда завершает run",
@@ -297,6 +302,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "13.08",
+   "what": "Поручил вернуть MAX тот же зрелый full-app agent/gate-контур, что у обычного генератора, не ослабляя Bridge, runtime, секреты и legal-границы.",
+   "impact": "MAX снова планирует полное приложение, читает server-owned capability packs, смотрит подписанный preview и не может завершиться на красивом локальном демо. Навигация, основное действие, сохранение после reload, ошибки, mobile и доступность теперь имеют исполняемый browser-proof; незакрытый план или отсутствующая аттестация блокируют snapshot."
+  },
   {
    "date": "13.08",
    "what": "Уточнил, что редактор вообще не включался: зависание возникает при обычном изучении готовых страниц внутри preview.",
@@ -2694,6 +2704,18 @@
       "evidence": "На актуальном production commit 4c384229 проекта c66e4b17 клик Статистика→Тренировки зависал за 5 секунд и standalone, и во framed harness. Matrix в Chromium: baseline HANG, отключённый inspector HANG, отключённый MutationObserver 74 мс, отключённые оба 80 мс. Код OmniaCompliance считал собственные три ссылки нативными, скрывал себя, снова не находил ссылки и повторял цикл. С исправленным алгоритмом Chromium выполнил клик, оставил ровно 1 fallback и остановился после 2 observer callbacks / 1 DOM commit; kit поднят с 30 до 31.",
       "impact": "Обычное переключение вкладки больше не может запустить бесконечную вставку и удаление служебного блока и занять главный поток всей страницы. Исправление штатно попадёт и в новые, и в уже созданные MAX-проекты через managed sync.",
       "next_vector": "Доставить api/worker, синхронизировать production-проект до kit 31 и повторить пять вкладок в точном signed preview"
+    },
+    {
+      "id": "H141",
+      "title": "MAX full-app contract использует общий зрелый agent/gate pipeline",
+      "status": "testing",
+      "score": null,
+      "category": "MAX / генерация / функциональность / верификация",
+      "period": "13.08",
+      "description": "Убрать preview-first исключения MAX и разрешать завершение только после полного плана, правдивых managed actions, reload persistence, signed interaction/visual proof и атомарной release-аттестации.",
+      "evidence": "Production-вызов заменил `_reference_max_completion_gap` на `max_completion_gap`, включил общий BuildPlan и immutable skill index, plan_task/update_plan/read_skill/see/read-only MCP в MAX-safe toolset и обязательный skill lifecycle. Новый signed Playwright gate проверяет semantic main navigation, primary action, managed POST + GET после reload, browser errors, 390px overflow, headings/labels/tap targets; source gate запрещает silent catch и требует deterministic plan/action hooks. Красный final proof восстанавливает checkpoint и обнуляет publishable files; положительная attestation вставляется в транзакции snapshot. Локально: 194/194 целевых теста, Ruff и mypy зелёные.",
+      "impact": "Чистая компиляция и локально нарисованные цифры больше не являются готовым MAX-приложением. Платформа требует доказательство реального поведения и не публикует частичную версию; locked files, API routes, секреты, direct DB и generic web-auth probes остаются недоступны.",
+      "next_vector": "После доставки выполнить fresh production canary: пройти все main views, primary/persisted action, reload, signed visual score и проверить overall_passed attestation точного commit"
     }
  ],
  "vectors": [
@@ -3228,6 +3250,10 @@
     ],
     [
      "Активный MAX native-loop: полный SAFE toolset, durable plan, read-only MCP и обязательные runtime + signed visual proof",
+     true
+    ],
+    [
+     "MAX full-app gate: BuildPlan coverage, plan attestation, signed navigation/action/reload/mobile/a11y proof и атомарная snapshot attestation",
      true
     ],
     [

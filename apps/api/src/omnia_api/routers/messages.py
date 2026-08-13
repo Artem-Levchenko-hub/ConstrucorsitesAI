@@ -221,18 +221,18 @@ def _reference_max_completion_gap(
     *,
     require_product_entry: bool,
 ) -> str | None:
-    """Minimal MAX delivery gate; final browser proof runs after this loop."""
+    """Legacy unit-test helper; production uses ``max_completion_gap`` below.
+
+    Keeping this pure compatibility surface lets historical bounded-loop tests
+    exercise their narrow transition without weakening the live MAX contract.
+    """
 
     if not written:
-        return (
-            "The agent has not changed a product file yet. "
-            "Implement the requested MAX app before finishing."
-        )
+        return "The agent has not changed a product file yet."
     if require_product_entry:
         if any("@maxhub/max-ui" in content for content in written.values()):
             return (
-                "Fresh MAX products must not import @maxhub/max-ui. Use ordinary React, "
-                "Tailwind or product CSS; the package remains only for historical snapshots."
+                "Fresh MAX products must use ordinary React; max-ui is historical snapshots only."
             )
         entry = str(written.get("src/components/product/ProductApp.tsx") or "").strip()
         if (
@@ -240,11 +240,7 @@ def _reference_max_completion_gap(
             or 'data-max-product-canvas="empty"' in entry
             or "data-max-product-canvas='empty'" in entry
         ):
-            return (
-                "A fresh MAX build must replace "
-                "src/components/product/ProductApp.tsx with a real product, not only "
-                "CSS or a placeholder."
-            )
+            return "A fresh MAX build must replace ProductApp.tsx with a real product."
     return None
 
 
@@ -1104,6 +1100,30 @@ async def _run_max_visual_qa(
             continue
 
         if visual.get("ok"):
+            from omnia_api.services.max_functional_gate import run_max_functional_gate
+            from omnia_api.services.max_generation_contract import (
+                max_prompt_requires_persistence,
+            )
+
+            functional = await run_max_functional_gate(
+                bootstrap_url,
+                require_persistence=max_prompt_requires_persistence(prompt_context),
+            )
+            visual["functional_verdict"] = functional
+            visual["functional_passed"] = functional.passed
+            visual["detail"] = (
+                str(visual.get("detail") or "")
+                + "\n\nSIGNED MAX FUNCTIONAL GATE:\n"
+                + functional.summary
+                + "\n"
+                + "\n".join(
+                    f"- {check.name}: {'PASS' if check.ok else 'FAIL'} — {check.detail}"
+                    for check in functional.checks
+                )
+            )
+            if not functional.passed:
+                visual["ok"] = False
+                visual["needs_fix"] = True
             if attempt > 1:
                 logging.getLogger(__name__).info(
                     "metric=max_visual_qa_retry_recovered project_id=%s attempt=%d",
@@ -3689,6 +3709,13 @@ async def _process_prompt(
                 if project_template == "max_miniapp"
                 else prompt_text
             )
+            _max_acceptance_contract = ""
+            if project_template == "max_miniapp":
+                from omnia_api.services.max_generation_contract import (
+                    build_max_product_contract,
+                )
+
+                _max_acceptance_contract = build_max_product_contract(_max_product_brief)
 
             # Durable observable plan. A retry inherits the last failed run's
             # checkpoint, while a fresh request starts from a small deterministic
@@ -4142,7 +4169,7 @@ async def _process_prompt(
             _skills = None
             if get_settings().use_skill_injection:
                 _skills = (
-                    None
+                    agent_builder.load_stack_skill_index(_orch_name)
                     if project_template == "max_miniapp"
                     else agent_builder.load_stack_skills(_orch_name)
                 )
@@ -4199,7 +4226,7 @@ async def _process_prompt(
             try:
                 from omnia_api.services import build_plan as _bplan
 
-                if get_settings().use_build_plan and project_template != "max_miniapp":
+                if get_settings().use_build_plan:
                     _build_plan = _bplan.BuildPlan()
                     if orchestrate and not _is_continue and not _is_edit:
                         _build_plan = await _bplan.plan_build(
@@ -4222,7 +4249,9 @@ async def _process_prompt(
                                 )
                     else:
                         _build_plan = _bplan.read_plan(project_discovery_spec)
-                    _bp_block = _build_plan.checklist_block()
+                    _bp_block = _build_plan.checklist_block(
+                        max_runtime=project_template == "max_miniapp"
+                    )
                     if _bp_block:
                         _seed_block = _seed_block + _bp_block
                         print(
@@ -4276,7 +4305,7 @@ async def _process_prompt(
                 if project_template == "max_miniapp":
                     _agent_user = (
                         "Собери полноценный MAX Mini App по запросу пользователя:\n\n"
-                        f"{prompt_text}\n\n{_seed_block}\n\n"
+                        f"{prompt_text}\n\n{_max_acceptance_contract}\n\n{_seed_block}\n\n"
                         "Среда MAX уже запущена и не задаёт дизайн. Первой продуктовой "
                         "записью полностью замени src/components/product/ProductApp.tsx: "
                         "собери целостный мобильный MVP со всеми главными экранами, "
@@ -4284,9 +4313,10 @@ async def _process_prompt(
                         "быть видимым и оформленным; вспомогательные файлы выноси только "
                         "после него. Сохрани управляемые Bridge/initData/profile/webhook "
                         "файлы, не создавай свои API routes и не вставляй секреты. Явно "
-                        "запрошенные демонстрационные данные разрешены. Затем запусти build, "
-                        "исправь фактические ошибки компилятора и заверши без формальных "
-                        "design/legal чек-листов."
+                        "Каталоги/планы могут быть статическим справочным контентом, но "
+                        "пользовательские достижения, история и успешные действия обязаны "
+                        "быть реальными и восстанавливаться после reload. Выполни весь plan, "
+                        "build, подписанную функциональную/визуальную проверку и только затем done."
                     )
                     # Exact pre-Gemini production ceiling used by successful MAX
                     # builds. The independent atomic gateway fuse still bounds
@@ -4408,6 +4438,24 @@ async def _process_prompt(
                 # see agent_native._NO_WRITE_*/_INFRA_DEAD_ABORT_AT.
                 from omnia_api.services import agent_native
 
+                def _max_completion_check(
+                    written: Mapping[str, str], evidence: Mapping[str, int]
+                ) -> str | None:
+                    if project_template != "max_miniapp":
+                        return None
+                    from omnia_api.services.max_generation_contract import max_completion_gap
+
+                    merged = {**current_files, **_max_seed_files, **written}
+                    gap = max_completion_gap(
+                        _max_product_brief,
+                        merged,
+                        evidence,
+                        build_plan=_build_plan,
+                    )
+                    if gap:
+                        return gap
+                    return agent_plan.completion_gap(_agent_state)
+
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(
                         _stack_guide or "",
@@ -4424,16 +4472,9 @@ async def _process_prompt(
                     free=is_free,
                     emit=_agent_emit,
                     completion_check=(
-                        (
-                            lambda written, evidence: _reference_max_completion_gap(
-                                written,
-                                evidence,
-                                require_product_entry=not _max_has_generated_snapshot,
-                            )
-                        )
-                        if project_template == "max_miniapp"
-                        else None
+                        _max_completion_check if project_template == "max_miniapp" else None
                     ),
+                    enforce_max_skill_lifecycle=(project_template == "max_miniapp"),
                     reference_max_loop=False,
                     max_steps=_agent_steps,
                     model=(
@@ -4443,8 +4484,7 @@ async def _process_prompt(
                     ),
                     stable_max_loop=project_template == "max_miniapp",
                     stable_max_product_first=(
-                        project_template == "max_miniapp"
-                        and not _max_has_generated_snapshot
+                        project_template == "max_miniapp" and not _max_has_generated_snapshot
                     ),
                 )
             elif _agent_res is None:
@@ -5312,6 +5352,7 @@ async def _process_prompt(
             # Gate verdicts captured at the gate-loop settle, for the DB attestation
             # persisted with this build's snapshot below (best-effort; None if no gate ran).
             _att_capture: list[tuple[str, Any]] | None = None
+            _max_attestation_record: dict[str, Any] | None = None
             _attestation_stack = _orch_name or project_template
             try:
                 if (
@@ -5604,7 +5645,12 @@ async def _process_prompt(
             # above cover only two stacks; every container build (including MAX)
             # must still prove that its FINAL live tree typechecks, serves and has
             # safe transport headers before its exact commit can be deployed.
-            if files and get_settings().use_build_attestation:
+            if files and (
+                get_settings().use_build_attestation or project_template == "max_miniapp"
+            ):
+                from omnia_api.services.max_generation_contract import (
+                    max_prompt_requires_persistence,
+                )
                 from omnia_api.services.release_proof import run_release_proof
 
                 _release_verdict = await run_release_proof(
@@ -5612,6 +5658,11 @@ async def _process_prompt(
                     project_slug,
                     require_hydrated_product=project_template == "max_miniapp",
                     hydrated_product_check=_max_hydration_check,
+                    require_max_functional=project_template == "max_miniapp",
+                    max_require_persistence=(
+                        project_template == "max_miniapp"
+                        and max_prompt_requires_persistence(_max_product_brief)
+                    ),
                 )
                 if _att_capture is None:
                     _att_capture = []
@@ -5620,6 +5671,73 @@ async def _process_prompt(
                     f"[ATTEST] universal release proof passed={_release_verdict.passed}",
                     flush=True,
                 )
+
+                # MAX completion is fail-closed: no snapshot or attestation may
+                # claim a product whose final signed browser proof is red. The
+                # native loop normally repairs the same checks through `see`;
+                # this independent final pass protects against drift between the
+                # last agent observation and the exact tree about to be committed.
+                if project_template == "max_miniapp" and not _release_verdict.passed:
+                    _verification_failed = True
+                    _release_error = _release_verdict.summary
+                    try:
+                        if current_sha and not _first_max_without_product:
+                            _baseline_files = await asyncio.to_thread(
+                                repo_svc.read_files, project_id, current_sha
+                            )
+                            _restore_patch = {path: _baseline_files.get(path, "") for path in files}
+                            if _restore_patch:
+                                await orchestrator_client.hot_reload_exact(
+                                    project_id, project_slug, _restore_patch
+                                )
+                            await orchestrator_client.agent_build(project_id, project_slug)
+                        elif _max_runtime_checkpoint is not None:
+                            await _restore_max_runtime_checkpoint(
+                                project_id, project_slug, _max_runtime_checkpoint
+                            )
+                    except Exception as _max_release_restore_exc:
+                        print(
+                            f"[PP] MAX release-proof rollback failed: {_max_release_restore_exc!r}",
+                            flush=True,
+                        )
+                    finally:
+                        files = {}
+                        _agent_res = agent_builder.AgentResult(
+                            done=False,
+                            summary=(
+                                "Сборка MAX не завершена: подписанная функциональная "
+                                "проверка не прошла. Частичная версия не опубликована."
+                            ),
+                            files={},
+                            steps=_agent_res.steps,
+                            transcript=_agent_res.transcript,
+                            stop_reason="max_functional_gate_red",
+                        )
+                        accumulated = _agent_res.summary
+                        await set_generation_run_error(run_id, "max_functional_gate_red")
+                        await _agent_emit(
+                            "agent.step",
+                            {
+                                "step": _agent_res.steps,
+                                "action": "max_functional_gate",
+                                "human": "Функциональная проверка не пройдена",
+                                "path": "/",
+                                "detail": _release_error,
+                                "ok": False,
+                            },
+                        )
+                elif project_template == "max_miniapp":
+                    # Build the signed record before canonical publication. It
+                    # is inserted in the same DB transaction as the snapshot;
+                    # MAX never exposes a completed snapshot without its proof.
+                    from omnia_api.services import attestation as _max_att
+
+                    _max_attestation_record = _max_att.build_attestation(
+                        gates=_att_capture,
+                        stack=_orch_name or project_template,
+                        project_id=str(project_id),
+                        created_at=_max_att.now_iso(),
+                    )
 
             if files:
                 # Persist the complete potential mutation set before the
@@ -5663,6 +5781,37 @@ async def _process_prompt(
                     session.add(snapshot)
                     await session.flush()
                     _agent_snap_id = snapshot.id
+                    if project_template == "max_miniapp":
+                        if _max_attestation_record is None:
+                            raise RuntimeError(
+                                "MAX release attestation is missing; refusing snapshot"
+                            )
+                        from omnia_api.models.attestation import Attestation
+
+                        _signed = dict(_max_attestation_record)
+                        _signed["commit_sha"] = new_sha
+                        from omnia_api.services import attestation as _max_att
+
+                        # Re-sign with the exact commit that was just produced.
+                        _signed = _max_att.build_attestation(
+                            gates=_att_capture or [],
+                            stack=_orch_name or project_template,
+                            project_id=str(project_id),
+                            created_at=str(_signed["created_at"]),
+                            commit_sha=new_sha,
+                        )
+                        session.add(
+                            Attestation(
+                                project_id=project_id,
+                                snapshot_id=snapshot.id,
+                                commit_sha=new_sha,
+                                stack=_attestation_stack,
+                                issued_at=str(_signed["created_at"]),
+                                overall_passed=bool(_signed["overall_passed"]),
+                                digest=_signed["digest"],
+                                gates=_signed["gates"],
+                            )
+                        )
                     advanced = (
                         await session.execute(
                             update(Project)
@@ -5693,7 +5842,11 @@ async def _process_prompt(
                     await session.refresh(snapshot)
                 # Persist the build attestation in its OWN transaction (best-effort;
                 # a failed insert can NEVER roll back the snapshot committed above).
-                if _att_capture and get_settings().use_build_attestation:
+                if (
+                    _att_capture
+                    and get_settings().use_build_attestation
+                    and project_template != "max_miniapp"
+                ):
                     try:
                         from omnia_api.models.attestation import Attestation
                         from omnia_api.services import attestation as _att

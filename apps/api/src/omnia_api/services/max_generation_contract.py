@@ -240,7 +240,7 @@ _NATIVE_LEGAL_NAV_MARKER = 'data-omnia-native-legal-nav="true"'
 _REQUIRED_NATIVE_LEGAL_LINKS = ("/support", "/legal/privacy", "/legal/terms")
 _NATIVE_LEGAL_NAV_MARKER_RE = re.compile(
     r"<[A-Za-z][^>]*\bdata-omnia-native-legal-nav\s*=\s*"
-    r'''(?:"true"|'true'|\{\s*(?:true|"true"|'true')\s*\})'''
+    r"""(?:"true"|'true'|\{\s*(?:true|"true"|'true')\s*\})"""
 )
 MAX_REQUIRED_PREWRITE_SKILLS = (
     "ui-ux-pro-max",
@@ -836,6 +836,11 @@ def build_max_product_contract(prompt: str) -> str:
         "brief coverage, never by an arbitrary number of files. Decorative tabs are not screens.",
         "- Every button must execute a real state change or persisted request. No decorative "
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
+        "- Expose deterministic test hooks on the real semantic UI: every main screen switch "
+        "uses data-omnia-screen-nav, every rendered view uses data-omnia-screen, the main "
+        "usable CTA uses data-omnia-primary-action, and a managed user-data write uses "
+        "data-omnia-persisted-action. Keep planner-supplied data-omnia-capability ids on "
+        "their working controls. These hooks let the signed browser gate click the product.",
         "- Keep the chosen visual system coherent on every screen and state, including cart, "
         "checkout, success, empty/error and profile views. Do not fall back to browser/default "
         "blue buttons, generic panels or a second accent palette outside the chosen art direction.",
@@ -1048,11 +1053,20 @@ def max_source_completion_gap(
                 "Native MAX support/legal navigation is incomplete. Add reachable product links "
                 "for /support, /legal/privacy and /legal/terms "
                 f"(missing: {missing_legal_detail}), then mark "
-                f'the product root with {_NATIVE_LEGAL_NAV_MARKER}.'
+                f"the product root with {_NATIVE_LEGAL_NAV_MARKER}."
             )
     product_source_views = [
         (source, _strip_js_non_code(source, keep_strings=False)) for source in product_sources
     ]
+    if "data-omnia-screen-nav" not in reachable_product_source_blob:
+        return (
+            "The main view navigation is not runtime-testable. Put data-omnia-screen-nav "
+            "on each real semantic main-view button/link."
+        )
+    if not re.search(r"data-omnia-screen\s*=", reachable_product_source_blob):
+        return "Mark each rendered product view with data-omnia-screen."
+    if "data-omnia-primary-action" not in reachable_product_source_blob:
+        return "Mark the real main CTA with data-omnia-primary-action for signed browser proof."
     for path, content in files.items():
         demo_rejection = max_demo_data_rejection(path, content)
         if demo_rejection:
@@ -1220,6 +1234,16 @@ def max_source_completion_gap(
             "The product writes user data but does not restore it after reload. Import and "
             "await getMaxActions() from a mounted useEffect loading path."
         )
+    if persistence_required and "data-omnia-persisted-action" not in reachable_product_source_blob:
+        return (
+            "Mark the real managed user-data action with data-omnia-persisted-action so "
+            "the signed browser gate can prove write and reload restoration."
+        )
+    if re.search(r"\.catch\s*\(\s*\(?.*?\)?\s*=>\s*\{?\s*\}?\s*\)", corpus):
+        return (
+            "A product request silently swallows its failure. Await the managed request, "
+            "render an honest error/retry state, and show success only after it resolves."
+        )
 
     if _ASYNC_STATES_PROMPT_RE.search(prompt):
         state_groups = (
@@ -1243,6 +1267,8 @@ def max_completion_gap(
     prompt: str,
     files: Mapping[str, str],
     evidence: Mapping[str, int],
+    *,
+    build_plan: object | None = None,
 ) -> str | None:
     """Return the actionable product/runtime gap for the native MAX agent.
 
@@ -1255,6 +1281,14 @@ def max_completion_gap(
     source_gap = max_source_completion_gap(prompt, files, require_native_legal_nav=True)
     if source_gap:
         return source_gap
+    if build_plan is not None:
+        plan_gap = max_build_plan_completion_gap(build_plan, files)
+        if plan_gap:
+            return plan_gap
+    if evidence.get("plan_task", 0) < 1:
+        return "Create the observable MAX execution plan with plan_task before done."
+    if evidence.get("update_plan", 0) < 1:
+        return "Update the observable MAX execution plan with factual evidence before done."
     missing_skills = [
         skill for skill in MAX_REQUIRED_PREWRITE_SKILLS if evidence.get(f"skill:{skill}", 0) < 1
     ]
@@ -1272,12 +1306,71 @@ def max_completion_gap(
     return None
 
 
+def max_prompt_requires_persistence(prompt: str) -> bool:
+    """Return whether the brief needs managed user activity across reloads."""
+
+    return _PERSISTENCE_PROMPT_RE.search(prompt or "") is not None
+
+
+def max_build_plan_completion_gap(plan: object, files: Mapping[str, str]) -> str | None:
+    """Prove deterministic MAX coverage for the shared :class:`BuildPlan`.
+
+    MAX has one browser route, so the ordinary HTTP capability probe cannot prove
+    its internal views. The shared planner emits stable ids/routes and the product
+    exposes those ids as inert ``data-omnia-*`` test hooks. The signed browser gate
+    then exercises the marked navigation and primary/persisted actions.
+    """
+
+    if bool(getattr(plan, "is_empty", True)):
+        return None
+    source = "\n".join(content for path, content in files.items() if _is_product_source(path))
+    missing_screens = [
+        str(getattr(screen, "route", ""))
+        for screen in getattr(plan, "screens", ())
+        if str(getattr(screen, "route", ""))
+        and not re.search(
+            r"data-omnia-screen\s*=\s*[{]?['\"]"
+            + re.escape(str(getattr(screen, "route", "")))
+            + r"['\"]",
+            source,
+            re.IGNORECASE,
+        )
+    ]
+    if missing_screens:
+        return (
+            "Build-plan screens are missing deterministic MAX coverage markers: "
+            + ", ".join(missing_screens[:8])
+            + '. Add data-omnia-screen="<planned route>" to each real view.'
+        )
+    missing_capabilities = [
+        str(getattr(capability, "id", ""))
+        for capability in getattr(plan, "capabilities", ())
+        if str(getattr(capability, "id", ""))
+        and not re.search(
+            r"data-omnia-capability\s*=\s*[{]?['\"]"
+            + re.escape(str(getattr(capability, "id", "")))
+            + r"['\"]",
+            source,
+            re.IGNORECASE,
+        )
+    ]
+    if missing_capabilities:
+        return (
+            "Build-plan capabilities are missing deterministic MAX coverage markers: "
+            + ", ".join(missing_capabilities[:8])
+            + '. Add data-omnia-capability="<planned id>" to the working control.'
+        )
+    return None
+
+
 __all__ = [
     "MAX_REQUIRED_POST_SEE_SKILL",
     "MAX_REQUIRED_PREWRITE_SKILLS",
     "build_max_product_contract",
+    "max_build_plan_completion_gap",
     "max_completion_gap",
     "max_demo_data_rejection",
+    "max_prompt_requires_persistence",
     "max_source_completion_gap",
     "normalize_max_globals_css",
     "requested_max_capabilities",

@@ -31,6 +31,8 @@ async def run_release_proof(
     *,
     require_hydrated_product: bool = False,
     hydrated_product_check: Check | None = None,
+    require_max_functional: bool = False,
+    max_require_persistence: bool = False,
 ) -> FunctionalVerdict:
     """Prove that the live project typechecks, serves HTTP and has safe transport.
 
@@ -91,5 +93,21 @@ async def run_release_proof(
             checks.append(Check("max_hydration", hydration.passed, hydration.detail[:240]))
         else:
             checks.append(Check("max_hydration", False, "dev_url missing"))
+
+    if require_max_functional:
+        try:
+            preview_session = await orchestrator_client.create_max_preview_session(project_id)
+            bootstrap_url = str(preview_session.get("bootstrap_url") or "")
+            if not bootstrap_url:
+                raise RuntimeError("signed bootstrap_url missing")
+            from omnia_api.services.max_functional_gate import run_max_functional_gate
+
+            max_functional = await run_max_functional_gate(
+                bootstrap_url,
+                require_persistence=max_require_persistence,
+            )
+            checks.extend(max_functional.checks)
+        except Exception as exc:
+            checks.append(Check("max_signed_functional", False, f"probe failed: {exc!r}"))
 
     return summarize(checks)

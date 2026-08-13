@@ -73,9 +73,7 @@ def test_parse_garbage_is_empty():
 
 def test_truncation_caps():
     big = {
-        "capabilities": [
-            {"id": f"c{i}", "path": f"/api/{i}", "action": "x"} for i in range(40)
-        ],
+        "capabilities": [{"id": f"c{i}", "path": f"/api/{i}", "action": "x"} for i in range(40)],
         "screens": [{"route": f"/s{i}"} for i in range(40)],
         "entities": [{"name": f"E{i}"} for i in range(40)],
     }
@@ -123,6 +121,16 @@ def test_checklist_block():
     assert "/api/clients" in blk
     assert "/dashboard" in blk
     assert BuildPlan().checklist_block() == ""
+
+
+def test_max_checklist_uses_internal_view_and_action_proof_markers():
+    block = parse_plan(json.dumps(_VALID)).checklist_block(max_runtime=True)
+
+    assert 'data-omnia-screen="/dashboard"' in block
+    assert 'data-omnia-capability="create_client"' in block
+    assert "data-omnia-screen-nav" in block
+    assert "data-omnia-persisted-action" in block
+    assert "инструментом `probe`" not in block
 
 
 def test_from_dict_defensive():
