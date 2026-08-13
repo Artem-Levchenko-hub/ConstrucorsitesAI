@@ -2670,6 +2670,18 @@
      "evidence": "Родитель раньше отправлял atomic+2 legacy команды сразу и через 120/450/1100 мс, а inspector v5 подтверждал каждую применённую команду без номера перехода. Введены editorSession+seq, единый реестр отменяемых таймеров, точная дедупликация ACK и inspector v6, который игнорирует stale seq и enveloped legacy fallback. Fake-timer/JSDOM проверка: inspect/style→off не содержит позднего enable, точный off ACK сокращает обмен до 6 сообщений, 50 циклов оставляют 0 таймеров и выполняют 50 обычных кликов; web 30/30, API select-mode 15/15, typecheck и targeted ESLint зелёные.",
      "impact": "Обычный просмотр открывается только после подтверждённого выключения перехвата. Старый retry, duplicate ACK или fallback для прежней сессии больше не может вернуть редактор и заблокировать клики всего workspace.",
      "next_vector": "Доставить web/api/orchestrator, синхронизировать managed kit и повторить editor→view→все вкладки в production"
+    },
+    {
+     "id": "H139",
+     "title": "MAX managed kit 30 доставляет inspector v6 существующим проектам",
+     "status": "testing",
+     "score": null,
+     "category": "MAX / preview / delivery",
+     "period": "13.08",
+     "description": "Поднять версию managed kit после inspector v6, чтобы штатная синхронизация проекта с версией 29 создала новый snapshot с sequenced protocol, даже без изменения бизнес-настроек.",
+     "evidence": "После delivery inspector v6 MAX_MANAGED_KIT_VERSION оставался 29, поэтому sync-kit считал существующие проекты актуальными. Версия поднята до 30; API-тест фиксирует project с managed_kit_version=29, вторую запись managed files и наличие setSequencedEditorMode в public/omnia-inspector.js.",
+     "impact": "При следующем авторизованном открытии MAX preview штатный sync-kit обновит старый проект через обычный snapshot; ручная правка пользовательского проекта не нужна.",
+     "next_vector": "Открыть owner workspace и проверить editor→view→все вкладки после sync-kit"
     }
  ],
  "vectors": [
@@ -2837,6 +2849,10 @@
     [
      "Liveness активного SPA-preview: owner heartbeat, runtime status polling и автоматическое восстановление после idle-stop",
      true
+    ],
+    [
+     "Managed kit 30: существующие MAX-проекты получают inspector v6 штатной синхронизацией",
+     true
     ]
    ],
    "hyp_ids": [
@@ -2846,7 +2862,8 @@
     "H78",
     "H79",
     "H87",
-    "H134"
+    "H134",
+    "H139"
    ]
   },
   {

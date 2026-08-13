@@ -624,6 +624,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
                 "message": message,
                 "parent_sha": parent_sha,
                 "config": files["src/lib/omnia/max-config.ts"],
+                "inspector": files["public/omnia-inspector.js"],
             }
         )
         return "2" * 40
@@ -671,7 +672,9 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
 
     # A project carrying an older managed kit is upgraded once even when its
     # business config and current snapshot are otherwise unchanged.
-    saved.managed_kit_version = MAX_MANAGED_KIT_VERSION - 1
+    # Version 29 predates the sequenced inspector protocol.  It must receive
+    # the current managed inspector even when the user has not changed config.
+    saved.managed_kit_version = 29
     await db_session.commit()
     upgraded = await max_studio.put_max_config(project.id, _config(), db_session, user)
     repeated_after_upgrade = await max_studio.put_max_config(
@@ -680,6 +683,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     refreshed = await db_session.get(MaxProjectConfig, project.id)
 
     assert len(calls) == 2
+    assert "setSequencedEditorMode" in calls[-1]["inspector"]
     assert refreshed is not None
     assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id
