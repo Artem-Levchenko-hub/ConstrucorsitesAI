@@ -9,6 +9,7 @@ to replay one ambiguous provider turn.  No hidden reasoning is written to
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,6 +30,18 @@ WATCHDOG_SECONDS = 20
 MAX_EXTERNAL_OUTAGE_SECONDS = 24 * 60 * 60
 NATIVE_CHECKPOINT_TTL_SECONDS = 48 * 60 * 60
 ENQUEUE_RESERVATION_SECONDS = 120
+MAX_REPEATED_SEGMENT_OCCURRENCES = 3
+_TERMINAL_INTERNAL_REASONS = {
+    "max_release_proof_red": (
+        "Финальная подписанная проверка не прошла. Непроверенная версия не опубликована; "
+        "рабочая версия восстановлена, а точная причина сохранена в истории сборки."
+    ),
+    "visual_quality_unmet": (
+        "Визуальная проверка осталась красной после двух предметных исправлений. "
+        "Автоповтор остановлен, чтобы не повторять те же правки; уточните направление "
+        "или запустите точечное исправление."
+    ),
+}
 
 
 def _native_checkpoint_key(run_id: UUID | str) -> str:
@@ -107,18 +120,55 @@ def _object_int(value: object, default: int = 0) -> int:
     return default
 
 
+def _object_strings(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str)]
+
+
+def workspace_digest(files: Mapping[str, str]) -> str:
+    """Return a content-only checkpoint identity without persisting source text."""
+
+    canonical = json.dumps(
+        {str(path): str(content) for path, content in files.items()},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _segment_progress(
+    state: Mapping[str, object],
+    continuity: Mapping[str, object],
+    reason: str,
+) -> tuple[list[str], int]:
+    """Track recurring stop+workspace states, including alternating A/B cycles."""
+
+    segment = _object_dict(state.get("last_segment"))
+    digest = str(segment.get("workspace_digest") or "")
+    if not digest or str(segment.get("stop_reason") or "") != reason:
+        history = _object_strings(continuity.get("recent_segment_fingerprints"))[-7:]
+        return history, 0
+    fingerprint = hashlib.sha256(f"{reason}\0{digest}".encode()).hexdigest()
+    history = _object_strings(continuity.get("recent_segment_fingerprints"))[-7:]
+    history.append(fingerprint)
+    return history[-8:], history.count(fingerprint)
+
+
 def classify_stop(
     stop_reason: str,
     *,
     attempt: int,
     started_at: datetime | None,
+    repeated_segment_count: int = 0,
     now: datetime | None = None,
 ) -> ContinuationDecision:
-    """Classify product/internal debt as recoverable and true external blocks only.
+    """Classify transient debt, deterministic dead ends and external blocks.
 
-    A time slice or repeated internal compile/runtime mismatch never becomes a
-    user-facing failure.  Permanent provider rejection and a provider outage
-    beyond the durable policy are external blockers with an exact next action.
+    Progressing source work and transient infrastructure stay recoverable.
+    Deterministic proof dead ends and a recurring identical workspace stop
+    terminalise honestly instead of creating an unbounded paid checkpoint loop.
     """
 
     current = now or datetime.now(UTC)
@@ -142,6 +192,23 @@ def classify_stop(
             0,
             "Провайдер недоступен дольше допустимого окна; повтор будет безопасен "
             "после восстановления.",
+        )
+    terminal_internal_action = _TERMINAL_INTERNAL_REASONS.get(reason)
+    if terminal_internal_action:
+        return ContinuationDecision(
+            False,
+            "internal_proof_blocked",
+            0,
+            terminal_internal_action,
+        )
+    if repeated_segment_count >= MAX_REPEATED_SEGMENT_OCCURRENCES:
+        return ContinuationDecision(
+            False,
+            "internal_no_progress",
+            0,
+            "Автопродолжение остановлено: три сегмента завершились той же ошибкой "
+            "при неизменных файлах. Рабочая версия восстановлена; причина сохранена "
+            "для точечного исправления без нового цикла.",
         )
     # Repeated internal debt switches to slower environment rediscovery rather
     # than becoming terminal. This bounds pressure without abandoning the run.
@@ -287,19 +354,33 @@ async def schedule_continuation(run_id: UUID, reason: str) -> ContinuationDecisi
         state = dict(run.agent_state or {})
         continuity = _object_dict(state.get(CONTINUITY_KEY))
         attempt = _object_int(continuity.get("attempt"))
+        segment_history, repeated_segment_count = _segment_progress(
+            state,
+            continuity,
+            reason,
+        )
         decision = classify_stop(
             reason,
             attempt=attempt,
             started_at=run.started_at or run.created_at,
+            repeated_segment_count=repeated_segment_count,
         )
         continuity.update(
             {
                 "attempt": attempt + 1,
-                "status": "queued" if decision.continue_run else "blocked_external",
+                "status": (
+                    "queued"
+                    if decision.continue_run
+                    else "blocked_external"
+                    if decision.classification.startswith("external_")
+                    else "blocked_internal"
+                ),
                 "last_stop_reason": reason[:200],
                 "classification": decision.classification,
                 "retryable": decision.continue_run,
                 "action": decision.action,
+                "recent_segment_fingerprints": segment_history,
+                "repeated_segment_count": repeated_segment_count,
                 "lease_owner": None,
                 "lease_expires_at": None,
                 "enqueue_token": None,
@@ -494,4 +575,5 @@ __all__ = [
     "save_native_checkpoint",
     "schedule_continuation",
     "store_execution_envelope",
+    "workspace_digest",
 ]

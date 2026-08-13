@@ -118,7 +118,10 @@ from omnia_api.services.file_extractor import (
     extract_edits,
     extract_files,
 )
-from omnia_api.services.generation_continuity import GenerationContinuationRequired
+from omnia_api.services.generation_continuity import (
+    GenerationContinuationRequired,
+    workspace_digest,
+)
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     finalize_generation_run,
@@ -3822,10 +3825,13 @@ async def _process_prompt(
         from omnia_api.services import agent_builder
 
         if (
-            agent_builder.is_agentic_enabled(
-                get_settings().use_agentic_builder,
-                get_settings().agentic_builder_canary_users,
-                str(user_id),
+            (
+                project_template == "max_miniapp"
+                or agent_builder.is_agentic_enabled(
+                    get_settings().use_agentic_builder,
+                    get_settings().agentic_builder_canary_users,
+                    str(user_id),
+                )
             )
             and project_template in CONTAINER_NEXT
             and project_slug
@@ -4877,7 +4883,9 @@ async def _process_prompt(
                         },
                     )
 
-            if _agent_res is None and get_settings().use_native_agent:
+            if _agent_res is None and (
+                project_template == "max_miniapp" or get_settings().use_native_agent
+            ):
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
                 # model end-to-end via native Anthropic tools + preserved thinking;
                 # fact-gate only (the `build` tool). Reuses the SAME executor; the
@@ -5024,10 +5032,7 @@ async def _process_prompt(
                     stop_reason="no_ai_write",
                 )
             if project_template == "max_miniapp" and not _agent_res.done:
-                from omnia_api.services.generation_continuity import (
-                    GenerationContinuationRequired,
-                    classify_stop,
-                )
+                from omnia_api.services.generation_continuity import classify_stop
 
                 _continuation_decision = classify_stop(
                     _agent_res.stop_reason,
@@ -5042,6 +5047,7 @@ async def _process_prompt(
                                 "stop_reason": _agent_res.stop_reason,
                                 "steps": _agent_res.steps,
                                 "written_paths": sorted(_agent_res.files),
+                                "workspace_digest": workspace_digest(_agent_res.files),
                                 "classification": _continuation_decision.classification,
                             }
                         },
@@ -5067,7 +5073,11 @@ async def _process_prompt(
                 )
                 _continuity_state.update(
                     {
-                        "status": "blocked_external",
+                        "status": (
+                            "blocked_external"
+                            if _continuation_decision.classification.startswith("external_")
+                            else "blocked_internal"
+                        ),
                         "classification": _continuation_decision.classification,
                         "retryable": False,
                         "action": _continuation_decision.action,
@@ -6240,10 +6250,6 @@ async def _process_prompt(
                 # this independent final pass protects against drift between the
                 # last agent observation and the exact tree about to be committed.
                 if project_template == "max_miniapp" and not _release_verdict.passed:
-                    from omnia_api.services.generation_continuity import (
-                        GenerationContinuationRequired,
-                    )
-
                     await merge_generation_agent_state(
                         run_id,
                         {
@@ -6251,61 +6257,14 @@ async def _process_prompt(
                                 "stop_reason": "max_release_proof_red",
                                 "steps": _agent_res.steps,
                                 "written_paths": sorted(files),
+                                "workspace_digest": workspace_digest(files),
                                 "classification": "internal_repair",
                                 "proof": _release_verdict.summary[:1000],
                             }
                         },
                     )
                     raise GenerationContinuationRequired("max_release_proof_red")
-                    _verification_failed = True
-                    _release_error = _release_verdict.summary
-                    try:
-                        if current_sha and not _first_max_without_product:
-                            _baseline_files = await asyncio.to_thread(
-                                repo_svc.read_files, project_id, current_sha
-                            )
-                            _restore_patch = {path: _baseline_files.get(path, "") for path in files}
-                            if _restore_patch:
-                                await orchestrator_client.hot_reload_exact(
-                                    project_id, project_slug, _restore_patch
-                                )
-                            await orchestrator_client.agent_build(project_id, project_slug)
-                        elif _max_runtime_checkpoint is not None:
-                            await _restore_max_runtime_checkpoint(
-                                project_id, project_slug, _max_runtime_checkpoint
-                            )
-                    except Exception as _max_release_restore_exc:
-                        print(
-                            f"[PP] MAX release-proof rollback failed: {_max_release_restore_exc!r}",
-                            flush=True,
-                        )
-                    finally:
-                        files = {}
-                        _agent_res = agent_builder.AgentResult(
-                            done=False,
-                            summary=(
-                                "Сборка MAX не завершена: подписанная функциональная "
-                                "проверка не прошла. Частичная версия не опубликована."
-                            ),
-                            files={},
-                            steps=_agent_res.steps,
-                            transcript=_agent_res.transcript,
-                            stop_reason="max_functional_gate_red",
-                        )
-                        accumulated = _agent_res.summary
-                        await set_generation_run_error(run_id, "max_functional_gate_red")
-                        await _agent_emit(
-                            "agent.step",
-                            {
-                                "step": _agent_res.steps,
-                                "action": "max_functional_gate",
-                                "human": "Функциональная проверка не пройдена",
-                                "path": "/",
-                                "detail": _release_error,
-                                "ok": False,
-                            },
-                        )
-                elif project_template == "max_miniapp":
+                if project_template == "max_miniapp":
                     # Build the signed record before canonical publication. It
                     # is inserted in the same DB transaction as the snapshot;
                     # MAX never exposes a completed snapshot without its proof.

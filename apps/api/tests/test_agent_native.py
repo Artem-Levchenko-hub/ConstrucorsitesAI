@@ -250,6 +250,13 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "_publishable_agent_files" in source
     assert "must_restore_previous=_must_restore_previous" in source
     assert "agent_native.run_native_build" in source
+    assert (
+        'project_template == "max_miniapp"\n                '
+        "or agent_builder.is_agentic_enabled"
+    ) in source
+    assert (
+        'project_template == "max_miniapp" or get_settings().use_native_agent'
+    ) in source
     assert "build_max_product_contract" in source
     assert "max_completion_gap" in source
     assert "_max_completion_check" in source

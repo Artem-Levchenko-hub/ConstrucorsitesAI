@@ -8,15 +8,18 @@ from typing import Any
 import pytest
 
 from omnia_api.services import agent_native
-from omnia_api.services.generation_continuity import classify_stop
+from omnia_api.services.generation_continuity import (
+    _segment_progress,
+    classify_stop,
+    workspace_digest,
+)
 from omnia_api.services.max_environment_manifest import build_max_environment_manifest
 
 
-def test_internal_red_never_becomes_terminal() -> None:
+def test_progressing_internal_red_stays_recoverable() -> None:
     for reason in (
         "generation_deadline_red",
         "max_steps_red",
-        "visual_quality_unmet",
         "runtime_check_failed",
         "missing_dependency",
         "managed_api_signature_mismatch",
@@ -24,6 +27,66 @@ def test_internal_red_never_becomes_terminal() -> None:
         decision = classify_stop(reason, attempt=99, started_at=datetime.now(UTC))
         assert decision.continue_run is True
         assert decision.classification == "environment_rediscovery"
+
+
+def test_exhausted_proof_states_do_not_restart_the_same_checkpoint() -> None:
+    for reason in ("visual_quality_unmet", "max_release_proof_red"):
+        decision = classify_stop(reason, attempt=0, started_at=datetime.now(UTC))
+
+        assert decision.continue_run is False
+        assert decision.classification == "internal_proof_blocked"
+
+
+def test_recurring_unchanged_segment_breaks_the_automatic_loop() -> None:
+    decision = classify_stop(
+        "visual_proof_unavailable",
+        attempt=2,
+        started_at=datetime.now(UTC),
+        repeated_segment_count=3,
+    )
+
+    assert decision.continue_run is False
+    assert decision.classification == "internal_no_progress"
+    assert "три сегмента" in decision.action
+
+
+def test_workspace_digest_is_stable_and_content_sensitive() -> None:
+    first = workspace_digest({"b.ts": "two", "a.ts": "one"})
+
+    assert first == workspace_digest({"a.ts": "one", "b.ts": "two"})
+    assert first != workspace_digest({"a.ts": "changed", "b.ts": "two"})
+
+
+def test_segment_progress_detects_non_consecutive_cycles() -> None:
+    digest = workspace_digest({"src/app.tsx": "same"})
+    state = {
+        "last_segment": {
+            "stop_reason": "visual_proof_unavailable",
+            "workspace_digest": digest,
+        }
+    }
+
+    history, first_count = _segment_progress(
+        state, {}, "visual_proof_unavailable"
+    )
+    other_history, _ = _segment_progress(
+        {
+            "last_segment": {
+                "stop_reason": "runtime_check_failed",
+                "workspace_digest": digest,
+            }
+        },
+        {"recent_segment_fingerprints": history},
+        "runtime_check_failed",
+    )
+    history, second_count = _segment_progress(
+        state,
+        {"recent_segment_fingerprints": other_history},
+        "visual_proof_unavailable",
+    )
+
+    assert first_count == 1
+    assert second_count == 2
 
 
 def test_only_true_external_provider_block_terminalizes() -> None:

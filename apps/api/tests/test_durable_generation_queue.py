@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
+import textwrap
 from typing import Any
 from uuid import uuid4
 
@@ -174,6 +176,19 @@ def test_continuation_control_flow_cannot_be_swallowed_by_process_prompt() -> No
 
     assert durable_except < generic_except
     assert "raise" in source[durable_except:generic_except]
+
+
+def test_process_prompt_does_not_shadow_continuation_control_flow() -> None:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(messages._process_prompt)))
+    local_imports = [
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "omnia_api.services.generation_continuity"
+        for alias in node.names
+    ]
+
+    assert "GenerationContinuationRequired" not in local_imports
 
 
 async def test_continuation_never_finalizes_or_clears_checkpoint(

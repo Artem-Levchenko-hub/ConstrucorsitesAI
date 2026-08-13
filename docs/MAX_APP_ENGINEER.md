@@ -86,6 +86,25 @@ Visual QA executes inside the worker; omitting that setting makes its local-safe
 default disable the real judge and turns every successful screenshot into a
 `visual_proof_unavailable` continuation loop.
 
+MAX always enters the native project-agent path even if an old generic
+`USE_AGENTIC_BUILDER` or `USE_NATIVE_AGENT` rollout flag is absent. The MAX
+contract therefore cannot silently fall back to the legacy one-shot writer.
+The agent has the full project-scoped capability surface: file search/read/write,
+an audited shell, dependency installation, tests, typecheck, live logs/runtime,
+signed browser vision, media generation, maintained skills and approved read-only
+MCP research. Shell mutations are diffed across the complete source tree and
+rolled back if they touch managed files or violate path, secret, SAST or DB rules.
+Host Docker, other projects and environment secrets remain outside the capability
+boundary; they do not help product engineering and would break tenant isolation.
+
+Durable continuation is progress-aware. Every stopped segment records a digest of
+the actual generated tree. A transient failure can resume, and a segment that
+changes source may keep working, but the third recurrence of the same stop against
+the same bytes is terminal. Exhausted visual repairs and a red final signed proof
+are terminal immediately because replaying the same checkpoint cannot create new
+evidence. This prevents both straight and alternating checkpoint cycles without
+weakening the build/runtime/visual release proof.
+
 Fresh builds allow one bounded inspection turn, then require the real
 `ProductApp.tsx` vertical slice and compile it before more exploration. Existing
 products keep unrestricted surgical support-file edits. Reading the same unchanged
@@ -94,13 +113,13 @@ source mutation changes its revision. A focused product-entry checkpoint replace
 stale exploratory history, so continuation resumes from authoritative live files
 instead of replaying hundreds of old reads.
 
-Each execution slice may end, but the accepted run does not: internal compile,
-dependency, import, managed-API, runtime, persistence, design or proof debt is
-classified as repair and automatically continued from the same live files and
-plan. After repeated red slices the agent rereads the immutable source-derived
-Environment Manifest and relevant contracts rather than abandoning the run.
-Only a permanent provider/owner rejection or a sustained external outage may
-terminalise it, with a retry classification and exact owner action.
+Each execution slice may end. Internal compile, dependency, import, managed-API,
+runtime, persistence, design or proof debt continues from the same live files and
+plan while source or proof evidence is progressing. A repeated identical stop
+against identical bytes, exhausted visual repair or red final signed proof ends
+the run honestly and restores the last working version instead of replaying the
+checkpoint. Permanent provider rejection and sustained external outage keep their
+separate external classifications and exact owner action.
 
 Partial files remain a private runtime checkpoint. No snapshot is published and
 no completion is recorded until the full functional, signed visual and release
