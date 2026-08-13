@@ -65,7 +65,9 @@ describe("MAX live preview surface", () => {
     expect(livePreview).toContain("sourceEditing={false}");
     expect(livePreview).toContain("fontEditing={false}");
     expect(livePreview).toContain("tokenEditing={false}");
-    expect(livePreview).toContain("post={postToAllProjectPreviews}");
+    expect(livePreview).toContain("post={postToPreview}");
+    expect(livePreview).not.toContain("postToAllProjectPreviews");
+    expect(livePreview).not.toContain("document.querySelectorAll<HTMLIFrameElement>");
     expect(livePreview).toContain('frame.dataset.maxPreviewReady = "true"');
     expect(livePreview).toContain("replayPendingStyles()");
     expect(livePreview).toContain("closedStylePanel");
@@ -84,12 +86,24 @@ describe("MAX live preview surface", () => {
     expect(workspaceShell).toContain(
       "<MaxEditorProjectScope key={project.id} projectId={project.id}>",
     );
-    expect(workspaceShell).toContain("scopeToProject(projectId)");
-    expect(workspaceShell).toContain("releaseProjectScope(projectId)");
+    expect(workspaceShell).toContain(
+      "scopeToProject(projectId, editorSession)",
+    );
+    expect(workspaceShell).toContain(
+      "releaseProjectScope(projectId, editorSession)",
+    );
+    expect(workspaceShell).toContain("inspectorSession !== editorSession");
+    expect(workspaceShell).toContain("styleSession !== editorSession");
     expect(workspaceShell).toContain("inspectorScope !== projectId");
     expect(workspaceShell).toContain("styleScope !== projectId");
     expect(workspaceShell).toContain(
       "onClose={() => setPreviewOpen(false)}",
+    );
+    expect(workspaceShell).toContain(
+      "{desktopPreviewLayout && (",
+    );
+    expect(workspaceShell).toContain(
+      "{previewOpen && !desktopPreviewLayout && (",
     );
     expect(workspaceShell).not.toContain("Превью приложения</p>");
   });

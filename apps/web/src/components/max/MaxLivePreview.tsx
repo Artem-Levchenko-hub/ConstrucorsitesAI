@@ -194,31 +194,6 @@ export function MaxLivePreview({
       // never block normal interactions inside the generated application.
     });
   }, [project.id]);
-  const postToAllProjectPreviews = useCallback(
-    (message: Record<string, unknown>) => {
-      document
-        .querySelectorAll<HTMLIFrameElement>(
-          'iframe[data-testid="max-live-iframe"]',
-        )
-        .forEach((frame) => {
-          if (
-            frame.dataset.maxProjectId !== project.id ||
-            frame.dataset.maxPreviewReady !== "true" ||
-            !frame.contentWindow
-          ) {
-            return;
-          }
-          const targetOrigin = previewTargetOrigin(
-            frame.src,
-            window.location.origin,
-          );
-          if (targetOrigin) {
-            frame.contentWindow.postMessage(message, targetOrigin);
-          }
-        });
-    },
-    [project.id],
-  );
   const syncEditorMode = useCallback(() => {
     editorModeMessages(activeEditorMode).forEach(postToPreview);
   }, [activeEditorMode, postToPreview]);
@@ -484,7 +459,7 @@ export function MaxLivePreview({
         stopEditorPickingAfterPick("style", {
           setInspectMode,
           stopStylePicking,
-          postMessage: postToAllProjectPreviews,
+          postMessage: postToPreview,
         });
         return;
       }
@@ -499,7 +474,7 @@ export function MaxLivePreview({
         stopEditorPickingAfterPick("inspect", {
           setInspectMode,
           stopStylePicking,
-          postMessage: postToAllProjectPreviews,
+          postMessage: postToPreview,
         });
         return;
       }
@@ -519,7 +494,7 @@ export function MaxLivePreview({
       stopEditorPickingAfterPick("inspect", {
         setInspectMode,
         stopStylePicking,
-        postMessage: postToAllProjectPreviews,
+        postMessage: postToPreview,
       });
     }
 
@@ -527,7 +502,6 @@ export function MaxLivePreview({
     return () => window.removeEventListener("message", onPreviewMessage);
   }, [
     addSelection,
-    postToAllProjectPreviews,
     postToPreview,
     replayPendingStyles,
     sendRuntimeHeartbeat,
@@ -555,8 +529,9 @@ export function MaxLivePreview({
     hadStyleSelection.current = Boolean(styleSelected);
   }, [activeEditorMode, postToPreview, styleSelected]);
 
-  // Removing a chip (or sending the prompt) must remove the matching outline in
-  // every mounted MAX preview, including the responsive drawer instance.
+  // Removing a chip (or sending the prompt) removes the matching outline from
+  // this component's owned iframe. The shell deliberately mounts only one live
+  // preview, so editor commands can never leak into a hidden responsive copy.
   useEffect(() => {
     const current = selections
       .map((selection) => selection.id)
@@ -947,7 +922,7 @@ export function MaxLivePreview({
       {!viewingHistorical && styleSelected && (
         <StylePanel
           projectId={project.id}
-          post={postToAllProjectPreviews}
+          post={postToPreview}
           sourceEditing={false}
           fontEditing={false}
           tokenEditing={false}

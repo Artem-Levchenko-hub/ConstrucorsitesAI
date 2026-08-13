@@ -7,11 +7,13 @@ describe("MAX editor project scope", () => {
   beforeEach(() => {
     useInspectorStore.setState({
       projectScope: null,
+      editorSession: null,
       inspectMode: false,
       selections: [],
     });
     useStyleEditStore.setState({
       projectScope: null,
+      editorSession: null,
       styleMode: false,
       selected: null,
       tokens: {},
@@ -106,6 +108,33 @@ describe("MAX editor project scope", () => {
       projectScope: "project-a",
       elements: {},
       dirty: false,
+    });
+  });
+
+  it("resets a same-project remount and ignores the stale instance cleanup", () => {
+    useInspectorStore.getState().scopeToProject("project-a", "session-old");
+    useStyleEditStore.getState().scopeToProject("project-a", "session-old");
+    useInspectorStore.getState().setInspectMode(true);
+    useStyleEditStore.getState().setStyleMode(true);
+
+    useInspectorStore.getState().scopeToProject("project-a", "session-new");
+    useStyleEditStore.getState().scopeToProject("project-a", "session-new");
+    useInspectorStore
+      .getState()
+      .releaseProjectScope("project-a", "session-old");
+    useStyleEditStore
+      .getState()
+      .releaseProjectScope("project-a", "session-old");
+
+    expect(useInspectorStore.getState()).toMatchObject({
+      projectScope: "project-a",
+      editorSession: "session-new",
+      inspectMode: false,
+    });
+    expect(useStyleEditStore.getState()).toMatchObject({
+      projectScope: "project-a",
+      editorSession: "session-new",
+      styleMode: false,
     });
   });
 

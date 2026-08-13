@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 46,
+  "version": 47,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -300,7 +300,7 @@
   {
    "date": "13.08",
    "what": "Уточнил, что редактор вообще не включался: зависание возникает при обычном изучении готовых страниц внутри preview.",
-   "impact": "Расследование ушло с picker на lifecycle runtime. Найдена штатная idle-остановка активного SPA-просмотра: локальные переходы не создавали сеть, а workspace после первого running переставал видеть состояние контейнера. Исправление добавляет явный heartbeat и автоматическое восстановление preview без изменения продуктовых кликов."
+   "impact": "Standalone preview и живой runtime исключили ошибку приложения: все пять вкладок переключаются, event loop остаётся отзывчивым. Причина найдена в workspace: на узком экране CSS скрывал desktop iframe, но не размонтировал его, а drawer создавал второй iframe с общей editor-сессией; глобальная рассылка могла менять режим обоих экземпляров. Теперь workspace физически держит только один preview, заново сбрасывает режим при каждом входе и отправляет команды только принадлежащему компоненту iframe."
   },
   {
    "date": "13.08",
@@ -2631,9 +2631,9 @@
     "category": "MAX / preview / browser / надёжность",
     "period": "13.08",
     "description": "Убрать из обычного клика всю работу editor bridge, DOM-анализ, postMessage и heartbeat HTTP, сохранив редактирование только по явному включению.",
-    "evidence": "Production fitness-47e6be и prod revision 486f666b: runtime running, после preview bootstrap только bounded GET / и два actions, request storm нет. ProductApp tab handler — чистый React setTab; единственный effect одноразово грузит history. Kit 28 при этом добавлял always-loaded capture click breadcrumb, DOM text scan, postMessage и heartbeat прямо в click path. Kit 29 не регистрирует click/change/pointerdown/mousemove в mode OFF; heartbeat остался отдельным минутным таймером.",
-    "impact": "Нажатие вкладки или кнопки теперь имеет только продуктовый React-путь. Ни inspector, ни API не могут замедлить или перехватить обычное изучение приложения.",
-    "next_vector": "Доставить kit 29 и повторить owner-mode OFF прогон"
+    "evidence": "Production project c66e4b17, snapshot 8a5fce7f и runtime здоровы; standalone signed preview переключил Статистика, Тренировки, ИИ-разбор, История и Профиль за 0.33–0.93 секунды без console errors. В workspace ниже 1280px одновременно жили CSS-hidden desktop MaxLivePreview и drawer MaxLivePreview; оба использовали общий Zustand mode и одну cached preview-session, а postToAllProjectPreviews делал глобальный document query. Исправление условно монтирует ровно одну responsive-ветку, сбрасывает same-project editor session до рендера iframe и заменяет broadcast на owned ref. JSDOM-регрессия с двумя настоящими inspector iframe подтверждает: armed hidden frame не включает visible frame, клики Статистика→Тренировки доходят до приложения; 16 focused web tests, typecheck и targeted ESLint зелёные.",
+    "impact": "Обычный просмотр больше не делит editor-состояние и preview capability между скрытым и видимым iframe. Даже stale режим старой responsive-ветки не может включить перехват кликов в открытом приложении; каждая команда ограничена текущим iframe.",
+    "next_vector": "Доставить exclusive-preview revision и повторить все пять вкладок внутри owner workspace"
    },
    {
     "id": "H136",

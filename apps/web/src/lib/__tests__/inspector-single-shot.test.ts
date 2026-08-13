@@ -59,6 +59,66 @@ describe("canonical inspector ordinary viewing mode", () => {
     expect(parentPost.mock.calls).toHaveLength(messagesBeforeClicks);
     shell.window.close();
   });
+
+  it("keeps the visible responsive preview off when a stale hidden preview is armed", () => {
+    const shell = new JSDOM(
+      '<iframe id="hidden-desktop"></iframe><iframe id="visible-drawer"></iframe>',
+      {
+        runScripts: "dangerously",
+        url: "https://constructor.example/workspace",
+      },
+    );
+    const hidden = shell.window.document.querySelector<HTMLIFrameElement>(
+      "#hidden-desktop",
+    )?.contentWindow as DOMWindow | null | undefined;
+    const visible = shell.window.document.querySelector<HTMLIFrameElement>(
+      "#visible-drawer",
+    )?.contentWindow as DOMWindow | null | undefined;
+    if (!hidden || !visible) throw new Error("test previews did not initialise");
+
+    for (const preview of [hidden, visible]) {
+      preview.document.body.innerHTML =
+        '<button id="stats">Статистика</button><button id="workouts">Тренировки</button>';
+      preview.eval(inspectorSource);
+    }
+
+    // This reproduces the former responsive composition: a CSS-hidden desktop
+    // iframe was still alive when the drawer iframe mounted. Editor commands
+    // must be owned by one frame; a stale mode in the old branch cannot arm the
+    // visible application.
+    hidden.dispatchEvent(
+      new hidden.MessageEvent("message", {
+        data: { type: "omnia:editor:set-mode", mode: "inspect" },
+        source: shell.window,
+        origin: "https://constructor.example",
+      }),
+    );
+    visible.dispatchEvent(
+      new visible.MessageEvent("message", {
+        data: { type: "omnia:editor:set-mode", mode: "off" },
+        source: shell.window,
+        origin: "https://constructor.example",
+      }),
+    );
+
+    const screens: string[] = [];
+    visible.document
+      .querySelector("#stats")
+      ?.addEventListener("click", () => screens.push("stats"));
+    visible.document
+      .querySelector("#workouts")
+      ?.addEventListener("click", () => screens.push("workouts"));
+    for (const id of ["#stats", "#workouts"]) {
+      visible.document.querySelector(id)?.dispatchEvent(
+        new visible.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    }
+
+    expect(screens).toEqual(["stats", "workouts"]);
+    expect(visible.document.documentElement.style.cursor).toBe("");
+    expect(hidden.document.documentElement.style.cursor).toBe("crosshair");
+    shell.window.close();
+  });
 });
 
 describe.each(["inspect", "style"] as const)(

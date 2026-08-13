@@ -5,6 +5,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -86,23 +87,34 @@ function MaxEditorProjectScope({
   projectId: string;
   children: ReactNode;
 }) {
+  const editorSession = useId();
   const inspectorScope = useInspectorStore((state) => state.projectScope);
+  const inspectorSession = useInspectorStore((state) => state.editorSession);
   const styleScope = useStyleEditStore((state) => state.projectScope);
+  const styleSession = useStyleEditStore((state) => state.editorSession);
 
   useEffect(() => {
-    // MAX mounts both a desktop and a drawer preview for one project. This
-    // single keyed boundary scopes their shared stores before either editor is
-    // rendered, and clears transient data on unmount. Selectors can therefore
-    // never cross projects without breaking the two-preview synchronization.
-    useInspectorStore.getState().scopeToProject(projectId);
-    useStyleEditStore.getState().scopeToProject(projectId);
+    // A unique owner resets stale mode even when React remounts the same project.
+    // Cleanup is owner-checked, so a late old cleanup cannot release a newer
+    // workspace instance for the same project.
+    useInspectorStore.getState().scopeToProject(projectId, editorSession);
+    useStyleEditStore.getState().scopeToProject(projectId, editorSession);
     return () => {
-      useInspectorStore.getState().releaseProjectScope(projectId);
-      useStyleEditStore.getState().releaseProjectScope(projectId);
+      useInspectorStore
+        .getState()
+        .releaseProjectScope(projectId, editorSession);
+      useStyleEditStore
+        .getState()
+        .releaseProjectScope(projectId, editorSession);
     };
-  }, [projectId]);
+  }, [editorSession, projectId]);
 
-  if (inspectorScope !== projectId || styleScope !== projectId) {
+  if (
+    inspectorScope !== projectId ||
+    inspectorSession !== editorSession ||
+    styleScope !== projectId ||
+    styleSession !== editorSession
+  ) {
     return (
       <div
         className="grid h-full min-h-0 place-items-center bg-[#fcfbf7] text-xs text-[#8d887f]"
@@ -129,6 +141,7 @@ function MaxWorkspaceContent({
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
   const [desktopNavigationLayout, setDesktopNavigationLayout] = useState(false);
+  const [desktopPreviewLayout, setDesktopPreviewLayout] = useState(false);
   const [versionSelection, setVersionSelection] = useState<{
     snapshotId: string;
     headId: string | null;
@@ -181,11 +194,19 @@ function MaxWorkspaceContent({
     : mobileNavOpen;
 
   useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
-    const update = () => setDesktopNavigationLayout(media.matches);
+    const navigationMedia = window.matchMedia("(min-width: 1024px)");
+    const previewMedia = window.matchMedia("(min-width: 1280px)");
+    const update = () => {
+      setDesktopNavigationLayout(navigationMedia.matches);
+      setDesktopPreviewLayout(previewMedia.matches);
+    };
     update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    navigationMedia.addEventListener("change", update);
+    previewMedia.addEventListener("change", update);
+    return () => {
+      navigationMedia.removeEventListener("change", update);
+      previewMedia.removeEventListener("change", update);
+    };
   }, []);
 
   useEffect(() => {
@@ -646,6 +667,7 @@ function MaxWorkspaceContent({
         )}
         data-testid="max-desktop-preview-column"
       >
+        {desktopPreviewLayout && (
           <MaxLivePreview
             project={project}
             deferInitialRuntimeStart={deferInitialRuntimeStart}
@@ -668,6 +690,7 @@ function MaxWorkspaceContent({
             restoringSnapshot={rollbackMutation.isPending}
             onClose={() => setPreviewPanelVisible(false)}
           />
+        )}
       </div>
 
       <AnimatePresence initial={false}>
@@ -686,7 +709,7 @@ function MaxWorkspaceContent({
       </AnimatePresence>
 
       <AnimatePresence initial={false}>
-        {previewOpen && (
+        {previewOpen && !desktopPreviewLayout && (
           <motion.div
             key="max-mobile-preview-layer"
             initial={{ opacity: 0 }}
