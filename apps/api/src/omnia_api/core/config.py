@@ -1023,12 +1023,12 @@ class Settings(BaseSettings):
     # but never an unbounded iterator. The wall-clock deadline is independent:
     # even slow provider and runtime calls must reach a terminal state.
     agent_builder_max_runtime_steps: int = Field(default=120)
-    agent_builder_max_runtime_seconds: int = Field(default=3600)
-    # Must exceed the gateway's complete 1200-second provider-turn deadline plus
+    agent_builder_max_runtime_seconds: int = Field(default=1200)
+    # Must exceed the gateway's complete 600-second provider-turn deadline plus
     # connect, request handling and response-classification time. This prevents
     # the API socket from disappearing just before the gateway returns an exact
     # terminal response.
-    native_gateway_read_timeout_seconds: int = Field(default=1320)
+    native_gateway_read_timeout_seconds: int = Field(default=660)
     # Green-gate (Phase 2): when ON, the agent loop refuses a `done` until the
     # last build was clean AND the running app was re-checked after the last
     # write (a clean typecheck is exactly what a model hallucinates completion

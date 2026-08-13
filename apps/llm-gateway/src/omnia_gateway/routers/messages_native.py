@@ -817,7 +817,11 @@ async def native_messages(request: Request) -> Response:
             payload,
             headers,
         )
-    except httpx.ReadTimeout as exc:
+    except httpx.TimeoutException as exc:
+        # Sync streamed responses can surface a read-idle failure as the base
+        # TimeoutException (depending on the httpcore/OpenSSL phase).  Catch the
+        # whole timeout family before HTTPError so the API gets the resumable,
+        # bounded provider_response_timeout code instead of paid_call_ambiguous.
         log.warning(
             "native_messages.response_timeout",
             model=model,

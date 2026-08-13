@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 45,
+  "version": 46,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Обычный клик в MAX preview полностью отделён от редактора",
   "subtitle": "Inspector не регистрирует обработчики в режиме просмотра; heartbeat остался отдельным ограниченным таймером.",
   "items": [
+   {
+    "s": "testing",
+    "t": "Зависший ответ MAX теперь ограничен и всегда завершает run",
+    "d": "Production-форензика run cc2251be показала: второй native-turn получил HTTP 200, затем тело молчало 10 минут и попало в общий transport error, из-за чего UI продолжал показывать running. Timeout теперь классифицируется отдельно, idle-окно сокращено до 180 секунд, полный ход ограничен 600 секундами, API ждёт 660 секунд, а внешний lifecycle-fuse через 1200 секунд обязательно финализирует run/message с честной ошибкой и сохранённой историей. Локально зелёные 3 API lifecycle-теста, 26 gateway-тестов, 5 web-тестов, Ruff и TypeScript; production-проверка ожидает доставку."
+   },
    {
     "s": "failed",
     "t": "Click-triggered heartbeat заменён полной изоляцией",
@@ -2639,8 +2644,20 @@
     "period": "13.08",
     "description": "Не позволять модели подменять продукт типовым тёмным AI-dashboard с emoji, glass/bento, пустыми графиками и одинаковыми карточками.",
     "evidence": "В fitness-47e6be зафиксированы dark purple shell, emoji-иконки всех пяти tabs, gradient logo, repeated rounded cards, пустой декоративный chart и generic premium/AI copy. Причина — в MAX_MODEL_DIRECTIVE и template SYSTEM_PROMPT не было design-quality contract. Оба контракта дополнены продуктовыми ограничениями и обязательной проверкой навигации.",
-    "impact": "Новые MAX-сборки должны выводить визуальную систему из задачи и аудитории, показывать полезные данные и использовать единый SVG/icon язык.",
-    "next_vector": "Проверить на следующей живой MAX-генерации"
+   "impact": "Новые MAX-сборки должны выводить визуальную систему из задачи и аудитории, показывать полезные данные и использовать единый SVG/icon язык.",
+   "next_vector": "Проверить на следующей живой MAX-генерации"
+   },
+   {
+    "id": "H137",
+    "title": "MAX run всегда получает конечный статус при молчащем провайдере",
+    "status": "testing",
+    "score": null,
+    "category": "MAX / LLM-провайдеры / надёжность",
+    "period": "13.08",
+    "description": "Ограничить молчание одного native-turn и гарантировать финализацию run/message независимым внешним дедлайном.",
+    "evidence": "Run cc2251be-bd5d-4f93-a2ec-02b0704af792: build_plan завершён в 08:37:03 UTC, второй /v1/messages получил HTTP 200, затем в 08:47:05 gateway записал The read operation timed out и ошибочно вернул 502 paid_call_ambiguous; message остался пустым с tokens_out=NULL. Исправлены timeout-family catch, интервалы 180/600/660/1200 секунд и outer terminalization. Локально: API lifecycle 3/3, gateway 26/26, web 5/5, Ruff и typecheck зелёные.",
+    "impact": "Сборка больше не может бесконечно держать single-flight и крутить интерфейс: провайдерский сбой становится наблюдаемой конечной ошибкой, после которой доступен безопасный повтор.",
+    "next_vector": "Доставить api/gateway/web и повторить MAX generation canary"
    }
  ],
  "vectors": [
@@ -3219,6 +3236,10 @@
     [
      "Kit 29: mode-OFF preview изолирован от inspector; живая owner-проверка",
      false
+    ],
+    [
+     "Bounded provider timeout и обязательная terminalization MAX-run; production canary",
+     false
     ]
    ],
    "hyp_ids": [
@@ -3257,7 +3278,8 @@
       "H131",
        "H132",
        "H135",
-       "H136"
+       "H136",
+       "H137"
    ]
   }
  ],

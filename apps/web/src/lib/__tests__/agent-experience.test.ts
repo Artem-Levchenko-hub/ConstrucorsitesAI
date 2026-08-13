@@ -58,4 +58,10 @@ describe("agent creative experience", () => {
   it("marks every phase complete only after a successful done", () => {
     expect(creativePhaseStates([step("done")], false).every((phase) => phase.status === "complete")).toBe(true);
   });
+
+  it("explains provider recovery instead of claiming a design replan", () => {
+    expect(creativeNarration([step("provider_resume", "", false)], true)).toBe(
+      "Восстанавливаю ответ AI-провайдера",
+    );
+  });
 });

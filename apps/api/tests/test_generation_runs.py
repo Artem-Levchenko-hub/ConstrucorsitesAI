@@ -391,6 +391,57 @@ async def test_tracked_prompt_uses_product_outcome_finalizer(
     assert finalized == [run_id]
 
 
+async def test_tracked_prompt_deadline_always_terminalizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid.uuid4()
+    project_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    statuses: list[tuple[str, str | None]] = []
+    emergency: list[str] = []
+
+    async def _work() -> None:
+        await asyncio.Future()
+
+    async def _never_cancel(_run_id: uuid.UUID) -> None:
+        await asyncio.Future()
+
+    async def _status(
+        _run_id: uuid.UUID, new_status: str, *, error: str | None = None
+    ) -> None:
+        statuses.append((new_status, error))
+
+    async def _error(_project_id: uuid.UUID, _message_id: uuid.UUID, err: str) -> None:
+        emergency.append(err)
+
+    async def _clear(_run_id: uuid.UUID) -> None:
+        return None
+
+    monkeypatch.setattr(messages, "set_generation_run_status", _status)
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", _never_cancel)
+    monkeypatch.setattr(messages, "_emergency_error", _error)
+    monkeypatch.setattr(messages, "clear_generation_cancel", _clear)
+    monkeypatch.setattr(
+        messages,
+        "get_settings",
+        lambda: SimpleNamespace(agent_builder_max_runtime_seconds=-29),
+    )
+
+    await messages._run_tracked_prompt(
+        _work(),
+        run_id=run_id,
+        project_id=project_id,
+        assistant_message_id=message_id,
+        label="deadline-test",
+    )
+
+    assert statuses == [
+        ("running", None),
+        ("failed", "generation_deadline_exceeded"),
+    ]
+    assert emergency and "безопасно остановлена" in emergency[0]
+
+
 async def test_build_without_snapshot_is_failed_product_outcome(
     db_session: AsyncSession,
 ) -> None:

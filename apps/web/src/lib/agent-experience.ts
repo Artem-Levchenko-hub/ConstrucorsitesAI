@@ -67,6 +67,9 @@ export function creativePhaseStates(
 export function creativeNarration(steps: AgentStep[], streaming: boolean): string {
   const last = steps.at(-1);
   if (!last) return streaming ? "Настраиваю творческую мастерскую" : "История сборки";
+  if (last.tool === "provider_resume") {
+    return "Восстанавливаю ответ AI-провайдера";
+  }
   if (last.ok === false) return "Исправляю найденную проблему";
   if (last.kind === "retry" || last.kind === "stalled") {
     return "Меняю подход и продолжаю";

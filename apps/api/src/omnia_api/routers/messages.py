@@ -425,7 +425,43 @@ async def _run_tracked_prompt(
         orchestrator_client.reset_hot_reload_tracker(tracker_token)
     cancel_task = asyncio.create_task(_wait_for_generation_cancel(run_id))
     try:
-        done, _ = await asyncio.wait({work_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(
+            {work_task, cancel_task},
+            timeout=max(1, int(get_settings().agent_builder_max_runtime_seconds) + 30),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            # This is the outer lifecycle fuse.  The native loop has its own
+            # provider deadline, but setup/finalisation and non-native paths must
+            # not be able to leave generation_runs active forever if a dependency
+            # ignores cancellation or a future code path forgets its own timeout.
+            work_task.cancel()
+            cancel_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await work_task
+            if not await _resync_cancelled_runtime_or_hold(
+                run_id=run_id,
+                project_id=project_id,
+                touched_paths=touched_paths,
+            ):
+                await _emergency_error(
+                    project_id,
+                    assistant_message_id,
+                    "Сборка превысила предельное время; рабочая версия восстанавливается.",
+                )
+                return
+            await set_generation_run_status(
+                run_id,
+                "failed",
+                error="generation_deadline_exceeded",
+            )
+            await _emergency_error(
+                project_id,
+                assistant_message_id,
+                "Сборка не получила ответ вовремя и безопасно остановлена. "
+                "Повторите запрос — история сохранена.",
+            )
+            return
         if cancel_task in done:
             work_task.cancel()
             try:

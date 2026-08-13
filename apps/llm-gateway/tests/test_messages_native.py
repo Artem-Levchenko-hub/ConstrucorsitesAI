@@ -739,6 +739,39 @@ def test_native_endpoint_classifies_stalled_response_body(
     assert response.json()["error"]["type"] == "provider_response_timeout"
 
 
+def test_native_endpoint_classifies_base_timeout_before_ambiguous_transport(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda _model: ("test-key", "https://provider.test/v1"),
+    )
+    monkeypatch.setattr(
+        messages_native,
+        "_post_llmgw",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(httpx.TimeoutException("read idle")),
+    )
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-5",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "metadata": {
+                "run_id": "33333333-3333-3333-3333-333333333333",
+                "turn_id": "33333333-3333-3333-3333-333333333333:5",
+                "free": True,
+            },
+            "messages": [{"role": "user", "content": "long composition"}],
+        },
+    )
+
+    assert response.status_code == 504
+    assert response.json()["error"]["type"] == "provider_response_timeout"
+
+
 def test_native_endpoint_replays_settled_logical_turn_before_provider(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -918,12 +951,12 @@ def test_native_endpoint_blocks_unattributed_calls_before_provider(
     reserve.assert_not_awaited()
 
 
-def test_native_product_timeout_outlives_observed_four_minute_response() -> None:
+def test_native_product_timeout_is_bounded_but_allows_long_streams() -> None:
     timeout = messages_native._upstream_timeout()
     settings = messages_native.get_settings()
 
     assert timeout.connect == 30.0
     assert timeout.write == 60.0
     assert timeout.pool == 30.0
-    assert timeout.read == 600.0
-    assert settings.native_response_total_timeout_seconds == 1200
+    assert timeout.read == 180.0
+    assert settings.native_response_total_timeout_seconds == 600

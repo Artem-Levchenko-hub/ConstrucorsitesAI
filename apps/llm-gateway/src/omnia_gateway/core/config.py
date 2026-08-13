@@ -74,8 +74,8 @@ class Settings(BaseSettings):
     # idle-between-chunks timeout, not a whole-response deadline; the API caller
     # has a strictly larger read window so the gateway can always return a
     # classified terminal error instead of losing the socket first.
-    native_response_idle_timeout_seconds: int = 600
-    native_response_total_timeout_seconds: int = 1200
+    native_response_idle_timeout_seconds: int = 180
+    native_response_total_timeout_seconds: int = 600
     native_turn_cache_ttl_seconds: int = 86400
 
     log_level: str = "INFO"
