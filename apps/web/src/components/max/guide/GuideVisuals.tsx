@@ -34,7 +34,10 @@ type Callout = {
   number: number;
   target: string;
   offset: [number, number];
+  targetAnchor?: [number, number];
 };
+
+const CALLOUT_TARGET_RADIUS = 10;
 
 function CalloutLayer({ callouts }: { callouts: Callout[] }) {
   const arrowId = `guide-arrow-${useId().replace(/:/g, "")}`;
@@ -58,25 +61,30 @@ function CalloutLayer({ callouts }: { callouts: Callout[] }) {
       const containerRect = container.getBoundingClientRect();
       if (containerRect.width === 0 || containerRect.height === 0) return;
 
-      const next = callouts.flatMap(({ number, target, offset }) => {
+      const next = callouts.flatMap(({ number, target, offset, targetAnchor = [0.5, 0.5] }) => {
         const targetElement = container.querySelector<HTMLElement>(`[data-guide-target="${target}"]`);
         if (!targetElement) return [];
 
         const targetRect = targetElement.getBoundingClientRect();
-        const toX = targetRect.left - containerRect.left + targetRect.width / 2;
-        const toY = targetRect.top - containerRect.top + targetRect.height / 2;
+        const targetX = targetRect.left - containerRect.left + targetRect.width * targetAnchor[0];
+        const targetY = targetRect.top - containerRect.top + targetRect.height * targetAnchor[1];
         const fromX = Math.min(
           containerRect.width - 18,
-          Math.max(18, toX + (offset[0] / 100) * containerRect.width),
+          Math.max(18, targetX + (offset[0] / 100) * containerRect.width),
         );
         const fromY = Math.min(
           containerRect.height - 18,
-          Math.max(18, toY + (offset[1] / 100) * containerRect.height),
+          Math.max(18, targetY + (offset[1] / 100) * containerRect.height),
         );
+        const targetDeltaX = targetX - fromX;
+        const targetDeltaY = targetY - fromY;
+        const targetDistance = Math.hypot(targetDeltaX, targetDeltaY) || 1;
+        const toX = targetX - (targetDeltaX / targetDistance) * CALLOUT_TARGET_RADIUS;
+        const toY = targetY - (targetDeltaY / targetDistance) * CALLOUT_TARGET_RADIUS;
         const deltaX = toX - fromX;
         const d = `M${fromX} ${fromY} C${fromX + deltaX * 0.38} ${fromY} ${toX - deltaX * 0.3} ${toY} ${toX} ${toY}`;
 
-        return [{ number, target, from: [fromX, fromY] as [number, number], to: [toX, toY] as [number, number], d }];
+        return [{ number, target, from: [fromX, fromY] as [number, number], to: [targetX, targetY] as [number, number], d }];
       });
 
       setLayerSize([containerRect.width, containerRect.height]);
@@ -180,8 +188,10 @@ function ScreenshotFrame({
           <span className="size-2 rounded-full bg-[#248a4b]" />
         </div>
       </figcaption>
-      <div className="relative min-h-[330px] w-full overflow-hidden bg-[#f5f3ee] sm:aspect-[1000/560] sm:min-h-0">
-        {children}
+      <div className="max-studio-scroll w-full overflow-x-auto bg-[#f5f3ee]">
+        <div className="relative aspect-[1000/560] w-full min-w-[760px] overflow-hidden">
+          {children}
+        </div>
       </div>
     </figure>
   );
@@ -293,16 +303,16 @@ export function AppSettingsVisual() {
           <div className="mt-[4%] grid grid-cols-[1.15fr_.85fr] gap-[3%]">
             <div className="rounded-xl border border-[#d8d4cb] bg-[#fcfbf7] p-[5%]">
               <p className="text-[10px] font-semibold">Основные данные</p>
-              <div data-guide-target="app-identity" className="mt-[5%] grid grid-cols-2 gap-2 text-[7px]">
-                <label className="font-medium">Название<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal">Кофе рядом</div></label>
+              <div className="mt-[5%] grid grid-cols-2 gap-2 text-[7px]">
+                <label className="font-medium">Название<div data-guide-target="app-identity" className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal">Кофе рядом</div></label>
                 <label className="font-medium">Поддержка<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal">help@coffee.ru</div></label>
                 <label className="col-span-2 font-medium">Короткое описание<div className="mt-1 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal text-[#6d6962]">Баллы, награды и быстрый заказ кофе</div></label>
               </div>
               <p className="mt-[5%] text-[8px] font-semibold">Что есть в приложении?</p>
-              <div data-guide-target="app-capabilities" className="mt-2 grid grid-cols-2 gap-1.5 text-[7px]">
+              <div className="mt-2 grid grid-cols-2 gap-1.5 text-[7px]">
                 {["Продажи", "Персональные данные", "Уведомления", "Контент пользователей"].map((item, index) => (
                   <div key={item} className="flex items-center gap-1.5 rounded-md border border-[#d8d4cb] bg-white p-2">
-                    <span className={`grid size-3 place-items-center rounded border ${index < 3 ? "border-accent bg-accent text-white" : "border-[#c9c4b9]"}`}>
+                    <span data-guide-target={index === 0 ? "app-capabilities" : undefined} className={`grid size-3 place-items-center rounded border ${index < 3 ? "border-accent bg-accent text-white" : "border-[#c9c4b9]"}`}>
                       {index < 3 && <Check className="size-2" />}
                     </span>
                     {item}
@@ -315,9 +325,9 @@ export function AppSettingsVisual() {
                 <p className="text-[10px] font-semibold">Документы</p>
                 <FileCheck2 className="size-4 text-accent" />
               </div>
-              <div data-guide-target="app-legal" className="mt-[7%] space-y-2">
+              <div className="mt-[7%] space-y-2">
                 {["Политика данных", "Согласие на обработку", "Условия использования"].map((item, index) => (
-                  <div key={item} className="flex items-center gap-2 rounded-md border border-[#d8d4cb] bg-white p-2 text-[7px]">
+                  <div key={item} data-guide-target={index === 2 ? "app-legal" : undefined} className="flex items-center gap-2 rounded-md border border-[#d8d4cb] bg-white p-2 text-[7px]">
                     <span className={`grid size-4 place-items-center rounded-full ${index < 2 ? "bg-[#248a4b]/10 text-[#248a4b]" : "bg-[#fff4df] text-[#946714]"}`}>
                       {index < 2 ? <Check className="size-2.5" /> : <CircleAlert className="size-2.5" />}
                     </span>
@@ -332,10 +342,10 @@ export function AppSettingsVisual() {
         </div>
       </div>
       <CalloutLayer callouts={[
-        { number: 1, target: "app-identity", offset: [20, -10] },
-        { number: 2, target: "app-capabilities", offset: [-15, 15] },
-        { number: 3, target: "app-legal", offset: [13, -15] },
-        { number: 4, target: "app-save", offset: [-12, 7] },
+        { number: 1, target: "app-identity", offset: [23, -13], targetAnchor: [0.5, 0.5] },
+        { number: 2, target: "app-capabilities", offset: [-10, 22], targetAnchor: [0.5, 0.5] },
+        { number: 3, target: "app-legal", offset: [10, -19], targetAnchor: [0.55, 0.5] },
+        { number: 4, target: "app-save", offset: [-13, 14], targetAnchor: [0.5, 0.5] },
       ]} />
     </ScreenshotFrame>
   );
