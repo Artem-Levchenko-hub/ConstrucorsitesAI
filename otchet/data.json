@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 48,
+  "version": 49,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2682,6 +2682,18 @@
      "evidence": "После delivery inspector v6 MAX_MANAGED_KIT_VERSION оставался 29, поэтому sync-kit считал существующие проекты актуальными. Версия поднята до 30; API-тест фиксирует project с managed_kit_version=29, вторую запись managed files и наличие setSequencedEditorMode в public/omnia-inspector.js.",
      "impact": "При следующем авторизованном открытии MAX preview штатный sync-kit обновит старый проект через обычный snapshot; ручная правка пользовательского проекта не нужна.",
      "next_vector": "Открыть owner workspace и проверить editor→view→все вкладки после sync-kit"
+    },
+    {
+      "id": "H140",
+      "title": "MAX legal fallback больше не зацикливает DOM",
+      "status": "testing",
+      "score": null,
+      "category": "MAX / preview / browser / надёжность",
+      "period": "13.08",
+      "description": "Исключить служебные legal-ссылки из проверки нативной навигации, чтобы MutationObserver не добавлял и не удалял собственный fallback бесконечно после обычного клика.",
+      "evidence": "На актуальном production commit 4c384229 проекта c66e4b17 клик Статистика→Тренировки зависал за 5 секунд и standalone, и во framed harness. Matrix в Chromium: baseline HANG, отключённый inspector HANG, отключённый MutationObserver 74 мс, отключённые оба 80 мс. Код OmniaCompliance считал собственные три ссылки нативными, скрывал себя, снова не находил ссылки и повторял цикл. С исправленным алгоритмом Chromium выполнил клик, оставил ровно 1 fallback и остановился после 2 observer callbacks / 1 DOM commit; kit поднят с 30 до 31.",
+      "impact": "Обычное переключение вкладки больше не может запустить бесконечную вставку и удаление служебного блока и занять главный поток всей страницы. Исправление штатно попадёт и в новые, и в уже созданные MAX-проекты через managed sync.",
+      "next_vector": "Доставить api/worker, синхронизировать production-проект до kit 31 и повторить пять вкладок в точном signed preview"
     }
  ],
  "vectors": [
@@ -3273,6 +3285,10 @@
     [
      "Монотонный editor→view протокол: session/seq, отмена stale retry и подтверждённый mode OFF; production owner-check",
      false
+    ],
+    [
+     "Managed kit 31: legal fallback не считает собственные ссылки нативными и не зацикливает DOM; production owner-check",
+     false
     ]
    ],
    "hyp_ids": [
@@ -3310,10 +3326,11 @@
      "H130",
       "H131",
        "H132",
-       "H135",
-       "H136",
-        "H137",
-        "H138"
+     "H135",
+     "H136",
+     "H137",
+     "H138",
+     "H140"
    ]
   }
  ],

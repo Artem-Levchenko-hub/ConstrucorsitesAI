@@ -318,6 +318,12 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "src/components/OmniaCompliance.tsx" in files
     compliance = files["src/components/OmniaCompliance.tsx"]
     assert "data-omnia-native-legal-nav" in compliance
+    assert (
+        'COMPLIANCE_FALLBACK_SELECTOR = \'[data-omnia-compliance-fallback="true"]\''
+        in compliance
+    )
+    assert "element.closest(COMPLIANCE_FALLBACK_SELECTOR) === null" in compliance
+    assert 'data-omnia-compliance-fallback="true"' in compliance
     assert "<details" in compliance
     assert "<footer" not in compliance
     assert "src/app/max-runtime.css" in files
@@ -625,6 +631,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
                 "parent_sha": parent_sha,
                 "config": files["src/lib/omnia/max-config.ts"],
                 "inspector": files["public/omnia-inspector.js"],
+                "compliance": files["src/components/OmniaCompliance.tsx"],
             }
         )
         return "2" * 40
@@ -672,9 +679,9 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
 
     # A project carrying an older managed kit is upgraded once even when its
     # business config and current snapshot are otherwise unchanged.
-    # Version 29 predates the sequenced inspector protocol.  It must receive
-    # the current managed inspector even when the user has not changed config.
-    saved.managed_kit_version = 29
+    # Version 30 carries the legal fallback self-observation loop. It must
+    # receive the fixed component even when the business config is unchanged.
+    saved.managed_kit_version = 30
     await db_session.commit()
     upgraded = await max_studio.put_max_config(project.id, _config(), db_session, user)
     repeated_after_upgrade = await max_studio.put_max_config(
@@ -684,6 +691,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
 
     assert len(calls) == 2
     assert "setSequencedEditorMode" in calls[-1]["inspector"]
+    assert 'data-omnia-compliance-fallback="true"' in calls[-1]["compliance"]
     assert refreshed is not None
     assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id

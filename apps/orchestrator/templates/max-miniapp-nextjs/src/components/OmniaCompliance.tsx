@@ -3,11 +3,18 @@
 import { useEffect, useState } from "react";
 
 const NATIVE_LEGAL_NAV_SELECTOR = '[data-omnia-native-legal-nav="true"]';
+const COMPLIANCE_FALLBACK_SELECTOR = '[data-omnia-compliance-fallback="true"]';
 const REQUIRED_LINKS = ["/support", "/legal/privacy", "/legal/terms"] as const;
 
 function hasNativeLegalNavigation() {
-  if (document.querySelector(NATIVE_LEGAL_NAV_SELECTOR)) return true;
-  return REQUIRED_LINKS.every((href) => document.querySelector(`a[href="${href}"]`));
+  const isNative = (element: Element) =>
+    element.closest(COMPLIANCE_FALLBACK_SELECTOR) === null;
+  if ([...document.querySelectorAll(NATIVE_LEGAL_NAV_SELECTOR)].some(isNative)) {
+    return true;
+  }
+  return REQUIRED_LINKS.every((href) =>
+    [...document.querySelectorAll(`a[href="${href}"]`)].some(isNative),
+  );
 }
 
 /**
@@ -33,7 +40,10 @@ export function OmniaCompliance({ fallback = false }: { fallback?: boolean } = {
   if (!fallback || !visible) return null;
 
   return (
-    <details aria-label="Служебная информация">
+    <details
+      aria-label="Служебная информация"
+      data-omnia-compliance-fallback="true"
+    >
       <summary>О приложении</summary>
       <nav aria-label="Поддержка и правовая информация">
         <a href="/support">Поддержка</a>{" · "}
