@@ -1,3 +1,40 @@
+# Product doctrine (highest priority, non-negotiable)
+
+Omnia exists to create complete production digital products for businesses, not
+mockups, disposable prototypes, decorative demos, or code that merely compiles.
+Every agent and every Codex session working in this repository must optimize for
+the real business outcome: establish the business's digital footprint and ship
+a product that solves the requested operational or commercial problem end to end.
+
+The default meaning of "build", "generate", "finish", or "ready" is a
+production-capable result. It includes, where relevant, a real domain model,
+authenticated and persistent data, complete user flows, integrations, truthful
+loading/empty/error/success states, security and tenant isolation, legal and
+privacy requirements, accessibility, observability, tests, deployment, and
+executable release proof. A screen, frontend shell, hardcoded dataset, fake
+success message, or HTTP 200 is never sufficient evidence of completion.
+
+Use agentic engineering to pursue the result: understand the business problem,
+create and maintain an observable plan, inspect the existing system, implement
+the full vertical slice, run it, exercise real user actions, verify persistence
+after reload, inspect the rendered product, repair defects, and complete the
+delivery loop. Prefer the maximum relevant business value, depth, and quality;
+"maximum" never means unrelated feature bloat or weakening reliability.
+
+Mocks and demo data are allowed only when the owner explicitly requests a
+prototype or when they are clearly labelled temporary scaffolding inside an
+unfinished run. They cannot satisfy completion, acceptance, release, or
+production-readiness gates. If credentials, legal data, external approval, or
+another owner-controlled dependency is missing, finish every unblocked part,
+name the exact blocker, and describe the result as incomplete rather than silently
+downgrading it to a demo.
+
+This doctrine applies to every generator and surface, including ordinary web
+projects and MAX Mini Apps. It overrides MVP shortcuts, preview-first behaviour,
+and narrower historical instructions unless the owner explicitly asks for a
+prototype in the current task. The durable elaboration is in
+[`docs/PRODUCT_DOCTRINE.md`](docs/PRODUCT_DOCTRINE.md).
+
 # Delivery rule (mandatory)
 
 Every change in this repository must complete the full delivery loop:

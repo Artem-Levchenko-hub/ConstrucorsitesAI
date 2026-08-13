@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 50,
+  "version": 51,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Обычный клик в MAX preview полностью отделён от редактора",
-  "subtitle": "Inspector не регистрирует обработчики в режиме просмотра; heartbeat остался отдельным ограниченным таймером.",
+  "title": "Полноценный цифровой продукт закреплён как нерушимое правило",
+  "subtitle": "Каждая генерация решает реальную задачу бизнеса через полный agentic engineering и не может подменить production-результат прототипом.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Product doctrine теперь автоматически видит Codex на любом компьютере",
+    "d": "Корневой AGENTS.md объявляет production-capable приложение единственным стандартным значением готового результата: реальные бизнес-процессы, доменная модель, persistence, интеграции, ошибки, безопасность, legal, тесты, deployment и исполняемый release proof. Подробный docs/PRODUCT_DOCTRINE.md закрепляет agentic loop и разрешает mock/demo только как явно обозначенное незавершённое исключение; правило хранится в репозитории и загружается новой Codex-сессией после checkout."
+   },
    {
     "s": "testing",
     "t": "MAX снова завершается только как полноценное приложение",
@@ -302,6 +307,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "13.08",
+   "what": "Потребовал навсегда закрепить цель Omnia: создавать полноценные цифровые продукты, которые максимально решают реальные задачи бизнеса, а не быстрые демо или красивые оболочки.",
+   "impact": "Решение стало верхнеуровневой product doctrine в корневом AGENTS.md и отдельном долговечном документе. Любая новая Codex-сессия из репозитория получает тот же стандарт: plan → полный vertical slice → реальные данные и действия → runtime/visual proof → доставка; прототип допустим только по прямому запросу и никогда не считается production-ready."
+  },
   {
    "date": "13.08",
    "what": "Поручил вернуть MAX тот же зрелый full-app agent/gate-контур, что у обычного генератора, не ослабляя Bridge, runtime, секреты и legal-границы.",
@@ -2716,6 +2726,18 @@
       "evidence": "Production-вызов заменил `_reference_max_completion_gap` на `max_completion_gap`, включил общий BuildPlan и immutable skill index, plan_task/update_plan/read_skill/see/read-only MCP в MAX-safe toolset и обязательный skill lifecycle. Новый signed Playwright gate проверяет semantic main navigation, primary action, managed POST + GET после reload, browser errors, 390px overflow, headings/labels/tap targets; source gate запрещает silent catch и требует deterministic plan/action hooks. Красный final proof восстанавливает checkpoint и обнуляет publishable files; положительная attestation вставляется в транзакции snapshot. Локально: 194/194 целевых теста, Ruff и mypy зелёные.",
       "impact": "Чистая компиляция и локально нарисованные цифры больше не являются готовым MAX-приложением. Платформа требует доказательство реального поведения и не публикует частичную версию; locked files, API routes, секреты, direct DB и generic web-auth probes остаются недоступны.",
       "next_vector": "После доставки выполнить fresh production canary: пройти все main views, primary/persisted action, reload, signed visual score и проверить overall_passed attestation точного commit"
+    },
+    {
+      "id": "H142",
+      "title": "Production-grade бизнес-продукт закреплён как обязательная доктрина проекта",
+      "status": "worked",
+      "score": 10,
+      "category": "продукт / процесс / agentic engineering",
+      "period": "13.08",
+      "description": "Сделать стандарт полного цифрового продукта автоматически доступным каждой Codex-сессии и запретить неявную подмену результата прототипом, моками или технически зелёной оболочкой.",
+      "evidence": "В корень репозитория добавлен highest-priority раздел AGENTS.md, который Codex читает при работе с проектом; подробный docs/PRODUCT_DOCTRINE.md формализует production contract, agentic engineering loop, prototype exception и enforcement через executable gates. JSON и ссылки проверены, правило доставляется через Git и поэтому действует после checkout на другом компьютере.",
+      "impact": "Цель владельца перестала зависеть от памяти конкретного чата или компьютера. Будущие агенты обязаны доводить релевантный бизнес-сценарий до реальных данных, интеграций, проверки и выпуска либо честно фиксировать внешний blocker, но не объявлять демо полноценным приложением.",
+      "next_vector": "V9 — последовательно кодировать доктрину в executable completion/release gates каждого генераторного маршрута"
     }
  ],
  "vectors": [
@@ -3357,6 +3379,33 @@
      "H137",
      "H138",
      "H140"
+   ]
+  },
+  {
+   "id": "V9",
+   "name": "Полноценные цифровые продукты для бизнеса",
+   "status": "нерушимая продуктовая доктрина",
+   "goal": "Каждая генерация создаёт production-capable цифровой продукт, который решает реальную коммерческую или операционную задачу бизнеса end to end.",
+   "steps": [
+    [
+     "Корневой AGENTS.md и docs/PRODUCT_DOCTRINE.md автоматически передают доктрину каждой новой Codex-сессии",
+     true
+    ],
+    [
+     "Каждый генераторный маршрут имеет executable full-app completion gate, а не только prompt-инструкцию",
+     false
+    ],
+    [
+     "Production canary доказывает реальные данные, primary flow, reload persistence, failure states и tenant isolation для каждого стека",
+     false
+    ],
+    [
+     "Design/functional/release evidence хранится с каждой опубликованной версией и блокирует подмену результата демо",
+     false
+    ]
+   ],
+   "hyp_ids": [
+    "H142"
    ]
   }
  ],
