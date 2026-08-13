@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 28
+MAX_MANAGED_KIT_VERSION = 29
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -888,6 +888,18 @@ Platform boundaries only:
   `requestOmniaAI({ message, instructions, context })`.
 - Demo/local data is allowed when the brief requests it or preview needs a useful
   first state. Never present demo identity as the authenticated MAX user.
+
+Product design contract:
+- Derive the visual system from the product's audience, task and content. Do not
+  default to a dark purple AI dashboard, glass/bento cards, decorative gradients,
+  huge radii, repeated badges or generic "AI"/"premium" labels.
+- Never use emoji as interface icons. Use one coherent SVG/icon set, restrained
+  typography and a small intentional color/radius/spacing system.
+- Every chart, metric, card and status must communicate useful real or clearly
+  labelled demo data. Do not render empty decorative charts or duplicate the same
+  card pattern across every screen.
+- Build and verify every requested navigation destination and primary action.
+  Tabs must remain responsive through repeated ordinary clicks with editor mode off.
 
 Do not add MAX-owned chrome, a required legal footer/marker, a design spec or other
 ceremony. Implement the user's product, run build, repair factual compiler errors,

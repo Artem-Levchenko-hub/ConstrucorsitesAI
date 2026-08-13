@@ -126,7 +126,7 @@ describe("MAX live preview surface", () => {
 
   it("keeps an ordinary viewing session alive and recovers a slept runtime", () => {
     expect(livePreview).toContain("heartbeatRuntime(project.id)");
-    expect(livePreview).toContain('data.type === "omnia:preview:activity"');
+    expect(livePreview).not.toContain('data.type === "omnia:preview:activity"');
     expect(livePreview).toContain(
       'state === "running" || state === "failed" ? 30_000 : 2_000',
     );

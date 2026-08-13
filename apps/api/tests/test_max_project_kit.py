@@ -580,6 +580,10 @@ def test_model_directive_is_headless_and_matches_locked_max_runtime_api() -> Non
     assert "never import `@maxhub/max-ui`" in MAX_MODEL_DIRECTIVE
     assert "Do not expose credentials" in MAX_MODEL_DIRECTIVE
     assert "required legal footer/marker" in MAX_MODEL_DIRECTIVE
+    assert "Never use emoji as interface icons" in MAX_MODEL_DIRECTIVE
+    assert "dark purple AI dashboard" in MAX_MODEL_DIRECTIVE
+    assert "empty decorative charts" in MAX_MODEL_DIRECTIVE
+    assert "editor mode off" in MAX_MODEL_DIRECTIVE
     assert 'data-omnia-native-legal-nav="true"' not in MAX_MODEL_DIRECTIVE
 
 

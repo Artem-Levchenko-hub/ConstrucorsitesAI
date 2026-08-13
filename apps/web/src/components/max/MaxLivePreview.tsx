@@ -334,11 +334,9 @@ export function MaxLivePreview({
     start.isPending,
   ]);
 
-  // An SPA tab/button click can be a completely local state transition, so
-  // Docker RX counters cannot distinguish an active viewer from an abandoned
-  // iframe.  Send an authenticated liveness signal while this preview is
-  // mounted, plus an immediate signal for each real interaction.  The latter
-  // also covers background-tab timer throttling.
+  // SPA tab/button clicks stay entirely inside the generated application. Keep
+  // the runtime alive on a bounded timer so ordinary viewing never executes
+  // cross-frame editor work or starts an API request from the click path.
   useEffect(() => {
     if (deferInitialRuntimeStart || !runtimeRunning || viewingHistorical) return;
     sendRuntimeHeartbeat();
@@ -440,10 +438,6 @@ export function MaxLivePreview({
         el?: Record<string, unknown>;
       };
       if (!data || typeof data.type !== "string") return;
-      if (data.type === "omnia:preview:activity") {
-        sendRuntimeHeartbeat();
-        return;
-      }
       if (data.type === "omnia:inspect:ready") {
         frame.dataset.maxPreviewReady = "true";
         setInspectorReady(true);

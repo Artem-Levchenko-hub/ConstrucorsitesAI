@@ -1,17 +1,22 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 44,
+  "version": 45,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Активный просмотр MAX preview больше не считается простоем",
-  "subtitle": "Обычные клиентские переходы теперь поддерживают runtime живым, а workspace замечает и автоматически восстанавливает неожиданно остановленную preview-сессию.",
+  "title": "Обычный клик в MAX preview полностью отделён от редактора",
+  "subtitle": "Inspector не регистрирует обработчики в режиме просмотра; heartbeat остался отдельным ограниченным таймером.",
   "items": [
    {
-    "s": "testing",
-    "t": "Обычные клики в preview защищены от ошибочной idle-остановки",
+    "s": "failed",
+    "t": "Click-triggered heartbeat заменён полной изоляцией",
     "d": "Production-форензика fitness-47e6be показала: контейнер завершился не из-за inspector или кода вкладки, а после idle-window — OOM=false, RestartCount=0, перед остановкой только штатный ELIFECYCLE. React setTab не создавал сетевой трафик, поэтому активный просмотр не обновлял таймер. Workspace теперь отправляет authenticated heartbeat раз в минуту и по реальному клику внутри iframe, продолжает проверять статус после running и один раз автоматически будит stopped/paused runtime. Framed-тест с mode OFF подтверждает два последовательных продуктовых перехода без перехвата."
+   },
+   {
+    "s": "testing",
+    "t": "MAX-дизайн больше не скатывается в типовой AI-dashboard",
+    "d": "Оба MAX-контракта теперь требуют продуктовую визуальную систему без emoji-иконок, типовой тёмно-фиолетовой палитры, glass/bento, пустых графиков и одинаковых карточек. Навигация и основные действия должны быть реально проверены до завершения сборки."
    },
    {
     "s": "testing",
@@ -2604,14 +2609,38 @@
    {
     "id": "H134",
     "title": "MAX workspace сохраняет активный SPA-preview и восстанавливает runtime после сна",
-    "status": "testing",
-    "score": null,
+    "status": "failed",
+    "score": 3,
     "category": "MAX / preview / runtime / надёжность",
     "period": "13.08",
     "description": "Считать локальные клики и открытый iframe реальной активностью, не давать idle-sweep остановить просмотр и автоматически восстанавливать runtime, если он всё же перешёл в stopped/paused/failed.",
     "evidence": "Production container omnia-dev-fitness-47e6be: StartedAt=05:12:23, последний HTTP activity=05:55:34, FinishedAt=06:30:34, ExitCode=1, OOMKilled=false, RestartCount=0, RestartPolicy=unless-stopped; перед завершением нет server/JS exception, только pnpm ELIFECYCLE после daemon stop. ProductApp использует локальный React setTab и исправен standalone. Добавлены owner-only POST runtime/heartbeat, минутный heartbeat открытого MAX iframe, throttled omnia:preview:activity на обычном клике, 30-секундный status poll после running и resettable auto-wake. Canonical inspector и 4 fallback-копии byte-identical, managed kit 27→28. Framed mode-OFF test: клики Статистика→Профиль оба доходят до app, omnia:pick=0, activity отправлена; web 10/10, typecheck, ESLint, API 19/19, managed-kit 43/43 и Ruff зелёные.",
-    "impact": "Пользователь может долго изучать сгенерированное приложение и переключать локальные экраны без скрытой остановки сервера. Если runtime остановится по внешней причине, workspace увидит это максимум за 30 секунд и запустит восстановление вместо навсегда замершего iframe.",
+    "impact": "Гипотеза об idle-stop была неполной: владелец повторно воспроизвёл мгновенный отказ при живом runtime. Click-triggered activity сама добавила inspector/API работу в критический путь и заменена изоляцией H135.",
     "next_vector": "После доставки повторить обычные переходы mode OFF в owner workspace fitness-47e6be и подтвердить heartbeat/status в production логах"
+   },
+   {
+    "id": "H135",
+    "title": "Обычный MAX-preview полностью изолирован от inspector",
+    "status": "testing",
+    "score": null,
+    "category": "MAX / preview / browser / надёжность",
+    "period": "13.08",
+    "description": "Убрать из обычного клика всю работу editor bridge, DOM-анализ, postMessage и heartbeat HTTP, сохранив редактирование только по явному включению.",
+    "evidence": "Production fitness-47e6be и prod revision 486f666b: runtime running, после preview bootstrap только bounded GET / и два actions, request storm нет. ProductApp tab handler — чистый React setTab; единственный effect одноразово грузит history. Kit 28 при этом добавлял always-loaded capture click breadcrumb, DOM text scan, postMessage и heartbeat прямо в click path. Kit 29 не регистрирует click/change/pointerdown/mousemove в mode OFF; heartbeat остался отдельным минутным таймером.",
+    "impact": "Нажатие вкладки или кнопки теперь имеет только продуктовый React-путь. Ни inspector, ни API не могут замедлить или перехватить обычное изучение приложения.",
+    "next_vector": "Доставить kit 29 и повторить owner-mode OFF прогон"
+   },
+   {
+    "id": "H136",
+    "title": "MAX получил анти-нейродизайн контракт",
+    "status": "testing",
+    "score": null,
+    "category": "MAX / дизайн / генерация",
+    "period": "13.08",
+    "description": "Не позволять модели подменять продукт типовым тёмным AI-dashboard с emoji, glass/bento, пустыми графиками и одинаковыми карточками.",
+    "evidence": "В fitness-47e6be зафиксированы dark purple shell, emoji-иконки всех пяти tabs, gradient logo, repeated rounded cards, пустой декоративный chart и generic premium/AI copy. Причина — в MAX_MODEL_DIRECTIVE и template SYSTEM_PROMPT не было design-quality contract. Оба контракта дополнены продуктовыми ограничениями и обязательной проверкой навигации.",
+    "impact": "Новые MAX-сборки должны выводить визуальную систему из задачи и аудитории, показывать полезные данные и использовать единый SVG/icon язык.",
+    "next_vector": "Проверить на следующей живой MAX-генерации"
    }
  ],
  "vectors": [
@@ -2644,6 +2673,10 @@
     [
      "Единая human-designed система лендинга и рабочих поверхностей без purple glow/gradient (30.07)",
      true
+    ],
+    [
+     "Проверить MAX анти-нейродизайн контракт на живой генерации",
+     false
     ]
    ],
    "hyp_ids": [
@@ -2654,7 +2687,8 @@
     "H68",
     "H79",
     "H81",
-    "H90"
+    "H90",
+    "H136"
    ]
   },
   {
@@ -3181,6 +3215,10 @@
     [
      "Пожизненный Business и безлимит создателя доставлены и подтверждены живым MAX-run без списания",
      false
+    ],
+    [
+     "Kit 29: mode-OFF preview изолирован от inspector; живая owner-проверка",
+     false
     ]
    ],
    "hyp_ids": [
@@ -3217,7 +3255,9 @@
      "H129",
      "H130",
       "H131",
-      "H132"
+       "H132",
+       "H135",
+       "H136"
    ]
   }
  ],

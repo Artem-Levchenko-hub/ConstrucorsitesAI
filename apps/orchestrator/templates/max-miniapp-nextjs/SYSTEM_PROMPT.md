@@ -15,6 +15,15 @@
   `@/lib/omnia/integration-client` only when the requested product needs them.
 - Demo/local data is allowed when requested or useful for preview. Never embed a
   credential or present demo identity as the authenticated MAX user.
+- Derive a restrained visual system from this product's audience, task and
+  content. Do not default to a dark-purple AI dashboard, glass/bento cards,
+  decorative gradients, huge radii, repeated badges or generic AI/premium copy.
+  Never use emoji as interface icons; use one coherent SVG/icon set.
+- Every chart, metric, card and status must communicate useful real or clearly
+  labelled demo data. Do not add empty decorative charts or repeat one generic
+  card pattern across every screen.
+- Implement and verify every requested destination and primary action. Repeated
+  ordinary tab clicks must stay responsive when editor mode is off.
 - Do not add a MAX visual shell, mandatory legal footer/marker, design spec or
   platform-themed component system. The final browser gate only checks that the
   compiled `ProductApp` hydrates into a real visible screen.

@@ -23,7 +23,7 @@
  *   parent → iframe (style 1.5): omnia:style:enable | :disable |
  *       omnia:style:set {target:'element'|'token', selector, prop, value} |
  *       omnia:font:link {family, href} | omnia:style:reset {selector?}
- *   iframe → parent: omnia:inspect:ready | omnia:preview:activity |
+ *   iframe → parent: omnia:inspect:ready |
  *       omnia:pick {el:{id,selector,label,text,html,rect,tag,color,backgroundColor,borderColor,fontFamily}}
  */
 (function () {
@@ -599,6 +599,8 @@
     document.documentElement.style.cursor = "crosshair";
     document.addEventListener("mousemove", onMouseMove, true);
     document.addEventListener("pointerdown", blockEarlyInteraction, true);
+    document.addEventListener("click", recordClickBreadcrumb, true);
+    document.addEventListener("change", recordChangeBreadcrumb, true);
     // Capture phase so we intercept before the site's own click handlers.
     document.addEventListener("click", onClick, true);
     window.addEventListener("scroll", refreshHover, true);
@@ -612,6 +614,8 @@
     document.documentElement.style.cursor = "";
     document.removeEventListener("mousemove", onMouseMove, true);
     document.removeEventListener("pointerdown", blockEarlyInteraction, true);
+    document.removeEventListener("click", recordClickBreadcrumb, true);
+    document.removeEventListener("change", recordChangeBreadcrumb, true);
     document.removeEventListener("click", onClick, true);
     window.removeEventListener("scroll", refreshHover, true);
     window.removeEventListener("resize", refreshHover, true);
@@ -801,15 +805,6 @@
   // the chat. Capture-phase + try/guarded so tracking can never break the page.
   var CRUMB_CAP = 6;
   var crumbs = [];
-  var lastActivityPostAt = 0;
-
-  function reportActivity() {
-    var now = Date.now();
-    if (now - lastActivityPostAt < 10000) return;
-    lastActivityPostAt = now;
-    post({ type: "omnia:preview:activity" });
-  }
-
   function pushCrumb(text) {
     var s = collapse(text, 80);
     if (!s) return;
@@ -838,28 +833,21 @@
     return label ? sel + " «" + label + "»" : sel;
   }
 
-  document.addEventListener(
-    "click",
-    function (e) {
-      try {
-        if (e && e.target && e.target.nodeType === 1) {
-          pushCrumb("клик: " + describeTarget(e.target));
-          reportActivity();
-        }
-      } catch (_) {}
-    },
-    true
-  );
-  document.addEventListener(
-    "change",
-    function (e) {
-      try {
-        if (e && e.target && e.target.nodeType === 1)
-          pushCrumb("ввод: " + describeTarget(e.target));
-      } catch (_) {}
-    },
-    true
-  );
+  // These handlers are attached only by enable() and removed by disable().
+  // Normal preview mode therefore has zero inspector click/change listeners.
+  function recordClickBreadcrumb(e) {
+    try {
+      if (e && e.target && e.target.nodeType === 1)
+        pushCrumb("клик: " + describeTarget(e.target));
+    } catch (_) {}
+  }
+
+  function recordChangeBreadcrumb(e) {
+    try {
+      if (e && e.target && e.target.nodeType === 1)
+        pushCrumb("ввод: " + describeTarget(e.target));
+    } catch (_) {}
+  }
 
   function reportError(sig, payload) {
     if (errCount >= ERR_CAP || errSeen[sig]) return;

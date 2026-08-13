@@ -13,7 +13,7 @@ const inspectorSource = readFileSync(
 );
 
 describe("canonical inspector ordinary viewing mode", () => {
-  it("never intercepts normal navigation and reports lightweight activity", () => {
+  it("leaves repeated normal navigation entirely inside the application", () => {
     const shell = new JSDOM('<iframe id="preview"></iframe>', {
       runScripts: "dangerously",
       url: "https://constructor.example/workspace",
@@ -34,8 +34,15 @@ describe("canonical inspector ordinary viewing mode", () => {
     const parentPost = vi
       .spyOn(shell.window, "postMessage")
       .mockImplementation(() => undefined);
+    const documentListener = vi.spyOn(preview.document, "addEventListener");
 
     preview.eval(inspectorSource);
+    const messagesBeforeClicks = parentPost.mock.calls.length;
+    expect(
+      documentListener.mock.calls.filter(([type]) =>
+        ["click", "change", "pointerdown", "mousemove"].includes(type),
+      ),
+    ).toHaveLength(0);
     for (const id of ["#stats", "#profile"]) {
       preview.document.querySelector(id)?.dispatchEvent(
         new preview.MouseEvent("click", { bubbles: true, cancelable: true }),
@@ -49,10 +56,7 @@ describe("canonical inspector ordinary viewing mode", () => {
           (message as { type?: string } | undefined)?.type === "omnia:pick",
       ),
     ).toHaveLength(0);
-    expect(parentPost).toHaveBeenCalledWith(
-      { type: "omnia:preview:activity" },
-      "*",
-    );
+    expect(parentPost.mock.calls).toHaveLength(messagesBeforeClicks);
     shell.window.close();
   });
 });
