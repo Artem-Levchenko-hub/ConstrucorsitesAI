@@ -141,7 +141,7 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
         stable_max_loop=True,
     )
 
-    assert "MAX PRODUCT STUDIO" in prompt
+    assert "OMNIA MAX APP ENGINEER" in prompt
     assert "АРТ-ДИРЕКЦИЯ ДО КОДА" in prompt
     assert "ProductApp.tsx" in prompt
     assert "защищённое ядро" in prompt
@@ -150,7 +150,8 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert "Sonnet" not in prompt
     assert "Gemini" not in prompt
     assert "read_skill" in prompt
-    assert "MAX capability catalog" in prompt
+    assert "read_skill(`premium-mobile-foundation`)" in prompt
+    assert "MAX capability catalog" not in prompt
     assert "signed MAX preview session" in prompt
     assert "build" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
@@ -4484,4 +4485,4 @@ def test_native_api_timeout_outlives_gateway_settlement_window() -> None:
     assert timeout.connect == 30.0
     assert timeout.write == 60.0
     assert timeout.pool == 30.0
-    assert timeout.read == 1320.0
+    assert timeout.read == 660.0

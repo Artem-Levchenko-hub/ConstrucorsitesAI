@@ -582,10 +582,13 @@ def test_model_directive_is_headless_and_matches_locked_max_runtime_api() -> Non
     assert "firstName" in MAX_MODEL_DIRECTIVE
     assert "languageCode" in MAX_MODEL_DIRECTIVE
     assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
-    assert "Demo/local data is allowed" in MAX_MODEL_DIRECTIVE
+    assert "Static product reference content" in MAX_MODEL_DIRECTIVE
+    assert "Never invent user identity" in MAX_MODEL_DIRECTIVE
+    assert "Demo/local data is allowed" not in MAX_MODEL_DIRECTIVE
     assert "never import `@maxhub/max-ui`" in MAX_MODEL_DIRECTIVE
     assert "Do not expose credentials" in MAX_MODEL_DIRECTIVE
-    assert "required legal footer/marker" in MAX_MODEL_DIRECTIVE
+    assert "managed support" in MAX_MODEL_DIRECTIVE
+    assert "privacy and terms routes" in MAX_MODEL_DIRECTIVE
     assert "Never use emoji as interface icons" in MAX_MODEL_DIRECTIVE
     assert "dark purple AI dashboard" in MAX_MODEL_DIRECTIVE
     assert "empty decorative charts" in MAX_MODEL_DIRECTIVE

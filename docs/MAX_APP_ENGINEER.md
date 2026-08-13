@@ -51,3 +51,31 @@ art direction or prove that an action works. Reliability comes from four layers:
 
 The model still has broad visual authorship. The platform owns the decision
 record, truth boundaries and acceptance floor.
+
+## Durable continuity contract
+
+An accepted MAX build is a durable server job, not a coroutine owned by the
+browser or one API process. Postgres keeps the public run, immutable execution
+envelope, plan/evidence checkpoint and a renewable single-flight lease. RQ owns
+execution; the API watchdog re-enqueues pending runs and reclaims only expired
+worker leases. Browser reload reconnects to the same run and message.
+
+Redis holds the opaque native transcript and provider turn cursor for 48 hours.
+The agent checkpoints immediately before a provider request and after every
+assistant/tool-result turn. If the network, API or worker dies with settlement
+unknown, recovery sends the identical transcript and logical turn ID so the
+gateway can replay its settled result without a duplicate provider request.
+Hidden model reasoning never enters the public `GenerationRun.agent_state`.
+
+Each execution slice may end, but the accepted run does not: internal compile,
+dependency, import, managed-API, runtime, persistence, design or proof debt is
+classified as repair and automatically continued from the same live files and
+plan. After repeated red slices the agent rereads the immutable source-derived
+Environment Manifest and relevant contracts rather than abandoning the run.
+Only a permanent provider/owner rejection or a sustained external outage may
+terminalise it, with a retry classification and exact owner action.
+
+Partial files remain a private runtime checkpoint. No snapshot is published and
+no completion is recorded until the full functional, signed visual and release
+contract returns `contract_green`; the final snapshot transaction remains the
+single publication point.

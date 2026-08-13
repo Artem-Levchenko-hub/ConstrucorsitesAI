@@ -147,7 +147,7 @@ from omnia_api.services.prompt_builder import (
     build_art_director_system,
     build_messages,
 )
-from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
+from omnia_api.services.queue import enqueue_entity_gate, enqueue_generation_run, enqueue_preview
 from omnia_api.services.runtime_sync import (
     mark_runtime_sync_required,
     reconcile_locked_runtime,
@@ -400,7 +400,24 @@ async def _run_tracked_prompt(
     """Run one prompt task while a Redis watcher makes Stop process-safe."""
 
     await set_generation_run_status(run_id, "running")
+    _durable_continuity = False
     touched_paths: set[str] = set()
+    try:
+        factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+        async with factory() as _run_session:
+            _run_row = await _run_session.get(GenerationRun, run_id)
+            _run_state = dict(_run_row.agent_state or {}) if _run_row is not None else {}
+            _durable_continuity = isinstance(_run_state.get("execution_envelope"), dict)
+            _prior_paths = _run_state.get("cleanup_paths")
+            if isinstance(_prior_paths, list):
+                touched_paths.update(
+                    path
+                    for path in _prior_paths
+                    if isinstance(path, str) and path and len(path) <= 500
+                )
+    except Exception:
+        # The execution itself will surface a DB outage. Do not guess durability.
+        pass
 
     async def _persist_mutations(paths: set[str]) -> None:
         await merge_generation_agent_state(
@@ -435,6 +452,27 @@ async def _run_tracked_prompt(
             cancel_task.cancel()
             with suppress(asyncio.CancelledError):
                 await work_task
+            if _durable_continuity:
+                from omnia_api.services.generation_continuity import schedule_continuation
+
+                _decision = await schedule_continuation(run_id, "generation_time_slice")
+                if _decision.continue_run:
+                    await publish_event(
+                        project_id,
+                        "generation.continuing",
+                        {
+                            "run_id": str(run_id),
+                            "message_id": str(assistant_message_id),
+                            "classification": _decision.classification,
+                            "retryable": True,
+                        },
+                    )
+                    await asyncio.to_thread(
+                        enqueue_generation_run,
+                        run_id,
+                        delay_seconds=_decision.delay_seconds,
+                    )
+                    return
             if not await _resync_cancelled_runtime_or_hold(
                 run_id=run_id,
                 project_id=project_id,
@@ -501,19 +539,88 @@ async def _run_tracked_prompt(
                 {"cleanup_required": False, "cleanup_paths": []},
             )
         await finalize_generation_run(run_id)
-    except asyncio.CancelledError:
-        work_task.cancel()
-        cancel_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await work_task
-        if not await _resync_cancelled_runtime_or_hold(
-            run_id=run_id,
-            project_id=project_id,
-            touched_paths=touched_paths,
-        ):
-            return
-        await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
+        if _durable_continuity:
+            from omnia_api.services.generation_continuity import clear_native_checkpoint
+
+            await clear_native_checkpoint(run_id)
     except Exception as exc:
+        from omnia_api.services.generation_continuity import (
+            GenerationContinuationRequired,
+            schedule_continuation,
+        )
+
+        if isinstance(exc, GenerationContinuationRequired) and _durable_continuity:
+            _decision = await schedule_continuation(run_id, exc.reason)
+            if _decision.continue_run:
+                await publish_event(
+                    project_id,
+                    "generation.continuing",
+                    {
+                        "run_id": str(run_id),
+                        "message_id": str(assistant_message_id),
+                        "classification": _decision.classification,
+                        "retryable": True,
+                    },
+                )
+                await asyncio.to_thread(
+                    enqueue_generation_run,
+                    run_id,
+                    delay_seconds=(
+                        exc.delay_seconds
+                        if exc.delay_seconds is not None
+                        else _decision.delay_seconds
+                    ),
+                )
+                return
+            if touched_paths:
+                await _resync_cancelled_runtime_or_hold(
+                    run_id=run_id,
+                    project_id=project_id,
+                    touched_paths=touched_paths,
+                )
+            await _emergency_error(project_id, assistant_message_id, _decision.action)
+            return
+        if _durable_continuity:
+            # The snapshot/message transaction is the publication idempotency
+            # key. If only the final event/ack failed after that commit, finish
+            # the same run instead of entering another slice and creating a
+            # duplicate snapshot or applying usage twice.
+            _published = False
+            _published_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+            async with _published_factory() as _published_session:
+                _published_message = await _published_session.get(
+                    Message, assistant_message_id
+                )
+                _published = bool(
+                    _published_message is not None
+                    and _published_message.snapshot_id is not None
+                )
+            if _published:
+                await finalize_generation_run(run_id)
+                from omnia_api.services.generation_continuity import (
+                    clear_native_checkpoint,
+                )
+
+                await clear_native_checkpoint(run_id)
+                return
+            # Infrastructure/code-path failures are engineering debt, not an
+            # owner-facing terminal result. Yield this lease and let the next
+            # slice reread the immutable environment + exact checkpoint.
+            _decision = await schedule_continuation(
+                run_id, f"internal_exception:{type(exc).__name__}"
+            )
+            if _decision.continue_run:
+                logging.getLogger(__name__).warning(
+                    "%s yielded for durable internal recovery",
+                    label,
+                    exc_info=exc,
+                )
+                await asyncio.to_thread(
+                    enqueue_generation_run,
+                    run_id,
+                    delay_seconds=_decision.delay_seconds,
+                )
+                return
         logging.getLogger(__name__).error("%s failed", label, exc_info=exc)
         if touched_paths:
             if not await _resync_cancelled_runtime_or_hold(
@@ -542,6 +649,18 @@ async def _run_tracked_prompt(
             assistant_message_id,
             f"{type(exc).__name__}: {exc}",
         )
+    except asyncio.CancelledError:
+        work_task.cancel()
+        cancel_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await work_task
+        if not await _resync_cancelled_runtime_or_hold(
+            run_id=run_id,
+            project_id=project_id,
+            touched_paths=touched_paths,
+        ):
+            return
+        await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
     finally:
         cancel_task.cancel()
         with suppress(Exception):
@@ -2351,23 +2470,54 @@ async def post_prompt(
             run_id=generation_run.id,
         )
     else:
-        _spawn_process_prompt(
-            run_id=generation_run.id,
-            project_id=project_id,
-            user_id=current_user.id,
-            user_message_id=user_msg.id,
-            assistant_message_id=assistant_msg.id,
-            current_snapshot_id=project.current_snapshot_id,
+        _execution = {
+            "version": 1,
+            "project_id": str(project_id),
+            "user_id": str(current_user.id),
+            "user_message_id": str(user_msg.id),
+            "assistant_message_id": str(assistant_msg.id),
+            "current_snapshot_id": (
+                str(project.current_snapshot_id) if project.current_snapshot_id else None
+            ),
             # On a discovery BUILD this is the compiled brief; otherwise the raw
             # prompt. The full Q&A still rides along via chat history.
-            prompt_text=effective_prompt,
-            model_id=routing_model,
-            force_model=force_model,
-            is_free=is_free,
-            max_demo_reserved=max_demo_reserved,
-            orchestrate=orchestrate,
-            selected_elements=selected_dump,
-        )
+            "prompt_text": effective_prompt,
+            "model_id": routing_model,
+            "force_model": force_model,
+            "is_free": is_free,
+            "max_demo_reserved": max_demo_reserved,
+            "orchestrate": orchestrate,
+            "selected_elements": selected_dump,
+        }
+        if project.template == "max_miniapp":
+            # Accepted MAX work is owned by RQ, not this API process. Persist the
+            # complete non-secret envelope first; enqueue failure is recovered by
+            # the startup/periodic watchdog without creating another run/message.
+            from omnia_api.services.generation_continuity import store_execution_envelope
+
+            await store_execution_envelope(generation_run.id, _execution)
+            try:
+                await asyncio.to_thread(enqueue_generation_run, generation_run.id)
+            except Exception as _enqueue_exc:
+                logging.getLogger(__name__).warning(
+                    "MAX generation enqueue deferred to watchdog: %r", _enqueue_exc
+                )
+        else:
+            _spawn_process_prompt(
+                run_id=generation_run.id,
+                project_id=project_id,
+                user_id=current_user.id,
+                user_message_id=user_msg.id,
+                assistant_message_id=assistant_msg.id,
+                current_snapshot_id=project.current_snapshot_id,
+                prompt_text=effective_prompt,
+                model_id=routing_model,
+                force_model=force_model,
+                is_free=is_free,
+                max_demo_reserved=max_demo_reserved,
+                orchestrate=orchestrate,
+                selected_elements=selected_dump,
+            )
 
     # Reset the orchestrator's hibernate timer — a user submitting a new prompt
     # is the strongest possible "this project is active" signal. The hibernate
@@ -3495,6 +3645,10 @@ async def _process_prompt(
     project_discovery_spec: dict[str, object] | None = None
     project_language: str = "ru"
     project_is_imported: bool = False
+    _continuity_attempt = 0
+    _continuity_provider_epoch = 0
+    _continuity_seed_files: dict[str, str] = {}
+    _current_run_state: dict[str, object] = {}
 
     try:
         async with factory() as session:
@@ -3512,6 +3666,26 @@ async def _process_prompt(
                 project_discovery_spec = proj.discovery_spec
                 project_language = getattr(proj, "language", None) or "ru"
                 project_is_imported = bool(getattr(proj, "source", "native") == "imported")
+            _run_row = await session.get(GenerationRun, run_id)
+            if _run_row is not None:
+                _current_run_state = dict(_run_row.agent_state or {})
+                _continuity = _current_run_state.get("continuity")
+                if isinstance(_continuity, dict):
+                    _continuity_attempt = int(_continuity.get("attempt") or 0)
+                    _continuity_provider_epoch = int(
+                        _continuity.get("provider_epoch") or 0
+                    )
+            _assistant_row = await session.get(Message, assistant_message_id)
+            if (
+                _assistant_row is not None
+                and isinstance(_assistant_row.agent_steps, list)
+                and _assistant_row.agent_steps
+            ):
+                _agent_step_log.extend(
+                    dict(step)
+                    for step in _assistant_row.agent_steps[-200:]
+                    if isinstance(step, dict)
+                )
             res = await session.execute(
                 select(Message)
                 .where(Message.project_id == project_id)
@@ -3575,6 +3749,21 @@ async def _process_prompt(
 
         if current_sha:
             current_files = await asyncio.to_thread(repo_svc.read_files, project_id, current_sha)
+        if project_template == "max_miniapp" and _continuity_attempt > 0:
+            _checkpoint_paths = _current_run_state.get("cleanup_paths")
+            if isinstance(_checkpoint_paths, list):
+                for _checkpoint_path in _checkpoint_paths:
+                    if not isinstance(_checkpoint_path, str) or not _checkpoint_path:
+                        continue
+                    try:
+                        _checkpoint_content = await orchestrator_client.agent_read_file(
+                            project_id, project_slug, _checkpoint_path
+                        )
+                    except Exception:
+                        _checkpoint_content = None
+                    if isinstance(_checkpoint_content, str):
+                        current_files[_checkpoint_path] = _checkpoint_content
+                        _continuity_seed_files[_checkpoint_path] = _checkpoint_content
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
 
         # Kit files are Omnia-managed infra — keep them out of the model's context
@@ -3726,7 +3915,19 @@ async def _process_prompt(
             from omnia_api.services import agent_plan
 
             _recovered_agent_state: dict[str, object] | None = None
-            if _user_requested_continue:
+            if project_template == "max_miniapp" and _continuity_attempt > 0:
+                _recovered_agent_state = {
+                    key: value
+                    for key, value in _current_run_state.items()
+                    if key
+                    not in {
+                        "continuity",
+                        "execution_envelope",
+                        "cleanup_required",
+                        "cleanup_paths",
+                    }
+                }
+            elif _user_requested_continue:
                 async with factory() as _checkpoint_session:
                     _recovered_agent_state = await latest_failed_agent_state(
                         _checkpoint_session,
@@ -4203,9 +4404,27 @@ async def _process_prompt(
                 else None
             )
             if project_template == "max_miniapp":
+                from omnia_api.services.max_environment_manifest import (
+                    manifest_prompt_block,
+                )
                 from omnia_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
 
                 _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
+                _seed_block += manifest_prompt_block()
+                await _agent_emit(
+                    "agent.step",
+                    {
+                        "step": 0,
+                        "action": "environment_preflight",
+                        "human": "Проверяю среду MAX перед планированием",
+                        "path": "package.json + managed contracts",
+                        "detail": (
+                            "Зафиксированы версии, writable/locked paths, точные managed "
+                            "signatures, capability states и обязательные proofs без секретов."
+                        ),
+                        "ok": True,
+                    },
+                )
             # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
             # perf canons aligned with the gates) when enabled. None → unchanged.
             _skills = None
@@ -4270,7 +4489,12 @@ async def _process_prompt(
 
                 if get_settings().use_build_plan:
                     _build_plan = _bplan.BuildPlan()
-                    if orchestrate and not _is_continue and not _is_edit:
+                    if (
+                        orchestrate
+                        and not _is_continue
+                        and not _is_edit
+                        and _continuity_attempt == 0
+                    ):
                         _build_plan = await _bplan.plan_build(
                             prompt_text,
                             stack=(_orch_name or project_template or ""),
@@ -4554,7 +4778,23 @@ async def _process_prompt(
                     )
                     if gap:
                         return gap
-                    return cast(str | None, agent_plan.completion_gap(_agent_state))
+                    return agent_plan.completion_gap(_agent_state)
+
+                from omnia_api.services.generation_continuity import (
+                    load_native_checkpoint,
+                    save_native_checkpoint,
+                )
+
+                _native_resume = (
+                    await load_native_checkpoint(run_id)
+                    if project_template == "max_miniapp"
+                    else None
+                )
+
+                async def _save_native_resume(
+                    checkpoint: Mapping[str, object],
+                ) -> None:
+                    await save_native_checkpoint(run_id, checkpoint)
 
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(
@@ -4585,6 +4825,13 @@ async def _process_prompt(
                     stable_max_loop=project_template == "max_miniapp",
                     stable_max_product_first=(
                         project_template == "max_miniapp" and not _max_has_generated_snapshot
+                    ),
+                    provider_turn_offset=_continuity_provider_epoch * 1000,
+                    resume_checkpoint=_native_resume,
+                    checkpoint=(
+                        _save_native_resume
+                        if project_template == "max_miniapp"
+                        else None
                     ),
                 )
             elif _agent_res is None:
@@ -4640,6 +4887,62 @@ async def _process_prompt(
                     transcript=_agent_res.transcript,
                     stop_reason="no_ai_write",
                 )
+            if project_template == "max_miniapp" and not _agent_res.done:
+                from omnia_api.services.generation_continuity import (
+                    GenerationContinuationRequired,
+                    classify_stop,
+                )
+
+                _continuation_decision = classify_stop(
+                    _agent_res.stop_reason,
+                    attempt=_continuity_attempt,
+                    started_at=None,
+                )
+                if _continuation_decision.continue_run:
+                    await merge_generation_agent_state(
+                        run_id,
+                        {
+                            "last_segment": {
+                                "stop_reason": _agent_res.stop_reason,
+                                "steps": _agent_res.steps,
+                                "written_paths": sorted(_agent_res.files),
+                                "classification": _continuation_decision.classification,
+                            }
+                        },
+                    )
+                    await _agent_emit(
+                        "agent.step",
+                        {
+                            "step": _agent_res.steps,
+                            "action": "continue_run",
+                            "human": "Продолжаю сборку с сохранённого этапа",
+                            "path": "",
+                            "detail": _continuation_decision.action,
+                            "ok": True,
+                        },
+                    )
+                    raise GenerationContinuationRequired(
+                        _agent_res.stop_reason,
+                        delay_seconds=_continuation_decision.delay_seconds,
+                    )
+                _continuity_raw = _current_run_state.get("continuity")
+                _continuity_state = (
+                    dict(_continuity_raw) if isinstance(_continuity_raw, dict) else {}
+                )
+                _continuity_state.update(
+                    {
+                        "status": "blocked_external",
+                        "classification": _continuation_decision.classification,
+                        "retryable": False,
+                        "action": _continuation_decision.action,
+                        "last_stop_reason": _agent_res.stop_reason,
+                    }
+                )
+                await merge_generation_agent_state(
+                    run_id,
+                    {"continuity": _continuity_state},
+                )
+                accumulated = _continuation_decision.action
             # MAX no longer needs a second bounded "recovery segment". The same
             # cached native conversation remains alive across every repair turn,
             # provider reconnect and temporary infra outage until it is green.
@@ -5753,6 +6056,9 @@ async def _process_prompt(
                 )
                 from omnia_api.services.release_proof import run_release_proof
 
+                if project_template == "max_miniapp" and _continuity_seed_files:
+                    files = {**_continuity_seed_files, **files}
+
                 _release_verdict = await run_release_proof(
                     project_id,
                     project_slug,
@@ -5806,6 +6112,23 @@ async def _process_prompt(
                 # this independent final pass protects against drift between the
                 # last agent observation and the exact tree about to be committed.
                 if project_template == "max_miniapp" and not _release_verdict.passed:
+                    from omnia_api.services.generation_continuity import (
+                        GenerationContinuationRequired,
+                    )
+
+                    await merge_generation_agent_state(
+                        run_id,
+                        {
+                            "last_segment": {
+                                "stop_reason": "max_release_proof_red",
+                                "steps": _agent_res.steps,
+                                "written_paths": sorted(files),
+                                "classification": "internal_repair",
+                                "proof": _release_verdict.summary[:1000],
+                            }
+                        },
+                    )
+                    raise GenerationContinuationRequired("max_release_proof_red")
                     _verification_failed = True
                     _release_error = _release_verdict.summary
                     try:

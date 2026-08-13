@@ -1517,6 +1517,9 @@ async def run_native_build(
     model: str = _MODEL,
     stable_max_loop: bool = False,
     stable_max_product_first: bool = True,
+    provider_turn_offset: int = 0,
+    resume_checkpoint: Mapping[str, Any] | None = None,
+    checkpoint: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
 ) -> AgentResult:
     """Drive one native tool-use loop until the model calls ``done`` after a clean
     build or reaches ``max_steps``. MAX uses the same bounded loop as the proven
@@ -1569,6 +1572,90 @@ async def run_native_build(
     prewrite_inspection_paths: set[str] = set()
     prewrite_inspection_ops = 0
     prewrite_inspection_exhausted = False
+
+    # A durable MAX continuation restores the exact transcript and provider
+    # cursor.  Persisting immediately before every provider call means an API or
+    # worker death can safely replay that logical turn through the gateway's
+    # settled-turn cache instead of creating a second provider request.
+    if resume_checkpoint:
+        restored_system = resume_checkpoint.get("system")
+        if isinstance(restored_system, str) and restored_system:
+            system = restored_system
+        restored_convo = resume_checkpoint.get("convo")
+        restored_written = resume_checkpoint.get("written")
+        if isinstance(restored_convo, list) and restored_convo:
+            convo = [dict(item) for item in restored_convo if isinstance(item, dict)]
+        if isinstance(restored_written, dict):
+            written = {
+                str(path): str(content)
+                for path, content in restored_written.items()
+                if isinstance(path, str) and isinstance(content, str)
+            }
+        provider_turn_index = max(
+            0, int(resume_checkpoint.get("provider_turn_index") or 0)
+        )
+        provider_turn_offset = max(
+            0, int(resume_checkpoint.get("provider_turn_offset") or provider_turn_offset)
+        )
+        last_build_ok = resume_checkpoint.get("last_build_ok")
+        if last_build_ok not in {True, False, None}:
+            last_build_ok = None
+        last_build_error_text = str(resume_checkpoint.get("last_build_error_text") or "")
+        last_build_error_paths = frozenset(
+            str(item) for item in resume_checkpoint.get("last_build_error_paths", [])
+        )
+        successful_tools = {
+            str(name): int(count)
+            for name, count in dict(resume_checkpoint.get("successful_tools") or {}).items()
+        }
+        successful_skill_ids = set(resume_checkpoint.get("successful_skill_ids") or [])
+        proof_after_write = set(resume_checkpoint.get("proof_after_write") or [])
+        wrote_since_build = bool(resume_checkpoint.get("wrote_since_build"))
+        visual_feedback_step = resume_checkpoint.get("visual_feedback_step")
+        visual_feedback_detail = str(resume_checkpoint.get("visual_feedback_detail") or "")
+        visual_repair_attempts = int(resume_checkpoint.get("visual_repair_attempts") or 0)
+        visual_evaluation_ready = bool(resume_checkpoint.get("visual_evaluation_ready"))
+        last_green_see_step = resume_checkpoint.get("last_green_see_step")
+        pending_visual_evaluation_step = resume_checkpoint.get(
+            "pending_visual_evaluation_step"
+        )
+        prewrite_inspection_paths = set(
+            resume_checkpoint.get("prewrite_inspection_paths") or []
+        )
+        prewrite_inspection_ops = int(resume_checkpoint.get("prewrite_inspection_ops") or 0)
+        prewrite_inspection_exhausted = bool(
+            resume_checkpoint.get("prewrite_inspection_exhausted")
+        )
+
+    async def _persist_checkpoint() -> None:
+        if checkpoint is None:
+            return
+        await checkpoint(
+            {
+                "version": 1,
+                "system": system,
+                "convo": convo,
+                "written": written,
+                "provider_turn_index": provider_turn_index,
+                "provider_turn_offset": provider_turn_offset,
+                "last_build_ok": last_build_ok,
+                "last_build_error_text": last_build_error_text,
+                "last_build_error_paths": sorted(last_build_error_paths),
+                "successful_tools": successful_tools,
+                "successful_skill_ids": sorted(successful_skill_ids),
+                "proof_after_write": sorted(proof_after_write),
+                "wrote_since_build": wrote_since_build,
+                "visual_feedback_step": visual_feedback_step,
+                "visual_feedback_detail": visual_feedback_detail,
+                "visual_repair_attempts": visual_repair_attempts,
+                "visual_evaluation_ready": visual_evaluation_ready,
+                "last_green_see_step": last_green_see_step,
+                "pending_visual_evaluation_step": pending_visual_evaluation_step,
+                "prewrite_inspection_paths": sorted(prewrite_inspection_paths),
+                "prewrite_inspection_ops": prewrite_inspection_ops,
+                "prewrite_inspection_exhausted": prewrite_inspection_exhausted,
+            }
+        )
 
     # Stable MAX builds get a generous but finite turn and wall-clock envelope.
     # Both limits are independent so a slow provider or a model that keeps
@@ -1881,6 +1968,7 @@ async def run_native_build(
                 else "native_agent"
             )
             try:
+                await _persist_checkpoint()
                 remaining_seconds = (
                     max(0.1, runtime_deadline - asyncio.get_running_loop().time())
                     if runtime_deadline is not None
@@ -1898,7 +1986,10 @@ async def run_native_build(
                         message_id=str(message_id) if message_id else None,
                         free=free,
                         stage=call_stage,
-                        turn_id=f"{run_id or 'run'}:{provider_turn_index}",
+                        turn_id=(
+                            f"{run_id or 'run'}:"
+                            f"{max(0, int(provider_turn_offset)) + provider_turn_index}"
+                        ),
                         resume_count=provider_timeout_resumes + free_ambiguous_resumes,
                         tools=(
                             _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
@@ -2185,6 +2276,7 @@ async def run_native_build(
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
             convo.append({"role": "assistant", "content": content})
+            await _persist_checkpoint()
 
             # Streaming (phase 8): surface Opus's own narration between tool calls to
             # the UI so the workspace reads «как переписка с Claude» — the model
@@ -2844,6 +2936,7 @@ async def run_native_build(
             else:
                 turns_without_product_entry += 1
             convo.append({"role": "user", "content": results})
+            await _persist_checkpoint()
             if visual_quality_exhausted_this_turn and max_runtime:
                 log.warning(
                     "agent_native.visual_quality_unmet",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
 import redis as sync_redis
@@ -20,6 +21,7 @@ ENTITY_GATE_JOB = "omnia_api.workers.quality.gate_entity_app"
 BUILD_EXE_JOB = "omnia_api.workers.build_exe.build_exe_job"
 # Hero-media MVP: one asynchronous hero render (planner already completed).
 HERO_MEDIA_JOB = "omnia_api.workers.hero_media.hero_media_job"
+GENERATION_JOB = "omnia_api.workers.generation.run_generation_job"
 
 
 def _connection() -> sync_redis.Redis:
@@ -107,3 +109,40 @@ def enqueue_hero_media_render(render_id: UUID) -> None:
         str(render_id),
         job_timeout=900,
     )
+
+
+def enqueue_generation_run(run_id: UUID, *, delay_seconds: int = 0) -> bool:
+    """Queue/requeue the same durable generation identity, storm-safe.
+
+    Jobs intentionally use a fresh RQ id: after a worker kill, RQ can retain the
+    old job in StartedJobRegistry until maintenance. Postgres lease ownership is
+    the authoritative single-flight guard; the short Redis lock only collapses
+    duplicate watchdog/API enqueue attempts.
+    """
+
+    connection = _connection()
+    lock = f"omnia:generation:enqueue:{run_id}"
+    if not connection.set(lock, "1", nx=True, ex=10):
+        return False
+    try:
+        queue = Queue(QUEUE_NAME, connection=connection)
+        kwargs = {
+            "job_timeout": max(
+                1800,
+                int(get_settings().agent_builder_max_runtime_seconds) + 300,
+            ),
+            "failure_ttl": 86_400,
+            "result_ttl": 3_600,
+        }
+        if delay_seconds > 0:
+            queue.enqueue_in(
+                timedelta(seconds=max(1, int(delay_seconds))),
+                GENERATION_JOB,
+                str(run_id),
+                **kwargs,
+            )
+        else:
+            queue.enqueue(GENERATION_JOB, str(run_id), **kwargs)
+        return True
+    finally:
+        connection.delete(lock)

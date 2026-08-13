@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 52,
+  "version": 53,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2760,6 +2760,18 @@
       "evidence": "Добавлен pure max_design_director.py с deterministic DesignDNA, capability contracts, discovery round-trip, completion и attestation verdict; premium-mobile-foundation skill и MAX App Engineer identity; messages.py сохраняет решение, показывает agent.step, передаёт DNA в repair/vision и включает design/capability/360+390 visual checks в fail-closed release verdict. Generic/score<8 и unavailable visual proof уже блокируются bounded native-loop. Локально: 110 MAX/design/vision/attestation/release/ordinary-routing tests, focused Ruff и mypy зелёные.",
       "impact": "Качество больше не держится на названии модели или наборе плагинов. У каждой генерации есть осмысленная уникальная арт-дирекция, общая mobile-планка и независимый критик; приложение не публикуется, если выглядит типовым, врёт об интеграциях или не имеет визуального доказательства.",
       "next_vector": "Доставить и выполнить fresh production canary: проверить agent.step Design Director, три concepts в discovery/spec, beautiful >=8 на 360/390 и exact-commit attestation"
+    },
+    {
+      "id": "H144",
+      "title": "MAX-генерация продолжает тот же run после обрывов и рестартов",
+      "status": "testing",
+      "score": null,
+      "category": "MAX / автономность / надёжность / инфра",
+      "period": "13.08",
+      "description": "Перенести принятую MAX-генерацию из API-корутины в durable RQ lifecycle: сохранять план, файлы и точный logical provider turn, автоматически продолжать внутренние ремонты до contract_green и не публиковать частичный snapshot.",
+      "evidence": "Добавлены immutable execution envelope, Postgres lease/heartbeat, watchdog orphan recovery, Redis-only native transcript checkpoint и replay того же turn ID; API restart не крадёт живой worker lease. Source-derived Environment Manifest фиксирует зависимости, locked/writable paths, managed signatures, команды proof и safe degradation. Ruff, strict mypy и 4 новых continuity/manifest/provider-replay теста зелёные; полный DB-прогон локально требует доступный Postgres.",
+      "impact": "F5, временный сетевой сбой, перезапуск API/worker и граница одного execution slice больше не должны превращать принятую сборку в ручной повтор или вечный running. Внутренний красный результат остаётся задачей агента; наружу terminal state допускается только для точного внешнего блокера.",
+      "next_vector": "Доставить api+worker и выполнить production kill/restart canary до contract_green без второго snapshot или списания"
     }
  ],
  "vectors": [
@@ -3433,11 +3445,16 @@
     [
      "MAX сохраняет DesignDNA, capability и visual 360/390 evidence в atomic release attestation",
      true
+    ],
+    [
+     "MAX durable lifecycle переживает timeout/F5/API-worker restart, продолжает внутренний repair и публикует только contract_green",
+     true
     ]
    ],
    "hyp_ids": [
     "H142",
-    "H143"
+    "H143",
+    "H144"
    ]
   }
  ],

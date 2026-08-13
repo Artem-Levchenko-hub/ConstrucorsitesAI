@@ -150,9 +150,17 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
     now = datetime.now(UTC)
     marker = "[Генерация прервана перезапуском сервера — отправьте запрос повторно]"
     for run in runs:
-        cleanup_paths_raw = (run.agent_state or {}).get("cleanup_paths")
-        cleanup_required = bool((run.agent_state or {}).get("cleanup_required"))
-        if cleanup_required and isinstance(cleanup_paths_raw, list):
+        run_state = run.agent_state or {}
+        continuity = run_state.get("continuity")
+        envelope = run_state.get("execution_envelope")
+        durable = isinstance(continuity, dict) and isinstance(envelope, dict)
+        cleanup_paths_raw = run_state.get("cleanup_paths")
+        cleanup_required = bool(run_state.get("cleanup_required"))
+        # Durable running work owns its private live checkpoint and must not be
+        # rolled back by an API-only restart. Legacy interrupted coroutines and
+        # explicit cancellations still restore the canonical snapshot first.
+        should_cleanup = run.status == "cancel_requested" or not durable
+        if should_cleanup and cleanup_required and isinstance(cleanup_paths_raw, list):
             cleanup_paths = {
                 path
                 for path in cleanup_paths_raw
@@ -209,6 +217,43 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
                         message.tokens_in = message.tokens_in or 0
                         message.tokens_out = 0
                 continue
+        # Durable MAX/RQ runs survive API and worker restarts. Clear only their
+        # process lease; the watchdog re-enqueues the same run/message and the
+        # partial runtime paths remain private until contract_green.
+        if durable:
+            assert isinstance(continuity, dict)
+            lease_expires_at: datetime | None = None
+            raw_lease_expiry = continuity.get("lease_expires_at")
+            if isinstance(raw_lease_expiry, str) and raw_lease_expiry:
+                try:
+                    lease_expires_at = datetime.fromisoformat(raw_lease_expiry)
+                    if lease_expires_at.tzinfo is None:
+                        lease_expires_at = lease_expires_at.replace(tzinfo=UTC)
+                except ValueError:
+                    lease_expires_at = None
+            # API and worker are separate processes in production. An API
+            # restart must not steal a still-heartbeating worker lease; the
+            # watchdog reclaims only expired/absent owners.
+            if lease_expires_at is not None and lease_expires_at > now:
+                continue
+            state = dict(run.agent_state or {})
+            continuity = dict(continuity)
+            continuity.update(
+                {
+                    "status": "queued",
+                    "lease_owner": None,
+                    "lease_expires_at": None,
+                    "classification": "process_restart_recovery",
+                    "retryable": True,
+                    "action": "Продолжить тот же run с последнего durable checkpoint.",
+                }
+            )
+            state["continuity"] = continuity
+            run.agent_state = state
+            run.status = "pending"
+            run.error = None
+            run.finished_at = None
+            continue
         run.status = "failed"
         run.error = "api_process_restarted"
         run.finished_at = now
@@ -229,13 +274,11 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
 async def recover_interrupted_generation_runs(
     session: AsyncSession | None = None,
 ) -> int:
-    """Release executions that cannot survive an API-process restart.
+    """Recover durable queued runs and terminalise only legacy coroutines.
 
-    Prompt coroutines live in the API event loop. In the current one-process
-    deployment none can still be running when a fresh process starts, so an
-    active DB row at startup is an interrupted execution, not real work.
-    Finalising it prevents both a permanent single-flight lock and a chat row
-    that looks as if it were streaming forever.
+    RQ-owned MAX runs keep their run/message/checkpoint and are reclaimed by the
+    watchdog. Historical fire-and-forget rows lack an execution envelope and
+    still fail honestly so they cannot occupy the project slot forever.
     """
 
     if session is not None:
@@ -300,11 +343,26 @@ async def save_generation_agent_state(
 ) -> None:
     """Persist a bounded, observable agent checkpoint from the background task."""
 
+    def _with_runtime_state(
+        previous: dict[str, object] | None,
+        incoming: dict[str, object],
+    ) -> dict[str, object]:
+        result = dict(incoming)
+        for key in (
+            "continuity",
+            "execution_envelope",
+            "cleanup_required",
+            "cleanup_paths",
+        ):
+            if key not in result and previous and key in previous:
+                result[key] = previous[key]
+        return result
+
     if session is not None:
         run = await session.get(GenerationRun, run_id)
         if run is None:
             return
-        run.agent_state = state
+        run.agent_state = _with_runtime_state(run.agent_state, state)
         await session.commit()
         return
 
@@ -315,7 +373,7 @@ async def save_generation_agent_state(
         run = await session.get(GenerationRun, run_id)
         if run is None:
             return
-        run.agent_state = state
+        run.agent_state = _with_runtime_state(run.agent_state, state)
         await session.commit()
 
 
