@@ -81,6 +81,11 @@ file revisions live in the Redis checkpoint; it therefore survives a worker/time
 slice without accumulating another copy on every turn. The public plan remains a
 user-visible notebook, not a ceremonial completion gate.
 
+The production API and generation worker both run with `MOCK_LLM=false`.
+Visual QA executes inside the worker; omitting that setting makes its local-safe
+default disable the real judge and turns every successful screenshot into a
+`visual_proof_unavailable` continuation loop.
+
 Fresh builds allow one bounded inspection turn, then require the real
 `ProductApp.tsx` vertical slice and compile it before more exploration. Existing
 products keep unrestricted surgical support-file edits. Reading the same unchanged

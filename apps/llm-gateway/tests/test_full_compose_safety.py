@@ -28,6 +28,14 @@ def test_worker_waits_for_api_health() -> None:
     assert "api:\n        condition: service_healthy" in worker
 
 
+def test_api_and_worker_never_default_production_generation_to_mock() -> None:
+    source = _source()
+    api, worker = source.split("\n  worker:", maxsplit=1)
+
+    assert 'MOCK_LLM: "false"' in api
+    assert 'MOCK_LLM: "false"' in worker
+
+
 def test_cost_abuse_guards_are_secure_by_default() -> None:
     source = _source()
     assert "PROMPT_IP_RATE_LIMIT: ${PROMPT_IP_RATE_LIMIT:-60/hour}" in source

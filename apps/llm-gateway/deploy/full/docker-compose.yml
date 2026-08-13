@@ -445,6 +445,11 @@ services:
       NATIVE_GATEWAY_READ_TIMEOUT_SECONDS: ${NATIVE_GATEWAY_READ_TIMEOUT_SECONDS:-660}
       AGENT_BUILDER_MAX_RUNTIME_SECONDS: ${AGENT_BUILDER_MAX_RUNTIME_SECONDS:-1200}
       AGENT_BUILDER_MAX_RUNTIME_STEPS: ${AGENT_BUILDER_MAX_RUNTIME_STEPS:-120}
+      # Generation + visual QA execute in this process. Keep production parity
+      # with the API: the Settings default is mock-safe for local development,
+      # but inheriting it here disables the real visual judge and loops every
+      # MAX run on visual_proof_unavailable.
+      MOCK_LLM: "false"
       # The preview-render job screenshots live container apps — it asks the
       # orchestrator for the running container's name (then reaches it on the
       # shared omnia-runtime network). Without these the worker can't reach the
