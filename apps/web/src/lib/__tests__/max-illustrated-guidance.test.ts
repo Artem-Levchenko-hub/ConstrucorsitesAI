@@ -32,4 +32,15 @@ describe("MAX illustrated guidance surfaces", () => {
     expect(dialog).toContain("Номера на изображении показывают, куда нажать");
     expect(dialog).toContain("guide.steps.map");
   });
+
+  it("anchors application arrows to exact controls instead of group centers", () => {
+    const visuals = source("components/max/guide/GuideVisuals.tsx");
+
+    expect(visuals).toContain('data-guide-target="app-identity"');
+    expect(visuals).toContain('index === 0 ? "app-capabilities"');
+    expect(visuals).toContain('index === 2 ? "app-legal"');
+    expect(visuals).toContain("CALLOUT_TARGET_RADIUS");
+    expect(visuals).toContain('min-w-[760px]');
+    expect(visuals).not.toContain('data-guide-target="app-capabilities" className="mt-2 grid');
+  });
 });
