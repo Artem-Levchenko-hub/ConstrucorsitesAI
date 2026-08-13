@@ -124,6 +124,16 @@ describe("MAX live preview surface", () => {
     expect(livePreview).toContain("{showPreviewError && (");
   });
 
+  it("keeps an ordinary viewing session alive and recovers a slept runtime", () => {
+    expect(livePreview).toContain("heartbeatRuntime(project.id)");
+    expect(livePreview).toContain('data.type === "omnia:preview:activity"');
+    expect(livePreview).toContain(
+      'state === "running" || state === "failed" ? 30_000 : 2_000',
+    );
+    expect(livePreview).toContain("autoStartAttempted.current = false");
+    expect(livePreview).toContain("window.setInterval(sendRuntimeHeartbeat, 60_000)");
+  });
+
   it("shows live gateway-ledger spend by generation stage", () => {
     expect(workspaceShell).toContain("<MaxUsageBreakdown projectId={project.id}");
     expect(usageBreakdown).toContain('queryKey: ["max-usage", projectId]');

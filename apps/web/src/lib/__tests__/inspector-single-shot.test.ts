@@ -12,6 +12,51 @@ const inspectorSource = readFileSync(
   "utf8",
 );
 
+describe("canonical inspector ordinary viewing mode", () => {
+  it("never intercepts normal navigation and reports lightweight activity", () => {
+    const shell = new JSDOM('<iframe id="preview"></iframe>', {
+      runScripts: "dangerously",
+      url: "https://constructor.example/workspace",
+    });
+    const frame = shell.window.document.querySelector("iframe");
+    const preview = frame?.contentWindow as DOMWindow | null | undefined;
+    if (!preview) throw new Error("test iframe did not initialise");
+
+    preview.document.body.innerHTML =
+      '<button id="stats">Статистика</button><button id="profile">Профиль</button>';
+    const screens: string[] = [];
+    preview.document
+      .querySelector("#stats")
+      ?.addEventListener("click", () => screens.push("stats"));
+    preview.document
+      .querySelector("#profile")
+      ?.addEventListener("click", () => screens.push("profile"));
+    const parentPost = vi
+      .spyOn(shell.window, "postMessage")
+      .mockImplementation(() => undefined);
+
+    preview.eval(inspectorSource);
+    for (const id of ["#stats", "#profile"]) {
+      preview.document.querySelector(id)?.dispatchEvent(
+        new preview.MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    }
+
+    expect(screens).toEqual(["stats", "profile"]);
+    expect(
+      parentPost.mock.calls.filter(
+        ([message]) =>
+          (message as { type?: string } | undefined)?.type === "omnia:pick",
+      ),
+    ).toHaveLength(0);
+    expect(parentPost).toHaveBeenCalledWith(
+      { type: "omnia:preview:activity" },
+      "*",
+    );
+    shell.window.close();
+  });
+});
+
 describe.each(["inspect", "style"] as const)(
   "canonical inspector single-shot %s mode",
   (mode) => {

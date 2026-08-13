@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 43,
+  "version": 44,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Клики внутри MAX preview снова доходят до приложения",
-  "subtitle": "Служебный портал Next.js больше не перекрывает нижние кнопки сгенерированного Mini App: управляемый runtime скрывает dev-индикатор и автоматически доставляет защиту как новым, так и уже созданным проектам.",
+  "title": "Активный просмотр MAX preview больше не считается простоем",
+  "subtitle": "Обычные клиентские переходы теперь поддерживают runtime живым, а workspace замечает и автоматически восстанавливает неожиданно остановленную preview-сессию.",
   "items": [
+   {
+    "s": "testing",
+    "t": "Обычные клики в preview защищены от ошибочной idle-остановки",
+    "d": "Production-форензика fitness-47e6be показала: контейнер завершился не из-за inspector или кода вкладки, а после idle-window — OOM=false, RestartCount=0, перед остановкой только штатный ELIFECYCLE. React setTab не создавал сетевой трафик, поэтому активный просмотр не обновлял таймер. Workspace теперь отправляет authenticated heartbeat раз в минуту и по реальному клику внутри iframe, продолжает проверять статус после running и один раз автоматически будит stopped/paused runtime. Framed-тест с mode OFF подтверждает два последовательных продуктовых перехода без перехвата."
+   },
    {
     "s": "testing",
     "t": "Выбор элемента в preview стал одноразовым и больше не замораживает приложение",
@@ -282,6 +287,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "13.08",
+   "what": "Уточнил, что редактор вообще не включался: зависание возникает при обычном изучении готовых страниц внутри preview.",
+   "impact": "Расследование ушло с picker на lifecycle runtime. Найдена штатная idle-остановка активного SPA-просмотра: локальные переходы не создавали сеть, а workspace после первого running переставал видеть состояние контейнера. Исправление добавляет явный heartbeat и автоматическое восстановление preview без изменения продуктовых кликов."
+  },
   {
    "date": "13.08",
    "what": "Повторно проверил production preview, подтвердил, что после выбора элемента клик по вкладке снова полностью блокирует приложение, и поручил довести исправление до конца.",
@@ -2589,7 +2599,19 @@
     "description": "После успешного выбора элемента немедленно отключать inspect/style interception, сохраняя выбранный узел, подсветку и панель правки, чтобы следующий клик снова принадлежал приложению.",
     "evidence": "Canonical omnia-inspector.js после единственного omnia:pick синхронно вызывает setEditorMode(\"off\") и снимает capture pointerdown/click до следующего события. Parent bridge сначала выключает Zustand-режим, затем отправляет atomic+legacy off всем preview; delayed повторный pick игнорируется. Style store получил отдельный stopStylePicking, который не очищает selected. Все 4 template-копии byte-identical, MAX_MANAGED_KIT_VERSION поднят 26→27. Детерминированный jsdom iframe-прогон inspect/style: первый pointerdown+click блокируется и создаёт ровно один pick, следующий pointerdown+click доходит до продуктовой кнопки; focused web 20/20, typecheck и API select-mode тесты зелёные.",
     "impact": "Редактор больше не оставляет невидимый слой перехвата после выбора. Пользователь может выбрать вкладку или карточку, сразу продолжить пользоваться сгенерированным приложением и при этом видеть выбранный элемент в панели; новый выбор начинается только по явному повторному включению режима.",
-    "next_vector": "Доставить revision и повторить production-сценарий на существующем fitness-47e6be: выбрать элемент, затем открыть продуктовую вкладку без перезагрузки"
+   "next_vector": "Доставить revision и повторить production-сценарий на существующем fitness-47e6be: выбрать элемент, затем открыть продуктовую вкладку без перезагрузки"
+   },
+   {
+    "id": "H134",
+    "title": "MAX workspace сохраняет активный SPA-preview и восстанавливает runtime после сна",
+    "status": "testing",
+    "score": null,
+    "category": "MAX / preview / runtime / надёжность",
+    "period": "13.08",
+    "description": "Считать локальные клики и открытый iframe реальной активностью, не давать idle-sweep остановить просмотр и автоматически восстанавливать runtime, если он всё же перешёл в stopped/paused/failed.",
+    "evidence": "Production container omnia-dev-fitness-47e6be: StartedAt=05:12:23, последний HTTP activity=05:55:34, FinishedAt=06:30:34, ExitCode=1, OOMKilled=false, RestartCount=0, RestartPolicy=unless-stopped; перед завершением нет server/JS exception, только pnpm ELIFECYCLE после daemon stop. ProductApp использует локальный React setTab и исправен standalone. Добавлены owner-only POST runtime/heartbeat, минутный heartbeat открытого MAX iframe, throttled omnia:preview:activity на обычном клике, 30-секундный status poll после running и resettable auto-wake. Canonical inspector и 4 fallback-копии byte-identical, managed kit 27→28. Framed mode-OFF test: клики Статистика→Профиль оба доходят до app, omnia:pick=0, activity отправлена; web 10/10, typecheck, ESLint, API 19/19, managed-kit 43/43 и Ruff зелёные.",
+    "impact": "Пользователь может долго изучать сгенерированное приложение и переключать локальные экраны без скрытой остановки сервера. Если runtime остановится по внешней причине, workspace увидит это максимум за 30 секунд и запустит восстановление вместо навсегда замершего iframe.",
+    "next_vector": "После доставки повторить обычные переходы mode OFF в owner workspace fitness-47e6be и подтвердить heartbeat/status в production логах"
    }
  ],
  "vectors": [
@@ -2748,6 +2770,10 @@
     [
      "Явный LLMGW-контур с сохранением Opus 4.8 и адаптацией native tool-use (30.07)",
      true
+    ],
+    [
+     "Liveness активного SPA-preview: owner heartbeat, runtime status polling и автоматическое восстановление после idle-stop",
+     true
     ]
    ],
    "hyp_ids": [
@@ -2756,7 +2782,8 @@
     "H77",
     "H78",
     "H79",
-    "H87"
+    "H87",
+    "H134"
    ]
   },
   {

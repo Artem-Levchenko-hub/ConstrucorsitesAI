@@ -45,7 +45,11 @@ import {
   createMaxPreviewSession,
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
-import { getRuntime, startRuntime } from "@/lib/api/runtime";
+import {
+  getRuntime,
+  heartbeatRuntime,
+  startRuntime,
+} from "@/lib/api/runtime";
 import type { Project, Snapshot } from "@/lib/api/types";
 import {
   editorModeMessages,
@@ -96,11 +100,12 @@ export function MaxLivePreview({
   const queryClient = useQueryClient();
   const editorInstanceId = useId();
   const selectionIdPrefix = `${editorInstanceId}|`;
-  const started = useRef(false);
+  const autoStartAttempted = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const historicalPreviewFrame = useRef<HTMLIFrameElement>(null);
   const previousPickIds = useRef<string[]>([]);
+  const lastHeartbeatAt = useRef(0);
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
@@ -180,6 +185,15 @@ export function MaxLivePreview({
     const targetOrigin = previewTargetOrigin(frame.src, window.location.origin);
     if (targetOrigin) frame.contentWindow.postMessage(message, targetOrigin);
   }, []);
+  const sendRuntimeHeartbeat = useCallback(() => {
+    const now = Date.now();
+    if (now - lastHeartbeatAt.current < 10_000) return;
+    lastHeartbeatAt.current = now;
+    void heartbeatRuntime(project.id).catch(() => {
+      // The status poll below owns recovery. A transient keepalive failure must
+      // never block normal interactions inside the generated application.
+    });
+  }, [project.id]);
   const postToAllProjectPreviews = useCallback(
     (message: Record<string, unknown>) => {
       document
@@ -260,9 +274,11 @@ export function MaxLivePreview({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
     retry: false,
+    // Keep observing a mounted preview even after it reaches `running`.
+    // Otherwise a later idle-stop is invisible to this shell forever.
     refetchInterval: (query) => {
       const state = query.state.data?.state;
-      return state === "running" || state === "failed" ? false : 2_000;
+      return state === "running" || state === "failed" ? 30_000 : 2_000;
     },
   });
   const start = useMutation({
@@ -295,12 +311,47 @@ export function MaxLivePreview({
 
   useEffect(() => {
     if (deferInitialRuntimeStart) return;
-    if (runtime.isLoading || started.current) return;
-    if (runtime.isError || !runtime.data || ["stopped", "paused", "failed"].includes(runtime.data.state)) {
-      started.current = true;
+    if (runtime.isLoading || start.isPending) return;
+    if (runtime.data?.state === "running") {
+      autoStartAttempted.current = false;
+      return;
+    }
+    if (
+      !autoStartAttempted.current &&
+      (runtime.isError ||
+        !runtime.data ||
+        ["stopped", "paused", "failed"].includes(runtime.data.state))
+    ) {
+      autoStartAttempted.current = true;
       start.mutate();
     }
-  }, [deferInitialRuntimeStart, runtime.isLoading, runtime.isError, runtime.data, start]);
+  }, [
+    deferInitialRuntimeStart,
+    runtime.isLoading,
+    runtime.isError,
+    runtime.data,
+    start,
+    start.isPending,
+  ]);
+
+  // An SPA tab/button click can be a completely local state transition, so
+  // Docker RX counters cannot distinguish an active viewer from an abandoned
+  // iframe.  Send an authenticated liveness signal while this preview is
+  // mounted, plus an immediate signal for each real interaction.  The latter
+  // also covers background-tab timer throttling.
+  useEffect(() => {
+    if (deferInitialRuntimeStart || !runtimeRunning || viewingHistorical) return;
+    sendRuntimeHeartbeat();
+    const interval = window.setInterval(sendRuntimeHeartbeat, 60_000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [
+    deferInitialRuntimeStart,
+    runtimeRunning,
+    sendRuntimeHeartbeat,
+    viewingHistorical,
+  ]);
 
   useEffect(() => {
     const stage = deviceStage.current;
@@ -389,6 +440,10 @@ export function MaxLivePreview({
         el?: Record<string, unknown>;
       };
       if (!data || typeof data.type !== "string") return;
+      if (data.type === "omnia:preview:activity") {
+        sendRuntimeHeartbeat();
+        return;
+      }
       if (data.type === "omnia:inspect:ready") {
         frame.dataset.maxPreviewReady = "true";
         setInspectorReady(true);
@@ -481,6 +536,7 @@ export function MaxLivePreview({
     postToAllProjectPreviews,
     postToPreview,
     replayPendingStyles,
+    sendRuntimeHeartbeat,
     selectionIdPrefix,
     setInspectMode,
     stopStylePicking,

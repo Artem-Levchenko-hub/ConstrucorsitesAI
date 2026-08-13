@@ -186,6 +186,11 @@ async def get_status(project_id: UUID) -> dict[str, Any]:
     return await _request("GET", f"/internal/projects/{project_id}/status")
 
 
+async def heartbeat(project_id: UUID) -> dict[str, Any]:
+    """Keep an actively viewed development preview out of idle hibernation."""
+    return await _request("POST", f"/internal/projects/{project_id}/heartbeat")
+
+
 async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
     """POST a short-lived, signed bootstrap session for a MAX preview."""
     return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")

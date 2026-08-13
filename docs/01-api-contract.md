@@ -138,6 +138,7 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 |---|---|---|---|
 | `POST` | `/api/projects/:id/runtime/start` | — | `RuntimeStatus` (после wake) |
 | `POST` | `/api/projects/:id/runtime/stop` | `{pause?: bool}` | `RuntimeStatus` |
+| `POST` | `/api/projects/:id/runtime/heartbeat` | — | `204` (owner preview activity) |
 | `GET` | `/api/projects/:id/runtime` | — | `RuntimeStatus` |
 | `POST` | `/api/projects/:id/deploy` | `{commit_sha?: string}` | `DeployStatus` (асинхронный, прогресс — через WS) |
 | `GET` | `/api/projects/:id/deploy` | — | `DeployStatus` последнего деплоя |

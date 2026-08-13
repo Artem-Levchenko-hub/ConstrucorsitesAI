@@ -23,7 +23,7 @@
  *   parent → iframe (style 1.5): omnia:style:enable | :disable |
  *       omnia:style:set {target:'element'|'token', selector, prop, value} |
  *       omnia:font:link {family, href} | omnia:style:reset {selector?}
- *   iframe → parent: omnia:inspect:ready |
+ *   iframe → parent: omnia:inspect:ready | omnia:preview:activity |
  *       omnia:pick {el:{id,selector,label,text,html,rect,tag,color,backgroundColor,borderColor,fontFamily}}
  */
 (function () {
@@ -801,6 +801,14 @@
   // the chat. Capture-phase + try/guarded so tracking can never break the page.
   var CRUMB_CAP = 6;
   var crumbs = [];
+  var lastActivityPostAt = 0;
+
+  function reportActivity() {
+    var now = Date.now();
+    if (now - lastActivityPostAt < 10000) return;
+    lastActivityPostAt = now;
+    post({ type: "omnia:preview:activity" });
+  }
 
   function pushCrumb(text) {
     var s = collapse(text, 80);
@@ -834,8 +842,10 @@
     "click",
     function (e) {
       try {
-        if (e && e.target && e.target.nodeType === 1)
+        if (e && e.target && e.target.nodeType === 1) {
           pushCrumb("клик: " + describeTarget(e.target));
+          reportActivity();
+        }
       } catch (_) {}
     },
     true

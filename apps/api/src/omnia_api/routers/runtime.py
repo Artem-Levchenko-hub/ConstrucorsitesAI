@@ -228,6 +228,20 @@ async def get_runtime(
     return _to_runtime_status(payload)
 
 
+@router.post("/{project_id}/runtime/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+async def heartbeat_runtime(
+    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
+) -> None:
+    """Record that the owner is still interacting with the embedded preview.
+
+    Client-side navigation inside a generated SPA produces no HTTP traffic to
+    the dev container.  Without this explicit signal the idle sweeper can stop
+    a runtime underneath a user who is actively exploring it.
+    """
+    await _project_owned_by(session, project_id, current_user.id)
+    await orchestrator_client.heartbeat(project_id)
+
+
 @router.post("/{project_id}/runtime/start", response_model=RuntimeStatus)
 async def start_runtime(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
