@@ -23,6 +23,7 @@ import os
 import shutil
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID
@@ -618,7 +619,7 @@ async def _run(
 
         # 4. Run the new prod container, replacing any previous one.
         prod_name = f"omnia-app-{slug}"
-        prod_port = await get_prod_port_allocator().acquire(UUID(project_id))
+        prod_allocator = get_prod_port_allocator()
         await docker_client.destroy_container(prod_name)
         # Auth.js v5 envs — same secret as dev so a deploy doesn't log every
         # user out. The dev container's `secrets_root/<id>/auth.secret` is
@@ -632,10 +633,10 @@ async def _run(
         auth_secret = _load_or_create_auth_secret(project_id)
         prod_origin = nginx_writer.prod_url(slug)
 
-        spec = docker_client.ContainerSpec(
+        base_spec = docker_client.ContainerSpec(
             name=prod_name,
             image=tag,
-            port=prod_port,
+            port=0,
             project_id=project_id,
             env={
                 "NODE_ENV": "production",
@@ -657,7 +658,29 @@ async def _run(
             kind="prod",
             restart_policy_name="unless-stopped",
         )
-        await docker_client.start_container(spec)
+        prod_port = 0
+        for attempt in range(5):
+            prod_port = await prod_allocator.acquire(UUID(project_id))
+            spec = replace(base_spec, port=prod_port)
+            try:
+                await docker_client.start_container(spec)
+            except OrchestratorError as exc:
+                await prod_allocator.reject(UUID(project_id), prod_port)
+                if exc.code != "port_conflict" or attempt == 4:
+                    raise
+                await docker_client.destroy_container(prod_name)
+                log.warning(
+                    "deploy.port_conflict_retry",
+                    project_id=project_id,
+                    port=prod_port,
+                    attempt=attempt + 1,
+                )
+                continue
+            except Exception:
+                await prod_allocator.reject(UUID(project_id), prod_port)
+                raise
+            await prod_allocator.confirm(UUID(project_id), prod_port)
+            break
 
         # 5. Health-poll before swapping traffic.
         if not await _healthy(prod_port):

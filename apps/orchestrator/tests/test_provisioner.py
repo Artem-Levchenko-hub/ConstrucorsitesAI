@@ -41,13 +41,31 @@ async def _provision_capturing_spec(
     monkeypatch: pytest.MonkeyPatch,
     template_dir: Path | None = None,
     initial_env: dict[str, str] | None = None,
+    allocation_ports: list[int] | None = None,
+    bind_conflicts: int = 0,
+    fatal_start: bool = False,
+    observed: dict[str, object] | None = None,
 ) -> ContainerSpec:
     """Run `provision` with every side-effecting collaborator stubbed; return
     the ContainerSpec that would have been handed to Docker."""
     captured: dict[str, ContainerSpec] = {}
 
+    starts = 0
+
     async def fake_start(spec: ContainerSpec) -> str:
+        nonlocal starts
+        starts += 1
         captured["spec"] = spec
+        if fatal_start:
+            raise RuntimeError("simulated Docker outage")
+        if starts <= bind_conflicts:
+            from omnia_orchestrator.core.errors import OrchestratorError
+
+            raise OrchestratorError(
+                code="port_conflict",
+                message="simulated bind race",
+                status_code=409,
+            )
         return "deadbeef" * 8
 
     # Template copy + source resolution → no filesystem touch.
@@ -60,7 +78,21 @@ async def _provision_capturing_spec(
     monkeypatch.setattr(provisioner, "_load_or_create_auth_secret", lambda _p: "auth-secret")
 
     # Port allocator → fixed port.
-    allocator = type("A", (), {"acquire": AsyncMock(return_value=3210)})()
+    acquire = AsyncMock(
+        side_effect=allocation_ports if allocation_ports is not None else None,
+        return_value=3210,
+    )
+    allocator = type(
+        "A",
+        (),
+        {
+            "acquire": acquire,
+            "confirm": AsyncMock(),
+            "reject": AsyncMock(),
+        },
+    )()
+    if observed is not None:
+        observed["allocator"] = allocator
     monkeypatch.setattr(provisioner, "get_port_allocator", lambda: allocator)
 
     # Postgres → reuse an "existing" DSN so create_schema is never called.
@@ -77,6 +109,7 @@ async def _provision_capturing_spec(
     monkeypatch.setattr(provisioner.nginx_writer, "publish_tls_in_background", lambda *_a: None)
 
     monkeypatch.setattr(provisioner, "start_container", fake_start)
+    monkeypatch.setattr(provisioner, "destroy_container", AsyncMock())
     monkeypatch.setattr(provisioner, "publish_project_event", AsyncMock())
 
     req = ProvisionRequest(
@@ -87,6 +120,8 @@ async def _provision_capturing_spec(
         initial_env=initial_env or {},
     )
     await provisioner.provision(req)
+    if observed is not None:
+        observed["starts"] = starts
     return captured["spec"]
 
 
@@ -182,6 +217,51 @@ async def test_duplicate_project_provisions_are_serialized(
     await asyncio.gather(provisioner.provision(req), provisioner.provision(req))
 
     assert max_active == 1
+
+
+async def test_provision_retries_bind_race_without_leaking_failed_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    spec = await _provision_capturing_spec(
+        monkeypatch,
+        allocation_ports=[3210, 3211],
+        bind_conflicts=1,
+        observed=observed,
+    )
+
+    allocator = observed["allocator"]
+    assert spec.port == 3211
+    assert observed["starts"] == 2
+    allocator.reject.assert_awaited_once_with(  # type: ignore[attr-defined]
+        UUID("00000000-0000-0000-0000-000000000001"), 3210
+    )
+    allocator.confirm.assert_awaited_once_with(  # type: ignore[attr-defined]
+        UUID("00000000-0000-0000-0000-000000000001"), 3211
+    )
+    provisioner.destroy_container.assert_awaited_once_with(  # type: ignore[attr-defined]
+        "omnia-dev-demo-app"
+    )
+
+
+async def test_provision_releases_reservation_on_non_bind_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    with pytest.raises(RuntimeError, match="Docker outage"):
+        await _provision_capturing_spec(
+            monkeypatch,
+            fatal_start=True,
+            observed=observed,
+        )
+
+    allocator = observed["allocator"]
+    allocator.reject.assert_awaited_once_with(  # type: ignore[attr-defined]
+        UUID("00000000-0000-0000-0000-000000000001"), 3210
+    )
+    allocator.confirm.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 # ── Phase 1 egress + network isolation (default OFF = current behaviour) ─────

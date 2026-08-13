@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 53,
+  "version": 54,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2772,6 +2772,18 @@
       "evidence": "Добавлены immutable execution envelope, Postgres lease/heartbeat, watchdog orphan recovery, Redis-only native transcript checkpoint и replay того же turn ID; API restart не крадёт живой worker lease. Source-derived Environment Manifest фиксирует зависимости, locked/writable paths, managed signatures, команды proof и safe degradation. Ruff, strict mypy и 4 новых continuity/manifest/provider-replay теста зелёные; полный DB-прогон локально требует доступный Postgres.",
       "impact": "F5, временный сетевой сбой, перезапуск API/worker и граница одного execution slice больше не должны превращать принятую сборку в ручной повтор или вечный running. Внутренний красный результат остаётся задачей агента; наружу terminal state допускается только для точного внешнего блокера.",
       "next_vector": "Доставить api+worker и выполнить production kill/restart canary до contract_green без второго snapshot или списания"
+    },
+    {
+      "id": "H145",
+      "title": "Runtime-порты сверяются с Docker и переживают drift реестра",
+      "status": "testing",
+      "score": null,
+      "category": "инфра / MAX / надёжность / concurrency",
+      "period": "13.08",
+      "description": "Убрать зависимость provision от устаревшего `.port-registry.json`: атомарно учитывать реальные Docker bindings и host listeners, безопасно повторять bind race и освобождать только точную неудачную reservation.",
+      "evidence": "Production canary получил 3364 из registry, хотя живой `omnia-dev-fitness-47e6be` уже держал 127.0.0.1:3364. Новый allocator сканирует Docker all=True и socket bind, восстанавливает exact owner, удаляет registry ghosts, пишет через atomic replace и имеет confirm/reject lease. Dev/prod/history provision повторяют `port_conflict` до пяти раз. Новые тесты покрывают live container вне registry, concurrency, TOCTOU, stale reservation, exact reuse и отсутствие leaks; focused Ruff/mypy зелёные.",
+      "impact": "Новая генерация больше не падает до первого agent-step из-за порта старого или вручную перезапущенного контейнера. Чужое приложение не останавливается: конфликтующая попытка меняет только свою reservation и выбирает следующий реально свободный порт.",
+      "next_vector": "Доставить orchestrator, перезапустить сервис и повторить MAX canary рядом с живым fitness-контейнером"
     }
  ],
  "vectors": [
@@ -3376,6 +3388,10 @@
     [
      "Managed kit 31: legal fallback не считает собственные ссылки нативными и не зацикливает DOM; production owner-check",
      false
+    ],
+    [
+     "Collision-safe runtime ports: Docker/listener reconciliation, atomic reservations и bounded bind retry",
+     true
     ]
    ],
    "hyp_ids": [
@@ -3417,7 +3433,8 @@
      "H136",
      "H137",
      "H138",
-     "H140"
+     "H140",
+     "H145"
    ]
   },
   {

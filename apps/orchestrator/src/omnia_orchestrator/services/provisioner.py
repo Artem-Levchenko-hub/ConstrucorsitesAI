@@ -26,6 +26,7 @@ import asyncio
 import os
 import secrets as _secrets
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import structlog
@@ -34,6 +35,7 @@ from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import (
     ContainerSpec,
+    destroy_container,
     ensure_template_image_fresh,
     start_container,
 )
@@ -203,9 +205,6 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     _copy_template(src, project_dir)
     log.info("provision.template_copied", dest=str(project_dir))
 
-    port = await get_port_allocator().acquire(req.project_id)
-    log.info("provision.port_acquired", port=port)
-
     container_name = f"omnia-dev-{req.slug}"
     image_tag = stack.image_tag
 
@@ -284,10 +283,10 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     # enabled, else None → docker_client uses the shared runtime net (current).
     network_name = f"omnia-proj-{req.project_id}" if settings.isolate_project_network else None
 
-    spec = ContainerSpec(
+    base_spec = ContainerSpec(
         name=container_name,
         image=image_tag,
-        port=port,
+        port=0,
         project_id=str(req.project_id),
         env=env,
         cpu_quota=1.0,
@@ -308,7 +307,41 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         pids_limit=settings.container_pids_limit,
     )
 
-    container_id = await start_container(spec)
+    allocator = get_port_allocator()
+    port = 0
+    container_id = ""
+    for attempt in range(5):
+        port = await allocator.acquire(req.project_id)
+        log.info("provision.port_acquired", port=port, attempt=attempt + 1)
+        spec = replace(base_spec, port=port)
+        try:
+            container_id = await start_container(spec)
+        except OrchestratorError as exc:
+            await allocator.reject(req.project_id, port)
+            if exc.code != "port_conflict" or attempt == 4:
+                raise
+            # Docker may leave a same-project container in `created` state when
+            # start loses the bind race. Removing that exact intended name is
+            # safe; the unrelated container owning the port is untouched.
+            await destroy_container(container_name)
+            log.warning(
+                "provision.port_conflict_retry",
+                project_id=str(req.project_id),
+                port=port,
+                attempt=attempt + 1,
+            )
+            continue
+        except Exception:
+            await allocator.reject(req.project_id, port)
+            raise
+        await allocator.confirm(req.project_id, port)
+        break
+    else:  # pragma: no cover - loop terminal branch is guarded above
+        raise OrchestratorError(
+            code="port_exhausted",
+            message="host port kept changing during provision",
+            status_code=503,
+        )
     log.info("provision.container_started", id=container_id[:12], name=container_name)
 
     # Expose the dev container at a browser-reachable host via nginx.

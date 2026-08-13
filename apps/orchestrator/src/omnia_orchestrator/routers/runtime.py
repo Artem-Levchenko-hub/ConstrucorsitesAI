@@ -1024,18 +1024,37 @@ async def start_history_preview_session(
                 credentials.schema_name,
             )
             secret_value = environment["AUTH_SECRET"]
-            port = await get_port_allocator().acquire(port_key)
-            await start_history_preview_container(
-                project_key,
-                str(payload.snapshot_id),
-                payload.files,
-                purpose="session",
-                host_port=port,
-                public_origin=origin,
-                environment_overrides={**environment, "AUTH_URL": origin},
-                history_database_id=str(database_id),
-                history_session_id=str(session_id),
-            )
+            allocator = get_port_allocator()
+            for attempt in range(5):
+                port = await allocator.acquire(port_key)
+                try:
+                    await start_history_preview_container(
+                        project_key,
+                        str(payload.snapshot_id),
+                        payload.files,
+                        purpose="session",
+                        host_port=port,
+                        public_origin=origin,
+                        environment_overrides={**environment, "AUTH_URL": origin},
+                        history_database_id=str(database_id),
+                        history_session_id=str(session_id),
+                    )
+                except OrchestratorError as exc:
+                    await allocator.reject(port_key, port)
+                    if exc.code != "port_conflict" or attempt == 4:
+                        raise
+                    await remove_history_preview_session(
+                        project_key,
+                        snapshot_id=str(payload.snapshot_id),
+                        session_id=str(session_id),
+                    )
+                    continue
+                except Exception:
+                    await allocator.reject(port_key, port)
+                    raise
+                await allocator.confirm(port_key, port)
+                break
+            assert port is not None
             probe_expires = int((datetime.now(UTC) + _MAX_PREVIEW_BOOTSTRAP_TTL).timestamp())
             probe_signature = _max_preview_bootstrap_signature(
                 secret_value, project_key, probe_expires

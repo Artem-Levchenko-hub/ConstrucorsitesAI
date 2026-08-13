@@ -90,6 +90,26 @@ class ContainerSpec:
 _client: docker.DockerClient | None = None
 
 
+def _port_conflict_error(
+    exc: docker.errors.APIError, port: int | None
+) -> OrchestratorError | None:
+    detail = str(exc).casefold()
+    markers = (
+        "port is already allocated",
+        "address already in use",
+        "bind for 127.0.0.1",
+        "failed programming external connectivity",
+    )
+    if not any(marker in detail for marker in markers):
+        return None
+    return OrchestratorError(
+        code="port_conflict",
+        message=f"host port {port or 0} became occupied during container start",
+        status_code=409,
+        details={"port": port or 0},
+    )
+
+
 def _get_client() -> docker.DockerClient:
     global _client
     if _client is None:
@@ -268,7 +288,13 @@ async def start_container(spec: ContainerSpec) -> str:
                 if existing.status == "paused":
                     existing.unpause()  # can't .start() a frozen container
                 elif existing.status not in {"running", "restarting", "dead"}:
-                    existing.start()
+                    try:
+                        existing.start()
+                    except docker.errors.APIError as exc:
+                        conflict = _port_conflict_error(exc, spec.port)
+                        if conflict is not None:
+                            raise conflict from exc
+                        raise
                 existing.reload()
                 core_ok = existing.status == "running"
                 if core_ok and spec.integrity_path:
@@ -345,6 +371,9 @@ async def start_container(spec: ContainerSpec) -> str:
                 status_code=409,
             ) from exc
         except docker.errors.APIError as exc:
+            conflict = _port_conflict_error(exc, spec.port)
+            if conflict is not None:
+                raise conflict from exc
             raise OrchestratorError(
                 code="container_failure",
                 message=f"docker refused start: {exc}",
@@ -634,6 +663,9 @@ async def start_history_preview_container(
                 **run_kwargs,
             )
         except docker.errors.APIError as exc:
+            conflict = _port_conflict_error(exc, host_port)
+            if conflict is not None:
+                raise conflict from exc
             raise OrchestratorError(
                 code="container_failure",
                 message=f"history preview start failed: {exc}",

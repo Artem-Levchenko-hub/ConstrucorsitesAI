@@ -264,6 +264,23 @@ EOF
 sudo chown omnia-orchestrator:omnia-orchestrator /opt/omnia-runtime/.env.orchestrator
 sudo chmod 600 /opt/omnia-runtime/.env.orchestrator
 
+# Port allocation safety
+
+`.port-registry.json` and `.prod-port-registry.json` are reservation journals,
+not the source of truth. Before allocation the orchestrator reconciles them with
+all Docker `HostConfig.PortBindings` (including stopped containers) and actual
+listeners on `127.0.0.1`. A missing/stale registry therefore cannot reuse a port
+owned by a live or restartable app. Registry writes use atomic replace; a new
+reservation has a short in-process lease until Docker confirms it.
+
+If another process wins the bind after reconciliation, Docker reports
+`port_conflict`; dev, prod and interactive history provisioning reject only that
+exact reservation, remove only their own failed `created` container and retry a
+new reconciled port up to five times. Existing unrelated containers are never
+stopped or reassigned. Failed provisioning and project cleanup release the exact
+reservation, while an existing container for the same project safely re-adopts
+its configured port after an orchestrator restart.
+
 # systemd unit
 sudo tee /etc/systemd/system/omnia-orchestrator.service <<'EOF'
 [Unit]

@@ -96,6 +96,19 @@ def test_container_spec_carries_tier_for_hibernate() -> None:
     assert bare.tier == "free"
 
 
+def test_docker_bind_failure_has_retryable_port_conflict_code() -> None:
+    error = docker.errors.APIError(
+        "failed programming external connectivity: Bind for 127.0.0.1:3364 failed: "
+        "port is already allocated"
+    )
+
+    classified = docker_client._port_conflict_error(error, 3364)
+
+    assert classified is not None
+    assert classified.code == "port_conflict"
+    assert classified.details == {"port": 3364}
+
+
 class _FakeContainer:
     def __init__(
         self,
