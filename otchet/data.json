@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-13",
-  "version": 54,
+  "version": 55,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2784,6 +2784,18 @@
       "evidence": "Production canary получил 3364 из registry, хотя живой `omnia-dev-fitness-47e6be` уже держал 127.0.0.1:3364. Новый allocator сканирует Docker all=True и socket bind, восстанавливает exact owner, удаляет registry ghosts, пишет через atomic replace и имеет confirm/reject lease. Dev/prod/history provision повторяют `port_conflict` до пяти раз. Новые тесты покрывают live container вне registry, concurrency, TOCTOU, stale reservation, exact reuse и отсутствие leaks; focused Ruff/mypy зелёные.",
       "impact": "Новая генерация больше не падает до первого agent-step из-за порта старого или вручную перезапущенного контейнера. Чужое приложение не останавливается: конфликтующая попытка меняет только свою reservation и выбирает следующий реально свободный порт.",
       "next_vector": "Доставить orchestrator, перезапустить сервис и повторить MAX canary рядом с живым fitness-контейнером"
+    },
+    {
+      "id": "H146",
+      "title": "Durable MAX recovery изолирован от preview и дедуплицирован",
+      "status": "testing",
+      "score": null,
+      "category": "MAX / автономность / очередь / надёжность",
+      "period": "13.08",
+      "description": "Не позволять долгому preview блокировать продолжение принятой MAX-сборки, а повторным watchdog ticks — раздувать очередь; внутренний no_ai_write должен сохранять checkpoint и продолжать тот же run.",
+      "evidence": "Live canary показал 240-секундную блокировку единственного RQ worker, 8+ повторных jobs одного run и ошибочную финализацию после provider 409/no_ai_write. Generation и preview разведены по отдельным OS workers; Postgres enqueue-token и stable RQ job ID дают atomic single-flight и stale-job no-op; preview ограничен 150/180 секундами. GenerationContinuationRequired теперь доходит до durable wrapper без snapshot finalize/checkpoint delete. Локально 130 focused tests, Ruff и strict mypy зелёные.",
+      "impact": "Preview больше не задерживает восстановление генерации, а restart/watchdog не создают очередь дублей и повторный provider turn. Внутренний provider conflict остаётся pending continuation с тем же run/message/checkpoint и не превращается в ложный failed без snapshot.",
+      "next_vector": "Доставить api+worker и повторить kill/restart canary до contract_green; подтвердить одну очередь continuation, один snapshot и одно применение usage"
     }
  ],
  "vectors": [
@@ -3392,6 +3404,10 @@
     [
      "Collision-safe runtime ports: Docker/listener reconciliation, atomic reservations и bounded bind retry",
      true
+    ],
+    [
+     "Изолированные generation/preview workers, durable enqueue-token и no_ai_write continuation без удаления checkpoint",
+     true
     ]
    ],
    "hyp_ids": [
@@ -3434,7 +3450,8 @@
      "H137",
      "H138",
      "H140",
-     "H145"
+     "H145",
+     "H146"
    ]
   },
   {

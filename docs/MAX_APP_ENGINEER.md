@@ -57,8 +57,21 @@ record, truth boundaries and acceptance floor.
 An accepted MAX build is a durable server job, not a coroutine owned by the
 browser or one API process. Postgres keeps the public run, immutable execution
 envelope, plan/evidence checkpoint and a renewable single-flight lease. RQ owns
-execution; the API watchdog re-enqueues pending runs and reclaims only expired
-worker leases. Browser reload reconnects to the same run and message.
+execution. Durable generation has dedicated worker capacity and cannot sit
+behind preview/Playwright work; preview has a 150-second cooperative pipeline
+deadline plus an independent 180-second RQ horse limit. The worker supervisor
+reaps children on shutdown, kills an uncooperative child after the grace period
+and restarts a child that exits unexpectedly. Browser reload reconnects to the
+same run and message.
+
+Every queue attempt first reserves an enqueue generation atomically in the
+run's Postgres continuity state. The token is part of the stable RQ job ID and
+must match when the worker claims the lease. Repeated watchdog ticks therefore
+enqueue once; an old or pre-deploy backlog job exits without touching the
+provider, files, usage or snapshot. A lost Redis enqueue acknowledgement clears
+only its exact reservation, while delayed retries keep their reservation across
+the complete backoff window. After a worker death the expired lease is reclaimed
+as the same run/message/checkpoint with a new enqueue generation.
 
 Redis holds the opaque native transcript and provider turn cursor for 48 hours.
 The agent checkpoints immediately before a provider request and after every
@@ -79,3 +92,10 @@ Partial files remain a private runtime checkpoint. No snapshot is published and
 no completion is recorded until the full functional, signed visual and release
 contract returns `contract_green`; the final snapshot transaction remains the
 single publication point.
+
+`GenerationContinuationRequired` is control flow, not an application failure.
+It is re-raised through the prompt processor to the durable wrapper, which
+schedules the next slice without calling the snapshot finalizer or deleting the
+native checkpoint. This specifically covers provider conflicts/timeouts that
+produce no AI write: they remain pending with classification and backoff instead
+of becoming `build finished without a committed snapshot`.

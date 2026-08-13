@@ -38,6 +38,7 @@ VIEWPORT: ViewportSize = {"width": 1280, "height": 800}
 MAX_VIEWPORT: ViewportSize = {"width": 390, "height": 844}
 GOTO_TIMEOUT_MS = 15_000
 HISTORY_GOTO_TIMEOUT_MS = 45_000
+PREVIEW_PIPELINE_TIMEOUT_SECONDS = 150
 
 # Container-backed templates render from a live dev container, not from repo
 # files — their git repo only tracks AI-generated files, no root `index.html`.
@@ -670,5 +671,10 @@ async def _render_async(snapshot_id: str) -> None:
 
 
 def render_preview(snapshot_id: str) -> None:
-    """Sync entrypoint для RQ. Внутри гонит асинхронный pipeline."""
-    asyncio.run(_render_async(snapshot_id))
+    """Sync RQ entrypoint with an inner wall-clock below the horse timeout."""
+
+    async def _bounded() -> None:
+        async with asyncio.timeout(PREVIEW_PIPELINE_TIMEOUT_SECONDS):
+            await _render_async(snapshot_id)
+
+    asyncio.run(_bounded())

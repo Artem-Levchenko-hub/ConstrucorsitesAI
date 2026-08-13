@@ -118,6 +118,7 @@ from omnia_api.services.file_extractor import (
     extract_edits,
     extract_files,
 )
+from omnia_api.services.generation_continuity import GenerationContinuationRequired
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     finalize_generation_run,
@@ -147,7 +148,7 @@ from omnia_api.services.prompt_builder import (
     build_art_director_system,
     build_messages,
 )
-from omnia_api.services.queue import enqueue_entity_gate, enqueue_generation_run, enqueue_preview
+from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
 from omnia_api.services.runtime_sync import (
     mark_runtime_sync_required,
     reconcile_locked_runtime,
@@ -453,7 +454,10 @@ async def _run_tracked_prompt(
             with suppress(asyncio.CancelledError):
                 await work_task
             if _durable_continuity:
-                from omnia_api.services.generation_continuity import schedule_continuation
+                from omnia_api.services.generation_continuity import (
+                    enqueue_run_durably,
+                    schedule_continuation,
+                )
 
                 _decision = await schedule_continuation(run_id, "generation_time_slice")
                 if _decision.continue_run:
@@ -467,10 +471,8 @@ async def _run_tracked_prompt(
                             "retryable": True,
                         },
                     )
-                    await asyncio.to_thread(
-                        enqueue_generation_run,
-                        run_id,
-                        delay_seconds=_decision.delay_seconds,
+                    await enqueue_run_durably(
+                        run_id, delay_seconds=_decision.delay_seconds
                     )
                     return
             if not await _resync_cancelled_runtime_or_hold(
@@ -545,7 +547,7 @@ async def _run_tracked_prompt(
             await clear_native_checkpoint(run_id)
     except Exception as exc:
         from omnia_api.services.generation_continuity import (
-            GenerationContinuationRequired,
+            enqueue_run_durably,
             schedule_continuation,
         )
 
@@ -562,8 +564,7 @@ async def _run_tracked_prompt(
                         "retryable": True,
                     },
                 )
-                await asyncio.to_thread(
-                    enqueue_generation_run,
+                await enqueue_run_durably(
                     run_id,
                     delay_seconds=(
                         exc.delay_seconds
@@ -615,10 +616,8 @@ async def _run_tracked_prompt(
                     label,
                     exc_info=exc,
                 )
-                await asyncio.to_thread(
-                    enqueue_generation_run,
-                    run_id,
-                    delay_seconds=_decision.delay_seconds,
+                await enqueue_run_durably(
+                    run_id, delay_seconds=_decision.delay_seconds
                 )
                 return
         logging.getLogger(__name__).error("%s failed", label, exc_info=exc)
@@ -2493,11 +2492,14 @@ async def post_prompt(
             # Accepted MAX work is owned by RQ, not this API process. Persist the
             # complete non-secret envelope first; enqueue failure is recovered by
             # the startup/periodic watchdog without creating another run/message.
-            from omnia_api.services.generation_continuity import store_execution_envelope
+            from omnia_api.services.generation_continuity import (
+                enqueue_run_durably,
+                store_execution_envelope,
+            )
 
             await store_execution_envelope(generation_run.id, _execution)
             try:
-                await asyncio.to_thread(enqueue_generation_run, generation_run.id)
+                await enqueue_run_durably(generation_run.id)
             except Exception as _enqueue_exc:
                 logging.getLogger(__name__).warning(
                     "MAX generation enqueue deferred to watchdog: %r", _enqueue_exc
@@ -8902,6 +8904,11 @@ async def _process_prompt(
             },
         )
 
+    except GenerationContinuationRequired:
+        # Durable control flow belongs to `_run_tracked_prompt`. Swallowing it
+        # here previously made the wrapper finalize a build with no snapshot,
+        # clear its checkpoint and lose the accepted continuation.
+        raise
     except PaidCallAmbiguousError:
         # The provider may already have completed and billed this request. Keep
         # the machine-readable code through pre-stream planners, audits and

@@ -13,7 +13,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -28,6 +28,7 @@ LEASE_SECONDS = 90
 WATCHDOG_SECONDS = 20
 MAX_EXTERNAL_OUTAGE_SECONDS = 24 * 60 * 60
 NATIVE_CHECKPOINT_TTL_SECONDS = 48 * 60 * 60
+ENQUEUE_RESERVATION_SECONDS = 120
 
 
 def _native_checkpoint_key(run_id: UUID | str) -> str:
@@ -171,6 +172,8 @@ def initial_continuity(envelope: Mapping[str, object]) -> dict[str, object]:
         "last_heartbeat_at": None,
         "lease_owner": None,
         "lease_expires_at": None,
+        "enqueue_token": None,
+        "enqueue_expires_at": None,
         "last_stop_reason": None,
         "classification": "accepted",
         "retryable": True,
@@ -203,7 +206,11 @@ async def store_execution_envelope(
         await _store(own)
 
 
-async def claim_run(run_id: UUID, owner: str) -> dict[str, object] | None:
+async def claim_run(
+    run_id: UUID,
+    owner: str,
+    enqueue_token: str,
+) -> dict[str, object] | None:
     """Acquire one expired/free lease and return its immutable execution envelope."""
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
@@ -216,6 +223,10 @@ async def claim_run(run_id: UUID, owner: str) -> dict[str, object] | None:
         continuity = _object_dict(state.get(CONTINUITY_KEY))
         if not isinstance(envelope, dict):
             return None
+        # Jobs from an older watchdog tick/deploy stay harmless in the backlog.
+        # Only the current Postgres reservation may acquire the execution lease.
+        if not enqueue_token or continuity.get("enqueue_token") != enqueue_token:
+            return None
         now = datetime.now(UTC)
         lease_owner = str(continuity.get("lease_owner") or "")
         lease_expires = _parse_time(continuity.get("lease_expires_at"))
@@ -227,6 +238,8 @@ async def claim_run(run_id: UUID, owner: str) -> dict[str, object] | None:
                 "lease_owner": owner,
                 "lease_expires_at": (now + timedelta(seconds=LEASE_SECONDS)).isoformat(),
                 "last_heartbeat_at": now.isoformat(),
+                "enqueue_token": None,
+                "enqueue_expires_at": None,
             }
         )
         state[CONTINUITY_KEY] = continuity
@@ -289,6 +302,8 @@ async def schedule_continuation(run_id: UUID, reason: str) -> ContinuationDecisi
                 "action": decision.action,
                 "lease_owner": None,
                 "lease_expires_at": None,
+                "enqueue_token": None,
+                "enqueue_expires_at": None,
             }
         )
         # New slice gets new provider turn ids. An ambiguous/timeout replay keeps
@@ -346,7 +361,14 @@ async def reclaimable_run_ids() -> tuple[UUID, ...]:
         if not isinstance(state.get(ENVELOPE_KEY), dict):
             continue
         continuity = state.get(CONTINUITY_KEY)
-        if run.status == "pending" or not isinstance(continuity, dict):
+        if not isinstance(continuity, dict):
+            result.append(run.id)
+            continue
+        enqueue_expires = _parse_time(continuity.get("enqueue_expires_at"))
+        enqueue_token = str(continuity.get("enqueue_token") or "")
+        if enqueue_token and enqueue_expires is not None and enqueue_expires > now:
+            continue
+        if run.status == "pending":
             result.append(run.id)
             continue
         expires = _parse_time(continuity.get("lease_expires_at"))
@@ -355,13 +377,98 @@ async def reclaimable_run_ids() -> tuple[UUID, ...]:
     return tuple(result)
 
 
-async def run_watchdog_forever() -> None:
+async def reserve_enqueue(run_id: UUID, *, delay_seconds: int = 0) -> str | None:
+    """Atomically reserve exactly one queue generation for a reclaimable run."""
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        run = await session.get(GenerationRun, run_id, with_for_update=True)
+        if run is None or run.status not in {"pending", "running"}:
+            return None
+        state = dict(run.agent_state or {})
+        if not isinstance(state.get(ENVELOPE_KEY), dict):
+            return None
+        continuity = _object_dict(state.get(CONTINUITY_KEY))
+        now = datetime.now(UTC)
+        lease_expires = _parse_time(continuity.get("lease_expires_at"))
+        lease_owner = str(continuity.get("lease_owner") or "")
+        if run.status == "running" and lease_owner and lease_expires and lease_expires > now:
+            return None
+        enqueue_expires = _parse_time(continuity.get("enqueue_expires_at"))
+        if continuity.get("enqueue_token") and enqueue_expires and enqueue_expires > now:
+            return None
+        token = uuid4().hex
+        # A delayed RQ job must keep owning its reservation until it can start.
+        # Otherwise the watchdog would replace it after 120s and defeat the
+        # continuation backoff. The extra reservation window covers scheduler
+        # latency and a worker restart around the due time.
+        reservation_seconds = max(
+            ENQUEUE_RESERVATION_SECONDS,
+            max(0, int(delay_seconds)) + ENQUEUE_RESERVATION_SECONDS,
+        )
+        continuity.update(
+            {
+                "status": "queued",
+                "enqueue_token": token,
+                "enqueue_expires_at": (
+                    now + timedelta(seconds=reservation_seconds)
+                ).isoformat(),
+                "lease_owner": None,
+                "lease_expires_at": None,
+            }
+        )
+        state[CONTINUITY_KEY] = continuity
+        run.agent_state = state
+        run.status = "pending"
+        await session.commit()
+        return token
+
+
+async def clear_enqueue_reservation(run_id: UUID, enqueue_token: str) -> None:
+    """Clear only the failed/lost enqueue generation, preserving newer work."""
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        run = await session.get(GenerationRun, run_id, with_for_update=True)
+        if run is None:
+            return
+        state = dict(run.agent_state or {})
+        continuity = _object_dict(state.get(CONTINUITY_KEY))
+        if continuity.get("enqueue_token") != enqueue_token:
+            return
+        continuity["enqueue_token"] = None
+        continuity["enqueue_expires_at"] = None
+        state[CONTINUITY_KEY] = continuity
+        run.agent_state = state
+        await session.commit()
+
+
+async def enqueue_run_durably(run_id: UUID, *, delay_seconds: int = 0) -> bool:
+    """Reserve in Postgres, enqueue once, and recover a lost enqueue failure."""
+
     from omnia_api.services.queue import enqueue_generation_run
 
+    token = await reserve_enqueue(run_id, delay_seconds=delay_seconds)
+    if token is None:
+        return False
+    try:
+        await asyncio.to_thread(
+            enqueue_generation_run,
+            run_id,
+            token,
+            delay_seconds=delay_seconds,
+        )
+    except Exception:
+        await clear_enqueue_reservation(run_id, token)
+        raise
+    return True
+
+
+async def run_watchdog_forever() -> None:
     while True:
         try:
             for run_id in await reclaimable_run_ids():
-                await asyncio.to_thread(enqueue_generation_run, run_id)
+                await enqueue_run_durably(run_id)
         except Exception:
             # Readiness and logs expose queue outages; the next pass retries.
             pass
@@ -374,12 +481,15 @@ __all__ = [
     "GenerationContinuationRequired",
     "claim_run",
     "classify_stop",
+    "clear_enqueue_reservation",
     "clear_native_checkpoint",
+    "enqueue_run_durably",
     "heartbeat_forever",
     "initial_continuity",
     "load_native_checkpoint",
     "reclaimable_run_ids",
     "release_lease",
+    "reserve_enqueue",
     "run_watchdog_forever",
     "save_native_checkpoint",
     "schedule_continuation",

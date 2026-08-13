@@ -17,8 +17,8 @@ from omnia_api.services.generation_continuity import (
 )
 
 
-async def _run(run_id: UUID, owner: str) -> None:
-    envelope = await claim_run(run_id, owner)
+async def _run(run_id: UUID, owner: str, enqueue_token: str) -> None:
+    envelope = await claim_run(run_id, owner, enqueue_token)
     if envelope is None:
         return
     heartbeat = asyncio.create_task(heartbeat_forever(run_id, owner))
@@ -75,12 +75,16 @@ async def _run(run_id: UUID, owner: str) -> None:
             await dispose_engine()
 
 
-def run_generation_job(run_id: str) -> None:
+def run_generation_job(run_id: str, enqueue_token: str | None = None) -> None:
     """Synchronous RQ entrypoint; a stale duplicate exits at the DB lease."""
 
+    # Pre-deploy duplicate backlog jobs have no token and are deliberately
+    # harmless. The watchdog will reserve/enqueue one current token.
+    if not enqueue_token:
+        return
     parsed = UUID(run_id)
     owner = f"{socket.gethostname()}:{uuid4()}"
-    asyncio.run(_run(parsed, owner))
+    asyncio.run(_run(parsed, owner, enqueue_token))
 
 
 __all__ = ["run_generation_job"]

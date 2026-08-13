@@ -409,6 +409,8 @@ services:
     volumes:
       - ../../../orchestrator/templates:/orchestrator/templates:ro
     # Same uv-run bypass as api — direct python from the venv.
+    # The supervisor keeps isolated OS workers for durable generation and
+    # preview/background jobs, and exits/reaps them together on SIGTERM.
     command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.run"]
     depends_on:
       api:

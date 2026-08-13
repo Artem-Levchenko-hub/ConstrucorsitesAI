@@ -22,11 +22,15 @@ uv run alembic upgrade head
 uv run uvicorn omnia_api.main:app --reload --port 8000
 ```
 
-Воркер preview-рендера в отдельном терминале:
+Единый production-compatible supervisor worker-процессов в отдельном терминале:
 
 ```bash
-uv run rq worker omnia-previews
+uv run python -m omnia_api.workers.run
 ```
+
+Supervisor держит две изолированные RQ-очереди: `omnia-generations` для
+durable-сборок и `omnia-previews` для скриншотов/других фоновых задач. Поэтому
+долгий Playwright-рендер не задерживает восстановление принятой генерации.
 
 ## Env
 
@@ -48,7 +52,7 @@ uv run rq worker omnia-previews
 
 ```bash
 uv run uvicorn omnia_api.main:app --reload --port 8000
-uv run rq worker omnia-previews
+uv run python -m omnia_api.workers.run
 uv run alembic revision --autogenerate -m "msg"
 uv run alembic upgrade head
 uv run pytest -q
