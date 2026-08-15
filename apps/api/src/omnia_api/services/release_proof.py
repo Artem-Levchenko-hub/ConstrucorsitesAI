@@ -33,6 +33,7 @@ async def run_release_proof(
     hydrated_product_check: Check | None = None,
     require_max_functional: bool = False,
     max_require_persistence: bool = False,
+    require_dependency_security: bool = False,
 ) -> FunctionalVerdict:
     """Prove that the live project typechecks, serves HTTP and has safe transport.
 
@@ -41,7 +42,16 @@ async def run_release_proof(
     """
     checks: list[Check] = []
     try:
-        typecheck = await orchestrator_client.agent_build(project_id, project_slug)
+        typecheck = (
+            await orchestrator_client.agent_build(
+                project_id,
+                project_slug,
+                code_intelligence=True,
+                security_scan=True,
+            )
+            if require_dependency_security
+            else await orchestrator_client.agent_build(project_id, project_slug)
+        )
         checks.append(
             Check(
                 "typecheck",
@@ -49,6 +59,45 @@ async def run_release_proof(
                 str(typecheck.get("detail") or "")[:240],
             )
         )
+        if require_dependency_security:
+            security_scan_completed = typecheck.get("security_scan_completed") is True
+            raw_unavailable = typecheck.get("analysis_unavailable")
+            unavailable = raw_unavailable if isinstance(raw_unavailable, list) else []
+            raw_security_findings = typecheck.get("security_findings")
+            if isinstance(raw_security_findings, list) and all(
+                isinstance(item, dict) for item in raw_security_findings
+            ):
+                security_findings_valid = True
+                security_findings = raw_security_findings
+            else:
+                security_findings_valid = False
+                security_findings = []
+            security_unavailable = [
+                str(item)
+                for item in unavailable
+                if "osv" in str(item).casefold() or "analyze-code" in str(item).casefold()
+            ]
+            detail = (
+                str(security_findings[0].get("message") or "vulnerability found")
+                if security_findings
+                else security_unavailable[0]
+                if security_unavailable
+                else "OSV lockfile scan did not complete"
+                if not security_scan_completed
+                else "OSV lockfile scan returned malformed findings"
+                if not security_findings_valid
+                else "OSV lockfile scan clean"
+            )
+            checks.append(
+                Check(
+                    "dependency_security",
+                    security_scan_completed
+                    and security_findings_valid
+                    and not security_findings
+                    and not security_unavailable,
+                    detail[:240],
+                )
+            )
     except Exception as exc:
         checks.append(Check("typecheck", False, f"probe failed: {exc!r}"))
 

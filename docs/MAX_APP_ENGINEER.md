@@ -67,10 +67,18 @@ the complete backoff window. After a worker death the expired lease is reclaimed
 as the same run/message/checkpoint with a new enqueue generation.
 
 Redis holds the opaque native transcript and provider turn cursor for 48 hours.
-The agent checkpoints immediately before a provider request and after every
-assistant/tool-result turn. If the network, API or worker dies with settlement
-unknown, recovery sends the identical transcript and logical turn ID so the
-gateway can replay its settled result without a duplicate provider request.
+The agent checkpoints immediately before a provider request, immediately after
+the assistant tool-use response and after every individual tool result. The
+checkpoint contains a bounded pending-tool journal and the turn-local transition
+state. Recovery continues directly from a journalled assistant response, skips
+completed tools and reconciles only the action whose durable `started` marker has
+no result. File writes are compared with the live tree; a managed shell check or
+paid media request in that uncertainty window is never issued twice. An explicit
+uncertain result forces subsequent verification.
+If death happened before that response was journalled, the gateway replays its
+settled logical turn.
+A worker death therefore cannot leave an assistant tool-use without a
+tool-result, repeat a completed mutation, or forget that the turn changed source.
 Hidden model reasoning never enters the public `GenerationRun.agent_state`.
 
 Every provider call also receives a compact server-owned working note. It is
@@ -90,10 +98,12 @@ MAX always enters the native project-agent path even if an old generic
 `USE_AGENTIC_BUILDER` or `USE_NATIVE_AGENT` rollout flag is absent. The MAX
 contract therefore cannot silently fall back to the legacy one-shot writer.
 The agent has the full project-scoped capability surface: file search/read/write,
-an audited shell, dependency installation, tests, typecheck, live logs/runtime,
+three exact managed read-only shell checks, managed dependency repair, typecheck,
+live logs/runtime,
 signed browser vision, media generation, maintained skills and approved read-only
-MCP research. Shell mutations are diffed across the complete source tree and
-rolled back if they touch managed files or violate path, secret, SAST or DB rules.
+MCP research. MAX shell rejects every mutation and every free-form command;
+source changes use the path, secret, SAST and DB-guarded file tools. This keeps
+binary and large files plus `node_modules` outside any lossy rollback path.
 Host Docker, other projects and environment secrets remain outside the capability
 boundary; they do not help product engineering and would break tenant isolation.
 
@@ -117,7 +127,8 @@ After a red build the agent must call `diagnose` with a root cause, observed
 evidence, one new experiment and its expected result before another mutation.
 Semantic progress means new executed evidence: changed source revision, a
 different normalized error signature, or a green build/proof observation. Three
-consecutive failed experiments with the same normalized signature stop as
+failed experiments that retain the same individual diagnostic signature, even
+while other diagnostics change, stop as
 `semantic_loop_red`; no fourth provider call is made and the primary cause is
 preserved even if final verification also fails.
 
@@ -126,6 +137,28 @@ all owners, while `AGENT_KERNEL_V2_CANARY_USERS` enables the kernel only for the
 listed owner UUIDs. Emergency rollback is setting the global flag to `false` and
 clearing the canary list, then recreating API and worker with the canonical
 production env file. No snapshot or project migration is required.
+
+Code intelligence enriches the existing `build` observation; it is not another
+model-owned tool or agent loop. The managed MAX image runs pinned Oxlint,
+dependency-cruiser and optional ast-grep checks after TypeScript, then returns a
+bounded structured list of diagnostics, affected model-owned files, stable error
+signature and factual evidence. Disabled and legacy builds remain TypeScript-only;
+an enabled analyzer's error diagnostics make the enriched build red, while a
+missing analyzer in an older container fails soft to the legacy build. The final
+release proof additionally runs pinned OSV-Scanner and is fail-closed unless a
+separate `security_scan_completed=true` attestation is present and the
+independently capped security finding list is empty. General lint diagnostics
+therefore cannot truncate a vulnerability out of the release gate.
+
+Public plan evidence carries the current workspace revision. Any source mutation
+reopens build, runtime and visual proof steps; a later failed proof supersedes an
+older green result. The agent cannot close a post-edit step with historical evidence.
+
+`MAX_CODE_INTELLIGENCE_ENABLED=false` keeps the enrichment disabled globally;
+`MAX_CODE_INTELLIGENCE_CANARY_USERS` enables it only for listed owner UUIDs.
+Rollback is clearing the allowlist and recreating API and worker. The template
+image is rebuilt for newly provisioned projects; existing same-tag project
+containers are not destroyed automatically and retain the fail-soft legacy path.
 
 Fresh builds allow one bounded inspection turn, then require the real
 `ProductApp.tsx` vertical slice and compile it before more exploration. Existing

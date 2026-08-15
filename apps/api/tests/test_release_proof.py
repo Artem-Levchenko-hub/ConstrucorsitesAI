@@ -132,3 +132,128 @@ async def test_max_release_proof_includes_signed_functional_gate(monkeypatch) ->
 
     assert not verdict.passed
     assert verdict.checks[-1].name == "max_reload_persistence"
+
+
+async def test_dependency_security_is_a_fail_closed_canary_release_check(monkeypatch) -> None:
+    project_id = uuid4()
+    build = AsyncMock(
+        return_value={
+            "ok": True,
+            "detail": "clean",
+            "security_scan_completed": True,
+            "security_findings": [
+                {
+                    "source": "osv-scanner",
+                    "severity": "error",
+                    "message": "OSV-TEST vulnerable-package",
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(release_proof.orchestrator_client, "agent_build", build)
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "runtime_status",
+        AsyncMock(return_value={"ok": True, "status_code": 200}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"dev_url": "https://max-dev.example.test"}),
+    )
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+
+    verdict = await release_proof.run_release_proof(
+        project_id,
+        "max-app",
+        require_dependency_security=True,
+    )
+
+    build.assert_awaited_once_with(
+        project_id,
+        "max-app",
+        code_intelligence=True,
+        security_scan=True,
+    )
+    dependency_check = next(
+        check for check in verdict.checks if check.name == "dependency_security"
+    )
+    assert dependency_check.ok is False
+    assert verdict.passed is False
+
+
+async def test_dependency_security_fails_closed_when_scan_did_not_complete(
+    monkeypatch,
+) -> None:
+    project_id = uuid4()
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "agent_build",
+        AsyncMock(return_value={"ok": True, "detail": "clean"}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "runtime_status",
+        AsyncMock(return_value={"ok": True, "status_code": 200}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"dev_url": "https://max-dev.example.test"}),
+    )
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+
+    verdict = await release_proof.run_release_proof(
+        project_id,
+        "max-app",
+        require_dependency_security=True,
+    )
+
+    dependency_check = next(
+        check for check in verdict.checks if check.name == "dependency_security"
+    )
+    assert dependency_check.ok is False
+    assert dependency_check.detail == "OSV lockfile scan did not complete"
+
+
+async def test_dependency_security_rejects_any_nonempty_dedicated_finding(
+    monkeypatch,
+) -> None:
+    project_id = uuid4()
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "agent_build",
+        AsyncMock(
+            return_value={
+                "ok": True,
+                "detail": "clean",
+                "security_scan_completed": True,
+                "security_findings": [
+                    {"source": "unexpected", "severity": "warning", "message": "finding"}
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "runtime_status",
+        AsyncMock(return_value={"ok": True, "status_code": 200}),
+    )
+    monkeypatch.setattr(
+        release_proof.orchestrator_client,
+        "get_status",
+        AsyncMock(return_value={"dev_url": "https://max-dev.example.test"}),
+    )
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+
+    verdict = await release_proof.run_release_proof(
+        project_id, "max-app", require_dependency_security=True
+    )
+
+    dependency_check = next(
+        check for check in verdict.checks if check.name == "dependency_security"
+    )
+    assert dependency_check.ok is False

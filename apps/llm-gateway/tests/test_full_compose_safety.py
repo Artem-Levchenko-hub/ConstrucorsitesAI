@@ -50,3 +50,11 @@ def test_agent_kernel_v2_flags_reach_api_and_worker() -> None:
     for service in (api, worker):
         assert "AGENT_KERNEL_V2_ENABLED: ${AGENT_KERNEL_V2_ENABLED:-false}" in service
         assert "AGENT_KERNEL_V2_CANARY_USERS: ${AGENT_KERNEL_V2_CANARY_USERS:-}" in service
+        assert (
+            "MAX_CODE_INTELLIGENCE_ENABLED: ${MAX_CODE_INTELLIGENCE_ENABLED:-false}"
+            in service
+        )
+        assert (
+            "MAX_CODE_INTELLIGENCE_CANARY_USERS: ${MAX_CODE_INTELLIGENCE_CANARY_USERS:-}"
+            in service
+        )

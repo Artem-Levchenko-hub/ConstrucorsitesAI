@@ -22,7 +22,7 @@ import hashlib
 import json
 import posixpath
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 import httpx
@@ -31,12 +31,17 @@ import structlog
 from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
 from omnia_api.services.agent_brain import (
     brain_prompt_view,
+    error_signatures,
     new_brain,
     normalize_error_signature,
+    record_acceptance_evidence,
     record_hypothesis,
     record_mutation,
     record_observation,
+    restore_durable_brain,
     semantic_loop_count,
+    sync_acceptance,
+    upgrade_brain,
 )
 from omnia_api.services.agent_builder import Action, AgentResult, is_agentic_enabled
 from omnia_api.services.max_generation_contract import (
@@ -311,13 +316,21 @@ _MAX_READ_SKILL_TOOL = _tool(
 )
 _MAX_BASH_TOOL = _tool(
     "bash",
-    "Run a real shell command inside this MAX project's isolated /app container. "
-    "Use it for project diagnostics, package scripts, tests and code generation; it "
-    "cannot access the host, Docker, other projects, environment secrets or credentials. "
-    "If the command may create, edit or delete product source, list every affected "
-    "project-relative path in mutation_paths so the exact bytes are tracked, validated, "
-    "checkpointed and published. Use write_file/edit_file for ordinary source edits.",
-    {"cmd": _STR, "mutation_paths": _STR_ARRAY},
+    "Run one exact platform-owned read-only MAX check: pnpm typecheck, "
+    "pnpm analyze:agent, or pnpm security:agent. mutation_paths must be []. "
+    "Free-form shell, package mutation, tests and code generation are unavailable; "
+    "use write_file/edit_file for every source change.",
+    {
+        "cmd": {
+            "type": "string",
+            "enum": [
+                "pnpm analyze:agent",
+                "pnpm security:agent",
+                "pnpm typecheck",
+            ],
+        },
+        "mutation_paths": {"type": "array", "items": _STR, "maxItems": 0},
+    },
     ["cmd", "mutation_paths"],
 )
 _MAX_BASE_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
@@ -510,9 +523,7 @@ _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
     {**_STABLE_MAX_VISUAL_REPAIR_TOOLS[-1], "cache_control": _CACHE},
 ]
 _STABLE_MAX_REPAIR_TOOLS = [
-    tool
-    for tool in _STABLE_MAX_TOOLS
-    if tool["name"] in {"read_file", "edit_file", "diagnose"}
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "edit_file", "diagnose"}
 ]
 _STABLE_MAX_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_REPAIR_TOOLS[:-1],
@@ -839,6 +850,40 @@ def _contains_history_placeholder(action: Action) -> bool:
     )
 
 
+def _serialize_tool_payload(payload: dict[str, Any]) -> str:
+    """Keep the structured observation valid JSON inside the provider budget."""
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    diagnostics = payload.get("diagnostics")
+    while (
+        len(serialized) > _MAX_TOOL_RESULT_CHARS
+        and isinstance(diagnostics, list)
+        and len(diagnostics) > 5
+    ):
+        diagnostics.pop()
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > _MAX_TOOL_RESULT_CHARS:
+        data = str(payload.get("data") or "")
+        payload["data"] = data[
+            : max(0, len(data) - (len(serialized) - _MAX_TOOL_RESULT_CHARS) - 64)
+        ]
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    while (
+        len(serialized) > _MAX_TOOL_RESULT_CHARS and isinstance(diagnostics, list) and diagnostics
+    ):
+        diagnostics.pop()
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > _MAX_TOOL_RESULT_CHARS:
+        payload = {
+            "status": "error",
+            "summary": "Tool observation exceeded the safe structured-result budget.",
+            "data": "",
+            "retry": "never",
+            "diagnostics": [],
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return serialized
+
+
 def _obs_to_tool_result(
     tool_use_id: str,
     obs: dict[str, Any],
@@ -889,14 +934,80 @@ def _obs_to_tool_result(
     if tool_name in {"write_file", "edit_file"} and ok:
         artifacts = list(dict.fromkeys([*artifacts, str(obs.get("path") or "")]))
         artifacts = [item for item in artifacts if item]
-    payload = {
+    root_cause_hint = str(obs.get("root_cause_hint") or "")[:1000]
+    error_signature = str(obs.get("error_signature") or "")[:128]
+    if not ok and tool_name == "build" and not error_signature:
+        error_signature = normalize_error_signature(text)
+    raw_evidence = obs.get("evidence")
+    evidence = (
+        [str(item)[:300] for item in raw_evidence[:20]] if isinstance(raw_evidence, list) else []
+    )
+    if ok and tool_name == "build" and "build:clean" not in evidence:
+        evidence.append("build:clean")
+    retry = str(
+        obs.get("retry")
+        or ("never" if ok else "transient" if obs.get("infra_dead") else "after_change")
+    )
+    if retry not in {"never", "after_change", "transient"}:
+        retry = "never"
+    raw_affected_files = obs.get("affected_files")
+    affected_files = (
+        [str(item)[:300] for item in raw_affected_files[:30]]
+        if isinstance(raw_affected_files, list)
+        else []
+    )
+    raw_diagnostics = obs.get("diagnostics")
+    diagnostics: list[dict[str, str]] = []
+    if isinstance(raw_diagnostics, list):
+        for item in raw_diagnostics[:30]:
+            if not isinstance(item, Mapping):
+                continue
+            diagnostics.append(
+                {
+                    "source": str(item.get("source") or "")[:40],
+                    "code": str(item.get("code") or "")[:80],
+                    "severity": str(item.get("severity") or "")[:20],
+                    "file": str(item.get("file") or "")[:300],
+                    "message": str(item.get("message") or "")[:500],
+                }
+            )
+    raw_analysis_unavailable = obs.get("analysis_unavailable")
+    analysis_unavailable = (
+        [str(item)[:400] for item in raw_analysis_unavailable[:10]]
+        if isinstance(raw_analysis_unavailable, list)
+        else []
+    )
+    payload: dict[str, Any] = {
         "status": status,
         "summary": str(obs.get("summary") or text)[:1000],
         "next_actions": next_actions,
         "artifacts": artifacts,
         "data": "" if ok and tool_name in {"write_file", "edit_file"} else text,
     }
-    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if tool_name == "build" or any(
+        key in obs
+        for key in (
+            "root_cause_hint",
+            "error_signature",
+            "evidence",
+            "retry",
+            "affected_files",
+            "diagnostics",
+            "analysis_unavailable",
+        )
+    ):
+        payload.update(
+            {
+                "root_cause_hint": root_cause_hint,
+                "error_signature": error_signature,
+                "evidence": evidence,
+                "retry": retry,
+                "affected_files": affected_files,
+                "diagnostics": diagnostics,
+                "analysis_unavailable": analysis_unavailable,
+            }
+        )
+    serialized = _serialize_tool_payload(payload)
     block: dict[str, Any] = {
         "type": "tool_result",
         "tool_use_id": tool_use_id,
@@ -991,6 +1102,34 @@ def _typescript_repair_paths(
         if dependency:
             paths.add(dependency)
     return frozenset(paths)
+
+
+def _structured_repair_paths(observation: Mapping[str, object]) -> frozenset[str]:
+    """Admit only canonical model-owned MAX files from analyzer observations."""
+    raw = observation.get("affected_files")
+    if not isinstance(raw, list):
+        return frozenset()
+    allowed: set[str] = set()
+    for item in raw[:30]:
+        if not isinstance(item, str) or len(item) > 300 or "\\" in item:
+            continue
+        path = posixpath.normpath(item)
+        if path != item or path.startswith(("/", "../")):
+            continue
+        if path == "src/app/globals.css" or path.startswith(
+            (
+                "src/components/",
+                "src/hooks/",
+                "src/data/",
+                "src/store/",
+                "src/styles/",
+                "src/types/",
+                "src/lib/product/",
+                "public/product/",
+            )
+        ):
+            allowed.add(path)
+    return frozenset(allowed)
 
 
 def _parallel_pages_hint(build_output: str) -> str | None:
@@ -1179,9 +1318,10 @@ _MAX_NATIVE_PREAMBLE = (
     "реальными сценариями и профессиональной детализацией. Инструменты вызывай "
     "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
     "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
-    "скриншоты и независимая mobile/MAX-критика, bash — реальные команды, тесты и "
-    "диагностика внутри изолированного Node/pnpm-контейнера текущего проекта. Не предполагай "
-    "наличие Python: сначала проверь command -v, используй Node/shell для штатной работы. "
+    "скриншоты и независимая mobile/MAX-критика, bash — только одна из трёх точных "
+    "read-only проверок с mutation_paths=[]: `pnpm typecheck`, `pnpm analyze:agent` или "
+    "`pnpm security:agent`. Не вызывай free-form shell, package mutation, tests или "
+    "code generation; исходники меняй только file tools. "
     "Пиши полноценно, "
     "без TODO, заглушек, "
     "декоративных кнопок и симулированного успеха. В начале существенной сборки уточни "
@@ -1734,6 +1874,7 @@ async def run_native_build(
     system: str,
     task: str,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
+    prepare_execute: Callable[[Action], Awaitable[Mapping[str, object] | None]] | None = None,
     user_id: Any = None,
     project_id: Any = None,
     run_id: Any = None,
@@ -1751,6 +1892,8 @@ async def run_native_build(
     resume_checkpoint: Mapping[str, Any] | None = None,
     checkpoint: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
     progress_context: Callable[[], str] | None = None,
+    acceptance_criteria: Sequence[str] = (),
+    brain_memory: Mapping[str, object] | None = None,
 ) -> AgentResult:
     """Drive one native tool-use loop until the model calls ``done`` after a clean
     build or reaches ``max_steps``. MAX uses the same bounded loop as the proven
@@ -1772,7 +1915,19 @@ async def run_native_build(
     )
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
-    brain_v2: dict[str, object] | None = new_brain(task, []) if brain_enabled else None
+    brain_v2: dict[str, object] | None = (
+        (
+            restore_durable_brain(
+                brain_memory,
+                objective=task,
+                acceptance=acceptance_criteria,
+            )
+            if brain_memory
+            else new_brain(task, acceptance_criteria)
+        )
+        if brain_enabled
+        else None
+    )
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     last_build_error_paths: frozenset[str] = frozenset()
@@ -1814,6 +1969,14 @@ async def run_native_build(
     observed_revisions: dict[str, int] = {}
     recent_mutation_paths: list[str] = []
     repeated_observation_paths: list[str] = []
+    pending_assistant_content: list[dict[str, Any]] | None = None
+    pending_tool_results: list[dict[str, Any]] = []
+    pending_tool_index = 0
+    pending_tool_started_index: int | None = None
+    pending_tool_preparations: dict[str, dict[str, object]] = {}
+    pending_turn_state: dict[str, str | int | bool] = {}
+    resuming_pending_tools = False
+    step_cursor = 0
 
     # A durable MAX continuation restores the exact transcript and provider
     # cursor.  Persisting immediately before every provider call means an API or
@@ -1837,6 +2000,7 @@ async def run_native_build(
         provider_turn_offset = max(
             0, int(resume_checkpoint.get("provider_turn_offset") or provider_turn_offset)
         )
+        step_cursor = max(0, int(resume_checkpoint.get("step_cursor") or 0))
         last_build_ok = resume_checkpoint.get("last_build_ok")
         if last_build_ok not in {True, False, None}:
             last_build_ok = None
@@ -1902,18 +2066,66 @@ async def run_native_build(
         ][-20:]
         restored_brain = resume_checkpoint.get("brain_v2")
         if brain_enabled and isinstance(restored_brain, Mapping):
-            brain_v2 = dict(restored_brain)
+            brain_v2 = upgrade_brain(restored_brain, acceptance=acceptance_criteria)
+        restored_pending = resume_checkpoint.get("pending_assistant_content")
+        if isinstance(restored_pending, list) and restored_pending:
+            resuming_pending_tools = True
+            pending_assistant_content = [
+                dict(item) for item in restored_pending if isinstance(item, dict)
+            ]
+            raw_pending_results = resume_checkpoint.get("pending_tool_results")
+            if isinstance(raw_pending_results, list):
+                pending_tool_results = [
+                    dict(item) for item in raw_pending_results if isinstance(item, dict)
+                ]
+            pending_tool_index = max(0, int(resume_checkpoint.get("pending_tool_index") or 0))
+            pending_tool_count = sum(
+                1 for item in pending_assistant_content if item.get("type") == "tool_use"
+            )
+            pending_tool_index = min(
+                pending_tool_index,
+                pending_tool_count,
+                len(pending_tool_results),
+            )
+            try:
+                restored_started_index = int(
+                    str(resume_checkpoint.get("pending_tool_started_index"))
+                )
+            except (TypeError, ValueError):
+                restored_started_index = -1
+            if restored_started_index == pending_tool_index:
+                pending_tool_started_index = restored_started_index
+            raw_preparations = resume_checkpoint.get("pending_tool_preparations")
+            if isinstance(raw_preparations, Mapping):
+                pending_tool_preparations = {
+                    str(key): dict(value)
+                    for key, value in raw_preparations.items()
+                    if isinstance(value, Mapping)
+                }
+            raw_pending_turn_state = resume_checkpoint.get("pending_turn_state")
+            if isinstance(raw_pending_turn_state, Mapping):
+                pending_turn_state = {
+                    str(key): value
+                    for key, value in raw_pending_turn_state.items()
+                    if isinstance(value, (str, bool, int))
+                }
+            # The exact assistant response is already durable, so do not spend a
+            # provider call replaying it. Rewind only the wire transcript to the
+            # last user boundary; the loop appends the stored assistant turn once.
+            if convo and convo[-1].get("role") == "assistant":
+                convo.pop()
 
     async def _persist_checkpoint() -> None:
         if checkpoint is None:
             return
         state: dict[str, object] = {
-            "version": 3 if brain_v2 is not None else 2,
+            "version": 4 if brain_v2 is not None else 3,
             "system": system,
             "convo": convo,
             "written": written,
             "provider_turn_index": provider_turn_index,
             "provider_turn_offset": provider_turn_offset,
+            "step_cursor": step_cursor,
             "last_build_ok": last_build_ok,
             "last_build_error_text": last_build_error_text,
             "last_build_error_paths": sorted(last_build_error_paths),
@@ -1950,10 +2162,39 @@ async def run_native_build(
             "observed_revisions": observed_revisions,
             "recent_mutation_paths": recent_mutation_paths[-20:],
             "repeated_observation_paths": repeated_observation_paths[-20:],
+            "pending_assistant_content": pending_assistant_content,
+            "pending_tool_results": pending_tool_results,
+            "pending_tool_index": pending_tool_index,
+            "pending_tool_started_index": pending_tool_started_index,
+            "pending_tool_preparations": pending_tool_preparations,
+            "pending_turn_state": pending_turn_state,
         }
         if brain_v2 is not None:
             state["brain_v2"] = brain_v2
         await checkpoint(state)
+
+    async def _persist_completed_tool(tool_index: int, results: list[dict[str, Any]]) -> None:
+        nonlocal pending_tool_index, pending_tool_results, pending_tool_started_index
+        pending_tool_index = tool_index + 1
+        pending_tool_results = [dict(item) for item in results]
+        pending_tool_started_index = None
+        pending_tool_preparations.pop(str(tool_index), None)
+        await _persist_checkpoint()
+
+    async def _complete_pending_turn(results: list[dict[str, Any]]) -> None:
+        nonlocal pending_assistant_content, pending_tool_results, pending_tool_index
+        nonlocal pending_tool_started_index
+        nonlocal pending_tool_preparations
+        nonlocal pending_turn_state, resuming_pending_tools
+        convo.append({"role": "user", "content": results})
+        pending_assistant_content = None
+        pending_tool_results = []
+        pending_tool_index = 0
+        pending_tool_started_index = None
+        pending_tool_preparations = {}
+        pending_turn_state = {}
+        resuming_pending_tools = False
+        await _persist_checkpoint()
 
     # Stable MAX builds get a generous but finite turn and wall-clock envelope.
     # Both limits are independent so a slow provider or a model that keeps
@@ -1983,10 +2224,24 @@ async def run_native_build(
         return result
 
     def _completion_gap() -> str | None:
+        nonlocal brain_v2
         if completion_check is None:
             return None
         try:
-            return completion_check(written, _evidence())
+            evidence = _evidence()
+            gap = completion_check(written, evidence)
+            if brain_v2 is not None and gap is None and last_build_ok is True:
+                proof_ids = [
+                    f"{name}@r{workspace_revision}"
+                    for name, count in sorted(evidence.items())
+                    if count > 0
+                ]
+                brain_v2 = record_acceptance_evidence(
+                    brain_v2,
+                    proof_ids=proof_ids,
+                    passed=True,
+                )
+            return gap
         except Exception as exc:
             log.exception("agent_native.completion_check_failed")
             return f"Product acceptance check failed: {type(exc).__name__}."
@@ -2108,7 +2363,10 @@ async def run_native_build(
         )
 
     async with httpx.AsyncClient() as client:
-        for step in range(effective_max_steps):
+        slice_start_step = step_cursor
+        for local_step in range(effective_max_steps):
+            step = slice_start_step + local_step
+            step_cursor = step
             if (
                 runtime_deadline is not None
                 and asyncio.get_running_loop().time() >= runtime_deadline
@@ -2183,10 +2441,7 @@ async def run_native_build(
                 force_repair_write
                 and last_build_error_paths
                 and not repair_context_compacted
-                and not (
-                    brain_v2 is not None
-                    and brain_v2.get("diagnosis_required_signature")
-                )
+                and not (brain_v2 is not None and brain_v2.get("diagnosis_required_signature"))
                 and all(
                     path in written or path in repair_source_cache
                     for path in last_build_error_paths
@@ -2301,71 +2556,80 @@ async def run_native_build(
                     else None
                 )
                 async with asyncio.timeout(remaining_seconds):
-                    resp = await _call_messages(
-                        client,
-                        url,
-                        convo,
-                        system,
-                        user_id=str(user_id) if user_id else None,
-                        project_id=str(project_id) if project_id else None,
-                        run_id=str(run_id) if run_id else None,
-                        message_id=str(message_id) if message_id else None,
-                        free=free,
-                        stage=call_stage,
-                        turn_id=(
-                            f"{run_id or 'run'}:"
-                            f"{max(0, int(provider_turn_offset)) + provider_turn_index}"
-                        ),
-                        resume_count=provider_timeout_resumes + free_ambiguous_resumes,
-                        working_memory=working_memory,
-                        tools=_kernel_tool_surface(
-                            (
-                                _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
-                                if force_entry_write
-                                else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
-                                if force_visual_finish
-                                else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
-                                if force_build_after_write
-                                else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
-                                if force_style_write
-                                else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                                if force_source_repair
-                                else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
-                                if force_runtime_proof
-                                else _STABLE_MAX_PROOF_TOOLS_CACHED
-                                if force_proof
-                                else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
-                                if force_visual_repair
-                                else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
-                                if force_repair_verify
-                                else _STABLE_MAX_REPAIR_TOOLS_CACHED
-                                if force_repair_edit_only and repair_reread_paths
-                                else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
-                                if force_repair_edit_only
-                                else _STABLE_MAX_PROGRESS_TOOLS_CACHED
-                                if force_progress
-                                else _STABLE_MAX_REPAIR_TOOLS_CACHED
-                                if force_repair_write
-                                else _STABLE_MAX_PREENTRY_TOOLS_CACHED
-                                if product_first and _STABLE_MAX_PRODUCT_ENTRY not in written
-                                else _STABLE_MAX_TOOLS_CACHED
-                                if stable_max_loop
-                                else _MAX_REFERENCE_TOOLS_CACHED
-                                if reference_max_loop
-                                else _MAX_TOOLS_CACHED
-                                if max_runtime
-                                else _TOOLS_CACHED
+                    resp = (
+                        {
+                            "stop_reason": "tool_use",
+                            "content": pending_assistant_content,
+                        }
+                        if resuming_pending_tools and pending_assistant_content is not None
+                        else await _call_messages(
+                            client,
+                            url,
+                            convo,
+                            system,
+                            user_id=str(user_id) if user_id else None,
+                            project_id=str(project_id) if project_id else None,
+                            run_id=str(run_id) if run_id else None,
+                            message_id=str(message_id) if message_id else None,
+                            free=free,
+                            stage=call_stage,
+                            turn_id=(
+                                f"{run_id or 'run'}:"
+                                f"{max(0, int(provider_turn_offset)) + provider_turn_index}"
                             ),
-                            enabled=brain_v2 is not None,
-                        ),
-                        model=model,
-                        thinking_budget=(
-                            _ENTRY_FOCUS_THINKING_BUDGET
-                            if entry_focus_compacted and _STABLE_MAX_PRODUCT_ENTRY not in written
-                            else _THINKING_BUDGET
-                        ),
+                            resume_count=provider_timeout_resumes + free_ambiguous_resumes,
+                            working_memory=working_memory,
+                            tools=_kernel_tool_surface(
+                                (
+                                    _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
+                                    if force_entry_write
+                                    else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
+                                    if force_visual_finish
+                                    else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
+                                    if force_build_after_write
+                                    else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
+                                    if force_style_write
+                                    else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                                    if force_source_repair
+                                    else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
+                                    if force_runtime_proof
+                                    else _STABLE_MAX_PROOF_TOOLS_CACHED
+                                    if force_proof
+                                    else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
+                                    if force_visual_repair
+                                    else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
+                                    if force_repair_verify
+                                    else _STABLE_MAX_REPAIR_TOOLS_CACHED
+                                    if force_repair_edit_only and repair_reread_paths
+                                    else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
+                                    if force_repair_edit_only
+                                    else _STABLE_MAX_PROGRESS_TOOLS_CACHED
+                                    if force_progress
+                                    else _STABLE_MAX_REPAIR_TOOLS_CACHED
+                                    if force_repair_write
+                                    else _STABLE_MAX_PREENTRY_TOOLS_CACHED
+                                    if product_first and _STABLE_MAX_PRODUCT_ENTRY not in written
+                                    else _STABLE_MAX_TOOLS_CACHED
+                                    if stable_max_loop
+                                    else _MAX_REFERENCE_TOOLS_CACHED
+                                    if reference_max_loop
+                                    else _MAX_TOOLS_CACHED
+                                    if max_runtime
+                                    else _TOOLS_CACHED
+                                ),
+                                enabled=brain_v2 is not None,
+                            ),
+                            model=model,
+                            thinking_budget=(
+                                _ENTRY_FOCUS_THINKING_BUDGET
+                                if entry_focus_compacted
+                                and _STABLE_MAX_PRODUCT_ENTRY not in written
+                                else _THINKING_BUDGET
+                            ),
+                        )
                     )
-                provider_turn_index += 1
+                if not resuming_pending_tools:
+                    provider_turn_index += 1
                 provider_timeout_resumes = 0
                 free_ambiguous_resumes = 0
             except TimeoutError:
@@ -2606,6 +2870,24 @@ async def run_native_build(
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
             convo.append({"role": "assistant", "content": content})
+            if pending_assistant_content is None:
+                pending_assistant_content = [
+                    dict(item) for item in content if isinstance(item, dict)
+                ]
+                pending_tool_results = []
+                pending_tool_index = 0
+                pending_tool_started_index = None
+                pending_tool_preparations = {}
+                pending_turn_state = {}
+            elif pending_assistant_content != content:
+                return AgentResult(
+                    done=False,
+                    summary="settled provider turn changed during durable tool replay",
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="checkpoint_conflict",
+                )
             await _persist_checkpoint()
 
             # Streaming (phase 8): surface Opus's own narration between tool calls to
@@ -2625,6 +2907,14 @@ async def run_native_build(
                 # the model happened to finish speaking.
                 gap = _completion_gap() if _done and last_build_ok is True else None
                 if _done and last_build_ok is True and not wrote_since_build and not gap:
+                    pending_assistant_content = None
+                    pending_tool_results = []
+                    pending_tool_index = 0
+                    pending_tool_started_index = None
+                    pending_tool_preparations = {}
+                    pending_turn_state = {}
+                    step_cursor = step + 1
+                    await _persist_checkpoint()
                     return AgentResult(
                         done=True,
                         summary=_text or "Готово — приложение собрано и проверено.",
@@ -2644,21 +2934,47 @@ async def run_native_build(
                         ),
                     }
                 )
+                pending_assistant_content = None
+                pending_tool_results = []
+                pending_tool_index = 0
+                pending_tool_started_index = None
+                pending_tool_preparations = {}
+                pending_turn_state = {}
+                step_cursor = step + 1
+                await _persist_checkpoint()
                 continue
 
-            results: list[dict[str, Any]] = []
-            done_summary: str | None = None
-            wrote_this_turn = False
-            noop_write_this_turn = False
-            visual_proof_unavailable_this_turn = False
-            visual_quality_exhausted_this_turn = False
-            visual_finish_satisfied_this_turn = False
-            semantic_loop_stop = False
-            ops_this_turn = 0  # executed (non-done) tool ops this turn
-            infra_this_turn = 0  # of those, how many died on infra
-            for tu in tool_uses:
+            results: list[dict[str, Any]] = list(pending_tool_results)
+            done_summary = str(pending_turn_state.get("done_summary") or "") or None
+            wrote_this_turn = bool(pending_turn_state.get("wrote"))
+            noop_write_this_turn = bool(pending_turn_state.get("noop_write"))
+            visual_proof_unavailable_this_turn = bool(
+                pending_turn_state.get("visual_proof_unavailable")
+            )
+            visual_quality_exhausted_this_turn = bool(
+                pending_turn_state.get("visual_quality_exhausted")
+            )
+            visual_finish_satisfied_this_turn = bool(
+                pending_turn_state.get("visual_finish_satisfied")
+            )
+            semantic_loop_stop = bool(pending_turn_state.get("semantic_loop_stop"))
+            ops_this_turn = int(pending_turn_state.get("ops") or 0)
+            infra_this_turn = int(pending_turn_state.get("infra") or 0)
+            reconcile_tool_index = (
+                pending_tool_index
+                if resuming_pending_tools and pending_tool_started_index == pending_tool_index
+                else -1
+            )
+            for tool_index, tu in enumerate(tool_uses):
+                if tool_index < pending_tool_index:
+                    continue
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
+                if tool_index == reconcile_tool_index and isinstance(tu.get("input"), dict):
+                    tu = {
+                        **tu,
+                        "input": {**tu["input"], "_resume_reconcile": True},
+                    }
                 if semantic_loop_stop:
                     results.append(
                         {
@@ -2671,6 +2987,7 @@ async def run_native_build(
                             ),
                         }
                     )
+                    await _persist_completed_tool(tool_index, results)
                     continue
                 if name == "done":
                     if force_product_progress:
@@ -2700,6 +3017,7 @@ async def run_native_build(
                                 ),
                             }
                         )
+                        await _persist_completed_tool(tool_index, results)
                         continue
                     # Fact-gate: refuse a premature done if the model wrote files but
                     # never confirmed a CLEAN build afterwards.
@@ -2714,6 +3032,7 @@ async def run_native_build(
                                 "CLEAN (fix any errors) before calling done.",
                             }
                         )
+                        await _persist_completed_tool(tool_index, results)
                         continue
                     gap = _completion_gap()
                     if gap:
@@ -2725,9 +3044,15 @@ async def run_native_build(
                                 "content": "Not done yet: " + gap,
                             }
                         )
+                        await _persist_completed_tool(tool_index, results)
                         continue
                     done_summary = str((tu.get("input") or {}).get("summary", ""))
                     results.append({"type": "tool_result", "tool_use_id": tu_id, "content": "done"})
+                    pending_turn_state = {
+                        **pending_turn_state,
+                        "done_summary": done_summary,
+                    }
+                    await _persist_completed_tool(tool_index, results)
                     continue
 
                 action = _tool_use_to_action(tu)
@@ -3006,9 +3331,13 @@ async def run_native_build(
                     )
                     experiment = str(diagnosis.get("experiment") or "").strip()
                     expected_result = str(diagnosis.get("expected_result") or "").strip()
+                    raw_failed_approaches = brain_v2.get("failed_approaches")
+                    failed_approaches = (
+                        raw_failed_approaches if isinstance(raw_failed_approaches, list) else []
+                    )
                     previous_experiments = {
                         str(item.get("experiment") or "").strip().casefold()
-                        for item in brain_v2.get("failed_approaches", [])
+                        for item in failed_approaches
                         if isinstance(item, Mapping)
                     }
                     if (
@@ -3040,10 +3369,57 @@ async def run_native_build(
                         }
                 else:
                     tool_executed = True
+                    preparation = pending_tool_preparations.get(str(tool_index))
+                    if preparation is None and prepare_execute is not None:
+                        try:
+                            raw_preparation = await prepare_execute(action)
+                            preparation = (
+                                dict(raw_preparation)
+                                if isinstance(raw_preparation, Mapping)
+                                else {}
+                            )
+                        except Exception as exc:
+                            preparation = {
+                                "error": f"tool preparation failed: {type(exc).__name__}"
+                            }
+                        pending_tool_preparations[str(tool_index)] = preparation
+                    if preparation:
+                        action = Action(
+                            name=action.name,
+                            args={**action.args, "_durable_preparation": preparation},
+                            raw=action.raw,
+                        )
+                    pending_tool_started_index = tool_index
+                    await _persist_checkpoint()
                     try:
                         obs = await execute(action)
                     except Exception as exc:  # a tool crash must not kill the build
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                    if obs.get("reconciliation_pending"):
+                        # The command has already produced a side effect, while
+                        # rollback infrastructure is temporarily unavailable.
+                        # Keep the durable started marker + preparation intact;
+                        # the next slice retries only reconciliation, never the
+                        # original command.
+                        if emit:
+                            await emit(
+                                "agent.step",
+                                {
+                                    "step": step,
+                                    "action": name,
+                                    "path": action.path,
+                                    "detail": _step_detail(name, action, obs),
+                                    "ok": False,
+                                },
+                            )
+                        return AgentResult(
+                            done=False,
+                            summary=str(obs.get("error") or "tool reconciliation pending"),
+                            files=written,
+                            steps=step + 1,
+                            transcript=convo,
+                            stop_reason="tool_reconciliation_pending",
+                        )
                 if (
                     tool_executed
                     and name in {"write_file", "edit_file"}
@@ -3145,9 +3521,7 @@ async def run_native_build(
                             if brain_v2 is not None:
                                 brain_v2 = record_mutation(
                                     brain_v2,
-                                    paths=[
-                                        path for path in bash_files if isinstance(path, str)
-                                    ],
+                                    paths=[path for path in bash_files if isinstance(path, str)],
                                     revision=workspace_revision,
                                 )
                             for path in bash_files:
@@ -3159,7 +3533,7 @@ async def run_native_build(
                             recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
                             proof_after_write.clear()
                             last_green_see_step = None
-                elif tool_executed and name == "build":
+                elif tool_executed and name == "build" and not obs.get("infra_dead"):
                     if force_visual_finish:
                         visual_finish_satisfied_this_turn = True
                     last_build_ok = bool(obs.get("ok"))
@@ -3167,9 +3541,12 @@ async def run_native_build(
                     last_build_error_paths = (
                         frozenset()
                         if last_build_ok
-                        else _typescript_repair_paths(
-                            str(obs.get("error") or obs.get("detail") or ""),
-                            written,
+                        else (
+                            _typescript_repair_paths(
+                                str(obs.get("error") or obs.get("detail") or ""),
+                                written,
+                            )
+                            | _structured_repair_paths(obs)
                         )
                     )
                     repair_reads_since_build.clear()
@@ -3178,18 +3555,54 @@ async def run_native_build(
                     repair_context_compacted = False
                     wrote_since_build = False
                     if brain_v2 is not None:
+                        raw_build_evidence = obs.get("evidence")
+                        build_evidence = (
+                            raw_build_evidence if isinstance(raw_build_evidence, list) else []
+                        )
+                        observed_signature = str(obs.get("error_signature") or "")[:128]
                         build_signature = (
                             ""
                             if last_build_ok
-                            else normalize_error_signature(last_build_error_text)
+                            else observed_signature
+                            or normalize_error_signature(last_build_error_text)
                         )
+                        compiler_signatures = (
+                            [] if last_build_ok else error_signatures(last_build_error_text)
+                        )
+                        structured_signatures: list[str] = []
+                        raw_diagnostics = obs.get("diagnostics")
+                        if not last_build_ok and isinstance(raw_diagnostics, list):
+                            for diagnostic in raw_diagnostics[:30]:
+                                if not isinstance(diagnostic, Mapping):
+                                    continue
+                                if str(diagnostic.get("severity") or "") != "error":
+                                    continue
+                                structured_signatures.extend(
+                                    error_signatures(
+                                        f"{diagnostic.get('source') or 'analysis'}/"
+                                        f"{diagnostic.get('code') or 'error'}: "
+                                        f"{diagnostic.get('message') or ''}"
+                                    )
+                                )
+                        build_diagnostic_signatures = list(
+                            dict.fromkeys(
+                                [
+                                    *structured_signatures[:30],
+                                    *compiler_signatures[:10],
+                                ]
+                            )
+                        )[:40]
                         brain_v2 = record_observation(
                             brain_v2,
                             kind="build",
                             status="ok" if last_build_ok else "error",
                             summary="typecheck clean" if last_build_ok else "typecheck red",
                             error_signature=build_signature,
-                            evidence=sorted(last_build_error_paths),
+                            diagnostic_signatures=build_diagnostic_signatures,
+                            evidence=[
+                                *sorted(last_build_error_paths),
+                                *[str(item)[:160] for item in build_evidence[:20]],
+                            ],
                         )
                         semantic_loop_stop = (
                             not last_build_ok and semantic_loop_count(brain_v2) >= 3
@@ -3214,6 +3627,18 @@ async def run_native_build(
                     repair_source_cache.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
+                    if brain_v2 is not None:
+                        runtime_signature = normalize_error_signature(last_build_error_text)
+                        brain_v2 = record_observation(
+                            brain_v2,
+                            kind="runtime_check",
+                            status="error",
+                            summary="runtime check red",
+                            error_signature=runtime_signature,
+                            diagnostic_signatures=error_signatures(last_build_error_text),
+                            evidence=sorted(last_build_error_paths),
+                        )
+                        semantic_loop_stop = semantic_loop_count(brain_v2) >= 3
                 if (
                     tool_executed
                     and name == "see"
@@ -3232,6 +3657,13 @@ async def run_native_build(
                         visual_quality_exhausted_this_turn = True
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
+                    if name == "plan_task" and brain_v2 is not None:
+                        raw_acceptance = obs.get("acceptance_criteria")
+                        if isinstance(raw_acceptance, list):
+                            brain_v2 = sync_acceptance(
+                                brain_v2,
+                                [item for item in raw_acceptance if isinstance(item, str)],
+                            )
                     if name == "generate_media" and visual_feedback_step is not None:
                         visual_media_generated_step = visual_feedback_step
                     if (
@@ -3270,12 +3702,28 @@ async def run_native_build(
                             proof_after_write.add(name)
                             if name == "see":
                                 last_green_see_step = step
-                _tr = _obs_to_tool_result(tu_id, obs, tool_name=name)
                 if name == "build" and not obs.get("ok"):
-                    _hint = _build_error_hint(str(_tr.get("content") or ""))
+                    _hint = _build_error_hint(str(obs.get("error") or obs.get("detail") or ""))
                     if _hint:
-                        _tr["content"] = str(_tr["content"]) + _hint
+                        obs = {
+                            **obs,
+                            "root_cause_hint": (
+                                str(obs.get("root_cause_hint") or "") + _hint
+                            ).strip(),
+                        }
+                _tr = _obs_to_tool_result(tu_id, obs, tool_name=name)
                 results.append(_tr)
+                pending_turn_state = {
+                    "wrote": wrote_this_turn,
+                    "noop_write": noop_write_this_turn,
+                    "visual_proof_unavailable": visual_proof_unavailable_this_turn,
+                    "visual_quality_exhausted": visual_quality_exhausted_this_turn,
+                    "visual_finish_satisfied": visual_finish_satisfied_this_turn,
+                    "semantic_loop_stop": semantic_loop_stop,
+                    "ops": ops_this_turn,
+                    "infra": infra_this_turn,
+                }
+                await _persist_completed_tool(tool_index, results)
 
             if force_visual_repair and wrote_this_turn:
                 # A visual verdict commonly requires both component markup and
@@ -3330,6 +3778,8 @@ async def run_native_build(
                 truncated_no_write_turns = 0
 
             if done_summary is not None:
+                step_cursor = step + 1
+                await _complete_pending_turn(results)
                 if emit:
                     await emit("agent.done", {"step": step, "files": len(written)})
                 return AgentResult(
@@ -3352,6 +3802,8 @@ async def run_native_build(
                 and not wrote_since_build
                 and _completion_gap() is None
             ):
+                step_cursor = step + 1
+                await _complete_pending_turn(results)
                 if emit:
                     await emit("agent.done", {"step": step, "files": len(written)})
                 return AgentResult(
@@ -3419,8 +3871,8 @@ async def run_native_build(
                 turns_without_product_entry = 0
             else:
                 turns_without_product_entry += 1
-            convo.append({"role": "user", "content": results})
-            await _persist_checkpoint()
+            step_cursor = step + 1
+            await _complete_pending_turn(results)
             if semantic_loop_stop:
                 if emit:
                     await emit(

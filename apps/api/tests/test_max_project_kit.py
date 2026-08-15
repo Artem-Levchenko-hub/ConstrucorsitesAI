@@ -253,9 +253,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
+        ".dependency-cruiser.cjs",
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
+        "scripts/analyze-code.mjs",
         "tsconfig.json",
         "public/omnia-inspector.js",
         MAX_PRODUCT_PAGE_PATH,
@@ -333,8 +335,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     compliance = files["src/components/OmniaCompliance.tsx"]
     assert "data-omnia-native-legal-nav" in compliance
     assert (
-        'COMPLIANCE_FALLBACK_SELECTOR = \'[data-omnia-compliance-fallback="true"]\''
-        in compliance
+        "COMPLIANCE_FALLBACK_SELECTOR = '[data-omnia-compliance-fallback=\"true\"]'" in compliance
     )
     assert "element.closest(COMPLIANCE_FALLBACK_SELECTOR) === null" in compliance
     assert 'data-omnia-compliance-fallback="true"' in compliance

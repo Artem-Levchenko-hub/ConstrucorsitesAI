@@ -17,12 +17,18 @@ def test_initial_plan_is_observable_and_has_no_reasoning_field() -> None:
 
 def test_plan_refinement_preserves_existing_step_evidence() -> None:
     initial = agent_plan.initial_plan("Собери приложение", max_product=True)
+    initial = agent_plan.record_tool_evidence(
+        initial,
+        tool="write_file",
+        ok=True,
+        summary="Концепция записана",
+    )
     checkpoint = agent_plan.update_plan(
         initial,
         step_id="step-1",
         status="completed",
         summary="Концепция сохранена",
-        evidence=[".omnia/max-design-spec.json прочитан"],
+        evidence=[initial["tool_evidence"][-1]["id"]],
         artifacts=[".omnia/max-design-spec.json"],
         next_action="Реализовать главный экран",
     )
@@ -30,7 +36,7 @@ def test_plan_refinement_preserves_existing_step_evidence() -> None:
     refined = agent_plan.make_plan(
         objective="Собери приложение",
         steps=[
-            "Зафиксировать концепцию",
+            initial["steps"][0]["title"],
             "Реализовать главный экран",
             "Проверить приложение",
         ],
@@ -41,6 +47,30 @@ def test_plan_refinement_preserves_existing_step_evidence() -> None:
     assert refined["steps"][0]["status"] == "completed"
     assert refined["steps"][0]["artifacts"] == [".omnia/max-design-spec.json"]
     assert refined["next_action"] == "Реализовать главный экран"
+
+
+def test_plan_refinement_reopens_same_position_when_step_meaning_changes() -> None:
+    initial = agent_plan.initial_plan("Собери приложение", max_product=True)
+    initial = agent_plan.record_tool_evidence(
+        initial, tool="write_file", ok=True, summary="Концепция записана"
+    )
+    initial = agent_plan.update_plan(
+        initial,
+        step_id="step-1",
+        status="completed",
+        summary="Готово",
+        evidence=[initial["tool_evidence"][-1]["id"]],
+    )
+
+    refined = agent_plan.make_plan(
+        objective="Собери приложение",
+        steps=["Провести визуальную проверку"],
+        acceptance_criteria=["Визуальная проверка зелёная"],
+        previous=initial,
+    )
+
+    assert refined["steps"][0]["status"] == "pending"
+    assert refined["steps"][0]["evidence"] == []
 
 
 def test_update_plan_rejects_unknown_steps_and_hidden_free_form_dump() -> None:
@@ -83,18 +113,85 @@ def test_plan_observation_uses_uniform_harness_contract() -> None:
     assert observation["artifacts"] == []
 
 
+def test_tool_evidence_recovers_from_malformed_legacy_sequence() -> None:
+    state = agent_plan.initial_plan("Собери приложение")
+    state["tool_evidence_seq"] = "not-a-number"
+
+    updated = agent_plan.record_tool_evidence(state, tool="build", ok=True, summary="Build clean")
+
+    assert updated["tool_evidence_seq"] == 1
+    assert updated["tool_evidence"][-1]["id"] == "tool:build:1"
+
+
 def test_completion_gap_is_fail_closed_until_every_public_step_is_attested() -> None:
     state = agent_plan.initial_plan("Собери приложение", max_product=True)
 
     assert "step-1" in str(agent_plan.completion_gap(state))
-    for item in list(state["steps"]):
-        state = agent_plan.update_plan(
-            state,
-            step_id=item["id"],
-            status="completed",
-            summary="Проверено живым инструментом",
-            evidence=["build/runtime/see green"],
-        )
+    for tool in ("write_file", "build", "runtime_check", "see"):
+        state = agent_plan.record_tool_evidence(state, tool=tool, ok=True, summary=f"{tool} green")
+    state = agent_plan.reconcile_tool_evidence(state)
 
     assert agent_plan.completion_gap(state) is None
     assert "plan_task" in str(agent_plan.completion_gap(None))
+
+
+def test_update_plan_rejects_evidence_free_or_incompatible_completion() -> None:
+    state = agent_plan.initial_plan("Собери приложение", max_product=True)
+    state = agent_plan.record_tool_evidence(state, tool="build", ok=True, summary="typecheck clean")
+
+    with pytest.raises(ValueError, match="server tool-evidence"):
+        agent_plan.update_plan(
+            state,
+            step_id="step-5",
+            status="completed",
+            summary="Визуально готово",
+            evidence=[state["tool_evidence"][-1]["id"]],
+        )
+
+
+def test_mutation_invalidates_old_build_runtime_and_visual_proof() -> None:
+    state = agent_plan.initial_plan("Собери приложение", max_product=True)
+    for tool in ("write_file", "build", "runtime_check", "see"):
+        state = agent_plan.record_tool_evidence(
+            state,
+            tool=tool,
+            ok=True,
+            summary=f"{tool} green",
+            mutated=tool == "write_file",
+        )
+    state = agent_plan.reconcile_tool_evidence(state)
+    assert agent_plan.completion_gap(state) is None
+
+    state = agent_plan.record_tool_evidence(
+        state,
+        tool="write_file",
+        ok=True,
+        summary="source changed",
+        mutated=True,
+    )
+    state = agent_plan.record_tool_evidence(
+        state,
+        tool="build",
+        ok=False,
+        summary="typecheck red",
+    )
+    state = agent_plan.reconcile_tool_evidence(state)
+
+    by_title = {item["title"]: item["status"] for item in state["steps"]}
+    assert by_title["Собрать проект и устранить реальные ошибки"] == "pending"
+    assert by_title["Проверить живой runtime и ключевые состояния"] == "pending"
+    assert by_title["Провести визуальную проверку и применить конкретные улучшения"] == "pending"
+
+
+def test_latest_visual_failure_supersedes_older_green_evidence() -> None:
+    state = agent_plan.initial_plan("Собери приложение", max_product=True)
+    state = agent_plan.record_tool_evidence(state, tool="see", ok=True, summary="visual green")
+    state = agent_plan.reconcile_tool_evidence(state)
+    assert state["steps"][4]["status"] == "completed"
+
+    state = agent_plan.record_tool_evidence(
+        state, tool="see", ok=False, summary="visual needs repair"
+    )
+    state = agent_plan.reconcile_tool_evidence(state)
+
+    assert state["steps"][4]["status"] == "pending"

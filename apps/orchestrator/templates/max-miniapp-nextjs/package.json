@@ -8,7 +8,9 @@
     "start": "next start --port 3000 --hostname 0.0.0.0",
     "db:generate": "drizzle-kit generate",
     "db:push": "node scripts/init-db.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "analyze:agent": "node scripts/analyze-code.mjs",
+    "security:agent": "node scripts/analyze-code.mjs --security"
   },
   "dependencies": {
     "@maxhub/max-bot-api": "0.2.5",
@@ -24,12 +26,15 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@ast-grep/cli": "0.45.1",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
-    "drizzle-kit": "^0.28.0",
+    "dependency-cruiser": "18.2.0",
+    "drizzle-kit": "0.31.10",
+    "oxlint": "1.78.0",
     "postcss": "^8.5.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2"
@@ -40,7 +45,8 @@
   "packageManager": "pnpm@9.15.0",
   "pnpm": {
     "overrides": {
-      "nanoid@<3.3.17": "3.3.17",
+      "esbuild@<0.25.0": "0.25.12",
+      "nanoid@<3.3.18": "3.3.18",
       "postcss": "8.5.25",
       "sharp": "0.35.0"
     }

@@ -1068,6 +1068,10 @@ class Settings(BaseSettings):
     # native loop; the per-user allowlist enables an owner-only MAX canary.
     agent_kernel_v2_enabled: bool = Field(default=False)
     agent_kernel_v2_canary_users: str = Field(default="")
+    # Read-only Oxlint/dependency analysis automatically enriches the existing
+    # MAX build observation. Separate canary keeps legacy containers fail-safe.
+    max_code_intelligence_enabled: bool = Field(default=False)
+    max_code_intelligence_canary_users: str = Field(default="")
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't

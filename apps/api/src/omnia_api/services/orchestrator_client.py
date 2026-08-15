@@ -26,9 +26,9 @@ _hot_reload_tracker: contextvars.ContextVar[set[str] | None] = contextvars.Conte
     "omnia_hot_reload_tracker",
     default=None,
 )
-_mutation_persistor: contextvars.ContextVar[
-    Callable[[set[str]], Awaitable[None]] | None
-] = contextvars.ContextVar("omnia_mutation_persistor", default=None)
+_mutation_persistor: contextvars.ContextVar[Callable[[set[str]], Awaitable[None]] | None] = (
+    contextvars.ContextVar("omnia_mutation_persistor", default=None)
+)
 
 
 def bind_hot_reload_tracker(
@@ -531,8 +531,14 @@ async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "
     return detail if isinstance(detail, str) else ""
 
 
-async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
-    """Run the container typecheck; returns {ok: bool, detail/error: str}."""
+async def agent_build(
+    project_id: UUID,
+    slug: str,
+    *,
+    code_intelligence: bool = False,
+    security_scan: bool = False,
+) -> dict[str, Any]:
+    """Run typecheck and, when canaried, bounded read-only code intelligence."""
     # Dependency doctor may update these files before typecheck. Persist the
     # paths before dispatch and make the bounded mutation non-interruptible so
     # cancellation cleanup never races a still-running worker thread.
@@ -541,7 +547,11 @@ async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
         _request(
             "POST",
             f"/internal/projects/{project_id}/agent/build",
-            params={"slug": slug},
+            params={
+                "slug": slug,
+                **({"code_intelligence": "true"} if code_intelligence else {}),
+                **({"security_scan": "true"} if security_scan else {}),
+            },
             timeout=240.0,
         )
     )

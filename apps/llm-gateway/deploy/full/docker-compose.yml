@@ -293,6 +293,8 @@ services:
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       AGENT_KERNEL_V2_ENABLED: ${AGENT_KERNEL_V2_ENABLED:-false}
       AGENT_KERNEL_V2_CANARY_USERS: ${AGENT_KERNEL_V2_CANARY_USERS:-}
+      MAX_CODE_INTELLIGENCE_ENABLED: ${MAX_CODE_INTELLIGENCE_ENABLED:-false}
+      MAX_CODE_INTELLIGENCE_CANARY_USERS: ${MAX_CODE_INTELLIGENCE_CANARY_USERS:-}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
       USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
@@ -486,6 +488,8 @@ services:
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       AGENT_KERNEL_V2_ENABLED: ${AGENT_KERNEL_V2_ENABLED:-false}
       AGENT_KERNEL_V2_CANARY_USERS: ${AGENT_KERNEL_V2_CANARY_USERS:-}
+      MAX_CODE_INTELLIGENCE_ENABLED: ${MAX_CODE_INTELLIGENCE_ENABLED:-false}
+      MAX_CODE_INTELLIGENCE_CANARY_USERS: ${MAX_CODE_INTELLIGENCE_CANARY_USERS:-}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
       USE_EXE_BUILD: ${USE_EXE_BUILD:-false}

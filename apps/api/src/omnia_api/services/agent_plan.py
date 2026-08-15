@@ -10,6 +10,7 @@ API restart without asking the model to rediscover completed work.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -19,6 +20,22 @@ _MAX_CRITERIA = 12
 _MAX_EVIDENCE = 30
 _MAX_ARTIFACTS = 40
 _VALID_STATUSES = frozenset({"pending", "in_progress", "completed", "blocked"})
+_PROOF_TOOLS = frozenset({"build", "runtime_check", "probe", "verify_isolation", "see"})
+
+
+def _required_tools(title: str, index: int) -> tuple[str, ...]:
+    folded = title.casefold()
+    if re.search(r"собр|сбор|build|compile|typecheck", folded):
+        return ("build",)
+    if re.search(r"runtime|жив|маршрут|route|изоляц", folded):
+        return ("runtime_check", "probe", "verify_isolation")
+    if re.search(r"визуал|visual|дизайн", folded):
+        return ("see",)
+    if re.search(r"реализ|интерфейс|функцион", folded):
+        return ("write_file", "edit_file", "bash")
+    if index == 0:
+        return ("write_file", "edit_file", "read_skill")
+    return ()
 
 
 def _now() -> str:
@@ -40,6 +57,34 @@ def _strings(value: Any, *, limit: int, item_limit: int = 500) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _revision(state: Mapping[str, Any]) -> int:
+    try:
+        return max(0, int(state.get("workspace_revision") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _evidence_revision(item: Mapping[str, Any]) -> int:
+    try:
+        return max(0, int(item.get("revision") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _invalidate_steps(state: dict[str, Any], tools: set[str]) -> None:
+    steps = state.get("steps")
+    if not isinstance(steps, list):
+        return
+    for index, item in enumerate(steps):
+        if not isinstance(item, dict):
+            continue
+        if not set(_required_tools(str(item.get("title") or ""), index)) & tools:
+            continue
+        item["status"] = "pending"
+        item["summary"] = ""
+        item["evidence"] = []
 
 
 def initial_plan(objective: str, *, max_product: bool = False) -> dict[str, Any]:
@@ -96,14 +141,21 @@ def make_plan(
         step_id = f"step-{index}"
         old = previous_steps.get(step_id, {})
         old_status = str(old.get("status") or "pending")
+        same_step = _text(old.get("title"), limit=300).casefold() == title.casefold()
         planned.append(
             {
                 "id": step_id,
                 "title": title,
-                "status": old_status if old_status in _VALID_STATUSES else "pending",
-                "summary": _text(old.get("summary"), limit=800),
-                "evidence": _strings(old.get("evidence"), limit=_MAX_EVIDENCE),
-                "artifacts": _strings(old.get("artifacts"), limit=_MAX_ARTIFACTS),
+                "status": (
+                    old_status if same_step and old_status in _VALID_STATUSES else "pending"
+                ),
+                "summary": _text(old.get("summary"), limit=800) if same_step else "",
+                "evidence": (
+                    _strings(old.get("evidence"), limit=_MAX_EVIDENCE) if same_step else []
+                ),
+                "artifacts": (
+                    _strings(old.get("artifacts"), limit=_MAX_ARTIFACTS) if same_step else []
+                ),
             }
         )
     now = _now()
@@ -115,6 +167,7 @@ def make_plan(
         "next_action": _text((previous or {}).get("next_action"), limit=800) or planned[0]["title"],
         "last_tool": _text((previous or {}).get("last_tool"), limit=80),
         "last_summary": _text((previous or {}).get("last_summary"), limit=1000),
+        "workspace_revision": _revision(previous or {}),
         "created_at": str((previous or {}).get("created_at") or now),
         "updated_at": now,
     }
@@ -148,17 +201,41 @@ def update_plan(
     if not isinstance(steps, list):
         raise ValueError("plan state is missing steps")
     target: dict[str, Any] | None = None
-    for item in steps:
+    target_index = -1
+    for index, item in enumerate(steps):
         if isinstance(item, dict) and item.get("id") == clean_step_id:
             target = item
+            target_index = index
             break
     if target is None:
         raise ValueError(f"unknown plan step: {clean_step_id}")
 
+    supplied_evidence = _strings(evidence, limit=_MAX_EVIDENCE)
+    verified_evidence = {
+        str(item.get("id")): str(item.get("tool") or "")
+        for item in next_state.get("tool_evidence", [])
+        if isinstance(item, Mapping)
+        and item.get("ok") is True
+        and item.get("id")
+        and _evidence_revision(item) == _revision(next_state)
+    }
+    supplied_tools = {
+        verified_evidence[evidence_id]
+        for evidence_id in supplied_evidence
+        if evidence_id in verified_evidence
+    }
+    required_tools = _required_tools(str(target.get("title") or ""), target_index)
+    if clean_status == "completed" and (
+        not supplied_tools or (required_tools and supplied_tools.isdisjoint(required_tools))
+    ):
+        raise ValueError(
+            "completed steps require an exact compatible successful server tool-evidence id"
+        )
+
     target["status"] = clean_status
     target["summary"] = clean_summary
     target["evidence"] = _strings(
-        [*target.get("evidence", []), *_strings(evidence, limit=_MAX_EVIDENCE)],
+        [*target.get("evidence", []), *supplied_evidence],
         limit=_MAX_EVIDENCE,
     )
     target["artifacts"] = _strings(
@@ -190,6 +267,7 @@ def record_tool_evidence(
     ok: bool,
     summary: str,
     artifact: str = "",
+    mutated: bool = False,
 ) -> dict[str, Any]:
     """Persist the last real observation even if the model skips update_plan."""
 
@@ -200,11 +278,84 @@ def record_tool_evidence(
     next_state["last_tool"] = _text(tool, limit=80)
     next_state["last_summary"] = _text(summary, limit=1000)
     next_state["last_tool_ok"] = bool(ok)
+    clean_tool = _text(tool, limit=80)
+    current_revision = _revision(next_state)
+    if ok and mutated:
+        current_revision += 1
+        next_state["workspace_revision"] = current_revision
+        _invalidate_steps(next_state, set(_PROOF_TOOLS))
+
+    history = next_state.get("tool_evidence")
+    if not isinstance(history, list):
+        history = []
+    invalidated_tools = {clean_tool}
+    if not ok and clean_tool in {"runtime_check", "probe", "verify_isolation"}:
+        invalidated_tools.update({"runtime_check", "probe", "verify_isolation"})
+    history = [
+        item
+        for item in history
+        if not isinstance(item, Mapping) or str(item.get("tool") or "") not in invalidated_tools
+    ]
+    if not ok and clean_tool in _PROOF_TOOLS:
+        _invalidate_steps(next_state, invalidated_tools)
+    try:
+        evidence_seq = max(0, int(next_state.get("tool_evidence_seq") or 0)) + 1
+    except (TypeError, ValueError):
+        # Plan state is durable and may outlive schema changes. A malformed
+        # legacy counter must not abort an otherwise valid server observation.
+        evidence_seq = 1
+    evidence_id = f"tool:{_text(clean_tool, limit=40)}:{evidence_seq}"
+    history.append(
+        {
+            "id": evidence_id,
+            "tool": clean_tool,
+            "ok": bool(ok),
+            "revision": current_revision,
+            "summary": _text(summary, limit=500),
+            "artifact": _text(artifact, limit=500),
+        }
+    )
+    next_state["tool_evidence"] = history[-_MAX_EVIDENCE:]
+    next_state["tool_evidence_seq"] = evidence_seq
     if artifact:
         artifacts = _strings(next_state.get("artifacts"), limit=_MAX_ARTIFACTS)
         next_state["artifacts"] = _strings(
             [*artifacts, artifact], limit=_MAX_ARTIFACTS, item_limit=500
         )
+    next_state["updated_at"] = _now()
+    return next_state
+
+
+def reconcile_tool_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Auto-close lifecycle steps only from successful server observations."""
+    next_state = cast(dict[str, Any], json.loads(json.dumps(dict(state), ensure_ascii=False)))
+    history = next_state.get("tool_evidence")
+    steps = next_state.get("steps")
+    if not isinstance(history, list) or not isinstance(steps, list):
+        return next_state
+    by_tool: dict[str, list[str]] = {}
+    current_revision = _revision(next_state)
+    for item in history:
+        if (
+            not isinstance(item, Mapping)
+            or item.get("ok") is not True
+            or _evidence_revision(item) != current_revision
+        ):
+            continue
+        tool = str(item.get("tool") or "")
+        evidence_id = str(item.get("id") or "")
+        if tool and evidence_id:
+            by_tool.setdefault(tool, []).append(evidence_id)
+
+    for index, item in enumerate(steps):
+        if not isinstance(item, dict):
+            continue
+        required = _required_tools(str(item.get("title") or ""), index)
+        proof = next((by_tool[tool][-1] for tool in required if by_tool.get(tool)), "")
+        if proof:
+            item["status"] = "completed"
+            item["summary"] = "Подтверждено серверным инструментом."
+            item["evidence"] = _strings([*item.get("evidence", []), proof], limit=_MAX_EVIDENCE)
     next_state["updated_at"] = _now()
     return next_state
 
@@ -217,6 +368,9 @@ def observation(state: Mapping[str, Any], summary: str) -> dict[str, Any]:
         "content": json.dumps(state, ensure_ascii=False, separators=(",", ":")),
         "next_actions": [_text(state.get("next_action"), limit=800)],
         "artifacts": _strings(state.get("artifacts"), limit=_MAX_ARTIFACTS),
+        "acceptance_criteria": _strings(
+            state.get("acceptance_criteria"), limit=_MAX_CRITERIA, item_limit=400
+        ),
     }
 
 
@@ -276,6 +430,7 @@ __all__ = [
     "initial_plan",
     "make_plan",
     "observation",
+    "reconcile_tool_evidence",
     "record_tool_evidence",
     "recovery_context",
     "update_plan",

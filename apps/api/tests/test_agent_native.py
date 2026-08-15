@@ -26,6 +26,43 @@ from omnia_api.services.max_generation_contract import (
 )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pnpm add date-fns",
+        "npm --silent install lodash",
+        "yarn remove react",
+        "corepack pnpm up",
+        "bun install",
+        'p=pnpm; "$p" add left-pad',
+        "pnpm typecheck && touch src/changed.ts",
+    ],
+)
+def test_max_bash_rejects_package_manager_mutation(command: str) -> None:
+    assert messages._max_bash_command_rejection(command, [])
+
+
+@pytest.mark.parametrize("command", ["pnpm typecheck", "pnpm analyze:agent", "pnpm security:agent"])
+def test_max_bash_allows_reproducible_package_scripts(command: str) -> None:
+    assert messages._max_bash_command_rejection(command, []) is None
+
+
+def test_max_bash_rejects_declared_mutation_for_read_only_command() -> None:
+    assert messages._max_bash_command_rejection("pnpm typecheck", ["src/a.ts"])
+
+
+def test_max_bash_schema_and_prompt_match_executor_allowlist() -> None:
+    tool = next(item for item in agent_native._MAX_TOOLS if item["name"] == "bash")
+    properties = tool["input_schema"]["properties"]
+    commands = properties["cmd"]["enum"]
+
+    assert set(commands) == messages._MAX_READ_ONLY_BASH_COMMANDS
+    assert properties["mutation_paths"]["maxItems"] == 0
+    assert "command -v" not in agent_native._MAX_NATIVE_PREAMBLE
+    for command in commands:
+        assert command in agent_native._MAX_NATIVE_PREAMBLE
+
+
 @pytest.mark.asyncio
 async def test_max_visual_qa_recovers_after_transient_preview_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -210,9 +247,7 @@ def test_server_working_memory_is_ephemeral_and_preserves_tool_result_order() ->
         {"role": "assistant", "content": [{"type": "tool_use", "id": "r1"}]},
         {
             "role": "user",
-            "content": [
-                {"type": "tool_result", "tool_use_id": "r1", "content": "read ok"}
-            ],
+            "content": [{"type": "tool_result", "tool_use_id": "r1", "content": "read ok"}],
         },
     ]
 
@@ -253,12 +288,9 @@ def test_first_max_build_starts_green_and_runs_bounded_sonnet_loop() -> None:
     assert "must_restore_previous=_must_restore_previous" in source
     assert "agent_native.run_native_build" in source
     assert (
-        'project_template == "max_miniapp"\n                '
-        "or agent_builder.is_agentic_enabled"
+        'project_template == "max_miniapp"\n                or agent_builder.is_agentic_enabled'
     ) in source
-    assert (
-        'project_template == "max_miniapp" or get_settings().use_native_agent'
-    ) in source
+    assert ('project_template == "max_miniapp" or get_settings().use_native_agent') in source
     assert "build_max_product_contract" in source
     assert "max_completion_gap" in source
     assert "_max_completion_check" in source
@@ -817,6 +849,45 @@ async def test_native_infra_breaker_aborts_after_dead_turns(
     assert res.stop_reason == "infra_error"
     assert "unreachable" in res.summary
     assert calls["n"] == agent_native._INFRA_DEAD_ABORT_AT  # aborted, not ground out
+
+
+@pytest.mark.asyncio
+async def test_transient_build_outage_retries_build_without_forcing_source_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(("build", {})),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "ready"})),
+        ]
+    )
+    executed: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        if len(executed) == 1:
+            return {"ok": False, "error": "orchestrator restarting", "infra_dead": True}
+        return {"ok": True, "detail": "clean"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native.run_native_build(
+        system="MAX runtime",
+        task="repair app",
+        execute=execute,
+        max_steps=4,
+        stable_max_loop=True,
+        stable_max_product_first=False,
+    )
+
+    assert executed == ["build", "build"]
+    assert result.done is True
+    assert result.summary == "ready"
 
 
 @pytest.mark.asyncio
@@ -4516,7 +4587,25 @@ def test_successful_file_mutation_observation_does_not_echo_whole_source() -> No
 def test_native_observation_has_stable_harness_shape() -> None:
     result = agent_native._obs_to_tool_result(
         "tu_build",
-        {"ok": False, "error": "TS2307 missing module"},
+        {
+            "ok": False,
+            "error": "TS2307 missing module",
+            "root_cause_hint": "Resolve the missing import before another build.",
+            "error_signature": "sig-ts2307",
+            "evidence": ["diagnostic:TS2307"],
+            "retry": "after_change",
+            "affected_files": ["src/product.tsx"],
+            "analysis_unavailable": ["ast-grep: optional pattern not configured"],
+            "diagnostics": [
+                {
+                    "source": "typescript",
+                    "code": "TS2307",
+                    "severity": "error",
+                    "file": "src/product.tsx",
+                    "message": "missing module",
+                }
+            ],
+        },
         tool_name="build",
     )
     payload = json.loads(result["content"])
@@ -4529,8 +4618,75 @@ def test_native_observation_has_stable_harness_shape() -> None:
             "Use the root-cause hint once; stop repeating the identical failing call."
         ],
         "artifacts": [],
+        "root_cause_hint": "Resolve the missing import before another build.",
+        "error_signature": "sig-ts2307",
+        "evidence": ["diagnostic:TS2307"],
+        "retry": "after_change",
+        "affected_files": ["src/product.tsx"],
+        "analysis_unavailable": ["ast-grep: optional pattern not configured"],
+        "diagnostics": [
+            {
+                "source": "typescript",
+                "code": "TS2307",
+                "severity": "error",
+                "file": "src/product.tsx",
+                "message": "missing module",
+            }
+        ],
         "data": "TS2307 missing module",
     }
+
+
+def test_native_observation_remains_valid_json_inside_budget() -> None:
+    result = agent_native._obs_to_tool_result(
+        "tu_build",
+        {
+            "ok": False,
+            "error": "compiler output " * 5_000,
+            "diagnostics": [
+                {
+                    "source": "oxlint",
+                    "code": f"rule-{index}",
+                    "severity": "error",
+                    "file": f"src/components/product/{'x' * 200}-{index}.tsx",
+                    "message": "diagnostic " * 100,
+                }
+                for index in range(100)
+            ],
+        },
+        tool_name="build",
+    )
+
+    assert len(result["content"]) <= agent_native._MAX_TOOL_RESULT_CHARS
+    assert json.loads(result["content"])["status"] == "error"
+
+
+def test_native_observation_budget_survives_json_escaping_expansion() -> None:
+    serialized = agent_native._serialize_tool_payload(
+        {
+            "status": "error",
+            "summary": "\x00" * 20_000,
+            "data": "\x00" * 20_000,
+            "retry": "never",
+            "diagnostics": [],
+        }
+    )
+
+    assert len(serialized) <= agent_native._MAX_TOOL_RESULT_CHARS
+    assert json.loads(serialized)["status"] == "error"
+
+
+def test_structured_repair_paths_reject_locked_and_traversal_paths() -> None:
+    assert agent_native._structured_repair_paths(
+        {
+            "affected_files": [
+                "src/components/product/ProductApp.tsx",
+                "src/app/layout.tsx",
+                "../secret",
+                "src\\components\\bad.tsx",
+            ]
+        }
+    ) == frozenset({"src/components/product/ProductApp.tsx"})
 
 
 @pytest.mark.asyncio

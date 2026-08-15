@@ -172,7 +172,7 @@ async def test_worker_death_replays_same_logical_provider_turn(
         )
 
     assert checkpoints[-1]["provider_turn_index"] == 0
-    assert checkpoints[-1]["version"] == 2
+    assert checkpoints[-1]["version"] == 3
     assert checkpoints[-1]["no_write_turns"] == 0
 
     async def resumed_call(
@@ -209,6 +209,283 @@ async def test_worker_death_replays_same_logical_provider_turn(
     assert checkpoints[-1]["provider_turn_index"] == 1
     assert checkpoints[-1]["workspace_revision"] == 1
     assert checkpoints[-1]["recent_mutation_paths"] == ["src/x.ts"]
+
+
+@pytest.mark.asyncio
+async def test_worker_death_after_tool_use_replays_action_not_bare_assistant_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoints: list[dict[str, object]] = []
+    turn_ids: list[str] = []
+    execution_attempts = 0
+    executed_actions: list[str] = []
+
+    async def save_checkpoint(value: Any) -> None:
+        # Match the production JSONB boundary instead of retaining mutable aliases.
+        checkpoints.append(json.loads(json.dumps(value)))
+
+    async def settled_turn(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        turn_ids.append(kwargs["turn_id"])
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "write_1",
+                    "name": "write_file",
+                    "input": {"path": "src/x.ts", "content": "export default 1"},
+                }
+            ],
+        }
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal execution_attempts
+        execution_attempts += 1
+        executed_actions.append(action.name)
+        if execution_attempts == 1:
+            raise asyncio.CancelledError
+        return {"ok": True, "content": action.args["content"], "detail": "written"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", settled_turn)
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="system",
+            task="task",
+            execute=execute,
+            run_id="same-run",
+            max_steps=1,
+            checkpoint=save_checkpoint,
+        )
+
+    crash_checkpoint = checkpoints[-1]
+    assert crash_checkpoint["provider_turn_index"] == 1
+    assert crash_checkpoint["convo"][-1]["role"] == "assistant"
+    assert crash_checkpoint["pending_tool_index"] == 0
+
+    result = await agent_native.run_native_build(
+        system="changed-after-restart",
+        task="task",
+        execute=execute,
+        run_id="same-run",
+        max_steps=1,
+        resume_checkpoint=crash_checkpoint,
+        checkpoint=save_checkpoint,
+    )
+
+    assert turn_ids == ["same-run:0"]
+    assert executed_actions[:2] == ["write_file", "write_file"]
+    assert result.files == {"src/x.ts": "export default 1"}
+
+
+@pytest.mark.asyncio
+async def test_worker_death_mid_tool_batch_resumes_after_completed_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoints: list[dict[str, object]] = []
+    executed_paths: list[str] = []
+    reconcile_paths: list[str] = []
+    cancel_second_once = True
+
+    async def save_checkpoint(value: Any) -> None:
+        checkpoints.append(json.loads(json.dumps(value)))
+
+    assistant_turn = {
+        "stop_reason": "tool_use",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "write_1",
+                "name": "write_file",
+                "input": {"path": "src/a.ts", "content": "export const a = 1"},
+            },
+            {
+                "type": "tool_use",
+                "id": "write_2",
+                "name": "write_file",
+                "input": {"path": "src/b.ts", "content": "export const b = 1"},
+            },
+            {
+                "type": "tool_use",
+                "id": "write_3",
+                "name": "write_file",
+                "input": {"path": "src/c.ts", "content": "export const c = 1"},
+            },
+        ],
+    }
+
+    async def settled_turn(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return assistant_turn
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal cancel_second_once
+        if action.name == "build":
+            return {"ok": True, "detail": "clean"}
+        executed_paths.append(action.path)
+        if action.args.get("_resume_reconcile"):
+            reconcile_paths.append(action.path)
+        if action.path == "src/b.ts" and cancel_second_once:
+            cancel_second_once = False
+            raise asyncio.CancelledError
+        return {"ok": True, "content": action.args["content"], "detail": "written"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", settled_turn)
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="system",
+            task="task",
+            execute=execute,
+            run_id="batch-run",
+            max_steps=1,
+            checkpoint=save_checkpoint,
+        )
+
+    crash_checkpoint = checkpoints[-1]
+    assert crash_checkpoint["pending_tool_index"] == 1
+    assert crash_checkpoint["written"] == {"src/a.ts": "export const a = 1"}
+    assert crash_checkpoint["pending_turn_state"]["wrote"] is True
+
+    result = await agent_native.run_native_build(
+        system="system",
+        task="task",
+        execute=execute,
+        run_id="batch-run",
+        max_steps=1,
+        resume_checkpoint=crash_checkpoint,
+        checkpoint=save_checkpoint,
+    )
+
+    assert executed_paths == ["src/a.ts", "src/b.ts", "src/b.ts", "src/c.ts"]
+    assert reconcile_paths == ["src/b.ts"]
+    assert result.files == {
+        "src/a.ts": "export const a = 1",
+        "src/b.ts": "export const b = 1",
+        "src/c.ts": "export const c = 1",
+    }
+    assert checkpoints[-1]["no_write_turns"] == 0
+
+
+@pytest.mark.asyncio
+async def test_uncertain_bash_uses_durable_preparation_without_repeating_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoints: list[dict[str, object]] = []
+    effects = 0
+    cancel_once = True
+
+    async def save_checkpoint(value: Any) -> None:
+        checkpoints.append(json.loads(json.dumps(value)))
+
+    async def settled_turn(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "bash_1",
+                    "name": "bash",
+                    "input": {"cmd": "generate", "mutation_paths": ["src/a.ts"]},
+                }
+            ],
+        }
+
+    async def prepare(_action: Any) -> dict[str, object]:
+        return {"bash_before_tree": {"src/a.ts": "before"}}
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal effects, cancel_once
+        assert action.args["_durable_preparation"]["bash_before_tree"] == {"src/a.ts": "before"}
+        if action.args.get("_resume_reconcile"):
+            return {"ok": False, "status": "uncertain", "retry": "never"}
+        effects += 1
+        if cancel_once:
+            cancel_once = False
+            raise asyncio.CancelledError
+        return {"ok": True, "files": {"src/a.ts": "after"}}
+
+    monkeypatch.setattr(agent_native, "_call_messages", settled_turn)
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="system",
+            task="task",
+            execute=execute,
+            prepare_execute=prepare,
+            run_id="bash-run",
+            max_steps=1,
+            checkpoint=save_checkpoint,
+        )
+
+    crash_checkpoint = checkpoints[-1]
+    assert crash_checkpoint["pending_tool_started_index"] == 0
+    assert crash_checkpoint["pending_tool_preparations"]["0"] == {
+        "bash_before_tree": {"src/a.ts": "before"}
+    }
+
+    await agent_native.run_native_build(
+        system="system",
+        task="task",
+        execute=execute,
+        prepare_execute=prepare,
+        run_id="bash-run",
+        max_steps=1,
+        resume_checkpoint=crash_checkpoint,
+        checkpoint=save_checkpoint,
+    )
+
+    assert effects == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_bash_reconciliation_keeps_started_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoints: list[dict[str, object]] = []
+
+    async def save_checkpoint(value: Any) -> None:
+        checkpoints.append(json.loads(json.dumps(value)))
+
+    async def settled_turn(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "bash_rollback",
+                    "name": "bash",
+                    "input": {"cmd": "generate", "mutation_paths": ["src/a.ts"]},
+                }
+            ],
+        }
+
+    async def prepare(_action: Any) -> dict[str, object]:
+        return {"bash_before_tree": {"src/a.ts": "before"}}
+
+    async def execute(_action: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "infra_dead": True,
+            "reconciliation_pending": True,
+            "error": "rollback unavailable",
+        }
+
+    monkeypatch.setattr(agent_native, "_call_messages", settled_turn)
+    result = await agent_native.run_native_build(
+        system="system",
+        task="task",
+        execute=execute,
+        prepare_execute=prepare,
+        run_id="bash-reconciliation-run",
+        max_steps=1,
+        checkpoint=save_checkpoint,
+    )
+
+    assert result.stop_reason == "tool_reconciliation_pending"
+    assert checkpoints[-1]["pending_tool_started_index"] == 0
+    assert checkpoints[-1]["pending_tool_index"] == 0
+    assert checkpoints[-1]["pending_tool_preparations"]["0"] == {
+        "bash_before_tree": {"src/a.ts": "before"}
+    }
 
 
 @pytest.mark.asyncio
@@ -249,12 +526,16 @@ async def test_owner_canary_project_brain_survives_worker_restart(
             stable_max_loop=True,
             stable_max_product_first=False,
             checkpoint=save_checkpoint,
+            acceptance_criteria=["typecheck clean"],
         )
 
     owner_checkpoint = checkpoints[-1]
-    assert owner_checkpoint["version"] == 3
-    assert owner_checkpoint["brain_v2"]["version"] == 1
+    assert owner_checkpoint["version"] == 4
+    assert owner_checkpoint["brain_v2"]["version"] == 2
     assert owner_checkpoint["brain_v2"]["objective"] == "Build owner fitness app"
+    assert owner_checkpoint["brain_v2"]["acceptance"] == [
+        {"criterion": "typecheck clean", "status": "open", "evidence": []}
+    ]
 
     with pytest.raises(asyncio.CancelledError):
         await agent_native.run_native_build(
@@ -269,7 +550,7 @@ async def test_owner_canary_project_brain_survives_worker_restart(
             checkpoint=save_checkpoint,
         )
 
-    assert "PROJECT BRAIN v1" in working_notes[-1]
+    assert "PROJECT BRAIN v2" in working_notes[-1]
     assert "Build owner fitness app" in working_notes[-1]
 
     other_checkpoints: list[dict[str, object]] = []
@@ -289,5 +570,5 @@ async def test_owner_canary_project_brain_survives_worker_restart(
             checkpoint=save_other,
         )
 
-    assert other_checkpoints[-1]["version"] == 2
+    assert other_checkpoints[-1]["version"] == 3
     assert "brain_v2" not in other_checkpoints[-1]

@@ -1427,6 +1427,7 @@ def make_container_executor(
     project_id: Any,
     slug: str,
     emit: Any = None,
+    code_intelligence: bool = False,
 ) -> Executor:
     """Bind the abstract actions to the live dev container via orchestrator_client.
 
@@ -1503,6 +1504,13 @@ def make_container_executor(
                         "error": "bash needs mutation_paths (use [] for a read-only command)",
                     }
                 mutation_paths = list(dict.fromkeys(raw_paths))
+                if action.args.get("_resume_reconcile"):
+                    return {
+                        "ok": False,
+                        "status": "uncertain",
+                        "error": ("uncertain prior bash was not repeated after worker restart"),
+                        "retry": "never",
+                    }
                 before_contents = await asyncio.gather(
                     *(
                         orchestrator_client.agent_read_file(project_id, slug, path)
@@ -1514,9 +1522,7 @@ def make_container_executor(
                 if not bool(result.get("ok")):
                     rollback = {
                         path: content if isinstance(content, str) else ""
-                        for path, content in zip(
-                            mutation_paths, before_contents, strict=True
-                        )
+                        for path, content in zip(mutation_paths, before_contents, strict=True)
                     }
                     if rollback:
                         await orchestrator_client.hot_reload_exact(project_id, slug, rollback)
@@ -1544,9 +1550,7 @@ def make_container_executor(
                     "changed_paths": sorted(files),
                     "_previous_files": {
                         path: content if isinstance(content, str) else ""
-                        for path, content in zip(
-                            mutation_paths, before_contents, strict=True
-                        )
+                        for path, content in zip(mutation_paths, before_contents, strict=True)
                     },
                 }
 
@@ -1560,6 +1564,16 @@ def make_container_executor(
                 # aborts the whole build.
                 content = _sanitize_nested_layout(action.path, content)
                 content = _sanitize_css_imports(action.path, content)
+                if action.args.get("_resume_reconcile"):
+                    current = await orchestrator_client.agent_read_file(
+                        project_id, slug, action.path
+                    )
+                    if current == content:
+                        return {
+                            "ok": True,
+                            "content": content,
+                            "detail": f"reconciled prior write {action.path}",
+                        }
                 await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: content}
                 )
@@ -1578,6 +1592,13 @@ def make_container_executor(
                 if current is None:
                     return {"ok": False, "error": f"not found: {action.path}"}
                 if search not in current:
+                    replacement = str(replace)
+                    if action.args.get("_resume_reconcile") and replacement in current:
+                        return {
+                            "ok": True,
+                            "content": current,
+                            "detail": f"reconciled prior edit {action.path}",
+                        }
                     return {
                         "ok": False,
                         "error": "search text not found exactly; read the file and copy it byte-for-byte",
@@ -1596,7 +1617,15 @@ def make_container_executor(
                 return {"ok": True, "content": new_content, "detail": f"patched {action.path}"}
 
             if action.name == "build":
-                res = await orchestrator_client.agent_build(project_id, slug)
+                res = (
+                    await orchestrator_client.agent_build(
+                        project_id,
+                        slug,
+                        code_intelligence=True,
+                    )
+                    if code_intelligence
+                    else await orchestrator_client.agent_build(project_id, slug)
+                )
                 ok = bool(res.get("ok"))
                 detail = res.get("detail") or res.get("error") or "build clean"
                 if not ok:
@@ -1614,7 +1643,7 @@ def make_container_executor(
                         f"[AGENT] build FAILED slug={slug}: {str(detail)[:600]}",
                         flush=True,
                     )
-                return {"ok": ok, "detail": detail}
+                return {**res, "ok": ok, "detail": detail}
 
             if action.name == "read_logs":
                 # Live dev-server stdout/stderr — the RUNTIME errors `build`
@@ -1668,6 +1697,19 @@ def make_container_executor(
                 # video (Kling: Flux first+last frame → interpolate) on the same
                 # key, store it in MinIO, and hand the agent a public URL to embed.
                 # Lazily imported (MinIO + gateway).
+                if action.args.get("_resume_reconcile"):
+                    return {
+                        "ok": False,
+                        "status": "uncertain",
+                        "error": (
+                            "uncertain prior media request was not repeated after worker restart"
+                        ),
+                        "content": (
+                            "Media result unavailable after worker restart. Do not repeat the "
+                            "identical paid request; continue with existing assets."
+                        ),
+                        "retry": "never",
+                    }
                 from omnia_api.services import agent_media
 
                 _kind = str(action.args.get("kind") or "image").strip().lower()
@@ -1700,11 +1742,25 @@ def make_container_executor(
                 # test user and read the EXACT status + body — the only way to prove
                 # an interactive feature (send/save/submit) actually works, which a
                 # clean build + 200 home page do NOT. Lazily imported (Playwright).
+                method = str(action.args.get("method") or "GET").upper()
+                if action.args.get("_resume_reconcile") and method not in {
+                    "GET",
+                    "HEAD",
+                    "OPTIONS",
+                }:
+                    return {
+                        "ok": False,
+                        "status": "uncertain",
+                        "error": (
+                            "uncertain prior mutating probe was not repeated after worker restart"
+                        ),
+                        "retry": "never",
+                    }
                 from omnia_api.services import agent_probe
 
                 return await agent_probe.run_probe(
                     project_id,
-                    method=str(action.args.get("method") or "GET"),
+                    method=method,
                     path=action.path or "/",
                     body=action.args.get("body"),
                 )
@@ -1714,6 +1770,15 @@ def make_container_executor(
                 # The agent supplies its OWN create/read endpoints (it just wrote
                 # them), so there is no guessing and no false block. Returns a
                 # functional verdict; ok=False on any leak so the loop fixes it.
+                if action.args.get("_resume_reconcile"):
+                    return {
+                        "ok": False,
+                        "status": "uncertain",
+                        "error": (
+                            "uncertain prior isolation probe was not repeated after worker restart"
+                        ),
+                        "retry": "never",
+                    }
                 from omnia_api.services import isolation_gate
 
                 _iv = await isolation_gate.run_isolation_probe(

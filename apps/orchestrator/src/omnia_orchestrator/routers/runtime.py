@@ -13,6 +13,7 @@ contracts (request/response schemas) are stable and consumed by apps/api today.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import secrets
@@ -120,6 +121,122 @@ _AGENT_MAX_READ = 1_000_000
 _AGENT_MAX_LIST = 16_000
 _AGENT_MAX_GREP = 16_000
 _AGENT_MAX_BUILD = 24_000
+_AGENT_MAX_DIAGNOSTICS = 30
+_AGENT_MAX_AFFECTED_FILES = 30
+
+
+def _safe_analyzer_path(value: object) -> str:
+    path = str(value or "").replace("\\", "/")[:300]
+    if (
+        not path
+        or path.startswith("/")
+        or re.match(r"^[A-Za-z]:/", path)
+        or ".." in path.split("/")
+    ):
+        return ""
+    return path
+
+
+def _normalize_code_intelligence(raw: str) -> dict[str, object]:
+    """Validate and bound the template analyzer's untrusted JSON output."""
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return {"analysis_unavailable": ["analyze-code: invalid JSON"]}
+    if not isinstance(payload, dict):
+        return {"analysis_unavailable": ["analyze-code: invalid report"]}
+
+    all_diagnostics: list[dict[str, str]] = []
+    security_findings: list[dict[str, str]] = []
+    affected_files: list[str] = []
+    raw_diagnostics = payload.get("diagnostics")
+    if not isinstance(raw_diagnostics, list):
+        raw_diagnostics = []
+    # The template already bounds its report. Validate the complete bounded
+    # payload before applying our smaller transport cap so a late blocker can
+    # never be hidden behind advisory warnings.
+    for item in raw_diagnostics[:200]:
+        if not isinstance(item, dict):
+            continue
+        file = _safe_analyzer_path(item.get("file"))
+        diagnostic = {
+            "source": str(item.get("tool") or "analysis")[:40],
+            "code": str(item.get("rule") or "")[:80],
+            "severity": str(item.get("severity") or "warning")[:20],
+            "file": file,
+            "message": str(item.get("message") or "")[:500],
+        }
+        all_diagnostics.append(diagnostic)
+        if file and file not in affected_files:
+            affected_files.append(file)
+    diagnostics = (
+        [item for item in all_diagnostics if item["severity"] == "error"]
+        + [item for item in all_diagnostics if item["severity"] != "error"]
+    )[:_AGENT_MAX_DIAGNOSTICS]
+
+    raw_security_findings = payload.get("security_findings")
+    security_findings_valid = isinstance(raw_security_findings, list) and all(
+        isinstance(item, dict) for item in raw_security_findings
+    )
+    security_finding_items = (
+        raw_security_findings if isinstance(raw_security_findings, list) else []
+    )
+    for item in security_finding_items[:_AGENT_MAX_DIAGNOSTICS]:
+        if not isinstance(item, dict):
+            continue
+        file = _safe_analyzer_path(item.get("file"))
+        finding = {
+            "source": str(item.get("tool") or "osv-scanner")[:40],
+            "code": str(item.get("rule") or "")[:80],
+            "severity": str(item.get("severity") or "error")[:20],
+            "file": file,
+            "message": str(item.get("message") or "")[:500],
+        }
+        security_findings.append(finding)
+
+    raw_affected = payload.get("affected_files")
+    if not isinstance(raw_affected, list):
+        raw_affected = []
+    for path in raw_affected[:_AGENT_MAX_AFFECTED_FILES]:
+        path = _safe_analyzer_path(path)
+        if path and path not in affected_files:
+            affected_files.append(path)
+    affected_files = affected_files[:_AGENT_MAX_AFFECTED_FILES]
+
+    unavailable: list[str] = []
+    raw_unavailable = payload.get("unavailable")
+    if not isinstance(raw_unavailable, list):
+        raw_unavailable = []
+    for item in raw_unavailable[:10]:
+        if not isinstance(item, dict):
+            continue
+        unavailable.append(
+            f"{str(item.get('tool') or 'analysis')[:40]}: "
+            f"{str(item.get('reason') or 'unavailable')[:300]}"
+        )
+    if payload.get("security_scan_completed") is True and not security_findings_valid:
+        unavailable.append("osv-scanner: invalid security findings report")
+    evidence = [
+        f"analysis:{item['source']}:{item['code'] or item['severity']}" for item in diagnostics[:20]
+    ]
+    result: dict[str, object] = {
+        "diagnostics": diagnostics,
+        "security_findings": security_findings,
+        "security_scan_completed": (
+            payload.get("security_scan_completed") is True and security_findings_valid
+        ),
+        "affected_files": affected_files,
+        "evidence": evidence,
+    }
+    if diagnostics:
+        first_error = next(
+            (item for item in diagnostics if item["severity"] == "error"), diagnostics[0]
+        )
+        result["root_cause_hint"] = first_error["message"]
+    if unavailable:
+        result["analysis_unavailable"] = unavailable
+    return result
+
 
 _MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
 _MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
@@ -1385,6 +1502,8 @@ async def _run_dep_doctor(container_name: str) -> str:
 async def agent_build(
     project_id: str,
     slug: str,
+    code_intelligence: bool = False,
+    security_scan: bool = False,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
     """Run the project's local TypeScript typecheck — a real, deterministic
@@ -1435,7 +1554,62 @@ async def agent_build(
     # see "[dep-doctor] installed: sonner" instead of a silent self-heal.
     if dep_note:
         body = f"{dep_note}\n{body}"
-    return {"ok": ok, "detail": body}
+    response: dict[str, object] = {"ok": ok, "detail": body}
+    if code_intelligence or security_scan:
+        try:
+            analyzer_cmd = ["node", "/app/scripts/analyze-code.mjs"]
+            if security_scan:
+                analyzer_cmd.append("--security")
+            analysis = await exec_cmd(
+                container_name,
+                cmd=analyzer_cmd,
+                workdir="/app",
+                timeout_sec=150,
+                max_output=160_000,
+            )
+            if analysis["exit_code"] == "0" and analysis["stdout"].strip():
+                response.update(_normalize_code_intelligence(analysis["stdout"]))
+            else:
+                response["analysis_unavailable"] = [
+                    "analyze-code: managed analyzer is not available in this container"
+                ]
+        except OrchestratorError:
+            # Compatibility with already-running containers that predate the
+            # managed analyzer. TypeScript remains the authoritative build gate.
+            response["analysis_unavailable"] = [
+                "analyze-code: managed analyzer is not available in this container"
+            ]
+        raw_response_diagnostics = response.get("diagnostics")
+        response_diagnostic_items = (
+            raw_response_diagnostics if isinstance(raw_response_diagnostics, list) else []
+        )
+        blocking_diagnostics = [
+            item
+            for item in response_diagnostic_items
+            if isinstance(item, dict) and item.get("severity") == "error"
+        ]
+        if blocking_diagnostics:
+            first = blocking_diagnostics[0]
+            response["ok"] = False
+            response["detail"] = (
+                f"{body}\n[code-intelligence] {len(blocking_diagnostics)} blocking "
+                f"diagnostic(s): {str(first.get('message') or 'analysis failed')[:500]}"
+            )
+        response_diagnostics = response_diagnostic_items
+        response_unavailable = response.get("analysis_unavailable")
+        log.info(
+            "agent.build.code_intelligence",
+            project_id=project_id,
+            enabled=code_intelligence,
+            security_scan=security_scan,
+            diagnostics=(
+                len(response_diagnostics) if isinstance(response_diagnostics, list) else 0
+            ),
+            unavailable=(
+                len(response_unavailable) if isinstance(response_unavailable, list) else 0
+            ),
+        )
+    return response
 
 
 # Phase 1: a bounded shell tool for the agent. Runs an arbitrary command inside

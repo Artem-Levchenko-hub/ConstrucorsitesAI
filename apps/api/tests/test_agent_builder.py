@@ -361,6 +361,130 @@ async def test_native_bash_runs_in_project_and_tracks_declared_mutations(
     assert tracked == [("src/components/product/Card.tsx",)]
 
 
+@pytest.mark.asyncio
+async def test_native_bash_reconcile_does_not_repeat_uncertain_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    calls: list[str] = []
+
+    async def read_file(_project: object, _slug: str, path: str) -> str:
+        assert path == "src/generated.ts"
+        return "export const generated = true"
+
+    async def forbidden_exec(_project: object, _slug: str, cmd: str) -> dict[str, object]:
+        calls.append(cmd)
+        return {"ok": True}
+
+    monkeypatch.setattr(orchestrator_client, "agent_read_file", read_file)
+    monkeypatch.setattr(orchestrator_client, "agent_exec", forbidden_exec)
+    execute = ab.make_container_executor(project_id="project", slug="slug")
+
+    result = await execute(
+        ab.Action(
+            "bash",
+            {
+                "cmd": "generate-file",
+                "mutation_paths": ["src/generated.ts"],
+                "_resume_reconcile": True,
+            },
+            "",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "uncertain"
+    assert result["retry"] == "never"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_media_reconcile_does_not_repeat_paid_request() -> None:
+    execute = ab.make_container_executor(project_id="project", slug="slug")
+
+    result = await execute(
+        ab.Action(
+            "generate_media",
+            {
+                "kind": "image",
+                "prompt": "cinematic hero",
+                "_resume_reconcile": True,
+            },
+            "",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "uncertain"
+    assert result["retry"] == "never"
+    assert "Do not repeat" in result["content"]
+
+
+@pytest.mark.asyncio
+async def test_read_only_bash_reconcile_never_repeats_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    calls: list[str] = []
+
+    async def forbidden_exec(_project: object, _slug: str, cmd: str) -> dict[str, object]:
+        calls.append(cmd)
+        return {"ok": True}
+
+    monkeypatch.setattr(orchestrator_client, "agent_exec", forbidden_exec)
+    execute = ab.make_container_executor(project_id="project", slug="slug")
+
+    result = await execute(
+        ab.Action(
+            "bash",
+            {"cmd": "pnpm typecheck", "mutation_paths": [], "_resume_reconcile": True},
+            "",
+        )
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "uncertain"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_build_preserves_canary_code_intelligence_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    calls: list[bool] = []
+
+    async def build(
+        _project: object, _slug: str, *, code_intelligence: bool = False
+    ) -> dict[str, object]:
+        calls.append(code_intelligence)
+        return {
+            "ok": False,
+            "detail": "TS2307 missing module",
+            "root_cause_hint": "missing import",
+            "affected_files": ["src/components/product/ProductApp.tsx"],
+            "evidence": ["analysis:oxlint:import/no-unresolved"],
+            "diagnostics": [{"source": "oxlint", "message": "missing import"}],
+        }
+
+    monkeypatch.setattr(orchestrator_client, "agent_build", build)
+    execute = ab.make_container_executor(
+        project_id="project",
+        slug="slug",
+        code_intelligence=True,
+    )
+
+    result = await execute(ab.Action("build", {}, ""))
+
+    assert calls == [True]
+    assert result["root_cause_hint"] == "missing import"
+    assert result["affected_files"] == ["src/components/product/ProductApp.tsx"]
+    assert result["diagnostics"] == [{"source": "oxlint", "message": "missing import"}]
+
+
 def test_runtime_debug_loop_recovers_then_done():
     """build clean → runtime_check 5xx → read_logs → fix → re-check ok → done.
 
@@ -637,11 +761,7 @@ def test_green_gate_cap_prevents_hang():
 
 def test_build_system_prompt_without_skills_keeps_base_contract():
     p = ab.build_system_prompt("STACK GUIDE")
-    assert p == (
-        ab.LOOP_PROTOCOL
-        + "\n\nSTACK GUIDE\n\n"
-        + ab.DEPTH_EXPERIENCE_CONTRACT
-    )
+    assert p == (ab.LOOP_PROTOCOL + "\n\nSTACK GUIDE\n\n" + ab.DEPTH_EXPERIENCE_CONTRACT)
     # None / empty skills must not alter the output
     assert ab.build_system_prompt("STACK GUIDE", skills=None) == p
     assert ab.build_system_prompt("STACK GUIDE", skills="   ") == p
@@ -717,9 +837,7 @@ def test_green_explore_stall_nudges_done_not_write():
 
 
 def test_arbitrary_shell_is_not_an_agent_action() -> None:
-    assert ab.parse_action(
-        '<omnia:action name="bash">{"cmd":"rm -rf src"}</omnia:action>'
-    ) is None
+    assert ab.parse_action('<omnia:action name="bash">{"cmd":"rm -rf src"}</omnia:action>') is None
     assert "bash" not in ab._KNOWN_ACTIONS
 
 
@@ -747,11 +865,7 @@ def test_css_import_correct_file_untouched() -> None:
 
 def test_css_import_sanitizer_deduplicates_and_keeps_tailwind_last() -> None:
     duplicated = (
-        '@import "tailwindcss";\n'
-        + _FONTS_IMPORT
-        + "\n"
-        + _FONTS_IMPORT
-        + "\n:root{--a:1}"
+        '@import "tailwindcss";\n' + _FONTS_IMPORT + "\n" + _FONTS_IMPORT + "\n:root{--a:1}"
     )
 
     out = ab._sanitize_css_imports("src/app/globals.css", duplicated)

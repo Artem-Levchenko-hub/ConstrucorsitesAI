@@ -219,6 +219,27 @@ def _fresh_max_product_write_rejection(
     return None
 
 
+_MAX_READ_ONLY_BASH_COMMANDS = frozenset(
+    {
+        "pnpm analyze:agent",
+        "pnpm security:agent",
+        "pnpm typecheck",
+    }
+)
+
+
+def _max_bash_command_rejection(command: str, mutation_paths: object = None) -> str | None:
+    """Allow only exact platform-owned read-only commands in MAX containers."""
+
+    if mutation_paths != [] or command.strip() not in _MAX_READ_ONLY_BASH_COMMANDS:
+        return (
+            "MAX bash accepts only exact managed read-only commands with mutation_paths=[]: "
+            "pnpm typecheck, pnpm analyze:agent, or pnpm security:agent. Use file tools "
+            "for source changes and the managed dependency repair path for packages."
+        )
+    return None
+
+
 def _reference_max_completion_gap(
     written: Mapping[str, str],
     _evidence: Mapping[str, int],
@@ -474,9 +495,7 @@ async def _run_tracked_prompt(
                             "retryable": True,
                         },
                     )
-                    await enqueue_run_durably(
-                        run_id, delay_seconds=_decision.delay_seconds
-                    )
+                    await enqueue_run_durably(run_id, delay_seconds=_decision.delay_seconds)
                     return
             if not await _resync_cancelled_runtime_or_hold(
                 run_id=run_id,
@@ -592,12 +611,9 @@ async def _run_tracked_prompt(
             _published = False
             _published_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
             async with _published_factory() as _published_session:
-                _published_message = await _published_session.get(
-                    Message, assistant_message_id
-                )
+                _published_message = await _published_session.get(Message, assistant_message_id)
                 _published = bool(
-                    _published_message is not None
-                    and _published_message.snapshot_id is not None
+                    _published_message is not None and _published_message.snapshot_id is not None
                 )
             if _published:
                 await finalize_generation_run(run_id)
@@ -619,9 +635,7 @@ async def _run_tracked_prompt(
                     label,
                     exc_info=exc,
                 )
-                await enqueue_run_durably(
-                    run_id, delay_seconds=_decision.delay_seconds
-                )
+                await enqueue_run_durably(run_id, delay_seconds=_decision.delay_seconds)
                 return
         logging.getLogger(__name__).error("%s failed", label, exc_info=exc)
         if touched_paths:
@@ -3674,6 +3688,7 @@ async def _process_prompt(
     _continuity_provider_epoch = 0
     _continuity_seed_files: dict[str, str] = {}
     _current_run_state: dict[str, object] = {}
+    _code_intelligence_enabled = False
 
     try:
         async with factory() as session:
@@ -3697,9 +3712,7 @@ async def _process_prompt(
                 _continuity = _current_run_state.get("continuity")
                 if isinstance(_continuity, dict):
                     _continuity_attempt = int(_continuity.get("attempt") or 0)
-                    _continuity_provider_epoch = int(
-                        _continuity.get("provider_epoch") or 0
-                    )
+                    _continuity_provider_epoch = int(_continuity.get("provider_epoch") or 0)
             _assistant_row = await session.get(Message, assistant_message_id)
             if (
                 _assistant_row is not None
@@ -4015,8 +4028,19 @@ async def _process_prompt(
                 }
                 await _record_agent_step(step_row)
 
+            _code_intelligence_enabled = (
+                project_template == "max_miniapp"
+                and agent_builder.is_agentic_enabled(
+                    get_settings().max_code_intelligence_enabled,
+                    get_settings().max_code_intelligence_canary_users,
+                    str(user_id),
+                )
+            )
             _base_agent_executor = agent_builder.make_container_executor(
-                project_id=project_id, slug=project_slug, emit=_agent_emit
+                project_id=project_id,
+                slug=project_slug,
+                emit=_agent_emit,
+                code_intelligence=_code_intelligence_enabled,
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             if project_template == "max_miniapp":
@@ -4028,7 +4052,6 @@ async def _process_prompt(
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
                     nonlocal _max_visual_proof
-                    bash_before_tree: dict[str, str] | None = None
                     if action.name in {"read_file", "grep"}:
                         read_path = action.path or ("src" if action.name == "grep" else "")
                         folded_path = read_path.casefold()
@@ -4055,49 +4078,12 @@ async def _process_prompt(
                         )
                     if action.name == "bash":
                         raw_mutation_paths = action.args.get("mutation_paths")
-                        if not isinstance(raw_mutation_paths, list) or any(
-                            not isinstance(path, str) or not path
-                            for path in raw_mutation_paths
-                        ):
-                            return {
-                                "ok": False,
-                                "error": (
-                                    "bash needs mutation_paths with every product file it may "
-                                    "change (use [] for read-only commands)"
-                                ),
-                            }
-                        for mutation_path in raw_mutation_paths:
-                            if mutation_path in MAX_MODEL_LOCKED_FILES:
-                                return {
-                                    "ok": False,
-                                    "error": f"{mutation_path} is managed by MAX Studio",
-                                }
-                            path_rejection = max_model_path_rejection(mutation_path)
-                            if path_rejection:
-                                return {"ok": False, "error": path_rejection}
-                        # Snapshot every source path, not only model-declared
-                        # mutations. Shell is intentionally powerful; this makes
-                        # its actual delta authoritative and lets policy rollback
-                        # an undeclared/locked mutation before it can influence
-                        # proof or publication.
-                        bash_before_paths = await orchestrator_client.agent_list_source_files(
-                            project_id, project_slug
+                        command_rejection = _max_bash_command_rejection(
+                            str(action.args.get("cmd") or ""), raw_mutation_paths
                         )
-                        bash_before_contents = await asyncio.gather(
-                            *(
-                                orchestrator_client.agent_read_file(
-                                    project_id, project_slug, path
-                                )
-                                for path in bash_before_paths
-                            )
-                        )
-                        bash_before_tree = {
-                            path: content
-                            for path, content in zip(
-                                bash_before_paths, bash_before_contents, strict=True
-                            )
-                            if isinstance(content, str)
-                        }
+                        if command_rejection:
+                            return {"ok": False, "error": command_rejection}
+                        return await _base_agent_executor(action)
                     if action.name == "see":
                         # MAX previews authenticate through signed initData/session,
                         # not the generic email login. Bootstrap a short-lived
@@ -4268,117 +4254,6 @@ async def _process_prompt(
                                 ),
                             }
                     _observation = await _base_agent_executor(action)
-                    if action.name == "bash" and bash_before_tree is not None:
-                        bash_after_paths = await orchestrator_client.agent_list_source_files(
-                            project_id, project_slug
-                        )
-                        bash_after_contents = await asyncio.gather(
-                            *(
-                                orchestrator_client.agent_read_file(
-                                    project_id, project_slug, path
-                                )
-                                for path in bash_after_paths
-                            )
-                        )
-                        bash_after_tree = {
-                            path: content
-                            for path, content in zip(
-                                bash_after_paths, bash_after_contents, strict=True
-                            )
-                            if isinstance(content, str)
-                        }
-                        actual_changed_paths = sorted(
-                            path
-                            for path in set(bash_before_tree) | set(bash_after_tree)
-                            if bash_before_tree.get(path) != bash_after_tree.get(path)
-                        )
-                        if actual_changed_paths:
-                            await orchestrator_client.track_mutation_paths(actual_changed_paths)
-                        actual_previous_files = {
-                            path: bash_before_tree.get(path, "")
-                            for path in actual_changed_paths
-                        }
-                        actual_shell_files = {
-                            path: bash_after_tree.get(path, "")
-                            for path in actual_changed_paths
-                        }
-                        if not _observation.get("ok"):
-                            if actual_previous_files:
-                                await orchestrator_client.hot_reload_exact(
-                                    project_id, project_slug, actual_previous_files
-                                )
-                            _observation.pop("_previous_files", None)
-                            return _observation
-                        _observation["files"] = actual_shell_files
-                        _observation["changed_paths"] = actual_changed_paths
-                        _observation["_previous_files"] = actual_previous_files
-
-                    if action.name == "bash" and _observation.get("ok"):
-                        shell_files = _observation.get("files")
-                        previous_files = _observation.get("_previous_files")
-                        if isinstance(shell_files, dict):
-                            shell_rejection: str | None = None
-                            normalized_shell_files: dict[str, str] = {}
-                            for shell_path, shell_content in shell_files.items():
-                                if not isinstance(shell_path, str) or not isinstance(
-                                    shell_content, str
-                                ):
-                                    shell_rejection = "bash returned an invalid source mutation"
-                                    break
-                                if shell_path in MAX_MODEL_LOCKED_FILES:
-                                    shell_rejection = f"{shell_path} is managed by MAX Studio"
-                                    break
-                                shell_rejection = max_model_path_rejection(shell_path)
-                                if shell_rejection:
-                                    break
-                                candidate = shell_content
-                                if shell_path == "src/app/globals.css":
-                                    from omnia_api.services.max_generation_contract import (
-                                        normalize_max_globals_css,
-                                    )
-
-                                    candidate = normalize_max_globals_css(candidate)
-                                shell_rejection = (
-                                    max_model_write_rejection(shell_path, candidate)
-                                    or _fresh_max_product_write_rejection(
-                                        candidate,
-                                        has_generated_snapshot=_max_has_generated_snapshot,
-                                    )
-                                )
-                                if shell_rejection:
-                                    break
-                                from omnia_api.services.sast_gate import check_sast
-
-                                sast = check_sast({shell_path: candidate})
-                                if not sast.safe:
-                                    shell_rejection = sast.summary
-                                    break
-                                if "@/lib/db" in candidate or "drizzle-orm" in candidate:
-                                    shell_rejection = (
-                                        "Direct DB access is forbidden in MAX product files. "
-                                        "Use the managed integration client."
-                                    )
-                                    break
-                                normalized_shell_files[shell_path] = candidate
-                            if shell_rejection:
-                                if isinstance(previous_files, dict) and previous_files:
-                                    await orchestrator_client.hot_reload_exact(
-                                        project_id,
-                                        project_slug,
-                                        {
-                                            path: content
-                                            for path, content in previous_files.items()
-                                            if isinstance(path, str)
-                                            and isinstance(content, str)
-                                        },
-                                    )
-                                return {"ok": False, "error": shell_rejection}
-                            if normalized_shell_files != shell_files:
-                                await orchestrator_client.hot_reload_exact(
-                                    project_id, project_slug, normalized_shell_files
-                                )
-                                _observation["files"] = normalized_shell_files
-                        _observation.pop("_previous_files", None)
                     if action.name == "runtime_check" and not _max_runtime_probe_is_green(
                         _observation
                     ):
@@ -4531,16 +4406,32 @@ async def _process_prompt(
                             or obs.get("error")
                             or f"{action.name} completed"
                         )[:1000]
-                    summary = str(
-                        sanitize_agent_step({"detail": summary}).get("detail") or ""
-                    )[:1000]
+                    summary = str(sanitize_agent_step({"detail": summary}).get("detail") or "")[
+                        :1000
+                    ]
                     artifact = action.path if action.name in {"write_file", "edit_file"} else ""
+                    raw_files = obs.get("files")
+                    mutated = bool(obs.get("ok")) and (
+                        action.name in {"write_file", "edit_file"}
+                        or (
+                            action.name == "bash"
+                            and isinstance(raw_files, Mapping)
+                            and bool(raw_files)
+                        )
+                    )
+                    evidence_ok = bool(obs.get("ok"))
+                    if action.name == "see":
+                        evidence_ok = evidence_ok and not any(
+                            bool(obs.get(key))
+                            for key in ("needs_fix", "proof_unavailable", "skipped")
+                        )
                     _agent_state = agent_plan.record_tool_evidence(
                         _agent_state,
                         tool=action.name,
-                        ok=bool(obs.get("ok")),
+                        ok=evidence_ok,
                         summary=summary,
                         artifact=artifact,
+                        mutated=mutated,
                     )
                     await save_generation_agent_state(run_id, _agent_state)
                 return obs
@@ -4986,15 +4877,27 @@ async def _process_prompt(
                     ),
                     provider_turn_offset=_continuity_provider_epoch * 1000,
                     resume_checkpoint=_native_resume,
-                    checkpoint=(
-                        _save_native_resume
-                        if project_template == "max_miniapp"
-                        else None
-                    ),
+                    checkpoint=(_save_native_resume if project_template == "max_miniapp" else None),
                     progress_context=(
-                        lambda: agent_plan.recovery_context(_agent_state)
+                        lambda: (
+                            agent_plan.recovery_context(_agent_state)
+                            if project_template == "max_miniapp"
+                            else ""
+                        )
+                    ),
+                    acceptance_criteria=(
+                        [
+                            item
+                            for item in _agent_state.get("acceptance_criteria", [])
+                            if isinstance(item, str)
+                        ]
                         if project_template == "max_miniapp"
-                        else ""
+                        else ()
+                    ),
+                    brain_memory=(
+                        _agent_state.get("brain_memory")
+                        if isinstance(_agent_state.get("brain_memory"), Mapping)
+                        else None
                     ),
                 )
             elif _agent_res is None:
@@ -5015,6 +4918,22 @@ async def _process_prompt(
                     edit_mode=_is_edit,
                     bare_mode=_bare_stack,
                 )
+            if project_template == "max_miniapp":
+                if _agent_res.stop_reason == "semantic_loop_red":
+                    from omnia_api.services.agent_brain import durable_brain_memory
+
+                    _terminal_checkpoint = await load_native_checkpoint(run_id)
+                    _terminal_brain = (
+                        _terminal_checkpoint.get("brain_v2")
+                        if isinstance(_terminal_checkpoint, Mapping)
+                        else None
+                    )
+                    if isinstance(_terminal_brain, Mapping):
+                        _agent_state["brain_memory"] = durable_brain_memory(_terminal_brain)
+                elif _agent_res.done:
+                    _agent_state.pop("brain_memory", None)
+                _agent_state = agent_plan.reconcile_tool_evidence(_agent_state)
+                await save_generation_agent_state(run_id, _agent_state)
             # A green runtime is not proof that the user's request was generated.
             # Native `done` may otherwise succeed after only reading/building the
             # existing environment. Require at least one attributable model write
@@ -6235,9 +6154,11 @@ async def _process_prompt(
                         project_template == "max_miniapp"
                         and max_prompt_requires_persistence(_max_product_brief)
                     ),
+                    require_dependency_security=_code_intelligence_enabled,
                 )
                 if project_template == "max_miniapp":
                     from omnia_api.services.functional_gate import Check, summarize
+
                     _visual_gate = _max_visual_proof or summarize(
                         [
                             Check(

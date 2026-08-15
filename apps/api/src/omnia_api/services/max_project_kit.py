@@ -143,9 +143,11 @@ def render_max_managed_files(
         1,
     )
     files = {
+        ".dependency-cruiser.cjs": _template_file(".dependency-cruiser.cjs"),
         "package.json": _template_file("package.json"),
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
+        "scripts/analyze-code.mjs": _template_file("scripts/analyze-code.mjs"),
         # MAX source uses the @/* alias throughout the protected runtime.  The
         # base container may predate the MAX template, so its generic tsconfig
         # cannot be trusted to carry that alias into a freshly overlaid starter.
@@ -446,6 +448,7 @@ export default function SupportPage() {
 MAX_MODEL_LOCKED_FILES = frozenset(
     {
         "docker-entrypoint.sh",
+        ".dependency-cruiser.cjs",
         "Dockerfile.dev",
         "Dockerfile.prod",
         "drizzle.config.ts",
@@ -454,6 +457,7 @@ MAX_MODEL_LOCKED_FILES = frozenset(
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
+        "scripts/analyze-code.mjs",
         "scripts/apply-migrations.mjs",
         "drizzle/0000_max_core.sql",
         "drizzle/0001_business_core.sql",
