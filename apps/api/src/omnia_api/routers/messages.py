@@ -1217,32 +1217,38 @@ async def _run_max_visual_qa(
     *,
     path: str,
     prompt_context: str,
+    visual_scoring_enabled: bool = False,
 ) -> dict[str, Any]:
-    """Run signed MAX visual QA with a short infrastructure-only retry.
+    """Run signed MAX functional QA and optionally attach screenshot scoring.
 
-    ``agent_vision.see_page`` already retries a skipped visual judge against one
-    captured image.  This outer recovery covers the other transient boundary:
-    creating the signed preview session or rendering the page.  A real browser
-    failure carries a verdict and is returned immediately so it cannot be
-    mislabeled as unavailable infrastructure.
+    Screenshot/vision scoring is an optional taste signal. The signed functional
+    gate remains mandatory and is the default MAX completion proof.
     """
 
-    from omnia_api.services import agent_vision
-
-    last_error = "MAX visual QA unavailable"
+    last_error = "MAX signed QA unavailable"
     for attempt, delay_seconds in enumerate(_MAX_VISUAL_QA_RETRY_DELAYS_SECONDS, start=1):
         if delay_seconds:
             await asyncio.sleep(delay_seconds)
         try:
             preview_session = await orchestrator_client.create_max_preview_session(project_id)
             bootstrap_url = str(preview_session.get("bootstrap_url") or "")
-            visual = await agent_vision.see_page(
-                project_id,
-                path=path,
-                prompt_context=prompt_context,
-                bootstrap_url=bootstrap_url,
-                product_kind="max_miniapp",
-            )
+            if visual_scoring_enabled:
+                from omnia_api.services import agent_vision
+
+                visual = await agent_vision.see_page(
+                    project_id,
+                    path=path,
+                    prompt_context=prompt_context,
+                    bootstrap_url=bootstrap_url,
+                    product_kind="max_miniapp",
+                )
+            else:
+                visual = {
+                    "ok": True,
+                    "needs_fix": False,
+                    "visual_scoring_skipped": True,
+                    "detail": "Subjective MAX screenshot scoring is disabled.",
+                }
         except Exception as exc:
             last_error = f"MAX visual QA unavailable: {type(exc).__name__}"
             logging.getLogger(__name__).warning(
@@ -3689,6 +3695,7 @@ async def _process_prompt(
     _continuity_seed_files: dict[str, str] = {}
     _current_run_state: dict[str, object] = {}
     _code_intelligence_enabled = False
+    _max_visual_scoring_enabled = False
 
     try:
         async with factory() as session:
@@ -4036,6 +4043,9 @@ async def _process_prompt(
                     str(user_id),
                 )
             )
+            _max_visual_scoring_enabled = (
+                project_template == "max_miniapp" and get_settings().max_visual_scoring_enabled
+            )
             _base_agent_executor = agent_builder.make_container_executor(
                 project_id=project_id,
                 slug=project_slug,
@@ -4099,10 +4109,13 @@ async def _process_prompt(
                                     else ""
                                 )
                             ),
+                            visual_scoring_enabled=_max_visual_scoring_enabled,
                         )
                         from omnia_api.services.functional_gate import Check, summarize
 
-                        if _visual.get("verdict"):
+                        if _visual.get("visual_scoring_skipped"):
+                            _max_visual_proof = None
+                        elif _visual.get("verdict"):
                             _visual_ok = bool(_visual.get("ok")) and not bool(
                                 _visual.get("needs_fix")
                             )
@@ -4133,8 +4146,10 @@ async def _process_prompt(
                                 ]
                             )
                         if not _visual.get("ok"):
-                            if _visual.get("verdict") or "BROWSER SIGNALS" in str(
-                                _visual.get("detail") or ""
+                            if (
+                                _visual.get("functional_passed") is False
+                                or _visual.get("verdict")
+                                or "BROWSER SIGNALS" in str(_visual.get("detail") or "")
                             ):
                                 return _visual
                             # Preserve the structured unavailable signal. The native
@@ -6156,7 +6171,7 @@ async def _process_prompt(
                     ),
                     require_dependency_security=_code_intelligence_enabled,
                 )
-                if project_template == "max_miniapp":
+                if project_template == "max_miniapp" and _max_visual_scoring_enabled:
                     from omnia_api.services.functional_gate import Check, summarize
 
                     _visual_gate = _max_visual_proof or summarize(

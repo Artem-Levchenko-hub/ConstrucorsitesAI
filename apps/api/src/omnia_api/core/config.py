@@ -1072,6 +1072,9 @@ class Settings(BaseSettings):
     # MAX build observation. Separate canary keeps legacy containers fail-safe.
     max_code_intelligence_enabled: bool = Field(default=False)
     max_code_intelligence_canary_users: str = Field(default="")
+    # Optional subjective screenshot/vision scoring for MAX. Functional browser,
+    # runtime, build and security proof remain mandatory when this is disabled.
+    max_visual_scoring_enabled: bool = Field(default=False)
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't

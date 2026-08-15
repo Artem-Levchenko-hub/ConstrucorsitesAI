@@ -113,6 +113,7 @@ async def test_max_visual_qa_recovers_after_transient_preview_failure(
         project_id,
         path="/",
         prompt_context="restaurant app",
+        visual_scoring_enabled=True,
     )
 
     assert result["ok"] is True
@@ -157,12 +158,92 @@ async def test_max_visual_qa_does_not_retry_real_browser_failure(
         uuid4(),
         path="/",
         prompt_context="restaurant app",
+        visual_scoring_enabled=True,
     )
 
     assert result["ok"] is False
     assert "BROWSER SIGNALS" in result["detail"]
     assert session_calls == 1
     assert see_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_max_signed_qa_skips_screenshot_scoring_but_keeps_functional_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import agent_vision, max_functional_gate
+    from omnia_api.services.functional_gate import Check, summarize
+
+    project_id = uuid4()
+    visual_calls = 0
+    functional_calls = 0
+
+    async def fake_session(_project_id: Any) -> dict[str, str]:
+        return {"bootstrap_url": "https://preview.example/session?signature=secret"}
+
+    async def unexpected_see(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal visual_calls
+        visual_calls += 1
+        raise AssertionError("visual scoring must stay disabled")
+
+    async def fake_functional(_url: str, *, require_persistence: bool) -> Any:
+        nonlocal functional_calls
+        functional_calls += 1
+        assert require_persistence is False
+        return summarize([Check("max_signed_functional", True, "green")])
+
+    monkeypatch.setattr(
+        messages.orchestrator_client,
+        "create_max_preview_session",
+        fake_session,
+    )
+    monkeypatch.setattr(agent_vision, "see_page", unexpected_see)
+    monkeypatch.setattr(max_functional_gate, "run_max_functional_gate", fake_functional)
+
+    result = await messages._run_max_visual_qa(
+        project_id,
+        path="/",
+        prompt_context="restaurant app",
+    )
+
+    assert result["ok"] is True
+    assert result["visual_scoring_skipped"] is True
+    assert result["functional_passed"] is True
+    assert visual_calls == 0
+    assert functional_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_max_signed_qa_keeps_functional_failure_blocking_without_visual_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import max_functional_gate
+    from omnia_api.services.functional_gate import Check, summarize
+
+    async def fake_session(_project_id: Any) -> dict[str, str]:
+        return {"bootstrap_url": "https://preview.example/session?signature=secret"}
+
+    async def fake_functional(_url: str, *, require_persistence: bool) -> Any:
+        assert require_persistence is False
+        return summarize([Check("primary_action", False, "action failed")])
+
+    monkeypatch.setattr(
+        messages.orchestrator_client,
+        "create_max_preview_session",
+        fake_session,
+    )
+    monkeypatch.setattr(max_functional_gate, "run_max_functional_gate", fake_functional)
+
+    result = await messages._run_max_visual_qa(
+        uuid4(),
+        path="/",
+        prompt_context="restaurant app",
+    )
+
+    assert result["visual_scoring_skipped"] is True
+    assert result["functional_passed"] is False
+    assert result["ok"] is False
+    assert result["needs_fix"] is True
 
 
 def test_generic_native_agent_and_autoheal_keep_primary_model() -> None:
@@ -191,6 +272,7 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert "Ни один навык не является обязательной" in prompt
     assert "MAX capability catalog" not in prompt
     assert "signed MAX preview session" in prompt
+    assert "без обязательной оценки дизайна" in prompt
     assert "Субъективный visual score" in prompt
     assert "must not trigger redesign or block completion" in prompt
     assert "build" in prompt
@@ -198,6 +280,8 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert {"read_file", "write_file", "build", "done"} <= names
     assert "read_skill" not in names
     assert agent_native._TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
+    max_see = next(tool for tool in agent_native._MAX_TOOLS if tool["name"] == "see")
+    assert "subjective screenshot/design scoring is optional" in max_see["description"]
     stable_names = {tool["name"] for tool in agent_native._STABLE_MAX_TOOLS_CACHED}
     assert {
         "plan_task",

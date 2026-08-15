@@ -339,7 +339,18 @@ _MAX_BASH_TOOL = _tool(
     },
     ["cmd", "mutation_paths"],
 )
-_MAX_BASE_TOOLS = [tool for tool in _TOOLS if tool["name"] not in _MAX_UNAVAILABLE_TOOLS]
+_MAX_SEE_TOOL = _tool(
+    "see",
+    "Run the signed MAX browser/functional gate on the live route. It verifies "
+    "hydration, navigation, primary actions and required persistence; subjective "
+    "screenshot/design scoring is optional and does not block completion.",
+    {"path": _STR},
+)
+_MAX_BASE_TOOLS = [
+    _MAX_SEE_TOOL if tool["name"] == "see" else tool
+    for tool in _TOOLS
+    if tool["name"] not in _MAX_UNAVAILABLE_TOOLS
+]
 _MAX_TOOLS = [
     *_MAX_BASE_TOOLS[:-1],
     _MAX_READ_SKILL_TOOL,
@@ -370,7 +381,7 @@ _MAX_TOOLS_CACHED: list[dict[str, Any]] = [
 
 # Stable MAX uses the same mature native-agent lifecycle as ordinary container
 # apps, with MAX-only schemas removing unsafe generic login/isolation probes.
-# Planning, server-owned skills, signed vision and read-only capability research
+# Planning, server-owned skills, signed functional proof and read-only capability research
 # are part of the production proof; file/path/secret safety remains enforced by
 # the MAX executor independently of which schemas are advertised.
 _STABLE_MAX_TOOL_NAMES = frozenset(
@@ -1324,7 +1335,8 @@ _MAX_NATIVE_PREAMBLE = (
     "реальными сценариями и профессиональной детализацией. Инструменты вызывай "
     "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
     "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
-    "скриншоты и независимая mobile/MAX-критика, bash — только одна из трёх точных "
+    "подписанная функциональная browser-проверка без обязательной оценки дизайна, "
+    "bash — только одна из трёх точных "
     "read-only проверок с mutation_paths=[]: `pnpm typecheck`, `pnpm analyze:agent` или "
     "`pnpm security:agent`. Не вызывай free-form shell, package mutation, tests или "
     "code generation; исходники меняй только file tools. "
@@ -1418,7 +1430,8 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
     "MAX uses signed initData and an authenticated preview session. The generic probe and "
     "verify_isolation tools cannot prove this runtime and are not available in a MAX build. "
-    "The see tool DOES receive a signed MAX preview session. Finish "
+    "The see tool DOES receive a signed MAX preview session and runs objective functional "
+    "browser checks; screenshot/design scoring is optional. Finish "
     "the complete source product, run build until clean, run runtime_check after the final "
     "write, then call see; the executor supplies a signed MAX preview session. A "
     "objective browser or signed functional failure is not proof: apply one concrete fix, "
