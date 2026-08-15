@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -14,6 +15,10 @@ from omnia_api.services.generation_continuity import (
     workspace_digest,
 )
 from omnia_api.services.max_environment_manifest import build_max_environment_manifest
+from omnia_api.services.max_project_kit import (
+    default_max_project_config,
+    render_max_managed_files,
+)
 
 
 def test_progressing_internal_red_stays_recoverable() -> None:
@@ -109,10 +114,19 @@ def test_only_true_external_provider_block_terminalizes() -> None:
 def test_environment_manifest_is_source_derived_locked_and_secret_free() -> None:
     manifest = build_max_environment_manifest()
     rendered = json.dumps(manifest, ensure_ascii=False).casefold()
+    managed = render_max_managed_files(
+        default_max_project_config("Manifest"),
+        UUID(int=0),
+    )["src/lib/omnia/integration-client.ts"]
+    signatures = "\n".join(manifest["managed_signatures"]["integration_client"])
 
     assert manifest["runtime"]["framework"].startswith("next@")
     assert "src/components/MaxAppProvider.tsx" in manifest["locked_paths"]
     assert "requestOmniaAI" in str(manifest["managed_signatures"])
+    assert ("trackMaxEvent" in signatures) is (
+        "export async function trackMaxEvent" in managed
+    )
+    assert "trackOmniaGoal" in signatures
     assert "pnpm typecheck" in manifest["proof_commands"]
     assert "api_key=" not in rendered
     assert "password=" not in rendered

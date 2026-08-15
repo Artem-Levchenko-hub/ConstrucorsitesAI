@@ -6,8 +6,13 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
-from omnia_api.services.max_project_kit import MAX_MODEL_LOCKED_FILES
+from omnia_api.services.max_project_kit import (
+    MAX_MODEL_LOCKED_FILES,
+    default_max_project_config,
+    render_max_managed_files,
+)
 
 _TEMPLATE = (
     Path(__file__).resolve().parents[4]
@@ -28,12 +33,61 @@ _EXPORT_START_RE = re.compile(
 def _public_exports(source: str) -> list[str]:
     """Extract compact exact public declarations without implementation bodies."""
 
+    def function_declaration(start: int) -> str:
+        parentheses = 0
+        angles = 0
+        brackets = 0
+        type_braces = 0
+        quote = ""
+        escaped = False
+        for index in range(start, len(source)):
+            char = source[index]
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = ""
+                continue
+            if char in {'"', "'", "`"}:
+                quote = char
+                continue
+            if char == "(":
+                parentheses += 1
+            elif char == ")":
+                parentheses = max(0, parentheses - 1)
+            elif char == "<":
+                angles += 1
+            elif char == ">":
+                angles = max(0, angles - 1)
+            elif char == "[":
+                brackets += 1
+            elif char == "]":
+                brackets = max(0, brackets - 1)
+            elif char == "{" and parentheses == angles == brackets == 0:
+                previous = source[:index].rstrip()[-1:]
+                if type_braces == 0 and previous != ":":
+                    declaration = source[start:index].strip()
+                    return re.sub(r"\s+", " ", declaration)[:1200] + ";"
+                type_braces += 1
+            elif char == "}" and type_braces:
+                type_braces -= 1
+        return re.sub(r"\s+", " ", source[start:].strip())[:1200]
+
     lines = source.splitlines()
     exports: list[str] = []
     index = 0
+    offset = 0
     while index < len(lines):
         line = lines[index]
         if not _EXPORT_START_RE.match(line):
+            offset += len(line) + 1
+            index += 1
+            continue
+        if re.match(r"^export\s+(?:async\s+)?function\s+", line):
+            exports.append(function_declaration(offset))
+            offset += len(line) + 1
             index += 1
             continue
         chunk = [line.strip()]
@@ -41,7 +95,7 @@ def _public_exports(source: str) -> list[str]:
         while index + 1 < len(lines) and (
             ("(" in " ".join(chunk) and ")" not in " ".join(chunk))
             or balance > 0
-            or not chunk[-1].rstrip().endswith((";", "{", ")"))
+            or not chunk[-1].rstrip().endswith((";", "{", "}", ")"))
         ):
             index += 1
             next_line = lines[index].strip()
@@ -50,20 +104,24 @@ def _public_exports(source: str) -> list[str]:
             if len(chunk) >= 24:
                 break
         declaration = " ".join(part for part in chunk if part)
-        if "{" in declaration and declaration.startswith("export async function"):
-            declaration = declaration.split("{", 1)[0].rstrip() + ";"
         exports.append(declaration[:1200])
+        start_line = index - len(chunk) + 1
+        offset += sum(
+            len(lines[position]) + 1 for position in range(start_line, index + 1)
+        )
         index += 1
     return exports
 
 
 def build_max_environment_manifest() -> dict[str, Any]:
     package = json.loads((_TEMPLATE / "package.json").read_text(encoding="utf-8"))
-    client = (_TEMPLATE / "src/lib/omnia/client.ts").read_text(encoding="utf-8")
-    provider = (_TEMPLATE / "src/components/MaxAppProvider.tsx").read_text(
-        encoding="utf-8"
+    managed = render_max_managed_files(
+        default_max_project_config("Manifest"),
+        UUID(int=0),
     )
-    config = (_TEMPLATE / "src/lib/omnia/max-config.ts").read_text(encoding="utf-8")
+    client = managed["src/lib/omnia/integration-client.ts"]
+    provider = managed["src/components/MaxAppProvider.tsx"]
+    config = managed["src/lib/omnia/max-config.ts"]
     index = (_TEMPLATE / ".omnia/skills/INDEX.md").read_text(encoding="utf-8")
     manifest: dict[str, Any] = {
         "version": 1,
