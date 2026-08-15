@@ -704,6 +704,12 @@ _MAX_RESTORE_TEMPLATE_PLATFORM_FILES = frozenset(
 _MAX_CONFIG_MARKER = "export const omniaMaxConfig: OmniaMaxConfig = "
 
 
+def is_managed_max_root_page(source: str) -> bool:
+    """Whether source is the current platform-owned root runtime boundary."""
+
+    return source.strip() == _template_file(MAX_PRODUCT_PAGE_PATH).strip()
+
+
 def max_history_product_files(files: dict[str, str]) -> dict[str, str]:
     """Return only snapshot-owned product files for a history renderer.
 
@@ -748,6 +754,7 @@ def max_history_product_files(files: dict[str, str]) -> dict[str, str]:
         MAX_PRODUCT_ENTRY_PATH not in product
         and legacy_page
         and legacy_page.strip() != _EMPTY_PRODUCT_ENTRY.strip()
+        and not is_managed_max_root_page(legacy_page)
     ):
         # Kit v14 and older let the model own the root page.  History and restore
         # migrate that product byte-for-byte behind the current browser-only

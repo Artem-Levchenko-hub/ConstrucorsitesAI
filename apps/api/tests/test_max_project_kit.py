@@ -147,6 +147,20 @@ def test_empty_initial_history_restores_neutral_generation_canvas() -> None:
     assert 'data-max-product-canvas="empty"' in config_only_files[MAX_PRODUCT_ENTRY_PATH]
 
 
+def test_current_managed_root_page_is_not_migrated_into_product_entry() -> None:
+    managed_page = max_project_kit_svc._template_file(MAX_PRODUCT_PAGE_PATH)
+
+    files = render_max_history_files(
+        {MAX_PRODUCT_PAGE_PATH: managed_page},
+        _config(),
+        uuid4(),
+    )
+
+    assert files[MAX_PRODUCT_PAGE_PATH] == managed_page
+    assert files[MAX_PRODUCT_ENTRY_PATH] != managed_page
+    assert 'data-max-product-canvas="empty"' in files[MAX_PRODUCT_ENTRY_PATH]
+
+
 def test_history_preserves_every_current_model_owned_product_artifact() -> None:
     snapshot = {
         MAX_PRODUCT_ENTRY_PATH: '"use client"; export default function ProductApp() {}',
