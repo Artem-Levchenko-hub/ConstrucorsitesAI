@@ -359,6 +359,22 @@ def test_max_terminal_failure_rejects_missing_snapshot_and_failed_hydration() ->
     )
 
 
+def test_max_terminal_error_payload_preserves_primary_code() -> None:
+    payload = messages._max_terminal_error_payload(
+        message_id="message-fixture",
+        error_message="Final verification failed",
+        error_code="final_verification_failed",
+        primary_code="agent_stopped:semantic_loop_red",
+    )
+
+    assert payload == {
+        "message_id": "message-fixture",
+        "error": "Final verification failed",
+        "code": "agent_stopped:semantic_loop_red",
+        "secondary_code": "final_verification_failed",
+    }
+
+
 def test_fresh_max_reference_gate_rejects_css_only_or_managed_empty_entry() -> None:
     evidence: dict[str, int] = {}
 

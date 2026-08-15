@@ -779,6 +779,26 @@ def _max_terminal_failure(
     return None
 
 
+def _max_terminal_error_payload(
+    *,
+    message_id: str,
+    error_message: str,
+    error_code: str,
+    primary_code: str | None,
+) -> dict[str, str]:
+    """Keep the first causal failure visible when final verification also fails."""
+
+    code = primary_code or error_code
+    payload = {
+        "message_id": message_id,
+        "error": error_message,
+        "code": code,
+    }
+    if code != error_code:
+        payload["secondary_code"] = error_code
+    return payload
+
+
 async def _probe_compile_errors(
     factory: async_sessionmaker[AsyncSession],
     project_id: UUID,
@@ -6472,15 +6492,16 @@ async def _process_prompt(
                         msg.tokens_out = msg.tokens_out or 0
                         msg.agent_steps = _agent_step_log or None
                     await session.commit()
-                await set_generation_run_error(run_id, error_code)
+                primary_code = await set_generation_run_error(run_id, error_code)
                 await publish_event(
                     project_id,
                     "llm.error",
-                    {
-                        "message_id": str(assistant_message_id),
-                        "error": error_message,
-                        "code": error_code,
-                    },
+                    _max_terminal_error_payload(
+                        message_id=str(assistant_message_id),
+                        error_message=error_message,
+                        error_code=error_code,
+                        primary_code=primary_code,
+                    ),
                 )
                 await clear_stream_state(project_id, assistant_message_id)
                 return

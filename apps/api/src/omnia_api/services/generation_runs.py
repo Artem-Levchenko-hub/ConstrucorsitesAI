@@ -317,7 +317,13 @@ async def set_generation_run_status(
         await session.commit()
 
 
-async def set_generation_run_error(run_id: UUID, error_code: str) -> None:
+async def set_generation_run_error(
+    run_id: UUID,
+    error_code: str,
+    *,
+    preserve_existing: bool = True,
+    session: AsyncSession | None = None,
+) -> str | None:
     """Persist a stable terminal reason while work is still being reconciled.
 
     The run remains active until snapshot/rollback reconciliation finishes. This
@@ -325,15 +331,24 @@ async def set_generation_run_error(run_id: UUID, error_code: str) -> None:
     visible, while ensuring the later generic finalizer cannot erase the cause.
     """
 
+    async def _persist(db: AsyncSession) -> str | None:
+        run = await db.get(GenerationRun, run_id)
+        if run is None:
+            return None
+        if not preserve_existing or not run.error:
+            run.error = error_code[:2000]
+        primary_error = run.error
+        await db.commit()
+        return primary_error
+
+    if session is not None:
+        return await _persist(session)
+
     from omnia_api.core.db import get_engine
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
-    async with factory() as session:
-        run = await session.get(GenerationRun, run_id)
-        if run is None:
-            return
-        run.error = error_code[:2000]
-        await session.commit()
+    async with factory() as own_session:
+        return await _persist(own_session)
 
 
 async def save_generation_agent_state(

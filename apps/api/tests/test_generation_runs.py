@@ -25,6 +25,7 @@ from omnia_api.services.generation_runs import (
     recover_interrupted_generation_runs,
     reserve_generation_run,
     save_generation_agent_state,
+    set_generation_run_error,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -138,6 +139,47 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
         "active_message_id": None,
         "active_status": "pending",
     }
+
+
+async def test_primary_generation_failure_is_not_overwritten(
+    db_session: AsyncSession,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="primary-failure",
+        prompt_hash="hash",
+        status="running",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    first = await set_generation_run_error(
+        run.id,
+        "agent_stopped:provider_rejected_red",
+        session=db_session,
+    )
+    primary = await set_generation_run_error(
+        run.id,
+        "final_verification_failed",
+        session=db_session,
+    )
+    await db_session.refresh(run)
+
+    assert first == "agent_stopped:provider_rejected_red"
+    assert primary == "agent_stopped:provider_rejected_red"
+    assert run.error == "agent_stopped:provider_rejected_red"
+
+    replaced = await set_generation_run_error(
+        run.id,
+        "administrative_repair",
+        preserve_existing=False,
+        session=db_session,
+    )
+    await db_session.refresh(run)
+    assert replaced == "administrative_repair"
+    assert run.error == "administrative_repair"
 
 
 async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
@@ -471,7 +513,6 @@ async def test_build_without_snapshot_is_failed_product_outcome(
 
     await db_session.refresh(run)
     assert run.status == "failed"
-    assert run.error == "api_process_restarted"
     assert run.finished_at is not None
     assert run.error == "build finished without a committed snapshot"
 
