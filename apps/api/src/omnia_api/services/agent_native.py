@@ -81,6 +81,12 @@ _STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 6
 # A third red verdict is preserved honestly for a later targeted edit instead of
 # charging for five more speculative rewrites.
 _STABLE_MAX_VISUAL_REPAIR_LIMIT = 2
+# One provider response is one planning snapshot: later tool calls in the same
+# response cannot see earlier results.  Bound that batch so a malformed/custom
+# provider response cannot hide an unbounded executor loop inside one agent
+# step, and require a fresh observation after two mutations of the same file.
+_STABLE_MAX_TOOL_OPS_PER_TURN = 16
+_STABLE_MAX_MUTATIONS_PER_PATH_PER_TURN = 2
 _HISTORY_PLACEHOLDER_MARKERS = (
     "[OMITTED FROM HISTORY:",
     "[OLDER TOOL RESULT OMITTED:",
@@ -1377,10 +1383,12 @@ _MAX_NATIVE_PREAMBLE = (
     "текущему брифу или конкретной ошибке. Ни один навык не является обязательной "
     "стадией перед записью кода или завершением. Если контекста достаточно — сразу "
     "создавай продукт, проверяй его и исправляй факты.\n\n"
-    "ДОКАЗАТЕЛЬСТВО КАЧЕСТВА. Цикл: реализуй целиком → build до чистоты → "
-    "runtime_check после последней записи → see через подписанную MAX-сессию. Если see "
-    "возвращает broken/generic или конкретные проблемы, не объявляй done: примени "
-    "точечную правку, снова build/runtime_check/see и повторяй до чистого visual verdict. "
+    "ДОКАЗАТЕЛЬСТВО ГОТОВНОСТИ. Реализуй целиком → build до чистоты → "
+    "runtime_check после последней записи → один see через подписанную MAX-сессию. "
+    "Объективная browser/functional ошибка блокирует готовность: примени точечную правку "
+    "и повтори доказательство. Субъективный visual score, generic/beautiful verdict или "
+    "совет по дополнительной полировке не блокируют рабочее приложение и не требуют "
+    "редизайна. Не повторяй исправления без нового факта. "
     "Если QA-инфраструктура недоступна, не перезапускай её вслепую и не объявляй done: "
     "заверши ход как visual proof unavailable — платформа сохранит last-known-good. "
     "Исправляй root-cause, не маскируй "
@@ -1413,9 +1421,10 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "The see tool DOES receive a signed MAX preview session. Finish "
     "the complete source product, run build until clean, run runtime_check after the final "
     "write, then call see; the executor supplies a signed MAX preview session. A "
-    "broken/generic verdict is not proof: apply the concrete fixes, rebuild, runtime_check "
-    "and see again until the visual verdict is clean. If visual QA reports unavailable, do "
-    "not retry it blindly."
+    "objective browser or signed functional failure is not proof: apply one concrete fix, "
+    "rebuild, runtime_check and see again. A subjective visual score or design-polish note "
+    "is advisory and must not trigger redesign or block completion. If visual QA reports "
+    "unavailable, do not retry it blindly."
 )
 
 _MAX_REFERENCE_PREAMBLE = (
@@ -1930,6 +1939,7 @@ async def run_native_build(
     )
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
+    last_build_revision: int | None = None
     last_build_error_paths: frozenset[str] = frozenset()
     last_build_error_text = ""
     repair_reads_since_build: set[str] = set()
@@ -2004,6 +2014,12 @@ async def run_native_build(
         last_build_ok = resume_checkpoint.get("last_build_ok")
         if last_build_ok not in {True, False, None}:
             last_build_ok = None
+        raw_last_build_revision = resume_checkpoint.get("last_build_revision")
+        if isinstance(raw_last_build_revision, (int, str)):
+            try:
+                last_build_revision = int(raw_last_build_revision)
+            except ValueError:
+                last_build_revision = None
         last_build_error_text = str(resume_checkpoint.get("last_build_error_text") or "")
         last_build_error_paths = frozenset(
             str(item) for item in resume_checkpoint.get("last_build_error_paths", [])
@@ -2127,6 +2143,7 @@ async def run_native_build(
             "provider_turn_offset": provider_turn_offset,
             "step_cursor": step_cursor,
             "last_build_ok": last_build_ok,
+            "last_build_revision": last_build_revision,
             "last_build_error_text": last_build_error_text,
             "last_build_error_paths": sorted(last_build_error_paths),
             "successful_tools": successful_tools,
@@ -2960,6 +2977,21 @@ async def run_native_build(
             semantic_loop_stop = bool(pending_turn_state.get("semantic_loop_stop"))
             ops_this_turn = int(pending_turn_state.get("ops") or 0)
             infra_this_turn = int(pending_turn_state.get("infra") or 0)
+            turn_mutation_counts: dict[str, int] = {}
+            raw_turn_mutation_counts = pending_turn_state.get("mutation_counts")
+            if isinstance(raw_turn_mutation_counts, str):
+                try:
+                    decoded_turn_mutation_counts = json.loads(raw_turn_mutation_counts)
+                except json.JSONDecodeError:
+                    decoded_turn_mutation_counts = {}
+                if isinstance(decoded_turn_mutation_counts, Mapping):
+                    for path, count in decoded_turn_mutation_counts.items():
+                        if not isinstance(path, str) or not isinstance(count, (int, str)):
+                            continue
+                        try:
+                            turn_mutation_counts[path] = max(0, int(count))
+                        except ValueError:
+                            continue
             reconcile_tool_index = (
                 pending_tool_index
                 if resuming_pending_tools and pending_tool_started_index == pending_tool_index
@@ -3169,6 +3201,48 @@ async def run_native_build(
                     repeated_observation_paths.append(action.path or action.name)
                     repeated_observation_paths = repeated_observation_paths[-20:]
                     obs = _repeat_observation_error(action)
+                elif stable_max_loop and ops_this_turn >= _STABLE_MAX_TOOL_OPS_PER_TURN:
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "Tool batch limit reached. Use the returned observations, then "
+                            "continue in a fresh model turn instead of executing more stale "
+                            "actions from the same response."
+                        ),
+                    }
+                elif (
+                    stable_max_loop
+                    and name in {"write_file", "edit_file"}
+                    and turn_mutation_counts.get(action.path, 0)
+                    >= _STABLE_MAX_MUTATIONS_PER_PATH_PER_TURN
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            f"{action.path} was already mutated twice in this model turn. "
+                            "Read the combined result in the next turn and apply one coherent "
+                            "follow-up instead of stacking stale same-file edits."
+                        ),
+                    }
+                elif (
+                    stable_max_loop
+                    and name == "build"
+                    and last_build_revision == workspace_revision
+                    and last_build_ok is not None
+                ):
+                    obs = {
+                        "ok": bool(last_build_ok),
+                        "cached": True,
+                        "detail": (
+                            "Build already clean for this workspace revision; reused proof."
+                            if last_build_ok
+                            else last_build_error_text
+                            or (
+                                "Build already failed for this workspace revision; "
+                                "edit source first."
+                            )
+                        ),
+                    }
                 elif visual_proof_unavailable_this_turn and name == "see":
                     # Tool calls in one assistant response are planned before
                     # their results return. Execute at most one unavailable
@@ -3487,6 +3561,7 @@ async def run_native_build(
                     wrote_since_build = True
                     wrote_this_turn = True
                     workspace_revision += 1
+                    turn_mutation_counts[action.path] = turn_mutation_counts.get(action.path, 0) + 1
                     source_revisions[action.path] = source_revisions.get(action.path, 0) + 1
                     if brain_v2 is not None:
                         brain_v2 = record_mutation(
@@ -3537,6 +3612,7 @@ async def run_native_build(
                     if force_visual_finish:
                         visual_finish_satisfied_this_turn = True
                     last_build_ok = bool(obs.get("ok"))
+                    last_build_revision = workspace_revision
                     last_build_error_text = str(obs.get("error") or obs.get("detail") or "")
                     last_build_error_paths = (
                         frozenset()
@@ -3722,6 +3798,12 @@ async def run_native_build(
                     "semantic_loop_stop": semantic_loop_stop,
                     "ops": ops_this_turn,
                     "infra": infra_this_turn,
+                    "mutation_counts": json.dumps(
+                        turn_mutation_counts,
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
                 }
                 await _persist_completed_tool(tool_index, results)
 

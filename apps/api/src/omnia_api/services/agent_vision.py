@@ -29,11 +29,9 @@ from uuid import UUID
 # for an irrelevant 1440px render.
 _WEB_SEE_WIDTHS = (1440, 360)
 _MAX_SEE_WIDTHS = (390, 360)
-# A full MAX build is much more expensive than another audit of the same captured
-# pixels. The visual provider has shown 20-60 second transient brownouts in
-# production, so keep the quality gate strict but give it a bounded recovery
-# window before the caller discards an otherwise green application.
-_MAX_VISION_RETRY_DELAYS_SECONDS = (0, 5, 10, 20)
+# Reuse the captured pixels for one cheap recovery attempt. The visual opinion is
+# advisory for MAX, so a longer retry ladder would only delay functional proof.
+_MAX_VISION_RETRY_DELAYS_SECONDS = (0, 3)
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +49,8 @@ async def see_page(
     Returns the executor observation dict ``{ok, detail|error}``:
       * ok=False  — no running preview / render failed (a readable reason the
         agent can act on, e.g. "start the app first").
-      * ok=True   — a verdict + concrete issues, OR a neutral note when the
-        vision judge was unavailable (skipped) so the agent isn't misled.
+      * ok=True   — a verdict + concrete issues, OR a neutral MAX advisory when
+        the screenshot exists but the subjective vision judge was unavailable.
     """
     # Lazy imports keep the pure agent engine + its unit tests free of the heavy
     # Playwright / dev_container dependency chain (same discipline as the
@@ -92,6 +90,16 @@ async def see_page(
         return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}
     if not shots:
         return {"ok": False, "error": f"render produced no screenshot for {rel}"}
+    if product_kind == "max_miniapp":
+        missing_widths = sorted(set(_MAX_SEE_WIDTHS).difference(shots))
+        if missing_widths:
+            return {
+                "ok": False,
+                "error": (
+                    "MAX render missed required viewport screenshot(s): "
+                    + ", ".join(str(width) for width in missing_widths)
+                ),
+            }
 
     # A screenshot capture is comparatively expensive, while an unavailable or
     # unparsable judge response is often transient. Reuse the same captured
@@ -125,31 +133,6 @@ async def see_page(
             getattr(verdict, "skip_reason", "unknown") or "unknown",
         )
     assert verdict is not None
-    if verdict.skipped:
-        return {
-            "ok": True,
-            "detail": (
-                f"saw {rel}, but the vision judge was unavailable after "
-                f"{len(delays)} attempts"
-            ),
-            "proof_unavailable": True,
-            "audit_attempts": len(delays),
-        }
-    max_quality_failed = product_kind == "max_miniapp" and (
-        verdict.verdict != "beautiful" or int(verdict.score) < 8
-    )
-    needs_fix = (
-        max_quality_failed
-        if product_kind == "max_miniapp"
-        else bool(verdict.issues) and verdict.verdict in {"broken", "generic"}
-    )
-    issue_rows = tuple(verdict.issues)
-    if needs_fix and not issue_rows:
-        issue_rows = (
-            "Главный экран: visual verdict не достиг production-grade уровня — "
-            "усиль уникальную концепцию, продуктовую иерархию и mobile craft по брифу.",
-        )
-    issues = "\n".join(f"- {i}" for i in issue_rows) or "(no concrete issues)"
 
     # Browser-side signals a screenshot can't show: failed (>=400) fetches and JS
     # console/page errors on load. A failed request is a REAL runtime failure, so it
@@ -174,17 +157,71 @@ async def see_page(
     except Exception:
         pass
 
+    if verdict.skipped:
+        if product_kind == "max_miniapp":
+            # The deterministic MAX gate still runs in the caller.  Once both
+            # mobile screenshots exist, a transient outage of the optional
+            # design judge must not discard an otherwise functional product.
+            return {
+                "ok": not has_failed,
+                "verdict": "unscored",
+                "score": None,
+                "quality_advisory": True,
+                "visual_audit_unavailable": True,
+                "needs_fix": has_failed,
+                "detail": (
+                    f"LOOKED at {rel} at 360px and 390px; the optional visual judge was "
+                    f"unavailable after {len(delays)} attempts.{diag_text}"
+                ),
+                "audit_attempts": len(delays),
+            }
+        return {
+            "ok": True,
+            "detail": (
+                f"saw {rel}, but the vision judge was unavailable after {len(delays)} attempts"
+            ),
+            "proof_unavailable": True,
+            "audit_attempts": len(delays),
+        }
+    max_quality_advisory = (
+        product_kind == "max_miniapp"
+        and verdict.verdict != "broken"
+        and (verdict.verdict != "beautiful" or int(verdict.score) < 8)
+    )
+    # MAX completion is fact-gated by hydration, browser diagnostics and the
+    # signed functional/release proof.  A subjective vision score is useful
+    # feedback, but must not trap an otherwise working product in a paid
+    # redesign loop.  The caller still turns failed browser requests and the
+    # deterministic MAX functional gate into ``ok=False``/``needs_fix=True``.
+    needs_fix = (
+        verdict.verdict == "broken"
+        if product_kind == "max_miniapp"
+        else bool(verdict.issues) and verdict.verdict in {"broken", "generic"}
+    )
+    issue_rows = tuple(verdict.issues)
+    if max_quality_advisory and not issue_rows:
+        issue_rows = (
+            "Главный экран: visual verdict не достиг production-grade уровня — "
+            "усиль уникальную концепцию, продуктовую иерархию и mobile craft по брифу.",
+        )
+    issues = "\n".join(f"- {i}" for i in issue_rows) or "(no concrete issues)"
+
+    feedback_heading = (
+        "Optional visual polish notes" if max_quality_advisory else "Apply these concrete fixes"
+    )
+
     return {
         "ok": not has_failed,
         "verdict": verdict.verdict,
         "score": verdict.score,
-        # Every actionable verdict blocks visual proof. The native MAX loop
-        # applies the concrete delta, rebuilds, and asks again until the judge
-        # returns a clean production-grade result (or explicitly skips).
+        "quality_advisory": max_quality_advisory,
+        # For MAX, the visual-model opinion is advisory. Deterministic browser
+        # and signed functional failures remain blocking through ``ok`` and the
+        # caller-owned ``needs_fix`` override.
         "needs_fix": needs_fix,
         "detail": (
             f"LOOKED at {rel} — verdict: {verdict.verdict} ({verdict.score}/10)\n"
-            f"Apply these concrete fixes:\n{issues}{diag_text}"
+            f"{feedback_heading}:\n{issues}{diag_text}"
         ),
     }
 

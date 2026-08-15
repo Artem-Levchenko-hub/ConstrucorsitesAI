@@ -191,6 +191,8 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
     assert "Ни один навык не является обязательной" in prompt
     assert "MAX capability catalog" not in prompt
     assert "signed MAX preview session" in prompt
+    assert "Субъективный visual score" in prompt
+    assert "must not trigger redesign or block completion" in prompt
     assert "build" in prompt
     names = {tool["name"] for tool in agent_native._TOOLS_CACHED}
     assert {"read_file", "write_file", "build", "done"} <= names
@@ -2591,6 +2593,110 @@ async def test_stable_max_rejects_and_bounds_byte_identical_source_repairs(
     assert builds == 2  # initial build plus one local terminal proof, never one per no-op
     assert len(calls) == 4
     assert "byte-identical" in json.dumps(calls[3])
+
+
+@pytest.mark.asyncio
+async def test_stable_max_bounds_same_path_mutations_inside_one_provider_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    turns = iter(
+        [
+            _turn(
+                ("write_file", {"path": entry, "content": "first"}),
+                ("write_file", {"path": entry, "content": "second"}),
+                ("write_file", {"path": entry, "content": "stale-third"}),
+            ),
+            _turn(("build", {})),
+            _turn(("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    writes: list[str] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        if action.name == "write_file":
+            writes.append(str(action.args.get("content") or ""))
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "green",
+            "needs_fix": False,
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files.get(entry) and all(evidence.get(key) for key in required) else "proof"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build the app.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=8,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert writes == ["first", "second"]
+    assert result.files[entry] == "second"
+    assert "already mutated twice" in json.dumps(result.transcript)
+
+
+@pytest.mark.asyncio
+async def test_stable_max_reuses_build_proof_for_same_workspace_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = agent_native._STABLE_MAX_PRODUCT_ENTRY
+    turns = iter(
+        [
+            _turn(("write_file", {"path": entry, "content": "product"})),
+            _turn(("build", {}), ("build", {})),
+            _turn(("runtime_check", {"path": "/"}), ("see", {"path": "/"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    build_calls = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal build_calls
+        if action.name == "build":
+            build_calls += 1
+        return {
+            "ok": True,
+            "content": action.args.get("content", ""),
+            "detail": "green",
+            "needs_fix": False,
+        }
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        required = ("build_after_write", "runtime_check_after_write", "see_after_write")
+        return None if files.get(entry) and all(evidence.get(key) for key in required) else "proof"
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT"),
+        task="Build the app.",
+        execute=execute,
+        completion_check=complete,
+        max_steps=8,
+        stable_max_loop=True,
+    )
+
+    assert result.done is True
+    assert build_calls == 1
+    assert "reused proof" in json.dumps(result.transcript)
 
 
 def test_stable_max_source_gap_classifier_preserves_proof_lifecycle() -> None:
