@@ -4155,6 +4155,69 @@ async def test_agent_kernel_requires_diagnosis_and_stops_same_error_experiments(
 
 
 @pytest.mark.asyncio
+async def test_agent_kernel_rejects_diagnosis_without_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = agent_native.get_settings()
+    monkeypatch.setattr(settings, "agent_kernel_v2_enabled", True)
+    edits = 0
+    responses = [
+        _turn(("build", {})),
+        _turn(
+            (
+                "diagnose",
+                {
+                    "root_cause": "guess only",
+                    "evidence": [],
+                    "experiment": "blind edit",
+                    "expected_result": "typecheck clean",
+                },
+            )
+        ),
+        _turn(
+            (
+                "edit_file",
+                {
+                    "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                    "search": "old",
+                    "replace": "blind attempt",
+                },
+            )
+        ),
+    ]
+    monkeypatch.setattr(settings, "agent_builder_max_runtime_steps", len(responses))
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return responses.pop(0)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal edits
+        if action.name == "build":
+            return {"ok": False, "error": "TS2305 missing managed export FixtureGoal"}
+        if action.name == "edit_file":
+            edits += 1
+            return {"ok": True, "content": "blind mutation"}
+        raise AssertionError(f"unexpected executor action: {action.name}")
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    result = await agent_native.run_native_build(
+        system="MAX system",
+        task="repair product",
+        execute=execute,
+        user_id="owner-fixture",
+        stable_max_loop=True,
+        stable_max_product_first=False,
+    )
+
+    assert edits == 0
+    assert "Diagnosis rejected" in str(result.transcript)
+    assert "Call `diagnose` first" in str(result.transcript)
+
+
+@pytest.mark.asyncio
 async def test_disabled_agent_kernel_does_not_advertise_diagnose(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2995,6 +2995,15 @@ async def run_native_build(
                     diagnosis = tu.get("input") or {}
                     root_cause = str(diagnosis.get("root_cause") or "").strip()
                     evidence = diagnosis.get("evidence") or []
+                    evidence_items = (
+                        [
+                            item.strip()
+                            for item in evidence
+                            if isinstance(item, str) and item.strip()
+                        ]
+                        if isinstance(evidence, list)
+                        else []
+                    )
                     experiment = str(diagnosis.get("experiment") or "").strip()
                     expected_result = str(diagnosis.get("expected_result") or "").strip()
                     previous_experiments = {
@@ -3004,6 +3013,7 @@ async def run_native_build(
                     }
                     if (
                         not root_cause
+                        or not evidence_items
                         or not experiment
                         or not expected_result
                         or experiment.casefold() in previous_experiments
@@ -3019,7 +3029,7 @@ async def run_native_build(
                         brain_v2 = record_hypothesis(
                             brain_v2,
                             root_cause=root_cause,
-                            evidence=[str(item) for item in evidence if isinstance(item, str)],
+                            evidence=evidence_items,
                             experiment=experiment,
                             expected_result=expected_result,
                         )
