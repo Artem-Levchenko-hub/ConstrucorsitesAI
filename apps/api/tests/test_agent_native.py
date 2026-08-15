@@ -7,6 +7,7 @@ contract is green or a durable spend/provider/cancellation guard stops it.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from types import SimpleNamespace
@@ -175,6 +176,7 @@ def test_max_native_prompt_exposes_complete_safe_product_toolset() -> None:
         "read_skill",
         "discover_capabilities",
         "call_capability",
+        "diagnose",
         "bash",
         "generate_media",
         "done",
@@ -3999,6 +4001,174 @@ async def test_active_max_safe_surface_survives_timeout_and_reaches_verified_con
     } <= set(executed)
     assert result.done is True
     assert result.stop_reason == "contract_green"
+
+
+@pytest.mark.asyncio
+async def test_agent_kernel_requires_diagnosis_and_stops_same_error_experiments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = agent_native.get_settings()
+    monkeypatch.setattr(settings, "agent_kernel_v2_enabled", True)
+    rejected_edit_result = ""
+    calls = 0
+    edits = 0
+
+    responses = [
+        _turn(("build", {})),
+        _turn(
+            (
+                "edit_file",
+                {
+                    "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                    "search": "old",
+                    "replace": "attempt-before-diagnosis",
+                },
+            )
+        ),
+        _turn(
+            (
+                "diagnose",
+                {
+                    "root_cause": "wrong managed export",
+                    "evidence": ["TS2305"],
+                    "experiment": "replace import one",
+                    "expected_result": "typecheck clean",
+                },
+            )
+        ),
+        _turn(
+            (
+                "edit_file",
+                {
+                    "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                    "search": "old",
+                    "replace": "attempt-one",
+                },
+            )
+        ),
+        _turn(("build", {})),
+        _turn(
+            (
+                "diagnose",
+                {
+                    "root_cause": "stale import",
+                    "evidence": ["TS2305"],
+                    "experiment": "replace import two",
+                    "expected_result": "typecheck clean",
+                },
+            )
+        ),
+        _turn(
+            (
+                "edit_file",
+                {
+                    "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                    "search": "old",
+                    "replace": "attempt-two",
+                },
+            )
+        ),
+        _turn(("build", {})),
+        _turn(
+            (
+                "diagnose",
+                {
+                    "root_cause": "wrong API family",
+                    "evidence": ["TS2305"],
+                    "experiment": "replace import three",
+                    "expected_result": "typecheck clean",
+                },
+            )
+        ),
+        _turn(
+            (
+                "edit_file",
+                {
+                    "path": agent_native._STABLE_MAX_PRODUCT_ENTRY,
+                    "search": "old",
+                    "replace": "attempt-three",
+                },
+            )
+        ),
+        _turn(("build", {})),
+    ]
+    monkeypatch.setattr(settings, "agent_builder_max_runtime_steps", len(responses))
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal calls, rejected_edit_result
+        if calls == 2:
+            rejected_edit_result = str(convo[-1])
+        response = responses[calls]
+        calls += 1
+        return response
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal edits
+        if action.name == "build":
+            return {
+                "ok": False,
+                "error": (
+                    "src/components/product/ProductApp.tsx:12:1 TS2305: "
+                    "Module has no exported member 'FixtureGoal'"
+                ),
+            }
+        if action.name == "edit_file":
+            edits += 1
+            return {"ok": True, "content": f"revision {edits}"}
+        raise AssertionError(f"unexpected executor action: {action.name}")
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    result = await agent_native.run_native_build(
+        system="MAX system",
+        task="repair product",
+        execute=execute,
+        user_id="owner-fixture",
+        run_id="semantic-loop-run",
+        stable_max_loop=True,
+        stable_max_product_first=False,
+    )
+
+    assert "diagnose" in rejected_edit_result
+    assert edits == 3
+    assert calls == len(responses)
+    assert result.done is False
+    assert result.stop_reason == "semantic_loop_red"
+
+
+@pytest.mark.asyncio
+async def test_disabled_agent_kernel_does_not_advertise_diagnose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = agent_native.get_settings()
+    monkeypatch.setattr(settings, "agent_kernel_v2_enabled", False)
+    monkeypatch.setattr(settings, "agent_kernel_v2_canary_users", "")
+    advertised: set[str] = set()
+
+    async def cancelled_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        advertised.update(str(tool["name"]) for tool in kwargs["tools"])
+        raise asyncio.CancelledError
+
+    async def execute(_action: Any) -> dict[str, Any]:
+        return {"ok": True, "detail": "clean"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", cancelled_call)
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="MAX system",
+            task="build product",
+            execute=execute,
+            user_id="owner-fixture",
+            stable_max_loop=True,
+            stable_max_product_first=False,
+        )
+
+    assert "diagnose" not in advertised
 
 
 @pytest.mark.asyncio

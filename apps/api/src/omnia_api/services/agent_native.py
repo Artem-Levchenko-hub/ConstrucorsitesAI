@@ -29,7 +29,15 @@ import httpx
 import structlog
 
 from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
-from omnia_api.services.agent_brain import brain_prompt_view, new_brain
+from omnia_api.services.agent_brain import (
+    brain_prompt_view,
+    new_brain,
+    normalize_error_signature,
+    record_hypothesis,
+    record_mutation,
+    record_observation,
+    semantic_loop_count,
+)
 from omnia_api.services.agent_builder import Action, AgentResult, is_agentic_enabled
 from omnia_api.services.max_generation_contract import (
     MAX_REQUIRED_POST_SEE_SKILL,
@@ -266,6 +274,18 @@ _TOOLS: list[dict[str, Any]] = [
         ["server", "tool", "arguments"],
     ),
     _tool(
+        "diagnose",
+        "Record one evidence-based root-cause hypothesis before repairing a repeated "
+        "red build/runtime observation.",
+        {
+            "root_cause": _STR,
+            "evidence": _STR_ARRAY,
+            "experiment": _STR,
+            "expected_result": _STR,
+        },
+        ["root_cause", "evidence", "experiment", "expected_result"],
+    ),
+    _tool(
         "done",
         "Finish — the requested app is built AND the last build is clean. "
         "`summary` = structured RU markdown for the user (bold one-line result, then "
@@ -345,6 +365,7 @@ _STABLE_MAX_TOOL_NAMES = frozenset(
         "read_skill",
         "discover_capabilities",
         "call_capability",
+        "diagnose",
         "bash",
         "write_file",
         "edit_file",
@@ -489,27 +510,34 @@ _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
     {**_STABLE_MAX_VISUAL_REPAIR_TOOLS[-1], "cache_control": _CACHE},
 ]
 _STABLE_MAX_REPAIR_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "edit_file"}
+    tool
+    for tool in _STABLE_MAX_TOOLS
+    if tool["name"] in {"read_file", "edit_file", "diagnose"}
 ]
 _STABLE_MAX_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_REPAIR_TOOLS[:-1],
     {**_STABLE_MAX_REPAIR_TOOLS[-1], "cache_control": _CACHE},
 ]
+_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS = [
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"diagnose", "edit_file"}
+]
 _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
-    {
-        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "edit_file"),
-        "cache_control": _CACHE,
-    }
+    *_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS[:-1],
+    {**_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS[-1], "cache_control": _CACHE},
 ]
 _STABLE_MAX_REPAIR_VERIFY_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "edit_file", "build"}
+    tool
+    for tool in _STABLE_MAX_TOOLS
+    if tool["name"] in {"read_file", "edit_file", "build", "diagnose"}
 ]
 _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_REPAIR_VERIFY_TOOLS[:-1],
     {**_STABLE_MAX_REPAIR_VERIFY_TOOLS[-1], "cache_control": _CACHE},
 ]
 _STABLE_MAX_PROGRESS_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file", "build"}
+    tool
+    for tool in _STABLE_MAX_TOOLS
+    if tool["name"] in {"write_file", "edit_file", "build", "diagnose"}
 ]
 _STABLE_MAX_PROGRESS_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_PROGRESS_TOOLS[:-1],
@@ -651,6 +679,25 @@ _MAX_REFERENCE_TOOLS_CACHED: list[dict[str, Any]] = [
     *_MAX_REFERENCE_TOOLS[:-1],
     {**_MAX_REFERENCE_TOOLS[-1], "cache_control": _CACHE},
 ]
+
+
+def _kernel_tool_surface(
+    tools: list[dict[str, Any]],
+    *,
+    enabled: bool,
+) -> list[dict[str, Any]]:
+    """Expose diagnosis only to Project Brain runs; preserve legacy schemas."""
+
+    if enabled:
+        return tools
+    filtered = [
+        {key: value for key, value in tool.items() if key != "cache_control"}
+        for tool in tools
+        if tool.get("name") != "diagnose"
+    ]
+    if filtered:
+        filtered[-1] = {**filtered[-1], "cache_control": _CACHE}
+    return filtered
 
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
@@ -2136,6 +2183,10 @@ async def run_native_build(
                 force_repair_write
                 and last_build_error_paths
                 and not repair_context_compacted
+                and not (
+                    brain_v2 is not None
+                    and brain_v2.get("diagnosis_required_signature")
+                )
                 and all(
                     path in written or path in repair_source_cache
                     for path in last_build_error_paths
@@ -2267,42 +2318,45 @@ async def run_native_build(
                         ),
                         resume_count=provider_timeout_resumes + free_ambiguous_resumes,
                         working_memory=working_memory,
-                        tools=(
-                            _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
-                            if force_entry_write
-                            else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
-                            if force_visual_finish
-                            else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
-                            if force_build_after_write
-                            else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
-                            if force_style_write
-                            else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                            if force_source_repair
-                            else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
-                            if force_runtime_proof
-                            else _STABLE_MAX_PROOF_TOOLS_CACHED
-                            if force_proof
-                            else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
-                            if force_visual_repair
-                            else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
-                            if force_repair_verify
-                            else _STABLE_MAX_REPAIR_TOOLS_CACHED
-                            if force_repair_edit_only and repair_reread_paths
-                            else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
-                            if force_repair_edit_only
-                            else _STABLE_MAX_PROGRESS_TOOLS_CACHED
-                            if force_progress
-                            else _STABLE_MAX_REPAIR_TOOLS_CACHED
-                            if force_repair_write
-                            else _STABLE_MAX_PREENTRY_TOOLS_CACHED
-                            if product_first and _STABLE_MAX_PRODUCT_ENTRY not in written
-                            else _STABLE_MAX_TOOLS_CACHED
-                            if stable_max_loop
-                            else _MAX_REFERENCE_TOOLS_CACHED
-                            if reference_max_loop
-                            else _MAX_TOOLS_CACHED
-                            if max_runtime
-                            else _TOOLS_CACHED
+                        tools=_kernel_tool_surface(
+                            (
+                                _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
+                                if force_entry_write
+                                else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
+                                if force_visual_finish
+                                else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
+                                if force_build_after_write
+                                else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
+                                if force_style_write
+                                else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
+                                if force_source_repair
+                                else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
+                                if force_runtime_proof
+                                else _STABLE_MAX_PROOF_TOOLS_CACHED
+                                if force_proof
+                                else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
+                                if force_visual_repair
+                                else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
+                                if force_repair_verify
+                                else _STABLE_MAX_REPAIR_TOOLS_CACHED
+                                if force_repair_edit_only and repair_reread_paths
+                                else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
+                                if force_repair_edit_only
+                                else _STABLE_MAX_PROGRESS_TOOLS_CACHED
+                                if force_progress
+                                else _STABLE_MAX_REPAIR_TOOLS_CACHED
+                                if force_repair_write
+                                else _STABLE_MAX_PREENTRY_TOOLS_CACHED
+                                if product_first and _STABLE_MAX_PRODUCT_ENTRY not in written
+                                else _STABLE_MAX_TOOLS_CACHED
+                                if stable_max_loop
+                                else _MAX_REFERENCE_TOOLS_CACHED
+                                if reference_max_loop
+                                else _MAX_TOOLS_CACHED
+                                if max_runtime
+                                else _TOOLS_CACHED
+                            ),
+                            enabled=brain_v2 is not None,
                         ),
                         model=model,
                         thinking_budget=(
@@ -2599,11 +2653,25 @@ async def run_native_build(
             visual_proof_unavailable_this_turn = False
             visual_quality_exhausted_this_turn = False
             visual_finish_satisfied_this_turn = False
+            semantic_loop_stop = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
+                if semantic_loop_stop:
+                    results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tu_id,
+                            "is_error": True,
+                            "content": (
+                                "Semantic loop stop is active; no further mutation or provider "
+                                "work will run in this generation."
+                            ),
+                        }
+                    )
+                    continue
                 if name == "done":
                     if force_product_progress:
                         results.append(
@@ -2722,25 +2790,25 @@ async def run_native_build(
                 obs: dict[str, Any]
                 tool_executed = False
                 allowed_progress_tools = (
-                    {"build"}
+                    {"build", "diagnose"}
                     if force_build_after_write
-                    else {"edit_file", "build"}
+                    else {"edit_file", "build", "diagnose"}
                     if force_visual_finish
-                    else {"write_file"}
+                    else {"write_file", "diagnose"}
                     if force_style_write
-                    else {"write_file", "edit_file"}
+                    else {"write_file", "edit_file", "diagnose"}
                     if force_source_repair
-                    else {"read_file", "edit_file", "build"}
+                    else {"read_file", "edit_file", "build", "diagnose"}
                     if force_repair_verify
-                    else {"read_file", "edit_file"}
+                    else {"read_file", "edit_file", "diagnose"}
                     if force_repair_edit_only and repair_reread_paths
-                    else {"edit_file"}
+                    else {"edit_file", "diagnose"}
                     if force_repair_edit_only
-                    else {"read_file", "edit_file"}
+                    else {"read_file", "edit_file", "diagnose"}
                     if force_repair_write
-                    else {"write_file", "edit_file", "build"}
+                    else {"write_file", "edit_file", "build", "diagnose"}
                     if force_progress
-                    else {"write_file", "edit_file"}
+                    else {"write_file", "edit_file", "diagnose"}
                 )
                 observation_signature = _observation_signature(action)
                 observation_revision = (
@@ -2910,6 +2978,56 @@ async def run_native_build(
                     obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
                 elif lifecycle_error:
                     obs = {"ok": False, "error": lifecycle_error}
+                elif (
+                    brain_v2 is not None
+                    and brain_v2.get("diagnosis_required_signature")
+                    and name in {"write_file", "edit_file"}
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "The same build is red. Call `diagnose` first with one root cause, "
+                            "observable evidence, a NEW experiment and its expected result; "
+                            "then apply exactly that repair."
+                        ),
+                    }
+                elif brain_v2 is not None and name == "diagnose":
+                    diagnosis = tu.get("input") or {}
+                    root_cause = str(diagnosis.get("root_cause") or "").strip()
+                    evidence = diagnosis.get("evidence") or []
+                    experiment = str(diagnosis.get("experiment") or "").strip()
+                    expected_result = str(diagnosis.get("expected_result") or "").strip()
+                    previous_experiments = {
+                        str(item.get("experiment") or "").strip().casefold()
+                        for item in brain_v2.get("failed_approaches", [])
+                        if isinstance(item, Mapping)
+                    }
+                    if (
+                        not root_cause
+                        or not experiment
+                        or not expected_result
+                        or experiment.casefold() in previous_experiments
+                    ):
+                        obs = {
+                            "ok": False,
+                            "error": (
+                                "Diagnosis rejected: provide evidence and a new falsifiable "
+                                "experiment that has not already failed."
+                            ),
+                        }
+                    else:
+                        brain_v2 = record_hypothesis(
+                            brain_v2,
+                            root_cause=root_cause,
+                            evidence=[str(item) for item in evidence if isinstance(item, str)],
+                            experiment=experiment,
+                            expected_result=expected_result,
+                        )
+                        tool_executed = True
+                        obs = {
+                            "ok": True,
+                            "detail": "Diagnosis recorded; apply the stated experiment once.",
+                        }
                 else:
                     tool_executed = True
                     try:
@@ -2984,6 +3102,12 @@ async def run_native_build(
                     wrote_this_turn = True
                     workspace_revision += 1
                     source_revisions[action.path] = source_revisions.get(action.path, 0) + 1
+                    if brain_v2 is not None:
+                        brain_v2 = record_mutation(
+                            brain_v2,
+                            paths=[action.path],
+                            revision=workspace_revision,
+                        )
                     observed_revisions.pop(f"read:{action.path}", None)
                     recent_mutation_paths.append(action.path)
                     recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
@@ -3008,6 +3132,14 @@ async def run_native_build(
                             wrote_since_build = True
                             wrote_this_turn = True
                             workspace_revision += 1
+                            if brain_v2 is not None:
+                                brain_v2 = record_mutation(
+                                    brain_v2,
+                                    paths=[
+                                        path for path in bash_files if isinstance(path, str)
+                                    ],
+                                    revision=workspace_revision,
+                                )
                             for path in bash_files:
                                 if not isinstance(path, str):
                                     continue
@@ -3035,6 +3167,23 @@ async def run_native_build(
                     repair_source_cache.clear()
                     repair_context_compacted = False
                     wrote_since_build = False
+                    if brain_v2 is not None:
+                        build_signature = (
+                            ""
+                            if last_build_ok
+                            else normalize_error_signature(last_build_error_text)
+                        )
+                        brain_v2 = record_observation(
+                            brain_v2,
+                            kind="build",
+                            status="ok" if last_build_ok else "error",
+                            summary="typecheck clean" if last_build_ok else "typecheck red",
+                            error_signature=build_signature,
+                            evidence=sorted(last_build_error_paths),
+                        )
+                        semantic_loop_stop = (
+                            not last_build_ok and semantic_loop_count(brain_v2) >= 3
+                        )
                 elif (
                     tool_executed
                     and name == "runtime_check"
@@ -3262,6 +3411,32 @@ async def run_native_build(
                 turns_without_product_entry += 1
             convo.append({"role": "user", "content": results})
             await _persist_checkpoint()
+            if semantic_loop_stop:
+                if emit:
+                    await emit(
+                        "agent.step",
+                        {
+                            "step": step,
+                            "action": "semantic_loop_stop",
+                            "path": "",
+                            "detail": (
+                                "Три разных исправления дали ту же ошибку; новые LLM-запросы "
+                                "остановлены, evidence сохранён."
+                            ),
+                            "ok": False,
+                        },
+                    )
+                return AgentResult(
+                    done=False,
+                    summary=(
+                        "Три проверенных исправления не изменили одну и ту же ошибку. "
+                        "Гипотезы и evidence сохранены для точечного ремонта без нового цикла."
+                    ),
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="semantic_loop_red",
+                )
             if visual_quality_exhausted_this_turn and max_runtime:
                 log.warning(
                     "agent_native.visual_quality_unmet",

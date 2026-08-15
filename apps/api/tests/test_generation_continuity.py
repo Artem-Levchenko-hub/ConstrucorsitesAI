@@ -55,6 +55,17 @@ def test_recurring_unchanged_segment_breaks_the_automatic_loop() -> None:
     assert "три сегмента" in decision.action
 
 
+def test_semantic_loop_is_terminal_internal_no_progress() -> None:
+    decision = classify_stop(
+        "semantic_loop_red",
+        attempt=0,
+        started_at=datetime.now(UTC),
+    )
+
+    assert decision.continue_run is False
+    assert decision.classification == "internal_no_progress"
+
+
 def test_workspace_digest_is_stable_and_content_sensitive() -> None:
     first = workspace_digest({"b.ts": "two", "a.ts": "one"})
 

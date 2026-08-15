@@ -41,6 +41,11 @@ _TERMINAL_INTERNAL_REASONS = {
         "Автоповтор остановлен, чтобы не повторять те же правки; уточните направление "
         "или запустите точечное исправление."
     ),
+    "semantic_loop_red": (
+        "Три проверенных исправления не изменили одну и ту же ошибку. "
+        "Рабочая версия восстановлена; гипотезы и evidence сохранены для "
+        "архитектурного ремонта без нового цикла."
+    ),
 }
 
 
@@ -197,7 +202,11 @@ def classify_stop(
     if terminal_internal_action:
         return ContinuationDecision(
             False,
-            "internal_proof_blocked",
+            (
+                "internal_no_progress"
+                if reason == "semantic_loop_red"
+                else "internal_proof_blocked"
+            ),
             0,
             terminal_internal_action,
         )
