@@ -105,6 +105,28 @@ are terminal immediately because replaying the same checkpoint cannot create new
 evidence. This prevents both straight and alternating checkpoint cycles without
 weakening the build/runtime/visual release proof.
 
+Agent Kernel v2 adds a private `brain_v2` object to the durable native checkpoint.
+It keeps the objective, open acceptance criteria, latest observations, bounded
+experiments, failed approaches, normalized error signatures and next action. It
+never enters the public chat and its model view omits source, artifact paths,
+credentials and hidden reasoning. Each continuation therefore resumes from
+compact evidence instead of reconstructing the same investigation from transcript
+history.
+
+After a red build the agent must call `diagnose` with a root cause, observed
+evidence, one new experiment and its expected result before another mutation.
+Semantic progress means new executed evidence: changed source revision, a
+different normalized error signature, or a green build/proof observation. Three
+consecutive failed experiments with the same normalized signature stop as
+`semantic_loop_red`; no fourth provider call is made and the primary cause is
+preserved even if final verification also fails.
+
+Rollout is fail-safe. `AGENT_KERNEL_V2_ENABLED=false` keeps the previous path for
+all owners, while `AGENT_KERNEL_V2_CANARY_USERS` enables the kernel only for the
+listed owner UUIDs. Emergency rollback is setting the global flag to `false` and
+clearing the canary list, then recreating API and worker with the canonical
+production env file. No snapshot or project migration is required.
+
 Fresh builds allow one bounded inspection turn, then require the real
 `ProductApp.tsx` vertical slice and compile it before more exploration. Existing
 products keep unrestricted surgical support-file edits. Reading the same unchanged
