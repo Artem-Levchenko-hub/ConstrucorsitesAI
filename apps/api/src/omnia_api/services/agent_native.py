@@ -1587,6 +1587,15 @@ async def _call_messages(
                 raise ProviderResponseTimeoutError(r.status_code)
             if error_type == "paid_call_ambiguous":
                 raise AmbiguousPaidCallError(r.status_code)
+            if error_type in {
+                "auth_error",
+                "authentication_error",
+                "budget_exceeded",
+                "insufficient_balance",
+                "invalid_request",
+                "validation_error",
+            }:
+                raise PermanentProviderError(r.status_code)
             trusted_rate_limit = error_type in {
                 "rate_limit",
                 "rate_limited",

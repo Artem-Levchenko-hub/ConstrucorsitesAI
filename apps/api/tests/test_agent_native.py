@@ -3677,6 +3677,37 @@ async def test_messages_call_fails_fast_on_permanent_4xx(
 
 
 @pytest.mark.asyncio
+async def test_budget_exceeded_is_permanent_and_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_post(*_args: Any, **_kwargs: Any) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            429,
+            request=httpx.Request("POST", "https://gateway.test/v1/messages"),
+            json={"error": {"type": "budget_exceeded"}},
+        )
+
+    client = httpx.AsyncClient()
+    monkeypatch.setattr(client, "post", fake_post)
+    try:
+        with pytest.raises(agent_native.PermanentProviderError):
+            await agent_native._call_messages(
+                client,
+                "https://gateway.test/v1/messages",
+                [{"role": "user", "content": "build"}],
+                "system",
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_messages_call_never_retries_ambiguous_paid_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
