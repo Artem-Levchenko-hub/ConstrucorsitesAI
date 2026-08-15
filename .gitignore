@@ -42,6 +42,7 @@ Thumbs.db
 
 # Worktrees (управляются claude-session-driver)
 .claude/worktrees/
+.worktrees/
 
 # Local data (для docker-compose volumes)
 infra/data/
