@@ -71,9 +71,7 @@ def test_segment_progress_detects_non_consecutive_cycles() -> None:
         }
     }
 
-    history, first_count = _segment_progress(
-        state, {}, "visual_proof_unavailable"
-    )
+    history, first_count = _segment_progress(state, {}, "visual_proof_unavailable")
     other_history, _ = _segment_progress(
         {
             "last_segment": {
@@ -95,9 +93,7 @@ def test_segment_progress_detects_non_consecutive_cycles() -> None:
 
 
 def test_only_true_external_provider_block_terminalizes() -> None:
-    rejection = classify_stop(
-        "provider_rejected_401", attempt=0, started_at=datetime.now(UTC)
-    )
+    rejection = classify_stop("provider_rejected_401", attempt=0, started_at=datetime.now(UTC))
     outage = classify_stop(
         "provider_stopped_red",
         attempt=20,
@@ -123,9 +119,7 @@ def test_environment_manifest_is_source_derived_locked_and_secret_free() -> None
     assert manifest["runtime"]["framework"].startswith("next@")
     assert "src/components/MaxAppProvider.tsx" in manifest["locked_paths"]
     assert "requestOmniaAI" in str(manifest["managed_signatures"])
-    assert ("trackMaxEvent" in signatures) is (
-        "export async function trackMaxEvent" in managed
-    )
+    assert ("trackMaxEvent" in signatures) is ("export async function trackMaxEvent" in managed)
     assert "trackOmniaGoal" in signatures
     assert "pnpm typecheck" in manifest["proof_commands"]
     assert "api_key=" not in rendered
@@ -204,3 +198,85 @@ async def test_worker_death_replays_same_logical_provider_turn(
     assert checkpoints[-1]["provider_turn_index"] == 1
     assert checkpoints[-1]["workspace_revision"] == 1
     assert checkpoints[-1]["recent_mutation_paths"] == ["src/x.ts"]
+
+
+@pytest.mark.asyncio
+async def test_owner_canary_project_brain_survives_worker_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = agent_native.get_settings()
+    monkeypatch.setattr(settings, "agent_kernel_v2_enabled", False, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "agent_kernel_v2_canary_users",
+        "owner-fixture",
+        raising=False,
+    )
+    checkpoints: list[dict[str, object]] = []
+    working_notes: list[str] = []
+
+    async def save_checkpoint(value: Any) -> None:
+        checkpoints.append(dict(value))
+
+    async def killed_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        working_notes.append(str(kwargs.get("working_memory") or ""))
+        raise asyncio.CancelledError
+
+    async def execute(_action: Any) -> dict[str, Any]:
+        return {"ok": True, "detail": "clean"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", killed_call)
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="MAX system",
+            task="Build owner fitness app",
+            execute=execute,
+            user_id="owner-fixture",
+            run_id="brain-run",
+            stable_max_loop=True,
+            stable_max_product_first=False,
+            checkpoint=save_checkpoint,
+        )
+
+    owner_checkpoint = checkpoints[-1]
+    assert owner_checkpoint["version"] == 3
+    assert owner_checkpoint["brain_v2"]["version"] == 1
+    assert owner_checkpoint["brain_v2"]["objective"] == "Build owner fitness app"
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="changed system",
+            task="changed task",
+            execute=execute,
+            user_id="owner-fixture",
+            run_id="brain-run",
+            stable_max_loop=True,
+            stable_max_product_first=False,
+            resume_checkpoint=owner_checkpoint,
+            checkpoint=save_checkpoint,
+        )
+
+    assert "PROJECT BRAIN v1" in working_notes[-1]
+    assert "Build owner fitness app" in working_notes[-1]
+
+    other_checkpoints: list[dict[str, object]] = []
+
+    async def save_other(value: Any) -> None:
+        other_checkpoints.append(dict(value))
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native.run_native_build(
+            system="MAX system",
+            task="Build other app",
+            execute=execute,
+            user_id="other-fixture",
+            run_id="other-run",
+            stable_max_loop=True,
+            stable_max_product_first=False,
+            checkpoint=save_other,
+        )
+
+    assert other_checkpoints[-1]["version"] == 2
+    assert "brain_v2" not in other_checkpoints[-1]

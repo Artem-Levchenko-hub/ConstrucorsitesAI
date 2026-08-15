@@ -29,7 +29,8 @@ import httpx
 import structlog
 
 from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
-from omnia_api.services.agent_builder import Action, AgentResult
+from omnia_api.services.agent_brain import brain_prompt_view, new_brain
+from omnia_api.services.agent_builder import Action, AgentResult, is_agentic_enabled
 from omnia_api.services.max_generation_contract import (
     MAX_REQUIRED_POST_SEE_SKILL,
     MAX_REQUIRED_PREWRITE_SKILLS,
@@ -682,7 +683,8 @@ def _with_incremental_cache(convo: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def _with_working_memory(
-    convo: list[dict[str, Any]], working_memory: str,
+    convo: list[dict[str, Any]],
+    working_memory: str,
 ) -> list[dict[str, Any]]:
     """Inject one ephemeral server-owned note into the current provider turn.
 
@@ -746,9 +748,7 @@ def _repeat_observation_error(action: Action) -> dict[str, Any]:
             "result is in the server working note/transcript; repeating it is not progress."
         ),
         "summary": f"Skipped repeated unchanged {action.name} observation.",
-        "next_actions": [
-            "Use the known result now: write/edit the required source or run build."
-        ],
+        "next_actions": ["Use the known result now: write/edit the required source or run build."],
         "artifacts": [action.path] if action.path else [],
     }
 
@@ -1447,6 +1447,7 @@ def _stable_max_working_memory(
     repeated_observation_paths: list[str],
     completion_gap: str | None,
     public_progress: str,
+    brain: Mapping[str, object] | None = None,
 ) -> str:
     """Render compact factual memory for every stable MAX provider call."""
 
@@ -1512,6 +1513,8 @@ def _stable_max_working_memory(
     rows.append(f"NEXT REQUIRED ACTION: {next_action}")
     if progress:
         rows.extend(("", progress))
+    if brain is not None:
+        rows.extend(("", brain_prompt_view(brain, max_chars=2_400)))
     rows.append(
         "Treat this note as the authoritative checkpoint. Continue from live files; never "
         "restart planning or repeat completed observations."
@@ -1715,8 +1718,14 @@ async def run_native_build(
     """
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
+    brain_enabled = stable_max_loop and is_agentic_enabled(
+        settings.agent_kernel_v2_enabled,
+        settings.agent_kernel_v2_canary_users,
+        str(user_id) if user_id is not None else None,
+    )
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
+    brain_v2: dict[str, object] | None = new_brain(task, []) if brain_enabled else None
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     last_build_error_paths: frozenset[str] = frozenset()
@@ -1777,9 +1786,7 @@ async def run_native_build(
                 for path, content in restored_written.items()
                 if isinstance(path, str) and isinstance(content, str)
             }
-        provider_turn_index = max(
-            0, int(resume_checkpoint.get("provider_turn_index") or 0)
-        )
+        provider_turn_index = max(0, int(resume_checkpoint.get("provider_turn_index") or 0))
         provider_turn_offset = max(
             0, int(resume_checkpoint.get("provider_turn_offset") or provider_turn_offset)
         )
@@ -1802,41 +1809,25 @@ async def run_native_build(
         visual_repair_attempts = int(resume_checkpoint.get("visual_repair_attempts") or 0)
         visual_evaluation_ready = bool(resume_checkpoint.get("visual_evaluation_ready"))
         last_green_see_step = resume_checkpoint.get("last_green_see_step")
-        pending_visual_evaluation_step = resume_checkpoint.get(
-            "pending_visual_evaluation_step"
-        )
-        prewrite_inspection_paths = set(
-            resume_checkpoint.get("prewrite_inspection_paths") or []
-        )
+        pending_visual_evaluation_step = resume_checkpoint.get("pending_visual_evaluation_step")
+        prewrite_inspection_paths = set(resume_checkpoint.get("prewrite_inspection_paths") or [])
         prewrite_inspection_ops = int(resume_checkpoint.get("prewrite_inspection_ops") or 0)
-        prewrite_inspection_exhausted = bool(
-            resume_checkpoint.get("prewrite_inspection_exhausted")
-        )
+        prewrite_inspection_exhausted = bool(resume_checkpoint.get("prewrite_inspection_exhausted"))
         no_write_turns = int(resume_checkpoint.get("no_write_turns") or 0)
         noop_write_turns = int(resume_checkpoint.get("noop_write_turns") or 0)
         infra_dead_turns = int(resume_checkpoint.get("infra_dead_turns") or 0)
-        truncated_no_write_turns = int(
-            resume_checkpoint.get("truncated_no_write_turns") or 0
-        )
-        turns_without_product_entry = int(
-            resume_checkpoint.get("turns_without_product_entry") or 0
-        )
+        truncated_no_write_turns = int(resume_checkpoint.get("truncated_no_write_turns") or 0)
+        turns_without_product_entry = int(resume_checkpoint.get("turns_without_product_entry") or 0)
         entry_focus_compacted = bool(resume_checkpoint.get("entry_focus_compacted"))
-        repair_reads_since_build = set(
-            resume_checkpoint.get("repair_reads_since_build") or []
-        )
+        repair_reads_since_build = set(resume_checkpoint.get("repair_reads_since_build") or [])
         repair_reread_paths = set(resume_checkpoint.get("repair_reread_paths") or [])
         repair_source_cache = {
             str(path): str(content)
             for path, content in dict(resume_checkpoint.get("repair_source_cache") or {}).items()
             if isinstance(path, str) and isinstance(content, str)
         }
-        repair_context_compacted = bool(
-            resume_checkpoint.get("repair_context_compacted")
-        )
-        visual_context_compacted_step = resume_checkpoint.get(
-            "visual_context_compacted_step"
-        )
+        repair_context_compacted = bool(resume_checkpoint.get("repair_context_compacted"))
+        visual_context_compacted_step = resume_checkpoint.get("visual_context_compacted_step")
         visual_media_generated_step = resume_checkpoint.get("visual_media_generated_step")
         visual_repair_paths = set(resume_checkpoint.get("visual_repair_paths") or [])
         visual_finish_pending = bool(resume_checkpoint.get("visual_finish_pending"))
@@ -1862,56 +1853,60 @@ async def run_native_build(
         repeated_observation_paths = [
             str(path) for path in resume_checkpoint.get("repeated_observation_paths", [])
         ][-20:]
+        restored_brain = resume_checkpoint.get("brain_v2")
+        if brain_enabled and isinstance(restored_brain, Mapping):
+            brain_v2 = dict(restored_brain)
 
     async def _persist_checkpoint() -> None:
         if checkpoint is None:
             return
-        await checkpoint(
-            {
-                "version": 2,
-                "system": system,
-                "convo": convo,
-                "written": written,
-                "provider_turn_index": provider_turn_index,
-                "provider_turn_offset": provider_turn_offset,
-                "last_build_ok": last_build_ok,
-                "last_build_error_text": last_build_error_text,
-                "last_build_error_paths": sorted(last_build_error_paths),
-                "successful_tools": successful_tools,
-                "successful_skill_ids": sorted(successful_skill_ids),
-                "proof_after_write": sorted(proof_after_write),
-                "wrote_since_build": wrote_since_build,
-                "visual_feedback_step": visual_feedback_step,
-                "visual_feedback_detail": visual_feedback_detail,
-                "visual_repair_attempts": visual_repair_attempts,
-                "visual_evaluation_ready": visual_evaluation_ready,
-                "last_green_see_step": last_green_see_step,
-                "pending_visual_evaluation_step": pending_visual_evaluation_step,
-                "prewrite_inspection_paths": sorted(prewrite_inspection_paths),
-                "prewrite_inspection_ops": prewrite_inspection_ops,
-                "prewrite_inspection_exhausted": prewrite_inspection_exhausted,
-                "no_write_turns": no_write_turns,
-                "noop_write_turns": noop_write_turns,
-                "infra_dead_turns": infra_dead_turns,
-                "truncated_no_write_turns": truncated_no_write_turns,
-                "turns_without_product_entry": turns_without_product_entry,
-                "entry_focus_compacted": entry_focus_compacted,
-                "repair_reads_since_build": sorted(repair_reads_since_build),
-                "repair_reread_paths": sorted(repair_reread_paths),
-                "repair_source_cache": repair_source_cache,
-                "repair_context_compacted": repair_context_compacted,
-                "visual_context_compacted_step": visual_context_compacted_step,
-                "visual_media_generated_step": visual_media_generated_step,
-                "visual_repair_paths": sorted(visual_repair_paths),
-                "visual_finish_pending": visual_finish_pending,
-                "source_repair_context_gap": source_repair_context_gap,
-                "workspace_revision": workspace_revision,
-                "source_revisions": source_revisions,
-                "observed_revisions": observed_revisions,
-                "recent_mutation_paths": recent_mutation_paths[-20:],
-                "repeated_observation_paths": repeated_observation_paths[-20:],
-            }
-        )
+        state: dict[str, object] = {
+            "version": 3 if brain_v2 is not None else 2,
+            "system": system,
+            "convo": convo,
+            "written": written,
+            "provider_turn_index": provider_turn_index,
+            "provider_turn_offset": provider_turn_offset,
+            "last_build_ok": last_build_ok,
+            "last_build_error_text": last_build_error_text,
+            "last_build_error_paths": sorted(last_build_error_paths),
+            "successful_tools": successful_tools,
+            "successful_skill_ids": sorted(successful_skill_ids),
+            "proof_after_write": sorted(proof_after_write),
+            "wrote_since_build": wrote_since_build,
+            "visual_feedback_step": visual_feedback_step,
+            "visual_feedback_detail": visual_feedback_detail,
+            "visual_repair_attempts": visual_repair_attempts,
+            "visual_evaluation_ready": visual_evaluation_ready,
+            "last_green_see_step": last_green_see_step,
+            "pending_visual_evaluation_step": pending_visual_evaluation_step,
+            "prewrite_inspection_paths": sorted(prewrite_inspection_paths),
+            "prewrite_inspection_ops": prewrite_inspection_ops,
+            "prewrite_inspection_exhausted": prewrite_inspection_exhausted,
+            "no_write_turns": no_write_turns,
+            "noop_write_turns": noop_write_turns,
+            "infra_dead_turns": infra_dead_turns,
+            "truncated_no_write_turns": truncated_no_write_turns,
+            "turns_without_product_entry": turns_without_product_entry,
+            "entry_focus_compacted": entry_focus_compacted,
+            "repair_reads_since_build": sorted(repair_reads_since_build),
+            "repair_reread_paths": sorted(repair_reread_paths),
+            "repair_source_cache": repair_source_cache,
+            "repair_context_compacted": repair_context_compacted,
+            "visual_context_compacted_step": visual_context_compacted_step,
+            "visual_media_generated_step": visual_media_generated_step,
+            "visual_repair_paths": sorted(visual_repair_paths),
+            "visual_finish_pending": visual_finish_pending,
+            "source_repair_context_gap": source_repair_context_gap,
+            "workspace_revision": workspace_revision,
+            "source_revisions": source_revisions,
+            "observed_revisions": observed_revisions,
+            "recent_mutation_paths": recent_mutation_paths[-20:],
+            "repeated_observation_paths": repeated_observation_paths[-20:],
+        }
+        if brain_v2 is not None:
+            state["brain_v2"] = brain_v2
+        await checkpoint(state)
 
     # Stable MAX builds get a generous but finite turn and wall-clock envelope.
     # Both limits are independent so a slow provider or a model that keeps
@@ -2244,6 +2239,7 @@ async def run_native_build(
                         repeated_observation_paths=repeated_observation_paths,
                         completion_gap=completion_gap,
                         public_progress=public_progress,
+                        brain=brain_v2,
                     )
                     if stable_max_loop
                     else ""
@@ -2844,9 +2840,7 @@ async def run_native_build(
                     entry_focus_compacted
                     and _STABLE_MAX_PRODUCT_ENTRY not in written
                     and name != "read_skill"
-                    and not (
-                        name == "bash" and not action.args.get("mutation_paths")
-                    )
+                    and not (name == "bash" and not action.args.get("mutation_paths"))
                     and (name != "write_file" or action.path != _STABLE_MAX_PRODUCT_ENTRY)
                 ):
                     obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
@@ -3020,9 +3014,7 @@ async def run_native_build(
                                 source_revisions[path] = source_revisions.get(path, 0) + 1
                                 observed_revisions.pop(f"read:{path}", None)
                                 recent_mutation_paths.append(path)
-                            recent_mutation_paths = list(
-                                dict.fromkeys(recent_mutation_paths)
-                            )[-20:]
+                            recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
                             proof_after_write.clear()
                             last_green_see_step = None
                 elif tool_executed and name == "build":

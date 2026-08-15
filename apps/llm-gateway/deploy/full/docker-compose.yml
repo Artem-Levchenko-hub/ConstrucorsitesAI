@@ -291,6 +291,8 @@ services:
       # Native tool-use agent: the general builder keeps Gemini; MAX Studio
       # explicitly selects Sonnet 5 and its stable pre-Gemini loop.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
+      AGENT_KERNEL_V2_ENABLED: ${AGENT_KERNEL_V2_ENABLED:-false}
+      AGENT_KERNEL_V2_CANARY_USERS: ${AGENT_KERNEL_V2_CANARY_USERS:-}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
       USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
@@ -482,6 +484,8 @@ services:
       # Native tool-use agent: one Gemini Custom Tools pass end-to-end with
       # structured tools and fact gates. Flip in .env.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
+      AGENT_KERNEL_V2_ENABLED: ${AGENT_KERNEL_V2_ENABLED:-false}
+      AGENT_KERNEL_V2_CANARY_USERS: ${AGENT_KERNEL_V2_CANARY_USERS:-}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
       USE_EXE_BUILD: ${USE_EXE_BUILD:-false}

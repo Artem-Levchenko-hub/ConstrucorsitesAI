@@ -40,3 +40,13 @@ def test_cost_abuse_guards_are_secure_by_default() -> None:
     source = _source()
     assert "PROMPT_IP_RATE_LIMIT: ${PROMPT_IP_RATE_LIMIT:-60/hour}" in source
     assert "ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-false}" in source
+
+
+def test_agent_kernel_v2_flags_reach_api_and_worker() -> None:
+    source = _source()
+    api, worker_and_web = source.split("\n  worker:", maxsplit=1)
+    worker = worker_and_web.split("\n  web:", maxsplit=1)[0]
+
+    for service in (api, worker):
+        assert "AGENT_KERNEL_V2_ENABLED: ${AGENT_KERNEL_V2_ENABLED:-false}" in service
+        assert "AGENT_KERNEL_V2_CANARY_USERS: ${AGENT_KERNEL_V2_CANARY_USERS:-}" in service

@@ -1064,6 +1064,10 @@ class Settings(BaseSettings):
     # protocol stays the prod default until the native path is verified on real builds
     # and billing is wired. Env: USE_NATIVE_AGENT.
     use_native_agent: bool = Field(default=False)
+    # Project Brain + semantic anti-loop. Global OFF preserves the existing
+    # native loop; the per-user allowlist enables an owner-only MAX canary.
+    agent_kernel_v2_enabled: bool = Field(default=False)
+    agent_kernel_v2_canary_users: str = Field(default="")
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't
