@@ -24,12 +24,14 @@ from typing import Any
 import httpx
 import structlog
 
-from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
+from omnia_api.core.config import get_settings
 from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
-_MODEL = PRIMARY_LLM_MODEL
+# Keep the proven pre-cost native loop, but route it through the current MAX
+# production model instead of the retired Gemini/Opus-era default.
+_MODEL = "claude-sonnet-5"
 # Providers can pre-reserve the full max_tokens × output price on every call and 402
 # if the key balance is below that reserve — so an over-large ceiling caps how many
 # calls fit the balance (an oversized reserve can 402 mid-build,

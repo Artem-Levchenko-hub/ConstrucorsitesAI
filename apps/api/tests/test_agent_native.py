@@ -17,10 +17,10 @@ from omnia_api.services import agent_native
 from omnia_api.services.agent_native import _module_not_found_hint
 
 
-def test_native_agent_and_autoheal_use_gemini_custom_tools_model() -> None:
+def test_native_agent_uses_sonnet_while_autoheal_keeps_gemini() -> None:
     from omnia_api.services import autoheal
 
-    assert agent_native._MODEL == "gemini-3.1-pro-preview-customtools"
+    assert agent_native._MODEL == "claude-sonnet-5"
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
 
 

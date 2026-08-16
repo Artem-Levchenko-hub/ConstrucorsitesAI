@@ -27,6 +27,7 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     # (routers/images.py), video, and whisper
     # transcription (routers/audio.py) bill via their own paths, not this table.
     "gemini-3.1-pro-preview-customtools": ModelPrice(Decimal("1.50"), Decimal("7.50")),
+    "claude-sonnet-5": ModelPrice(Decimal("0.323"), Decimal("1.615")),
 }
 
 _PER_1K = Decimal("1000")
@@ -91,6 +92,12 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
         "google",
         1_048_576,
         ("agentic", "coding", "multimodal"),
+    ),
+    "claude-sonnet-5": _ModelMeta(
+        "Claude Sonnet 5",
+        "anthropic",
+        1_000_000,
+        ("agentic", "coding", "tool-use", "multimodal"),
     ),
 }
 

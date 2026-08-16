@@ -1193,6 +1193,7 @@ def get_settings() -> Settings:
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7": "premium",
+    "claude-sonnet-5": "premium",
     "gemini-3.1-pro-preview-customtools": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
