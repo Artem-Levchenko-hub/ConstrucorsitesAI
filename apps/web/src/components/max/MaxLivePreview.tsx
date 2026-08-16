@@ -4,8 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
-  Check,
-  CircleAlert,
   ExternalLink,
   Loader2,
   PanelRightClose,
@@ -42,7 +40,6 @@ export function MaxLivePreview({
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const [deviceScale, setDeviceScale] = useState(0.72);
-  const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -136,31 +133,13 @@ export function MaxLivePreview({
     ? `${apiOrigin}/p/${project.slug}`
     : `/p/${project.slug}`;
   const previewUrl = previewSession.data?.url ?? null;
-  const connected = Boolean(previewUrl ?? lastWorkingUrl);
-  // A cold provision can outlive an earlier start request. Once polling sees
-  // the runtime running, that old mutation error is no longer relevant and
-  // must not replace the active "preparing" state with a false failure.
+  const connected = Boolean(previewUrl);
   const previewError =
-    (managedKit.isError ? managedKit.error : null) ??
-    (previewSession.isError ? previewSession.error : null) ??
-    (!runtimeRunning && start.isError ? start.error : null) ??
-    (runtime.isError ? runtime.error : null);
+    managedKit.error ?? previewSession.error ?? start.error ?? runtime.error;
   const preparing =
     runtime.isLoading ||
     start.isPending ||
     (runtimeRunning && (managedKit.isLoading || previewSession.isLoading));
-  const showPreviewError = Boolean(previewError) && !preparing;
-  const displayPreviewUrl = previewUrl ?? lastWorkingUrl;
-  const preparationLabel = !runtimeRunning
-    ? "Запускаем сервер приложения"
-    : !managedKit.isSuccess
-      ? "Синхронизируем последнюю версию"
-      : "Создаём безопасную preview-сессию";
-  const preparationSteps = [
-    { label: "Сервер приложения", done: runtimeRunning },
-    { label: "Последняя версия", done: managedKit.isSuccess },
-    { label: "Безопасная сессия", done: Boolean(previewUrl) },
-  ];
 
   async function openSeparatePreview() {
     const popup = window.open("about:blank", "_blank");
@@ -263,52 +242,23 @@ export function MaxLivePreview({
                   </span>
                 </div>
                 <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
-                  {displayPreviewUrl ? (
-                    <>
-                      <iframe
+                  {previewUrl ? (
+                    <iframe
                       ref={previewFrame}
-                      key={displayPreviewUrl}
-                      src={displayPreviewUrl}
+                      key={previewUrl}
+                      src={previewUrl}
                       title={`Превью ${project.name}`}
                       className="absolute inset-0 size-full border-0 bg-white"
                       allow="clipboard-read; clipboard-write"
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
-                      onLoad={(event) => {
-                        if (previewUrl) setLastWorkingUrl(previewUrl);
+                      onLoad={(event) =>
                         event.currentTarget.contentWindow?.postMessage(
                           { type: "omnia:preview:chrome", hideScrollbar: true },
                           "*",
-                        );
-                      }}
-                      />
-                      {!previewUrl && preparing && (
-                        <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7]/95 px-3 py-2 text-left shadow-sm backdrop-blur">
-                          <p className="flex items-center gap-2 text-[11px] font-medium text-[#171716]">
-                            <Loader2 className="size-3 animate-spin text-[#f15a38]" />
-                            {preparationLabel}
-                          </p>
-                          <p className="mt-1 text-[9px] text-[#8d887f]">
-                            Пока показываем последнюю рабочую версию.
-                          </p>
-                        </div>
-                      )}
-                      {!previewUrl && showPreviewError && (
-                        <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-[#c63d35]/25 bg-[#fcfbf7]/95 px-3 py-2 text-left shadow-sm backdrop-blur">
-                          <p className="flex items-center gap-2 text-[11px] font-medium text-[#171716]">
-                            <CircleAlert className="size-3 text-[#c63d35]" />
-                            Новая версия не открылась
-                          </p>
-                          <button
-                            type="button"
-                            onClick={retryPreview}
-                            className="mt-1 text-[10px] font-medium text-[#c84528]"
-                          >
-                            Повторить проверку
-                          </button>
-                        </div>
-                      )}
-                    </>
+                        )
+                      }
+                    />
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#fcfbf7] px-10 text-center">
                       {preparing ? (
@@ -317,41 +267,24 @@ export function MaxLivePreview({
                         <Play className="size-7 text-[#f15a38]" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-[#171716]">
-                        {showPreviewError
-                          ? "Превью пока недоступно"
-                          : preparationLabel}
+                        {previewError
+                          ? "Не удалось открыть безопасное превью"
+                          : "Подготавливаем рабочую версию"}
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-[#8d887f]">
-                        {showPreviewError
-                          ? "Omnia не смогла создать защищённую сессию. Данные приложения не раскрыты."
-                          : "Обычно подготовка занимает от 15 до 60 секунд."}
+                        {previewError
+                          ? "Данные приложения не открываются без защищённой preview-сессии."
+                          : "Синхронизируем приложение и запускаем изолированную preview-сессию."}
                       </p>
-                      {!showPreviewError && (
-                        <ol className="mt-5 w-full space-y-2 text-left">
-                          {preparationSteps.map((step) => (
-                            <li key={step.label} className="flex items-center gap-2 text-[10px] text-[#6d6962]">
-                              <span className={`grid size-4 place-items-center rounded-full border ${step.done ? "border-[#248a4b] bg-[#248a4b]/10 text-[#248a4b]" : "border-[#d8d4cb] text-[#aaa59b]"}`}>
-                                {step.done ? <Check className="size-2.5" /> : <span className="size-1 rounded-full bg-current" />}
-                              </span>
-                              {step.label}
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                      {showPreviewError && (
-                        <div className="mt-6 flex flex-col items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={retryPreview}
-                            className="inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-[#d8d4cb] px-4 text-[12px] font-medium text-[#171716]"
-                          >
-                            <RefreshCw className="size-4" />
-                            Повторить
-                          </button>
-                          <p className="text-[9px] leading-4 text-[#aaa59b]">
-                            Если ошибка повторяется, откройте панель запуска — там указан ответственный шаг.
-                          </p>
-                        </div>
+                      {!preparing && (
+                        <button
+                          type="button"
+                          onClick={retryPreview}
+                          className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-[#d8d4cb] px-4 text-[12px] font-medium text-[#171716]"
+                        >
+                          <RefreshCw className="size-4" />
+                          Повторить
+                        </button>
                       )}
                     </div>
                   )}

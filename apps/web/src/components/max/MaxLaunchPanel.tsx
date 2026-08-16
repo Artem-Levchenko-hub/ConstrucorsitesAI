@@ -25,8 +25,8 @@ import { MaxLaunchButton } from "./MaxLaunchButton";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import {
   copyMaxLaunchUrl,
+  getMaxLaunchWizard,
 } from "@/lib/max-launch-steps";
-import { getMaxJourney, getMaxJourneyItemHref } from "@/lib/max-journey";
 import { cn } from "@/lib/utils";
 
 export function MaxLaunchPanel({
@@ -70,28 +70,21 @@ export function MaxLaunchPanel({
   );
   const items = readiness.data?.items ?? [];
   const readinessAvailable = readiness.isSuccess && items.length > 0;
-  const journey = getMaxJourney(project.id, items);
-  const currentStage = readinessAvailable ? journey.currentStage : undefined;
-  const nextItem = currentStage
-    ? items.find(
-        (item) =>
-          !item.done &&
-          getMaxJourneyItemHref(project.id, item.id) === currentStage.href,
-      )
-    : undefined;
+  const wizard = getMaxLaunchWizard(items);
+  const nextItem = readinessAvailable ? wizard.currentStep : undefined;
   const nextStepLabel = readiness.isError
     ? "Не удалось проверить готовность"
     : !readinessAvailable
       ? "Проверяем готовность…"
-      : currentStage?.label ?? "Всё готово";
+      : nextItem?.label ?? "Всё готово";
   const nextStepCopy = readiness.isError
     ? "Обновите страницу или повторите попытку чуть позже."
       : !readinessAvailable
       ? "Статусы появятся после ответа сервера."
-      : currentStage
-        ? currentStage.description
+      : nextItem
+        ? nextItem.instruction
         : "Приложение готово к работе в MAX.";
-  const configurationEmphasis = ["business", "legal"].includes(
+  const configurationEmphasis = ["business", "legal", "max_url"].includes(
     nextItem?.id ?? "",
   );
   const botEmphasis = nextItem?.id === "bot";
@@ -131,7 +124,7 @@ export function MaxLaunchPanel({
               readiness.data?.ready_to_launch ? "bg-success" : "bg-[#f15a38]",
             )}
           />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8d887f]">Путь до запуска</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#8d887f]">Публикация</span>
         </div>
         <button
           type="button"
@@ -156,25 +149,25 @@ export function MaxLaunchPanel({
               </h2>
             </div>
             <span className="tabular-nums text-sm font-medium text-[#6d6962]">
-              {readinessAvailable ? `${journey.progress}%` : "—"}
+              {readinessAvailable ? `${readiness.data.progress}%` : "—"}
             </span>
           </div>
           <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[#e7e3da]">
             <div
-              aria-label={`Готовность к запуску: ${readinessAvailable ? journey.progress : 0}%`}
+              aria-label={`Готовность к запуску: ${readinessAvailable ? readiness.data.progress : 0}%`}
               aria-valuemax={100}
               aria-valuemin={0}
-              aria-valuenow={readinessAvailable ? journey.progress : 0}
+              aria-valuenow={readinessAvailable ? readiness.data.progress : 0}
               data-testid="max-launch-progress"
               role="progressbar"
               className="h-full rounded-full bg-[#f15a38] transition-[width]"
-              style={{ width: `${readinessAvailable ? journey.progress : 0}%` }}
+              style={{ width: `${readiness.data?.progress ?? 0}%` }}
             />
           </div>
 
           <div aria-live="polite" data-testid="max-launch-current-step" className="mt-5 border-l-2 border-[#f15a38]/70 pl-3">
             <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
-              {currentStage ? `Этап ${currentStage.position} из ${journey.total}` : "Запуск завершён"}
+              {nextItem ? `Шаг ${nextItem.position} из ${wizard.total}` : "Запуск завершён"}
             </p>
             <p className="mt-1 text-sm font-medium text-[#171716]">
               {nextStepLabel}
@@ -188,26 +181,11 @@ export function MaxLaunchPanel({
               </p>
             )}
           </div>
-          {currentStage ? (
-            <Button asChild className="mt-4 h-11 w-full bg-[#f15a38] text-white hover:bg-[#d94929]">
-              <Link href={currentStage.href}>
-                {currentStage.actionLabel}
-                <ChevronRight className="size-4" />
-              </Link>
-            </Button>
-          ) : (
-            <Button asChild className="mt-4 h-11 w-full bg-[#f15a38] text-white hover:bg-[#d94929]">
-              <Link href={`/max/${project.id}/dashboard`}>
-                Открыть управление
-                <ChevronRight className="size-4" />
-              </Link>
-            </Button>
-          )}
         </section>
 
         {readinessAvailable && (
           <ol aria-label="Шаги публикации в MAX" className="mt-5 space-y-1 border-y border-[#e7e3da] py-3">
-            {journey.stages.map((step) => (
+            {wizard.steps.map((step) => (
               <li
                 key={step.id}
                 aria-current={step.status === "current" ? "step" : undefined}
@@ -233,8 +211,8 @@ export function MaxLaunchPanel({
                   <span className={cn("block", step.status === "completed" ? "text-[#8d887f]" : "text-[#171716]", step.status === "current" && "font-semibold")}>
                     {step.label}
                   </span>
-                  {step.status === "current" && (
-                    <span className="mt-0.5 block text-[#c84528]">Сейчас: {step.actionLabel}</span>
+                  {step.status === "current" && step.action && (
+                    <span className="mt-0.5 block text-[#c84528]">Сейчас: {step.action}</span>
                   )}
                   {step.status === "upcoming" && <span className="mt-0.5 block text-[#8d887f]">Далее</span>}
                 </span>
@@ -243,15 +221,12 @@ export function MaxLaunchPanel({
           </ol>
         )}
 
-        <section className="mt-5 space-y-2.5" aria-label="Другие разделы проекта" data-testid="max-launch-actions">
-          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[#8d887f]">
-            Другие разделы
-          </p>
+        <section className="mt-5 space-y-2.5" aria-label="Действия публикации" data-testid="max-launch-actions">
           <div className="grid grid-cols-2 gap-2">
             <MaxProjectSetupDialog
               projectId={project.id}
               emphasized={configurationEmphasis}
-              label="Данные"
+              label={nextItem?.id === "max_url" ? "URL в MAX" : "Приложение"}
             />
             <MaxIntegrationButton
               projectId={project.id}
@@ -274,9 +249,7 @@ export function MaxLaunchPanel({
               <ChevronRight className="h-3.5 w-3.5 text-[#aaa59b]" />
             </Link>
           </Button>
-          {currentStage?.id === "publish" && (
-            <MaxLaunchButton projectId={project.id} />
-          )}
+          <MaxLaunchButton projectId={project.id} />
           <RuntimeButton projectId={project.id} display="compact" />
         </section>
 

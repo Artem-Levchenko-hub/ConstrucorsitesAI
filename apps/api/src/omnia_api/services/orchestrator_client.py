@@ -161,14 +161,7 @@ async def provision(
     initial_env: dict[str, str] | None = None,
     timeout: float = 180.0,  # noqa: ASYNC109 - cold template rebuilds can take >60s
 ) -> dict[str, Any]:
-    """POST /internal/projects/provision — first-time scaffold + start.
-
-    A stale template image is rebuilt during the first cold start. Production
-    builds regularly exceed the generic 30-second orchestrator deadline, while
-    provisioning continues successfully in the background. Keep this request
-    alive long enough for the real result so the UI never reports a false
-    preview failure for a container that is still starting.
-    """
+    """POST /internal/projects/provision — first-time scaffold + start."""
     payload: dict[str, Any] = {
         "project_id": str(project_id),
         "slug": slug,

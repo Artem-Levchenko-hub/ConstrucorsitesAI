@@ -1,36 +1,5 @@
 /* Managed by MAX Studio. This fallback is replaced by the saved business profile. */
-export type OmniaMaxContentItem = {
-  id: string;
-  title: string;
-  description: string;
-  price: string;
-  action_label: string;
-  active: boolean;
-};
-
-export type OmniaMaxConfig = {
-  app_name: string;
-  app_type: "loyalty" | "catalog" | "booking" | "event" | "education" | "custom";
-  summary: string;
-  audience: string;
-  primary_action: string;
-  features: string[];
-  style: "brand" | "clean" | "bright";
-  brand_colors: string;
-  content: OmniaMaxContentItem[];
-  operator: { legal_name: string; inn: string; ogrn: string; address: string };
-  support: { email: string | null; phone: string; response_time: string };
-  legal: {
-    age_rating: "0+" | "6+" | "12+" | "16+" | "18+";
-    has_sales: boolean;
-    has_user_content: boolean;
-    marketing_notifications: boolean;
-    personal_data_consent: boolean;
-    terms_accepted: boolean;
-  };
-};
-
-export const omniaMaxConfig: OmniaMaxConfig = {
+export const omniaMaxConfig = {
   app_name: "MAX Mini App",
   app_type: "custom",
   summary: "Готовое мини-приложение для пользователей MAX",
@@ -54,4 +23,7 @@ export const omniaMaxConfig: OmniaMaxConfig = {
     personal_data_consent: true,
     terms_accepted: false,
   },
-};
+  max_url_attached: false,
+} as const;
+
+export type OmniaMaxConfig = typeof omniaMaxConfig;

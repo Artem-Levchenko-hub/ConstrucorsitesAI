@@ -1005,10 +1005,7 @@ class Settings(BaseSettings):
     # headroom: the agent reads a couple of examples, declares N entities, writes
     # the screens, then build+fix. 14 was too tight (all spent exploring); 40
     # gives room to actually write + repair. Env: AGENT_BUILDER_MAX_STEPS.
-    # Preferred model-turn budget. The execution path additionally clamps legacy
-    # production overrides to 30, so an old AGENT_BUILDER_MAX_STEPS=120 cannot
-    # silently reopen the runaway loop.
-    agent_builder_max_steps: int = Field(default=24)
+    agent_builder_max_steps: int = Field(default=40)
     # Green-gate (Phase 2): when ON, the agent loop refuses a `done` until the
     # last build was clean AND the running app was re-checked after the last
     # write (a clean typecheck is exactly what a model hallucinates completion
@@ -1030,9 +1027,7 @@ class Settings(BaseSettings):
     # makes NO new file progress (genuinely stuck). This is the real stop condition;
     # the segment count is just a runaway backstop (a truly unbounded loop is unsafe —
     # a model that never finishes would run forever). Env: AGENT_MAX_SEGMENTS.
-    # A generation is a single bounded run. Completeness comes from the working
-    # template + deterministic final build/rollback, not another provider segment.
-    agent_max_segments: int = Field(default=1)
+    agent_max_segments: int = Field(default=6)
 
     # Native tool-use agent (2026-07-01, owner «как Claude Code, только на сервере»).
     # When ON, a container-app build runs through agent_native.run_native_build: ONE
@@ -1054,7 +1049,7 @@ class Settings(BaseSettings):
     # (a repair-run exception just stops the loop, never breaks the build). Kill
     # per-env: USE_EDIT_AUTO_REPAIR=false.
     use_edit_auto_repair: bool = Field(default=True)
-    edit_auto_repair_attempts: int = Field(default=1)
+    edit_auto_repair_attempts: int = Field(default=4)
 
     # Auto-heal ON OPEN (owner 2026-07-16 — "зашёл → ошибки чинятся сами").
     # When a project is opened/started and its dev build is RED, kick off the same
@@ -1074,7 +1069,7 @@ class Settings(BaseSettings):
     # OFF by default → the guardrail runs advisory-only (logs, never re-loops), so
     # prod generation is unchanged. Env: USE_AGENT_GATE_FEEDBACK.
     use_agent_gate_feedback: bool = Field(default=True)
-    agent_gate_max_attempts: int = Field(default=1)
+    agent_gate_max_attempts: int = Field(default=2)
     # Runtime gates in the loop (research finding: functional/role gates were
     # defined+tested but UNWIRED — only the static guardrail ran). When on, after
     # the agent says done we drive the live preview through the functional gate
@@ -1193,7 +1188,6 @@ def get_settings() -> Settings:
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7": "premium",
-    "claude-sonnet-5": "premium",
     "gemini-3.1-pro-preview-customtools": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)

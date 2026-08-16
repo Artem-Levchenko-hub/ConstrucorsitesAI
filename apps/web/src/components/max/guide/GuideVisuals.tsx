@@ -1,5 +1,3 @@
-"use client";
-
 import {
   Activity,
   ArrowRight,
@@ -19,7 +17,7 @@ import {
   Sparkles,
   Webhook,
 } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 const ink = "#171716";
 const paper = "#fcfbf7";
@@ -29,131 +27,46 @@ const accent = "#f15a38";
 const muted = "#8d887f";
 const success = "#248a4b";
 
-type Callout = {
-  number: number;
-  target: string;
-  offset: [number, number];
-};
-
-function CalloutLayer({ callouts }: { callouts: Callout[] }) {
-  const arrowId = `guide-arrow-${useId().replace(/:/g, "")}`;
-  const layerRef = useRef<HTMLDivElement>(null);
-  const [layerSize, setLayerSize] = useState<[number, number]>([1, 1]);
-  const [geometry, setGeometry] = useState<Array<{
-    number: number;
-    target: string;
-    from: [number, number];
-    to: [number, number];
-    d: string;
-  }>>([]);
-
-  useLayoutEffect(() => {
-    const layer = layerRef.current;
-    const container = layer?.parentElement;
-    if (!layer || !container) return;
-
-    let animationFrame = 0;
-    const measure = () => {
-      const containerRect = container.getBoundingClientRect();
-      if (containerRect.width === 0 || containerRect.height === 0) return;
-
-      const next = callouts.flatMap(({ number, target, offset }) => {
-        const targetElement = container.querySelector<HTMLElement>(`[data-guide-target="${target}"]`);
-        if (!targetElement) return [];
-
-        const targetRect = targetElement.getBoundingClientRect();
-        const toX = targetRect.left - containerRect.left + targetRect.width / 2;
-        const toY = targetRect.top - containerRect.top + targetRect.height / 2;
-        const fromX = Math.min(
-          containerRect.width - 18,
-          Math.max(18, toX + (offset[0] / 100) * containerRect.width),
-        );
-        const fromY = Math.min(
-          containerRect.height - 18,
-          Math.max(18, toY + (offset[1] / 100) * containerRect.height),
-        );
-        const deltaX = toX - fromX;
-        const d = `M${fromX} ${fromY} C${fromX + deltaX * 0.38} ${fromY} ${toX - deltaX * 0.3} ${toY} ${toX} ${toY}`;
-
-        return [{ number, target, from: [fromX, fromY] as [number, number], to: [toX, toY] as [number, number], d }];
-      });
-
-      setLayerSize([containerRect.width, containerRect.height]);
-      setGeometry(next);
-    };
-    const scheduleMeasure = () => {
-      cancelAnimationFrame(animationFrame);
-      animationFrame = requestAnimationFrame(measure);
-    };
-    const resizeObserver = new ResizeObserver(scheduleMeasure);
-    resizeObserver.observe(container);
-    callouts.forEach(({ target }) => {
-      const targetElement = container.querySelector<HTMLElement>(`[data-guide-target="${target}"]`);
-      if (targetElement) resizeObserver.observe(targetElement);
-    });
-    scheduleMeasure();
-    void document.fonts?.ready.then(scheduleMeasure);
-
-    return () => {
-      cancelAnimationFrame(animationFrame);
-      resizeObserver.disconnect();
-    };
-  }, [callouts]);
-
+function Marker({ number, className }: { number: number; className: string }) {
   return (
-    <div ref={layerRef} aria-hidden="true" className="pointer-events-none absolute inset-0 z-20">
-      <svg
-        className="absolute inset-0 h-full w-full"
-        viewBox={`0 0 ${layerSize[0]} ${layerSize[1]}`}
-        preserveAspectRatio="none"
-      >
-        <defs>
-          <marker
-            id={arrowId}
-            markerWidth="14"
-            markerHeight="14"
-            markerUnits="userSpaceOnUse"
-            refX="8"
-            refY="4"
-            orient="auto"
-            viewBox="0 0 8 8"
-          >
-            <path d="M0,0 L8,4 L0,8 Z" fill={accent} />
-          </marker>
-        </defs>
-        {geometry.map(({ number, d }) => (
-          <g key={number}>
-            <path d={d} fill="none" stroke="white" strokeLinecap="round" strokeWidth="9" />
-            <path
-              d={d}
-              fill="none"
-              markerEnd={`url(#${arrowId})`}
-              stroke={accent}
-              strokeDasharray="8 7"
-              strokeLinecap="round"
-              strokeWidth="4"
-            />
-          </g>
-        ))}
-      </svg>
-      {geometry.map(({ number, target, from, to }) => (
-        <div key={number} aria-hidden="true">
-          <span
-            className="pointer-events-none absolute z-30 grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#f15a38] text-[11px] font-bold text-white shadow-[0_5px_14px_rgba(0,0,0,.28)]"
-            style={{ left: from[0], top: from[1] }}
-          >
-            {number}
-          </span>
-          <span
-            data-guide-callout-for={target}
-            className="pointer-events-none absolute z-30 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-[#f15a38] bg-white/95"
-            style={{ left: to[0], top: to[1] }}
-          >
-            <span className="size-1.5 rounded-full bg-[#f15a38]" />
-          </span>
-        </div>
-      ))}
-    </div>
+    <span
+      aria-hidden="true"
+      className={`absolute z-20 grid size-7 place-items-center rounded-full border-2 border-white bg-[#f15a38] text-xs font-bold text-white shadow-[0_5px_14px_rgba(0,0,0,.28)] ${className}`}
+    >
+      {number}
+    </span>
+  );
+}
+
+function ArrowLayer({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+      viewBox="0 0 1000 560"
+      preserveAspectRatio="none"
+    >
+      <defs>
+        <marker id="guide-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 Z" fill={accent} />
+        </marker>
+      </defs>
+      {children}
+    </svg>
+  );
+}
+
+function Arrow({ d }: { d: string }) {
+  return (
+    <path
+      d={d}
+      fill="none"
+      markerEnd="url(#guide-arrow)"
+      stroke={accent}
+      strokeDasharray="6 5"
+      strokeLinecap="round"
+      strokeWidth="3"
+    />
   );
 }
 
@@ -179,7 +92,7 @@ function ScreenshotFrame({
           <span className="size-2 rounded-full bg-[#248a4b]" />
         </div>
       </figcaption>
-      <div className="relative min-h-[330px] w-full overflow-hidden bg-[#f5f3ee] sm:aspect-[1000/560] sm:min-h-0">
+      <div className="relative aspect-[1000/560] min-h-[330px] overflow-hidden bg-[#f5f3ee] sm:min-h-0">
         {children}
       </div>
     </figure>
@@ -225,7 +138,7 @@ export function ProjectCreationVisual() {
         <div className="min-w-0 flex-1">
           <div className="flex h-[13%] items-center justify-between border-b border-[#d8d4cb] bg-[#fcfbf7] px-[4%]">
             <span className="font-mono text-[8px] uppercase tracking-[.18em] text-[#8d887f]">MAX Studio</span>
-            <button data-guide-target="project-new" className="flex items-center gap-1.5 rounded-md bg-[#f15a38] px-3 py-2 text-[8px] font-semibold text-white">
+            <button className="flex items-center gap-1.5 rounded-md bg-[#f15a38] px-3 py-2 text-[8px] font-semibold text-white">
               <span className="text-xs leading-none">+</span> Новый проект
             </button>
           </div>
@@ -255,7 +168,7 @@ export function ProjectCreationVisual() {
           </div>
           <div className="space-y-[4%] p-[5%] text-[8px]">
             <label className="block font-medium">Название<div className="mt-1.5 rounded-md border border-[#d8d4cb] bg-white px-2 py-2 text-[#6d6962]">Кофе рядом</div></label>
-            <label className="block font-medium">Что пользователь сможет делать?<div data-guide-target="project-description" className="mt-1.5 h-12 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal text-[#6d6962]">Получать баллы, выбирать награды и оформлять заказ</div></label>
+            <label className="block font-medium">Что пользователь сможет делать?<div className="mt-1.5 h-12 rounded-md border border-[#d8d4cb] bg-white p-2 font-normal text-[#6d6962]">Получать баллы, выбирать награды и оформлять заказ</div></label>
             <div>
               <p className="font-medium">Тип приложения</p>
               <div className="mt-1.5 grid grid-cols-2 gap-1.5">
@@ -263,15 +176,18 @@ export function ProjectCreationVisual() {
                 <div className="rounded-md border border-[#d8d4cb] p-2">Каталог и заказы</div>
               </div>
             </div>
-            <button data-guide-target="project-create" className="float-right flex items-center gap-1.5 rounded-md bg-[#f15a38] px-3 py-2 font-semibold text-white"><Sparkles className="size-3" />Создать проект</button>
+            <button className="float-right flex items-center gap-1.5 rounded-md bg-[#f15a38] px-3 py-2 font-semibold text-white"><Sparkles className="size-3" />Создать проект</button>
           </div>
         </div>
       </div>
-      <CalloutLayer callouts={[
-        { number: 1, target: "project-new", offset: [-14, 8] },
-        { number: 2, target: "project-description", offset: [20, -4] },
-        { number: 3, target: "project-create", offset: [-16, 7] },
-      ]} />
+      <ArrowLayer>
+        <Arrow d="M835 60 C835 90 800 96 765 115" />
+        <Arrow d="M920 230 C860 235 835 245 790 270" />
+        <Arrow d="M700 505 C740 500 790 490 830 455" />
+      </ArrowLayer>
+      <Marker number={1} className="right-[12%] top-[5%]" />
+      <Marker number={2} className="right-[4%] top-[36%]" />
+      <Marker number={3} className="bottom-[4%] right-[31%]" />
     </ScreenshotFrame>
   );
 }
@@ -284,7 +200,7 @@ export function BuilderVisual() {
         <div className="flex min-w-0 flex-1 flex-col bg-[#fcfbf7]">
           <div className="flex h-[13%] items-center justify-between border-b border-[#d8d4cb] px-[3%]">
             <div><p className="text-[10px] font-semibold">Кофе рядом</p><p className="mt-1 text-[7px] text-[#248a4b]">● Сохранено на сервере</p></div>
-            <button data-guide-target="builder-publish" className="rounded-md bg-[#f15a38] px-3 py-2 text-[8px] font-semibold text-white">Опубликовать</button>
+            <button className="rounded-md bg-[#f15a38] px-3 py-2 text-[8px] font-semibold text-white">Опубликовать</button>
           </div>
           <div className="flex min-h-0 flex-1">
             <div className="relative w-[58%] border-r border-[#d8d4cb] p-[4%]">
@@ -295,12 +211,12 @@ export function BuilderVisual() {
               </div>
               <div className="absolute inset-x-[5%] bottom-[5%] rounded-lg border border-[#d8d4cb] bg-white p-2.5">
                 <p className="text-[8px] text-[#8d887f]">Например: добавь экран наград и кнопку обмена баллов…</p>
-                <div className="mt-3 flex justify-end"><span data-guide-target="builder-send" className="rounded-md bg-[#f15a38] px-3 py-1.5 text-[7px] font-semibold text-white">Отправить</span></div>
+                <div className="mt-3 flex justify-end"><span className="rounded-md bg-[#f15a38] px-3 py-1.5 text-[7px] font-semibold text-white">Отправить</span></div>
               </div>
             </div>
             <div className="relative flex-1 bg-[#f5f3ee] p-[4%]">
               <p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#8d887f]">Mobile WebView · Живое превью</p>
-              <div data-guide-target="builder-preview" className="mx-auto mt-[5%] h-[75%] w-[58%] rounded-[24px] border-[6px] border-[#171716] bg-white p-2 shadow-xl">
+              <div className="mx-auto mt-[5%] h-[75%] w-[58%] rounded-[24px] border-[6px] border-[#171716] bg-white p-2 shadow-xl">
                 <div className="rounded-xl bg-[#3b2a22] p-3 text-white">
                   <p className="text-[6px] text-white/60">Кофе рядом</p><p className="mt-1 text-[13px] font-semibold">1 250 баллов</p>
                   <div className="mt-3 h-1 rounded bg-white/20"><div className="h-full w-3/5 rounded bg-[#f15a38]" /></div>
@@ -313,11 +229,14 @@ export function BuilderVisual() {
           </div>
         </div>
       </div>
-      <CalloutLayer callouts={[
-        { number: 1, target: "builder-send", offset: [-19, 7] },
-        { number: 2, target: "builder-preview", offset: [11, -19] },
-        { number: 3, target: "builder-publish", offset: [-12, 8] },
-      ]} />
+      <ArrowLayer>
+        <Arrow d="M420 500 C430 470 450 445 475 420" />
+        <Arrow d="M815 185 C800 205 780 220 755 240" />
+        <Arrow d="M915 60 C890 75 855 85 820 92" />
+      </ArrowLayer>
+      <Marker number={1} className="bottom-[3%] left-[39%]" />
+      <Marker number={2} className="right-[7%] top-[25%]" />
+      <Marker number={3} className="right-[4%] top-[4%]" />
     </ScreenshotFrame>
   );
 }
@@ -343,7 +262,7 @@ export function IntegrationVisual() {
                 <div key={String(title)} className={`rounded-lg border bg-[#fcfbf7] p-[5%] ${hot ? "border-[#f15a38]/60 shadow-[0_8px_24px_rgba(241,90,56,.12)]" : "border-[#d8d4cb]"}`}>
                   <div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#ece8df]"><ItemIcon className="size-3.5 text-[#f15a38]" /></span><span className="rounded-full bg-[#f5f3ee] px-2 py-1 text-[6px] text-[#8d887f]">Не подключено</span></div>
                   <p className="mt-[7%] text-[10px] font-semibold">{String(title)}</p><p className="mt-1 text-[7px] text-[#8d887f]">{String(copy)}</p>
-                  <button data-guide-target={hot ? "integration-connect" : undefined} className={`mt-[7%] rounded-md px-3 py-1.5 text-[7px] font-semibold ${hot ? "bg-[#f15a38] text-white" : "border border-[#d8d4cb]"}`}>{String(action)}</button>
+                  <button className={`mt-[7%] rounded-md px-3 py-1.5 text-[7px] font-semibold ${hot ? "bg-[#f15a38] text-white" : "border border-[#d8d4cb]"}`}>{String(action)}</button>
                 </div>
               );
             })}
@@ -351,15 +270,17 @@ export function IntegrationVisual() {
           <div className="absolute bottom-[7%] right-[5%] w-[38%] rounded-lg border border-[#d8d4cb] bg-white p-[3%] shadow-xl">
             <div className="flex items-center gap-2"><Bot className="size-4 text-[#f15a38]" /><p className="text-[10px] font-semibold">Подключить MAX-бота</p></div>
             <p className="mt-2 text-[7px] leading-3 text-[#8d887f]">Вставьте токен из MAX для партнёров. Токен будет проверен через API.</p>
-            <div data-guide-target="integration-token" className="mt-2 rounded-md border border-[#d8d4cb] px-2 py-2 font-mono text-[7px] text-[#aaa59b]">Введите токен бота</div>
+            <div className="mt-2 rounded-md border border-[#d8d4cb] px-2 py-2 font-mono text-[7px] text-[#aaa59b]">Введите токен бота</div>
             <button className="mt-2 rounded-md bg-[#f15a38] px-3 py-1.5 text-[7px] font-semibold text-white">Проверить и сохранить</button>
           </div>
         </div>
       </div>
-      <CalloutLayer callouts={[
-        { number: 1, target: "integration-connect", offset: [25, 2] },
-        { number: 2, target: "integration-token", offset: [21, 13] },
-      ]} />
+      <ArrowLayer>
+        <Arrow d="M555 280 C590 280 620 285 655 300" />
+        <Arrow d="M875 485 C850 470 825 455 805 430" />
+      </ArrowLayer>
+      <Marker number={1} className="left-[54%] top-[45%]" />
+      <Marker number={2} className="bottom-[4%] right-[10%]" />
     </ScreenshotFrame>
   );
 }
@@ -387,7 +308,7 @@ export function LaunchVisual() {
                 <div className="rounded-md bg-[#f5f3ee] p-2"><p className="text-[#8d887f]">Health</p><p className="mt-1 font-semibold">готов</p></div>
                 <div className="rounded-md bg-[#f5f3ee] p-2"><p className="text-[#8d887f]">Webhook</p><p className="mt-1 font-semibold">ожидает URL</p></div>
               </div>
-              <button data-guide-target="launch-publish" className="mt-[6%] flex items-center gap-1.5 rounded-md bg-[#f15a38] px-3 py-2 text-[8px] font-semibold text-white"><Rocket className="size-3" />Опубликовать</button>
+              <button className="mt-[6%] flex items-center gap-1.5 rounded-md bg-[#f15a38] px-3 py-2 text-[8px] font-semibold text-white"><Rocket className="size-3" />Опубликовать</button>
             </div>
           </div>
           <aside className="w-[36%] border-l border-[#d8d4cb] bg-[#fcfbf7] p-[4%]">
@@ -395,16 +316,18 @@ export function LaunchVisual() {
             <div className="mt-2 h-1.5 rounded-full bg-[#e7e3da]"><div className="h-full w-3/5 rounded-full bg-[#f15a38]" /></div>
             <div className="mt-[7%] border-l-2 border-[#f15a38] pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#8d887f]">Шаг 4 из 5</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#8d887f]">Получите постоянный HTTPS-адрес.</p></div>
             <div className="mt-[7%] space-y-1 border-y border-[#e7e3da] py-2">
-              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 3 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 3 ? "bg-[#f15a38]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-[#248a4b]" : index === 3 ? "border-[#f15a38] bg-[#f15a38] text-white" : "border-[#d8d4cb] text-[#8d887f]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
+              {steps.map(([step, done], index) => <div key={step} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 3 ? "bg-[#f15a38]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-[#248a4b]" : index === 3 ? "border-[#f15a38] bg-[#f15a38] text-white" : "border-[#d8d4cb] text-[#8d887f]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
             </div>
             <div className="mt-[7%] grid grid-cols-2 gap-1.5"><button className="rounded-md border border-[#d8d4cb] px-2 py-2 text-[7px]">Приложение</button><button className="rounded-md border border-[#d8d4cb] px-2 py-2 text-[7px]">MAX-бот</button></div>
           </aside>
         </div>
       </div>
-      <CalloutLayer callouts={[
-        { number: 1, target: "launch-publish", offset: [22, 21] },
-        { number: 2, target: "launch-current-step", offset: [13, -25] },
-      ]} />
+      <ArrowLayer>
+        <Arrow d="M525 390 C510 410 495 425 470 442" />
+        <Arrow d="M865 230 C845 250 830 270 815 292" />
+      </ArrowLayer>
+      <Marker number={1} className="bottom-[17%] left-[49%]" />
+      <Marker number={2} className="right-[7%] top-[35%]" />
     </ScreenshotFrame>
   );
 }
@@ -422,21 +345,24 @@ export function PartnerVisual() {
         <div className="min-w-0 flex-1 p-[5%]">
           <div className="flex items-center justify-between"><div><p className="text-[8px] text-[#727780]">Чат-боты / Кофе рядом</p><h3 className="mt-1 text-[18px] font-semibold">Расширенные настройки</h3></div><span className="rounded-full bg-[#e7f6ec] px-2.5 py-1 text-[7px] font-semibold text-[#1e7e45]">Бот создан</span></div>
           <div className="mt-[5%] rounded-xl bg-white p-[5%] shadow-[0_8px_30px_rgba(0,0,0,.07)]">
-            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Токен бота</p><p className="mt-1 text-[7px] text-[#727780]">Используется сервером для Bot API.</p></div><button data-guide-target="partner-copy" className="flex items-center gap-1 rounded-md border border-black/10 px-2 py-1.5 text-[7px]"><Copy className="size-3" />Копировать</button></div>
+            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Токен бота</p><p className="mt-1 text-[7px] text-[#727780]">Используется сервером для Bot API.</p></div><button className="flex items-center gap-1 rounded-md border border-black/10 px-2 py-1.5 text-[7px]"><Copy className="size-3" />Копировать</button></div>
             <div className="mt-2 rounded-md border border-black/10 bg-[#f7f8fa] px-3 py-2 font-mono text-[7px] text-[#727780]">••••••••••••••••••••••••</div>
             <div className="my-[5%] h-px bg-black/10" />
             <label className="block text-[10px] font-semibold">Ссылка на мини-приложение</label>
-            <div className="mt-2 flex gap-2"><div data-guide-target="partner-url" className="min-w-0 flex-1 truncate rounded-md border-2 border-[#f15a38] bg-white px-3 py-2 font-mono text-[7px]">https://app-42.lead-generator.ru</div><button className="rounded-md border border-black/10 px-3 text-[7px]">Проверить</button></div>
+            <div className="mt-2 flex gap-2"><div className="min-w-0 flex-1 truncate rounded-md border-2 border-[#f15a38] bg-white px-3 py-2 font-mono text-[7px]">https://app-42.lead-generator.ru</div><button className="rounded-md border border-black/10 px-3 text-[7px]">Проверить</button></div>
             <div className="mt-[4%]"><p className="text-[9px] font-semibold">Кнопка запуска</p><div className="mt-2 flex gap-2 text-[7px]"><button className="rounded-full border-2 border-[#f15a38] bg-[#fff3ef] px-3 py-1.5 font-semibold text-[#c84528]">Открыть</button><button className="rounded-full border border-black/10 px-3 py-1.5">Старт</button><button className="rounded-full border border-black/10 px-3 py-1.5">Играть</button></div></div>
-            <div className="mt-[5%] flex justify-end"><button data-guide-target="partner-save" className="rounded-md bg-[#15171a] px-4 py-2 text-[8px] font-semibold text-white">Сохранить</button></div>
+            <div className="mt-[5%] flex justify-end"><button className="rounded-md bg-[#15171a] px-4 py-2 text-[8px] font-semibold text-white">Сохранить</button></div>
           </div>
         </div>
       </div>
-      <CalloutLayer callouts={[
-        { number: 1, target: "partner-copy", offset: [8, -7] },
-        { number: 2, target: "partner-url", offset: [30, -4] },
-        { number: 3, target: "partner-save", offset: [-15, 5] },
-      ]} />
+      <ArrowLayer>
+        <Arrow d="M870 160 C835 170 795 185 750 210" />
+        <Arrow d="M890 338 C850 340 815 344 770 350" />
+        <Arrow d="M720 480 C750 475 790 466 825 450" />
+      </ArrowLayer>
+      <Marker number={1} className="right-[8%] top-[21%]" />
+      <Marker number={2} className="right-[6%] top-[56%]" />
+      <Marker number={3} className="bottom-[6%] right-[27%]" />
     </ScreenshotFrame>
   );
 }
@@ -447,7 +373,7 @@ export function DashboardVisual() {
       <div className="flex h-full text-[#171716]">
         <Sidebar active="Публикация" />
         <div className="min-w-0 flex-1 p-[4%]">
-          <div className="flex items-end justify-between"><div><p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#f15a38]">Production</p><h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">После запуска</h3></div><a data-guide-target="dashboard-open" className="flex items-center gap-1 text-[8px] font-semibold text-[#c84528]">Открыть приложение <ExternalLink className="size-3" /></a></div>
+          <div className="flex items-end justify-between"><div><p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#f15a38]">Production</p><h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">После запуска</h3></div><a className="flex items-center gap-1 text-[8px] font-semibold text-[#c84528]">Открыть приложение <ExternalLink className="size-3" /></a></div>
           <div className="mt-[5%] grid grid-cols-4 gap-[2%]">
             {[
               [Cloud, "Контейнер", "Работает", true],
@@ -462,16 +388,18 @@ export function DashboardVisual() {
           <div className="mt-[4%] grid grid-cols-[1.25fr_.75fr] gap-[3%]">
             <div className="overflow-hidden rounded-lg border border-[#d8d4cb] bg-[#fcfbf7]">
               <div className="flex items-center justify-between border-b border-[#d8d4cb] p-[4%]"><div><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#8d887f]">Versions</p><p className="mt-1 text-[10px] font-semibold">История публикаций</p></div><button className="rounded-md border border-[#d8d4cb] px-2 py-1 text-[7px]">Обновить</button></div>
-              {["v.12 · Production build", "v.11 · Обновление каталога", "v.10 · Первая публикация"].map((item, index) => <div key={item} data-guide-target={index === 0 ? "dashboard-version" : undefined} className="flex items-center gap-3 border-b border-[#e7e3da] p-[3%] text-[7px]"><span className="grid size-6 place-items-center rounded-full bg-[#248a4b]/10 text-[#248a4b]"><Check className="size-3" /></span><span className="font-semibold">{item}</span><span className="ml-auto text-[#8d887f]">{index === 0 ? "сейчас" : `${index} дн.`}</span><span className="font-semibold text-[#248a4b]">done</span></div>)}
+              {["v.12 · Production build", "v.11 · Обновление каталога", "v.10 · Первая публикация"].map((item, index) => <div key={item} className="flex items-center gap-3 border-b border-[#e7e3da] p-[3%] text-[7px]"><span className="grid size-6 place-items-center rounded-full bg-[#248a4b]/10 text-[#248a4b]"><Check className="size-3" /></span><span className="font-semibold">{item}</span><span className="ml-auto text-[#8d887f]">{index === 0 ? "сейчас" : `${index} дн.`}</span><span className="font-semibold text-[#248a4b]">done</span></div>)}
             </div>
             <div className="rounded-lg border border-[#d8d4cb] bg-[#fcfbf7] p-[7%]"><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#8d887f]">Эксплуатация</p><p className="mt-2 text-[10px] font-semibold">Без разработчика</p><div className="mt-[10%] space-y-3 text-[7px] text-[#6d6962]"><p className="flex gap-2"><ShieldCheck className="size-3 shrink-0 text-[#f15a38]" />Health-check после релиза</p><p className="flex gap-2"><Cloud className="size-3 shrink-0 text-[#f15a38]" />Всегда активный контейнер</p><p className="flex gap-2"><ArrowRight className="size-3 shrink-0 text-[#f15a38]" />Версии и откат</p></div></div>
           </div>
         </div>
       </div>
-      <CalloutLayer callouts={[
-        { number: 1, target: "dashboard-open", offset: [-15, 8] },
-        { number: 2, target: "dashboard-version", offset: [8, 20] },
-      ]} />
+      <ArrowLayer>
+        <Arrow d="M895 90 C860 100 830 110 790 130" />
+        <Arrow d="M520 430 C500 410 485 392 470 365" />
+      </ArrowLayer>
+      <Marker number={1} className="right-[7%] top-[7%]" />
+      <Marker number={2} className="bottom-[18%] left-[48%]" />
     </ScreenshotFrame>
   );
 }

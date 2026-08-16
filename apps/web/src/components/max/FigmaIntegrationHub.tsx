@@ -51,7 +51,6 @@ import { cn } from "@/lib/utils";
 
 const categories: Record<IntegrationCategory | "all", { label: string; icon: LucideIcon }> = {
   all: { label: "Все сервисы", icon: Plug },
-  ai: { label: "ИИ", icon: Sparkles },
   payments: { label: "Оплата", icon: CircleDollarSign },
   restaurant: { label: "Рестораны", icon: Store },
   crm: { label: "CRM", icon: UsersRound },
@@ -62,7 +61,6 @@ const categories: Record<IntegrationCategory | "all", { label: string; icon: Luc
 };
 
 const providerIcons: Record<string, LucideIcon> = {
-  aitunnel: Sparkles,
   yookassa: CircleDollarSign,
   iiko: Store,
   rkeeper: Store,
@@ -192,7 +190,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       projectId={projectId}
       projectName={projectName}
       active="integrations"
-      eyebrow="Дополнительный шаг"
+      eyebrow="06 / Integrations"
       title="Интеграции"
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >

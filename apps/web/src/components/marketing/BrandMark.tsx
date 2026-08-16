@@ -26,9 +26,7 @@ export function BrandMark({
       >
         <Asterisk className="h-[18px] w-[18px]" strokeWidth={2.2} />
       </span>
-      <span className={`text-[18px] ${inverse ? "text-[#fcfbf7]" : "text-[#171716]"}`}>
-        {label}
-      </span>
+      <span className="text-[18px]">{label}</span>
     </Link>
   );
 }

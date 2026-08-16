@@ -20,8 +20,6 @@ import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { Button } from "@/components/ui/button";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy, getRuntime } from "@/lib/api/runtime";
-import { getMaxJourney } from "@/lib/max-journey";
-import { getMaxPublicationState } from "@/lib/max-publication-state";
 
 const activePhases = new Set(["queued", "building", "pushing", "swapping", "cancelling"]);
 
@@ -53,46 +51,21 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
 
   const phase = deploy.data?.phase;
   const inProgress = activePhases.has(phase ?? "");
-  const publicationState = getMaxPublicationState(readiness.data, phase);
-  const complete = publicationState === "published";
-  const outdated = publicationState === "outdated";
-  const checkingPublication = phase === "done" && readiness.isLoading;
+  const complete = phase === "done";
   const failed = phase === "failed";
   const currentIndex = Math.max(0, phaseSteps.findIndex(([id]) => id === phase));
-  const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
 
   return (
     <MaxSectionShell
       projectId={projectId}
       projectName={projectName}
       active="publish"
-      eyebrow="Этап 5 из 6"
+      eyebrow="08 / Publishing and deployment"
       title="Публикация"
-      lead="Публикация заменяет версию за тем же постоянным HTTPS-адресом: Studio фиксирует зелёный snapshot, собирает production-образ и только потом переключает трафик."
+      lead="Выберите размещение, запустите проверяемый production-деплой и получите постоянный HTTPS-адрес. Прогресс хранится на сервере и не сбрасывается после обновления страницы."
     >
-      {checkingPublication && (
-        <section className="mt-8 flex items-center gap-4 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-          <Loader2 className="size-5 shrink-0 animate-spin text-[#f15a38]" />
-          <div>
-            <h2 className="font-semibold">Проверяем актуальность публикации</h2>
-            <p className="mt-1 text-sm text-[#6d6962]">Сверяем последний деплой с текущей версией проекта.</p>
-          </div>
-        </section>
-      )}
-
-      {!inProgress && !complete && !checkingPublication && (
+      {!inProgress && !complete && (
         <>
-          {outdated && (
-            <section className="mt-8 flex items-start gap-4 rounded-[12px] border border-[#e8a127]/40 bg-[#fffaf0] p-6">
-              <CircleAlert className="mt-0.5 size-5 shrink-0 text-[#c47b12]" />
-              <div>
-                <h2 className="font-semibold">Текущая версия не опубликована</h2>
-                <p className="mt-2 max-w-[760px] text-sm leading-6 text-[#6d6962]">
-                  В истории остался предыдущий успешный деплой, но после изменений текущая версия проекта отличается от него. Опубликуйте её снова — постоянный HTTPS-адрес останется тем же.
-                </p>
-              </div>
-            </section>
-          )}
           <section className="mt-8 grid gap-4 lg:grid-cols-2">
             <article className="rounded-[12px] border-2 border-[#f15a38] bg-[#fcfbf7] p-6 sm:p-8">
               <div className="flex items-start justify-between">
@@ -100,7 +73,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
                 <span className="rounded-full bg-[#f15a38]/10 px-3 py-1 text-[10px] font-semibold text-[#c84528]">Рекомендуется</span>
               </div>
               <h2 className="mt-8 text-2xl font-semibold">Хостинг Omnia</h2>
-              <p className="mt-3 text-sm leading-6 text-[#6d6962]">Адрес не меняется: новый зелёный образ атомарно подменяет предыдущую production-версию.</p>
+              <p className="mt-3 text-sm leading-6 text-[#6d6962]">Постоянный HTTPS, автоматические обновления, backup, health-check и управляемый контейнер.</p>
               <div className="mt-6 space-y-3 text-xs text-[#6d6962]">
                 {["Не нужно настраивать сервер", "Контейнер можно оставить активным всегда", "Версии и откат доступны из кабинета"].map((item) => <p key={item} className="flex items-center gap-2"><Check className="size-3.5 text-[#248a4b]" />{item}</p>)}
               </div>
@@ -169,7 +142,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
             <span className="grid size-12 place-items-center rounded-full bg-[#248a4b] text-white"><Check className="size-6" /></span>
             <p className="omnia-kicker mt-6 text-[#248a4b]">Deployment complete</p>
             <h2 className="mt-2 text-3xl font-semibold tracking-[-.035em]">Версия опубликована</h2>
-            <p className="mt-3 max-w-[650px] text-sm leading-6 text-[#6d6962]">Production-контейнер запущен, health-check пройден. Тот же URL теперь открывает новую версию; повторно менять ссылку в MAX Partner не нужно.</p>
+            <p className="mt-3 max-w-[650px] text-sm leading-6 text-[#6d6962]">Production-контейнер запущен, health-check пройден. URL можно открыть отдельно или добавить к кнопке запуска в кабинете MAX.</p>
             {deploy.data?.prod_url && (
               <a href={deploy.data.prod_url} target="_blank" rel="noreferrer" className="mt-6 flex max-w-[620px] items-center justify-between rounded-[10px] border border-[#d8d4cb] bg-white px-4 py-3 font-mono text-xs">
                 <span className="truncate">{deploy.data.prod_url}</span><ExternalLink className="size-4 shrink-0 text-[#f15a38]" />
@@ -190,11 +163,11 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
         </section>
       )}
 
-      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {journey.stages.map((stage) => (
-          <div key={stage.id} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4">
-            <span className={`grid size-6 place-items-center rounded-full border ${stage.done ? "border-[#248a4b] text-[#248a4b]" : "border-[#d8d4cb] text-[#aaa59b]"}`}>{stage.done ? <Check className="size-3.5" /> : <ShieldCheck className="size-3" />}</span>
-            <p className="mt-3 text-xs font-medium">{stage.shortLabel}</p>
+      <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {(readiness.data?.items ?? []).map((item) => (
+          <div key={item.id} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4">
+            <span className={`grid size-6 place-items-center rounded-full border ${item.done ? "border-[#248a4b] text-[#248a4b]" : "border-[#d8d4cb] text-[#aaa59b]"}`}>{item.done ? <Check className="size-3.5" /> : <ShieldCheck className="size-3" />}</span>
+            <p className="mt-3 text-xs font-medium">{item.label}</p>
           </div>
         ))}
       </section>

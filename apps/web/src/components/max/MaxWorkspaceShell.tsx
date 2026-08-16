@@ -1,15 +1,22 @@
 "use client";
 
-import { type CSSProperties, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowUpRight,
+  BarChart3,
+  Bot,
   ChevronDown,
+  CircleHelp,
+  CreditCard,
   LayoutGrid,
   LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
+  Plug,
+  Rocket,
   Settings,
   Smartphone,
   X,
@@ -20,14 +27,10 @@ import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
-import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
-import { getMaxJourney } from "@/lib/max-journey";
 import { cn } from "@/lib/utils";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
-import { MaxProjectNav } from "./MaxProjectNav";
-import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 
 export function MaxWorkspaceShell({
   project,
@@ -42,19 +45,6 @@ export function MaxWorkspaceShell({
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
-  const readiness = useQuery({
-    queryKey: ["max-readiness", project.id],
-    queryFn: () => getMaxReadiness(project.id),
-    retry: false,
-    refetchInterval: 10_000,
-  });
-  const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
-  const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
-  const launchLabel = readiness.isLoading
-    ? "Проверяем…"
-    : nextStage
-      ? `Продолжить · ${journey.completedCount}/${journey.total}`
-      : "Проверить запуск";
   const maxProjects = useMemo(
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
@@ -64,19 +54,21 @@ export function MaxWorkspaceShell({
     <div
       data-light-shell
       className={cn(
-        "relative isolate grid h-full max-h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 lg:grid-cols-[var(--max-nav-column)_minmax(0,1fr)] xl:grid-cols-[var(--max-nav-column)_minmax(420px,1fr)_var(--max-preview-column)] 2xl:grid-cols-[var(--max-nav-column)_minmax(480px,1fr)_var(--max-preview-column)]",
+        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-200",
+        navigationVisible
+          ? "lg:grid-cols-[220px_minmax(0,1fr)]"
+          : "lg:grid-cols-[minmax(0,1fr)]",
+        navigationVisible && previewPanelVisible
+          ? "xl:grid-cols-[220px_minmax(420px,1fr)_380px] 2xl:grid-cols-[220px_minmax(480px,1fr)_420px]"
+          : navigationVisible
+            ? "xl:grid-cols-[220px_minmax(0,1fr)]"
+            : previewPanelVisible
+              ? "xl:grid-cols-[minmax(420px,1fr)_380px] 2xl:grid-cols-[minmax(480px,1fr)_420px]"
+              : "xl:grid-cols-[minmax(0,1fr)]",
       )}
-      style={
-        {
-          "--max-nav-column": navigationVisible ? "220px" : "0px",
-          "--max-preview-column": previewPanelVisible
-            ? "clamp(380px,20.5vw,420px)"
-            : "0px",
-        } as CSSProperties
-      }
     >
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 w-[220px] flex-col overflow-hidden border-r bg-[#fcfbf7] transition-[transform,opacity,border-color] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 lg:static lg:h-full lg:max-h-full lg:w-full ${navigationVisible ? "lg:translate-x-0 lg:border-[#d8d4cb] lg:opacity-100" : "lg:pointer-events-none lg:-translate-x-2 lg:border-transparent lg:opacity-0"} ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:translate-x-0 ${navigationVisible ? "lg:flex" : "lg:hidden"} ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -99,19 +91,12 @@ export function MaxWorkspaceShell({
           </div>
         </div>
 
-        <div
-          className="flex min-h-0 flex-1 flex-col p-3"
-          data-testid="max-navigation-scroll"
-        >
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <Link href="/max" className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
             <LayoutGrid className="size-4" /> Все проекты
           </Link>
-          <p className="omnia-kicker mt-5 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
-          <nav
-            className="max-projects-scroll mt-2 min-h-20 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1"
-            aria-label="Ваши Mini Apps"
-            data-testid="max-projects-scroll"
-          >
+          <p className="omnia-kicker mt-6 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
+          <nav className="mt-2 space-y-1">
             {maxProjects.map((item) => {
               const active = item.id === project.id;
               return (
@@ -124,15 +109,24 @@ export function MaxWorkspaceShell({
             })}
           </nav>
 
-          <div className="mt-3 shrink-0 border-t border-[#d8d4cb] pt-3">
-            <p className="omnia-kicker px-3 text-[#aaa59b]">Проект</p>
-          </div>
-          <div className="max-projects-scroll mt-2 min-h-0 shrink overflow-y-auto overscroll-contain pr-1">
-            <MaxProjectNav projectId={project.id} active="editor" />
-          </div>
+          <p className="omnia-kicker mt-7 px-3 text-[#aaa59b]">Проект</p>
+          <nav className="mt-2 space-y-1">
+            <Link href={`/max/${project.id}/integrations`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
+              <Plug className="size-4" /> Интеграции
+            </Link>
+            <Link href={`/max/${project.id}/settings`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
+              <Bot className="size-4" /> MAX и приложение
+            </Link>
+            <Link href={`/max/${project.id}/publish`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
+              <Rocket className="size-4" /> Публикация
+            </Link>
+            <Link href={`/max/${project.id}/dashboard`} className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
+              <BarChart3 className="size-4" /> После запуска
+            </Link>
+          </nav>
         </div>
 
-        <div className="shrink-0 border-t border-[#d8d4cb] p-3">
+        <div className="border-t border-[#d8d4cb] p-3">
           <Link href="/account" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[8px] p-2 hover:bg-[#f5f3ee]">
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#171716] text-[11px] font-semibold text-white">{email.slice(0, 1).toUpperCase()}</span>
             <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{email.split("@")[0]}</span><span className="block truncate text-[9px] text-[#8d887f]">{email}</span></span>
@@ -144,7 +138,7 @@ export function MaxWorkspaceShell({
         </div>
       </aside>
 
-      <section className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#fcfbf7]">
+      <section className="flex min-h-0 min-w-0 flex-col bg-[#fcfbf7]">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#d8d4cb] px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button type="button" onClick={() => setMobileNavOpen(true)} className="grid size-11 shrink-0 place-items-center rounded-[8px] text-[#6d6962] lg:hidden" aria-label="Открыть меню"><Menu className="size-4" /></button>
@@ -166,7 +160,6 @@ export function MaxWorkspaceShell({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <MaxUsageBreakdown projectId={project.id} />
             <Link href={`/max/${project.id}/integrations`} className="hidden h-11 items-center rounded-[8px] border border-[#d8d4cb] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] md:inline-flex">Интеграции</Link>
             <button
               type="button"
@@ -190,45 +183,14 @@ export function MaxWorkspaceShell({
               </button>
             )}
             <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-[#f15a38] px-3 text-xs font-semibold text-white hover:bg-[#d94929] sm:gap-2 sm:px-4">
-              <span className="sm:hidden">Дальше</span>
-              <span className="hidden sm:inline">{launchLabel}</span>
+              <span className="sm:hidden">Пуск</span>
+              <span className="hidden sm:inline">Опубликовать</span>
               <ChevronDown className="size-3.5" />
             </button>
           </div>
         </header>
 
-        <button
-          type="button"
-          onClick={() => setLaunchOpen(true)}
-          className="flex min-h-14 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
-          data-testid="max-next-action-bar"
-        >
-          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#f15a38] text-[10px] font-semibold text-white">
-            {readiness.isSuccess
-              ? nextStage?.position ?? journey.total
-              : "…"}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[9px] font-medium uppercase tracking-[0.12em] text-[#8d887f]">
-              {nextStage ? "Следующий шаг" : "Путь до запуска"}
-            </span>
-            <span className="mt-0.5 block truncate text-xs font-semibold text-[#171716]">
-              {readiness.isError
-                ? "Не удалось проверить готовность — откройте панель для повтора"
-                : readiness.isLoading
-                  ? "Проверяем состояние проекта…"
-                  : nextStage?.label ?? "Все обязательные этапы пройдены"}
-            </span>
-          </span>
-          <span className="hidden shrink-0 text-[10px] text-[#8d887f] sm:block">
-            {readiness.isSuccess
-              ? `${journey.completedCount} из ${journey.total}`
-              : "Статус обновляется"}
-          </span>
-          <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
-        </button>
-
-        <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">
+        <div className="min-h-0 flex-1 max-studio-chat">
           <ChatPanel
             projectId={project.id}
             projectSlug={project.slug}

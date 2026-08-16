@@ -25,8 +25,6 @@ from omnia_gateway.services.pricing import (
         ("gemini-3.1-pro-preview-customtools", 0, 0, Decimal("0.0000")),
         # 100*1.50/1000 + 50*7.50/1000 = 0.15 + 0.375
         ("gemini-3.1-pro-preview-customtools", 100, 50, Decimal("0.5250")),
-        # Sonnet 5 @ LLMGW catalog rates.
-        ("claude-sonnet-5", 1000, 1000, Decimal("1.9380")),
     ],
 )
 def test_calculate_cost_rub_known_models(
@@ -70,17 +68,6 @@ def test_cached_tokens_default_zero_is_unchanged() -> None:
     ) == calculate_cost_rub("gemini-3.1-pro-preview-customtools", 5000, 500, cached_tokens=0)
 
 
-def test_cache_creation_is_billed_separately() -> None:
-    # 4K fresh + 6K cache write at 1.25x + 1K output.
-    cost = calculate_cost_rub(
-        "gemini-3.1-pro-preview-customtools",
-        10_000,
-        1_000,
-        cache_write_tokens=6_000,
-    )
-    assert cost == Decimal("24.7500")
-
-
 def test_cached_tokens_capped_at_prompt() -> None:
     # A bogus upstream count (cached > prompt) must clamp, never underbill negative.
     capped = calculate_cost_rub(
@@ -94,10 +81,7 @@ def test_cached_tokens_capped_at_prompt() -> None:
 
 def test_list_models_covers_price_table() -> None:
     catalog = list_models()
-    assert set(PRICE_TABLE) == {
-        "gemini-3.1-pro-preview-customtools",
-        "claude-sonnet-5",
-    }
+    assert set(PRICE_TABLE) == {"gemini-3.1-pro-preview-customtools"}
     assert {m["id"] for m in catalog} == set(PRICE_TABLE.keys())
     for m in catalog:
         assert m["price_rub_per_1k_in"] > 0

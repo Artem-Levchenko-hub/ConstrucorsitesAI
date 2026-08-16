@@ -170,7 +170,6 @@ async def complete_chat(
     *,
     user_id: str | None = None,
     project_id: str | None = None,
-    stage: str | None = None,
     max_tokens: int = 1024,
     temperature: float | None = 0.0,
 ) -> str:
@@ -194,11 +193,7 @@ async def complete_chat(
         "messages": messages,
         "stream": False,
         "user": user_id,
-        "metadata": {
-            "project_id": project_id,
-            "free": _free_generation.get(),
-            **({"stage": stage} if stage else {}),
-        },
+        "metadata": {"project_id": project_id, "free": _free_generation.get()},
         "max_tokens": max_tokens,
     }
     if temperature is not None:

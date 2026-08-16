@@ -38,7 +38,7 @@ log = structlog.get_logger("omnia_orchestrator.nginx")
 
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,253}[a-z0-9])?$")
 _ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/[A-Za-z0-9_./-]+$")
-_VHOST_TEMPLATE_MARKER = "# omnia vhost template: html-no-store-v3"
+_VHOST_TEMPLATE_MARKER = "# omnia vhost template: html-no-store-v2"
 
 
 def dev_host(slug: str) -> str:
@@ -190,23 +190,6 @@ def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
         sub_filter '</body>' '{tag}</body>';
 """
     return f"""\
-    # Next.js content-hashes these assets, so their upstream immutable cache
-    # policy is safe across deployments and should remain untouched.
-    location ^~ /_next/static/ {{
-        proxy_pass http://127.0.0.1:{port};
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $omnia_connection_upgrade;
-        proxy_read_timeout 86400;
-        proxy_hide_header X-Frame-Options;
-        proxy_intercept_errors on;
-        error_page 502 503 504 = @omnia_waking;
-    }}
-
     location / {{
         proxy_pass http://127.0.0.1:{port};
         proxy_http_version 1.1;
@@ -218,11 +201,15 @@ def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
         proxy_set_header Connection $omnia_connection_upgrade;
         proxy_read_timeout 86400;
         proxy_hide_header X-Frame-Options;
-        # Next.js may mark a prerendered app shell cacheable for a year. This
-        # default route covers HTML, APIs and public shell assets; only the
-        # content-hashed /_next/static location above keeps immutable caching.
+        # Next.js may mark a prerendered app shell cacheable for a year. Keep
+        # hashed asset/API policies intact, but never let MAX WebViews retain
+        # stale HTML across a customer deployment.
         proxy_hide_header Cache-Control;
-        add_header Cache-Control "no-store" always;
+        set $omnia_cache_control $upstream_http_cache_control;
+        if ($upstream_http_content_type ~* "^text/html") {{
+            set $omnia_cache_control "no-store";
+        }}
+        add_header Cache-Control $omnia_cache_control always;
 {inspector_filter.rstrip()}
         proxy_intercept_errors on;
         error_page 502 503 504 = @omnia_waking;

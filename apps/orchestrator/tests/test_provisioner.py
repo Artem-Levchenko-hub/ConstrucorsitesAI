@@ -12,7 +12,6 @@ never restarts an API-stopped container).
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -20,7 +19,7 @@ from uuid import UUID
 import pytest
 
 from omnia_orchestrator.core.docker_client import ContainerSpec
-from omnia_orchestrator.schemas.runtime import ProvisionRequest, ProvisionResponse
+from omnia_orchestrator.schemas.runtime import ProvisionRequest
 from omnia_orchestrator.services import provisioner
 
 
@@ -111,39 +110,6 @@ async def test_provision_memory_is_config_driven(
 
     spec = await _provision_capturing_spec(monkeypatch)
     assert spec.memory_mb == 8192
-
-
-async def test_duplicate_project_provisions_are_serialized(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    active = 0
-    max_active = 0
-
-    async def fake_provision_once(req: ProvisionRequest) -> ProvisionResponse:
-        nonlocal active, max_active
-        active += 1
-        max_active = max(max_active, active)
-        await asyncio.sleep(0)
-        active -= 1
-        return ProvisionResponse(
-            project_id=req.project_id,
-            container_name=f"omnia-dev-{req.slug}",
-            port=3210,
-            dev_url=f"https://{req.slug}-dev.test",
-            state="running",
-        )
-
-    monkeypatch.setattr(provisioner, "_provision_once", fake_provision_once)
-    req = ProvisionRequest(
-        project_id=UUID("00000000-0000-0000-0000-000000000099"),
-        slug="same-project",
-        template="max-miniapp-nextjs",
-        tier="free",
-    )
-
-    await asyncio.gather(provisioner.provision(req), provisioner.provision(req))
-
-    assert max_active == 1
 
 
 # ── Phase 1 egress + network isolation (default OFF = current behaviour) ─────

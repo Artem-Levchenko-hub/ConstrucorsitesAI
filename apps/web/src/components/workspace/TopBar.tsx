@@ -175,22 +175,15 @@ export function TopBar({
       <div className="flex shrink-0 items-center gap-1.5 pl-1">
         {showProjectControls && <WalletBadge />}
 
-        <LocaleSwitcher inverse />
+        <LocaleSwitcher />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="group gap-1.5 rounded-full border border-white/15 bg-white/[0.05] px-1.5 text-white hover:border-white/30 hover:bg-white/[0.10] hover:text-white data-[state=open]:border-white/35 data-[state=open]:bg-white/[0.12]"
-              aria-label={`${tNav("account")}: ${user.email}`}
-            >
-              <Avatar className="h-7 w-7 ring-1 ring-white/20">
-                <AvatarFallback className="bg-[#f15a38] font-semibold text-white">
-                  {initial}
-                </AvatarFallback>
+            <Button variant="ghost" size="sm" className="gap-2 px-1.5">
+              <Avatar className="h-7 w-7">
+                <AvatarFallback>{initial}</AvatarFallback>
               </Avatar>
-              <ChevronDown className="h-3.5 w-3.5 text-slate-300 transition-transform group-hover:text-white group-data-[state=open]:rotate-180 group-data-[state=open]:text-white" />
+              <ChevronDown className="h-3.5 w-3.5 text-fg-tertiary" />
             </Button>
           </DropdownMenuTrigger>
 

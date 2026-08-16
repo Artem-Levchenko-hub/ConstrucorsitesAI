@@ -20,6 +20,7 @@ import { ApiError } from "@/lib/api/client";
 import {
   getMaxProjectConfig,
   saveMaxProjectConfig,
+  saveMaxUrlAttached,
 } from "@/lib/api/max-studio";
 import type { MaxProjectConfigPayload } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
@@ -46,15 +47,6 @@ const CHECKS: {
   },
 ];
 
-type SetupSection = "details" | "content" | "owner" | "policies";
-
-const SETUP_SECTIONS: Array<{ id: SetupSection; label: string }> = [
-  { id: "details", label: "Основное" },
-  { id: "content", label: "Контент" },
-  { id: "owner", label: "Владелец" },
-  { id: "policies", label: "Политики" },
-];
-
 function errorMessage(error: unknown) {
   return error instanceof ApiError ? error.message : "Попробуйте ещё раз";
 }
@@ -73,7 +65,6 @@ export function MaxProjectSetupDialog({
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
-  const [section, setSection] = useState<SetupSection>("details");
   const config = useQuery({
     queryKey: ["max-config", projectId],
     queryFn: () => getMaxProjectConfig(projectId),
@@ -93,43 +84,38 @@ export function MaxProjectSetupDialog({
         description: "Контент и юридические страницы сохранены в новой версии.",
       });
       setOpen(false);
-      setDraft(null);
     },
     onError: (error) =>
       toast.error("Не удалось сохранить", { description: errorMessage(error) }),
   });
+  const saveMaxUrl = useMutation({
+    mutationFn: ({
+      next,
+    }: {
+      next: MaxProjectConfigPayload;
+      previous: MaxProjectConfigPayload;
+    }) => saveMaxUrlAttached(projectId, next.max_url_attached),
+    onSuccess: (data, variables) => {
+      qc.setQueryData(["max-config", projectId], data);
+      void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
+      setDraft(variables.next);
+      toast.success(
+        data.config.max_url_attached
+          ? "URL в кабинете MAX подтверждён"
+          : "Подтверждение URL снято",
+      );
+    },
+    onError: (error, variables) => {
+      setDraft(variables.previous);
+      toast.error("Не удалось сохранить подтверждение URL", {
+        description: errorMessage(error),
+      });
+    },
+  });
+
   const inputClass = "h-11 border-[#d8d4cb] bg-white sm:h-10";
   const sectionClass =
     "space-y-4 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4";
-  const saved = config.data?.config;
-  const changedSections = current && saved
-    ? [
-        JSON.stringify({
-          app_name: current.app_name,
-          app_type: current.app_type,
-          summary: current.summary,
-          audience: current.audience,
-          primary_action: current.primary_action,
-          features: current.features,
-          style: current.style,
-          brand_colors: current.brand_colors,
-        }) !==
-          JSON.stringify({
-            app_name: saved.app_name,
-            app_type: saved.app_type,
-            summary: saved.summary,
-            audience: saved.audience,
-            primary_action: saved.primary_action,
-            features: saved.features,
-            style: saved.style,
-            brand_colors: saved.brand_colors,
-          }),
-        JSON.stringify(current.content) !== JSON.stringify(saved.content),
-        JSON.stringify({ operator: current.operator, support: current.support }) !==
-          JSON.stringify({ operator: saved.operator, support: saved.support }),
-        JSON.stringify(current.legal) !== JSON.stringify(saved.legal),
-      ].filter(Boolean).length
-    : 0;
 
   return (
     <>
@@ -145,11 +131,7 @@ export function MaxProjectSetupDialog({
               )
             : "h-11 gap-1.5 px-2.5 text-xs sm:h-7"
         }
-        onClick={() => {
-          setSection("details");
-          setDraft(null);
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
         data-testid="max-settings-open"
       >
         <Settings2 className="h-3.5 w-3.5" />
@@ -157,13 +139,7 @@ export function MaxProjectSetupDialog({
           {display === "panel" ? label : "Настройки"}
         </span>
       </Button>
-      <Dialog
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) setDraft(null);
-        }}
-      >
+      <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           data-light-shell
           className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#d8d4cb] bg-[#fcfbf7] p-0 text-[#171716] sm:max-h-[92dvh] sm:max-w-[760px] sm:p-0"
@@ -171,35 +147,13 @@ export function MaxProjectSetupDialog({
           <DialogHeader className="shrink-0 px-5 pb-4 pr-16 pt-5 sm:px-7 sm:pb-5 sm:pr-14 sm:pt-7">
             <DialogTitle className="flex items-center gap-2 text-[#171716]">
               <FileCheck2 className="h-5 w-5 text-[#f15a38]" />
-              Данные приложения
+              Готовое приложение без разработчика
             </DialogTitle>
             <DialogDescription className="text-[#6d6962]">
-              Заполните четыре раздела. Изменения применяются одной безопасной
-              версией и не запускают повторную генерацию.
+              Эти данные обновляются без модели и без расходов. Студия версионирует
+              контент, поддержку и обязательные юридические страницы.
             </DialogDescription>
           </DialogHeader>
-
-          <div className="shrink-0 border-y border-[#e7e3da] px-5 py-3 sm:px-7">
-            <div className="flex gap-2 overflow-x-auto" role="tablist" aria-label="Разделы данных приложения">
-              {SETUP_SECTIONS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={section === item.id}
-                  onClick={() => setSection(item.id)}
-                  className={cn(
-                    "h-9 shrink-0 rounded-[8px] border px-3 text-xs font-medium transition-colors",
-                    section === item.id
-                      ? "border-[#171716] bg-[#171716] text-white"
-                      : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee]",
-                  )}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {config.isLoading || !current ? (
             <div className="flex min-h-44 flex-1 items-center justify-center">
@@ -212,8 +166,7 @@ export function MaxProjectSetupDialog({
                 data-testid="max-settings-scroll-region"
               >
                 <div className="space-y-4">
-                  {section === "details" && (
-                    <section className={sectionClass}>
+                  <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Продукт</h3>
                   <p className="mt-1 text-xs text-[#8d887f]">
@@ -347,11 +300,9 @@ export function MaxProjectSetupDialog({
                     </p>
                   </div>
                 </div>
-                    </section>
-                  )}
+                  </section>
 
-                  {section === "content" && (
-                    <section className={sectionClass}>
+                  <section className={sectionClass}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="text-sm font-semibold">Каталог и контент</h3>
@@ -501,11 +452,9 @@ export function MaxProjectSetupDialog({
                     ))}
                   </div>
                 )}
-                    </section>
-                  )}
+                  </section>
 
-                  {section === "owner" && (
-                    <section className={sectionClass}>
+                  <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Владелец и поддержка</h3>
                   <p className="mt-1 text-xs text-[#8d887f]">
@@ -623,11 +572,9 @@ export function MaxProjectSetupDialog({
                     />
                   </div>
                 </div>
-                    </section>
-                  )}
+                  </section>
 
-                  {section === "policies" && (
-                    <section className={sectionClass}>
+                  <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Политики MAX</h3>
                   <p className="mt-1 text-xs text-[#8d887f]">
@@ -749,25 +696,50 @@ export function MaxProjectSetupDialog({
                     </span>
                   </span>
                 </label>
-                    </section>
-                  )}
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#d8d4cb] bg-white p-3">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 accent-[#f15a38]"
+                    checked={current.max_url_attached}
+                    disabled={save.isPending || saveMaxUrl.isPending}
+                    onChange={(event) => {
+                      const next = {
+                        ...current,
+                        max_url_attached: event.target.checked,
+                      };
+                      const previous = current;
+                      setDraft(next);
+                      saveMaxUrl.mutate({ next, previous });
+                    }}
+                  />
+                  <span>
+                    <span className="flex items-center gap-2 text-xs font-medium">
+                      {saveMaxUrl.isPending && (
+                        <Loader2 className="h-3 w-3 animate-spin text-[#f15a38]" />
+                      )}
+                      {saveMaxUrl.isPending
+                        ? "Сохраняем подтверждение…"
+                        : "HTTPS-адрес уже вставлен в кабинете MAX"}
+                    </span>
+                    <span className="mt-1 block text-[10px] leading-4 text-[#8d887f]">
+                      MAX пока не даёт публичного API для этой операции, поэтому
+                      требуется одно подтверждение.
+                    </span>
+                  </span>
+                </label>
+                  </section>
                 </div>
               </div>
 
               <div
-                className="flex shrink-0 flex-col gap-3 border-t border-[#e7e3da] px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:pt-4"
+                className="shrink-0 px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-7 sm:pt-4"
                 data-testid="max-settings-footer"
               >
-                <p className="text-xs text-[#8d887f]">
-                  {changedSections > 0
-                    ? `Изменено разделов: ${changedSections}`
-                    : "Все изменения сохранены"}
-                </p>
                 <Button
-                  className="h-11 w-full sm:w-auto sm:min-w-[220px]"
+                  className="h-11 w-full"
                   disabled={
                     save.isPending ||
-                    changedSections === 0 ||
+                    saveMaxUrl.isPending ||
                     current.app_name.trim().length < 1 ||
                     current.summary.trim().length < 1
                   }
@@ -776,7 +748,7 @@ export function MaxProjectSetupDialog({
                   {save.isPending && (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   )}
-                  Сохранить и проверить
+                  Сохранить остальные изменения
                 </Button>
               </div>
             </>

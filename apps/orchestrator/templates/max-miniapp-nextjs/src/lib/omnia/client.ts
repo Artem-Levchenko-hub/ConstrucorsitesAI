@@ -41,20 +41,8 @@ export async function createMaxAction(
   return response.json() as Promise<Record<string, unknown>>;
 }
 
-export async function getMaxActions(): Promise<{
-  actions: Array<Record<string, unknown>>;
-}> {
-  const response = await fetch("/api/omnia/actions", { credentials: "include" });
-  if (!response.ok) throw new Error("История действий временно недоступна");
-  return response.json() as Promise<{ actions: Array<Record<string, unknown>> }>;
-}
-
-// Compatibility alias for model-generated product code. Both names use the
-// same authenticated, tenant-filtered MAX Studio endpoint.
-export const getActionHistory = getMaxActions;
-
 async function integration<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "catalog",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -123,26 +111,6 @@ export function getOmniaCatalog(): Promise<{
   }>;
 }> {
   return integration("catalog");
-}
-
-type OmniaAIInput = {
-  message?: string;
-  prompt?: string;
-  instructions?: string;
-  context?: Record<string, unknown>;
-};
-
-export async function requestOmniaAI(
-  input: OmniaAIInput,
-): Promise<{ answer: string; text: string; model: string }> {
-  const message = input.message || input.prompt;
-  if (!message?.trim()) throw new Error("Введите сообщение для ИИ-тренера");
-  const result = await integration<{ answer: string; model: string }>("ai", {
-    message,
-    instructions: input.instructions,
-    context: input.context,
-  });
-  return { ...result, text: result.answer };
 }
 
 export async function trackOmniaGoal(

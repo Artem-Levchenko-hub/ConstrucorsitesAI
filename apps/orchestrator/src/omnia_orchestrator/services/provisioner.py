@@ -22,7 +22,6 @@ sprint A1 swaps the body.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import secrets as _secrets
 import shutil
@@ -138,12 +137,6 @@ def load_existing_auth_secret(project_id: str) -> str | None:
 
 log = structlog.get_logger("omnia_orchestrator.provisioner")
 
-# A cold image rebuild is shared by template, but the rest of provisioning is
-# project-specific (container start, nginx publication and runtime.started).
-# Serialise duplicate starts for the same project so multiple open tabs cannot
-# race those side effects while the first cold start is still in progress.
-_PROVISION_LOCKS: dict[str, asyncio.Lock] = {}
-
 
 def _template_source_dir(template: str) -> Path:
     """Resolve the template directory inside the orchestrator source tree.
@@ -174,12 +167,6 @@ def _copy_template(src: Path, dest: Path) -> None:
 
 
 async def provision(req: ProvisionRequest) -> ProvisionResponse:
-    lock = _PROVISION_LOCKS.setdefault(str(req.project_id), asyncio.Lock())
-    async with lock:
-        return await _provision_once(req)
-
-
-async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     settings = get_settings()
     log.info(
         "provision.start",

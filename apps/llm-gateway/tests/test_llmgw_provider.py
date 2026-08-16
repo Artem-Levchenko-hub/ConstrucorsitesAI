@@ -18,7 +18,6 @@ _MODEL = "gemini-3.1-pro-preview-customtools"
 
 def test_is_llmgw_model() -> None:
     assert llmgw.is_llmgw_model(_MODEL) is True
-    assert llmgw.is_llmgw_model("claude-sonnet-5") is True
     # Retired / other-provider slugs are not served here.
     assert llmgw.is_llmgw_model("deepseek-v4-pro") is False
     assert llmgw.is_llmgw_model("claude-opus-4-7") is False
@@ -33,15 +32,11 @@ def test_slug_mapping_round_trip() -> None:
     # Upstream response `model` → Omnia id (both surfaces' spellings).
     assert llmgw.slug_to_omnia("gemini-3.1-pro-preview-customtools") == _MODEL
     assert llmgw.slug_to_omnia("google/gemini-3.1-pro-preview-customtools") == _MODEL
-    assert llmgw.native_slug("claude-sonnet-5") == "anthropic/claude-sonnet-5"
-    assert llmgw.slug_to_omnia("claude-sonnet-5") == "claude-sonnet-5"
-    assert llmgw.slug_to_omnia("anthropic/claude-sonnet-5") == "claude-sonnet-5"
     assert llmgw.slug_to_omnia("gpt-5") is None
 
 
 def test_is_vision() -> None:
     assert llmgw._is_vision(_MODEL) is True
-    assert llmgw._is_vision("claude-sonnet-5") is True
     assert llmgw._is_vision("some-text-only-model") is False
 
 

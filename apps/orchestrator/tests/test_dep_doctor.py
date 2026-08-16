@@ -107,19 +107,3 @@ def test_imported_packages_ignores_local_and_builtins() -> None:
         'import { toast } from "sonner";'
     )
     assert dep_doctor.imported_packages(src) == {"sonner"}
-
-
-def test_agent_build_clears_only_stale_next_route_validators() -> None:
-    from pathlib import Path
-
-    source = (
-        Path(__file__).parents[1]
-        / "src"
-        / "omnia_orchestrator"
-        / "routers"
-        / "runtime.py"
-    ).read_text(encoding="utf-8")
-
-    assert "/app/.next/types/app" in source
-    assert "/app/.next/types/validator.ts" in source
-    assert "/app/.next/types/routes.d.ts" not in source

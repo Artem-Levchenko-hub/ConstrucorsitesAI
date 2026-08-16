@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-08-01",
-  "version": 19,
+  "updated": "2026-07-31",
+  "version": 9,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -187,11 +187,6 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
-  {
-   "date": "01.08",
-   "what": "Поручил полностью упростить UX MAX Studio: оставить один понятный путь от проекта до запуска, показывать пользователю следующее действие и убрать конкурирующие чек-листы и технический шум.",
-   "impact": "Весь MAX-контур сведён к шести проверяемым этапам с общей навигацией, прогрессом и одной основной кнопкой. Настройки разделены по смыслу, MAX URL получил отдельную честную проверку, preview сохраняет последнюю рабочую версию, а публичный быстрый старт объясняет полный путь до запуска без чтения длинного руководства."
-  },
   {
    "date": "31.07",
    "what": "Поручил заменить Claude Opus 4.8 во всём активном LLM-контуре на Google Gemini 3.1 Pro Preview Custom Tools как основную модель для разработки MAX.",
@@ -2099,114 +2094,6 @@
    "evidence": "Revision a194d110 отправлена в origin/main и развёрнута production compose для gateway, API и worker. HEAD production=a194d110033a; gateway и API health=200, контейнеры healthy, worker запущен, omnia-orchestrator active, fatal log matches=0. Runtime API: default и все 22 роли имеют единственный ID gemini-3.1-pro-preview-customtools. /v1/models содержит только этот доступный Google-каталог. Живой gateway chat вернул HTTP 200, actual_model_used=gemini-3.1-pro-preview-customtools и GEMINI_OK_731; image input вернул HTTP 200 и VISION_OK; /v1/messages вернул HTTP 200, stop_reason=tool_use и done({summary: GEMINI_TOOL_OK}). Локально gateway: 58 passed, ruff и mypy; API: 20 целевых тестов, ruff и mypy. Публичные constructor, API health, /otchet и fitnessstat-31eba8 отвечают 200; MAX integration active, webhook_present=true, last_error=null.",
    "impact": "Следующие генерации и правки MAX проходят через специализированную Custom Tools-версию Gemini. Один и тот же подтверждённый маршрут покрывает планирование, код, autoheal, визуальный аудит и реальные tool calls без скрытого fallback на Opus.",
    "next_vector": "V8"
-  },
-  {
-   "id": "H106",
-   "title": "Единый шестишаговый путь MAX Studio",
-   "status": "worked",
-   "score": 9,
-   "category": "MAX / UX / onboarding / публикация / надёжность",
-   "period": "01.08",
-   "description": "Заменить разрозненные меню, чек-листы и технические состояния MAX Studio одним project-scoped маршрутом: создать проект, проверить сборку, заполнить данные, подключить MAX, опубликовать и подтвердить запуск.",
-   "evidence": "Revisions 8b662c60 и последующий публичный route-fix отправлены в origin/main и развёрнуты production compose. В web добавлен единый max-journey на 6 этапов, общая навигация проекта, динамическая кнопка следующего действия, прогресс на карточках, публичный /max/start, секционные настройки и MAX URL handoff. Preview сохраняет последнюю рабочую версию во время подготовки новой сессии; технический transcript после завершения сворачивается. Полный web-набор: 19 test files, 115 tests passed; lint, typecheck и production build зелёные. Production build сгенерировал 46 страниц, omnia-prod-web и omnia-prod-api healthy. /api/health, /max/start, /max/product, /login?next=/max и /max отвечают HTTP 200. Живой browser DOM подтвердил все 6 этапов и их deep links; MAX login показывает отдельный контекст и ведёт на /max/register. Отдельный middleware regression-test подтверждает, что инструкция доступна гостю без сессии.",
-   "impact": "Пользователь больше не должен угадывать, какой из нескольких чек-листов главный и куда идти после текущего экрана. Studio сама показывает одно следующее действие, но сохраняет доступ к остальным разделам; внутренние технические детали перестали перекрывать основной сценарий.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H107",
-   "title": "Ограниченный и измеримый цикл сборки MAX",
-   "status": "worked",
-   "score": 9,
-   "category": "MAX / LLM / ledger / кеш / UX / надёжность",
-   "period": "01.08",
-   "description": "Сократить скрытый агентный цикл со 120 до 20–30 вызовов, не оставлять красную версию при исчерпании лимита, учитывать каждый native-вызов по пользователю, проекту и run, вернуть provider cache и показать разбивку расхода в Studio.",
-   "evidence": "Кодовый контур ограничивает native-agent 30 вызовами с default=24 и одним сегментом; 402 не повторяется, а любая остановка по лимиту откатывает весь edit к последнему зелёному SHA даже при чистом typecheck. Новый MAX старт собирается без модели из типизированного config-driven шаблона; его tsc и Next production build прошли, создано 15 маршрутов. Alembic 0001→0040→0039→0040 прошёл на чистой PostgreSQL; usage хранит run_id, stage, cache read/write, retries и provider request/cost. Gateway: 62 теста, ruff и mypy; целевые API-наборы и mypy изменённых модулей зелёные; Web: 116 тестов, lint, typecheck и production build на 46 страниц. В UX прямо пояснено, что токен бота остаётся на backend, а публикация атомарно заменяет версию за тем же URL. Revision 34651162 развёрнута в production compose: api, gateway и web healthy, worker running без ошибок; Alembic на 0040, public /api/health, /max/start и /otchet/ отвечают 200, env снижен со 120 до 24. Два live native-cache canary вернули 200, provider reported 4240 cache-read tokens и provider cost USD в metadata на каждом вызове.",
-   "impact": "Первичная MAX-сборка больше не должна оплачивать многократное переписывание уже готовой платформенной основы. При любой незавершённой попытке пользователь сохраняет рабочее приложение, а Studio получает проверяемую по этапам картину фактического использования вместо приблизительного общего списания.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H108",
-   "title": "Статус публикации соответствует текущей версии MAX",
-   "status": "worked",
-   "score": 9,
-   "category": "MAX / UX / публикация / snapshot / надёжность",
-   "period": "01.08",
-   "description": "Не показывать старый успешный деплой как публикацию текущей версии после сохранения политик, данных или других изменений, создающих новый snapshot.",
-   "evidence": "Найдено два расходящихся источника: большая карточка публикации доверяла phase=done последнего исторического деплоя, а серверная readiness-галочка сверяла finished_at деплоя с created_at текущего snapshot. Реализован единый frontend-контракт: статус published разрешён только серверным readiness item publish; старый done при снятой галочке получает отдельное состояние outdated и предложение повторной публикации по тому же URL. Regression-набор: 20 файлов, 120 тестов; lint, typecheck и production build на 46 страниц зелёные. Revision 190262c2 отправлена в origin/main и развёрнута production compose; web и API healthy, публичные /api/health, /web-health, /max/start и /otchet/ отвечают 200.",
-   "impact": "Пользователь больше не увидит одновременно зелёную надпись «Версия опубликована» и незавершённый шаг публикации после изменения проекта.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H109",
-   "title": "Одна публикация MAX создаёт один launch-flow и одно уведомление",
-   "status": "worked",
-   "score": 9,
-   "category": "MAX / UX / публикация / idempotency / надёжность",
-   "period": "01.08",
-   "description": "Исключить повторный запуск и два одинаковых success-toast после одного нажатия на публикацию.",
-   "evidence": "Root cause локализован в MaxLaunchButton: ручной onMutate записывал durable launch-флаг, после чего useEffect в том же mount принимал его за восстановление прерванного процесса и вызывал mutation повторно. Добавлены синхронный ref-guard ручного старта, module-level single-flight по project_id и стабильные toast id. Локально: 21 test file, 122 tests, lint, typecheck и production build на 46 страниц зелёные. Revision 168e414d отправлена в origin/main и развёрнута production compose; собранный bundle содержит новый toast-id guard, web и API healthy, публичные health endpoints и /max/start отвечают 200.",
-   "impact": "Один клик больше не должен запускать второй параллельный deploy/activation и показывать два одинаковых сообщения.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H110",
-   "title": "Первый MAX-запуск снова выполняет реальную AI-генерацию",
-   "status": "worked",
-   "score": 9,
-   "category": "MAX / Gemini / агент / генерация / UX / надёжность",
-   "period": "01.08",
-   "description": "Сохранить безопасную config-driven основу и новые лимиты цикла, но исключить ложное завершение первой MAX-сборки на одном шаблоне: после подготовки основы обязательно запустить Gemini Custom Tools, применить его UI-правки и восстановить таймер работы после F5.",
-   "evidence": "Root cause локализован в revision 34651162: первая MAX-сборка создавала AgentResult(stop_reason=deterministic_template) сразу после clean build 16 starter-файлов и не доходила до agent_native.run_native_build. Исправленный контур использует starter как seed/rollback, затем вызывает native-agent gemini-3.1-pro-preview-customtools; snapshot объединяет полный seed с файлами агента, а нулевая AI-правка не засчитывается как готовая генерация. Message history теперь проецирует started_at/finished_at durable GenerationRun, поэтому текущий и завершённый elapsed восстанавливаются после перезагрузки. Локально: 37 целевых API-тестов, ruff и strict mypy по 218 модулям; Web lint/typecheck, 22 файла и 125 тестов зелёные. Production revision e3aa80cd развёрнута документированным compose с полной Linux-сборкой API/Web; api и web healthy, worker слушает очередь, публичные /api/health, /web-health, /max/start и /max отвечают 200. Runtime подтвердил use_agentic_builder=true, use_native_agent=true, лимит 24 шага и модель gemini-3.1-pro-preview-customtools. Реальный canary через production /v1/messages получил HTTP 200 от этой модели со stop_reason=end_turn и usage-метаданными; свежие логи после рестарта чистые.",
-   "impact": "Пользовательский бриф снова должен превращаться в реальные изменения экранов и функций, а не в мгновенную выдачу универсального шаблона. Новые ограничения, single-flight и rollback сохраняются; перезагрузка страницы больше не обнуляет видимое время работы агента.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H111",
-   "title": "MAX строится от продуктового брифа, а не от готового UI-шаблона",
-   "status": "testing",
-   "score": null,
-   "category": "MAX / Gemini / продуктовая полнота / дизайн / runtime AI",
-   "period": "01.08",
-   "description": "Убрать визуальный и архитектурный якорь универсального MAX-шаблона, не принимать одностраничную косметическую правку как готовый продукт и дать сгенерированным приложениям безопасный реальный вызов Google AI без ключа в клиентском коде.",
-   "evidence": "Browser QA последнего fitness-25a64d против предыдущего fitnessstat-31eba8 показал точный регресс: новый результат свёл бриф к трём декоративным вкладкам, пустому графику и setTimeout-имитации анализа, тогда как предыдущий имел 6 экранов, persisted CRUD, поиск/фильтры и уведомления, но тоже подменял AI детерминированной формулой. Root cause найден в MAX_MODEL_DIRECTIVE: модель получала утверждение, что приложение уже complete, прямой совет предпочитать только page.tsx/globals.css и отсутствие semantic done-gate; build plan и coverage gate для MAX были выключены. Реализованы пустой generation canvas вместо карточного product UI, 30-turn full-build, brief-aware acceptance contract по явным функциям, обязательные runtime_check/probe и два see для сложного продукта, запрет fake-AI и managed requestOmniaAI → подписанный MAX runtime → gemini-3.1-pro-preview-customtools с owner/team billing и rate limits. Локально: 38 целевых API-тестов на чистой PostgreSQL, отдельный pure-набор 29 тестов, ruff, strict mypy по 219 модулям, MAX TypeScript typecheck зелёные; Next production compile/static generation зелёные. Production revision 0b5abc6bd976 развёрнута документированным compose: Linux API image собран полностью, api healthy, worker слушает очередь, gateway/web healthy, orchestrator active; публичные /api/health, /web-health, /max/start и /max отвечают 200. В runtime подтверждены MAX-kit 11, semantic completion gate, модель gemini-3.1-pro-preview-customtools и опубликованный /api/runtime/projects/{project_id}/ai. Новый браузерный canary не запускался по решению пользователя.",
-   "impact": "Google-агент больше не сможет завершить сложный MAX-бриф после перекраски одного файла: он обязан построить продуктовые экраны и реальные сценарии, покрыть явно названные функции, проверить интерактив и исправить визуальный результат. ИИ-функции приложения вызывают управляемую модель на сервере вместо таймера или утечки пользовательского ключа.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H112",
-   "title": "MAX сам доводит генерацию до рабочего состояния без платного ручного «Продолжить»",
-  "status": "failed",
-  "score": 2,
-  "category": "MAX / Gemini / recovery / надёжность",
-   "period": "01.08",
-   "description": "Устранить повторные обрывы полного MAX-build: внутренний предел одного агентного контекста должен запускать автономный ремонтный проход, а любая неустранимая красная версия должна атомарно заменяться рабочей основой, а не оставлять проект без страницы.",
-   "evidence": "Production-диагностика двух последовательных GenerationRun проекта fitnessstat-a00c0b (a62e593b и 7a6bece3) показала одинаковый финал build finished without a committed snapshot. В первом проходе агент создал несовместимый вызов requestOmniaAI({prompt})/.text, прямые DB-маршруты и импорт отсутствующего lucide-react; во втором — отсутствующий getActionHistory и те же недостающие пакеты. Оба дошли до внутреннего предела native-agent, после чего финальный typecheck дополнительно падал на устаревшем .next/types/app/page.ts. Главная скрытая причина: служебный snapshot без содержательного prompt ошибочно считался ранее сгенерированным продуктом, поэтому безопасный first-build recovery не запускался; ручное «продолжи» вдобавок заменяло исходный бриф одним словом. Исправлены единый критерий продуктового snapshot/readiness, восстановление последнего содержательного брифа из истории, MAX kit 12 с закреплёнными UI/Tailwind-зависимостями и совместимым managed client, запрет прямого DB/API bypass до выполнения записи, очистка только устаревших Next route validators, локальное добирание deterministic proof, до трёх автономных bounded-сегментов в одном запуске и зелёный starter fallback вместо незавершённой публикации. Зелёные 33 целевых API-теста, 11 orchestrator-тестов, strict mypy по 219 API-модулям и MAX TypeScript typecheck; production Linux Docker build установил все 97 пакетов, собрал Next, проверил типы и сгенерировал 15/15 страниц. Runtime подтвердил kit 12, hard limit 30, native/agentic=true и gemini-3.1-pro-preview-customtools; production browser-canary оставлен пользователю.",
-  "impact": "Живой прогон опроверг гипотезу: три сегмента не доделали продукт, а повторили несовместимые с MAX проверки. Рабочая сборка была откачена к пустой основе, а UI ошибочно показал «Изменения готовы».",
-  "next_vector": "V8"
-  },
-  {
-   "id": "H113",
-   "title": "MAX завершает полный продукт по реальным признакам готовности",
-   "status": "testing",
-   "score": null,
-   "category": "MAX / Gemini / генерация / верификация / секреты",
-   "period": "01.08",
-   "description": "Разделить ошибку продукта и сбой проверочной инфраструктуры: Google-агент повторяет проход только при реально недостающем экране/функции и никогда не выдаёт rollback за готовый результат.",
-   "evidence": "Production-run f769dc88 прошёл clean build и runtime 200 после записи Dashboard, AddWorkout, History, Profile и Nutrition. Затем generic verify_isolation/probe получили HTML login вместо JSON, see не получил screenshot, после чего контур запустил ещё два сегмента и откатил зелёный продукт к canvas. В исправлении MAX блокирует source-contract + clean build + runtime_check + один see через подписанную preview-session; generic probe/verify_isolation исключены, а недоступная visual-QA становится advisory и не перезапускает модель. Обычный путь ограничен одним 30-step проходом; один recovery разрешён только при оставшемся source-gap. Добавлены блокировка .env/ключей до записи в repo, redirect в Integration Hub без запуска модели и отдельный failed-заголовок в плашке шагов. Локально: 32 API tests, ruff, strict mypy, 127 Web tests, typecheck и lint зелёные. Production ревизии 8fb66788: Linux Docker собрал 46/46 Next-страниц, api/web healthy, worker running; runtime подтвердил native-agent=true, green-before-done=true и gemini-3.1-pro-preview-customtools. Для fitness-c3394b чистая MAX-основа проходит build/runtime 200, подписанный preview возвращает 200 и HttpOnly-сессию; репозиторий, 6 snapshot, история чата и live-контейнер очищены от засвеченного ключа (0 secret hits, 0 secret files). Платный browser-run оставлен владельцу.",
-   "impact": "Чисто собранное MAX-приложение больше не должно откатываться из-за чужой схемы авторизации проверок. Если же откат реально произошёл, чат и плашка шагов честно покажут «Сборка не завершена»; секрет не попадёт в git даже при прямой команде модели.",
-   "next_vector": "V8"
-  },
-  {
-   "id": "H114",
-   "title": "MAX начинает генерацию без продуктового шаблона и canvas",
-   "status": "testing",
-   "score": null,
-   "category": "MAX / Gemini / генерация / качество / надёжность",
-   "period": "01.08",
-   "description": "Полностью убрать готовую продуктовую страницу из первого MAX-запуска: модель должна сама создать page.tsx, стили, навигацию, экраны и сценарии, а техническое ядро не может считаться приложением или показываться как успешная генерация.",
-   "evidence": "Сравнение с рабочей revision 451fd117 показало, что прежний быстрый результат опирался на детерминированный готовый product starter; позднее его заменили на нейтральный canvas, но canvas всё равно оставался настоящим src/app/page.tsx и переживал snapshot/rollback. В kit 13 удалён сам page.tsx, canvas-CSS заменён минимальным техническим reset, а prompt и semantic done-gate требуют создать продукт с нуля. Перед первым Google-run API принудительно удаляет legacy page; если чистое ядро подготовить не удалось, вызов Gemini не запускается. Rollback теперь сохраняет только MAX core без продуктовой страницы и честно помечает сборку незавершённой. Локально зелёные 36 целевых API-тестов, 38 orchestrator-тестов, ruff, strict mypy и MAX TypeScript typecheck; Linux production собрал API/worker и отдельный omnia-template-max-miniapp-nextjs:dev без page/canvas. Revision fe9dcaed развёрнута production compose, API/Web/Gateway healthy, публичные /api/health, /web-health и /max отвечают 200. Проблемный fitness-c3394b переведён на kit 13: все 6 snapshot указывают на 52d94eb2, repo и live-контейнер не содержат page/canvas, typecheck clean; новых GenerationRun и вызовов модели при миграции не было. Платный browser-canary оставлен владельцу.",
-   "impact": "Новая MAX-генерация больше не может выдать универсальную заготовку или пустой canvas за приложение. Google-агент получает полную свободу над продуктовым UI, но обязан реально создать домашнюю страницу и покрыть бриф; при инфраструктурной ошибке запуск останавливается до обращения к модели.",
-   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -2679,26 +2566,6 @@
      true
     ],
     [
-     "Единый UX-путь MAX Studio: 6 этапов, общая навигация, одно следующее действие и проверяемый MAX URL handoff",
-     true
-    ],
-    [
-     "Ограниченный цикл MAX: hard cap 30, один основной Google-run и один recovery только при source-gap, зелёный rollback, usage/cache/retries по этапам в Studio",
-     true
-    ],
-    [
-     "Первый MAX-запуск: безопасный platform core без UI → обязательный Gemini Custom Tools agent → snapshot с реальными AI-правками; elapsed сохраняется после F5",
-     true
-    ],
-    [
-     "Первый MAX-запуск без product page/canvas: platform core → brief-aware Gemini → semantic acceptance → real managed AI runtime",
-     true
-    ],
-    [
-     "MAX-aware completion: source/build/runtime отделены от generic web-proof; rollback не маскируется как ready, .env/ключи блокируются до repo",
-     true
-    ],
-    [
      "Живой e2e внутри MAX с реальным токеном промодерированного бота",
      false
     ],
@@ -2716,14 +2583,7 @@
      "H97",
      "H100",
      "H104",
-     "H105",
-     "H106",
-     "H107",
-     "H110",
-     "H111",
-    "H112",
-    "H113",
-    "H114"
+     "H105"
    ]
   }
  ],

@@ -1,6 +1,5 @@
 """Safe capability requests made by a generated MAX Mini App."""
 
-import json
 from decimal import Decimal
 from typing import Any
 
@@ -26,7 +25,11 @@ class RuntimePaymentRequest(BaseModel):
     def validate_metadata(cls, value: dict[str, str]) -> dict[str, str]:
         if len(value) > 16:
             raise ValueError("too many metadata values")
-        return {str(key)[:64]: str(item)[:512] for key, item in value.items() if str(key).strip()}
+        return {
+            str(key)[:64]: str(item)[:512]
+            for key, item in value.items()
+            if str(key).strip()
+        }
 
 
 class RuntimePaymentPublic(BaseModel):
@@ -65,23 +68,3 @@ class RuntimeCatalogItem(BaseModel):
 class RuntimeCatalogPublic(BaseModel):
     provider: str
     items: list[RuntimeCatalogItem]
-
-
-class RuntimeAIRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4_000)
-    instructions: str = Field(default="", max_length=2_000)
-    context: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("context")
-    @classmethod
-    def validate_context(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if len(value) > 40:
-            raise ValueError("too many context fields")
-        if len(json.dumps(value, ensure_ascii=False, default=str)) > 16_384:
-            raise ValueError("context is too large")
-        return value
-
-
-class RuntimeAIPublic(BaseModel):
-    answer: str
-    model: str

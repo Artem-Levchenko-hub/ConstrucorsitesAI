@@ -22,7 +22,7 @@ from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 
 from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
@@ -644,27 +644,6 @@ async def agent_build(
     await record_activity(project_id)
     container_name = f"omnia-dev-{slug}"
     dep_note = await _run_dep_doctor(container_name)
-    # Next dev writes route validators for the source tree that existed at the
-    # time of its last successful compile. Agent writes/rollback can replace or
-    # remove a page faster than HMR refreshes those generated imports, which made
-    # a valid restored tree fail on a ghost `.next/types/app/page.ts` reference.
-    # Remove only regenerable route validators before the independent source
-    # typecheck; keep routes.d.ts because next-env.d.ts references it directly.
-    try:
-        await exec_cmd(
-            container_name,
-            cmd=[
-                "rm",
-                "-rf",
-                "--",
-                "/app/.next/types/app",
-                "/app/.next/types/validator.ts",
-            ],
-            workdir="/app",
-            max_output=1_024,
-        )
-    except OrchestratorError:
-        pass
     try:
         result = await exec_cmd(
             container_name,
@@ -820,15 +799,13 @@ async def deploy(
     optional — the dev container is resolved by the `omnia.project_id` label.
     """
     _verify_token(x_internal_token)
-    if payload.commit_sha is not None:
-        raise OrchestratorError(
-            code="conflict",
-            message=(
-                "Production publication is paused during the historical MAX "
-                "generation comparison because this baseline cannot prove an "
-                "immutable snapshot deploy."
-            ),
+    if payload.commit_sha:
+        raise HTTPException(
             status_code=409,
+            detail=(
+                "Historical comparison mode cannot prove an immutable deploy; "
+                "deploy by commit is temporarily disabled."
+            ),
         )
     target = payload.target.model_dump() if payload.target else None
     rec = await builder.start_deploy(

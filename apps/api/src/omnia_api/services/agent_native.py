@@ -18,20 +18,18 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 import structlog
 
-from omnia_api.core.config import get_settings
+from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
 from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
-# Keep the proven pre-cost native loop, but route it through the current MAX
-# production model instead of the retired Gemini/Opus-era default.
-_MODEL = "claude-sonnet-5"
+_MODEL = PRIMARY_LLM_MODEL
 # Providers can pre-reserve the full max_tokens × output price on every call and 402
 # if the key balance is below that reserve — so an over-large ceiling caps how many
 # calls fit the balance (an oversized reserve can 402 mid-build,
@@ -42,8 +40,7 @@ _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 3  # bounded transport retry inside one turn; never restart a whole run
-_HARD_MAX_STEPS = 30
+_CALL_RETRIES = 8  # upstream concurrency caps + sustained 502/504 flake bursts
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -469,55 +466,26 @@ _DONE_WHEN_GREEN_NUDGE = (
     "(runtime_check main routes, probe interactive actions, verify_isolation "
     "owned resources) and call done NOW."
 )
-_MAX_DONE_WHEN_GREEN_NUDGE = (
-    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
-    "and run see once through the signed MAX preview, then call done NOW. Do not call "
-    "generic probe or verify_isolation."
-)
-
-_MAX_NATIVE_VERIFICATION_OVERRIDE = (
-    "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
-    "MAX uses signed initData and an authenticated preview session. The generic probe, "
-    "verify_isolation and see tools currently authenticate as a normal web user and cannot "
-    "prove this runtime. Do NOT call or retry probe/verify_isolation in a MAX build. Finish "
-    "the complete source product, run build until clean, run runtime_check after the final "
-    "write, then call see ONCE; the executor supplies a signed MAX preview session. Apply a "
-    "concrete visual fix if returned, rebuild/runtime_check/see once more, then call done. If "
-    "visual QA reports unavailable, do not retry it."
-)
 
 
 def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
-    guide = (stack_guide or "").strip()
-    parts = [_NATIVE_PREAMBLE, guide]
+    parts = [_NATIVE_PREAMBLE, (stack_guide or "").strip()]
     if skills and skills.strip():
         parts.append(skills.strip())
-    if "MAX PLATFORM CORE CONTRACT" in guide:
-        parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
 
 
 async def _call_messages(
-    client: httpx.AsyncClient,
-    url: str,
-    convo: list[dict[str, Any]],
-    system: str,
-    *,
-    user_id: str | None = None,
-    project_id: str | None = None,
-    run_id: str | None = None,
-    message_id: str | None = None,
-    free: bool = False,
-    stage: str = "native_agent",
+    client: httpx.AsyncClient, url: str, convo: list[dict[str, Any]], system: str
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
     import asyncio
 
-    payload: dict[str, Any] = {
+    payload = {
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
         "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
@@ -528,21 +496,8 @@ async def _call_messages(
         "tool_choice": {"type": "auto"},
         "messages": _with_incremental_cache(convo),
     }
-    if user_id:
-        payload["user"] = user_id
     last: Exception | None = None
     for attempt in range(_CALL_RETRIES):
-        # Every provider attempt is attributable. The gateway persists these
-        # fields with the provider usage row, including a successful retry.
-        payload["metadata"] = {
-            "user_id": user_id,
-            "project_id": project_id,
-            "run_id": run_id,
-            "message_id": message_id,
-            "free": free,
-            "stage": stage,
-            "retry_count": attempt,
-        }
         try:
             r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
             # 402 = provider key out of balance. Retrying can't fix it, so fail
@@ -578,13 +533,8 @@ async def run_native_build(
     task: str,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
     user_id: Any = None,
-    project_id: Any = None,
-    run_id: Any = None,
-    message_id: Any = None,
-    free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
-    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
-    max_steps: int = 24,
+    max_steps: int = 40,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -602,149 +552,25 @@ async def run_native_build(
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     wrote_since_build = False
+    done_rejections = 0
+    # Room to bounce a premature done and actually heal (a hallucinated-module
+    # build usually needs a couple of correction turns) before we let it ship red.
+    _DONE_REJECT_CAP = 5
     no_write_turns = 0  # consecutive assistant turns with no successful write
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
-    successful_tools: dict[str, int] = {}
-    proof_after_write: set[str] = set()
-
-    effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
-    max_runtime = "MAX VERIFICATION OVERRIDE" in system
-
-    def _evidence() -> dict[str, int]:
-        result = dict(successful_tools)
-        for tool in proof_after_write:
-            result[f"{tool}_after_write"] = 1
-        return result
-
-    def _completion_gap() -> str | None:
-        if completion_check is None:
-            return None
-        try:
-            return completion_check(written, _evidence())
-        except Exception as exc:
-            log.exception("agent_native.completion_check_failed")
-            return f"Product acceptance check failed: {type(exc).__name__}."
-
-    async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
-        """Stop provider traffic and prove the tree with one local build only."""
-        try:
-            final_build = await execute(Action(name="build", args={}, raw=""))
-        except Exception as exc:
-            final_build = {"ok": False, "error": f"final build probe crashed: {exc}"}
-        if emit:
-            await emit(
-                "agent.step",
-                {
-                    "step": steps,
-                    "action": "build",
-                    "path": "",
-                    "detail": _step_detail("build", Action("build", {}, ""), final_build),
-                    "ok": bool(final_build.get("ok")),
-                },
-            )
-        if final_build.get("ok"):
-            successful_tools["build"] = successful_tools.get("build", 0) + 1
-            proof_after_write.add("build")
-            gap = _completion_gap()
-            # A provider turn limit must not turn forgotten verification clicks
-            # into a user-visible failed build. When the source is already green
-            # and the remaining product-contract gap asks only for deterministic
-            # proof, run those read-only checks locally. Functional/source gaps
-            # still return to the caller's autonomous repair segment.
-            local_proofs = 0
-            while gap and local_proofs < 4:
-                action: Action | None = None
-                if "runtime_check" in gap:
-                    evidence = _evidence()
-                    if evidence.get("runtime_check_after_write", 0) < 1:
-                        action = Action("runtime_check", {"path": "/"}, "")
-                if action is None and "probe" in gap:
-                    action = Action(
-                        "probe",
-                        {"method": "GET", "path": "/api/omnia/actions"},
-                        "",
-                    )
-                if action is None and "see" in gap:
-                    action = Action("see", {"path": "/"}, "")
-                if action is None:
-                    break
-                try:
-                    proof = await execute(action)
-                except Exception as exc:
-                    proof = {"ok": False, "error": f"local proof crashed: {exc}"}
-                local_proofs += 1
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": steps,
-                            "action": action.name,
-                            "path": action.path,
-                            "detail": _step_detail(action.name, action, proof),
-                            "ok": bool(proof.get("ok")),
-                        },
-                    )
-                if not proof.get("ok"):
-                    break
-                successful_tools[action.name] = successful_tools.get(action.name, 0) + 1
-                proof_after_write.add(action.name)
-                gap = _completion_gap()
-            if gap:
-                return AgentResult(
-                    done=False,
-                    summary=gap,
-                    files=written,
-                    steps=steps,
-                    transcript=convo,
-                    stop_reason="max_steps" if reason == "max_steps" else f"{reason}_red",
-                )
-            return AgentResult(
-                done=True,
-                summary=(
-                    "Готово — генерация остановлена без дополнительных запросов к провайдеру; "
-                    "текущая версия приложения проверена и работает."
-                ),
-                files=written,
-                steps=steps,
-                transcript=convo,
-                stop_reason=f"{reason}_green",
-            )
-        return AgentResult(
-            done=False,
-            summary=str(final_build.get("detail") or final_build.get("error") or detail),
-            files=written,
-            steps=steps,
-            transcript=convo,
-            stop_reason=f"{reason}_red",
-        )
 
     async with httpx.AsyncClient() as client:
-        for step in range(effective_max_steps):
-            call_stage = (
-                "build_plan"
-                if step == 0
-                else "verification"
-                if last_build_ok is True and not wrote_since_build
-                else "native_agent"
-            )
+        for step in range(max_steps):
             try:
-                resp = await _call_messages(
-                    client,
-                    url,
-                    convo,
-                    system,
-                    user_id=str(user_id) if user_id else None,
-                    project_id=str(project_id) if project_id else None,
-                    run_id=str(run_id) if run_id else None,
-                    message_id=str(message_id) if message_id else None,
-                    free=free,
-                    stage=call_stage,
-                )
+                resp = await _call_messages(client, url, convo, system)
             except Exception as exc:
-                return await _finish_without_provider(
+                return AgentResult(
+                    done=False,
+                    summary=f"gateway error: {exc}",
+                    files=written,
                     steps=step,
-                    reason="provider_stopped",
-                    detail=f"gateway error: {exc}",
+                    transcript=convo,
+                    stop_reason="error",
                 )
 
             content = resp.get("content")
@@ -771,33 +597,27 @@ async def run_native_build(
 
             tool_uses = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
             if not tool_uses:
+                # Model ended its turn with prose and no tool — it's done talking.
+                # A prose-less finish must NOT leak "(no tool call)" to the chat
+                # (observed live: it became the user-visible assistant message on
+                # a template-already-covers-it build). Human fallback for done;
+                # the technical marker stays for the non-done diagnostics path.
                 _done = resp.get("stop_reason") == "end_turn"
                 _text = _text_of(content)
-                # Prose is not proof. Keep the turn inside the same hard budget
-                # until a real clean build exists; never ship a broken app because
-                # the model happened to finish speaking.
-                gap = _completion_gap() if _done and last_build_ok is True else None
-                if _done and last_build_ok is True and not wrote_since_build and not gap:
-                    return AgentResult(
-                        done=True,
-                        summary=_text or "Готово — приложение собрано и проверено.",
-                        files=written,
-                        steps=step + 1,
-                        transcript=convo,
-                        stop_reason="done_green",
+                if not _text:
+                    _text = (
+                        "Готово — приложение собрано и проверено. Открой превью."
+                        if _done
+                        else "(no tool call)"
                     )
-                convo.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            (gap + " " if gap else "")
-                            + "Перед завершением обязательно вызови build. Если он красный — "
-                            "почини ошибки; если чистый — устрани остаток acceptance contract "
-                            "и вызови done."
-                        ),
-                    }
+                return AgentResult(
+                    done=_done,
+                    summary=_text,
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="no_tool",
                 )
-                continue
 
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
@@ -811,7 +631,8 @@ async def run_native_build(
                     # Fact-gate: refuse a premature done if the model wrote files but
                     # never confirmed a CLEAN build afterwards. Bounded (R-10).
                     premature = wrote_since_build or last_build_ok is not True
-                    if premature:
+                    if premature and done_rejections < _DONE_REJECT_CAP:
+                        done_rejections += 1
                         results.append(
                             {
                                 "type": "tool_result",
@@ -819,17 +640,6 @@ async def run_native_build(
                                 "is_error": True,
                                 "content": "Not done yet: run the `build` tool and make it "
                                 "CLEAN (fix any errors) before calling done.",
-                            }
-                        )
-                        continue
-                    gap = _completion_gap()
-                    if gap:
-                        results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tu_id,
-                                "is_error": True,
-                                "content": "Not done yet: " + gap,
                             }
                         )
                         continue
@@ -870,14 +680,9 @@ async def run_native_build(
                         written[action.path] = obs["content"]
                     wrote_since_build = True
                     wrote_this_turn = True
-                    proof_after_write.clear()
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
-                if obs.get("ok"):
-                    successful_tools[name] = successful_tools.get(name, 0) + 1
-                    if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
-                        proof_after_write.add(name)
                 _tr = _obs_to_tool_result(tu_id, obs)
                 if name == "build" and not obs.get("ok"):
                     _hint = _build_error_hint(str(_tr.get("content") or ""))
@@ -919,11 +724,7 @@ async def run_native_build(
                         {
                             "type": "text",
                             "text": (
-                                (
-                                    _MAX_DONE_WHEN_GREEN_NUDGE
-                                    if max_runtime
-                                    else _DONE_WHEN_GREEN_NUDGE
-                                )
+                                _DONE_WHEN_GREEN_NUDGE
                                 if last_build_ok is True and not wrote_since_build
                                 else _EXPLORE_STALL_NUDGE
                             ),
@@ -952,10 +753,11 @@ async def run_native_build(
                     stop_reason="exploring",
                 )
 
-    # Hard stop means no more provider calls. A local build decides whether the
-    # tree can ship; otherwise the caller restores the last green snapshot.
-    return await _finish_without_provider(
-        steps=effective_max_steps,
-        reason="max_steps",
-        detail="build failed",
+    return AgentResult(
+        done=False,
+        summary="hit step budget without calling done",
+        files=written,
+        steps=max_steps,
+        transcript=convo,
+        stop_reason="max_steps",
     )

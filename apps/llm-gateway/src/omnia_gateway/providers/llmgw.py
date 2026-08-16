@@ -45,22 +45,17 @@ _TRANSIENT = (
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
     "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools",
-    "claude-sonnet-5": "anthropic/claude-sonnet-5",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
 _SLUG_TO_OMNIA: dict[str, str] = {
     "gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview-customtools",
     "google/gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview-customtools",
-    "claude-sonnet-5": "claude-sonnet-5",
-    "anthropic/claude-sonnet-5": "claude-sonnet-5",
 }
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening
 # them (the acceptance/vision judge + the agent `see` tool send screenshots).
-_MULTIMODAL: frozenset[str] = frozenset(
-    {"gemini-3.1-pro-preview-customtools", "claude-sonnet-5"}
-)
+_MULTIMODAL: frozenset[str] = frozenset({"gemini-3.1-pro-preview-customtools"})
 
 _DEFAULT_MAX_TOKENS = 32768
 # Long art-director / writer passes run ~150s non-streaming. 240s clears them while

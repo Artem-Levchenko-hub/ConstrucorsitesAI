@@ -20,17 +20,17 @@ export default async function ProjectsPage() {
         <div className="mx-auto w-full max-w-[1240px] px-8 py-10 space-y-8">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-400">Omnia Builder</p>
-              <h1 className="font-display text-3xl font-semibold tracking-[-0.035em]">Сайты и веб-сервисы</h1>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-blue-400">Рабочее пространство</p>
+              <h1 className="font-display text-3xl font-semibold tracking-[-0.035em]">Проекты</h1>
               <p className="text-sm text-fg-secondary">
-                Здесь находятся обычные web-проекты. MAX Mini Apps открываются в отдельной студии.
+                Каждый проект — отдельный сайт с git-историей и preview.
               </p>
             </div>
             <div className="flex items-center gap-2">
               <Button asChild variant="secondary">
                 <Link href="/max">
                   <MessageCircleMore className="h-4 w-4" />
-                  Перейти в MAX Studio
+                  MAX Mini Apps
                 </Link>
               </Button>
               <NewProjectDialog />

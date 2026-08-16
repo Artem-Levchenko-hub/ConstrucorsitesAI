@@ -158,8 +158,8 @@ export function MaxIntegrationButton({
               MAX Mini App
             </DialogTitle>
             <DialogDescription>
-              Это серверная интеграция Bot API. Для обычного запуска мини-приложения
-              достаточно вставить его production URL в MAX Partner.
+              Подключите прошедшего модерацию MAX-бота, опубликуйте проект и
+              активируйте защищённый webhook.
             </DialogDescription>
           </DialogHeader>
 
@@ -175,8 +175,8 @@ export function MaxIntegrationButton({
             <div className="space-y-4" data-testid="max-connect-form">
               <div className="rounded-lg border border-border-subtle bg-surface-raised p-3 text-xs leading-relaxed text-fg-secondary">
                 Бот создаётся и проходит модерацию на платформе MAX для
-                партнёров. Секрет хранится зашифрованно на backend, не встраивается в
-                приложение и не показывается повторно.
+                партнёров. Секрет сохраняется зашифрованно и не показывается
+                повторно.
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-bot-token">Секрет бота</Label>

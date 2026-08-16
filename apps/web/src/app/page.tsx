@@ -192,7 +192,7 @@ export default function HomePage() {
             <a href="#process" className="hover:text-white">Как работает</a>
             <a href="#integrations" className="hover:text-white">Интеграции</a>
             <Link href="/pricing" className="hover:text-white">Тарифы</Link>
-            <Link href="/mvp" className="hover:text-white">Статус продукта</Link>
+            <Link href="/mvp" className="hover:text-white">MVP-чеклист</Link>
           </nav>
           <div className="flex items-center gap-2.5">
             <Link href="/login?next=/max" className="hidden px-3 py-2 text-[13px] text-white/65 hover:text-white sm:block">Войти</Link>

@@ -42,7 +42,7 @@ type StreamHandle = {
   send: (msg: unknown) => void;
 };
 
-export type PromptSubmitOptions = {
+type PromptSubmitOptions = {
   skipClarify?: boolean;
   designPresetId?: string | null;
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
