@@ -8,6 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -62,11 +63,17 @@ export const maxBusinessActions = appSchema.table("max_business_actions", {
     .notNull()
     .references(() => maxUsers.maxUserId, { onDelete: "cascade" }),
   actionType: text("action_type").notNull(),
+  idempotencyKey: text("idempotency_key"),
   status: text("status").notNull().default("new"),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-});
+}, (table) => [
+  uniqueIndex("max_business_actions_user_idempotency_key_uq").on(
+    table.maxUserId,
+    table.idempotencyKey,
+  ),
+]);
 
 export const maxConsents = appSchema.table("max_consents", {
   id: uuid("id").primaryKey().defaultRandom(),

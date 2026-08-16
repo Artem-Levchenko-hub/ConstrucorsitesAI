@@ -25,6 +25,8 @@ _PROOF_TOOLS = frozenset({"build", "runtime_check", "probe", "verify_isolation",
 
 def _required_tools(title: str, index: int) -> tuple[str, ...]:
     folded = title.casefold()
+    if re.search(r"подписан|signed|browser acceptance|functional gate", folded):
+        return ("see",)
     if re.search(r"собр|сбор|build|compile|typecheck", folded):
         return ("build",)
     if re.search(r"runtime|жив|маршрут|route|изоляц", folded):
@@ -32,9 +34,9 @@ def _required_tools(title: str, index: int) -> tuple[str, ...]:
     if re.search(r"визуал|visual|дизайн", folded):
         return ("see",)
     if re.search(r"реализ|интерфейс|функцион", folded):
-        return ("write_file", "edit_file", "bash")
+        return ("write_files", "write_file", "edit_file", "bash")
     if index == 0:
-        return ("write_file", "edit_file", "read_skill")
+        return ("write_files", "write_file", "edit_file", "read_skill")
     return ()
 
 

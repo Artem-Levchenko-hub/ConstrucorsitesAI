@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.routers import runtime
 from omnia_orchestrator.routers.runtime import _normalize_code_intelligence
 
@@ -154,6 +155,100 @@ async def test_missing_analyzer_keeps_typecheck_authoritative(
     assert result["ok"] is True
     assert result["detail"] == "typecheck clean"
     assert result["analysis_unavailable"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code_intelligence", "failed_command", "message"),
+    [
+        (False, "/app/node_modules/.bin/tsc", "docker exec transport failed"),
+        (True, "node", "exec node on omnia-dev-slug timed out after 150s"),
+    ],
+)
+async def test_agent_build_marks_execution_failure_as_infra_dead(
+    monkeypatch: pytest.MonkeyPatch,
+    code_intelligence: bool,
+    failed_command: str,
+    message: str,
+) -> None:
+    async def no_activity(_project_id: str) -> None:
+        return None
+
+    async def no_dep_doctor(_container: str) -> str:
+        return ""
+
+    async def exec_cmd(_container: str, *, cmd: list[str], **kwargs: object) -> dict[str, str]:
+        if cmd[0] == failed_command:
+            raise OrchestratorError(
+                code="container_failure",
+                message=message,
+                status_code=504,
+            )
+        return {"exit_code": "0", "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(runtime, "_verify_token", lambda _token: None)
+    monkeypatch.setattr(runtime, "record_activity", no_activity)
+    monkeypatch.setattr(runtime, "_run_dep_doctor", no_dep_doctor)
+    monkeypatch.setattr(runtime, "exec_cmd", exec_cmd)
+
+    result = await runtime.agent_build("project", "slug", code_intelligence=code_intelligence)
+
+    assert result == {"ok": False, "error": message, "infra_dead": True}
+    assert "detail" not in result
+    assert "diagnostics" not in result
+
+
+@pytest.mark.asyncio
+async def test_agent_build_keeps_compiler_failure_as_product_red(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_activity(_project_id: str) -> None:
+        return None
+
+    async def no_dep_doctor(_container: str) -> str:
+        return ""
+
+    async def exec_cmd(_container: str, *, cmd: list[str], **kwargs: object) -> dict[str, str]:
+        if cmd[0] == "/app/node_modules/.bin/tsc":
+            return {"exit_code": "2", "stdout": "src/app.tsx: TS2322", "stderr": ""}
+        return {"exit_code": "0", "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(runtime, "_verify_token", lambda _token: None)
+    monkeypatch.setattr(runtime, "record_activity", no_activity)
+    monkeypatch.setattr(runtime, "_run_dep_doctor", no_dep_doctor)
+    monkeypatch.setattr(runtime, "exec_cmd", exec_cmd)
+
+    result = await runtime.agent_build("project", "slug")
+
+    assert result == {"ok": False, "detail": "src/app.tsx: TS2322"}
+    assert "infra_dead" not in result
+
+
+@pytest.mark.asyncio
+async def test_kernel_build_can_skip_mutating_dependency_doctor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dep_doctor_calls: list[str] = []
+
+    async def dep_doctor(container: str) -> str:
+        dep_doctor_calls.append(container)
+        return "[dep-doctor] installed: sonner"
+
+    async def no_activity(_project_id: str) -> None:
+        return None
+
+    async def exec_cmd(_container: str, *, cmd: list[str], **kwargs: object) -> dict[str, str]:
+        return {"exit_code": "0", "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(runtime, "_verify_token", lambda _token: None)
+    monkeypatch.setattr(runtime, "record_activity", no_activity)
+    monkeypatch.setattr(runtime, "_run_dep_doctor", dep_doctor)
+    monkeypatch.setattr(runtime, "exec_cmd", exec_cmd)
+
+    result = await runtime.agent_build("project", "slug", dependency_doctor=False)
+
+    assert result == {"ok": True, "detail": "typecheck clean"}
+    assert dep_doctor_calls == []
 
 
 def test_code_intelligence_rejects_absolute_and_nested_traversal_paths() -> None:

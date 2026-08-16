@@ -15,7 +15,7 @@ from uuid import UUID
 
 import httpx
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, Response, status
 from sqlalchemy import select
 
 from omnia_api.core.config import MAX_STUDIO_LLM_MODEL
@@ -47,6 +47,7 @@ from omnia_api.services import (
     llm_client,
     orchestrator_client,
 )
+from omnia_api.services.max_proof_authorization import validate_max_proof_authorization
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
@@ -217,19 +218,50 @@ def _provider_failure(provider: str, response: httpx.Response) -> ApiError:
 async def runtime_integration_status(
     project_id: UUID,
     session: SessionDep,
+    response: Response,
     x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
     x_omnia_max_preview_capability: Annotated[
         str | None,
         Header(alias="X-Omnia-MAX-Preview-Capability"),
     ] = None,
+    x_omnia_proof_key: Annotated[
+        str | None,
+        Header(alias="X-Omnia-Proof-Key"),
+    ] = None,
+    x_omnia_proof_authorization: Annotated[
+        str | None,
+        Header(alias="X-Omnia-Proof-Authorization"),
+    ] = None,
 ) -> RuntimeIntegrationStatus:
-    await _runtime_context(
+    context = await _runtime_context(
         session,
         project_id,
         x_max_init_data,
         preview_capability=x_omnia_max_preview_capability,
         allow_preview=True,
     )
+    proof_requested = x_omnia_proof_key is not None or x_omnia_proof_authorization is not None
+    if proof_requested:
+        proof = (
+            validate_max_proof_authorization(
+                x_omnia_proof_authorization or "",
+                project_id,
+                proof_key=x_omnia_proof_key or "",
+            )
+            if context.is_preview and x_omnia_proof_key and x_omnia_proof_authorization
+            else None
+        )
+        if proof is None:
+            raise ApiError(
+                "max_proof_authorization_invalid",
+                "Защищённое подтверждение проверки недействительно.",
+                status.HTTP_403_FORBIDDEN,
+            )
+        # The locked template requires an exact echo only after both the
+        # project-bound preview capability and API-signed proof token pass.
+        # Untrusted generated JavaScript cannot mint this binding.
+        response.headers["X-Omnia-Proof-Key-Bound"] = proof.proof_key
+        response.headers["Cache-Control"] = "no-store"
     connections = await _connections(session, project_id)
     metrica = connections.get("yandex_metrica")
     return RuntimeIntegrationStatus(

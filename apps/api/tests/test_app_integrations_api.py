@@ -10,6 +10,7 @@ from uuid import UUID
 import httpx
 import pytest
 from sqlalchemy import select
+from starlette.responses import Response
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
@@ -77,6 +78,7 @@ async def test_read_only_runtime_endpoints_forward_signed_preview_capability(
     status_result = await integration_runtime_router.runtime_integration_status(
         project_id,
         fake_session,  # type: ignore[arg-type]
+        Response(),
         None,
         preview_token,
     )

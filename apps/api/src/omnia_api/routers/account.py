@@ -213,12 +213,16 @@ async def export_account_data(
     }
 
 
-@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
 async def request_account_deletion(
     response: Response,
     current_user: CurrentUserDep,
     session: SessionDep,
-) -> None:
+) -> Response:
     now = datetime.now(UTC)
     current_user.status = "deletion_pending"
     current_user.deletion_requested_at = now
@@ -251,3 +255,5 @@ async def request_account_deletion(
         path="/",
         domain=settings.jwt_cookie_domain,
     )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response

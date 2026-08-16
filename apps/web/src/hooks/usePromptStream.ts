@@ -28,6 +28,7 @@ import {
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
 import { useWorkspaceStore } from "@/store/workspace";
+import type { MaxProductSpec } from "@/lib/max-brief";
 
 /**
  * Opens a real WebSocket to /api/ws/projects/:id and routes server events
@@ -48,6 +49,7 @@ type PromptSubmitOptions = {
   designPresetId?: string | null;
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
   idempotencyKey?: string;
+  productSpec?: MaxProductSpec | null;
 };
 
 /**

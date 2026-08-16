@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from omnia_api.services import agent_builder, agent_native
-from omnia_api.services.max_agent_skills import read_max_skill
+from omnia_api.services.max_agent_skills import (
+    read_max_skill,
+    render_selected_max_skills,
+    select_max_skills,
+)
 
 CREATIVE_CAPABILITY_PACKS = {
     "premium-mobile-foundation",
@@ -20,7 +24,7 @@ CREATIVE_CAPABILITY_PACKS = {
 }
 
 
-def test_stable_max_system_routes_required_skills_without_full_optional_catalog() -> None:
+def test_stable_max_system_does_not_force_optional_skill_catalog() -> None:
     index = agent_builder.load_stack_skill_index("max-miniapp-nextjs")
 
     assert index is not None
@@ -35,8 +39,9 @@ def test_stable_max_system_routes_required_skills_without_full_optional_catalog(
         stable_max_loop=True,
     )
     assert "MAX capability catalog" not in prompt
-    assert "read_skill(`premium-mobile-foundation`)" in prompt
-    assert "read_skill(`ui-ux-pro-max`)" in prompt
+    assert "read_skill(`premium-mobile-foundation`)" not in prompt
+    assert "visual-evaluation" not in prompt
+    assert "read_skill(`ui-ux-pro-max`)" not in prompt
     assert "MAX PLATFORM CORE CONTRACT" in prompt
 
 
@@ -113,3 +118,67 @@ def test_read_skill_returns_specialist_principles_without_layout_recipe() -> Non
     assert "requestOmniaAI" in content
     assert "AI can be an analyser" in content
     assert "hero + features" not in content
+
+
+def test_structured_skill_router_is_minimal_stable_and_excludes_visual_loop() -> None:
+    available = {
+        "ui-ux-pro-max",
+        "max-platform",
+        "domain-fitness",
+        "product-strategy",
+        "production-readiness",
+        "ai-native-ux",
+        "trust-safety",
+        "visual-evaluation",
+    }
+    spec = {
+        "industry": "fitness",
+        "capabilities": ["AI coach", "history", "payments", "medical data"],
+    }
+
+    assert select_max_skills(spec, available_skill_ids=available) == (
+        "ui-ux-pro-max",
+        "max-platform",
+        "domain-fitness",
+        "production-readiness",
+        "ai-native-ux",
+        "trust-safety",
+    )
+
+
+def test_structured_skill_router_falls_back_and_respects_available_cap() -> None:
+    assert select_max_skills(
+        {"product": "неопределённая услуга", "ai": False},
+        available_skill_ids={"max-platform", "product-strategy", "visual-evaluation"},
+    ) == ("max-platform", "product-strategy")
+    assert select_max_skills(
+        {"industry": "fitness", "ai": True},
+        available_skill_ids={"ui-ux-pro-max", "max-platform", "domain-fitness", "ai-native-ux"},
+        max_skills=3,
+    ) == ("ui-ux-pro-max", "max-platform", "domain-fitness")
+
+
+def test_kernel_skill_context_keeps_craft_without_design_or_proof_ceremony() -> None:
+    rendered = render_selected_max_skills(
+        [
+            "ui-ux-pro-max",
+            "product-strategy",
+            "max-platform",
+            "production-readiness",
+            "trust-safety",
+        ],
+        prompt="Приложение записи на услуги",
+        project_id="booking-1",
+    )
+
+    assert "Craft bar" in rendered
+    assert "ProductSpec style/plan are final" in rendered
+    assert "three real directions" not in rendered
+    assert "three-direction exploration" not in rendered
+    assert "max-design-spec.json" not in rendered
+    assert "before `done`" not in rendered
+    assert "call `docs`" not in rendered
+    assert "Reload the app and prove" not in rendered
+    assert "authenticated runtime check" not in rendered
+    assert "## Safety proof" not in rendered
+    assert "User-owned data starts empty" in rendered

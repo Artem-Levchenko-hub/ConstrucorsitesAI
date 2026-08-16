@@ -22,6 +22,10 @@ import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
 import { restorePersistedAgentSteps } from "@/lib/agent-steps";
+import {
+  parseMaxStarterHandoff,
+  type MaxProductSpec,
+} from "@/lib/max-brief";
 
 type DiscoveryChoices = {
   choices: string[];
@@ -43,6 +47,7 @@ type PromptSubmitOptions = {
   skipClarify?: boolean;
   designPresetId?: string | null;
   idempotencyKey?: string;
+  productSpec?: MaxProductSpec | null;
 };
 
 export function ChatPanel({
@@ -83,9 +88,18 @@ export function ChatPanel({
             "Задача продолжит сборку через встроенный AI — ключ не попадёт в сеть, чат или код.",
         });
       }
-      submit(safe.text, modelId, selections, options);
+      let resolvedOptions = options;
+      if (mode === "max" && !options?.productSpec) {
+        const handoff = parseMaxStarterHandoff(
+          window.sessionStorage.getItem(`omnia:max:starter:${projectId}`),
+        );
+        if (handoff) {
+          resolvedOptions = { ...options, productSpec: handoff.productSpec };
+        }
+      }
+      submit(safe.text, modelId, selections, resolvedOptions);
     },
-    [mode, submit],
+    [mode, projectId, submit],
   );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -96,6 +110,16 @@ export function ChatPanel({
     queryKey: ["messages", projectId],
     queryFn: () => listMessages(projectId),
   });
+
+  // Keep the strict ProductSpec through transport errors and failed first runs.
+  // Clear it only after a committed snapshot proves the server owns a result.
+  useEffect(() => {
+    if (mode !== "max" || !messages?.some((message) => message.snapshot_id)) return;
+    window.sessionStorage.removeItem(`omnia:max:starter:${projectId}`);
+    if (new URLSearchParams(window.location.search).get("starter") === "1") {
+      window.history.replaceState(null, "", basePath);
+    }
+  }, [basePath, messages, mode, projectId]);
 
   // Re-hydrate the agentic transcript from history: the backend persists each
   // assistant reply's steps on `message.agent_steps`, so after a reload we seed
@@ -224,10 +248,12 @@ export function ChatPanel({
     if (messages === undefined) return; // wait for the first load
     const params = new URLSearchParams(window.location.search);
     let p = params.get("p");
+    let productSpec: MaxProductSpec | null = null;
     if (!p && params.get("starter") === "1") {
       const key = `omnia:max:starter:${projectId}`;
-      p = window.sessionStorage.getItem(key);
-      if (p) window.sessionStorage.removeItem(key);
+      const handoff = parseMaxStarterHandoff(window.sessionStorage.getItem(key));
+      p = handoff?.prompt ?? null;
+      productSpec = handoff?.productSpec ?? null;
     }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
@@ -237,8 +263,8 @@ export function ChatPanel({
         // effect somehow fires twice, reserve_generation_run replays this exact
         // run rather than creating a second generation.
         idempotencyKey: `max-starter-${projectId}`,
+        productSpec,
       });
-      window.history.replaceState(null, "", basePath);
     }
   }, [messages, submitSafely, basePath, projectId]);
 
@@ -285,8 +311,8 @@ export function ChatPanel({
             <div className="text-xs text-fg-tertiary leading-5">
               {mode === "max" ? (
                 <>
-                  Сначала увидите кликабельное демо в телефоне. Верификация,
-                  MAX-бот и публикация появятся отдельными шагами после результата.
+                  Готовое приложение появится только после зелёной сборки,
+                  проверки всех экранов, главного действия и сохранения данных.
                 </>
               ) : (
                 <>

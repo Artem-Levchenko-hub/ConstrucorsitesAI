@@ -62,28 +62,21 @@ or release gate.
 
 ## MAX App Engineer
 
-MAX Mini Apps use the same native code-agent loop as other production container
-applications, with MAX-specific locked runtime, signed identity, Bridge, managed
-integrations, legal routes and secret boundaries. Before product code, the
-server-owned Design Director persists a deterministic DesignDNA: audience,
-emotional promise, three materially different concepts, one selected direction
-with rationale, composition, typography, semantic colours, geometry and density,
-data-visualisation language, motion, signature interaction and anti-patterns.
+Fresh MAX builds use a stricter kernel-owned lifecycle. The completed questionnaire
+becomes one durable ProductSpec containing purpose, audience, screens, capabilities, primary
+action, data/history, integrations, style and acceptance criteria. Omnia derives a
+non-empty file/screen/scenario plan and selects the smallest relevant capability
+packs before the model runs. The model receives this one canonical task, writes one
+coherent multi-file product revision and may make one evidence-driven repair.
 
-The selected direction is not a reusable screen template. A deterministic premium
-mobile foundation supplies accessibility and interaction contracts for navigation,
-sheets, forms, charts, async/offline states, touch targets and safe areas; a domain
-skill supplies product depth. Relevant managed capabilities (AI, payments, leads,
-catalogue, analytics, persisted actions, MAX identity and legal) are planned with
-truth requirements and executable evidence. Fake success and unavailable visual
-proof are release failures.
-
-Every completed MAX revision must carry an independent signed visual verdict at
-360px and 390px, plus functional and capability evidence. A generic or rushed
-render gets at most two targeted repair passes in the bounded native loop; if the
-quality floor remains unmet, the last known-good product is preserved and no new
-snapshot is published. See [`MAX_APP_ENGINEER.md`](MAX_APP_ENGINEER.md) for the
-architecture and proof chain.
+Build, live runtime and signed functional checks are automatic state transitions,
+not model tools. Completion proves that every planned screen is reachable, the
+primary action works, required user data survives reload, failures remain honest,
+and mobile/accessibility/browser invariants are green. Subjective screenshot scoring
+and repeated redesign are not release gates for this lifecycle; the selected style
+is applied once. A red final contract preserves the last known-good product and no
+partial snapshot is published. See [`MAX_APP_ENGINEER.md`](MAX_APP_ENGINEER.md) for
+the exact state machine and proof chain.
 
 If an external dependency is unavailable, agents still complete all safe,
 unblocked engineering work. They then identify the exact owner or provider action

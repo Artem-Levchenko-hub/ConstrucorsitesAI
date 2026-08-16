@@ -14,7 +14,10 @@ from omnia_api.services.generation_continuity import (
     classify_stop,
     workspace_digest,
 )
-from omnia_api.services.max_environment_manifest import build_max_environment_manifest
+from omnia_api.services.max_environment_manifest import (
+    build_max_environment_manifest,
+    manifest_prompt_block,
+)
 from omnia_api.services.max_project_kit import (
     default_max_project_config,
     render_max_managed_files,
@@ -29,9 +32,32 @@ def test_progressing_internal_red_stays_recoverable() -> None:
         "missing_dependency",
         "managed_api_signature_mismatch",
     ):
-        decision = classify_stop(reason, attempt=99, started_at=datetime.now(UTC))
+        decision = classify_stop(reason, attempt=2, started_at=datetime.now(UTC))
         assert decision.continue_run is True
         assert decision.classification == "environment_rediscovery"
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ("kernel_verification_pending", "generation_time_slice", "internal_exception:TimeoutError"),
+)
+def test_internal_continuations_have_a_global_attempt_limit(reason: str) -> None:
+    decision = classify_stop(reason, attempt=3, started_at=datetime.now(UTC))
+
+    assert decision.continue_run is False
+    assert decision.classification == "internal_budget_exhausted"
+    assert decision.delay_seconds == 0
+
+
+def test_internal_continuations_have_an_elapsed_deadline() -> None:
+    decision = classify_stop(
+        "kernel_verification_pending",
+        attempt=1,
+        started_at=datetime.now(UTC) - timedelta(minutes=31),
+    )
+
+    assert decision.continue_run is False
+    assert decision.classification == "internal_budget_exhausted"
 
 
 def test_exhausted_proof_states_do_not_restart_the_same_checkpoint() -> None:
@@ -40,6 +66,18 @@ def test_exhausted_proof_states_do_not_restart_the_same_checkpoint() -> None:
 
         assert decision.continue_run is False
         assert decision.classification == "internal_proof_blocked"
+
+
+def test_owner_dependency_stops_without_model_repair_or_retry() -> None:
+    decision = classify_stop(
+        "kernel_owner_dependency",
+        attempt=0,
+        started_at=datetime.now(UTC),
+    )
+
+    assert decision.continue_run is False
+    assert decision.classification == "external_owner_dependency"
+    assert "не будет переписываться" in decision.action
 
 
 def test_recurring_unchanged_segment_breaks_the_automatic_loop() -> None:
@@ -135,6 +173,19 @@ def test_environment_manifest_is_source_derived_locked_and_secret_free() -> None
     assert "pnpm typecheck" in manifest["proof_commands"]
     assert "api_key=" not in rendered
     assert "password=" not in rendered
+
+
+def test_kernel_environment_manifest_has_one_automatic_proof_owner() -> None:
+    manifest = build_max_environment_manifest(profile="agent")
+    prompt = manifest_prompt_block(profile="agent")
+
+    assert "skill_index" not in manifest
+    assert all("automatically" in item for item in manifest["proof_commands"])
+    assert "plan_task" not in prompt
+    assert "continuation milestones" not in prompt
+    assert "Read relevant locked contracts" not in prompt
+    assert "Start with a usable vertical slice" not in prompt
+    assert "do not call planning, build" in prompt
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
@@ -49,6 +50,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
+from omnia_api.schemas.max_product_spec import MaxProductSpec
 from omnia_api.schemas.message import (
     ClientErrorReport,
     GenerationRunPublic,
@@ -267,6 +269,50 @@ def _reference_max_completion_gap(
         ):
             return "A fresh MAX build must replace ProductApp.tsx with a real product."
     return None
+
+
+def _fresh_max_product_spec_required(
+    *, project_template: str, is_first_build: bool, has_product_spec: bool
+) -> bool:
+    """Keep every fresh MAX build on the deterministic ProductSpec kernel."""
+
+    return project_template == "max_miniapp" and is_first_build and not has_product_spec
+
+
+def _fresh_agent_step_budget(*, kernel_product_run: bool, configured_steps: int) -> int:
+    """Keep strict ProductSpec runs bounded independently from legacy settings."""
+
+    return 4 if kernel_product_run else min(30, max(1, int(configured_steps)))
+
+
+_MAX_PRODUCT_SPEC_DISCOVERY_KEY = "max_product_spec"
+
+
+def _stored_max_product_spec(
+    discovery_spec: Mapping[str, Any] | None,
+) -> MaxProductSpec | None:
+    """Recover the last accepted strict contract for a failed fresh-run retry."""
+
+    if not isinstance(discovery_spec, Mapping):
+        return None
+    raw = discovery_spec.get(_MAX_PRODUCT_SPEC_DISCOVERY_KEY)
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return MaxProductSpec.model_validate(dict(raw))
+    except Exception:
+        return None
+
+
+def _merge_stored_max_product_spec(
+    discovery_spec: Mapping[str, Any] | None,
+    product_spec: MaxProductSpec,
+) -> dict[str, Any]:
+    """Persist ProductSpec without deleting FidelitySpec or BuildPlan state."""
+
+    merged = dict(discovery_spec or {})
+    merged[_MAX_PRODUCT_SPEC_DISCOVERY_KEY] = product_spec.model_dump(mode="json")
+    return merged
 
 
 # Strong references to fire-and-forget background tasks. Without this set,
@@ -564,9 +610,13 @@ async def _run_tracked_prompt(
             )
         await finalize_generation_run(run_id)
         if _durable_continuity:
-            from omnia_api.services.generation_continuity import clear_native_checkpoint
+            from omnia_api.services.generation_continuity import (
+                clear_max_runtime_checkpoint,
+                clear_native_checkpoint,
+            )
 
             await clear_native_checkpoint(run_id)
+            await clear_max_runtime_checkpoint(run_id)
     except Exception as exc:
         from omnia_api.services.generation_continuity import (
             enqueue_run_durably,
@@ -618,10 +668,12 @@ async def _run_tracked_prompt(
             if _published:
                 await finalize_generation_run(run_id)
                 from omnia_api.services.generation_continuity import (
+                    clear_max_runtime_checkpoint,
                     clear_native_checkpoint,
                 )
 
                 await clear_native_checkpoint(run_id)
+                await clear_max_runtime_checkpoint(run_id)
                 return
             # Infrastructure/code-path failures are engineering debt, not an
             # owner-facing terminal result. Yield this lease and let the next
@@ -1218,6 +1270,8 @@ async def _run_max_visual_qa(
     path: str,
     prompt_context: str,
     visual_scoring_enabled: bool = False,
+    require_persistence: bool | None = None,
+    planned_flow: Any = None,
 ) -> dict[str, Any]:
     """Run signed MAX functional QA and optionally attach screenshot scoring.
 
@@ -1268,7 +1322,13 @@ async def _run_max_visual_qa(
 
             functional = await run_max_functional_gate(
                 bootstrap_url,
-                require_persistence=max_prompt_requires_persistence(prompt_context),
+                project_id=project_id,
+                require_persistence=(
+                    max_prompt_requires_persistence(prompt_context)
+                    if require_persistence is None
+                    else require_persistence
+                ),
+                planned_flow=planned_flow,
             )
             visual["functional_verdict"] = functional
             visual["functional_passed"] = functional.passed
@@ -1854,10 +1914,34 @@ async def post_prompt(
 ) -> PromptResponse:
     project = await _ensure_owner(session, project_id, current_user.id)
 
+    # A failed first generation still owns a canonical ProductSpec. Reuse it on
+    # an explicit retry so a lost browser handoff or another device cannot fall
+    # back into the historical prose loop.
+    if project.template == "max_miniapp" and payload.product_spec is None:
+        stored_product_spec = _stored_max_product_spec(project.discovery_spec)
+        if stored_product_spec is not None:
+            payload = payload.model_copy(update={"product_spec": stored_product_spec})
+
+    product_spec_payload = (
+        payload.product_spec.model_dump(mode="json") if payload.product_spec is not None else None
+    )
+
     # A credential pasted into MAX chat must never reach persistence or a model.
     # Keep the product request: redact it before even hashing the prompt and
     # route the model to the managed, secretless runtime instead of stopping.
-    from omnia_api.services.secret_safety import prepare_safe_max_prompt
+    from omnia_api.services.secret_safety import (
+        prepare_safe_max_prompt,
+        structured_provider_secret_paths,
+    )
+
+    secret_paths = structured_provider_secret_paths(product_spec_payload)
+    if project.template == "max_miniapp" and secret_paths:
+        raise ApiError(
+            "credential_in_product_spec",
+            "Удалите секреты из опроса и подключите их через защищённые интеграции.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            details={"fields": list(secret_paths)},
+        )
 
     safe_max_prompt = prepare_safe_max_prompt(payload.prompt)
     credential_removed = project.template == "max_miniapp" and safe_max_prompt.credential_removed
@@ -1871,6 +1955,7 @@ async def post_prompt(
         user_id=current_user.id,
         idempotency_key=idempotency_key,
         prompt=payload.prompt,
+        product_spec=product_spec_payload,
     )
     if replayed:
         if generation_run.response_payload is not None:
@@ -1917,6 +2002,11 @@ async def post_prompt(
     # routing or first-build state, otherwise a config/rollback commit that won
     # the race could make us spend the full model budget on a stale base.
     project = await _refresh_reserved_project(session, project, current_user.id)
+    if project.template == "max_miniapp" and payload.product_spec is not None:
+        project.discovery_spec = _merge_stored_max_product_spec(
+            project.discovery_spec,
+            payload.product_spec,
+        )
     if project.runtime_sync_required:
         await reconcile_locked_runtime(session, project, ensure_running=True)
     try:
@@ -1998,6 +2088,16 @@ async def post_prompt(
         else None
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
+    if _fresh_max_product_spec_required(
+        project_template=project.template,
+        is_first_build=is_first_build,
+        has_product_spec=payload.product_spec is not None,
+    ):
+        raise ApiError(
+            "max_product_spec_required",
+            "Сначала завершите короткий опрос: без полного ТЗ MAX-генерация не запускается.",
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
 
     # Run/install intent (owner 2026-06-19): on a FOLLOW-UP, "как запустить / хочу
     # запустить / установщик / дай поиграть" → DON'T build; hand back a one-click
@@ -2530,6 +2630,11 @@ async def post_prompt(
             "max_demo_reserved": max_demo_reserved,
             "orchestrate": orchestrate,
             "selected_elements": selected_dump,
+            "product_spec": (
+                payload.product_spec.model_dump(mode="json")
+                if payload.product_spec is not None
+                else None
+            ),
         }
         if project.template == "max_miniapp":
             # Accepted MAX work is owned by RQ, not this API process. Persist the
@@ -2562,6 +2667,7 @@ async def post_prompt(
                 max_demo_reserved=max_demo_reserved,
                 orchestrate=orchestrate,
                 selected_elements=selected_dump,
+                product_spec=payload.product_spec,
             )
 
     # Reset the orchestrator's hibernate timer — a user submitting a new prompt
@@ -3596,6 +3702,7 @@ async def _process_prompt(
     max_demo_reserved: bool = False,
     orchestrate: bool = True,
     selected_elements: list[dict[str, Any]] | None = None,
+    product_spec: MaxProductSpec | None = None,
 ) -> None:
     import logging as _log_mod
 
@@ -3946,15 +4053,116 @@ async def _process_prompt(
                 if project_template == "max_miniapp"
                 else prompt_text
             )
+            _kernel_product_run = bool(
+                project_template == "max_miniapp"
+                and product_spec is not None
+                and not _max_has_generated_snapshot
+                and not _is_edit
+            )
+            _max_product_spec_data = (
+                product_spec.model_dump(mode="json") if product_spec is not None else None
+            )
+            _max_requires_persistence = (
+                bool(_max_product_spec_data.get("history"))
+                if _max_product_spec_data is not None
+                else None
+            )
+            if _kernel_product_run and _max_product_spec_data is not None:
+                from omnia_api.services.max_instruction_bundle import (
+                    render_max_product_spec_task,
+                )
+
+                _max_product_brief = render_max_product_spec_task(_max_product_spec_data)
             _max_acceptance_contract = ""
             _max_design_dna: Any = None
             _max_visual_proof: Any = None
+            _kernel_release_verdict: Any = None
+            _kernel_workspace_files: dict[str, str] = {}
+
+            def _kernel_planned_flow(source_files: Mapping[str, str]) -> Any:
+                if (
+                    not _kernel_product_run
+                    or _build_plan is None
+                    or _build_plan.is_empty
+                    or not source_files
+                ):
+                    return None
+                from omnia_api.services.max_functional_gate import MaxPlannedFlow
+
+                return MaxPlannedFlow(
+                    screen_ids=tuple(screen.route for screen in _build_plan.screens),
+                    capability_ids=tuple(capability.id for capability in _build_plan.capabilities),
+                    capability_actions=tuple(
+                        (capability.id, capability.action or capability.id)
+                        for capability in _build_plan.capabilities
+                    ),
+                    primary_action_id="primary_action",
+                    source_digest=workspace_digest(source_files),
+                    primary_action_kind=(
+                        str(_max_product_spec_data.get("primary_action_kind"))
+                        if _max_product_spec_data is not None
+                        else "managed_write"
+                    ),
+                    primary_integration_operation=(
+                        "catalog"
+                        if _max_product_spec_data is not None
+                        and _max_product_spec_data.get("primary_action_kind") == "catalog_read"
+                        else None
+                    ),
+                    persistence_action_id=("primary_action" if _max_requires_persistence else None),
+                )
+
+            def _kernel_release_contract_digest(planned_flow: Any) -> str:
+                """Bind a resumable green proof to every release-relevant policy input."""
+
+                from omnia_api.services.max_project_kit import MAX_MANAGED_KIT_VERSION
+
+                settings = get_settings()
+                contract = {
+                    "contract_version": 4,
+                    "template": "max_miniapp",
+                    "product_spec": _max_product_spec_data,
+                    "planned_flow": {
+                        "screens": planned_flow.screen_ids,
+                        "capabilities": planned_flow.capability_ids,
+                        "actions": planned_flow.capability_actions,
+                        "primary": planned_flow.primary_action_id,
+                        "primary_action_kind": planned_flow.primary_action_kind,
+                        "primary_integration_operation": (
+                            planned_flow.primary_integration_operation
+                        ),
+                        "persistence": planned_flow.persistence_action_id,
+                        "source_digest": planned_flow.source_digest,
+                    },
+                    "requirements": {
+                        "hydration": True,
+                        "functional": True,
+                        "persistence": bool(_max_requires_persistence),
+                        "dependency_security": bool(_code_intelligence_enabled),
+                        "dependency_doctor": False,
+                        "transport_security": bool(settings.use_security_gate),
+                        "visual_scoring": False,
+                    },
+                    "managed_kit_version": MAX_MANAGED_KIT_VERSION,
+                }
+                return workspace_digest(
+                    {
+                        "kernel-release-contract.json": json.dumps(
+                            contract,
+                            ensure_ascii=True,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        )
+                    }
+                )
+
             if project_template == "max_miniapp":
                 from omnia_api.services.max_generation_contract import (
                     build_max_product_contract,
                 )
 
-                _max_acceptance_contract = build_max_product_contract(_max_product_brief)
+                if not _kernel_product_run:
+                    _max_acceptance_contract = build_max_product_contract(_max_product_brief)
 
             # Durable observable plan. A retry inherits the last failed run's
             # checkpoint, while a fresh request starts from a small deterministic
@@ -3982,14 +4190,24 @@ async def _process_prompt(
                         project_id=project_id,
                         exclude_run_id=run_id,
                     )
-            _agent_state: dict[str, Any] = (
-                dict(_recovered_agent_state)
-                if _recovered_agent_state
-                else agent_plan.initial_plan(
+            if _recovered_agent_state:
+                _agent_state: dict[str, Any] = dict(_recovered_agent_state)
+            elif _kernel_product_run and _max_product_spec_data is not None:
+                _agent_state = agent_plan.make_plan(
+                    objective=str(_max_product_spec_data.get("purpose") or "MAX Mini App"),
+                    steps=[
+                        "Реализовать целостную multi-file структуру экранов и сценариев",
+                        "Автоматически собрать проект и устранить полный список ошибок",
+                        "Проверить живой runtime приложения",
+                        "Пройти подписанную функциональную проверку",
+                    ],
+                    acceptance_criteria=list(_max_product_spec_data.get("acceptance") or []),
+                )
+            else:
+                _agent_state = agent_plan.initial_plan(
                     prompt_text,
                     max_product=project_template == "max_miniapp",
                 )
-            )
             await save_generation_agent_state(run_id, _agent_state)
 
             async def _agent_emit(event: str, data: dict[str, Any]) -> None:
@@ -4044,13 +4262,16 @@ async def _process_prompt(
                 )
             )
             _max_visual_scoring_enabled = (
-                project_template == "max_miniapp" and get_settings().max_visual_scoring_enabled
+                project_template == "max_miniapp"
+                and not _kernel_product_run
+                and get_settings().max_visual_scoring_enabled
             )
             _base_agent_executor = agent_builder.make_container_executor(
                 project_id=project_id,
                 slug=project_slug,
                 emit=_agent_emit,
                 code_intelligence=_code_intelligence_enabled,
+                dependency_doctor=not _kernel_product_run,
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             if project_template == "max_miniapp":
@@ -4061,7 +4282,8 @@ async def _process_prompt(
                 from omnia_api.services.secret_safety import max_model_write_rejection
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
-                    nonlocal _max_visual_proof
+                    nonlocal _kernel_release_verdict, _max_visual_proof
+                    nonlocal _kernel_workspace_files
                     if action.name in {"read_file", "grep"}:
                         read_path = action.path or ("src" if action.name == "grep" else "")
                         folded_path = read_path.casefold()
@@ -4098,6 +4320,82 @@ async def _process_prompt(
                         # MAX previews authenticate through signed initData/session,
                         # not the generic email login. Bootstrap a short-lived
                         # preview identity before Playwright captures the product.
+                        _planned_flow = _kernel_planned_flow(_kernel_workspace_files)
+                        if _kernel_product_run:
+                            if _planned_flow is None:
+                                return {
+                                    "ok": False,
+                                    "needs_fix": True,
+                                    "detail": (
+                                        "Kernel release contract is unavailable for the current "
+                                        "source revision."
+                                    ),
+                                }
+                            from omnia_api.services.release_proof import (
+                                release_proof_infrastructure_unavailable,
+                                release_proof_owner_dependency,
+                                run_release_proof,
+                            )
+
+                            _kernel_release_verdict = await run_release_proof(
+                                project_id,
+                                project_slug,
+                                require_hydrated_product=True,
+                                require_max_functional=True,
+                                max_require_persistence=bool(_max_requires_persistence),
+                                max_planned_flow=_planned_flow,
+                                require_dependency_security=_code_intelligence_enabled,
+                                dependency_doctor=False,
+                            )
+                            _kernel_detail = "\n".join(
+                                f"{check.name}: {'PASS' if check.ok else 'FAIL'} — {check.detail}"
+                                for check in _kernel_release_verdict.checks
+                            )
+                            if release_proof_infrastructure_unavailable(_kernel_release_verdict):
+                                return {
+                                    "ok": True,
+                                    "proof_unavailable": True,
+                                    "detail": _kernel_detail[:12_000],
+                                }
+                            if release_proof_owner_dependency(_kernel_release_verdict):
+                                return {
+                                    "ok": False,
+                                    "owner_dependency": True,
+                                    "detail": _kernel_detail[:12_000],
+                                }
+                            if _kernel_release_verdict.passed:
+                                from omnia_api.services.release_proof import (
+                                    serialize_release_proof,
+                                )
+
+                                _proof_state = serialize_release_proof(
+                                    _kernel_release_verdict,
+                                    source_digest=workspace_digest(_kernel_workspace_files),
+                                    contract_digest=_kernel_release_contract_digest(_planned_flow),
+                                )
+                                try:
+                                    await merge_generation_agent_state(
+                                        run_id,
+                                        {"kernel_release_proof": _proof_state},
+                                    )
+                                except Exception as _proof_persist_exc:
+                                    _kernel_release_verdict = None
+                                    return {
+                                        "ok": True,
+                                        "proof_unavailable": True,
+                                        "detail": (
+                                            "Release proof is green but its durable checkpoint "
+                                            "is unavailable; verification will resume safely. "
+                                            f"{type(_proof_persist_exc).__name__}"
+                                        ),
+                                    }
+                                _agent_state["kernel_release_proof"] = _proof_state
+                            return {
+                                "ok": _kernel_release_verdict.passed,
+                                "needs_fix": not _kernel_release_verdict.passed,
+                                "functional_passed": _kernel_release_verdict.passed,
+                                "detail": _kernel_detail[:12_000],
+                            }
                         _visual = await _run_max_visual_qa(
                             project_id,
                             path=action.path or "/",
@@ -4110,6 +4408,8 @@ async def _process_prompt(
                                 )
                             ),
                             visual_scoring_enabled=_max_visual_scoring_enabled,
+                            require_persistence=_max_requires_persistence,
+                            planned_flow=_planned_flow,
                         )
                         from omnia_api.services.functional_gate import Check, summarize
 
@@ -4161,6 +4461,121 @@ async def _process_prompt(
                                 "proof_unavailable": True,
                             }
                         return _visual
+                    if action.name == "write_files":
+                        raw_files = action.args.get("files")
+                        if not isinstance(raw_files, Mapping) or not raw_files:
+                            return {
+                                "ok": False,
+                                "error": "write_files needs a non-empty path-to-content object",
+                            }
+                        if len(raw_files) > 12:
+                            return {"ok": False, "error": "write_files accepts at most 12 files"}
+                        candidates: dict[str, str] = {}
+                        for raw_path, raw_content in raw_files.items():
+                            if not isinstance(raw_path, str) or not isinstance(raw_content, str):
+                                return {
+                                    "ok": False,
+                                    "error": (
+                                        "write_files requires string paths and full string contents"
+                                    ),
+                                }
+                            if not raw_content:
+                                return {
+                                    "ok": False,
+                                    "error": f"{raw_path} is empty; deletion is not supported",
+                                }
+                            if raw_path in MAX_MODEL_LOCKED_FILES:
+                                return {
+                                    "ok": False,
+                                    "error": f"{raw_path} is managed by MAX Studio",
+                                }
+                            path_rejection = max_model_path_rejection(raw_path)
+                            if path_rejection:
+                                return {"ok": False, "error": path_rejection}
+                            candidate = raw_content
+                            if raw_path == "src/app/globals.css":
+                                from omnia_api.services.max_generation_contract import (
+                                    normalize_max_globals_css,
+                                )
+
+                                candidate = normalize_max_globals_css(candidate)
+                            secret_rejection = max_model_write_rejection(raw_path, candidate)
+                            if secret_rejection:
+                                return {"ok": False, "error": secret_rejection}
+                            fresh_rejection = _fresh_max_product_write_rejection(
+                                candidate,
+                                has_generated_snapshot=_max_has_generated_snapshot,
+                            )
+                            if fresh_rejection:
+                                return {"ok": False, "error": fresh_rejection}
+                            if "@/lib/db" in candidate or "drizzle-orm" in candidate:
+                                return {
+                                    "ok": False,
+                                    "error": (
+                                        "Direct DB access is forbidden in MAX product files. "
+                                        "Use the managed integration client."
+                                    ),
+                                }
+                            if raw_path.startswith("src/app/api/"):
+                                return {
+                                    "ok": False,
+                                    "error": "MAX Studio owns every server API route.",
+                                }
+                            candidates[raw_path] = candidate
+                        if sum(len(content) for content in candidates.values()) > 120_000:
+                            return {
+                                "ok": False,
+                                "error": "write_files exceeds the 120000 character total limit",
+                            }
+                        from omnia_api.services.sast_gate import check_sast
+
+                        sast = check_sast(candidates)
+                        if not sast.safe:
+                            return {"ok": False, "error": sast.summary}
+                        if _kernel_product_run:
+                            # Invalidate the previous revision before the atomic
+                            # source side effect. A DB outage therefore retries the
+                            # same prepared write instead of trusting stale proof.
+                            _kernel_release_verdict = None
+                            try:
+                                await merge_generation_agent_state(
+                                    run_id,
+                                    {"kernel_release_proof": None},
+                                )
+                            except Exception as _proof_clear_exc:
+                                return {
+                                    "ok": False,
+                                    "reconciliation_pending": True,
+                                    "error": (
+                                        "Could not invalidate the previous release proof; "
+                                        "the same atomic write will resume. "
+                                        f"{type(_proof_clear_exc).__name__}"
+                                    ),
+                                }
+                            _agent_state.pop("kernel_release_proof", None)
+                        _write_observation = await _base_agent_executor(
+                            agent_builder.Action(
+                                name="write_files",
+                                args={**action.args, "files": candidates},
+                                raw=action.raw,
+                            )
+                        )
+                        if _write_observation.get("ok"):
+                            _written_files = _write_observation.get("files")
+                            if not isinstance(_written_files, dict) or not all(
+                                isinstance(path, str) and isinstance(content, str)
+                                for path, content in _written_files.items()
+                            ):
+                                return {
+                                    "ok": False,
+                                    "reconciliation_pending": True,
+                                    "error": (
+                                        "Atomic write completed without canonical file bytes; "
+                                        "proof must resume from the persisted workspace."
+                                    ),
+                                }
+                            _kernel_workspace_files.update(_written_files)
+                        return _write_observation
                     if (
                         action.name in {"write_file", "edit_file"}
                         and action.path in MAX_MODEL_LOCKED_FILES
@@ -4399,6 +4814,7 @@ async def _process_prompt(
                 obs.setdefault("path", action.path)
                 if action.name in {
                     "write_file",
+                    "write_files",
                     "edit_file",
                     "build",
                     "runtime_check",
@@ -4409,10 +4825,10 @@ async def _process_prompt(
                     "verify_isolation",
                     "generate_media",
                 }:
-                    if action.name in {"write_file", "edit_file"}:
+                    if action.name in {"write_file", "write_files", "edit_file"}:
                         summary = (
                             f"{action.name} {'succeeded' if obs.get('ok') else 'failed'}: "
-                            f"{action.path}"
+                            f"{action.path or ', '.join(obs.get('changed_paths') or [])}"
                         )
                     else:
                         summary = str(
@@ -4427,7 +4843,7 @@ async def _process_prompt(
                     artifact = action.path if action.name in {"write_file", "edit_file"} else ""
                     raw_files = obs.get("files")
                     mutated = bool(obs.get("ok")) and (
-                        action.name in {"write_file", "edit_file"}
+                        action.name in {"write_file", "write_files", "edit_file"}
                         or (
                             action.name == "bash"
                             and isinstance(raw_files, Mapping)
@@ -4514,14 +4930,34 @@ async def _process_prompt(
                 if _orch_name and _orch_name != "nextjs-entities"
                 else None
             )
+            _selected_max_skill_ids: tuple[str, ...] = ()
+            _selected_max_skill_context = ""
             if project_template == "max_miniapp":
                 from omnia_api.services.max_environment_manifest import (
                     manifest_prompt_block,
                 )
-                from omnia_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
+                from omnia_api.services.max_project_kit import (
+                    MAX_KERNEL_MODEL_DIRECTIVE,
+                    MAX_MODEL_DIRECTIVE,
+                )
 
-                _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
-                _seed_block += manifest_prompt_block()
+                if _kernel_product_run and _max_product_spec_data is not None:
+                    from omnia_api.services.max_agent_skills import (
+                        render_selected_max_skills,
+                        select_max_skills,
+                    )
+
+                    _selected_max_skill_ids = select_max_skills(_max_product_spec_data)
+                    _selected_max_skill_context = render_selected_max_skills(
+                        _selected_max_skill_ids,
+                        prompt=_max_product_brief,
+                        project_id=str(project_id),
+                    )
+                    _stack_guide = MAX_KERNEL_MODEL_DIRECTIVE
+                    _seed_block += manifest_prompt_block(profile="agent")
+                else:
+                    _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
+                    _seed_block += manifest_prompt_block()
                 await _agent_emit(
                     "agent.step",
                     {
@@ -4598,9 +5034,33 @@ async def _process_prompt(
             try:
                 from omnia_api.services import build_plan as _bplan
 
-                if get_settings().use_build_plan:
+                if get_settings().use_build_plan or _kernel_product_run:
                     _build_plan = _bplan.BuildPlan()
-                    if (
+                    if _kernel_product_run and _max_product_spec_data is not None:
+                        _build_plan = _bplan.build_plan_from_max_product_spec(
+                            _max_product_spec_data
+                        )
+                        try:
+                            async with factory() as _bp_session:
+                                _bp_project = await _bp_session.get(Project, project_id)
+                                if _bp_project is not None:
+                                    _bp_project.discovery_spec = _bplan.merge_plan_into_spec(
+                                        _bp_project.discovery_spec, _build_plan
+                                    )
+                                    await _bp_session.commit()
+                        except Exception as _bp_persist_exc:
+                            if _kernel_product_run:
+                                # The strict plan must be durable before any paid
+                                # source turn. The worker recovery path retries
+                                # this infrastructure step without invoking the
+                                # provider or degrading to an empty plan.
+                                raise
+                            print(
+                                f"[PP] deterministic build_plan persist skipped: "
+                                f"{_bp_persist_exc!r}",
+                                flush=True,
+                            )
+                    elif (
                         orchestrate
                         and not _is_continue
                         and not _is_edit
@@ -4612,14 +5072,16 @@ async def _process_prompt(
                             user_id=str(user_id),
                             project_id=str(project_id),
                         )
-                        if not _build_plan.is_empty and proj is not None:
+                        if not _build_plan.is_empty:
                             try:
-                                proj.discovery_spec = _bplan.merge_plan_into_spec(
-                                    proj.discovery_spec, _build_plan
-                                )
-                                await session.commit()
+                                async with factory() as _bp_session:
+                                    _bp_project = await _bp_session.get(Project, project_id)
+                                    if _bp_project is not None:
+                                        _bp_project.discovery_spec = _bplan.merge_plan_into_spec(
+                                            _bp_project.discovery_spec, _build_plan
+                                        )
+                                        await _bp_session.commit()
                             except Exception as _bp_persist_exc:
-                                await session.rollback()
                                 print(
                                     f"[PP] build_plan persist skipped: {_bp_persist_exc!r}",
                                     flush=True,
@@ -4629,7 +5091,7 @@ async def _process_prompt(
                     _bp_block = _build_plan.checklist_block(
                         max_runtime=project_template == "max_miniapp"
                     )
-                    if _bp_block:
+                    if _bp_block and not _kernel_product_run:
                         _seed_block = _seed_block + _bp_block
                         print(
                             "[PP] build_plan injected "
@@ -4641,6 +5103,8 @@ async def _process_prompt(
             except PaidCallAmbiguousError:
                 raise
             except Exception as _bp_exc:
+                if _kernel_product_run:
+                    raise
                 print(f"[PP] build_plan skipped: {_bp_exc!r}", flush=True)
             # MAX is a headless platform adapter. The native coding agent owns
             # product structure and art direction directly; no deterministic
@@ -4685,25 +5149,46 @@ async def _process_prompt(
                 _agent_steps = 18
             else:
                 if project_template == "max_miniapp":
-                    _agent_user = (
-                        "Собери полноценный MAX Mini App по запросу пользователя:\n\n"
-                        f"{prompt_text}\n\n{_max_acceptance_contract}\n\n{_seed_block}\n\n"
-                        "Среда MAX уже запущена и не задаёт дизайн. Первой продуктовой "
-                        "записью полностью замени src/components/product/ProductApp.tsx: "
-                        "собери целостный мобильный MVP со всеми главными экранами, "
-                        "навигацией и состояниями из запроса. Этот первый файл уже должен "
-                        "быть видимым и оформленным; вспомогательные файлы выноси только "
-                        "после него. Сохрани управляемые Bridge/initData/profile/webhook "
-                        "файлы, не создавай свои API routes и не вставляй секреты. Явно "
-                        "Каталоги/планы могут быть статическим справочным контентом, но "
-                        "пользовательские достижения, история и успешные действия обязаны "
-                        "быть реальными и восстанавливаться после reload. Выполни весь plan, "
-                        "build, подписанную функциональную/визуальную проверку и только затем done."
-                    )
-                    # Exact pre-Gemini production ceiling used by successful MAX
-                    # builds. The independent atomic gateway fuse still bounds
-                    # provider spend and applies to free runs.
-                    _agent_steps = 120
+                    if _kernel_product_run and _max_product_spec_data is not None:
+                        from omnia_api.services.max_instruction_bundle import (
+                            build_max_instruction_bundle,
+                        )
+
+                        _instruction_bundle = build_max_instruction_bundle(
+                            _max_product_spec_data,
+                            selected_skill_ids=_selected_max_skill_ids,
+                            build_plan=_build_plan,
+                        )
+                        _agent_user = "\n\n".join(
+                            part
+                            for part in (
+                                _instruction_bundle.task,
+                                _selected_max_skill_context,
+                                _seed_block,
+                            )
+                            if part.strip()
+                        )
+                        # One complete pass + one repair pass, with room for one
+                        # malformed/prose provider response. Build/proof consume
+                        # no provider turns.
+                        _agent_steps = 4
+                    else:
+                        _agent_user = (
+                            "Собери полноценный MAX Mini App по запросу пользователя:\n\n"
+                            f"{prompt_text}\n\n{_max_acceptance_contract}\n\n{_seed_block}\n\n"
+                            "Среда MAX уже запущена и не задаёт дизайн. Первой продуктовой "
+                            "записью полностью замени src/components/product/ProductApp.tsx: "
+                            "собери целостный мобильный MVP со всеми главными экранами, "
+                            "навигацией и состояниями из запроса. Этот первый файл уже должен "
+                            "быть видимым и оформленным; вспомогательные файлы выноси только "
+                            "после него. Сохрани управляемые Bridge/initData/profile/webhook "
+                            "файлы, не создавай свои API routes и не вставляй секреты. "
+                            "Каталоги/планы могут быть статическим справочным контентом, но "
+                            "пользовательские достижения, история и успешные действия обязаны "
+                            "быть реальными и восстанавливаться после reload. Выполни весь plan, "
+                            "build, подписанную функциональную проверку и только затем done."
+                        )
+                        _agent_steps = 120
                 else:
                     _agent_user = (
                         f"Собери приложение по запросу пользователя:\n\n{prompt_text}\n\n"
@@ -4714,7 +5199,10 @@ async def _process_prompt(
                         f"раскладка выше уже дана."
                     )
                 _agent_system = _stack_system
-                _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
+                _agent_steps = _fresh_agent_step_budget(
+                    kernel_product_run=_kernel_product_run,
+                    configured_steps=get_settings().agent_builder_max_steps,
+                )
             _checkpoint_context = agent_plan.recovery_context(_recovered_agent_state)
             if _checkpoint_context:
                 _agent_user = f"{_agent_user}\n\n{_checkpoint_context}"
@@ -4779,9 +5267,19 @@ async def _process_prompt(
                 and not _max_has_generated_snapshot
             ):
                 try:
-                    _max_runtime_checkpoint = await _capture_max_runtime_checkpoint(
-                        project_id, project_slug
+                    from omnia_api.services.generation_continuity import (
+                        load_max_runtime_checkpoint,
+                        save_max_runtime_checkpoint,
                     )
+
+                    _max_runtime_checkpoint = await load_max_runtime_checkpoint(run_id)
+                    if _max_runtime_checkpoint is None:
+                        if _continuity_attempt > 0:
+                            raise RuntimeError("durable pre-run MAX checkpoint is unavailable")
+                        _max_runtime_checkpoint = await _capture_max_runtime_checkpoint(
+                            project_id, project_slug
+                        )
+                        await save_max_runtime_checkpoint(run_id, _max_runtime_checkpoint)
                 except Exception as _checkpoint_exc:
                     print(f"[PP] MAX runtime checkpoint failed: {_checkpoint_exc!r}", flush=True)
                     _agent_res = agent_builder.AgentResult(
@@ -4836,6 +5334,7 @@ async def _process_prompt(
                         evidence,
                         build_plan=_build_plan,
                         design_dna=_max_design_dna,
+                        persistence_required=_max_requires_persistence,
                     )
                     if gap:
                         return gap
@@ -4854,6 +5353,56 @@ async def _process_prompt(
                     if project_template == "max_miniapp"
                     else None
                 )
+                _restored_kernel_green = False
+                if _kernel_product_run and isinstance(_native_resume, Mapping):
+                    _restored_written = _native_resume.get("written")
+                    if isinstance(_restored_written, Mapping):
+                        _kernel_workspace_files.update(
+                            {
+                                str(path): str(content)
+                                for path, content in _restored_written.items()
+                                if isinstance(path, str) and isinstance(content, str)
+                            }
+                        )
+                    _pending_content = _native_resume.get("pending_assistant_content")
+                    if not _pending_content and _kernel_workspace_files:
+                        from omnia_api.services.release_proof import restore_release_proof
+
+                        try:
+                            _live_kernel_contents = await asyncio.gather(
+                                *(
+                                    orchestrator_client.agent_read_file(
+                                        project_id,
+                                        project_slug,
+                                        path,
+                                    )
+                                    for path in _kernel_workspace_files
+                                )
+                            )
+                        except Exception as _kernel_read_exc:
+                            raise GenerationContinuationRequired(
+                                "kernel_verification_pending"
+                            ) from _kernel_read_exc
+                        _kernel_live_matches = all(
+                            live_content == _kernel_workspace_files[path]
+                            for path, live_content in zip(
+                                _kernel_workspace_files,
+                                _live_kernel_contents,
+                                strict=True,
+                            )
+                        )
+                        if _kernel_live_matches:
+                            _resume_planned_flow = _kernel_planned_flow(_kernel_workspace_files)
+                            _kernel_release_verdict = restore_release_proof(
+                                _agent_state.get("kernel_release_proof"),
+                                source_digest=workspace_digest(_kernel_workspace_files),
+                                contract_digest=(
+                                    _kernel_release_contract_digest(_resume_planned_flow)
+                                    if _resume_planned_flow is not None
+                                    else ""
+                                ),
+                            )
+                            _restored_kernel_green = _kernel_release_verdict is not None
 
                 async def _save_native_resume(
                     checkpoint: Mapping[str, object],
@@ -4866,6 +5415,7 @@ async def _process_prompt(
                         _skills,
                         stable_max_loop=project_template == "max_miniapp",
                         stable_max_edit=(project_template == "max_miniapp" and _is_edit),
+                        kernel_owned_loop=_kernel_product_run,
                     ),
                     task=_agent_user,
                     execute=_agent_executor,
@@ -4887,11 +5437,13 @@ async def _process_prompt(
                         else PRIMARY_LLM_MODEL
                     ),
                     stable_max_loop=project_template == "max_miniapp",
+                    kernel_owned_loop=_kernel_product_run,
                     stable_max_product_first=(
                         project_template == "max_miniapp" and not _max_has_generated_snapshot
                     ),
                     provider_turn_offset=_continuity_provider_epoch * 1000,
                     resume_checkpoint=_native_resume,
+                    restored_kernel_green=_restored_kernel_green,
                     checkpoint=(_save_native_resume if project_template == "max_miniapp" else None),
                     progress_context=(
                         lambda: (
@@ -5223,6 +5775,7 @@ async def _process_prompt(
             # model, then whatever it produced stands.
             if (
                 not _is_edit
+                and not _kernel_product_run
                 and not files
                 and get_settings().use_agentic_builder
                 and not get_settings().use_native_agent
@@ -5314,6 +5867,7 @@ async def _process_prompt(
                 _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
                 while (
                     get_settings().use_agent_gate_feedback
+                    and not _kernel_product_run
                     and not get_settings().use_native_agent
                     and not _is_edit
                 ):
@@ -5401,7 +5955,11 @@ async def _process_prompt(
             # in Turbopack with "@import rules must precede all rules". Repair
             # only import placement before the independent runtime gate; product
             # styles remain entirely model-owned and no extra model call is used.
-            if project_template == "max_miniapp" and "src/app/globals.css" in files:
+            if (
+                project_template == "max_miniapp"
+                and not _kernel_product_run
+                and "src/app/globals.css" in files
+            ):
                 try:
                     from omnia_api.services.max_generation_contract import (
                         normalize_max_globals_css,
@@ -5449,51 +6007,59 @@ async def _process_prompt(
             # Deterministic (one HTTP probe), fail-soft.
             _runtime_ok = True  # fail-soft default: a probe error ≠ a broken app
             _rt_error = ""
-            try:
-                _rt = await orchestrator_client.runtime_status(
-                    project_id, slug=project_slug, path="/"
-                )
-                if project_template == "max_miniapp" and _rt.get("ok"):
-                    # A first request can still hit the previous Turbopack graph
-                    # while HMR notices the last write. Require a second green
-                    # response after a short settle window before publishing.
-                    await asyncio.sleep(2)
+            if _kernel_product_run:
+                if _kernel_release_verdict is None:
+                    raise GenerationContinuationRequired("kernel_verification_pending")
+                _runtime_ok = bool(_kernel_release_verdict.passed)
+            else:
+                try:
                     _rt = await orchestrator_client.runtime_status(
                         project_id, slug=project_slug, path="/"
                     )
-                _runtime_ok = (
-                    _max_runtime_probe_is_green(_rt)
-                    if project_template == "max_miniapp"
-                    else bool(_rt.get("ok"))
-                )
-                if not _runtime_ok:
-                    _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
-                    _rt_error = str(_rt_err)
-                    accumulated += (
-                        f"\n\n⚠️ Рантайм-проверка: приложение отвечает ошибкой "
-                        f"({_rt_err}). Открой превью и нажми «Починить» или уточни запрос."
+                    if project_template == "max_miniapp" and _rt.get("ok"):
+                        # A first request can still hit the previous Turbopack graph
+                        # while HMR notices the last write. Require a second green
+                        # response after a short settle window before publishing.
+                        await asyncio.sleep(2)
+                        _rt = await orchestrator_client.runtime_status(
+                            project_id, slug=project_slug, path="/"
+                        )
+                    _runtime_ok = (
+                        _max_runtime_probe_is_green(_rt)
+                        if project_template == "max_miniapp"
+                        else bool(_rt.get("ok"))
                     )
-                    print(f"[PP] agentic_smoke runtime FAIL {_rt.get('status_code')}", flush=True)
-                else:
-                    print("[PP] agentic_smoke runtime ok", flush=True)
+                    if not _runtime_ok:
+                        _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
+                        _rt_error = str(_rt_err)
+                        accumulated += (
+                            f"\n\n⚠️ Рантайм-проверка: приложение отвечает ошибкой "
+                            f"({_rt_err}). Открой превью и нажми «Починить» или уточни запрос."
+                        )
+                        print(
+                            f"[PP] agentic_smoke runtime FAIL {_rt.get('status_code')}",
+                            flush=True,
+                        )
+                    else:
+                        print("[PP] agentic_smoke runtime ok", flush=True)
 
-                    # Fire-and-forget route pre-warm: `next dev` compiles each
-                    # route lazily on FIRST hit (~30-90s cold), so a reviewer eats
-                    # that per page on a demo. Force those first hits now, in the
-                    # background, so the pages are WARM when they land. Best-effort
-                    # — never blocks the response, never fails the build.
-                    async def _warm_bg() -> None:
-                        try:
-                            _w = await orchestrator_client.warm_routes(project_id, project_slug)
-                            print(f"[PP] warm routes {_w}", flush=True)
-                        except Exception as _w_exc:
-                            print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
+                        # Fire-and-forget route pre-warm: `next dev` compiles each
+                        # route lazily on FIRST hit (~30-90s cold), so a reviewer eats
+                        # that per page on a demo. Force those first hits now, in the
+                        # background, so the pages are WARM when they land. Best-effort
+                        # — never blocks the response, never fails the build.
+                        async def _warm_bg() -> None:
+                            try:
+                                _w = await orchestrator_client.warm_routes(project_id, project_slug)
+                                print(f"[PP] warm routes {_w}", flush=True)
+                            except Exception as _w_exc:
+                                print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
 
-                    _warm_task = asyncio.create_task(_warm_bg())
-                    # Hold a ref so the task isn't GC'd mid-flight; discard on done.
-                    _warm_task.add_done_callback(lambda _t: None)
-            except Exception as _sm_exc:
-                print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
+                        _warm_task = asyncio.create_task(_warm_bg())
+                        # Hold a ref so the task isn't GC'd mid-flight; discard on done.
+                        _warm_task.add_done_callback(lambda _t: None)
+                except Exception as _sm_exc:
+                    print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
 
             # Honesty gate: a page that SERVES can still be typecheck-RED — a client
             # TS error (e.g. TS2739 «missing columns, fields») is NOT a 5xx, so the
@@ -5504,24 +6070,27 @@ async def _process_prompt(
             # an agent_build exception leaves _typecheck_ok=True (unknown ≠ broken).
             _typecheck_ok = True
             _tc_error = ""
-            try:
-                _tc = await orchestrator_client.agent_build(project_id, project_slug)
-                _typecheck_ok = bool(_tc.get("ok", True))
-                if not _typecheck_ok:
-                    _tc_detail = str(_tc.get("detail") or "").strip()
-                    _tc_first = (
-                        _tc_detail.splitlines()[0][:240] if _tc_detail else "ошибка типизации"
-                    )
-                    _tc_error = _tc_first
-                    accumulated += (
-                        f"\n\n⚠️ Почти готово, но осталась ошибка: {_tc_first}. "
-                        f"Нажми «Починить» — доведу до чистоты."
-                    )
-                    print(f"[PP] agentic_typecheck RED: {_tc_first}", flush=True)
-                else:
-                    print("[PP] agentic_typecheck clean", flush=True)
-            except Exception as _tc_exc:
-                print(f"[PP] agentic_typecheck skipped: {_tc_exc!r}", flush=True)
+            if _kernel_product_run:
+                _typecheck_ok = bool(_kernel_release_verdict.passed)
+            else:
+                try:
+                    _tc = await orchestrator_client.agent_build(project_id, project_slug)
+                    _typecheck_ok = bool(_tc.get("ok", True))
+                    if not _typecheck_ok:
+                        _tc_detail = str(_tc.get("detail") or "").strip()
+                        _tc_first = (
+                            _tc_detail.splitlines()[0][:240] if _tc_detail else "ошибка типизации"
+                        )
+                        _tc_error = _tc_first
+                        accumulated += (
+                            f"\n\n⚠️ Почти готово, но осталась ошибка: {_tc_first}. "
+                            f"Нажми «Починить» — доведу до чистоты."
+                        )
+                        print(f"[PP] agentic_typecheck RED: {_tc_first}", flush=True)
+                    else:
+                        print("[PP] agentic_typecheck clean", flush=True)
+                except Exception as _tc_exc:
+                    print(f"[PP] agentic_typecheck skipped: {_tc_exc!r}", flush=True)
 
             # ── Edit auto-repair «до талого» ──────────────────────────────────
             # A point-edit that didn't land cleanly — nothing written, a red
@@ -5533,6 +6102,7 @@ async def _process_prompt(
             # never breaks the build).
             if (
                 _is_edit
+                and not _kernel_product_run
                 and get_settings().use_edit_auto_repair
                 and not get_settings().use_native_agent
                 and (not files or not _typecheck_ok or not _runtime_ok)
@@ -5635,7 +6205,7 @@ async def _process_prompt(
             _release_verdict = None
             _max_hydration_check = None
             _verification_failed = False
-            if project_template == "max_miniapp" and files:
+            if project_template == "max_miniapp" and files and not _kernel_product_run:
                 from omnia_api.services.functional_gate import summarize
                 from omnia_api.services.release_proof import run_max_hydration_check
 
@@ -5653,8 +6223,10 @@ async def _process_prompt(
             # budget; MAX may stop on its durable spend/provider guard. This
             # independent verification still prevents a stale dev-server
             # response from being published.
-            if (get_settings().use_native_agent or project_template == "max_miniapp") and (
-                not _runtime_ok or not _typecheck_ok
+            if (
+                not _kernel_product_run
+                and (get_settings().use_native_agent or project_template == "max_miniapp")
+                and (not _runtime_ok or not _typecheck_ok)
             ):
                 _verification_failed = project_template == "max_miniapp"
                 _verification_error = _tc_error or _rt_error or "final verification failed"
@@ -5860,6 +6432,7 @@ async def _process_prompt(
             try:
                 if (
                     get_settings().use_runtime_gates
+                    and not _kernel_product_run
                     and not get_settings().use_native_agent
                     and (not _is_edit or _gate_touched)
                     and _gate_kind is not None
@@ -6022,6 +6595,7 @@ async def _process_prompt(
                 )
                 _cov_on = (
                     get_settings().use_coverage_gate
+                    and not _kernel_product_run
                     and not get_settings().use_native_agent
                     and _build_plan is not None
                     and not _build_plan.is_empty
@@ -6154,23 +6728,46 @@ async def _process_prompt(
                 from omnia_api.services.max_generation_contract import (
                     max_prompt_requires_persistence,
                 )
-                from omnia_api.services.release_proof import run_release_proof
+                from omnia_api.services.release_proof import (
+                    release_proof_infrastructure_unavailable,
+                    release_proof_owner_dependency,
+                    run_release_proof,
+                )
 
                 if project_template == "max_miniapp" and _continuity_seed_files:
                     files = {**_continuity_seed_files, **files}
 
-                _release_verdict = await run_release_proof(
-                    project_id,
-                    project_slug,
-                    require_hydrated_product=project_template == "max_miniapp",
-                    hydrated_product_check=_max_hydration_check,
-                    require_max_functional=project_template == "max_miniapp",
-                    max_require_persistence=(
-                        project_template == "max_miniapp"
-                        and max_prompt_requires_persistence(_max_product_brief)
-                    ),
-                    require_dependency_security=_code_intelligence_enabled,
-                )
+                if _kernel_product_run and _kernel_release_verdict is not None:
+                    # No source mutation is allowed after the kernel's signed
+                    # release proof. Reuse that exact same-revision verdict;
+                    # rerunning a stateful primary action here would duplicate
+                    # user data and create a second, contradictory gate.
+                    _release_verdict = _kernel_release_verdict
+                else:
+                    _release_verdict = await run_release_proof(
+                        project_id,
+                        project_slug,
+                        require_hydrated_product=project_template == "max_miniapp",
+                        hydrated_product_check=_max_hydration_check,
+                        require_max_functional=project_template == "max_miniapp",
+                        max_require_persistence=(
+                            bool(_max_requires_persistence)
+                            if project_template == "max_miniapp"
+                            and _max_requires_persistence is not None
+                            else project_template == "max_miniapp"
+                            and max_prompt_requires_persistence(_max_product_brief)
+                        ),
+                        max_planned_flow=(
+                            _kernel_planned_flow(files)
+                            if project_template == "max_miniapp"
+                            and _kernel_product_run
+                            and _build_plan is not None
+                            and not _build_plan.is_empty
+                            else None
+                        ),
+                        require_dependency_security=_code_intelligence_enabled,
+                        dependency_doctor=not _kernel_product_run,
+                    )
                 if project_template == "max_miniapp" and _max_visual_scoring_enabled:
                     from omnia_api.services.functional_gate import Check, summarize
 
@@ -6206,6 +6803,36 @@ async def _process_prompt(
                 # this independent final pass protects against drift between the
                 # last agent observation and the exact tree about to be committed.
                 if project_template == "max_miniapp" and not _release_verdict.passed:
+                    if release_proof_owner_dependency(_release_verdict):
+                        await merge_generation_agent_state(
+                            run_id,
+                            {
+                                "last_segment": {
+                                    "stop_reason": "kernel_owner_dependency",
+                                    "steps": _agent_res.steps,
+                                    "written_paths": sorted(files),
+                                    "workspace_digest": workspace_digest(files),
+                                    "classification": "external_owner_dependency",
+                                    "proof": _release_verdict.summary[:1000],
+                                }
+                            },
+                        )
+                        raise GenerationContinuationRequired("kernel_owner_dependency")
+                    if release_proof_infrastructure_unavailable(_release_verdict):
+                        await merge_generation_agent_state(
+                            run_id,
+                            {
+                                "last_segment": {
+                                    "stop_reason": "kernel_verification_pending",
+                                    "steps": _agent_res.steps,
+                                    "written_paths": sorted(files),
+                                    "workspace_digest": workspace_digest(files),
+                                    "classification": "environment",
+                                    "proof": _release_verdict.summary[:1000],
+                                }
+                            },
+                        )
+                        raise GenerationContinuationRequired("kernel_verification_pending")
                     await merge_generation_agent_state(
                         run_id,
                         {

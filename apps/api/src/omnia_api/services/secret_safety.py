@@ -9,8 +9,10 @@ container or git object ever sees them.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Any
 
 _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
@@ -76,6 +78,39 @@ def redact_provider_secrets(value: str) -> str:
     for pattern in _SECRET_TOKEN_PATTERNS:
         redacted = pattern.sub("[CREDENTIAL REDACTED]", redacted)
     return redacted
+
+
+def structured_provider_secret_paths(value: Any, *, limit: int = 8) -> tuple[str, ...]:
+    """Return bounded field paths containing credential-shaped strings.
+
+    Structured contracts are rejected rather than partially redacted. A PEM
+    block, for example, must never leave its body behind after replacing only a
+    header. Paths are safe metadata; secret values are never returned.
+    """
+
+    found: list[str] = []
+
+    def visit(current: Any, path: str) -> None:
+        if len(found) >= limit:
+            return
+        if isinstance(current, str):
+            if contains_provider_secret(current):
+                found.append(path)
+            return
+        if isinstance(current, Mapping):
+            for key, item in current.items():
+                visit(item, f"{path}.{key}")
+                if len(found) >= limit:
+                    return
+            return
+        if isinstance(current, Sequence) and not isinstance(current, (bytes, bytearray)):
+            for index, item in enumerate(current):
+                visit(item, f"{path}[{index}]")
+                if len(found) >= limit:
+                    return
+
+    visit(value, "product_spec")
+    return tuple(found)
 
 
 def prepare_safe_max_prompt(value: str) -> SafeMaxPrompt:
@@ -164,4 +199,5 @@ __all__ = [
     "max_model_write_rejection",
     "prepare_safe_max_prompt",
     "redact_provider_secrets",
+    "structured_provider_secret_paths",
 ]

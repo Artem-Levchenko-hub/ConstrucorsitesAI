@@ -966,7 +966,7 @@ export function PreviewFrame({
                           Собираем контейнер
                         </span>
                         <span className="ml-auto text-fg-tertiary text-[11px]">
-                          обычно 15–45 сек · код пишется вживую
+                          Генерация продолжается · результат появится после проверок
                         </span>
                       </div>
                     </motion.div>

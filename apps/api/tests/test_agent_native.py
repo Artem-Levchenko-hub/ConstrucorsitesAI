@@ -26,6 +26,35 @@ from omnia_api.services.max_generation_contract import (
 )
 
 
+@pytest.mark.asyncio
+async def test_restored_kernel_green_finishes_without_provider_or_tool() -> None:
+    calls: list[str] = []
+
+    async def execute(action: agent_native.Action) -> dict[str, Any]:
+        calls.append(action.name)
+        return {"ok": False}
+
+    result = await agent_native.run_native_build(
+        system="kernel",
+        task="build product",
+        execute=execute,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        restored_kernel_green=True,
+        resume_checkpoint={
+            "system": "kernel",
+            "convo": [{"role": "user", "content": "build product"}],
+            "written": {"src/components/product/ProductApp.tsx": "export default 1"},
+            "step_cursor": 1,
+            "pending_assistant_content": None,
+        },
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "kernel_green_recovered"
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -96,8 +125,11 @@ async def test_max_visual_qa_recovers_after_transient_preview_failure(
     async def fake_sleep(delay: int) -> None:
         sleeps.append(delay)
 
-    async def fake_functional(_url: str, *, require_persistence: bool) -> Any:
+    async def fake_functional(
+        _url: str, *, require_persistence: bool, planned_flow: Any = None
+    ) -> Any:
         assert require_persistence is False
+        assert planned_flow is None
         return summarize([Check("max_signed_functional", True, "green")])
 
     monkeypatch.setattr(
@@ -186,10 +218,13 @@ async def test_max_signed_qa_skips_screenshot_scoring_but_keeps_functional_gate(
         visual_calls += 1
         raise AssertionError("visual scoring must stay disabled")
 
-    async def fake_functional(_url: str, *, require_persistence: bool) -> Any:
+    async def fake_functional(
+        _url: str, *, require_persistence: bool, planned_flow: Any = None
+    ) -> Any:
         nonlocal functional_calls
         functional_calls += 1
         assert require_persistence is False
+        assert planned_flow is None
         return summarize([Check("max_signed_functional", True, "green")])
 
     monkeypatch.setattr(
@@ -223,8 +258,11 @@ async def test_max_signed_qa_keeps_functional_failure_blocking_without_visual_sc
     async def fake_session(_project_id: Any) -> dict[str, str]:
         return {"bootstrap_url": "https://preview.example/session?signature=secret"}
 
-    async def fake_functional(_url: str, *, require_persistence: bool) -> Any:
+    async def fake_functional(
+        _url: str, *, require_persistence: bool, planned_flow: Any = None
+    ) -> Any:
         assert require_persistence is False
+        assert planned_flow is None
         return summarize([Check("primary_action", False, "action failed")])
 
     monkeypatch.setattr(
@@ -905,6 +943,434 @@ def _turn(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
             for i, (name, args) in enumerate(tools)
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_kernel_owned_max_builds_and_proves_without_model_check_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = {
+        "src/components/product/ProductApp.tsx": "export default function App(){return <main/>}",
+        "src/components/product/Nav.tsx": "export const Nav=()=>null",
+        "src/app/globals.css": "body{margin:0}",
+    }
+    provider_calls = 0
+    advertised: list[set[str]] = []
+
+    async def fake_call(
+        _client: Any, _url: str, _convo: Any, _system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        nonlocal provider_calls
+        provider_calls += 1
+        advertised.append({tool["name"] for tool in kwargs["tools"]})
+        return _turn(("write_files", {"files": files}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    executed: list[str] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        if action.name == "write_files":
+            return {
+                "ok": True,
+                "files": dict(action.args["files"]),
+                "changed_paths": sorted(action.args["files"]),
+            }
+        return {"ok": True, "detail": "green"}
+
+    def complete(written: Any, evidence: Any) -> str | None:
+        if "src/components/product/ProductApp.tsx" not in written:
+            return "[source:SOURCE_CONTRACT] product entry missing"
+        if not evidence.get("runtime_check_after_write"):
+            return "[proof:RUNTIME_CHECK] missing"
+        if not evidence.get("see_after_write"):
+            return "[proof:SIGNED_PREVIEW] missing"
+        return None
+
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt(
+            "MAX PLATFORM CORE", stable_max_loop=True, kernel_owned_loop=True
+        ),
+        task="canonical spec",
+        execute=execute,
+        completion_check=complete,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+    )
+
+    assert result.done is True
+    assert result.files == files
+    assert provider_calls == 1
+    assert executed == ["write_files", "build", "runtime_check", "see"]
+    assert advertised == [{"write_files"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("infra_tool", ["build", "runtime_check", "see"])
+async def test_kernel_proof_infra_resumes_without_repeating_source_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    infra_tool: str,
+) -> None:
+    files = {
+        "src/components/product/ProductApp.tsx": "export default function App(){return <main/>}",
+        "src/components/product/Nav.tsx": "export const Nav=()=>null",
+        "src/app/globals.css": "body{margin:0}",
+    }
+    checkpoints: list[dict[str, Any]] = []
+    provider_calls = 0
+    physical_writes = 0
+    write_calls = 0
+    fail_once = True
+
+    async def save_checkpoint(value: Any) -> None:
+        checkpoints.append(json.loads(json.dumps(value)))
+
+    async def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal provider_calls
+        provider_calls += 1
+        return _turn(("write_files", {"files": files}))
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal fail_once, physical_writes, write_calls
+        if action.name == "write_files":
+            write_calls += 1
+            if not action.args.get("_resume_reconcile"):
+                physical_writes += 1
+            return {
+                "ok": True,
+                "files": dict(action.args["files"]),
+                "changed_paths": sorted(action.args["files"]),
+            }
+        if action.name == infra_tool and fail_once:
+            fail_once = False
+            if infra_tool == "runtime_check":
+                raise ConnectionError("temporary outage")
+            if infra_tool == "see":
+                return {
+                    "ok": True,
+                    "proof_unavailable": True,
+                    "detail": "signed preview temporarily unavailable",
+                }
+            return {"ok": False, "infra_dead": True, "error": "temporary outage"}
+        return {"ok": True, "detail": "green"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    first = await agent_native.run_native_build(
+        system="MAX kernel",
+        task="canonical spec",
+        execute=execute,
+        completion_check=lambda _files, _evidence: None,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+        checkpoint=save_checkpoint,
+    )
+
+    assert first.done is False
+    assert first.stop_reason == "kernel_verification_pending"
+    assert checkpoints[-1]["pending_tool_started_index"] == 0
+    assert physical_writes == 1
+
+    resumed = await agent_native.run_native_build(
+        system="changed system is ignored on resume",
+        task="canonical spec",
+        execute=execute,
+        completion_check=lambda _files, _evidence: None,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+        resume_checkpoint=checkpoints[-1],
+        checkpoint=save_checkpoint,
+    )
+
+    assert resumed.done is True
+    assert resumed.stop_reason == "contract_green"
+    assert provider_calls == 1
+    assert write_calls == 2
+    assert physical_writes == 1
+    assert resumed.files == files
+
+
+@pytest.mark.asyncio
+async def test_kernel_checker_exception_resumes_without_spending_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = {
+        "src/components/product/ProductApp.tsx": "app",
+        "src/components/product/Nav.tsx": "nav",
+        "src/app/globals.css": "css",
+    }
+    provider_calls = 0
+    executed: list[str] = []
+
+    async def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal provider_calls
+        provider_calls += 1
+        return _turn(("write_files", {"files": files}))
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        if action.name == "write_files":
+            return {"ok": True, "files": dict(files), "changed_paths": sorted(files)}
+        return {"ok": True, "detail": "green"}
+
+    def broken_checker(_files: Any, _evidence: Any) -> str | None:
+        raise RuntimeError("deterministic checker unavailable")
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native.run_native_build(
+        system="MAX kernel",
+        task="canonical spec",
+        execute=execute,
+        completion_check=broken_checker,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+    )
+
+    assert result.done is False
+    assert result.stop_reason == "kernel_verification_pending"
+    assert provider_calls == 1
+    assert executed == ["write_files", "build"]
+
+
+@pytest.mark.asyncio
+async def test_kernel_owned_max_stops_after_one_red_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(
+                (
+                    "write_files",
+                    {
+                        "files": {
+                            "src/components/product/ProductApp.tsx": "first",
+                            "src/components/product/Nav.tsx": "first",
+                            "src/app/globals.css": "first",
+                        }
+                    },
+                )
+            ),
+            _turn(
+                (
+                    "write_files",
+                    {
+                        "files": {
+                            "src/components/product/ProductApp.tsx": "repair",
+                            "src/components/product/Nav.tsx": "repair",
+                        }
+                    },
+                )
+            ),
+        ]
+    )
+    provider_calls = 0
+
+    async def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal provider_calls
+        provider_calls += 1
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    build_calls = 0
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal build_calls
+        if action.name == "write_files":
+            return {
+                "ok": True,
+                "files": dict(action.args["files"]),
+                "changed_paths": sorted(action.args["files"]),
+            }
+        if action.name == "build":
+            build_calls += 1
+            return {"ok": False, "detail": f"TS2322 red attempt {build_calls}"}
+        raise AssertionError(f"unexpected proof after red build: {action.name}")
+
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="canonical spec",
+        execute=execute,
+        completion_check=lambda _files, _evidence: None,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+    )
+
+    assert result.done is False
+    assert result.stop_reason == "kernel_repair_exhausted"
+    assert provider_calls == 2
+    assert build_calls == 2
+    assert result.files["src/components/product/ProductApp.tsx"] == "repair"
+
+
+@pytest.mark.asyncio
+async def test_kernel_source_gap_gets_exactly_one_multi_file_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initial = {
+        "src/components/product/ProductApp.tsx": "first",
+        "src/components/product/Nav.tsx": "nav",
+        "src/app/globals.css": "css",
+    }
+    repair = {"src/components/product/ProductApp.tsx": "repaired"}
+    turns = iter(
+        [
+            _turn(("write_files", {"files": initial})),
+            _turn(("write_files", {"files": repair})),
+        ]
+    )
+    provider_calls = 0
+    executed: list[str] = []
+
+    async def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal provider_calls
+        provider_calls += 1
+        return next(turns)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        if action.name == "write_files":
+            return {
+                "ok": True,
+                "files": dict(action.args["files"]),
+                "changed_paths": sorted(action.args["files"]),
+            }
+        return {"ok": True, "detail": "green"}
+
+    def complete(files: Any, evidence: Any) -> str | None:
+        if files.get("src/components/product/ProductApp.tsx") != "repaired":
+            return (
+                "[source:SOURCE_CONTRACT] Repair all source debt.\n"
+                "[plan:BUILD_PLAN] Add the missing planned screen."
+            )
+        if not evidence.get("runtime_check_after_write"):
+            return "[proof:RUNTIME_CHECK] missing"
+        if not evidence.get("see_after_write"):
+            return "[proof:SIGNED_PREVIEW] missing"
+        return None
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native.run_native_build(
+        system="MAX kernel",
+        task="canonical spec",
+        execute=execute,
+        completion_check=complete,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+    )
+
+    assert result.done is True
+    assert provider_calls == 2
+    assert executed == [
+        "write_files",
+        "build",
+        "write_files",
+        "build",
+        "runtime_check",
+        "see",
+    ]
+    assert result.files == {**initial, **repair}
+
+
+@pytest.mark.asyncio
+async def test_kernel_honours_four_provider_turn_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_calls = 0
+
+    async def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "still thinking"}],
+        }
+
+    async def execute(action: Any) -> dict[str, Any]:
+        assert action.name == "build"
+        return {"ok": False, "detail": "no product source"}
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native.run_native_build(
+        system="MAX kernel",
+        task="canonical spec",
+        execute=execute,
+        completion_check=lambda _files, _evidence: "source missing",
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+    )
+
+    assert result.done is False
+    assert result.stop_reason == "max_steps_red"
+    assert provider_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_kernel_owned_max_rejects_thin_initial_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    turns = iter(
+        [
+            _turn(
+                (
+                    "write_files",
+                    {
+                        "files": {
+                            "src/components/product/ProductApp.tsx": "one giant component",
+                            "src/components/Unused.tsx": "irrelevant",
+                            "public/product/unused.svg": "<svg/>",
+                        }
+                    },
+                )
+            ),
+            _turn(
+                (
+                    "write_files",
+                    {
+                        "files": {
+                            "src/components/product/ProductApp.tsx": "app",
+                            "src/components/product/Nav.tsx": "nav",
+                            "src/app/globals.css": "css",
+                        }
+                    },
+                )
+            ),
+        ]
+    )
+
+    async def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    executed: list[str] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append(action.name)
+        if action.name == "write_files":
+            return {
+                "ok": True,
+                "files": dict(action.args["files"]),
+                "changed_paths": sorted(action.args["files"]),
+            }
+        return {"ok": True, "detail": "green"}
+
+    result = await agent_native.run_native_build(
+        system="MAX kernel",
+        task="canonical spec",
+        execute=execute,
+        completion_check=lambda _files, _evidence: None,
+        stable_max_loop=True,
+        kernel_owned_loop=True,
+        max_steps=4,
+    )
+
+    assert result.done is True
+    assert executed == ["write_files", "build", "runtime_check", "see"]
 
 
 @pytest.mark.asyncio

@@ -368,7 +368,7 @@ async def get_deploy(project_id: UUID) -> dict[str, Any]:
     """GET /internal/projects/<uuid>/deploy — last-known deploy record.
 
     Returns the orchestrator's `DeployResponse` shape:
-    `{project_id, phase, prod_url, image_tag, started_at, finished_at, error}`.
+    `{project_id, commit_sha, phase, prod_url, image_tag, started_at, finished_at, error}`.
     `phase` is one of `queued | building | swapping | done | failed`. For a
     project that has never been deployed the orchestrator returns
     `phase=queued` with no prod_url.
@@ -537,12 +537,14 @@ async def agent_build(
     *,
     code_intelligence: bool = False,
     security_scan: bool = False,
+    dependency_doctor: bool = True,
 ) -> dict[str, Any]:
     """Run typecheck and, when canaried, bounded read-only code intelligence."""
     # Dependency doctor may update these files before typecheck. Persist the
     # paths before dispatch and make the bounded mutation non-interruptible so
     # cancellation cleanup never races a still-running worker thread.
-    await track_mutation_paths(("package.json", "pnpm-lock.yaml"))
+    if dependency_doctor:
+        await track_mutation_paths(("package.json", "pnpm-lock.yaml"))
     request_task = asyncio.create_task(
         _request(
             "POST",
@@ -551,6 +553,7 @@ async def agent_build(
                 "slug": slug,
                 **({"code_intelligence": "true"} if code_intelligence else {}),
                 **({"security_scan": "true"} if security_scan else {}),
+                **({"dependency_doctor": "false"} if not dependency_doctor else {}),
             },
             timeout=240.0,
         )

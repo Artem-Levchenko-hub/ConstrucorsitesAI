@@ -28,10 +28,17 @@ ENVELOPE_KEY = "execution_envelope"
 LEASE_SECONDS = 90
 WATCHDOG_SECONDS = 20
 MAX_EXTERNAL_OUTAGE_SECONDS = 24 * 60 * 60
+MAX_INTERNAL_CONTINUATION_ATTEMPTS = 3
+MAX_INTERNAL_CONTINUATION_SECONDS = 30 * 60
 NATIVE_CHECKPOINT_TTL_SECONDS = 48 * 60 * 60
 ENQUEUE_RESERVATION_SECONDS = 120
 MAX_REPEATED_SEGMENT_OCCURRENCES = 3
 _TERMINAL_INTERNAL_REASONS = {
+    "kernel_repair_exhausted": (
+        "Одна предметная ремонтная итерация не закрыла объективные ошибки. "
+        "Автоповтор остановлен, чтобы не переписывать приложение по кругу; "
+        "точный список ошибок сохранён для следующего запуска."
+    ),
     "max_release_proof_red": (
         "Финальная подписанная проверка не прошла. Непроверенная версия не опубликована; "
         "рабочая версия восстановлена, а точная причина сохранена в истории сборки."
@@ -51,6 +58,10 @@ _TERMINAL_INTERNAL_REASONS = {
 
 def _native_checkpoint_key(run_id: UUID | str) -> str:
     return f"omnia:generation:native-checkpoint:{run_id}"
+
+
+def _max_runtime_checkpoint_key(run_id: UUID | str) -> str:
+    return f"omnia:generation:max-runtime-checkpoint:{run_id}"
 
 
 async def save_native_checkpoint(
@@ -83,6 +94,39 @@ async def load_native_checkpoint(run_id: UUID | str) -> dict[str, object] | None
 
 async def clear_native_checkpoint(run_id: UUID | str) -> None:
     await get_redis().delete(_native_checkpoint_key(run_id))
+
+
+async def save_max_runtime_checkpoint(
+    run_id: UUID | str,
+    checkpoint: Mapping[str, str],
+) -> None:
+    """Persist exact pre-run MAX product bytes for every continuation slice."""
+
+    await get_redis().set(
+        _max_runtime_checkpoint_key(run_id),
+        json.dumps(dict(checkpoint), ensure_ascii=False, separators=(",", ":")),
+        ex=NATIVE_CHECKPOINT_TTL_SECONDS,
+    )
+
+
+async def load_max_runtime_checkpoint(run_id: UUID | str) -> dict[str, str] | None:
+    raw = await get_redis().get(_max_runtime_checkpoint_key(run_id))
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or any(
+        not isinstance(path, str) or not isinstance(content, str)
+        for path, content in value.items()
+    ):
+        return None
+    return value
+
+
+async def clear_max_runtime_checkpoint(run_id: UUID | str) -> None:
+    await get_redis().delete(_max_runtime_checkpoint_key(run_id))
 
 
 class GenerationContinuationRequired(RuntimeError):
@@ -198,6 +242,14 @@ def classify_stop(
             "Провайдер недоступен дольше допустимого окна; повтор будет безопасен "
             "после восстановления.",
         )
+    if reason == "kernel_owner_dependency":
+        return ContinuationDecision(
+            False,
+            "external_owner_dependency",
+            0,
+            "Подключите требуемую бизнес-интеграцию или её безопасный test-mode; "
+            "код приложения не будет переписываться повторно.",
+        )
     terminal_internal_action = _TERMINAL_INTERNAL_REASONS.get(reason)
     if terminal_internal_action:
         return ContinuationDecision(
@@ -219,14 +271,27 @@ def classify_stop(
             "при неизменных файлах. Рабочая версия восстановлена; причина сохранена "
             "для точечного исправления без нового цикла.",
         )
-    # Repeated internal debt switches to slower environment rediscovery rather
-    # than becoming terminal. This bounds pressure without abandoning the run.
+    if not provider_outage and (
+        attempt >= MAX_INTERNAL_CONTINUATION_ATTEMPTS
+        or (started_at is not None and elapsed >= MAX_INTERNAL_CONTINUATION_SECONDS)
+    ):
+        return ContinuationDecision(
+            False,
+            "internal_budget_exhausted",
+            0,
+            "Автопродолжение остановлено: три восстановления или 30 минут "
+            "не дали зелёный результат. Текущее состояние и причина сохранены; "
+            "новый запуск не будет повторять этот цикл.",
+        )
+    # Bounded internal debt uses slower environment rediscovery while a safe
+    # checkpoint still has retry budget. Provider outages retain their separate
+    # 24-hour window because source mutation cannot repair them.
     delay = min(300, 5 * (2 ** min(max(attempt, 0), 6)))
     classification = (
         "provider_replay"
         if provider_outage
         else "environment_rediscovery"
-        if attempt >= 3
+        if attempt >= 2
         else "internal_repair"
     )
     return ContinuationDecision(
@@ -572,15 +637,18 @@ __all__ = [
     "claim_run",
     "classify_stop",
     "clear_enqueue_reservation",
+    "clear_max_runtime_checkpoint",
     "clear_native_checkpoint",
     "enqueue_run_durably",
     "heartbeat_forever",
     "initial_continuity",
+    "load_max_runtime_checkpoint",
     "load_native_checkpoint",
     "reclaimable_run_ids",
     "release_lease",
     "reserve_enqueue",
     "run_watchdog_forever",
+    "save_max_runtime_checkpoint",
     "save_native_checkpoint",
     "schedule_continuation",
     "store_execution_envelope",

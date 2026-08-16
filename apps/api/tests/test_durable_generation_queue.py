@@ -44,9 +44,7 @@ async def test_repeated_watchdog_enqueue_reservation_only_queues_once(
     reservations = iter(["epoch-1", None])
     queued: list[tuple[object, ...]] = []
 
-    async def reserve(
-        _run_id: object, *, delay_seconds: int = 0
-    ) -> str | None:
+    async def reserve(_run_id: object, *, delay_seconds: int = 0) -> str | None:
         assert delay_seconds == 0
         return next(reservations)
 
@@ -101,6 +99,73 @@ def test_predeploy_duplicate_job_without_token_is_harmless(
     generation.run_generation_job(str(uuid4()))
 
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_worker_rehydrates_and_forwards_the_exact_product_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    ids = {name: uuid4() for name in ("project", "assistant", "user", "user_message")}
+    product_spec = {
+        "purpose": "Запись на услугу",
+        "audience": "Клиенты салона",
+        "screens": ["Услуги", "Запись", "Профиль"],
+        "primary_action": "Записаться",
+        "primary_action_kind": "managed_write",
+        "capabilities": ["Расписание"],
+        "data": ["Услуги", "Записи"],
+        "history": True,
+        "integrations": ["MAX Bridge"],
+        "style": "Чистый",
+        "acceptance": ["Запись создаётся", "Запись восстанавливается"],
+    }
+    envelope = {
+        "project_id": str(ids["project"]),
+        "assistant_message_id": str(ids["assistant"]),
+        "user_id": str(ids["user"]),
+        "user_message_id": str(ids["user_message"]),
+        "current_snapshot_id": None,
+        "prompt_text": "canonical prompt",
+        "model_id": "topmix-v1",
+        "force_model": None,
+        "is_free": False,
+        "max_demo_reserved": False,
+        "orchestrate": True,
+        "selected_elements": None,
+        "product_spec": product_spec,
+    }
+    captured: dict[str, Any] = {}
+
+    async def claim(*_args: object) -> dict[str, object]:
+        return envelope
+
+    async def heartbeat(*_args: object) -> None:
+        await asyncio.Future()
+
+    async def process(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    async def tracked(work: Any, **_kwargs: object) -> None:
+        await work
+
+    async def noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(generation, "claim_run", claim)
+    monkeypatch.setattr(generation, "heartbeat_forever", heartbeat)
+    monkeypatch.setattr(generation, "release_lease", noop)
+    monkeypatch.setattr(generation, "dispose_redis", noop)
+    monkeypatch.setattr(generation, "dispose_engine", noop)
+    monkeypatch.setattr(messages, "_process_prompt", process)
+    monkeypatch.setattr(messages, "_run_tracked_prompt", tracked)
+
+    await generation._run(run_id, "owner", "enqueue-token")
+
+    forwarded = captured["product_spec"]
+    assert forwarded.model_dump(mode="json") == product_spec
+    assert captured["project_id"] == ids["project"]
+    assert captured["run_id"] == run_id
 
 
 def test_worker_shutdown_reaps_and_kills_uncooperative_children() -> None:
@@ -221,19 +286,13 @@ async def test_continuation_never_finalizes_or_clears_checkpoint(
             return Context()
 
     async def work() -> None:
-        raise generation_continuity.GenerationContinuationRequired(
-            "no_ai_write", delay_seconds=7
-        )
+        raise generation_continuity.GenerationContinuationRequired("no_ai_write", delay_seconds=7)
 
     async def wait_cancel(_run_id: object) -> None:
         await asyncio.Future()
 
-    async def schedule(
-        _run_id: object, _reason: str
-    ) -> generation_continuity.ContinuationDecision:
-        return generation_continuity.ContinuationDecision(
-            True, "internal_repair", 5, "continue"
-        )
+    async def schedule(_run_id: object, _reason: str) -> generation_continuity.ContinuationDecision:
+        return generation_continuity.ContinuationDecision(True, "internal_repair", 5, "continue")
 
     async def enqueue(target: object, *, delay_seconds: int = 0) -> bool:
         enqueued.append((target, delay_seconds))

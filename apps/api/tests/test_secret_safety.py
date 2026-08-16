@@ -11,6 +11,7 @@ from omnia_api.services.secret_safety import (
     max_model_write_rejection,
     prepare_safe_max_prompt,
     redact_provider_secrets,
+    structured_provider_secret_paths,
 )
 
 
@@ -33,6 +34,20 @@ def test_secret_paste_keeps_ai_native_max_request_buildable() -> None:
     assert "[CREDENTIAL REDACTED]" in prepared.chat_text
     assert "requestOmniaAI" in prepared.model_text
     assert "не имитируй AI" in prepared.model_text
+
+
+def test_structured_product_spec_reports_paths_without_returning_secrets() -> None:
+    secret = "sk-" + "q" * 24
+    paths = structured_provider_secret_paths(
+        {
+            "purpose": "AI помощник",
+            "integrations": ["Календарь", secret],
+            "acceptance": ["Работает без внешних ключей"],
+        }
+    )
+
+    assert paths == ("product_spec.integrations[1]",)
+    assert secret not in repr(paths)
 
 
 def test_max_prompt_handler_no_longer_redirects_secret_pastes_to_dead_end() -> None:

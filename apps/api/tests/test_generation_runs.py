@@ -21,6 +21,7 @@ from omnia_api.services.generation_runs import (
     _acquire_generation_lock,
     finalize_generation_run,
     latest_failed_agent_state,
+    prompt_hash,
     reconcile_completed_build_runs,
     recover_interrupted_generation_runs,
     reserve_generation_run,
@@ -29,6 +30,17 @@ from omnia_api.services.generation_runs import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_product_spec_is_part_of_idempotency_hash() -> None:
+    prompt = "Собери магазин"
+    first = {"purpose": "Каталог", "screens": ["Главная", "Корзина"]}
+    same_reordered = {"screens": ["Главная", "Корзина"], "purpose": "Каталог"}
+    changed = {"purpose": "Каталог", "screens": ["Главная", "Избранное"]}
+
+    assert prompt_hash(prompt, first) == prompt_hash(prompt, same_reordered)
+    assert prompt_hash(prompt, first) != prompt_hash(prompt, changed)
+    assert prompt_hash(prompt) != prompt_hash(prompt, first)
 
 
 class _LockResult:
@@ -139,6 +151,35 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
         "active_message_id": None,
         "active_status": "pending",
     }
+
+
+async def test_same_key_rejects_changed_product_spec(db_session: AsyncSession) -> None:
+    owner, project = await _owner_and_project(db_session)
+    first_spec = {"purpose": "Каталог", "screens": ["Главная", "Корзина"]}
+
+    run, replayed = await reserve_generation_run(
+        db_session,
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="product-spec-11111111",
+        prompt="Собери приложение",
+        product_spec=first_spec,
+    )
+    await db_session.commit()
+    assert replayed is False
+
+    with pytest.raises(ApiError) as reused:
+        await reserve_generation_run(
+            db_session,
+            project_id=project.id,
+            user_id=owner.id,
+            idempotency_key="product-spec-11111111",
+            prompt="Собери приложение",
+            product_spec={"purpose": "Каталог", "screens": ["Главная", "Избранное"]},
+        )
+
+    assert reused.value.code == "conflict"
+    assert reused.value.details == {"run_id": str(run.id)}
 
 
 async def test_primary_generation_failure_is_not_overwritten(
@@ -448,9 +489,7 @@ async def test_tracked_prompt_deadline_always_terminalizes(
     async def _never_cancel(_run_id: uuid.UUID) -> None:
         await asyncio.Future()
 
-    async def _status(
-        _run_id: uuid.UUID, new_status: str, *, error: str | None = None
-    ) -> None:
+    async def _status(_run_id: uuid.UUID, new_status: str, *, error: str | None = None) -> None:
         statuses.append((new_status, error))
 
     async def _error(_project_id: uuid.UUID, _message_id: uuid.UUID, err: str) -> None:

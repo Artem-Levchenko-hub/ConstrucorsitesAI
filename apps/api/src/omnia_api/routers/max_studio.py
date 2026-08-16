@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from collections.abc import Mapping
 from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
@@ -35,7 +35,11 @@ from omnia_api.schemas.max_studio import (
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.billing_accounts import resolve_billing_account
-from omnia_api.services.deploy_attestation import ensure_current_release_proof
+from omnia_api.services.deploy_attestation import (
+    DeployProof,
+    ensure_current_release_proof,
+    resolve_deploy_proof,
+)
 from omnia_api.services.deployment_state import (
     current_snapshot_id_fresh,
     deployment_is_active,
@@ -141,6 +145,26 @@ async def _refresh_release_proof(session: SessionDep, project: Project) -> None:
             project_id=str(project.id),
             exc_info=True,
         )
+
+
+def _current_snapshot_is_published(
+    deployment: Mapping[str, object],
+    snapshot: Snapshot | None,
+    proof: DeployProof,
+) -> bool:
+    """Accept a production URL only when it serves the proven current tree."""
+
+    if snapshot is None:
+        return False
+    deployed_sha = deployment.get("commit_sha")
+    return bool(
+        deployment.get("phase") == "done"
+        and deployment.get("prod_url")
+        and isinstance(deployed_sha, str)
+        and deployed_sha == snapshot.commit_sha
+        and proof.passed
+        and proof.commit_sha == snapshot.commit_sha
+    )
 
 
 def _preview_session_public(project: Project, payload: object) -> MaxPreviewSessionPublic:
@@ -523,25 +547,24 @@ async def get_max_readiness(
         deployment = await orchestrator_client.get_deploy(project.id)
     except Exception:
         deployment = {}
-    deployed_at: datetime | None = None
-    finished_at = deployment.get("finished_at")
-    if isinstance(finished_at, str):
-        try:
-            deployed_at = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
-        except ValueError:
-            deployed_at = None
     current_snapshot = (
         await session.get(Snapshot, project.current_snapshot_id)
         if project.current_snapshot_id
         else None
     )
-    published = bool(
-        deployment.get("phase") == "done"
-        and deployment.get("prod_url")
-        and deployed_at
-        and current_snapshot
-        and deployed_at >= current_snapshot.created_at
-    )
+    proof = DeployProof(False, "snapshot_missing")
+    if current_snapshot is not None:
+        try:
+            proof = await resolve_deploy_proof(session, project, current_snapshot.commit_sha)
+        except Exception:
+            log.warning(
+                "max.readiness_release_proof_unavailable",
+                project_id=str(project.id),
+                commit_sha=current_snapshot.commit_sha,
+                exc_info=True,
+            )
+            proof = DeployProof(False, "proof_unavailable", commit_sha=current_snapshot.commit_sha)
+    published = _current_snapshot_is_published(deployment, current_snapshot, proof)
     configured = bool(
         config
         and config.app_name

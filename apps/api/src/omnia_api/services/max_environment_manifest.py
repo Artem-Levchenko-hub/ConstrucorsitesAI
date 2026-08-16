@@ -113,7 +113,7 @@ def _public_exports(source: str) -> list[str]:
     return exports
 
 
-def build_max_environment_manifest() -> dict[str, Any]:
+def build_max_environment_manifest(*, profile: str = "full") -> dict[str, Any]:
     package = json.loads((_TEMPLATE / "package.json").read_text(encoding="utf-8"))
     managed = render_max_managed_files(
         default_max_project_config("Manifest"),
@@ -186,21 +186,57 @@ def build_max_environment_manifest() -> dict[str, Any]:
         ],
         "skill_index": index,
     }
+    if profile == "agent":
+        # Skill routing is compiled separately from ProductSpec. Repeating the
+        # whole catalog in every provider turn both wastes context and invites
+        # the model to start a second, contradictory selection ceremony.
+        manifest.pop("skill_index", None)
+        manifest["proof_commands"] = [
+            "Omnia automatically runs the compiler after the atomic source revision",
+            "Omnia automatically checks the live route",
+            "Omnia automatically runs the signed objective functional gate",
+        ]
+        manifest["constraints"] = [
+            item
+            for item in manifest["constraints"]
+            if "continuation milestones" not in item
+            and "Read relevant locked contracts" not in item
+            and "Start with a usable vertical slice" not in item
+        ]
+        manifest["constraints"].append(
+            "Submit one coherent multi-file product revision; do not call planning, build, "
+            "runtime, screenshot or proof tools because Omnia owns those transitions."
+        )
+    elif profile != "full":
+        raise ValueError("profile must be 'full' or 'agent'")
     rendered = json.dumps(manifest, ensure_ascii=False, sort_keys=True)
     if _SECRET_RE.search(rendered):
         raise RuntimeError("MAX environment manifest unexpectedly contains secret-shaped data")
     return manifest
 
 
-def manifest_prompt_block() -> str:
-    manifest = json.dumps(build_max_environment_manifest(), ensure_ascii=False, indent=2)
+def manifest_prompt_block(*, profile: str = "full") -> str:
+    manifest = json.dumps(
+        build_max_environment_manifest(profile=profile), ensure_ascii=False, indent=2
+    )
+    if profile == "agent":
+        lead = (
+            "This immutable contract has already been compiled into the ProductSpec and plan. "
+            "Use its installed dependencies and managed signatures while writing the single "
+            "coherent product revision. Do not start another plan or verification ceremony."
+        )
+    else:
+        lead = (
+            "Study this before plan_task and before code. Do not guess dependencies or managed "
+            "APIs. When compile/import/runtime/API evidence is red, reread the relevant exact "
+            "contract/log, adapt with installed primitives and continue; internal platform "
+            "mismatch is not a reason to stop. For a complex app, deliver one usable vertical "
+            "slice first, then split screens, components, hooks and product services across "
+            "continuation milestones."
+        )
     return (
         "\n\nOMNIA MAX ENVIRONMENT MANIFEST (server-owned immutable preflight, source-derived):\n"
-        "Study this before plan_task and before code. Do not guess dependencies or managed APIs. "
-        "When compile/import/runtime/API evidence is red, reread the relevant exact contract/log, "
-        "adapt with installed primitives and continue; internal platform mismatch is not a reason "
-        "to stop. For a complex app, deliver one usable vertical slice first, then split screens, "
-        "components, hooks and product services across continuation milestones.\n"
+        f"{lead}\n"
         f"```json\n{manifest}\n```"
     )
 

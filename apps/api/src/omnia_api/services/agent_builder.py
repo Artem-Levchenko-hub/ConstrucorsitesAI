@@ -71,6 +71,7 @@ _KNOWN_ACTIONS = frozenset(
         "grep",
         "docs",
         "write_file",
+        "write_files",
         "edit_file",
         "build",
         "read_logs",
@@ -1428,6 +1429,7 @@ def make_container_executor(
     slug: str,
     emit: Any = None,
     code_intelligence: bool = False,
+    dependency_doctor: bool = True,
 ) -> Executor:
     """Bind the abstract actions to the live dev container via orchestrator_client.
 
@@ -1583,6 +1585,62 @@ def make_container_executor(
                     "detail": f"wrote {action.path} ({len(content)} bytes)",
                 }
 
+            if action.name == "write_files":
+                raw_files = action.args.get("files")
+                if not isinstance(raw_files, dict) or not raw_files:
+                    return {"ok": False, "error": "write_files needs a non-empty files object"}
+                if len(raw_files) > 12:
+                    return {"ok": False, "error": "write_files accepts at most 12 files"}
+                batch_files: dict[str, str] = {}
+                for raw_path, raw_content in raw_files.items():
+                    if not isinstance(raw_path, str) or not raw_path:
+                        return {"ok": False, "error": "write_files paths must be non-empty strings"}
+                    if not isinstance(raw_content, str) or not raw_content:
+                        return {
+                            "ok": False,
+                            "error": (
+                                f"write_files requires full non-empty content for {raw_path}; "
+                                "deletion is not supported"
+                            ),
+                        }
+                    content = _sanitize_nested_layout(raw_path, raw_content)
+                    content = _sanitize_css_imports(raw_path, content)
+                    batch_files[raw_path] = content
+                if sum(len(content) for content in batch_files.values()) > 120_000:
+                    return {
+                        "ok": False,
+                        "error": "write_files total content exceeds the 120000 character limit",
+                    }
+                if action.args.get("_resume_reconcile"):
+                    current_contents = await asyncio.gather(
+                        *(
+                            orchestrator_client.agent_read_file(project_id, slug, path)
+                            for path in batch_files
+                        )
+                    )
+                    if all(
+                        existing == batch_files[path]
+                        for path, existing in zip(batch_files, current_contents, strict=True)
+                    ):
+                        return {
+                            "ok": True,
+                            "files": batch_files,
+                            "changed_paths": sorted(batch_files),
+                            "detail": (
+                                f"reconciled prior atomic write of {len(batch_files)} files"
+                            ),
+                        }
+                await orchestrator_client.hot_reload_exact(project_id, slug, batch_files)
+                return {
+                    "ok": True,
+                    "files": batch_files,
+                    "changed_paths": sorted(batch_files),
+                    "detail": (
+                        f"atomically wrote {len(batch_files)} files "
+                        f"({sum(len(content) for content in batch_files.values())} characters)"
+                    ),
+                }
+
             if action.name == "edit_file":
                 search = action.args.get("search")
                 replace = action.args.get("replace")
@@ -1617,14 +1675,22 @@ def make_container_executor(
                 return {"ok": True, "content": new_content, "detail": f"patched {action.path}"}
 
             if action.name == "build":
+                build_options: dict[str, bool] = (
+                    {} if dependency_doctor else {"dependency_doctor": False}
+                )
                 res = (
                     await orchestrator_client.agent_build(
                         project_id,
                         slug,
                         code_intelligence=True,
+                        **build_options,
                     )
                     if code_intelligence
-                    else await orchestrator_client.agent_build(project_id, slug)
+                    else await orchestrator_client.agent_build(
+                        project_id,
+                        slug,
+                        **build_options,
+                    )
                 )
                 ok = bool(res.get("ok"))
                 detail = res.get("detail") or res.get("error") or "build clean"

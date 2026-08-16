@@ -15,10 +15,10 @@ It is persisted inside ``projects.discovery_spec`` (JSONB) under the
 ``build_plan`` key, so a follow-up prompt / edit reads it back via
 :func:`read_plan` and is held to the same plan.
 
-**Fail-soft (R-10).** A planner gateway/parse error, mock mode, or the
-``use_build_plan`` flag being off all yield an EMPTY :class:`BuildPlan`, and an
-empty plan means EXACTLY today's behaviour: no checklist injected, no coverage
-gate run. This feature can never make a build worse than it is today.
+Ordinary web builds keep the fail-soft model planner. Fresh ProductSpec MAX
+builds instead use :func:`build_plan_from_max_product_spec`: a pure, bounded,
+non-empty plan with no extra model turn. This keeps the strict MAX path from
+silently degrading to an empty checklist.
 
 The single public surface mirrors the project's other services: a trivial
 ``await plan_build(...) -> BuildPlan`` hides the prompt + JSON contract; pure
@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +48,128 @@ _MAX_ENTITIES = 8
 _MAX_CAPABILITIES = 10
 
 _VALID_ROLES = ("guest", "user", "admin")
+
+
+def _max_product_spec_mapping(spec: Mapping[str, Any] | object) -> Mapping[str, Any]:
+    """Return a transport-safe view of a MAX ProductSpec without importing it.
+
+    The MAX schema is intentionally owned by the transport layer and can evolve
+    independently.  This small duck-typed boundary keeps the deterministic
+    planner usable for both a Pydantic model and a persisted JSON mapping.
+    """
+    if isinstance(spec, Mapping):
+        return spec
+    model_dump = getattr(spec, "model_dump", None)
+    if callable(model_dump):
+        try:
+            value = model_dump(mode="json")
+        except (TypeError, ValueError):
+            value = model_dump()
+        if isinstance(value, Mapping):
+            return value
+    as_dict = getattr(spec, "dict", None)
+    if callable(as_dict):
+        try:
+            value = as_dict()
+        except (TypeError, ValueError):
+            value = None
+        if isinstance(value, Mapping):
+            return value
+    return {}
+
+
+def _max_spec_values(value: Any, *, limit: int, item_limit: int = 200) -> tuple[str, ...]:
+    """Clean a scalar/list ProductSpec field preserving its declared order."""
+    if isinstance(value, str):
+        raw: Any = (value,)
+    elif isinstance(value, (list, tuple)):
+        raw = value
+    else:
+        raw = ()
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        clean = _clean_str(item, limit=item_limit)
+        key = clean.casefold()
+        if not clean or key in seen:
+            continue
+        seen.add(key)
+        result.append(clean)
+        if len(result) >= limit:
+            break
+    return tuple(result)
+
+
+def build_plan_from_max_product_spec(spec: Mapping[str, Any] | object) -> BuildPlan:
+    """Make a bounded, non-empty MAX :class:`BuildPlan` without a model call.
+
+    MAX has a single browser route, therefore the generated ``route`` values
+    are stable internal-view markers rather than invented API endpoints.  The
+    primary action is UI-only (``path=""``), which deliberately keeps it out of
+    the ordinary HTTP coverage probe while allowing the signed MAX browser gate
+    to exercise its ``data-omnia-capability`` marker.
+
+    Missing/legacy values receive deterministic product-neutral fallbacks.  The
+    function is pure: equal ProductSpec values always serialize to equal plans.
+    """
+    data = _max_product_spec_mapping(spec)
+    purpose = _clean_str(data.get("purpose"), limit=400) or "MAX Mini App"
+    audience = _clean_str(data.get("audience"), limit=200) or "пользователи MAX"
+    screen_names = _max_spec_values(data.get("screens"), limit=_MAX_SCREENS, item_limit=80)
+    if not screen_names:
+        screen_names = ("Главный экран",)
+    entity_names = _max_spec_values(data.get("data"), limit=_MAX_ENTITIES, item_limit=80)
+    if not entity_names:
+        entity_names = ("Пользовательские данные",)
+    action = _clean_str(data.get("primary_action"), limit=200) or "выполнить основное действие"
+    action_kind = _clean_str(data.get("primary_action_kind"), limit=32) or "managed_write"
+    acceptance = _max_spec_values(data.get("acceptance"), limit=12, item_limit=200)
+    if not acceptance:
+        acceptance = (f"Пользователь может {action}.",)
+
+    screens = tuple(
+        Screen(
+            route=f"/view-{index}",
+            name=name,
+            purpose=f"Экран для аудитории: {audience}",
+            primary_entity=entity_names[min(index - 1, len(entity_names) - 1)],
+        )
+        for index, name in enumerate(screen_names, start=1)
+    )
+    entities = tuple(
+        Entity(name=name, fields=("id", "created_at"), owner_scoped=True) for name in entity_names
+    )
+    requested_capabilities = _max_spec_values(data.get("capabilities"), limit=8, item_limit=120)
+    capabilities = (
+        Capability(
+            id="primary_action",
+            actor_role="user",
+            action=action,
+            method=("GET" if action_kind in {"local_navigation", "catalog_read"} else "POST"),
+            path="",
+            expect="2xx",
+            must_have=True,
+        ),
+        *(
+            Capability(
+                id=f"feature_{index}",
+                actor_role="user",
+                action=label,
+                method="POST",
+                path="",
+                expect="2xx",
+                must_have=True,
+            )
+            for index, label in enumerate(requested_capabilities, start=1)
+        ),
+    )
+    return BuildPlan(
+        summary=f"{purpose} — для {audience}",
+        screens=screens,
+        entities=entities,
+        capabilities=capabilities,
+        acceptance=acceptance,
+    )
 
 
 def _clean_str(v: Any, *, limit: int = 200) -> str:
@@ -297,9 +420,27 @@ class BuildPlan:
                 "ожидаемый статус своему актору; это и есть критерий «готово»):"
             )
             for c in self.capabilities:
+                action_text = c.action or c.id
+                action_literal = json.dumps(action_text, ensure_ascii=False)
                 where = f" → {c.method} {c.path}" if c.path else " (через UI)"
                 star = "" if c.must_have else " (доп.)"
-                marker = f' [маркер data-omnia-capability="{c.id}"]' if max_runtime else ""
+                marker = (
+                    f' [маркеры data-omnia-capability="{c.id}" '
+                    f"data-omnia-capability-label={action_literal}; один видимый доступный "
+                    f"semantic control с accessible name по смыслу {action_literal}; "
+                    f"реализуй отдельный реальный сценарий, не общий status-toggle]"
+                    if max_runtime
+                    else ""
+                )
+                if max_runtime and c.id == "primary_action":
+                    marker = marker[:-1] + (
+                        '; data-omnia-primary-action; после реального успеха покажи '
+                        'data-omnia-action-result="primary_action" с понятным итогом и, если '
+                        "создана запись, server-generated confirmation id; для catalog-интеграции "
+                        "покажи в этом результате реальное значение из ответа catalog; "
+                        "размести CTA и его реальные поля в form или "
+                        "data-omnia-primary-flow]"
+                    )
                 lines.append(f"  - [{c.actor_role}] {c.action}{where} ⇒ {c.expect}{star}{marker}")
         if max_runtime:
             lines.append(
@@ -307,7 +448,11 @@ class BuildPlan:
                 "data-omnia-screen-nav on every main view switch; mark the main usable "
                 "CTA data-omnia-primary-action. Mark an action that writes managed user "
                 "data data-omnia-persisted-action so the signed browser gate can click it, "
-                "reload, and prove restoration. Markers are test hooks, not decoration."
+                "reload, and prove restoration. The signed gate deeply exercises only the main "
+                "action as a user: real form/selection controls, planned screen transition or "
+                "managed response with server id, visible outcome, and restored state. Other "
+                "capabilities must still be unique, reachable, enabled, labelled controls. "
+                "A generic Done/status toggle is not a business result."
             )
         elif self.blocking_capabilities():
             lines.append(
@@ -493,6 +638,7 @@ __all__ = [
     "Capability",
     "Entity",
     "Screen",
+    "build_plan_from_max_product_spec",
     "merge_plan_into_spec",
     "parse_plan",
     "plan_build",

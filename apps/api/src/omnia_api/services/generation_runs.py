@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import status
@@ -16,8 +19,21 @@ from omnia_api.models.message import Message
 ACTIVE_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
 
 
-def prompt_hash(prompt: str) -> str:
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+def prompt_hash(
+    prompt: str,
+    product_spec: Mapping[str, Any] | None = None,
+) -> str:
+    """Hash the complete logical request while preserving legacy prompt hashes."""
+
+    if product_spec is None:
+        return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    canonical = json.dumps(
+        {"prompt": prompt, "product_spec": product_spec},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 async def _acquire_generation_lock(session: AsyncSession, project_id: UUID) -> None:
@@ -52,6 +68,7 @@ async def reserve_generation_run(
     user_id: UUID,
     idempotency_key: str,
     prompt: str,
+    product_spec: Mapping[str, Any] | None = None,
 ) -> tuple[GenerationRun, bool]:
     """Atomically reserve the only active execution slot for a project.
 
@@ -71,7 +88,7 @@ async def reserve_generation_run(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.prompt_hash != prompt_hash(prompt):
+        if existing.prompt_hash != prompt_hash(prompt, product_spec):
             raise ApiError(
                 "conflict",
                 "idempotency key was already used for another prompt",
@@ -124,7 +141,7 @@ async def reserve_generation_run(
         project_id=project_id,
         user_id=user_id,
         idempotency_key=idempotency_key,
-        prompt_hash=prompt_hash(prompt),
+        prompt_hash=prompt_hash(prompt, product_spec),
         status="pending",
     )
     session.add(run)

@@ -21,7 +21,7 @@ from omnia_api.services.secret_safety import max_model_write_rejection
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 31
+MAX_MANAGED_KIT_VERSION = 32
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 MAX_PRODUCT_ENTRY_PATH = "src/components/product/ProductApp.tsx"
@@ -148,6 +148,9 @@ def render_max_managed_files(
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         "scripts/analyze-code.mjs": _template_file("scripts/analyze-code.mjs"),
+        "drizzle/0002_action_idempotency.sql": _template_file(
+            "drizzle/0002_action_idempotency.sql"
+        ),
         # MAX source uses the @/* alias throughout the protected runtime.  The
         # base container may predate the MAX template, so its generic tsconfig
         # cannot be trusted to carry that alias into a freshly overlaid starter.
@@ -461,6 +464,7 @@ MAX_MODEL_LOCKED_FILES = frozenset(
         "scripts/apply-migrations.mjs",
         "drizzle/0000_max_core.sql",
         "drizzle/0001_business_core.sql",
+        "drizzle/0002_action_idempotency.sql",
         "public/omnia-brief-narration.js",
         "public/omnia-inspector.js",
         "public/omnia-remix-cta.js",
@@ -699,6 +703,7 @@ _MAX_RESTORE_TEMPLATE_PLATFORM_FILES = frozenset(
         "tsconfig.json",
         "drizzle/0000_max_core.sql",
         "drizzle/0001_business_core.sql",
+        "drizzle/0002_action_idempotency.sql",
         "scripts/apply-migrations.mjs",
         "public/omnia-brief-narration.js",
         "public/omnia-remix-cta.js",
@@ -922,3 +927,23 @@ Do not recreate MAX-owned chrome. Keep reachable links to the managed support,
 privacy and terms routes. Prove build, signed runtime interactions, reload
 persistence, accessibility and visual quality before completion.
 """.strip()
+
+# ProductSpec/kernel runs have a fixed action surface: one atomic source write;
+# build/runtime/functional proof are state-machine transitions, not model tools.
+# Keep the same platform/API truth while replacing the legacy manual-proof tail
+# so the model never receives two contradictory owners for verification.
+MAX_KERNEL_MODEL_DIRECTIVE = MAX_MODEL_DIRECTIVE.removesuffix(
+    "Prove build, signed runtime interactions, reload\n"
+    "persistence, accessibility and visual quality before completion."
+).replace(
+    "Every chart, metric, card and status must communicate useful real or clearly\n"
+    "  labelled demo data. Do not render empty decorative charts or duplicate the same\n"
+    "  card pattern across every screen.",
+    "Every chart, metric, card and status must use canonical reference content or managed\n"
+    "  user data. When data is unavailable, render an honest empty state; never invent\n"
+    "  user records or success.",
+).rstrip() + (
+    "\nOmnia automatically runs build, signed runtime interactions, required reload "
+    "persistence and the objective functional gate after the atomic source revision. "
+    "Do not start manual proof or screenshot/design-scoring turns."
+)

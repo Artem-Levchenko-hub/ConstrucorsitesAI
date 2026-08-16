@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from omnia_api.core.db import dispose_engine
 from omnia_api.core.redis import dispose_redis
+from omnia_api.schemas.max_product_spec import MaxProductSpec
 from omnia_api.services.generation_continuity import (
     claim_run,
     heartbeat_forever,
@@ -54,6 +55,11 @@ async def _run(run_id: UUID, owner: str, enqueue_token: str) -> None:
                 selected_elements=(
                     cast(list[dict[str, Any]], envelope["selected_elements"])
                     if isinstance(envelope.get("selected_elements"), list)
+                    else None
+                ),
+                product_spec=(
+                    MaxProductSpec.model_validate(envelope["product_spec"])
+                    if isinstance(envelope.get("product_spec"), dict)
                     else None
                 ),
             ),

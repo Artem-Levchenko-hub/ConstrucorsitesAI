@@ -19,6 +19,7 @@ import json
 import posixpath
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
@@ -250,6 +251,46 @@ MAX_REQUIRED_PREWRITE_SKILLS = (
     "production-readiness",
 )
 MAX_REQUIRED_POST_SEE_SKILL = "visual-evaluation"
+# One kernel repair must see every independent blocker that can be known before
+# the browser proof.  The upper bound is still small enough for one tool result,
+# while reserving four rows for plan/design/runtime/signed-proof facts prevents a
+# noisy source tree from hiding a different layer until the repair budget is gone.
+MAX_SOURCE_COMPLETION_ISSUE_LIMIT = 44
+MAX_COMPLETION_ISSUE_LIMIT = MAX_SOURCE_COMPLETION_ISSUE_LIMIT + 4
+
+
+@dataclass(frozen=True)
+class MaxCompletionIssue:
+    """One independent MAX completion blocker, grouped by its proving source."""
+
+    source: str
+    message: str
+    code: str = "GENERAL"
+
+    def render(self) -> str:
+        return f"[{self.source}:{self.code}] {self.message}"
+
+
+def render_max_completion_issues(
+    issues: Iterable[MaxCompletionIssue], *, limit: int = MAX_COMPLETION_ISSUE_LIMIT
+) -> str | None:
+    """Render a bounded, stable correction list for model and legacy callers."""
+
+    if limit < 1:
+        return None
+    unique: list[MaxCompletionIssue] = []
+    seen: set[tuple[str, str, str]] = set()
+    for issue in issues:
+        key = (issue.source, issue.code, issue.message)
+        if not issue.message or key in seen:
+            continue
+        seen.add(key)
+        unique.append(issue)
+        if len(unique) >= limit:
+            break
+    if not unique:
+        return None
+    return "\n".join(issue.render() for issue in unique)
 
 
 def _prompt_requires_provider(prompt: str, provider_re: re.Pattern[str]) -> bool:
@@ -943,19 +984,29 @@ def normalize_max_globals_css(css: str) -> str:
     return normalized + ("\n" if css.endswith("\n") else "")
 
 
-def max_source_completion_gap(
+def collect_max_source_completion_issues(
     prompt: str,
     files: Mapping[str, str],
     *,
     require_design_spec: bool = True,
     require_native_legal_nav: bool = False,
-) -> str | None:
-    """Return a source/product gap independently of runtime proof infrastructure.
+    persistence_required: bool | None = None,
+    limit: int = MAX_COMPLETION_ISSUE_LIMIT,
+) -> tuple[str, ...]:
+    """Collect independent source/product gaps in deterministic repair order.
 
     Keeping this separate lets the caller decide whether another model segment
     could materially improve the product.  A failed screenshot/login harness is
     not a source gap and therefore never authorises another paid segment.
     """
+
+    if limit < 1:
+        return ()
+    issues: list[str] = []
+
+    def add(message: str | None) -> None:
+        if message and message not in issues and len(issues) < limit:
+            issues.append(message)
 
     # Legacy snapshots (kit <=14) still carry their product in page.tsx. They
     # are migrated behind the browser-only runtime before execution, but the
@@ -967,13 +1018,13 @@ def max_source_completion_gap(
         return (
             "MAX product has no product entry. Create "
             "src/components/product/ProductApp.tsx with the actual "
-            "requested product before done."
+            "requested product before done.",
         )
     if "max-generation-canvas" in entry:
         return (
             "MAX product still contains the retired generation canvas. Replace "
             "src/components/product/ProductApp.tsx with the actual requested product "
-            "before done."
+            "before done.",
         )
 
     if require_design_spec:
@@ -982,14 +1033,16 @@ def max_source_completion_gap(
             return (
                 "MAX product has no persistent art direction. Create "
                 f"{_MAX_DESIGN_SPEC_PATH} with the three explored directions and chosen "
-                "product-specific design/motion system before done."
+                "product-specific design/motion system before done.",
             )
         try:
             spec = json.loads(spec_raw)
         except (TypeError, json.JSONDecodeError):
-            return f"{_MAX_DESIGN_SPEC_PATH} is not valid JSON. Repair the design spec before done."
+            return (
+                f"{_MAX_DESIGN_SPEC_PATH} is not valid JSON. Repair the design spec before done.",
+            )
         if not isinstance(spec, dict):
-            return f"{_MAX_DESIGN_SPEC_PATH} must contain one JSON object."
+            return (f"{_MAX_DESIGN_SPEC_PATH} must contain one JSON object.",)
 
         required_text = (
             "product_promise",
@@ -1013,18 +1066,19 @@ def max_source_completion_gap(
         motion = spec.get("motion")
         states = {str(item).strip().casefold() for item in (spec.get("states") or [])}
         if missing_text:
-            return f"MAX design spec is incomplete: missing {', '.join(missing_text)}."
+            return (f"MAX design spec is incomplete: missing {', '.join(missing_text)}.",)
         if len(direction_names) < 3:
-            return "MAX design spec must compare three genuinely distinct art directions."
+            return ("MAX design spec must compare three genuinely distinct art directions.",)
         if not isinstance(screens, list) or not screens:
-            return "MAX design spec must define the product screens/views before implementation."
+            return ("MAX design spec must define the product screens/views before implementation.",)
         if not isinstance(visual_system, dict) or not visual_system:
-            return "MAX design spec must define a project-specific visual_system."
+            return ("MAX design spec must define a project-specific visual_system.",)
         if not isinstance(motion, list) or not motion:
-            return "MAX design spec must define purposeful interaction motion."
+            return ("MAX design spec must define purposeful interaction motion.",)
         missing_states = sorted(_REQUIRED_DESIGN_STATES.difference(states))
         if missing_states:
-            return "MAX design spec is missing product states: " + ", ".join(missing_states) + "."
+            message = "MAX design spec is missing product states: "
+            return (message + ", ".join(missing_states) + ".",)
 
     capabilities = requested_max_capabilities(prompt)
     reachable_product_files = _reachable_product_sources(files)
@@ -1044,7 +1098,7 @@ def max_source_completion_gap(
         )
         if not has_legal_marker or missing_legal_links:
             missing_legal_detail = ", ".join(missing_legal_links) or _NATIVE_LEGAL_NAV_MARKER
-            return (
+            add(
                 "Native MAX support/legal navigation is incomplete. Add reachable product links "
                 "for /support, /legal/privacy and /legal/terms "
                 f"(missing: {missing_legal_detail}), then mark "
@@ -1054,18 +1108,18 @@ def max_source_completion_gap(
         (source, _strip_js_non_code(source, keep_strings=False)) for source in product_sources
     ]
     if "data-omnia-screen-nav" not in reachable_product_source_blob:
-        return (
+        add(
             "The main view navigation is not runtime-testable. Put data-omnia-screen-nav "
             "on each real semantic main-view button/link."
         )
     if not re.search(r"data-omnia-screen\s*=", reachable_product_source_blob):
-        return "Mark each rendered product view with data-omnia-screen."
+        add("Mark each rendered product view with data-omnia-screen.")
     if "data-omnia-primary-action" not in reachable_product_source_blob:
-        return "Mark the real main CTA with data-omnia-primary-action for signed browser proof."
+        add("Mark the real main CTA with data-omnia-primary-action for signed browser proof.")
     for path, content in files.items():
         demo_rejection = max_demo_data_rejection(path, content)
         if demo_rejection:
-            return demo_rejection
+            add(demo_rejection)
     managed_config_gaps: list[str] = []
     if _managed_max_content_is_populated(files):
         for content in reachable_product_files.values():
@@ -1089,7 +1143,7 @@ def max_source_completion_gap(
             "individually; never stringify the support object."
         )
     if managed_config_gaps:
-        return "Managed MAX config contract failed: " + " ".join(managed_config_gaps)
+        add("Managed MAX config contract failed: " + " ".join(managed_config_gaps))
     unsafe_product_db_paths = [
         path
         for path, content in files.items()
@@ -1099,7 +1153,7 @@ def max_source_completion_gap(
         and ("@/lib/db" in content or "drizzle-orm" in content)
     ]
     if unsafe_product_db_paths:
-        return (
+        add(
             "Product files bypass the managed MAX persistence boundary: "
             + ", ".join(sorted(unsafe_product_db_paths))
             + ". Remove direct DB imports and use createMaxAction/getMaxActions."
@@ -1110,7 +1164,7 @@ def max_source_completion_gap(
     # substantial page component; the former file-count rule rejected exactly
     # that shape after build + runtime + visual proof had already passed.
     if len(corpus.strip()) < 900:
-        return (
+        add(
             "The product implementation is still too thin. Build the actual mobile UI, "
             "navigation/views, interactions and states from the brief before done."
         )
@@ -1120,7 +1174,7 @@ def max_source_completion_gap(
         if not any(needle in corpus for needle in needles)
     ]
     if missing:
-        return "Explicit brief capabilities are still missing: " + ", ".join(missing) + "."
+        add("Explicit brief capabilities are still missing: " + ", ".join(missing) + ".")
 
     if _AI_PROMPT_RE.search(prompt):
         managed_ai_call = any(
@@ -1129,13 +1183,13 @@ def max_source_completion_gap(
             for source, code in product_source_views
         )
         if not managed_ai_call:
-            return (
+            add(
                 "The brief requests real AI, but no product module imports and awaits "
                 "requestOmniaAI from @/lib/omnia/integration-client. Use the managed "
                 "server-side managed AI primitive; do not simulate analysis."
             )
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
-            return "A timer is still simulating AI work. Replace it with requestOmniaAI."
+            add("A timer is still simulating AI work. Replace it with requestOmniaAI.")
 
     integration_status_call = any(
         _has_managed_named_import(source, "getOmniaIntegrations", "@/lib/omnia/integration-client")
@@ -1145,7 +1199,7 @@ def max_source_completion_gap(
     yookassa_required = _prompt_requires_provider(prompt, _YOOKASSA_PROMPT_RE)
     iiko_required = _prompt_requires_provider(prompt, _IIKO_PROMPT_RE)
     if (yookassa_required or iiko_required) and not integration_status_call:
-        return (
+        add(
             "The brief names an external integration, but the UI never checks which tenant "
             "providers are connected. Import and await getOmniaIntegrations from "
             "@/lib/omnia/integration-client, then show connected and unavailable states honestly."
@@ -1162,13 +1216,13 @@ def max_source_completion_gap(
             for source, code in product_source_views
         )
         if not managed_payment_call:
-            return (
+            add(
                 "The brief requires YooKassa, but checkout never imports and awaits "
                 "createOmniaPayment from @/lib/omnia/integration-client. A local order action "
                 "must not simulate successful online payment."
             )
         if "confirmation_url" not in corpus:
-            return (
+            add(
                 "The YooKassa flow ignores confirmation_url. Use the managed payment result "
                 "to open or redirect to the real provider confirmation; do not render payment "
                 "success immediately after a local order write."
@@ -1181,7 +1235,7 @@ def max_source_completion_gap(
             for source, code in product_source_views
         )
         if not managed_iiko_catalog_call:
-            return (
+            add(
                 "The brief requires iiko, but the product never imports and awaits "
                 "getOmniaCatalog from @/lib/omnia/integration-client. Load the connected "
                 "restaurant catalog and render an honest fallback/error when it is unavailable."
@@ -1197,19 +1251,20 @@ def max_source_completion_gap(
         for source, code in product_source_views
     )
     if not managed_identity_call:
-        return (
+        add(
             "The product does not consume the verified MAX account. Import useMaxApp "
             "from @/components/MaxAppProvider and call useMaxApp() in the product UI."
         )
     source_with_strings = _strip_js_non_code(product_source_blob, keep_strings=True)
     if _GENERIC_IDENTITY_FALLBACK_RE.search(source_with_strings):
-        return (
+        add(
             "The product renders a generic identity fallback such as Пользователь/User/Guest. "
             "Use the verified MAX first_name only when present; otherwise render neutral "
             "non-personal copy instead of inventing a profile name."
         )
 
-    persistence_required = _PERSISTENCE_PROMPT_RE.search(prompt) is not None
+    if persistence_required is None:
+        persistence_required = _PERSISTENCE_PROMPT_RE.search(prompt) is not None
     managed_create_call = any(
         _has_managed_named_import(source, "createMaxAction", "@/lib/omnia/integration-client")
         and re.search(r"\bawait\s+createmaxaction\s*\(", code, re.IGNORECASE)
@@ -1219,23 +1274,23 @@ def max_source_completion_gap(
         _has_mounted_max_action_restore(source, code) for source, code in product_source_views
     )
     if persistence_required and not managed_create_call:
-        return (
+        add(
             "The brief requires user data/history, but no persisted MAX action flow exists. "
             "Import createMaxAction from @/lib/omnia/integration-client and await it "
             "from a real user action."
         )
     if persistence_required and not managed_restore_call:
-        return (
+        add(
             "The product writes user data but does not restore it after reload. Import and "
             "await getMaxActions() from a mounted useEffect loading path."
         )
     if persistence_required and "data-omnia-persisted-action" not in reachable_product_source_blob:
-        return (
+        add(
             "Mark the real managed user-data action with data-omnia-persisted-action so "
             "the signed browser gate can prove write and reload restoration."
         )
     if re.search(r"\.catch\s*\(\s*\(?.*?\)?\s*=>\s*\{?\s*\}?\s*\)", corpus):
-        return (
+        add(
             "A product request silently swallows its failure. Await the managed request, "
             "render an honest error/retry state, and show success only after it resolves."
         )
@@ -1253,9 +1308,104 @@ def max_source_completion_gap(
             if english not in corpus and russian not in corpus
         ]
         if absent_states:
-            return "Named async states are missing from the UI: " + ", ".join(absent_states) + "."
+            add("Named async states are missing from the UI: " + ", ".join(absent_states) + ".")
 
-    return None
+    return tuple(issues)
+
+
+def max_source_completion_gap(
+    prompt: str,
+    files: Mapping[str, str],
+    *,
+    require_design_spec: bool = True,
+    require_native_legal_nav: bool = False,
+    persistence_required: bool | None = None,
+) -> str | None:
+    """Legacy first-gap wrapper over :func:`collect_max_source_completion_issues`."""
+
+    issues = collect_max_source_completion_issues(
+        prompt,
+        files,
+        require_design_spec=require_design_spec,
+        require_native_legal_nav=require_native_legal_nav,
+        persistence_required=persistence_required,
+        limit=1,
+    )
+    return issues[0] if issues else None
+
+
+def collect_max_completion_issues(
+    prompt: str,
+    files: Mapping[str, str],
+    evidence: Mapping[str, int],
+    *,
+    build_plan: object | None = None,
+    design_dna: object | None = None,
+    persistence_required: bool | None = None,
+    limit: int = MAX_COMPLETION_ISSUE_LIMIT,
+) -> tuple[MaxCompletionIssue, ...]:
+    """Collect independent source, plan/design and proof blockers in stable order.
+
+    A clean build is still enforced by the native loop's fact gate. The MAX-safe
+    evidence is ``runtime_check`` plus one ``see`` using a signed preview session.
+    Generic ``probe`` and ``verify_isolation`` require a normal web login and are
+    intentionally not blocking for MAX.  Unlike the legacy string wrapper, this
+    lets one repair turn address independent layers without hiding proof gaps
+    behind the first source complaint.
+    """
+
+    if limit < 1:
+        return ()
+    trailing: list[MaxCompletionIssue] = []
+
+    def add_trailing(source: str, code: str, message: str | None) -> None:
+        if message:
+            trailing.append(MaxCompletionIssue(source, message, code))
+
+    source_issues = collect_max_source_completion_issues(
+        prompt,
+        files,
+        require_design_spec=False,
+        require_native_legal_nav=True,
+        persistence_required=persistence_required,
+        limit=MAX_SOURCE_COMPLETION_ISSUE_LIMIT,
+    )
+    if build_plan is not None:
+        plan_gap = max_build_plan_completion_gap(build_plan, files)
+        add_trailing("plan", "BUILD_PLAN", plan_gap)
+    if design_dna is not None:
+        from omnia_api.services.max_design_director import MaxDesignDNA, completion_gap
+
+        if not isinstance(design_dna, MaxDesignDNA):
+            add_trailing(
+                "plan",
+                "DESIGN_DNA",
+                "MAX Design Director state is missing or invalid; rebuild it before done.",
+            )
+        else:
+            add_trailing("plan", "DESIGN_DNA", completion_gap(design_dna, files))
+    if evidence.get("runtime_check_after_write", 0) < 1:
+        add_trailing(
+            "proof",
+            "RUNTIME_CHECK",
+            "Run runtime_check on the finished product after the last source write.",
+        )
+    if evidence.get("see_after_write", 0) < 1:
+        add_trailing(
+            "proof",
+            "SIGNED_PREVIEW",
+            "Run see once through the signed MAX preview after the last source write.",
+        )
+    # Tail rows are different proof layers, not lower-priority source trivia.
+    # Reserve their space first, then fill the remaining bounded payload with
+    # the complete source list in its deterministic repair order.
+    tail = trailing[:limit]
+    source_budget = max(0, limit - len(tail))
+    source_rows = [
+        MaxCompletionIssue("source", message, "SOURCE_CONTRACT")
+        for message in source_issues[:source_budget]
+    ]
+    return tuple([*source_rows, *tail])
 
 
 def max_completion_gap(
@@ -1265,40 +1415,20 @@ def max_completion_gap(
     *,
     build_plan: object | None = None,
     design_dna: object | None = None,
+    persistence_required: bool | None = None,
 ) -> str | None:
-    """Return the actionable product/runtime gap for the native MAX agent.
+    """Legacy str|None completion wrapper over the aggregate contract API."""
 
-    A clean build is still enforced by the native loop's fact gate. The MAX-safe
-    evidence is ``runtime_check`` plus one ``see`` using a signed preview session.
-    Generic ``probe`` and ``verify_isolation`` require a normal web login and are
-    intentionally not blocking for MAX.
-    """
-
-    source_gap = max_source_completion_gap(
-        prompt,
-        files,
-        require_design_spec=False,
-        require_native_legal_nav=True,
+    return render_max_completion_issues(
+        collect_max_completion_issues(
+            prompt,
+            files,
+            evidence,
+            build_plan=build_plan,
+            design_dna=design_dna,
+            persistence_required=persistence_required,
+        )
     )
-    if source_gap:
-        return source_gap
-    if build_plan is not None:
-        plan_gap = max_build_plan_completion_gap(build_plan, files)
-        if plan_gap:
-            return plan_gap
-    if design_dna is not None:
-        from omnia_api.services.max_design_director import MaxDesignDNA, completion_gap
-
-        if not isinstance(design_dna, MaxDesignDNA):
-            return "MAX Design Director state is missing or invalid; rebuild it before done."
-        design_gap = completion_gap(design_dna, files)
-        if design_gap:
-            return design_gap
-    if evidence.get("runtime_check_after_write", 0) < 1:
-        return "Run runtime_check on the finished product after the last source write."
-    if evidence.get("see_after_write", 0) < 1:
-        return "Run see once through the signed MAX preview after the last source write."
-    return None
 
 
 def max_prompt_requires_persistence(prompt: str) -> bool:
@@ -1359,14 +1489,20 @@ def max_build_plan_completion_gap(plan: object, files: Mapping[str, str]) -> str
 
 
 __all__ = [
+    "MAX_COMPLETION_ISSUE_LIMIT",
     "MAX_REQUIRED_POST_SEE_SKILL",
     "MAX_REQUIRED_PREWRITE_SKILLS",
+    "MAX_SOURCE_COMPLETION_ISSUE_LIMIT",
+    "MaxCompletionIssue",
     "build_max_product_contract",
+    "collect_max_completion_issues",
+    "collect_max_source_completion_issues",
     "max_build_plan_completion_gap",
     "max_completion_gap",
     "max_demo_data_rejection",
     "max_prompt_requires_persistence",
     "max_source_completion_gap",
     "normalize_max_globals_css",
+    "render_max_completion_issues",
     "requested_max_capabilities",
 ]

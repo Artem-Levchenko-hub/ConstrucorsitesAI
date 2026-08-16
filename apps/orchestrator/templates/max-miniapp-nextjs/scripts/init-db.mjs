@@ -63,11 +63,16 @@ const statements = [
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     "max_user_id" text NOT NULL,
     "action_type" text NOT NULL,
+    "idempotency_key" text,
     "status" text DEFAULT 'new' NOT NULL,
     "payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
     "created_at" timestamptz DEFAULT now() NOT NULL,
     "updated_at" timestamptz DEFAULT now() NOT NULL
   )`,
+  `ALTER TABLE ${qualified("max_business_actions")}
+    ADD COLUMN IF NOT EXISTS "idempotency_key" text`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS "max_business_actions_user_idempotency_key_uq"
+    ON ${qualified("max_business_actions")} ("max_user_id", "idempotency_key")`,
   `CREATE TABLE IF NOT EXISTS ${qualified("max_consents")} (
     "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
     "max_user_id" text NOT NULL,

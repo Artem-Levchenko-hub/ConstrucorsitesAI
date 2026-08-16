@@ -8,12 +8,16 @@ from omnia_api.services.build_plan import BuildPlan
 from omnia_api.services.max_generation_contract import (
     MAX_REQUIRED_POST_SEE_SKILL,
     MAX_REQUIRED_PREWRITE_SKILLS,
+    MaxCompletionIssue,
     build_max_product_contract,
+    collect_max_completion_issues,
+    collect_max_source_completion_issues,
     max_build_plan_completion_gap,
     max_completion_gap,
     max_demo_data_rejection,
     max_source_completion_gap,
     normalize_max_globals_css,
+    render_max_completion_issues,
     requested_max_capabilities,
 )
 
@@ -813,6 +817,128 @@ def test_completion_requires_only_max_compatible_runtime_proof() -> None:
 
     evidence = _complete_evidence()
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
+
+
+def test_completion_issue_collector_keeps_independent_plan_and_proof_gaps() -> None:
+    plan = BuildPlan.from_dict(
+        {
+            "screens": [{"route": "/history"}],
+            "capabilities": [{"id": "start_workout", "action": "Старт"}],
+        }
+    )
+    issues = collect_max_completion_issues(COMPLEX_BRIEF, _complete_files(), {}, build_plan=plan)
+
+    assert [(issue.source, issue.code, issue.message) for issue in issues] == [
+        (
+            "plan",
+            "BUILD_PLAN",
+            'Build-plan screens are missing deterministic MAX coverage markers: /history. '
+            'Add data-omnia-screen="<planned route>" to each real view.',
+        ),
+        (
+            "proof",
+            "RUNTIME_CHECK",
+            "Run runtime_check on the finished product after the last source write.",
+        ),
+        (
+            "proof",
+            "SIGNED_PREVIEW",
+            "Run see once through the signed MAX preview after the last source write.",
+        ),
+    ]
+    rendered = render_max_completion_issues(issues)
+    assert rendered is not None
+    assert "[plan:BUILD_PLAN]" in rendered
+    assert rendered.count("[proof:") == 2
+
+
+def test_completion_issue_renderer_is_bounded_deduped_and_legacy_safe() -> None:
+    issues = (
+        MaxCompletionIssue("source", "Repair product source."),
+        MaxCompletionIssue("source", "Repair product source."),
+        MaxCompletionIssue("proof", "Run proof."),
+    )
+
+    assert render_max_completion_issues(issues, limit=1) == (
+        "[source:GENERAL] Repair product source."
+    )
+    assert render_max_completion_issues(issues, limit=2) == (
+        "[source:GENERAL] Repair product source.\n[proof:GENERAL] Run proof."
+    )
+
+
+def test_completion_aggregates_independent_source_defects_without_prerequisite_cascade() -> None:
+    incomplete = {
+        "src/app/page.tsx": (
+            "export default function Page() { return <main>"
+            "тренировки сон питание статистика график профиль история уведомления " * 45
+            + "</main>; }"
+        )
+    }
+    issues = collect_max_completion_issues(
+        COMPLEX_BRIEF,
+        incomplete,
+        _complete_evidence(),
+        persistence_required=True,
+        limit=8,
+    )
+    source_messages = [issue.message for issue in issues if issue.source == "source"]
+
+    assert len(issues) <= 8
+    assert any("data-omnia-screen-nav" in message for message in source_messages)
+    assert any("data-omnia-primary-action" in message for message in source_messages)
+    assert any("verified MAX account" in message for message in source_messages)
+    assert any("persisted MAX action flow" in message for message in source_messages)
+    assert collect_max_source_completion_issues(
+        COMPLEX_BRIEF,
+        _complete_files(),
+        require_native_legal_nav=True,
+        persistence_required=True,
+    ) == ()
+
+
+def test_completion_reserves_plan_and_proof_after_many_source_defects() -> None:
+    incomplete = {
+        f"src/components/product/Feature{index}.tsx": (
+            f"const demoOrders{index} = [{{ id: '{index}', status: 'done' }}];\n"
+            f"export default function Feature{index}() {{ return <div>demo</div>; }}"
+        )
+        for index in range(12)
+    }
+    incomplete["src/components/product/ProductApp.tsx"] = (
+        "export default function ProductApp() { return <main>"
+        + " приложение профиль история действие " * 80
+        + "</main>; }"
+    )
+    plan = BuildPlan.from_dict(
+        {
+            "screens": [{"route": "/view-1"}, {"route": "/view-2"}],
+            "capabilities": [{"id": "primary_action", "action": "Выполнить"}],
+        }
+    )
+
+    issues = collect_max_completion_issues(
+        COMPLEX_BRIEF,
+        incomplete,
+        {},
+        build_plan=plan,
+        persistence_required=True,
+    )
+    rendered = render_max_completion_issues(issues)
+
+    assert len([issue for issue in issues if issue.source == "source"]) > 6
+    assert rendered is not None
+    assert "persisted MAX action flow" in rendered
+    assert "[plan:BUILD_PLAN]" in rendered
+    assert "[proof:RUNTIME_CHECK]" in rendered
+    assert "[proof:SIGNED_PREVIEW]" in rendered
+
+
+def test_source_prerequisites_return_one_actionable_issue_without_cascade() -> None:
+    assert collect_max_source_completion_issues(COMPLEX_BRIEF, {}) == (
+        "MAX product has no product entry. Create "
+        "src/components/product/ProductApp.tsx with the actual requested product before done.",
+    )
 
 
 def test_max_build_plan_completion_requires_every_screen_and_capability_hook() -> None:

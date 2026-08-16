@@ -23,6 +23,7 @@ from omnia_api.schemas.max_studio import (
 )
 from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
+    MAX_KERNEL_MODEL_DIRECTIVE,
     MAX_MANAGED_KIT_VERSION,
     MAX_MODEL_DIRECTIVE,
     MAX_PRODUCT_ENTRY_PATH,
@@ -258,6 +259,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "pnpm-lock.yaml",
         "postcss.config.mjs",
         "scripts/analyze-code.mjs",
+        "drizzle/0002_action_idempotency.sql",
         "tsconfig.json",
         "public/omnia-inspector.js",
         MAX_PRODUCT_PAGE_PATH,
@@ -612,6 +614,15 @@ def test_model_directive_is_headless_and_matches_locked_max_runtime_api() -> Non
     assert 'data-omnia-native-legal-nav="true"' not in MAX_MODEL_DIRECTIVE
 
 
+def test_kernel_model_directive_delegates_proof_without_screenshot_loop() -> None:
+    assert "MAX HEADLESS PLATFORM ADAPTER" in MAX_KERNEL_MODEL_DIRECTIVE
+    assert "automatically runs build" in MAX_KERNEL_MODEL_DIRECTIVE
+    assert "Do not start manual proof" in MAX_KERNEL_MODEL_DIRECTIVE
+    assert "visual quality before completion" not in MAX_KERNEL_MODEL_DIRECTIVE
+    assert "clearly labelled demo data" not in MAX_KERNEL_MODEL_DIRECTIVE
+    assert "never invent" in MAX_KERNEL_MODEL_DIRECTIVE
+
+
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:
     source = inspect.getsource(max_studio.get_max_readiness)
 
@@ -651,6 +662,12 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
                 "config": files["src/lib/omnia/max-config.ts"],
                 "inspector": files["public/omnia-inspector.js"],
                 "compliance": files["src/components/OmniaCompliance.tsx"],
+                "actions_route": files["src/app/api/omnia/actions/route.ts"],
+                "integrations_route": files[
+                    "src/app/api/omnia/integrations/[...path]/route.ts"
+                ],
+                "schema": files["src/lib/db/schema.ts"],
+                "idempotency_migration": files["drizzle/0002_action_idempotency.sql"],
             }
         )
         return "2" * 40
@@ -670,7 +687,10 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
         return {
             MAX_PRODUCT_PAGE_PATH: (
                 '"use client"; export default function Page() { return <main>Coffee</main>; }'
-            )
+            ),
+            "src/app/api/omnia/actions/route.ts": "old action route",
+            "src/app/api/omnia/integrations/[...path]/route.ts": "old integrations route",
+            "src/lib/db/schema.ts": "old schema",
         }
 
     monkeypatch.setattr(max_studio.repo_svc, "read_files", fake_read)
@@ -698,9 +718,9 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
 
     # A project carrying an older managed kit is upgraded once even when its
     # business config and current snapshot are otherwise unchanged.
-    # Version 30 carries the legal fallback self-observation loop. It must
-    # receive the fixed component even when the business config is unchanged.
-    saved.managed_kit_version = 30
+    # Version 31 predates the idempotent action/proof-sandbox runtime. A synced
+    # project must receive every changed managed route, schema and migration.
+    saved.managed_kit_version = 31
     await db_session.commit()
     upgraded = await max_studio.put_max_config(project.id, _config(), db_session, user)
     repeated_after_upgrade = await max_studio.put_max_config(
@@ -711,6 +731,10 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     assert len(calls) == 2
     assert "setSequencedEditorMode" in calls[-1]["inspector"]
     assert 'data-omnia-compliance-fallback="true"' in calls[-1]["compliance"]
+    assert "onConflictDoNothing" in calls[-1]["actions_route"]
+    assert "X-Omnia-Proof-Sandbox" in calls[-1]["integrations_route"]
+    assert "idempotencyKey" in calls[-1]["schema"]
+    assert 'ADD COLUMN IF NOT EXISTS "idempotency_key"' in calls[-1]["idempotency_migration"]
     assert refreshed is not None
     assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id

@@ -227,6 +227,9 @@ DeployPhase = Literal[
 
 class DeployResponse(BaseModel):
     project_id: UUID
+    # Immutable source revision actually used by this deployment.  Readiness
+    # must compare it with the current snapshot instead of guessing from time.
+    commit_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     run_id: str | None = None
     phase: DeployPhase
     prod_url: str | None = None

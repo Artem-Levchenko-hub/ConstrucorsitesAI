@@ -37,7 +37,6 @@ import { createProject, listProjects } from "@/lib/api/projects";
 import { sendPrompt } from "@/lib/api/messages";
 import { getMaxAccess } from "@/lib/api/max-account";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
-import { redactCredentialsBeforeTransport } from "@/lib/credential-safety";
 import {
   clearMaxDemoDraft,
   useMaxDemoDraft,
@@ -46,7 +45,10 @@ import {
   MAX_APP_TYPES,
   MAX_FEATURES,
   MAX_STYLES,
+  buildMaxProductSpec,
   buildMaxProjectPrompt,
+  sanitizeMaxProjectBrief,
+  serializeMaxStarterHandoff,
   type MaxAppTypeId,
   type MaxFeature,
   type MaxStyleId,
@@ -141,30 +143,38 @@ function MaxStudioContent({
 
   const create = useMutation({
     mutationFn: async () => {
-      const project = await createProject({ name: name.trim(), template: "max_miniapp" });
-      const prompt = redactCredentialsBeforeTransport(
-        buildMaxProjectPrompt({
-          name,
-          idea,
-          appType,
-          audience,
-          primaryAction,
-          features,
-          style,
-          brandColors,
-        }),
-      ).text;
+      const { brief: safeBrief, credentialsRemoved } = sanitizeMaxProjectBrief({
+        name,
+        idea,
+        appType,
+        audience,
+        primaryAction,
+        features,
+        style,
+        brandColors,
+      });
+      if (credentialsRemoved) {
+        toast.warning("Секрет удалён до отправки", {
+          description: "Для подключения используйте защищённый раздел интеграций.",
+        });
+      }
+      const productSpec = buildMaxProductSpec(safeBrief);
+      const project = await createProject({
+        name: safeBrief.name,
+        template: "max_miniapp",
+      });
+      const prompt = buildMaxProjectPrompt(safeBrief);
       let configSaved = true;
       try {
         await saveMaxProjectConfig(project.id, {
-          app_name: name.trim(),
+          app_name: safeBrief.name,
           app_type: appType,
-          summary: idea.trim(),
-          audience: audience.trim(),
-          primary_action: primaryAction.trim(),
+          summary: safeBrief.idea,
+          audience: safeBrief.audience,
+          primary_action: safeBrief.primaryAction,
           features,
           style,
-          brand_colors: brandColors.trim(),
+          brand_colors: safeBrief.brandColors,
           content: [],
           operator: { legal_name: "", inn: "", ogrn: "", address: "" },
           support: { email: null, phone: "", response_time: "Ответим в течение 2 рабочих дней" },
@@ -186,13 +196,14 @@ function MaxStudioContent({
         await sendPrompt(project.id, prompt, "topmix-v1", undefined, {
           skipClarify: true,
           idempotencyKey: `max-starter-${project.id}`,
+          productSpec,
         });
       } catch {
         promptAccepted = false;
       }
-      return { project, prompt, configSaved, promptAccepted };
+      return { project, prompt, productSpec, configSaved, promptAccepted };
     },
-    onSuccess: ({ project, prompt, configSaved, promptAccepted }) => {
+    onSuccess: ({ project, prompt, productSpec, configSaved, promptAccepted }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
       clearMaxDemoDraft();
       setDemoDraft(null);
@@ -209,10 +220,19 @@ function MaxStudioContent({
         return;
       }
       try {
-        window.sessionStorage.setItem(`omnia:max:starter:${project.id}`, prompt);
+        window.sessionStorage.setItem(
+          `omnia:max:starter:${project.id}`,
+          serializeMaxStarterHandoff(prompt, productSpec),
+        );
         router.push(`/max/${project.id}?starter=1`);
       } catch {
-        router.push(`/max/${project.id}?p=${encodeURIComponent(prompt)}`);
+        // Never downgrade a strict MAX run to a prompt-only legacy generation.
+        // The first request may already be running despite a transport timeout;
+        // the workspace poller will recover it without issuing a duplicate.
+        toast.error("Повтор не запущен", {
+          description: "ТЗ не удалось безопасно сохранить. Проверьте статус в студии.",
+        });
+        router.push(`/max/${project.id}`);
       }
     },
     onError: (error: unknown) => {
@@ -397,8 +417,8 @@ function MaxStudioContent({
                 </summary>
                 <div className="space-y-5 border-t border-[#e7e3da] p-4">
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" value={audience} onChange={(event) => setAudience(event.target.value)} className="border-[#d8d4cb] bg-white" /></div>
-                    <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={primaryAction} onChange={(event) => setPrimaryAction(event.target.value)} className="border-[#d8d4cb] bg-white" /></div>
+                    <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" value={audience} onChange={(event) => setAudience(event.target.value)} className="border-[#d8d4cb] bg-white" maxLength={400} /></div>
+                    <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={primaryAction} onChange={(event) => setPrimaryAction(event.target.value)} className="border-[#d8d4cb] bg-white" maxLength={240} /></div>
                   </div>
                   <div>
                     <p className="text-sm font-medium">Функции</p>
@@ -416,7 +436,7 @@ function MaxStudioContent({
                       ))}
                     </div>
                   </div>
-                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="Матовый индиго, белый, графит" className="border-[#d8d4cb] bg-white" /></div>
+                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="Матовый индиго, белый, графит" className="border-[#d8d4cb] bg-white" maxLength={180} /></div>
                 </div>
               </details>
             </div>

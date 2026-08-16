@@ -70,6 +70,14 @@ _MAX_TRUNCATED_WRITE_ABORT_AT = 2
 _STABLE_MAX_NOOP_WRITE_ABORT_AT = 2
 _STABLE_MAX_WORKING_MEMORY_CHARS = 6_000
 _STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
+_KERNEL_REQUIRED_STYLE_PATH = "src/app/globals.css"
+_KERNEL_PRODUCT_MODULE_PREFIXES = (
+    "src/components/product/",
+    "src/hooks/",
+    "src/lib/product/",
+    "src/store/",
+    "src/data/",
+)
 # One batched inspection turn is enough because the headless runtime contract
 # includes the exact managed API signatures. The next provider turn must create
 # the usable product entry; support-first runs are not recoverable if the
@@ -339,6 +347,53 @@ _MAX_BASH_TOOL = _tool(
     },
     ["cmd", "mutation_paths"],
 )
+_MAX_WRITE_FILES_TOOL: dict[str, Any] = {
+    "name": "write_files",
+    "description": (
+        "Apply one coherent MAX product revision as complete file contents. Send every "
+        "new or changed product file together; Omnia validates the whole set before one "
+        "atomic write, then automatically runs build and objective checks. The initial "
+        "revision must include ProductApp.tsx, src/app/globals.css and at least one separate "
+        "product component/hook/data module; the single repair may be smaller. Do not call "
+        "build/runtime/see yourself. "
+        "At most 12 files and 120000 total characters; empty content/deletion is unavailable."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "files": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 12,
+                "additionalProperties": {"type": "string", "minLength": 1},
+            }
+        },
+        "required": ["files"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _kernel_initial_revision_gap(value: object) -> str | None:
+    if not isinstance(value, Mapping):
+        return "write_files.files must be an object."
+    paths = {str(path) for path in value}
+    if _STABLE_MAX_PRODUCT_ENTRY not in paths:
+        return f"Include {_STABLE_MAX_PRODUCT_ENTRY}."
+    if _KERNEL_REQUIRED_STYLE_PATH not in paths:
+        return f"Include {_KERNEL_REQUIRED_STYLE_PATH} in the same atomic revision."
+    product_modules = {
+        path
+        for path in paths
+        if path != _STABLE_MAX_PRODUCT_ENTRY
+        and path.endswith((".ts", ".tsx"))
+        and path.startswith(_KERNEL_PRODUCT_MODULE_PREFIXES)
+    }
+    if not product_modules:
+        return "Include at least one separate product component, hook or data module."
+    return None
+
+
 _MAX_SEE_TOOL = _tool(
     "see",
     "Run the signed MAX browser/functional gate on the live route. It verifies "
@@ -355,6 +410,7 @@ _MAX_TOOLS = [
     *_MAX_BASE_TOOLS[:-1],
     _MAX_READ_SKILL_TOOL,
     _MAX_BASH_TOOL,
+    _MAX_WRITE_FILES_TOOL,
     _MAX_BASE_TOOLS[-1],
 ]
 
@@ -411,6 +467,16 @@ _STABLE_MAX_TOOLS = [tool for tool in _MAX_TOOLS if tool["name"] in _STABLE_MAX_
 _STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_TOOLS[:-1],
     {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
+]
+
+# Fresh ProductSpec builds use one stable action surface for the whole run.  The
+# kernel, not the model, owns build/runtime/functional transitions.  Keeping the
+# schema constant also preserves provider prompt caching and prevents stale
+# cached tool definitions from reopening model-owned verification loops.
+_STABLE_MAX_KERNEL_TOOLS = [tool for tool in _MAX_TOOLS if tool["name"] == "write_files"]
+_STABLE_MAX_KERNEL_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_STABLE_MAX_KERNEL_TOOLS[:-1],
+    {**_STABLE_MAX_KERNEL_TOOLS[-1], "cache_control": _CACHE},
 ]
 
 # A fresh MAX build starts from a known headless runtime. Allow one model turn
@@ -524,7 +590,7 @@ def _stable_max_compact_repair_task(
 
 
 _STABLE_MAX_FIRST_WRITE_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "edit_file"}
+    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "write_files", "edit_file"}
 ]
 _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED: list[dict[str, Any]] = [
     *_STABLE_MAX_FIRST_WRITE_TOOLS[:-1],
@@ -844,6 +910,21 @@ def _normalize_stable_max_action_path(action: Action) -> Action:
     and are rejected by ``max_model_path_rejection`` in the executor.
     """
 
+    if action.name == "write_files":
+        raw_files = action.args.get("files")
+        if not isinstance(raw_files, Mapping):
+            return action
+        normalized: dict[str, object] = {}
+        for raw_path, content in raw_files.items():
+            path = str(raw_path)
+            if path.startswith(("/src/", "/public/product/", "/.omnia/")):
+                path = path[1:]
+            normalized[path] = content
+        return Action(
+            name=action.name,
+            args={**action.args, "files": normalized},
+            raw=action.raw,
+        )
     path = action.path
     if action.name not in {"list_dir", "read_file", "grep", "write_file", "edit_file"}:
         return action
@@ -857,14 +938,43 @@ def _normalize_stable_max_action_path(action: Action) -> Action:
 
 
 def _contains_history_placeholder(action: Action) -> bool:
-    if action.name not in {"write_file", "edit_file"}:
+    if action.name not in {"write_file", "write_files", "edit_file"}:
         return False
+
+    def _strings(value: object) -> list[str]:
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, Mapping):
+            return [item for nested in value.values() for item in _strings(nested)]
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [item for nested in value for item in _strings(nested)]
+        return []
+
     return any(
         marker in value
-        for value in action.args.values()
-        if isinstance(value, str)
+        for value in _strings(action.args)
         for marker in _HISTORY_PLACEHOLDER_MARKERS
     )
+
+
+def _mutation_files(action: Action, observation: Mapping[str, object]) -> dict[str, str]:
+    """Return the exact post-write files for a successful mutation action."""
+
+    if action.name == "write_files":
+        raw = observation.get("files")
+        if not isinstance(raw, Mapping):
+            raw = action.args.get("files")
+        return {
+            str(path): content
+            for path, content in dict(raw or {}).items()
+            if isinstance(path, str) and isinstance(content, str)
+        }
+    if action.name in {"write_file", "edit_file"} and action.path:
+        content = observation.get("content")
+        if not isinstance(content, str) and action.name == "write_file":
+            content = action.args.get("content")
+        return {action.path: content} if isinstance(content, str) else {}
+    return {}
 
 
 def _serialize_tool_payload(payload: dict[str, Any]) -> str:
@@ -914,15 +1024,22 @@ def _obs_to_tool_result(
     # expensive: every later turn resends it in the conversation. Keep the
     # immediate observation factual but compact; the model can call read_file if
     # it genuinely needs to inspect the resulting source again.
-    if ok and tool_name in {"write_file", "edit_file"}:
+    if ok and tool_name in {"write_file", "write_files", "edit_file"}:
         content = obs.get("content")
         size = len(content) if isinstance(content, str) else None
-        verb = "written" if tool_name == "write_file" else "edited"
-        body = (
-            f"File {verb} successfully"
-            + (f" ({size} characters)" if size is not None else "")
-            + ". Current source is in the container."
-        )
+        if tool_name == "write_files":
+            body = str(
+                obs.get("kernel_verification")
+                or obs.get("detail")
+                or "Product files written; Omnia verification completed."
+            )
+        else:
+            verb = "written" if tool_name == "write_file" else "edited"
+            body = (
+                f"File {verb} successfully"
+                + (f" ({size} characters)" if size is not None else "")
+                + ". Current source is in the container."
+            )
     else:
         body = (
             obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
@@ -938,6 +1055,10 @@ def _obs_to_tool_result(
     if not next_actions:
         if ok and tool_name in {"write_file", "edit_file"}:
             next_actions = ["Run build and fix the exact compiler output if it fails."]
+        elif ok and tool_name == "write_files":
+            next_actions = [
+                "If Omnia reported gaps, submit one coherent repair revision; otherwise stop."
+            ]
         elif ok and tool_name == "build":
             next_actions = ["Run the remaining runtime and visual proof after the last write."]
         elif not ok:
@@ -948,9 +1069,15 @@ def _obs_to_tool_result(
     artifacts = (
         [str(item)[:500] for item in raw_artifacts[:20]] if isinstance(raw_artifacts, list) else []
     )
-    if tool_name in {"write_file", "edit_file"} and ok:
+    if tool_name in {"write_file", "write_files", "edit_file"} and ok:
         artifacts = list(dict.fromkeys([*artifacts, str(obs.get("path") or "")]))
         artifacts = [item for item in artifacts if item]
+        if tool_name == "write_files":
+            raw_changed = obs.get("changed_paths")
+            if isinstance(raw_changed, list):
+                artifacts = list(
+                    dict.fromkeys([*artifacts, *[str(path)[:500] for path in raw_changed[:20]]])
+                )
     root_cause_hint = str(obs.get("root_cause_hint") or "")[:1000]
     error_signature = str(obs.get("error_signature") or "")[:128]
     if not ok and tool_name == "build" and not error_signature:
@@ -1204,6 +1331,19 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
     if name == "write_file":
         content = str(action.args.get("content", "") or "")
         return _cap(f"{len(content)} символов записано:\n\n{content}")
+    if name == "write_files":
+        raw_files = action.args.get("files")
+        paths = sorted(raw_files) if isinstance(raw_files, Mapping) else []
+        total = (
+            sum(len(value) for value in raw_files.values() if isinstance(value, str))
+            if isinstance(raw_files, Mapping)
+            else 0
+        )
+        return _cap(
+            f"Атомарный проход: {len(paths)} файлов, {total} символов.\n"
+            + "\n".join(paths)
+            + (f"\n\n{obs.get('kernel_verification')}" if obs.get("kernel_verification") else "")
+        )
     if name == "edit_file":
         return _cap(obs.get("content") or obs.get("detail") or "правка применена")
     if name == "read_file":
@@ -1440,6 +1580,35 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "unavailable, do not retry it blindly."
 )
 
+_MAX_KERNEL_PREAMBLE = (
+    "OMNIA MAX PRODUCT BUILDER. The user questionnaire is already compiled into one "
+    "canonical ProductSpec, a non-empty screen/file/scenario plan and a minimal set of "
+    "preselected capability guidance. Treat that bundle as the only product brief; do not "
+    "reinterpret it or invent a second plan. Build a complete mobile MAX Mini App, not a "
+    "landing page, mockup or one giant component. Submit one coherent multi-file revision "
+    "through write_files with complete contents for ProductApp, product components/hooks "
+    "and globals.css. Keep MAX-owned runtime files locked, use only documented managed APIs, "
+    "and never add secrets, direct DB access, API routes, fake user history or fake success. "
+    "Implement every planned screen, navigation destination, capability, primary action and "
+    "honest "
+    "loading/empty/error/success state. If history is required, persist a real managed action "
+    "and restore it after reload. Omnia automatically runs build, runtime and the signed "
+    "objective functional gate after write_files; never request those checks yourself. If the "
+    "result is red, use the complete error/gap list for one coherent repair write_files pass. "
+    "Do not redesign, polish or repeat a repair without new evidence. Subjective screenshot "
+    "scoring is disabled and is not part of completion. Put each planned view id on its real "
+    "visible view as data-omnia-screen. Put each planned action id on its working clickable "
+    "control as data-omnia-capability and its exact plan text as "
+    "data-omnia-capability-label. Render that action's own visible outcome with "
+    "data-omnia-action-result set to the same action id; a shared generic status is not proof. "
+    "Obey Primary action execution kind exactly: local_navigation must reach its planned view "
+    "without a fake write; managed_write must call createMaxAction with the exact action id "
+    "and show its causal tenant-owned record; catalog_read must call the managed catalog "
+    "integration and show a real catalog item value, never call createMaxAction. "
+    "Keep data-omnia-primary-action plus "
+    "data-omnia-persisted-action on the same primary control when persistence is required."
+)
+
 _MAX_REFERENCE_PREAMBLE = (
     "Ты — автономный инженер, который за один непрерывный проход строит "
     "полноценный MAX Mini App. MAX здесь только headless-адаптер Bridge/auth/API и не "
@@ -1488,6 +1657,7 @@ def native_system_prompt(
     stable_max_edit: bool = False,
     reference_max_loop: bool = False,
     reference_max_edit: bool = False,
+    kernel_owned_loop: bool = False,
 ) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
@@ -1498,13 +1668,15 @@ def native_system_prompt(
     _ = reference_max_loop, reference_max_edit
     parts = [
         (
-            f"{_MAX_NATIVE_PREAMBLE}\n\n{_MAX_NATIVE_EDIT_OVERRIDE}"
+            _MAX_KERNEL_PREAMBLE
+            if kernel_owned_loop
+            else f"{_MAX_NATIVE_PREAMBLE}\n\n{_MAX_NATIVE_EDIT_OVERRIDE}"
             if stable_max_edit
             else _MAX_NATIVE_PREAMBLE
         )
         if stable_max_loop
         else _NATIVE_PREAMBLE,
-        _MAX_NATIVE_VERIFICATION_OVERRIDE if stable_max_loop else "",
+        _MAX_NATIVE_VERIFICATION_OVERRIDE if stable_max_loop and not kernel_owned_loop else "",
         guide,
     ]
     # Stable MAX receives exact required/domain skill ids from the persisted
@@ -1910,8 +2082,10 @@ async def run_native_build(
     model: str = _MODEL,
     stable_max_loop: bool = False,
     stable_max_product_first: bool = True,
+    kernel_owned_loop: bool = False,
     provider_turn_offset: int = 0,
     resume_checkpoint: Mapping[str, Any] | None = None,
+    restored_kernel_green: bool = False,
     checkpoint: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
     progress_context: Callable[[], str] | None = None,
     acceptance_criteria: Sequence[str] = (),
@@ -2000,6 +2174,7 @@ async def run_native_build(
     pending_turn_state: dict[str, str | int | bool] = {}
     resuming_pending_tools = False
     step_cursor = 0
+    kernel_write_passes = 0
 
     # A durable MAX continuation restores the exact transcript and provider
     # cursor.  Persisting immediately before every provider call means an API or
@@ -2059,6 +2234,7 @@ async def run_native_build(
         truncated_no_write_turns = int(resume_checkpoint.get("truncated_no_write_turns") or 0)
         turns_without_product_entry = int(resume_checkpoint.get("turns_without_product_entry") or 0)
         entry_focus_compacted = bool(resume_checkpoint.get("entry_focus_compacted"))
+        kernel_write_passes = max(0, int(resume_checkpoint.get("kernel_write_passes") or 0))
         repair_reads_since_build = set(resume_checkpoint.get("repair_reads_since_build") or [])
         repair_reread_paths = set(resume_checkpoint.get("repair_reread_paths") or [])
         repair_source_cache = {
@@ -2144,6 +2320,25 @@ async def run_native_build(
             if convo and convo[-1].get("role") == "assistant":
                 convo.pop()
 
+    if (
+        restored_kernel_green
+        and kernel_owned_loop
+        and resume_checkpoint is not None
+        and not resuming_pending_tools
+        and bool(written)
+    ):
+        return AgentResult(
+            done=True,
+            summary=(
+                "Готово — восстановлено зелёное доказательство точной ревизии; "
+                "повторная модель и пользовательское действие не запускались."
+            ),
+            files=written,
+            steps=step_cursor,
+            transcript=convo,
+            stop_reason="kernel_green_recovered",
+        )
+
     async def _persist_checkpoint() -> None:
         if checkpoint is None:
             return
@@ -2178,6 +2373,7 @@ async def run_native_build(
             "truncated_no_write_turns": truncated_no_write_turns,
             "turns_without_product_entry": turns_without_product_entry,
             "entry_focus_compacted": entry_focus_compacted,
+            "kernel_write_passes": kernel_write_passes,
             "repair_reads_since_build": sorted(repair_reads_since_build),
             "repair_reread_paths": sorted(repair_reread_paths),
             "repair_source_cache": repair_source_cache,
@@ -2233,7 +2429,9 @@ async def run_native_build(
     product_first = stable_max_loop and stable_max_product_first
     max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
     effective_max_steps = (
-        max(1, int(settings.agent_builder_max_runtime_steps))
+        max(1, int(4 if max_steps is None else max_steps))
+        if kernel_owned_loop
+        else max(1, int(settings.agent_builder_max_runtime_steps))
         if max_runtime
         else max(1, int(40 if max_steps is None else max_steps))
     )
@@ -2253,8 +2451,10 @@ async def run_native_build(
             result[f"{tool}_after_write"] = 1
         return result
 
+    completion_check_failure: str | None = None
+
     def _completion_gap() -> str | None:
-        nonlocal brain_v2
+        nonlocal brain_v2, completion_check_failure
         if completion_check is None:
             return None
         try:
@@ -2274,7 +2474,213 @@ async def run_native_build(
             return gap
         except Exception as exc:
             log.exception("agent_native.completion_check_failed")
+            completion_check_failure = f"Product acceptance check failed: {type(exc).__name__}."
+            if kernel_owned_loop:
+                return None
             return f"Product acceptance check failed: {type(exc).__name__}."
+
+    def _completion_gap_assuming_kernel_proof() -> str | None:
+        """Expose only source/plan debt before spending browser-proof time."""
+
+        nonlocal completion_check_failure
+        if completion_check is None:
+            return None
+        try:
+            evidence = _evidence()
+            evidence["runtime_check_after_write"] = 1
+            evidence["see_after_write"] = 1
+            return completion_check(written, evidence)
+        except Exception as exc:
+            log.exception("agent_native.kernel_completion_check_failed")
+            completion_check_failure = f"Product acceptance check failed: {type(exc).__name__}."
+            if kernel_owned_loop:
+                return None
+            return f"Product acceptance check failed: {type(exc).__name__}."
+
+    def _record_build_observation(observation: Mapping[str, object]) -> bool:
+        """Update same-revision compiler state; return semantic-loop stop."""
+
+        nonlocal last_build_ok, last_build_revision, last_build_error_text
+        nonlocal last_build_error_paths, repair_context_compacted, wrote_since_build
+        nonlocal brain_v2
+        if observation.get("infra_dead"):
+            return False
+        last_build_ok = bool(observation.get("ok"))
+        last_build_revision = workspace_revision
+        last_build_error_text = str(observation.get("error") or observation.get("detail") or "")
+        last_build_error_paths = (
+            frozenset()
+            if last_build_ok
+            else (
+                _typescript_repair_paths(last_build_error_text, written)
+                | _structured_repair_paths(observation)
+            )
+        )
+        repair_reads_since_build.clear()
+        repair_reread_paths.clear()
+        repair_source_cache.clear()
+        repair_context_compacted = False
+        wrote_since_build = False
+        if brain_v2 is None:
+            return False
+        raw_build_evidence = observation.get("evidence")
+        build_evidence = raw_build_evidence if isinstance(raw_build_evidence, list) else []
+        observed_signature = str(observation.get("error_signature") or "")[:128]
+        build_signature = (
+            ""
+            if last_build_ok
+            else observed_signature or normalize_error_signature(last_build_error_text)
+        )
+        compiler_signatures = [] if last_build_ok else error_signatures(last_build_error_text)
+        structured_signatures: list[str] = []
+        raw_diagnostics = observation.get("diagnostics")
+        if not last_build_ok and isinstance(raw_diagnostics, list):
+            for diagnostic in raw_diagnostics[:30]:
+                if not isinstance(diagnostic, Mapping):
+                    continue
+                if str(diagnostic.get("severity") or "") != "error":
+                    continue
+                structured_signatures.extend(
+                    error_signatures(
+                        f"{diagnostic.get('source') or 'analysis'}/"
+                        f"{diagnostic.get('code') or 'error'}: "
+                        f"{diagnostic.get('message') or ''}"
+                    )
+                )
+        build_diagnostic_signatures = list(
+            dict.fromkeys([*structured_signatures[:30], *compiler_signatures[:10]])
+        )[:40]
+        brain_v2 = record_observation(
+            brain_v2,
+            kind="build",
+            status="ok" if last_build_ok else "error",
+            summary="typecheck clean" if last_build_ok else "typecheck red",
+            error_signature=build_signature,
+            diagnostic_signatures=build_diagnostic_signatures,
+            evidence=[
+                *sorted(last_build_error_paths),
+                *[str(item)[:160] for item in build_evidence[:20]],
+            ],
+        )
+        return not last_build_ok and semantic_loop_count(brain_v2) >= 3
+
+    async def _kernel_verify_revision(step: int) -> dict[str, object]:
+        """Run compiler and objective MAX proof without another provider turn."""
+
+        nonlocal last_build_ok, last_build_error_text, last_build_error_paths
+        try:
+            build = await execute(Action(name="build", args={}, raw=""))
+        except Exception as exc:
+            build = {"ok": False, "infra_dead": True, "error": f"auto build crashed: {exc}"}
+        if emit:
+            await emit(
+                "agent.step",
+                {
+                    "step": step,
+                    "action": "build",
+                    "path": "",
+                    "detail": _step_detail("build", Action("build", {}, ""), dict(build)),
+                    "ok": bool(build.get("ok")),
+                },
+            )
+        if build.get("infra_dead"):
+            return {"status": "infra", "detail": str(build.get("detail") or build.get("error"))}
+        _record_build_observation(build)
+        if not last_build_ok:
+            return {
+                "status": "red",
+                "detail": last_build_error_text or "Build failed.",
+                "build": dict(build),
+            }
+        successful_tools["build"] = successful_tools.get("build", 0) + 1
+        proof_after_write.add("build")
+        source_gap = _completion_gap_assuming_kernel_proof()
+        if completion_check_failure:
+            return {"status": "infra", "detail": completion_check_failure}
+        if source_gap:
+            return {"status": "red", "detail": source_gap, "build": dict(build)}
+
+        proof_results: list[dict[str, object]] = []
+        for proof_action in (
+            Action("runtime_check", {"path": "/"}, ""),
+            Action("see", {"path": "/"}, ""),
+        ):
+            try:
+                proof = await execute(proof_action)
+            except Exception as exc:
+                proof = {
+                    "ok": False,
+                    "infra_dead": True,
+                    "error": f"auto {proof_action.name} crashed: {exc}",
+                }
+            proof_results.append(dict(proof))
+            if emit:
+                await emit(
+                    "agent.step",
+                    {
+                        "step": step,
+                        "action": proof_action.name,
+                        "path": proof_action.path,
+                        "detail": _step_detail(proof_action.name, proof_action, dict(proof)),
+                        "ok": bool(proof.get("ok")),
+                    },
+                )
+            if proof.get("infra_dead"):
+                return {
+                    "status": "infra",
+                    "detail": str(proof.get("detail") or proof.get("error")),
+                }
+            if proof.get("owner_dependency"):
+                return {
+                    "status": "owner",
+                    "detail": str(
+                        proof.get("detail")
+                        or proof.get("error")
+                        or "owner-controlled integration is required"
+                    ),
+                }
+            if proof.get("proof_unavailable") or proof.get("skipped"):
+                return {
+                    "status": "infra",
+                    "detail": str(
+                        proof.get("detail")
+                        or proof.get("error")
+                        or f"{proof_action.name} infrastructure unavailable"
+                    ),
+                }
+            proof_red = not bool(proof.get("ok")) or any(
+                bool(proof.get(key)) for key in ("needs_fix",)
+            )
+            if proof_red:
+                last_build_ok = False
+                last_build_error_text = str(
+                    proof.get("detail") or proof.get("error") or f"{proof_action.name} failed"
+                )
+                last_build_error_paths = _typescript_error_paths(last_build_error_text)
+                return {
+                    "status": "red",
+                    "detail": last_build_error_text,
+                    "build": dict(build),
+                    "proofs": proof_results,
+                }
+            successful_tools[proof_action.name] = successful_tools.get(proof_action.name, 0) + 1
+            proof_after_write.add(proof_action.name)
+        final_gap = _completion_gap()
+        if completion_check_failure:
+            return {"status": "infra", "detail": completion_check_failure}
+        if final_gap:
+            return {
+                "status": "red",
+                "detail": final_gap,
+                "build": dict(build),
+                "proofs": proof_results,
+            }
+        return {
+            "status": "green",
+            "detail": "Build, runtime and signed functional checks are green.",
+            "build": dict(build),
+            "proofs": proof_results,
+        }
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic and prove the tree with one local build only."""
@@ -2438,7 +2844,8 @@ async def run_native_build(
                 ]
                 entry_focus_compacted = True
             force_entry_write = (
-                product_first
+                not kernel_owned_loop
+                and product_first
                 and _STABLE_MAX_PRODUCT_ENTRY not in written
                 and (
                     not max_lifecycle
@@ -2450,7 +2857,7 @@ async def run_native_build(
                     or prewrite_inspection_exhausted
                 )
             )
-            repair_mode = stable_max_loop and last_build_ok is False
+            repair_mode = stable_max_loop and not kernel_owned_loop and last_build_ok is False
             force_repair_write = repair_mode and not wrote_since_build
             force_repair_verify = repair_mode and wrote_since_build
             force_visual_finish = stable_max_loop and visual_finish_pending and not repair_mode
@@ -2462,6 +2869,7 @@ async def run_native_build(
             # repairs keep their existing edit-then-verify flow below.
             force_build_after_write = (
                 stable_max_loop
+                and not kernel_owned_loop
                 and _STABLE_MAX_PRODUCT_ENTRY in written
                 and wrote_since_build
                 and not repair_mode
@@ -2498,6 +2906,7 @@ async def run_native_build(
             completion_gap = _completion_gap()
             force_style_write = (
                 stable_max_loop
+                and not kernel_owned_loop
                 and last_build_ok is True
                 and not wrote_since_build
                 and completion_gap is not None
@@ -2505,6 +2914,7 @@ async def run_native_build(
             )
             force_source_repair = (
                 stable_max_loop
+                and not kernel_owned_loop
                 and last_build_ok is True
                 and not wrote_since_build
                 and visual_feedback_step is None
@@ -2524,6 +2934,7 @@ async def run_native_build(
                 source_repair_context_gap = completion_gap
             force_proof = (
                 stable_max_loop
+                and not kernel_owned_loop
                 and last_build_ok is True
                 and not wrote_since_build
                 and visual_feedback_step is None
@@ -2611,7 +3022,9 @@ async def run_native_build(
                             working_memory=working_memory,
                             tools=_kernel_tool_surface(
                                 (
-                                    _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
+                                    _STABLE_MAX_KERNEL_TOOLS_CACHED
+                                    if kernel_owned_loop
+                                    else _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
                                     if force_entry_write
                                     else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
                                     if force_visual_finish
@@ -2958,6 +3371,10 @@ async def run_native_build(
                         "role": "user",
                         "content": (
                             (gap + " " if gap else "")
+                            + "Use write_files now. Omnia will run build and objective "
+                            "proof automatically; do not return prose without source."
+                            if kernel_owned_loop
+                            else (gap + " " if gap else "")
                             + "Перед завершением обязательно вызови build. Если он красный — "
                             "почини ошибки; если чистый — устрани остаток acceptance contract "
                             "и вызови done."
@@ -2988,6 +3405,10 @@ async def run_native_build(
                 pending_turn_state.get("visual_finish_satisfied")
             )
             semantic_loop_stop = bool(pending_turn_state.get("semantic_loop_stop"))
+            kernel_terminal_this_turn = bool(pending_turn_state.get("kernel_terminal"))
+            kernel_repair_exhausted_this_turn = bool(
+                pending_turn_state.get("kernel_repair_exhausted")
+            )
             ops_this_turn = int(pending_turn_state.get("ops") or 0)
             infra_this_turn = int(pending_turn_state.get("infra") or 0)
             turn_mutation_counts: dict[str, int] = {}
@@ -3196,7 +3617,45 @@ async def run_native_build(
                         and action.path in repair_reread_paths
                     )
                 )
-                if _contains_history_placeholder(action):
+                if kernel_owned_loop and name != "write_files":
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "This ProductSpec run exposes one source action only: write_files. "
+                            "Omnia runs build/runtime/functional checks automatically."
+                        ),
+                    }
+                elif kernel_owned_loop and name == "write_files" and kernel_write_passes >= 2:
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "The initial product pass and the single repair pass are already "
+                            "used. Omnia stopped further rewrites to prevent a loop."
+                        ),
+                    }
+                    kernel_repair_exhausted_this_turn = True
+                elif kernel_owned_loop and name == "write_files" and wrote_this_turn:
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "Only one atomic product revision may run per provider turn. "
+                            "Wait for Omnia's build observation before repairing."
+                        ),
+                    }
+                elif (
+                    kernel_owned_loop
+                    and name == "write_files"
+                    and kernel_write_passes == 0
+                    and (_kernel_gap := _kernel_initial_revision_gap(action.args.get("files")))
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            "The initial revision must be a coherent multi-file product. "
+                            f"{_kernel_gap}"
+                        ),
+                    }
+                elif _contains_history_placeholder(action):
                     # The gateway replaces large historical tool arguments with
                     # explicit markers. A long-running model can occasionally
                     # echo that marker back as if it were the file body. Never
@@ -3509,17 +3968,15 @@ async def run_native_build(
                         )
                 if (
                     tool_executed
-                    and name in {"write_file", "edit_file"}
+                    and name in {"write_file", "write_files", "edit_file"}
                     and obs.get("ok")
-                    and action.path in written
                 ):
-                    post_edit_content = obs.get("content")
-                    if (
-                        isinstance(post_edit_content, str)
-                        and post_edit_content == written[action.path]
+                    mutation_files = _mutation_files(action, obs)
+                    if mutation_files and all(
+                        written.get(path) == content for path, content in mutation_files.items()
                     ):
                         # The live MAX canary exposed a paid source-repair loop
-                        # where the model returned the same ProductApp bytes,
+                        # where the model returned the same product bytes,
                         # the executor reported success, and a fresh build was
                         # charged after every false edit. Preserve the existing
                         # green proof and tell the model that nothing changed.
@@ -3560,32 +4017,33 @@ async def run_native_build(
                     repair_reread_paths.add(action.path)
                     repair_source_cache.pop(action.path, None)
                     observed_revisions.pop(f"read:{action.path}", None)
-                if tool_executed and name in ("write_file", "edit_file") and obs.get("ok"):
-                    repair_reread_paths.discard(action.path)
-                    repair_source_cache.pop(action.path, None)
-                    if isinstance(obs.get("content"), str):
-                        # executor returns the post-edit content (mirrors the
-                        # text loop's tracking at agent_builder.py). Prefer it
-                        # for writes too: deterministic executor sanitizers can
-                        # change the bytes that actually landed in the container.
-                        written[action.path] = obs["content"]
-                    elif name == "write_file":
-                        written[action.path] = action.args.get("content", "")
+                if (
+                    tool_executed
+                    and name in ("write_file", "write_files", "edit_file")
+                    and obs.get("ok")
+                ):
+                    mutation_files = _mutation_files(action, obs)
+                    for path, content in mutation_files.items():
+                        repair_reread_paths.discard(path)
+                        repair_source_cache.pop(path, None)
+                        written[path] = content
                     wrote_since_build = True
                     wrote_this_turn = True
                     workspace_revision += 1
-                    turn_mutation_counts[action.path] = turn_mutation_counts.get(action.path, 0) + 1
-                    source_revisions[action.path] = source_revisions.get(action.path, 0) + 1
+                    for path in mutation_files:
+                        turn_mutation_counts[path] = turn_mutation_counts.get(path, 0) + 1
+                        source_revisions[path] = source_revisions.get(path, 0) + 1
                     if brain_v2 is not None:
                         brain_v2 = record_mutation(
                             brain_v2,
-                            paths=[action.path],
+                            paths=sorted(mutation_files),
                             revision=workspace_revision,
                         )
-                    observed_revisions.pop(f"read:{action.path}", None)
-                    recent_mutation_paths.append(action.path)
+                    for path in mutation_files:
+                        observed_revisions.pop(f"read:{path}", None)
+                        recent_mutation_paths.append(path)
                     recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
-                    if force_visual_finish and action.path == "src/app/globals.css":
+                    if force_visual_finish and "src/app/globals.css" in mutation_files:
                         visual_finish_satisfied_this_turn = True
                     if force_source_repair:
                         source_repair_context_gap = None
@@ -3593,9 +4051,69 @@ async def run_native_build(
                     # any result is returned. Only a write from a LATER turn can
                     # have applied the visual critique.
                     if visual_feedback_step is not None and step > visual_feedback_step:
-                        visual_repair_paths.add(action.path)
+                        visual_repair_paths.update(mutation_files)
                     proof_after_write.clear()
                     last_green_see_step = None
+                    if kernel_owned_loop and name == "write_files":
+                        kernel_write_passes += 1
+                        verification = await _kernel_verify_revision(step)
+                        verification_status = str(verification.get("status") or "red")
+                        verification_detail = str(verification.get("detail") or "")
+                        obs = {
+                            **obs,
+                            "kernel_verification": verification_detail,
+                        }
+                        raw_build = verification.get("build")
+                        if isinstance(raw_build, Mapping):
+                            for key in (
+                                "diagnostics",
+                                "affected_files",
+                                "error_signature",
+                                "evidence",
+                                "analysis_unavailable",
+                            ):
+                                if key in raw_build:
+                                    obs[key] = raw_build[key]
+                        if verification_status == "infra":
+                            # Keep the started marker durable. On the next slice
+                            # write_files reconciles exact bytes, then repeats only
+                            # read-only verification; the source mutation is never
+                            # duplicated.
+                            return AgentResult(
+                                done=False,
+                                summary=(
+                                    verification_detail or "verification infrastructure unavailable"
+                                ),
+                                files=written,
+                                steps=step + 1,
+                                transcript=convo,
+                                stop_reason="kernel_verification_pending",
+                            )
+                        if verification_status == "owner":
+                            return AgentResult(
+                                done=False,
+                                summary=(
+                                    verification_detail
+                                    or "Owner-controlled integration configuration is required."
+                                ),
+                                files=written,
+                                steps=step + 1,
+                                transcript=convo,
+                                stop_reason="kernel_owner_dependency",
+                            )
+                        kernel_terminal_this_turn = verification_status == "green"
+                        if not kernel_terminal_this_turn:
+                            last_build_error_text = verification_detail
+                            obs = {
+                                **obs,
+                                "ok": False,
+                                "status": "error",
+                                "error": verification_detail,
+                                "detail": verification_detail,
+                            }
+                        kernel_repair_exhausted_this_turn = (
+                            verification_status != "green" and kernel_write_passes >= 2
+                        )
                 elif tool_executed and name == "bash" and obs.get("ok"):
                     bash_files = obs.get("files")
                     if isinstance(bash_files, dict):
@@ -3624,78 +4142,7 @@ async def run_native_build(
                 elif tool_executed and name == "build" and not obs.get("infra_dead"):
                     if force_visual_finish:
                         visual_finish_satisfied_this_turn = True
-                    last_build_ok = bool(obs.get("ok"))
-                    last_build_revision = workspace_revision
-                    last_build_error_text = str(obs.get("error") or obs.get("detail") or "")
-                    last_build_error_paths = (
-                        frozenset()
-                        if last_build_ok
-                        else (
-                            _typescript_repair_paths(
-                                str(obs.get("error") or obs.get("detail") or ""),
-                                written,
-                            )
-                            | _structured_repair_paths(obs)
-                        )
-                    )
-                    repair_reads_since_build.clear()
-                    repair_reread_paths.clear()
-                    repair_source_cache.clear()
-                    repair_context_compacted = False
-                    wrote_since_build = False
-                    if brain_v2 is not None:
-                        raw_build_evidence = obs.get("evidence")
-                        build_evidence = (
-                            raw_build_evidence if isinstance(raw_build_evidence, list) else []
-                        )
-                        observed_signature = str(obs.get("error_signature") or "")[:128]
-                        build_signature = (
-                            ""
-                            if last_build_ok
-                            else observed_signature
-                            or normalize_error_signature(last_build_error_text)
-                        )
-                        compiler_signatures = (
-                            [] if last_build_ok else error_signatures(last_build_error_text)
-                        )
-                        structured_signatures: list[str] = []
-                        raw_diagnostics = obs.get("diagnostics")
-                        if not last_build_ok and isinstance(raw_diagnostics, list):
-                            for diagnostic in raw_diagnostics[:30]:
-                                if not isinstance(diagnostic, Mapping):
-                                    continue
-                                if str(diagnostic.get("severity") or "") != "error":
-                                    continue
-                                structured_signatures.extend(
-                                    error_signatures(
-                                        f"{diagnostic.get('source') or 'analysis'}/"
-                                        f"{diagnostic.get('code') or 'error'}: "
-                                        f"{diagnostic.get('message') or ''}"
-                                    )
-                                )
-                        build_diagnostic_signatures = list(
-                            dict.fromkeys(
-                                [
-                                    *structured_signatures[:30],
-                                    *compiler_signatures[:10],
-                                ]
-                            )
-                        )[:40]
-                        brain_v2 = record_observation(
-                            brain_v2,
-                            kind="build",
-                            status="ok" if last_build_ok else "error",
-                            summary="typecheck clean" if last_build_ok else "typecheck red",
-                            error_signature=build_signature,
-                            diagnostic_signatures=build_diagnostic_signatures,
-                            evidence=[
-                                *sorted(last_build_error_paths),
-                                *[str(item)[:160] for item in build_evidence[:20]],
-                            ],
-                        )
-                        semantic_loop_stop = (
-                            not last_build_ok and semantic_loop_count(brain_v2) >= 3
-                        )
+                    semantic_loop_stop = _record_build_observation(obs) or semantic_loop_stop
                 elif (
                     tool_executed
                     and name == "runtime_check"
@@ -3809,6 +4256,8 @@ async def run_native_build(
                     "visual_quality_exhausted": visual_quality_exhausted_this_turn,
                     "visual_finish_satisfied": visual_finish_satisfied_this_turn,
                     "semantic_loop_stop": semantic_loop_stop,
+                    "kernel_terminal": kernel_terminal_this_turn,
+                    "kernel_repair_exhausted": kernel_repair_exhausted_this_turn,
                     "ops": ops_this_turn,
                     "infra": infra_this_turn,
                     "mutation_counts": json.dumps(
@@ -3850,7 +4299,9 @@ async def run_native_build(
             response_hit_output_limit = (
                 stable_max_loop
                 and resp.get("stop_reason") == "max_tokens"
-                and any(tu.get("name") in {"write_file", "edit_file"} for tu in tool_uses)
+                and any(
+                    tu.get("name") in {"write_file", "write_files", "edit_file"} for tu in tool_uses
+                )
             )
             if response_hit_output_limit:
                 if wrote_this_turn:
@@ -3864,8 +4315,8 @@ async def run_native_build(
                             "[OUTPUT LIMIT] The previous write was truncated before its tool "
                             "arguments were complete. Do not retry the same large file. Split "
                             "the screen into smaller component files and keep the TOTAL "
-                            "write_file/edit_file content in the next response below 24000 "
-                            "characters. Your next turn must perform one or more smaller writes."
+                            "write payload in the next response below the configured limit. "
+                            "Your next turn must submit one coherent smaller revision."
                         ),
                     }
                 )
@@ -3968,6 +4419,32 @@ async def run_native_build(
                 turns_without_product_entry += 1
             step_cursor = step + 1
             await _complete_pending_turn(results)
+            if kernel_terminal_this_turn:
+                if emit:
+                    await emit("agent.done", {"step": step, "files": len(written)})
+                return AgentResult(
+                    done=True,
+                    summary=(
+                        "Готово — приложение собрано целостным проходом; сборка, "
+                        "живой маршрут и подписанная функциональная проверка зелёные."
+                    ),
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="kernel_green",
+                )
+            if kernel_repair_exhausted_this_turn:
+                return AgentResult(
+                    done=False,
+                    summary=(
+                        last_build_error_text
+                        or "Одна ремонтная итерация не закрыла все объективные ошибки."
+                    ),
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="kernel_repair_exhausted",
+                )
             if semantic_loop_stop:
                 if emit:
                     await emit(

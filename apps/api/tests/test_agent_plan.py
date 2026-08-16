@@ -135,6 +135,31 @@ def test_completion_gap_is_fail_closed_until_every_public_step_is_attested() -> 
     assert "plan_task" in str(agent_plan.completion_gap(None))
 
 
+def test_kernel_plan_closes_only_from_write_build_runtime_and_signed_proof() -> None:
+    state = agent_plan.make_plan(
+        objective="Собрать MAX продукт",
+        steps=[
+            "Реализовать целостную multi-file структуру экранов и сценариев",
+            "Автоматически собрать проект и устранить полный список ошибок",
+            "Проверить живой runtime приложения",
+            "Пройти подписанную функциональную проверку",
+        ],
+        acceptance_criteria=["Продукт работает"],
+    )
+    for tool in ("write_files", "build", "runtime_check", "see"):
+        state = agent_plan.record_tool_evidence(
+            state,
+            tool=tool,
+            ok=True,
+            summary=f"{tool} green",
+            mutated=tool == "write_files",
+        )
+    state = agent_plan.reconcile_tool_evidence(state)
+
+    assert [step["status"] for step in state["steps"]] == ["completed"] * 4
+    assert agent_plan.completion_gap(state) is None
+
+
 def test_update_plan_rejects_evidence_free_or_incompatible_completion() -> None:
     state = agent_plan.initial_plan("Собери приложение", max_product=True)
     state = agent_plan.record_tool_evidence(state, tool="build", ok=True, summary="typecheck clean")

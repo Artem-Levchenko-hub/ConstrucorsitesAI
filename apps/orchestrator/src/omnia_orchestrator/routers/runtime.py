@@ -125,6 +125,11 @@ _AGENT_MAX_DIAGNOSTICS = 30
 _AGENT_MAX_AFFECTED_FILES = 30
 
 
+def _agent_build_infra_response(exc: OrchestratorError) -> dict[str, object]:
+    """Keep container execution failures out of source-repair feedback."""
+    return {"ok": False, "error": exc.message, "infra_dead": True}
+
+
 def _safe_analyzer_path(value: object) -> str:
     path = str(value or "").replace("\\", "/")[:300]
     if (
@@ -1504,6 +1509,7 @@ async def agent_build(
     slug: str,
     code_intelligence: bool = False,
     security_scan: bool = False,
+    dependency_doctor: bool = True,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
     """Run the project's local TypeScript typecheck — a real, deterministic
@@ -1513,7 +1519,7 @@ async def agent_build(
     _verify_token(x_internal_token)
     await record_activity(project_id)
     container_name = f"omnia-dev-{slug}"
-    dep_note = await _run_dep_doctor(container_name)
+    dep_note = await _run_dep_doctor(container_name) if dependency_doctor else ""
     # Next dev writes route validators for the source tree that existed at the
     # time of its last successful compile. Agent writes/rollback can replace or
     # remove a page faster than HMR refreshes those generated imports, which made
@@ -1533,8 +1539,8 @@ async def agent_build(
             workdir="/app",
             max_output=1_024,
         )
-    except OrchestratorError:
-        pass
+    except OrchestratorError as exc:
+        return _agent_build_infra_response(exc)
     try:
         result = await exec_cmd(
             container_name,
@@ -1544,9 +1550,7 @@ async def agent_build(
             max_output=_AGENT_MAX_BUILD,
         )
     except OrchestratorError as exc:
-        if exc.code == "container_not_running":
-            raise
-        return {"ok": False, "error": exc.message}
+        return _agent_build_infra_response(exc)
     ok = result["exit_code"] == "0"
     detail = (result["stdout"] + "\n" + result["stderr"]).strip()
     body = "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]
@@ -1573,12 +1577,12 @@ async def agent_build(
                 response["analysis_unavailable"] = [
                     "analyze-code: managed analyzer is not available in this container"
                 ]
-        except OrchestratorError:
-            # Compatibility with already-running containers that predate the
-            # managed analyzer. TypeScript remains the authoritative build gate.
-            response["analysis_unavailable"] = [
-                "analyze-code: managed analyzer is not available in this container"
-            ]
+        except OrchestratorError as exc:
+            # A missing pre-analyzer container returns an ordinary non-zero
+            # command result above. An execution exception instead means the
+            # container/runtime is unavailable, not that project source needs
+            # repair; this is especially material for requested security scans.
+            return _agent_build_infra_response(exc)
         raw_response_diagnostics = response.get("diagnostics")
         response_diagnostic_items = (
             raw_response_diagnostics if isinstance(raw_response_diagnostics, list) else []
@@ -1717,6 +1721,7 @@ def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse
 
     return DeployResponse(
         project_id=UUID(rec.project_id),
+        commit_sha=rec.commit_sha,
         run_id=rec.run_id,
         phase=rec.phase,
         prod_url=rec.prod_url,

@@ -321,6 +321,34 @@ async def test_runtime_check_never_invents_http_200_when_probe_has_no_response(
 
 
 @pytest.mark.asyncio
+async def test_write_files_uses_one_atomic_hot_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    calls: list[dict[str, str]] = []
+
+    async def hot_reload_exact(
+        _project: object, _slug: str, files: dict[str, str]
+    ) -> dict[str, object]:
+        calls.append(dict(files))
+        return {"ok": True}
+
+    monkeypatch.setattr(orchestrator_client, "hot_reload_exact", hot_reload_exact)
+    execute = ab.make_container_executor(project_id="project", slug="slug")
+    files = {
+        "src/components/product/ProductApp.tsx": "export default function App(){return null}",
+        "src/components/product/Nav.tsx": "export const Nav = () => null",
+    }
+
+    result = await execute(ab.Action("write_files", {"files": files}, ""))
+
+    assert result["ok"] is True
+    assert result["changed_paths"] == sorted(files)
+    assert calls == [files]
+
+
+@pytest.mark.asyncio
 async def test_native_bash_runs_in_project_and_tracks_declared_mutations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -483,6 +511,36 @@ async def test_build_preserves_canary_code_intelligence_fields(
     assert result["root_cause_hint"] == "missing import"
     assert result["affected_files"] == ["src/components/product/ProductApp.tsx"]
     assert result["diagnostics"] == [{"source": "oxlint", "message": "missing import"}]
+
+
+@pytest.mark.asyncio
+async def test_build_can_disable_dependency_doctor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    calls: list[bool] = []
+
+    async def build(
+        _project: object,
+        _slug: str,
+        *,
+        dependency_doctor: bool = True,
+    ) -> dict[str, object]:
+        calls.append(dependency_doctor)
+        return {"ok": True, "detail": "clean"}
+
+    monkeypatch.setattr(orchestrator_client, "agent_build", build)
+    execute = ab.make_container_executor(
+        project_id="project",
+        slug="slug",
+        dependency_doctor=False,
+    )
+
+    result = await execute(ab.Action("build", {}, ""))
+
+    assert result["ok"] is True
+    assert calls == [False]
 
 
 def test_runtime_debug_loop_recovers_then_done():
