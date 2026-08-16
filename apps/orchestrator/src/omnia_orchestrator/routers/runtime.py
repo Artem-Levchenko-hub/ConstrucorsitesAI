@@ -820,6 +820,16 @@ async def deploy(
     optional — the dev container is resolved by the `omnia.project_id` label.
     """
     _verify_token(x_internal_token)
+    if payload.commit_sha is not None:
+        raise OrchestratorError(
+            code="conflict",
+            message=(
+                "Production publication is paused during the historical MAX "
+                "generation comparison because this baseline cannot prove an "
+                "immutable snapshot deploy."
+            ),
+            status_code=409,
+        )
     target = payload.target.model_dump() if payload.target else None
     rec = await builder.start_deploy(
         str(payload.project_id),

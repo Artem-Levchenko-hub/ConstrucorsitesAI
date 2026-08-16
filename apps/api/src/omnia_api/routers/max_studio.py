@@ -271,6 +271,15 @@ async def put_max_config(
 
     config_data = payload.model_dump(mode="json")
     record = await session.get(MaxProjectConfig, project_id)
+    if record is not None and record.managed_kit_version > MAX_MANAGED_KIT_VERSION:
+        raise ApiError(
+            "managed_kit_newer_than_server",
+            (
+                "Эта версия приложения использует более новый системный комплект. "
+                "Во время проверки старой генерации его настройки нельзя перезаписать."
+            ),
+            status.HTTP_409_CONFLICT,
+        )
     if (
         record is not None
         and record.config == config_data
