@@ -29,25 +29,3 @@ def test_max_template_gets_next_production_build_guards() -> None:
     assert _is_next_template("max-miniapp-nextjs") is True
     assert _is_next_template("nextjs-postgres-drizzle") is True
     assert _is_next_template("vite-react-spa") is False
-
-
-def test_exact_deploy_source_rejects_unsafe_path() -> None:
-    with pytest.raises(ValidationError):
-        DeployRequest(
-            project_id="00000000-0000-0000-0000-000000000001",
-            commit_sha="a" * 40,
-            slug="safe-app",
-            template="max-miniapp-nextjs",
-            source_files={"../escape.ts": "bad"},
-        )
-
-
-def test_exact_deploy_source_rejects_oversized_file() -> None:
-    with pytest.raises(ValidationError):
-        DeployRequest(
-            project_id="00000000-0000-0000-0000-000000000001",
-            commit_sha="a" * 40,
-            slug="safe-app",
-            template="max-miniapp-nextjs",
-            source_files={"src/app/page.tsx": "x" * (2 * 1024 * 1024 + 1)},
-        )

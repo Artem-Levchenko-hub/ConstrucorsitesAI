@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.admin import is_admin_user
-from omnia_api.core.config import MAX_DEMO_GENERATION_LIMIT, get_settings
+from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.account import (
@@ -16,7 +16,6 @@ from omnia_api.models.account import (
     BusinessMember,
     BusinessProfile,
 )
-from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.user import User
 from omnia_api.schemas.max_account import (
     BusinessDecision,
@@ -24,12 +23,8 @@ from omnia_api.schemas.max_account import (
     BusinessProfilePublic,
     BusinessReviewPublic,
     MaxAccessPublic,
-    MaxDemoEntitlementPublic,
 )
-from omnia_api.services.billing_accounts import (
-    promote_personal_account_to_business,
-    resolve_billing_account,
-)
+from omnia_api.services.billing_accounts import promote_personal_account_to_business
 from omnia_api.services.max_access import get_user_business
 
 router = APIRouter(prefix="/api/max/account", tags=["max-account"])
@@ -89,49 +84,22 @@ async def get_access(
 ) -> MaxAccessPublic:
     settings = get_settings()
     business = await get_user_business(session, current_user.id)
-    registered = not current_user.is_anon and current_user.email is not None
-    reason = None if registered else "registration_required"
-    if current_user.email_verified_at is None:
-        launch_reason = "email_verification_required"
+    if current_user.is_anon or current_user.email is None:
+        reason = "registration_required"
+    elif current_user.email_verified_at is None:
+        reason = "email_verification_required"
     elif business is None:
-        launch_reason = "business_profile_required"
+        reason = "business_profile_required"
     elif business.status != "verified":
-        launch_reason = "business_verification_required"
+        reason = "business_verification_required"
     else:
-        launch_reason = None
-    paid_launch = False
-    if registered:
-        billing_account = await resolve_billing_account(session, current_user.id)
-        plan = (
-            await session.execute(
-                select(BillingPlan)
-                .join(Subscription, Subscription.plan_id == BillingPlan.id)
-                .where(
-                    Subscription.billing_account_id == billing_account.id,
-                    Subscription.status.in_(("trialing", "active", "past_due", "paused")),
-                )
-            )
-        ).scalar_one()
-        slots = plan.entitlements.get("static_publish_slots")
-        paid_launch = isinstance(slots, int) and slots > 0
-        if launch_reason is None and not paid_launch:
-            launch_reason = "subscription_entitlement_required"
-    demo_used = max(0, current_user.max_demo_generations_used or 0)
-    demo_remaining = max(0, MAX_DEMO_GENERATION_LIMIT - demo_used)
+        reason = None
     return MaxAccessPublic(
         email_verified=current_user.email_verified_at is not None,
         email_delivery_configured=bool(settings.smtp_host),
         business=BusinessProfilePublic.model_validate(business) if business else None,
-        can_create_project=registered,
-        can_launch=registered and launch_reason is None and paid_launch,
+        can_create_project=reason is None,
         reason=reason,
-        launch_reason=launch_reason,
-        demo=MaxDemoEntitlementPublic(
-            limit=MAX_DEMO_GENERATION_LIMIT,
-            used=demo_used,
-            remaining=demo_remaining,
-            available=demo_remaining > 0,
-        ),
         legal_document_version=settings.legal_document_version,
         payments_configured=bool(
             settings.yookassa_shop_id

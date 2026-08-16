@@ -144,65 +144,6 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
     assert restored.json()["next_charge_at"] == restored.json()["current_period_end"]
 
 
-async def test_lifetime_business_is_visible_and_cannot_be_replaced_or_downgraded(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user, account, free = await _registered_billing_context(
-        client,
-        db_session,
-        email="lifetime-business@example.com",
-    )
-    now = datetime.now(UTC).replace(microsecond=0)
-    free.status = "expired"
-    free.ended_at = now
-    lifetime = Subscription(
-        billing_account_id=account.id,
-        user_id=user.id,
-        plan_id=BUSINESS_PLAN_ID,
-        status="active",
-        is_lifetime=True,
-        auto_renew=False,
-        cancel_at_period_end=False,
-        current_period_start=now,
-    )
-    db_session.add(lifetime)
-    await db_session.commit()
-
-    current = await client.get("/api/billing/subscription")
-    assert current.status_code == 200
-    assert current.json()["plan"]["code"] == "business"
-    assert current.json()["is_lifetime"] is True
-    assert current.json()["current_period_end"] is None
-    assert current.json()["next_charge_at"] is None
-
-    manage = await client.patch("/api/billing/subscription", json={"action": "cancel"})
-    assert manage.status_code == 409
-    assert manage.json()["error"]["code"] == "subscription_management_unavailable"
-
-    monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    checkout = await client.post(
-        "/api/payments/subscription",
-        json={
-            "plan_code": "pro",
-            "idempotency_key": "f15c31aa-f218-41a9-b41f-dd68b49b378a",
-            "auto_renew": False,
-        },
-    )
-    assert checkout.status_code == 409
-    assert checkout.json()["error"]["code"] == "subscription_already_active"
-
-    processed = await process_subscription_cycle(
-        db_session,
-        now=now + timedelta(days=36500),
-    )
-    assert processed == 0
-    await db_session.refresh(lifetime)
-    assert lifetime.status == "active"
-    assert lifetime.is_lifetime is True
-
-
 async def test_lifecycle_renews_and_credits_exactly_once(
     client: httpx.AsyncClient,
     db_session: AsyncSession,

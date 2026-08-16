@@ -12,24 +12,17 @@ contracts (request/response schemas) are stable and consumed by apps/api today.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import re
-import secrets
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from hmac import compare_digest
 from hmac import new as hmac_new
-from time import time
 from typing import Annotated
-from urllib.parse import urlencode, urlsplit
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from urllib.parse import urlencode
+from uuid import UUID
 
-import httpx
-import structlog
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Header
 
 from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
@@ -39,11 +32,6 @@ from omnia_orchestrator.core.docker_client import (
     destroy_container,
     exec_cmd,
     find_project_container,
-    history_preview_cleanup_candidates,
-    history_preview_container_labels,
-    remove_history_preview_container,
-    remove_history_preview_session,
-    start_history_preview_container,
     stop_container,
     wake_container,
     write_files,
@@ -60,16 +48,10 @@ from omnia_orchestrator.schemas.runtime import (
     CompileStatusResponse,
     DeployRequest,
     DeployResponse,
-    HistoryPreviewRequest,
-    HistoryPreviewResponse,
-    HistoryPreviewSessionRequest,
-    HistoryPreviewSessionResponse,
     HotReloadRequest,
     KeepAliveRequest,
     KeepAliveResponse,
     LogsResponse,
-    MaxPreviewCapabilityValidateRequest,
-    MaxPreviewCapabilityValidateResponse,
     MaxPreviewSessionResponse,
     ProvisionRequest,
     ProvisionResponse,
@@ -84,7 +66,6 @@ from omnia_orchestrator.services import (
     demo_seed_writer,
     dep_doctor,
     deploy_state,
-    history_cleanup,
     nginx_writer,
 )
 from omnia_orchestrator.services.compile_status import parse_next_compile_error
@@ -107,7 +88,6 @@ from omnia_orchestrator.services.runtime_probe import probe_runtime_error
 from omnia_orchestrator.services.warm import warm_routes
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
-log = structlog.get_logger("omnia_orchestrator.runtime")
 
 # Fixed template files (globals.css, the component kit, layout) are baked into
 # the container image and never committed to the project git repo. The direct
@@ -121,147 +101,10 @@ _AGENT_MAX_READ = 1_000_000
 _AGENT_MAX_LIST = 16_000
 _AGENT_MAX_GREP = 16_000
 _AGENT_MAX_BUILD = 24_000
-_AGENT_MAX_DIAGNOSTICS = 30
-_AGENT_MAX_AFFECTED_FILES = 30
-
-
-def _agent_build_infra_response(exc: OrchestratorError) -> dict[str, object]:
-    """Keep container execution failures out of source-repair feedback."""
-    return {"ok": False, "error": exc.message, "infra_dead": True}
-
-
-def _safe_analyzer_path(value: object) -> str:
-    path = str(value or "").replace("\\", "/")[:300]
-    if (
-        not path
-        or path.startswith("/")
-        or re.match(r"^[A-Za-z]:/", path)
-        or ".." in path.split("/")
-    ):
-        return ""
-    return path
-
-
-def _normalize_code_intelligence(raw: str) -> dict[str, object]:
-    """Validate and bound the template analyzer's untrusted JSON output."""
-    try:
-        payload = json.loads(raw)
-    except (TypeError, ValueError):
-        return {"analysis_unavailable": ["analyze-code: invalid JSON"]}
-    if not isinstance(payload, dict):
-        return {"analysis_unavailable": ["analyze-code: invalid report"]}
-
-    all_diagnostics: list[dict[str, str]] = []
-    security_findings: list[dict[str, str]] = []
-    affected_files: list[str] = []
-    raw_diagnostics = payload.get("diagnostics")
-    if not isinstance(raw_diagnostics, list):
-        raw_diagnostics = []
-    # The template already bounds its report. Validate the complete bounded
-    # payload before applying our smaller transport cap so a late blocker can
-    # never be hidden behind advisory warnings.
-    for item in raw_diagnostics[:200]:
-        if not isinstance(item, dict):
-            continue
-        file = _safe_analyzer_path(item.get("file"))
-        diagnostic = {
-            "source": str(item.get("tool") or "analysis")[:40],
-            "code": str(item.get("rule") or "")[:80],
-            "severity": str(item.get("severity") or "warning")[:20],
-            "file": file,
-            "message": str(item.get("message") or "")[:500],
-        }
-        all_diagnostics.append(diagnostic)
-        if file and file not in affected_files:
-            affected_files.append(file)
-    diagnostics = (
-        [item for item in all_diagnostics if item["severity"] == "error"]
-        + [item for item in all_diagnostics if item["severity"] != "error"]
-    )[:_AGENT_MAX_DIAGNOSTICS]
-
-    raw_security_findings = payload.get("security_findings")
-    security_findings_valid = isinstance(raw_security_findings, list) and all(
-        isinstance(item, dict) for item in raw_security_findings
-    )
-    security_finding_items = (
-        raw_security_findings if isinstance(raw_security_findings, list) else []
-    )
-    for item in security_finding_items[:_AGENT_MAX_DIAGNOSTICS]:
-        if not isinstance(item, dict):
-            continue
-        file = _safe_analyzer_path(item.get("file"))
-        finding = {
-            "source": str(item.get("tool") or "osv-scanner")[:40],
-            "code": str(item.get("rule") or "")[:80],
-            "severity": str(item.get("severity") or "error")[:20],
-            "file": file,
-            "message": str(item.get("message") or "")[:500],
-        }
-        security_findings.append(finding)
-
-    raw_affected = payload.get("affected_files")
-    if not isinstance(raw_affected, list):
-        raw_affected = []
-    for path in raw_affected[:_AGENT_MAX_AFFECTED_FILES]:
-        path = _safe_analyzer_path(path)
-        if path and path not in affected_files:
-            affected_files.append(path)
-    affected_files = affected_files[:_AGENT_MAX_AFFECTED_FILES]
-
-    unavailable: list[str] = []
-    raw_unavailable = payload.get("unavailable")
-    if not isinstance(raw_unavailable, list):
-        raw_unavailable = []
-    for item in raw_unavailable[:10]:
-        if not isinstance(item, dict):
-            continue
-        unavailable.append(
-            f"{str(item.get('tool') or 'analysis')[:40]}: "
-            f"{str(item.get('reason') or 'unavailable')[:300]}"
-        )
-    if payload.get("security_scan_completed") is True and not security_findings_valid:
-        unavailable.append("osv-scanner: invalid security findings report")
-    evidence = [
-        f"analysis:{item['source']}:{item['code'] or item['severity']}" for item in diagnostics[:20]
-    ]
-    result: dict[str, object] = {
-        "diagnostics": diagnostics,
-        "security_findings": security_findings,
-        "security_scan_completed": (
-            payload.get("security_scan_completed") is True and security_findings_valid
-        ),
-        "affected_files": affected_files,
-        "evidence": evidence,
-    }
-    if diagnostics:
-        first_error = next(
-            (item for item in diagnostics if item["severity"] == "error"), diagnostics[0]
-        )
-        result["root_cause_hint"] = first_error["message"]
-    if unavailable:
-        result["analysis_unavailable"] = unavailable
-    return result
-
 
 _MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
 _MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
 _MAX_PREVIEW_BOOTSTRAP_PATH = "/api/omnia/preview-session"
-_MAX_PREVIEW_CAPABILITY_TTL_SECONDS = 15 * 60
-_HISTORY_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
-_HISTORY_SESSION_EXPIRY_TASKS: dict[str, asyncio.Task[None]] = {}
-_HISTORY_SWEEPER_TASK: asyncio.Task[None] | None = None
-_HISTORY_SESSION_TTL_SECONDS = 15 * 60
-_HISTORY_SESSION_READY_TRIES = 20
-_HISTORY_SESSION_READY_DELAY_SECONDS = 1.0
-_HISTORY_SWEEP_INTERVAL_SECONDS = 60
-_HISTORY_SESSION_START_TIMEOUT_SECONDS = 300
-_HISTORY_SESSION_CLEANUP_TIMEOUT_SECONDS = 60
-_HISTORY_DATABASE_CLEANUP_TIMEOUT_SECONDS = 30
-_HISTORY_JOURNAL_GRACE_SECONDS = (
-    _HISTORY_SESSION_START_TIMEOUT_SECONDS
-    + _HISTORY_SESSION_CLEANUP_TIMEOUT_SECONDS
-    + _HISTORY_DATABASE_CLEANUP_TIMEOUT_SECONDS
-)
 
 
 def _max_preview_bootstrap_message(project_id: str, expires: int) -> bytes:
@@ -273,20 +116,6 @@ def _max_preview_bootstrap_signature(secret: str, project_id: str, expires: int)
     digest = hmac_new(
         secret.encode("utf-8"),
         _max_preview_bootstrap_message(project_id, expires),
-        sha256,
-    ).digest()
-    return urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-
-def _max_preview_capability_message(project_id: str, expires: int) -> bytes:
-    """Canonical input for the server-only development capability."""
-    return f"omnia:max-preview-capability:v1\n{project_id}\n{expires}".encode("ascii")
-
-
-def _max_preview_capability_signature(secret: str, project_id: str, expires: int) -> str:
-    digest = hmac_new(
-        secret.encode("utf-8"),
-        _max_preview_capability_message(project_id, expires),
         sha256,
     ).digest()
     return urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -386,73 +215,6 @@ async def create_max_preview_session(
         bootstrap_url=bootstrap_url,
         expires_at=expires_at.isoformat().replace("+00:00", "Z"),
     )
-
-
-@router.post(
-    "/{project_id}/max-preview-capability/validate",
-    response_model=MaxPreviewCapabilityValidateResponse,
-)
-async def validate_max_preview_capability(
-    project_id: UUID,
-    payload: MaxPreviewCapabilityValidateRequest,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> MaxPreviewCapabilityValidateResponse:
-    """Validate a project-bound capability issued by the locked preview route."""
-    _verify_token(x_internal_token)
-    canonical_project_id = str(project_id)
-    parts = payload.token.split(".")
-    if (
-        len(parts) != 3
-        or parts[0] != "v1"
-        or not re.fullmatch(r"[1-9]\d{0,11}", parts[1])
-        or not re.fullmatch(r"[A-Za-z0-9_-]{43}", parts[2])
-    ):
-        raise OrchestratorError(
-            code="unauthorized",
-            message="MAX preview capability is invalid",
-            status_code=401,
-        )
-    expires = int(parts[1])
-    now = int(time())
-    if expires < now or expires > now + _MAX_PREVIEW_CAPABILITY_TTL_SECONDS:
-        raise OrchestratorError(
-            code="unauthorized",
-            message="MAX preview capability is invalid",
-            status_code=401,
-        )
-
-    container_name = await find_project_container(canonical_project_id, kind="dev")
-    if container_name is None:
-        raise OrchestratorError(
-            code="unauthorized",
-            message="MAX preview capability is invalid",
-            status_code=401,
-        )
-    container_status = await docker_container_status(container_name)
-    if (
-        container_status["state"] != "running"
-        or await container_image_template(container_name) != _MAX_PREVIEW_TEMPLATE
-    ):
-        raise OrchestratorError(
-            code="unauthorized",
-            message="MAX preview capability is invalid",
-            status_code=401,
-        )
-    secret = load_existing_auth_secret(canonical_project_id)
-    if secret is None:
-        raise OrchestratorError(
-            code="unauthorized",
-            message="MAX preview capability is invalid",
-            status_code=401,
-        )
-    expected = _max_preview_capability_signature(secret, canonical_project_id, expires)
-    if not compare_digest(parts[2], expected):
-        raise OrchestratorError(
-            code="unauthorized",
-            message="MAX preview capability is invalid",
-            status_code=401,
-        )
-    return MaxPreviewCapabilityValidateResponse(project_id=project_id, valid=True)
 
 
 @router.post("/wake", response_model=WakeResponse)
@@ -672,7 +434,6 @@ async def hot_reload(
         "state": "hot_reloaded",
         "written": write_result.get("written", "0"),
         "total_bytes": write_result.get("total_bytes", "0"),
-        "deleted": write_result.get("deleted", "0"),
         "dropped": write_result.get("dropped", ""),
         "seeded": str(sum(seeded.values())),
     }
@@ -680,588 +441,6 @@ async def hot_reload(
         response["drizzle_exit_code"] = drizzle_result["exit_code"]
         response["drizzle_stderr_tail"] = drizzle_result["stderr"][-500:]
     return response
-
-
-@router.post("/history-preview", response_model=HistoryPreviewResponse)
-async def start_history_preview(
-    payload: HistoryPreviewRequest,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> HistoryPreviewResponse:
-    """Create a private renderer from one immutable project git snapshot."""
-    _verify_token(x_internal_token)
-    database_id = _history_database_key(payload.project_id, payload.snapshot_id, purpose="artifact")
-    await _drop_history_artifact(payload.project_id, payload.snapshot_id)
-    await _remember_history_cleanup(
-        project_id=payload.project_id,
-        snapshot_id=payload.snapshot_id,
-        database_id=database_id,
-        purpose="artifact",
-    )
-    try:
-        await postgres_admin.drop_schema(database_id)
-        credentials = await postgres_admin.create_schema(database_id)
-        result = await start_history_preview_container(
-            str(payload.project_id),
-            str(payload.snapshot_id),
-            payload.files,
-            environment_overrides=_history_environment(
-                payload.project_id,
-                credentials.dsn,
-                credentials.schema_name,
-            ),
-            history_database_id=str(database_id),
-        )
-    except Exception:
-        try:
-            await _drop_history_artifact(payload.project_id, payload.snapshot_id)
-        except Exception as cleanup_exc:
-            log.warning(
-                "history_preview.failure_cleanup_pending",
-                project_id=str(payload.project_id),
-                snapshot_id=str(payload.snapshot_id),
-                error=str(cleanup_exc),
-            )
-        try:
-            await postgres_admin.drop_schema(database_id)
-            await _forget_history_cleanup(database_id)
-        except Exception as cleanup_exc:
-            log.warning(
-                "history_preview.database_cleanup_pending",
-                database_id=str(database_id),
-                error=str(cleanup_exc),
-            )
-        raise
-    return HistoryPreviewResponse(
-        project_id=payload.project_id,
-        snapshot_id=payload.snapshot_id,
-        **result,
-    )
-
-
-@router.delete("/history-preview/{project_id}/{snapshot_id}", status_code=204)
-async def stop_history_preview(
-    project_id: UUID,
-    snapshot_id: UUID,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> None:
-    """Remove a private history renderer after its immutable PNG is stored."""
-    _verify_token(x_internal_token)
-    removed = await _drop_history_artifact(project_id, snapshot_id)
-    if not removed:
-        database_id = _history_database_key(project_id, snapshot_id, purpose="artifact")
-        await postgres_admin.drop_schema(database_id)
-        await _forget_history_cleanup(database_id)
-
-
-def _history_session_port_key(project_id: UUID) -> UUID:
-    return uuid5(NAMESPACE_URL, f"omnia:history-session:{project_id}")
-
-
-def _history_database_key(project_id: UUID, snapshot_id: UUID, *, purpose: str) -> UUID:
-    return uuid5(
-        NAMESPACE_URL,
-        f"omnia:history-database:{purpose}:{project_id}:{snapshot_id}",
-    )
-
-
-def _history_environment(
-    project_id: UUID,
-    database_url: str,
-    database_schema: str,
-) -> dict[str, str]:
-    """Credentials scoped to one disposable history container only."""
-    return {
-        "AUTH_SECRET": secrets.token_urlsafe(32),
-        "AUTH_TRUST_HOST": "true",
-        "DATABASE_URL": database_url,
-        "OMNIA_DB_SCHEMA": database_schema,
-        "NODE_ENV": "development",
-        "OMNIA_PROJECT_ID": str(project_id),
-    }
-
-
-def _history_session_slug(project_id: UUID) -> str:
-    """Stable per-project host so TLS is issued/reused once, not per click."""
-    return f"history-{project_id.hex[:16]}"
-
-
-async def _remember_history_cleanup(
-    *,
-    project_id: UUID,
-    snapshot_id: UUID,
-    database_id: UUID,
-    purpose: str,
-    origin: str | None = None,
-    session_id: UUID | None = None,
-) -> None:
-    """Durably record cleanup before creating any disposable resource."""
-    record = history_cleanup.HistoryCleanupRecord(
-        project_id=str(project_id),
-        snapshot_id=str(snapshot_id),
-        purpose=purpose,
-        database_id=str(database_id),
-        origin=origin,
-        session_id=str(session_id) if session_id else None,
-    )
-    await asyncio.to_thread(history_cleanup.remember, record)
-
-
-async def _forget_history_cleanup(database_id: UUID | str | None) -> None:
-    if database_id:
-        await asyncio.to_thread(history_cleanup.forget, str(database_id))
-
-
-def _cleanup_record_labels(record: history_cleanup.HistoryCleanupRecord) -> dict[str, str]:
-    labels = {
-        "omnia.kind": "history-session" if record.purpose == "session" else "history-preview",
-        "omnia.project_id": record.project_id,
-        "omnia.snapshot_id": record.snapshot_id,
-        "omnia.history_database_id": record.database_id,
-    }
-    if record.origin:
-        labels["omnia.history_origin"] = record.origin
-    if record.session_id:
-        labels["omnia.history_session_id"] = record.session_id
-    return labels
-
-
-async def _release_orphan_history_records(
-    project_id: UUID,
-    *,
-    purpose: str,
-    snapshot_id: UUID | None = None,
-) -> bool:
-    """Release journaled resources when no Docker labels survived provisioning."""
-    records = await asyncio.to_thread(history_cleanup.list_records)
-    matches = [
-        record
-        for record in records
-        if record.project_id == str(project_id)
-        and record.purpose == purpose
-        and (snapshot_id is None or record.snapshot_id == str(snapshot_id))
-    ]
-    for record in matches:
-        if not await _release_history_resources(_cleanup_record_labels(record)):
-            raise OrchestratorError(
-                code="container_failure",
-                message="history resource cleanup will be retried",
-                status_code=503,
-            )
-        await _forget_history_cleanup(record.database_id)
-    return bool(matches)
-
-
-async def _wait_history_session_ready(port: int, bootstrap_path: str) -> None:
-    """Wait until the exact snapshot has rendered once before exposing it.
-
-    The UI can keep showing the immutable PNG while this cold compile runs, so
-    reliability is preferable to swapping the screenshot for an nginx 502.
-    """
-    origin = f"http://127.0.0.1:{port}"
-    async with httpx.AsyncClient(timeout=2.0, follow_redirects=False) as client:
-        for attempt in range(_HISTORY_SESSION_READY_TRIES):
-            try:
-                bootstrap = await client.get(f"{origin}{bootstrap_path}")
-                if bootstrap.status_code in {302, 303, 307, 308}:
-                    page = await client.get(f"{origin}/")
-                    if 200 <= page.status_code < 300:
-                        return
-            except httpx.HTTPError:
-                pass
-            if attempt < _HISTORY_SESSION_READY_TRIES - 1:
-                await asyncio.sleep(_HISTORY_SESSION_READY_DELAY_SECONDS)
-    raise OrchestratorError(
-        code="container_failure",
-        message="historical version did not become ready in time",
-        status_code=503,
-    )
-
-
-async def _drop_history_artifact(project_id: UUID, snapshot_id: UUID) -> bool:
-    labels = await history_preview_container_labels(str(project_id), str(snapshot_id))
-    if not labels:
-        await _release_orphan_history_records(
-            project_id,
-            purpose="artifact",
-            snapshot_id=snapshot_id,
-        )
-        return False
-    if not await _release_history_resources(labels):
-        raise OrchestratorError(
-            code="container_failure",
-            message="history preview cleanup will be retried",
-            status_code=503,
-        )
-    removed = await remove_history_preview_container(str(project_id), str(snapshot_id))
-    if not removed:
-        raise OrchestratorError(
-            code="container_failure",
-            message="history preview container cleanup will be retried",
-            status_code=503,
-        )
-    await _forget_history_cleanup(labels.get("omnia.history_database_id"))
-    return bool(removed)
-
-
-async def _drop_history_session(project_id: UUID) -> bool:
-    labels = await history_preview_container_labels(str(project_id), purpose="session")
-    if not labels:
-        had_records = await _release_orphan_history_records(project_id, purpose="session")
-        if had_records:
-            await get_port_allocator().release(_history_session_port_key(project_id))
-        return False
-    if not await _release_history_resources(labels):
-        raise OrchestratorError(
-            code="container_failure",
-            message="history session cleanup will be retried",
-            status_code=503,
-        )
-    removed = await remove_history_preview_session(str(project_id))
-    if not removed:
-        raise OrchestratorError(
-            code="container_failure",
-            message="history session container cleanup will be retried",
-            status_code=503,
-        )
-    await _forget_history_cleanup(labels.get("omnia.history_database_id"))
-    await get_port_allocator().release(_history_session_port_key(project_id))
-    return True
-
-
-async def _drop_selected_history_session(
-    project_id: UUID, snapshot_id: UUID, session_id: UUID
-) -> bool:
-    labels = await history_preview_container_labels(
-        str(project_id),
-        snapshot_id=str(snapshot_id),
-        purpose="session",
-        session_id=str(session_id),
-    )
-    if not labels:
-        return False
-    if not await _release_history_resources(labels):
-        raise OrchestratorError(
-            code="container_failure",
-            message="history session cleanup will be retried",
-            status_code=503,
-        )
-    removed = await remove_history_preview_session(
-        str(project_id),
-        snapshot_id=str(snapshot_id),
-        session_id=str(session_id),
-    )
-    if not removed:
-        return False
-    await _forget_history_cleanup(labels.get("omnia.history_database_id"))
-    await get_port_allocator().release(_history_session_port_key(project_id))
-    return True
-
-
-async def _release_history_resources(labels: dict[str, str]) -> bool:
-    """Attempt every cleanup independently; one failure must not mask others."""
-    released = True
-    origin = labels.get("omnia.history_origin")
-    if origin:
-        host = urlsplit(origin).hostname
-        if host:
-            try:
-                await nginx_writer.unpublish(host)
-            except Exception as exc:
-                released = False
-                log.warning("history_preview.unpublish_failed", host=host, error=str(exc))
-    database_id = labels.get("omnia.history_database_id")
-    if database_id:
-        try:
-            parsed_database_id = UUID(database_id)
-        except ValueError:
-            parsed_database_id = None
-            released = False
-        if parsed_database_id is not None:
-            try:
-                await postgres_admin.drop_schema(parsed_database_id)
-            except Exception as exc:
-                released = False
-                log.warning(
-                    "history_preview.database_cleanup_failed",
-                    database_id=database_id,
-                    error=str(exc),
-                )
-    return released
-
-
-async def _sweep_history_previews(*, remove_all: bool = False) -> int:
-    candidates = await history_preview_cleanup_candidates(remove_all=remove_all)
-    removed = 0
-    for labels in candidates:
-        try:
-            project_id = UUID(labels["omnia.project_id"])
-            snapshot_id = UUID(labels["omnia.snapshot_id"])
-            if labels.get("omnia.kind") == "history-session":
-                session_id = UUID(labels["omnia.history_session_id"])
-                removed += int(
-                    await _drop_selected_history_session(project_id, snapshot_id, session_id)
-                )
-            else:
-                removed += int(await _drop_history_artifact(project_id, snapshot_id))
-        except (KeyError, ValueError) as exc:
-            log.warning("history_preview.invalid_cleanup_labels", error=str(exc))
-        except Exception as exc:
-            log.warning(
-                "history_preview.cleanup_deferred",
-                project_id=labels.get("omnia.project_id"),
-                snapshot_id=labels.get("omnia.snapshot_id"),
-                error=str(exc),
-            )
-    # A provisioning crash may happen before Docker creates a labelled
-    # container.  The write-ahead journal is the only durable cleanup source in
-    # that window, so sweep records which have no matching live container.
-    records = await asyncio.to_thread(history_cleanup.list_records)
-    for record in records:
-        try:
-            UUID(record.project_id)
-            UUID(record.snapshot_id)
-            if not remove_all and time() - record.created_epoch < _HISTORY_JOURNAL_GRACE_SECONDS:
-                continue
-            labels = await history_preview_container_labels(
-                record.project_id,
-                snapshot_id=record.snapshot_id,
-                purpose=record.purpose,
-                session_id=record.session_id,
-            )
-            if labels:
-                continue
-            if await _release_history_resources(_cleanup_record_labels(record)):
-                await _forget_history_cleanup(record.database_id)
-            else:
-                log.warning(
-                    "history_preview.journal_cleanup_deferred",
-                    project_id=record.project_id,
-                    snapshot_id=record.snapshot_id,
-                )
-        except (ValueError, TypeError) as exc:
-            log.warning("history_preview.invalid_cleanup_record", error=str(exc))
-        except Exception as exc:
-            log.warning(
-                "history_preview.journal_cleanup_deferred",
-                project_id=record.project_id,
-                snapshot_id=record.snapshot_id,
-                error=str(exc),
-            )
-    return removed
-
-
-async def start_history_preview_sweeper() -> None:
-    """Clear restart-orphans, then periodically enforce the persisted TTL."""
-    global _HISTORY_SWEEPER_TASK
-    if _HISTORY_SWEEPER_TASK is not None and not _HISTORY_SWEEPER_TASK.done():
-        return
-    try:
-        await _sweep_history_previews(remove_all=True)
-    except Exception as exc:
-        log.warning("history_preview.startup_sweep_failed", error=str(exc))
-
-    async def _loop() -> None:
-        while True:
-            await asyncio.sleep(_HISTORY_SWEEP_INTERVAL_SECONDS)
-            try:
-                await _sweep_history_previews()
-            except Exception as exc:
-                log.warning("history_preview.sweep_failed", error=str(exc))
-
-    _HISTORY_SWEEPER_TASK = asyncio.create_task(_loop())
-
-
-async def stop_history_preview_sweeper() -> None:
-    global _HISTORY_SWEEPER_TASK
-    task = _HISTORY_SWEEPER_TASK
-    _HISTORY_SWEEPER_TASK = None
-    if task is not None:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-def _schedule_history_session_expiry(project_id: UUID, snapshot_id: UUID, session_id: UUID) -> None:
-    project_key = str(project_id)
-    previous = _HISTORY_SESSION_EXPIRY_TASKS.pop(project_key, None)
-    if previous is not None:
-        previous.cancel()
-
-    async def _expire() -> None:
-        try:
-            await asyncio.sleep(_HISTORY_SESSION_TTL_SECONDS)
-            lock = _HISTORY_SESSION_LOCKS.setdefault(project_key, asyncio.Lock())
-            async with lock:
-                await _drop_selected_history_session(project_id, snapshot_id, session_id)
-        finally:
-            current = _HISTORY_SESSION_EXPIRY_TASKS.get(project_key)
-            if current is asyncio.current_task():
-                _HISTORY_SESSION_EXPIRY_TASKS.pop(project_key, None)
-
-    _HISTORY_SESSION_EXPIRY_TASKS[project_key] = asyncio.create_task(_expire())
-
-
-@router.post(
-    "/history-preview/session",
-    response_model=HistoryPreviewSessionResponse,
-)
-async def start_history_preview_session(
-    payload: HistoryPreviewSessionRequest,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> HistoryPreviewSessionResponse:
-    """Expose one product snapshot with isolated, disposable runtime data."""
-    _verify_token(x_internal_token)
-    project_key = str(payload.project_id)
-    lock = _HISTORY_SESSION_LOCKS.setdefault(project_key, asyncio.Lock())
-    async with lock:
-        await _drop_history_session(payload.project_id)
-        database_id = _history_database_key(
-            payload.project_id, payload.snapshot_id, purpose="session"
-        )
-        port_key = _history_session_port_key(payload.project_id)
-        session_id = uuid4()
-        port: int | None = None
-        session_slug = _history_session_slug(payload.project_id)
-        host = nginx_writer.dev_host(session_slug)
-        origin = nginx_writer.dev_url(session_slug)
-
-        await _remember_history_cleanup(
-            project_id=payload.project_id,
-            snapshot_id=payload.snapshot_id,
-            database_id=database_id,
-            purpose="session",
-            origin=origin,
-            session_id=session_id,
-        )
-
-        async def _provision_history_session() -> str:
-            nonlocal port
-            await postgres_admin.drop_schema(database_id)
-            credentials = await postgres_admin.create_schema(database_id)
-            environment = _history_environment(
-                payload.project_id,
-                credentials.dsn,
-                credentials.schema_name,
-            )
-            secret_value = environment["AUTH_SECRET"]
-            allocator = get_port_allocator()
-            for attempt in range(5):
-                port = await allocator.acquire(port_key)
-                try:
-                    await start_history_preview_container(
-                        project_key,
-                        str(payload.snapshot_id),
-                        payload.files,
-                        purpose="session",
-                        host_port=port,
-                        public_origin=origin,
-                        environment_overrides={**environment, "AUTH_URL": origin},
-                        history_database_id=str(database_id),
-                        history_session_id=str(session_id),
-                    )
-                except OrchestratorError as exc:
-                    await allocator.reject(port_key, port)
-                    if exc.code != "port_conflict" or attempt == 4:
-                        raise
-                    await remove_history_preview_session(
-                        project_key,
-                        snapshot_id=str(payload.snapshot_id),
-                        session_id=str(session_id),
-                    )
-                    continue
-                except Exception:
-                    await allocator.reject(port_key, port)
-                    raise
-                await allocator.confirm(port_key, port)
-                break
-            assert port is not None
-            probe_expires = int((datetime.now(UTC) + _MAX_PREVIEW_BOOTSTRAP_TTL).timestamp())
-            probe_signature = _max_preview_bootstrap_signature(
-                secret_value, project_key, probe_expires
-            )
-            probe_query = urlencode({"expires": probe_expires, "signature": probe_signature})
-            await _wait_history_session_ready(port, f"{_MAX_PREVIEW_BOOTSTRAP_PATH}?{probe_query}")
-            await nginx_writer.publish_http(host, port)
-            if get_settings().enable_tls and not await nginx_writer.ensure_tls(host, port):
-                raise OrchestratorError(
-                    code="container_failure",
-                    message="history preview requires HTTPS",
-                    status_code=503,
-                )
-            return secret_value
-
-        try:
-            secret = await asyncio.wait_for(
-                _provision_history_session(),
-                timeout=_HISTORY_SESSION_START_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:
-            try:
-                await asyncio.wait_for(
-                    _drop_history_session(payload.project_id),
-                    timeout=_HISTORY_SESSION_CLEANUP_TIMEOUT_SECONDS,
-                )
-            except Exception as cleanup_exc:
-                log.warning(
-                    "history_preview.session_cleanup_pending",
-                    project_id=project_key,
-                    error=str(cleanup_exc),
-                )
-            try:
-                await asyncio.wait_for(
-                    postgres_admin.drop_schema(database_id),
-                    timeout=_HISTORY_DATABASE_CLEANUP_TIMEOUT_SECONDS,
-                )
-                await _forget_history_cleanup(database_id)
-            except Exception as cleanup_exc:
-                log.warning(
-                    "history_preview.database_cleanup_pending",
-                    database_id=str(database_id),
-                    error=str(cleanup_exc),
-                )
-            if port is not None:
-                await get_port_allocator().release(port_key)
-            if isinstance(exc, TimeoutError):
-                raise OrchestratorError(
-                    code="container_failure",
-                    message="historical version startup timed out safely",
-                    status_code=503,
-                ) from exc
-            raise
-
-        now = datetime.now(UTC)
-        expires_at = now + _MAX_PREVIEW_BOOTSTRAP_TTL
-        expires = int(expires_at.timestamp())
-        signature = _max_preview_bootstrap_signature(secret, project_key, expires)
-        query = urlencode({"expires": expires, "signature": signature})
-        _schedule_history_session_expiry(payload.project_id, payload.snapshot_id, session_id)
-        return HistoryPreviewSessionResponse(
-            project_id=payload.project_id,
-            snapshot_id=payload.snapshot_id,
-            session_id=session_id,
-            bootstrap_url=f"{origin}{_MAX_PREVIEW_BOOTSTRAP_PATH}?{query}",
-            expires_at=expires_at.isoformat().replace("+00:00", "Z"),
-        )
-
-
-@router.delete("/history-preview/session/{project_id}/{snapshot_id}", status_code=204)
-async def stop_history_preview_session(
-    project_id: UUID,
-    snapshot_id: UUID,
-    session_id: Annotated[UUID, Query()],
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> None:
-    """Close the selected sandbox without deleting or restoring its snapshot."""
-    _verify_token(x_internal_token)
-    lock = _HISTORY_SESSION_LOCKS.setdefault(str(project_id), asyncio.Lock())
-    async with lock:
-        # An old browser cleanup must not tear down a newer selected version.
-        if await _drop_selected_history_session(project_id, snapshot_id, session_id):
-            task = _HISTORY_SESSION_EXPIRY_TASKS.pop(str(project_id), None)
-            if task is not None and task is not asyncio.current_task():
-                task.cancel()
 
 
 @router.get("/{project_id}/read-file")
@@ -1368,58 +547,6 @@ async def agent_list_dir(
     return {"ok": ok, "detail": result["stdout"] if ok else result["stderr"]}
 
 
-@router.get("/{project_id}/agent/list-source-files")
-async def agent_list_source_files(
-    project_id: str,
-    slug: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """List mutable project source without exposing runtime secrets/caches."""
-
-    _verify_token(x_internal_token)
-    await record_activity(project_id)
-    container_name = f"omnia-dev-{slug}"
-    result = await exec_cmd(
-        container_name,
-        cmd=[
-            "find",
-            ".",
-            "-path",
-            "./node_modules",
-            "-prune",
-            "-o",
-            "-path",
-            "./.next",
-            "-prune",
-            "-o",
-            "-path",
-            "./.git",
-            "-prune",
-            "-o",
-            "-path",
-            "./public/uploads",
-            "-prune",
-            "-o",
-            "-type",
-            "f",
-            "-not",
-            "-name",
-            ".env",
-            "-not",
-            "-name",
-            ".env.*",
-            "-printf",
-            "%P\n",
-        ],
-        workdir="/app",
-        max_output=2_000_000,
-    )
-    if result["exit_code"] != "0":
-        return {"ok": False, "files": [], "detail": result["stderr"][:500]}
-    files = sorted({line.strip() for line in result["stdout"].splitlines() if line.strip()})
-    return {"ok": True, "files": files}
-
-
 @router.get("/{project_id}/agent/grep")
 async def agent_grep(
     project_id: str,
@@ -1507,9 +634,6 @@ async def _run_dep_doctor(container_name: str) -> str:
 async def agent_build(
     project_id: str,
     slug: str,
-    code_intelligence: bool = False,
-    security_scan: bool = False,
-    dependency_doctor: bool = True,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
     """Run the project's local TypeScript typecheck — a real, deterministic
@@ -1519,7 +643,7 @@ async def agent_build(
     _verify_token(x_internal_token)
     await record_activity(project_id)
     container_name = f"omnia-dev-{slug}"
-    dep_note = await _run_dep_doctor(container_name) if dependency_doctor else ""
+    dep_note = await _run_dep_doctor(container_name)
     # Next dev writes route validators for the source tree that existed at the
     # time of its last successful compile. Agent writes/rollback can replace or
     # remove a page faster than HMR refreshes those generated imports, which made
@@ -1539,8 +663,8 @@ async def agent_build(
             workdir="/app",
             max_output=1_024,
         )
-    except OrchestratorError as exc:
-        return _agent_build_infra_response(exc)
+    except OrchestratorError:
+        pass
     try:
         result = await exec_cmd(
             container_name,
@@ -1550,7 +674,9 @@ async def agent_build(
             max_output=_AGENT_MAX_BUILD,
         )
     except OrchestratorError as exc:
-        return _agent_build_infra_response(exc)
+        if exc.code == "container_not_running":
+            raise
+        return {"ok": False, "error": exc.message}
     ok = result["exit_code"] == "0"
     detail = (result["stdout"] + "\n" + result["stderr"]).strip()
     body = "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]
@@ -1558,62 +684,7 @@ async def agent_build(
     # see "[dep-doctor] installed: sonner" instead of a silent self-heal.
     if dep_note:
         body = f"{dep_note}\n{body}"
-    response: dict[str, object] = {"ok": ok, "detail": body}
-    if code_intelligence or security_scan:
-        try:
-            analyzer_cmd = ["node", "/app/scripts/analyze-code.mjs"]
-            if security_scan:
-                analyzer_cmd.append("--security")
-            analysis = await exec_cmd(
-                container_name,
-                cmd=analyzer_cmd,
-                workdir="/app",
-                timeout_sec=150,
-                max_output=160_000,
-            )
-            if analysis["exit_code"] == "0" and analysis["stdout"].strip():
-                response.update(_normalize_code_intelligence(analysis["stdout"]))
-            else:
-                response["analysis_unavailable"] = [
-                    "analyze-code: managed analyzer is not available in this container"
-                ]
-        except OrchestratorError as exc:
-            # A missing pre-analyzer container returns an ordinary non-zero
-            # command result above. An execution exception instead means the
-            # container/runtime is unavailable, not that project source needs
-            # repair; this is especially material for requested security scans.
-            return _agent_build_infra_response(exc)
-        raw_response_diagnostics = response.get("diagnostics")
-        response_diagnostic_items = (
-            raw_response_diagnostics if isinstance(raw_response_diagnostics, list) else []
-        )
-        blocking_diagnostics = [
-            item
-            for item in response_diagnostic_items
-            if isinstance(item, dict) and item.get("severity") == "error"
-        ]
-        if blocking_diagnostics:
-            first = blocking_diagnostics[0]
-            response["ok"] = False
-            response["detail"] = (
-                f"{body}\n[code-intelligence] {len(blocking_diagnostics)} blocking "
-                f"diagnostic(s): {str(first.get('message') or 'analysis failed')[:500]}"
-            )
-        response_diagnostics = response_diagnostic_items
-        response_unavailable = response.get("analysis_unavailable")
-        log.info(
-            "agent.build.code_intelligence",
-            project_id=project_id,
-            enabled=code_intelligence,
-            security_scan=security_scan,
-            diagnostics=(
-                len(response_diagnostics) if isinstance(response_diagnostics, list) else 0
-            ),
-            unavailable=(
-                len(response_unavailable) if isinstance(response_unavailable, list) else 0
-            ),
-        )
-    return response
+    return {"ok": ok, "detail": body}
 
 
 # Phase 1: a bounded shell tool for the agent. Runs an arbitrary command inside
@@ -1721,7 +792,6 @@ def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse
 
     return DeployResponse(
         project_id=UUID(rec.project_id),
-        commit_sha=rec.commit_sha,
         run_id=rec.run_id,
         phase=rec.phase,
         prod_url=rec.prod_url,
@@ -1750,31 +820,14 @@ async def deploy(
     optional — the dev container is resolved by the `omnia.project_id` label.
     """
     _verify_token(x_internal_token)
-    exact_parts = (
-        payload.commit_sha,
-        payload.slug,
-        payload.template,
-        payload.source_files,
-    )
-    if any(part is not None for part in exact_parts) and not all(
-        part is not None for part in exact_parts
-    ):
-        raise OrchestratorError(
-            code="validation_failed",
-            message="commit_sha, slug, template and source_files must be supplied together",
-            status_code=422,
-        )
     target = payload.target.model_dump() if payload.target else None
     rec = await builder.start_deploy(
-        project_id=str(payload.project_id),
-        slug=payload.slug or slug,
-        commit_sha=payload.commit_sha,
-        template=payload.template,
-        source_files=payload.source_files,
-        target=target,
-        domains=payload.domains,
-        idempotency_key=payload.idempotency_key,
-        runtime_env=payload.runtime_env,
+        str(payload.project_id),
+        slug,
+        target,
+        payload.domains,
+        payload.idempotency_key,
+        payload.runtime_env,
     )
     return _deploy_record_to_response(rec)
 

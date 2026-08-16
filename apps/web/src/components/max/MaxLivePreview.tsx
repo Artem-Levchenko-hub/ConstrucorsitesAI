@@ -1,67 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
   Check,
   CircleAlert,
   ExternalLink,
-  GitCommitHorizontal,
   Loader2,
-  MousePointer2,
   PanelRightClose,
-  Pencil,
   Play,
   RefreshCw,
   Signal,
-  Sparkles,
   Wifi,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { JoyBurst } from "@/components/workspace/JoyBurst";
-import { StylePanel } from "@/components/workspace/StylePanel";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   createMaxPreviewSession,
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
-import {
-  getRuntime,
-  heartbeatRuntime,
-  startRuntime,
-} from "@/lib/api/runtime";
-import type { Project, Snapshot } from "@/lib/api/types";
-import {
-  createEditorModeSync,
-  previewTargetOrigin,
-  stopEditorPickingAfterPick,
-  type EditorMode,
-} from "@/lib/editor-bridge";
-import { maxSnapshotLabel, maxSnapshotVersion } from "@/lib/max-version-history";
-import { cn, shortSha } from "@/lib/utils";
-import { useInspectorStore } from "@/store/inspector";
-import { useStyleEditStore } from "@/store/styleEdit";
-import { MaxVersionRail } from "./MaxVersionRail";
+import { getRuntime, startRuntime } from "@/lib/api/runtime";
+import type { Project } from "@/lib/api/types";
 
 const SCREEN_WIDTH = 390;
 const SCREEN_HEIGHT = 844;
@@ -72,202 +32,24 @@ const DEVICE_HEIGHT = SCREEN_HEIGHT + STATUS_BAR_HEIGHT + DEVICE_BEZEL * 2;
 
 export function MaxLivePreview({
   project,
-  deferInitialRuntimeStart = false,
-  snapshots,
-  snapshotsLoading,
-  currentSnapshotId,
-  selectedSnapshotId,
-  historicalSessionUrl,
-  historicalSessionLoading,
-  onSelectSnapshot,
-  onRestoreSnapshot,
-  restoringSnapshot,
   onClose,
 }: {
   project: Project;
-  deferInitialRuntimeStart?: boolean;
-  snapshots: Snapshot[];
-  snapshotsLoading: boolean;
-  currentSnapshotId: string | null;
-  selectedSnapshotId: string | null;
-  historicalSessionUrl: string | null;
-  historicalSessionLoading: boolean;
-  onSelectSnapshot: (snapshotId: string | null) => void;
-  onRestoreSnapshot: (snapshotId: string) => Promise<void>;
-  restoringSnapshot: boolean;
   onClose?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const editorInstanceId = useId();
-  const selectionIdPrefix = `${editorInstanceId}|`;
-  const autoStartAttempted = useRef(false);
+  const started = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
-  const historicalPreviewFrame = useRef<HTMLIFrameElement>(null);
-  const previousPickIds = useRef<string[]>([]);
-  const lastHeartbeatAt = useRef(0);
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
-  const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
-  const [inspectorReady, setInspectorReady] = useState(false);
-  const [acknowledgedEditorTransition, setAcknowledgedEditorTransition] =
-    useState<{ mode: EditorMode; seq: number } | null>(null);
-  const [loadedHistoricalSessionUrl, setLoadedHistoricalSessionUrl] = useState<
-    string | null
-  >(null);
-  const [restoreTarget, setRestoreTarget] = useState<{
-    snapshotId: string;
-    headId: string | null;
-  } | null>(null);
-  const inspectMode = useInspectorStore((state) => state.inspectMode);
-  const setInspectMode = useInspectorStore((state) => state.setInspectMode);
-  const addSelection = useInspectorStore((state) => state.addSelection);
-  const selections = useInspectorStore((state) => state.selections);
-  const styleMode = useStyleEditStore((state) => state.styleMode);
-  const setStyleMode = useStyleEditStore((state) => state.setStyleMode);
-  const stopStylePicking = useStyleEditStore(
-    (state) => state.stopStylePicking,
-  );
-  const styleSelected = useStyleEditStore((state) => state.selected);
-  const activeEditorMode: EditorMode = styleMode
-    ? "style"
-    : inspectMode
-      ? "inspect"
-      : "off";
-  const selectedSnapshot = selectedSnapshotId
-    ? snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null
-    : null;
-  const viewingHistorical = Boolean(
-    selectedSnapshot && selectedSnapshot.id !== currentSnapshotId,
-  );
-  const selectedVersion = selectedSnapshot
-    ? maxSnapshotVersion(snapshots, selectedSnapshot.id)
-    : null;
-  const restoreTargetId =
-    restoreTarget?.headId === currentSnapshotId
-      ? restoreTarget.snapshotId
-      : null;
-  const restoreTargetSnapshot = restoreTargetId
-    ? snapshots.find((snapshot) => snapshot.id === restoreTargetId) ?? null
-    : null;
-  const restoreTargetVersion = restoreTargetSnapshot
-    ? maxSnapshotVersion(snapshots, restoreTargetSnapshot.id)
-    : null;
-
-  const historicalSessionReady = Boolean(
-    historicalSessionUrl && loadedHistoricalSessionUrl === historicalSessionUrl,
-  );
-  useEffect(() => {
-    if (!historicalSessionUrl) return;
-    const expectedOrigin = previewTargetOrigin(
-      historicalSessionUrl,
-      window.location.origin,
-    );
-    if (!expectedOrigin) return;
-
-    function onHistoricalReady(event: MessageEvent) {
-      if (
-        event.source !== historicalPreviewFrame.current?.contentWindow ||
-        event.origin !== expectedOrigin
-      ) {
-        return;
-      }
-      const data = event.data as { type?: string } | null;
-      if (data?.type === "omnia:inspect:ready") {
-        setLoadedHistoricalSessionUrl(historicalSessionUrl);
-      }
-    }
-
-    window.addEventListener("message", onHistoricalReady);
-    return () => window.removeEventListener("message", onHistoricalReady);
-  }, [historicalSessionUrl]);
-  const postToPreview = useCallback((message: Record<string, unknown>) => {
-    const frame = previewFrame.current;
-    if (!frame?.contentWindow) return;
-    const targetOrigin = previewTargetOrigin(frame.src, window.location.origin);
-    if (targetOrigin) frame.contentWindow.postMessage(message, targetOrigin);
-  }, []);
-  const [editorModeSync] = useState(() =>
-    createEditorModeSync({
-      editorSession: editorInstanceId,
-    }),
-  );
-  useEffect(() => {
-    editorModeSync.setPostMessage(postToPreview);
-    return () => editorModeSync.setPostMessage(() => undefined);
-  }, [editorModeSync, postToPreview]);
-  const sendRuntimeHeartbeat = useCallback(() => {
-    const now = Date.now();
-    if (now - lastHeartbeatAt.current < 10_000) return;
-    lastHeartbeatAt.current = now;
-    void heartbeatRuntime(project.id).catch(() => {
-      // The status poll below owns recovery. A transient keepalive failure must
-      // never block normal interactions inside the generated application.
-    });
-  }, [project.id]);
-  const replayPendingStyles = useCallback(() => {
-    const propNames = {
-      color: "color",
-      background_color: "background-color",
-      border_color: "border-color",
-    } as const;
-    const { elements } = useStyleEditStore.getState();
-    Object.entries(elements).forEach(([selector, edit]) => {
-      Object.entries(propNames).forEach(([key, prop]) => {
-        const value = edit[key as keyof typeof propNames];
-        if (!value) return;
-        postToPreview({
-          type: "omnia:style:set",
-          target: "element",
-          selector,
-          prop,
-          value,
-        });
-      });
-    });
-  }, [postToPreview]);
-  const selectEditorMode = useCallback(
-    (mode: EditorMode) => {
-      // Cancel captured retries synchronously in the click handler. Waiting for
-      // the React effect cleanup leaves a small window where a stale enable can
-      // run after the user has already chosen ordinary viewing.
-      editorModeSync.transition(mode);
-      setStyleMode(mode === "style");
-      setInspectMode(mode === "inspect");
-    },
-    [editorModeSync, setInspectMode, setStyleMode],
-  );
-
-  useEffect(() => () => editorModeSync.dispose(), [editorModeSync]);
-
-  useEffect(() => {
-    if (!viewingHistorical) return;
-    selectEditorMode("off");
-  }, [selectEditorMode, viewingHistorical]);
-
-  useEffect(() => {
-    if (
-      selectedSnapshotId &&
-      !snapshotsLoading &&
-      !snapshots.some((snapshot) => snapshot.id === selectedSnapshotId)
-    ) {
-      onSelectSnapshot(null);
-    }
-  }, [
-    onSelectSnapshot,
-    selectedSnapshotId,
-    snapshots,
-    snapshotsLoading,
-  ]);
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
     retry: false,
-    // Keep observing a mounted preview even after it reaches `running`.
-    // Otherwise a later idle-stop is invisible to this shell forever.
     refetchInterval: (query) => {
       const state = query.state.data?.state;
-      return state === "running" || state === "failed" ? 30_000 : 2_000;
+      return state === "running" || state === "failed" ? false : 2_000;
     },
   });
   const start = useMutation({
@@ -278,7 +60,7 @@ export function MaxLivePreview({
   const managedKit = useQuery({
     queryKey: ["max-managed-kit-sync", project.id],
     queryFn: () => syncMaxManagedKit(project.id),
-    enabled: runtimeRunning && !deferInitialRuntimeStart,
+    enabled: runtimeRunning,
     retry: false,
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -299,46 +81,12 @@ export function MaxLivePreview({
   });
 
   useEffect(() => {
-    if (deferInitialRuntimeStart) return;
-    if (runtime.isLoading || start.isPending) return;
-    if (runtime.data?.state === "running") {
-      autoStartAttempted.current = false;
-      return;
-    }
-    if (
-      !autoStartAttempted.current &&
-      (runtime.isError ||
-        !runtime.data ||
-        ["stopped", "paused", "failed"].includes(runtime.data.state))
-    ) {
-      autoStartAttempted.current = true;
+    if (runtime.isLoading || started.current) return;
+    if (runtime.isError || !runtime.data || ["stopped", "paused", "failed"].includes(runtime.data.state)) {
+      started.current = true;
       start.mutate();
     }
-  }, [
-    deferInitialRuntimeStart,
-    runtime.isLoading,
-    runtime.isError,
-    runtime.data,
-    start,
-    start.isPending,
-  ]);
-
-  // SPA tab/button clicks stay entirely inside the generated application. Keep
-  // the runtime alive on a bounded timer so ordinary viewing never executes
-  // cross-frame editor work or starts an API request from the click path.
-  useEffect(() => {
-    if (deferInitialRuntimeStart || !runtimeRunning || viewingHistorical) return;
-    sendRuntimeHeartbeat();
-    const interval = window.setInterval(sendRuntimeHeartbeat, 60_000);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [
-    deferInitialRuntimeStart,
-    runtimeRunning,
-    sendRuntimeHeartbeat,
-    viewingHistorical,
-  ]);
+  }, [runtime.isLoading, runtime.isError, runtime.data, start]);
 
   useEffect(() => {
     const stage = deviceStage.current;
@@ -360,6 +108,24 @@ export function MaxLivePreview({
     const observer = new ResizeObserver(updateScale);
     observer.observe(stage);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const syncPreviewChrome = (event: MessageEvent) => {
+      if (
+        event.source !== previewFrame.current?.contentWindow ||
+        event.data?.type !== "omnia:inspect:ready"
+      ) {
+        return;
+      }
+      previewFrame.current?.contentWindow?.postMessage(
+        { type: "omnia:preview:chrome", hideScrollbar: true },
+        "*",
+      );
+    };
+
+    window.addEventListener("message", syncPreviewChrome);
+    return () => window.removeEventListener("message", syncPreviewChrome);
   }, []);
 
   // A relative same-origin fallback is both correct behind the production
@@ -396,198 +162,6 @@ export function MaxLivePreview({
     { label: "Безопасная сессия", done: Boolean(previewUrl) },
   ];
 
-  // Mode changes happen long after the iframe's initial load. Each transition
-  // owns one monotonic sequence and one timer registry. Cleanup cancels every
-  // retry before another mode or iframe can become active.
-  useEffect(() => {
-    if (!displayPreviewUrl || loadedPreviewUrl !== displayPreviewUrl) {
-      editorModeSync.cancelPending();
-      return;
-    }
-    const current = editorModeSync.getCurrent();
-    if (!current || current.mode !== activeEditorMode) {
-      editorModeSync.transition(activeEditorMode);
-    }
-    return () => editorModeSync.cancelPending();
-  }, [activeEditorMode, displayPreviewUrl, editorModeSync, loadedPreviewUrl]);
-
-  // One strict message boundary serves both editor paths. AI picks become
-  // commentable chips in the existing MAX composer; manual picks open the
-  // existing no-LLM StylePanel with the element's computed/source metadata.
-  useEffect(() => {
-    function onPreviewMessage(event: MessageEvent) {
-      const frame = previewFrame.current;
-      const frameWindow = frame?.contentWindow;
-      if (!frameWindow || event.source !== frameWindow) return;
-      const expectedOrigin = previewTargetOrigin(
-        frame.src,
-        window.location.origin,
-      );
-      if (!expectedOrigin || event.origin !== expectedOrigin) return;
-
-      const data = event.data as {
-        type?: string;
-        el?: Record<string, unknown>;
-        mode?: unknown;
-        editorSession?: unknown;
-        seq?: unknown;
-        version?: unknown;
-      };
-      if (!data || typeof data.type !== "string") return;
-      if (data.type === "omnia:inspect:ready") {
-        frame.dataset.maxPreviewReady = "true";
-        setInspectorReady(true);
-        postToPreview({ type: "omnia:preview:chrome", hideScrollbar: true });
-        editorModeSync.resend();
-        replayPendingStyles();
-        return;
-      }
-      if (data.type === "omnia:editor:state") {
-        if (editorModeSync.acknowledge(data)) {
-          const current = editorModeSync.getCurrent();
-          if (current) {
-            setAcknowledgedEditorTransition({
-              mode: current.mode,
-              seq: current.seq,
-            });
-          }
-        }
-        return;
-      }
-      if (data.type !== "omnia:pick" || !data.el) return;
-
-      const element = data.el;
-      const selector = String(element.selector ?? "");
-      if (!selector) return;
-      const pickedMode: EditorMode = useStyleEditStore.getState().styleMode
-        ? "style"
-        : useInspectorStore.getState().inspectMode
-          ? "inspect"
-          : "off";
-      if (pickedMode === "off") return;
-      if (pickedMode === "style") {
-        useStyleEditStore.getState().selectElement({
-          selector,
-          tag: String(element.tag ?? ""),
-          color: String(element.color ?? ""),
-          backgroundColor: String(element.backgroundColor ?? ""),
-          borderColor: String(element.borderColor ?? ""),
-          fontFamily: String(element.fontFamily ?? ""),
-          src: String(element.src ?? ""),
-          srcs: Array.isArray(element.srcs) ? element.srcs.map(String) : [],
-          editableText: Boolean(element.editableText),
-          editText: String(element.editText ?? ""),
-          textIndex:
-            typeof element.textIndex === "number" ? element.textIndex : 0,
-          outerHTML: String(element.outerHTML ?? ""),
-          htmlIndex:
-            typeof element.htmlIndex === "number" ? element.htmlIndex : 0,
-          prevHTML: String(element.prevHTML ?? ""),
-          prevIndex:
-            typeof element.prevIndex === "number" ? element.prevIndex : 0,
-          nextHTML: String(element.nextHTML ?? ""),
-          nextIndex:
-            typeof element.nextIndex === "number" ? element.nextIndex : 0,
-        });
-        editorModeSync.cancelPending();
-        stopEditorPickingAfterPick("style", {
-          setInspectMode,
-          stopStylePicking,
-          postMessage: postToPreview,
-        });
-        return;
-      }
-
-      const rawId = String(element.id ?? "");
-      if (!rawId) return;
-      const alreadySelected = useInspectorStore
-        .getState()
-        .selections.some((selection) => selection.selector === selector);
-      if (alreadySelected) {
-        postToPreview({ type: "omnia:inspect:remove", id: rawId });
-        editorModeSync.cancelPending();
-        stopEditorPickingAfterPick("inspect", {
-          setInspectMode,
-          stopStylePicking,
-          postMessage: postToPreview,
-        });
-        return;
-      }
-      const id = `${selectionIdPrefix}${rawId}`;
-      addSelection({
-        id,
-        selector,
-        label: element.label ? String(element.label) : null,
-        text: element.text ? String(element.text) : null,
-        html: element.html ? String(element.html) : null,
-        comment: "",
-      });
-      toast.success("Элемент добавлен в правку", {
-        description:
-          "Опишите изменение в чате — ИИ затронет только выделенное.",
-      });
-      editorModeSync.cancelPending();
-      stopEditorPickingAfterPick("inspect", {
-        setInspectMode,
-        stopStylePicking,
-        postMessage: postToPreview,
-      });
-    }
-
-    window.addEventListener("message", onPreviewMessage);
-    return () => window.removeEventListener("message", onPreviewMessage);
-  }, [
-    addSelection,
-    postToPreview,
-    replayPendingStyles,
-    sendRuntimeHeartbeat,
-    selectionIdPrefix,
-    setInspectMode,
-    stopStylePicking,
-    editorModeSync,
-  ]);
-
-  // A single-shot pick leaves its selected mark and panel visible while capture
-  // mode is off. Clear the mark only when that panel is explicitly closed (or
-  // an explicit mode change clears the selection), not on the automatic stop.
-  const previousEditorMode = useRef<EditorMode>("off");
-  const hadStyleSelection = useRef(false);
-  useEffect(() => {
-    const leftStyleMode =
-      previousEditorMode.current === "style" &&
-      activeEditorMode !== "style" &&
-      !styleSelected;
-    const closedStylePanel = hadStyleSelection.current && !styleSelected;
-    if (leftStyleMode || closedStylePanel) {
-      postToPreview({ type: "omnia:inspect:clear" });
-    }
-    previousEditorMode.current = activeEditorMode;
-    hadStyleSelection.current = Boolean(styleSelected);
-  }, [activeEditorMode, postToPreview, styleSelected]);
-
-  // Removing a chip (or sending the prompt) removes the matching outline from
-  // this component's owned iframe. The shell deliberately mounts only one live
-  // preview, so editor commands can never leak into a hidden responsive copy.
-  useEffect(() => {
-    const current = selections
-      .map((selection) => selection.id)
-      .filter((id) => id.startsWith(selectionIdPrefix));
-    const removed = previousPickIds.current.filter(
-      (id) => !current.includes(id),
-    );
-    if (removed.length > 0) {
-      if (current.length === 0) {
-        postToPreview({ type: "omnia:inspect:clear" });
-      } else {
-        removed.forEach((id) => {
-          const rawId = id.slice(selectionIdPrefix.length);
-          postToPreview({ type: "omnia:inspect:remove", id: rawId });
-        });
-      }
-    }
-    previousPickIds.current = current;
-  }, [postToPreview, selectionIdPrefix, selections]);
-
   async function openSeparatePreview() {
     const popup = window.open("about:blank", "_blank");
     if (popup) popup.opener = null;
@@ -621,47 +195,26 @@ export function MaxLivePreview({
     void previewSession.refetch();
   }
 
-  async function confirmRestoreSnapshot() {
-    if (!restoreTargetSnapshot) return;
-    try {
-      await onRestoreSnapshot(restoreTargetSnapshot.id);
-      setRestoreTarget(null);
-    } catch {
-      // The shell keeps the dialog open and reports the API error in a toast so
-      // a temporary failure can be retried without losing the chosen version.
-    }
-  }
-
   return (
     <aside
-      className="relative flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
+      className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
       data-testid="max-live-preview"
     >
-      <JoyBurst projectId={project.id} label="Готово — приложение ожило" />
       <div className="flex shrink-0 items-center justify-between gap-3 px-3 sm:px-5">
-        <h2 className="text-xs font-semibold">Превью</h2>
+        <div>
+          <p className="omnia-kicker text-[#8d887f]">Mobile WebView</p>
+          <h2 className="mt-1 text-sm font-semibold">Живое превью</h2>
+        </div>
         <div className="flex items-center gap-1.5">
-          <span
-            className="grid size-6 place-items-center"
-            aria-label={connected ? "Превью подключено" : "Превью запускается"}
-            title={connected ? "Подключено" : "Запускается"}
-          >
+          <span className="inline-flex items-center gap-2 text-[10px] text-[#6d6962]">
             <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#aaa59b]"}`} />
-            <span className="sr-only">
-              {connected ? "Подключено" : "Запускается"}
-            </span>
+            {connected ? "Подключено" : "Запускается"}
           </span>
-          <MaxEditMenu
-            mode={activeEditorMode}
-            disabled={!displayPreviewUrl || viewingHistorical}
-            selectionCount={selections.length}
-            onModeChange={selectEditorMode}
-          />
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="grid size-11 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716]"
+              className="grid size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716]"
               aria-label="Скрыть панель превью"
               title="Скрыть превью"
               data-testid="max-desktop-preview-close"
@@ -673,36 +226,28 @@ export function MaxLivePreview({
       </div>
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col items-center">
-        <div className="flex min-h-[340px] w-full min-w-0 flex-1 overflow-hidden px-1 sm:px-1.5">
-          <MaxVersionRail
-            snapshots={snapshots}
-            currentSnapshotId={currentSnapshotId}
-            selectedSnapshotId={selectedSnapshotId}
-            loading={snapshotsLoading}
-            onSelect={onSelectSnapshot}
-          />
+        <div
+          ref={deviceStage}
+          className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"
+          data-testid="max-live-device-stage"
+        >
           <div
-            ref={deviceStage}
-            className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden"
-            data-testid="max-live-device-stage"
+            className="relative shrink-0"
+            style={{
+              width: DEVICE_WIDTH * deviceScale,
+              height: DEVICE_HEIGHT * deviceScale,
+            }}
           >
             <div
-              className="relative shrink-0"
+              className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
+              data-testid="max-live-device"
               style={{
-                width: DEVICE_WIDTH * deviceScale,
-                height: DEVICE_HEIGHT * deviceScale,
+                width: DEVICE_WIDTH,
+                height: DEVICE_HEIGHT,
+                transform: `scale(${deviceScale})`,
+                transformOrigin: "top left",
               }}
             >
-              <div
-                className="absolute left-0 top-0 rounded-[58px] bg-[#0b0b0b] p-[10px] shadow-[0_12px_28px_rgba(23,23,22,.14),0_2px_7px_rgba(23,23,22,.12),inset_0_0_0_1px_rgba(255,255,255,.16)]"
-                data-testid="max-live-device"
-                style={{
-                  width: DEVICE_WIDTH,
-                  height: DEVICE_HEIGHT,
-                  transform: `scale(${deviceScale})`,
-                  transformOrigin: "top left",
-                }}
-              >
               <span className="absolute -left-[3px] top-[154px] h-[76px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
               <span className="absolute -left-[3px] top-[242px] h-[46px] w-[4px] rounded-l-full bg-[#30302f] shadow-[inset_1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
               <span className="absolute -right-[3px] top-[196px] h-[104px] w-[4px] rounded-r-full bg-[#30302f] shadow-[inset_-1px_0_rgba(255,255,255,.16)]" aria-hidden="true" />
@@ -718,143 +263,29 @@ export function MaxLivePreview({
                   </span>
                 </div>
                 <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
-                  {viewingHistorical && selectedSnapshot ? (
-                    <div
-                      className="absolute inset-0 bg-[#f5f3ee]"
-                      data-testid="max-historical-snapshot"
-                    >
-                      <span className="absolute left-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/95 px-2.5 py-1 text-[10px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
-                        <GitCommitHorizontal className="size-3 text-accent" />
-                        Версия v{selectedVersion} · изолированная сессия
-                      </span>
-                      {selectedSnapshot.preview_url ? (
-                        <div className="absolute inset-0 overflow-hidden bg-white">
-                          {/* The immutable PNG appears immediately. A single
-                              isolated interactive sandbox fades over it only
-                              after the exact historical commit is ready. */}
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={selectedSnapshot.preview_url}
-                            alt={`Снимок версии ${selectedVersion}: ${maxSnapshotLabel(selectedSnapshot)}`}
-                            className={cn(
-                              "absolute inset-0 size-full object-cover object-top transition-opacity duration-300 ease-out motion-reduce:transition-none",
-                              historicalSessionReady ? "opacity-0" : "opacity-100",
-                            )}
-                          />
-                        </div>
-                      ) : (
-                        <div className="grid size-full place-items-center bg-[#fcfbf7] px-8 text-center">
-                          <div>
-                            <GitCommitHorizontal className="mx-auto size-6 text-[#aaa59b]" />
-                            <p className="mt-3 text-[13px] font-medium text-[#171716]">
-                              Снимок ещё готовится
-                            </p>
-                            <p className="mt-1 text-[10px] leading-4 text-[#8d887f]">
-                              Версию уже можно восстановить. Изображение появится после обработки.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      {historicalSessionUrl && (
-                        <iframe
-                          ref={historicalPreviewFrame}
-                          key={historicalSessionUrl}
-                          src={historicalSessionUrl}
-                          title={`Интерактивная версия ${selectedVersion}`}
-                          className={cn(
-                            "absolute inset-0 size-full border-0 bg-white transition-[opacity,transform] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:transition-none",
-                            historicalSessionReady
-                              ? "pointer-events-auto translate-y-0 opacity-100"
-                              : "pointer-events-none translate-y-1 opacity-0",
-                          )}
-                          allow="clipboard-read; clipboard-write"
-                          referrerPolicy="no-referrer"
-                          data-testid="max-historical-iframe"
-                          onLoad={(event) => {
-                            const frame = event.currentTarget;
-                            const targetOrigin = previewTargetOrigin(
-                              frame.src,
-                              window.location.origin,
-                            );
-                            if (!targetOrigin || !frame.contentWindow) return;
-                            [0, 160, 640, 1_400].forEach((delay) => {
-                              window.setTimeout(() => {
-                                frame.contentWindow?.postMessage(
-                                  { type: "omnia:inspect:ping" },
-                                  targetOrigin,
-                                );
-                              }, delay);
-                            });
-                          }}
-                        />
-                      )}
-                      {(historicalSessionLoading || historicalSessionUrl) &&
-                        !historicalSessionReady && (
-                        <span className="pointer-events-none absolute bottom-3 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/92 px-2.5 py-1 text-[9px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
-                          <Loader2 className="size-2.5 animate-spin text-accent motion-reduce:animate-none" />
-                          Открываем интерактивную версию
-                        </span>
-                        )}
-                    </div>
-                  ) : displayPreviewUrl ? (
+                  {displayPreviewUrl ? (
                     <>
                       <iframe
                       ref={previewFrame}
                       key={displayPreviewUrl}
                       src={displayPreviewUrl}
                       title={`Превью ${project.name}`}
-                      className={cn(
-                        "absolute inset-0 size-full border-0 bg-white",
-                        activeEditorMode === "off" &&
-                          (!editorModeSync.isAcknowledged("off") ||
-                            acknowledgedEditorTransition?.mode !== "off" ||
-                            acknowledgedEditorTransition.seq !==
-                              editorModeSync.getCurrent()?.seq) &&
-                          "pointer-events-none",
-                      )}
+                      className="absolute inset-0 size-full border-0 bg-white"
                       allow="clipboard-read; clipboard-write"
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
-                      data-max-project-id={project.id}
-                      data-max-preview-ready={
-                        loadedPreviewUrl === displayPreviewUrl && inspectorReady
-                          ? "true"
-                          : "false"
-                      }
                       onLoad={(event) => {
-                        event.currentTarget.dataset.maxPreviewReady = "false";
-                        setInspectorReady(false);
-                        setAcknowledgedEditorTransition(null);
-                        editorModeSync.dispose();
-                        editorModeSync.transition(activeEditorMode);
                         if (previewUrl) setLastWorkingUrl(previewUrl);
-                        if (displayPreviewUrl) {
-                          setLoadedPreviewUrl(displayPreviewUrl);
-                        }
-                        postToPreview({
-                          type: "omnia:preview:chrome",
-                          hideScrollbar: true,
-                        });
+                        event.currentTarget.contentWindow?.postMessage(
+                          { type: "omnia:preview:chrome", hideScrollbar: true },
+                          "*",
+                        );
                       }}
                       />
-                      {activeEditorMode === "off" &&
-                        (!editorModeSync.isAcknowledged("off") ||
-                          acknowledgedEditorTransition?.mode !== "off" ||
-                          acknowledgedEditorTransition.seq !==
-                            editorModeSync.getCurrent()?.seq) && (
-                          <div
-                            className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-white/20"
-                            data-testid="max-view-mode-syncing"
-                          >
-                            <span className="rounded-full border border-[#d8d4cb] bg-[#fcfbf7]/92 px-3 py-1.5 text-[9px] font-medium text-[#6d6962] shadow-sm backdrop-blur">
-                              Включаем просмотр…
-                            </span>
-                          </div>
-                        )}
                       {!previewUrl && preparing && (
                         <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7]/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-[#171716]">
-                            <Loader2 className="size-3 animate-spin text-accent" />
+                            <Loader2 className="size-3 animate-spin text-[#f15a38]" />
                             {preparationLabel}
                           </p>
                           <p className="mt-1 text-[9px] text-[#8d887f]">
@@ -871,7 +302,7 @@ export function MaxLivePreview({
                           <button
                             type="button"
                             onClick={retryPreview}
-                            className="mt-1 text-[10px] font-medium text-accent"
+                            className="mt-1 text-[10px] font-medium text-[#c84528]"
                           >
                             Повторить проверку
                           </button>
@@ -881,9 +312,9 @@ export function MaxLivePreview({
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#fcfbf7] px-10 text-center">
                       {preparing ? (
-                        <Loader2 className="size-7 animate-spin text-accent" />
+                        <Loader2 className="size-7 animate-spin text-[#f15a38]" />
                       ) : (
-                        <Play className="size-7 text-accent" />
+                        <Play className="size-7 text-[#f15a38]" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-[#171716]">
                         {showPreviewError
@@ -927,210 +358,27 @@ export function MaxLivePreview({
                 </div>
                 <div className="pointer-events-none absolute inset-0 rounded-[48px] ring-1 ring-inset ring-white/10" aria-hidden="true" />
               </div>
-              </div>
             </div>
           </div>
         </div>
         <div className="shrink-0 text-center">
-          {viewingHistorical && selectedSnapshot ? (
-            <div className="mt-1 flex min-h-11 items-center justify-center gap-1.5 px-2">
-              <button
-                type="button"
-                onClick={() => onSelectSnapshot(null)}
-                disabled={restoringSnapshot}
-                className="inline-flex min-h-11 items-center rounded-[9px] px-2.5 text-[10px] font-medium text-[#6d6962] transition-colors hover:bg-[#f5f3ee] hover:text-[#171716] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:opacity-45"
-                data-testid="max-return-current-version"
-              >
-                Текущая
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setRestoreTarget({
-                    snapshotId: selectedSnapshot.id,
-                    headId: currentSnapshotId,
-                  })
-                }
-                disabled={restoringSnapshot}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[10px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent disabled:opacity-45"
-                data-testid="max-restore-version"
-              >
-                {restoringSnapshot && (
-                  <Loader2 className="size-3 animate-spin" />
-                )}
-                Восстановить v{selectedVersion}
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void openSeparatePreview()}
-              disabled={!connected || separatePreview.isPending}
-              className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
-              data-testid="max-open-preview-separate"
-              title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
-            >
-              {separatePreview.isPending ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <ExternalLink className="size-3" />
-              )}
-              Открыть отдельно
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => void openSeparatePreview()}
+            disabled={!connected || separatePreview.isPending}
+            className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-[#8d887f] transition-colors hover:text-[#c84528] disabled:cursor-not-allowed disabled:opacity-45"
+            data-testid="max-open-preview-separate"
+            title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
+          >
+            {separatePreview.isPending ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <ExternalLink className="size-3" />
+            )}
+            Открыть отдельно
+          </button>
         </div>
       </div>
-      {!viewingHistorical && styleSelected && (
-        <StylePanel
-          projectId={project.id}
-          post={postToPreview}
-          sourceEditing={false}
-          fontEditing={false}
-          tokenEditing={false}
-        />
-      )}
-      <Dialog
-        open={Boolean(
-          restoreTargetSnapshot &&
-            restoreTargetId === selectedSnapshotId &&
-            viewingHistorical,
-        )}
-        onOpenChange={(open) => {
-          if (!restoringSnapshot && !open) setRestoreTarget(null);
-        }}
-      >
-        <DialogContent className="border-[#d8d4cb] bg-[#fcfbf7] text-[#171716] shadow-[0_30px_90px_rgba(23,23,22,.28)] [&>button]:text-[#8d887f] [&>button:hover]:bg-[#ece8df]">
-          <DialogHeader>
-            <DialogTitle className="text-[#171716]">
-              Вернуться к версии v{restoreTargetVersion}?
-            </DialogTitle>
-            <DialogDescription className="leading-6 text-[#6d6962]">
-              Создадим новую версию на основе{" "}
-              <span className="font-mono text-[#171716]">
-                {restoreTargetSnapshot
-                  ? shortSha(restoreTargetSnapshot.commit_sha)
-                  : ""}
-              </span>
-              . Текущая версия останется в истории — её можно будет вернуть.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="lg"
-              onClick={() => setRestoreTarget(null)}
-              disabled={restoringSnapshot}
-              className="text-[#6d6962] hover:bg-[#ece8df] hover:text-[#171716]"
-            >
-              Отмена
-            </Button>
-            <Button
-              type="button"
-              size="lg"
-              onClick={() => void confirmRestoreSnapshot()}
-              disabled={restoringSnapshot || !restoreTargetSnapshot}
-            >
-              {restoringSnapshot && <Loader2 className="animate-spin" />}
-              Вернуться к версии
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </aside>
-  );
-}
-
-function MaxEditMenu({
-  mode,
-  disabled,
-  selectionCount,
-  onModeChange,
-}: {
-  mode: EditorMode;
-  disabled: boolean;
-  selectionCount: number;
-  onModeChange: (mode: EditorMode) => void;
-}) {
-  const active = mode !== "off";
-  const label =
-    mode === "inspect" ? "С ИИ" : mode === "style" ? "Вручную" : "Править";
-  const Icon =
-    mode === "inspect" ? Sparkles : mode === "style" ? Pencil : MousePointer2;
-  const selectionLabel =
-    mode === "inspect" && selectionCount > 0
-      ? `, выбрано: ${selectionCount}`
-      : "";
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          data-testid="max-edit-menu-trigger"
-          aria-label={`Режим правки: ${label}${selectionLabel}`}
-          aria-pressed={active}
-          title={active ? `Режим: ${label}` : "Править элементы"}
-          className={cn(
-            "relative grid size-11 shrink-0 place-items-center rounded-[9px] border transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45 disabled:active:scale-100",
-            active
-              ? "border-accent/35 bg-accent/10 text-accent"
-              : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
-          )}
-        >
-          <Icon className="size-4" />
-          {mode === "inspect" && selectionCount > 0 && (
-            <span className="absolute right-1 top-1 grid h-3.5 min-w-3.5 place-items-center rounded-full bg-accent px-0.5 text-[8px] font-semibold leading-none text-accent-fg tabular-nums">
-              {selectionCount}
-            </span>
-          )}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        sideOffset={8}
-        className="w-52 border-[#d8d4cb] bg-[#fcfbf7] p-1 text-[#171716] shadow-[0_14px_36px_rgba(23,23,22,.14)]"
-        data-testid="max-edit-menu"
-      >
-        <DropdownMenuRadioGroup
-          value={mode}
-          onValueChange={(value) => {
-            if (value === "inspect" || value === "style" || value === "off") {
-              onModeChange(value);
-            }
-          }}
-        >
-          <DropdownMenuRadioItem
-            value="inspect"
-            data-testid="max-edit-with-ai"
-            className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
-          >
-            <Sparkles className="size-3.5 shrink-0 text-accent" />
-            Изменить с ИИ
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem
-            value="style"
-            data-testid="max-edit-manually"
-            className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
-          >
-            <Pencil className="size-3.5 shrink-0 text-[#725f4f]" />
-            Настроить вручную
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-        {active && (
-          <>
-            <DropdownMenuSeparator className="bg-[#e7e3da]" />
-            <DropdownMenuItem
-              onSelect={() => onModeChange("off")}
-              className="min-h-10 rounded-[8px] px-2.5 py-2 text-[11px] text-[#6d6962] focus:bg-[#f5f3ee]"
-            >
-              <X className="size-3.5" />
-              Готово
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

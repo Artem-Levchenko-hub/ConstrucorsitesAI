@@ -51,7 +51,6 @@ def _public_subscription(
     return SubscriptionPublic(
         id=subscription.id,
         status=subscription.status,
-        is_lifetime=subscription.is_lifetime,
         auto_renew=subscription.auto_renew,
         cancel_at_period_end=subscription.cancel_at_period_end,
         current_period_start=subscription.current_period_start,
@@ -108,12 +107,6 @@ async def manage_subscription(
         account.id,
         for_update=True,
     )
-    if subscription.is_lifetime:
-        raise ApiError(
-            "subscription_management_unavailable",
-            "Пожизненный тариф не требует продления или отмены",
-            status.HTTP_409_CONFLICT,
-        )
     if plan.price_rub <= 0 or subscription.current_period_end is None:
         raise ApiError(
             "subscription_management_unavailable",

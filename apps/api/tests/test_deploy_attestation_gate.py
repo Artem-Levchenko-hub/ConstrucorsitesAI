@@ -108,17 +108,8 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     async def status(_project_id: uuid.UUID) -> dict[str, str]:
         return {"state": "running"}
 
-    async def read_live(
-        _project_id: uuid.UUID,
-        _slug: str,
-        _path: str,
-    ) -> None:
-        return None
-
-    async def list_live(_project_id: uuid.UUID, _slug: str) -> list[str]:
-        return ["src/app/page.tsx", "src/stale.ts"]
-
     async def hot_reload(
+        *,
         project_id: uuid.UUID,
         slug: str,
         files: dict[str, str],
@@ -129,7 +120,6 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     async def release_proof(
         _project_id: uuid.UUID,
         _slug: str,
-        **_kwargs: object,
     ) -> FunctionalVerdict:
         return FunctionalVerdict(
             passed=True,
@@ -146,15 +136,7 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
         status,
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.agent_read_file",
-        read_live,
-    )
-    monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.agent_list_source_files",
-        list_live,
-    )
-    monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload_exact",
+        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
         hot_reload,
     )
     monkeypatch.setattr(
@@ -169,10 +151,7 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
         (
             project.id,
             project.slug,
-            {
-                "src/app/page.tsx": "export default function Page() { return null }",
-                "src/stale.ts": "",
-            },
+            {"src/app/page.tsx": "export default function Page() { return null }"},
         )
     ]
 
@@ -192,16 +171,11 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
     async def current_user() -> User:
         return user
 
-    calls: list[tuple[uuid.UUID, dict[str, object]]] = []
+    calls: list[uuid.UUID] = []
 
-    async def deploy(project_id: uuid.UUID, **kwargs: object) -> dict[str, object]:
-        calls.append((project_id, kwargs))
+    async def deploy(project_id: uuid.UUID, **_: object) -> dict[str, object]:
+        calls.append(project_id)
         return {"phase": "queued"}
-
-    def read_files(project_id: uuid.UUID, commit_sha: str) -> dict[str, str]:
-        assert project_id == project.id
-        assert commit_sha == snapshot.commit_sha
-        return {"src/app/page.tsx": "export default function Page() { return null }"}
 
     prod_settings = get_settings().model_copy(
         update={"env": "prod", "deploy_attestation_blocking": False}
@@ -209,7 +183,6 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
     app.dependency_overrides[get_current_user] = current_user
     monkeypatch.setattr("omnia_api.routers.runtime.get_settings", lambda: prod_settings)
     monkeypatch.setattr("omnia_api.routers.runtime.orchestrator_client.deploy", deploy)
-    monkeypatch.setattr("omnia_api.routers.runtime.repo_svc.read_files", read_files)
     try:
         blocked = await client.post(f"/api/projects/{project.id}/deploy", json={})
         assert blocked.status_code == 409
@@ -221,14 +194,7 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
         allowed = await client.post(f"/api/projects/{project.id}/deploy", json={})
         assert allowed.status_code == 200
         assert allowed.json()["phase"] == "queued"
-        assert len(calls) == 1
-        called_project, called_kwargs = calls[0]
-        assert called_project == project.id
-        assert called_kwargs["commit_sha"] == snapshot.commit_sha
-        assert called_kwargs["slug"] == project.slug
-        assert called_kwargs["source_files"] == {
-            "src/app/page.tsx": "export default function Page() { return null }"
-        }
+        assert calls == [project.id]
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 

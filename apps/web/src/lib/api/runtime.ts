@@ -31,12 +31,6 @@ export async function getRuntime(projectId: Uuid): Promise<RuntimeStatus> {
   return apiFetch<RuntimeStatus>(`/api/projects/${projectId}/runtime`);
 }
 
-export async function heartbeatRuntime(projectId: Uuid): Promise<void> {
-  await apiFetch<void>(`/api/projects/${projectId}/runtime/heartbeat`, {
-    method: "POST",
-  });
-}
-
 export async function startRuntime(projectId: Uuid): Promise<RuntimeStatus> {
   return apiFetch<RuntimeStatus>(`/api/projects/${projectId}/runtime/start`, {
     method: "POST",

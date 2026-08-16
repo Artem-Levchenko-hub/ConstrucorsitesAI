@@ -166,7 +166,7 @@ export function PromptInput({
         onRemove={removeSelection}
       />
 
-      <div className="rounded-lg border border-border-default bg-surface-input transition-all focus-within:border-accent/70 focus-within:shadow-[0_0_0_3px_var(--color-accent-subtle)]">
+      <div className="rounded-lg border border-border-default bg-surface-input transition-all focus-within:border-[rgba(241,90,56,0.72)] focus-within:shadow-[0_0_0_3px_rgba(241,90,56,0.13)]">
         <textarea
           ref={ref}
           aria-label={ariaLabel}

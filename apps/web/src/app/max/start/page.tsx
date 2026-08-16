@@ -79,16 +79,16 @@ export default function MaxQuickStartPage() {
             <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#6d6962] hover:text-[#171716] sm:inline-flex">
               Полное руководство
             </Link>
-            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-accent px-4 text-xs font-semibold text-white hover:bg-accent-hover">
+            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-[#f15a38] px-4 text-xs font-semibold text-white hover:bg-[#d94929]">
               Открыть Studio
             </Link>
           </div>
         </div>
       </header>
 
-      <section data-graphite-shell className="border-b border-[#d8d4cb] bg-[#171716] text-white">
+      <section className="border-b border-[#d8d4cb] bg-[#171716] text-white">
         <div className="mx-auto max-w-[1120px] px-5 py-14 sm:px-8 sm:py-20">
-          <p className="omnia-kicker text-accent">Быстрый старт</p>
+          <p className="omnia-kicker text-[#f15a38]">Быстрый старт</p>
           <h1 className="mt-4 max-w-[760px] text-[42px] font-semibold leading-[1.04] tracking-[-.05em] sm:text-[62px]">
             От идеи до запуска за шесть этапов
           </h1>
@@ -106,7 +106,7 @@ export default function MaxQuickStartPage() {
             return (
               <li key={step.number} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5 sm:p-7">
                 <div className="flex items-center justify-between gap-4">
-                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#ece8df] text-accent">
+                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]">
                     <Icon className="size-4" />
                   </span>
                   <span className="font-mono text-xs text-[#aaa59b]">{step.number} / 06</span>
@@ -117,7 +117,7 @@ export default function MaxQuickStartPage() {
                   <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8d887f]">Результат этапа</p>
                   <p className="mt-2 text-xs leading-5 text-[#171716]">{step.result}</p>
                 </div>
-                <Link href={step.href} className="mt-5 inline-flex min-h-11 items-center gap-2 text-xs font-semibold text-accent hover:underline">
+                <Link href={step.href} className="mt-5 inline-flex min-h-11 items-center gap-2 text-xs font-semibold text-[#c84528] hover:underline">
                   Подробная инструкция
                   <ArrowRight className="size-3.5" />
                 </Link>

@@ -41,13 +41,8 @@ class User(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="active", default="active"
     )
-    role: Mapped[str] = mapped_column(Text, nullable=False, server_default="user", default="user")
-    # Account-scoped owner/tester entitlement.  This bypasses wallet and free-demo
-    # counters only; request throttling and per-run provider safety limits remain
-    # active so an accidental loop cannot turn this privilege into a platform-wide
-    # availability incident.
-    unlimited_generations: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false", default=False
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="user", default="user"
     )
     deletion_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -67,13 +62,6 @@ class User(Base):
     # successful free generation; once it reaches FREE_GENERATION_LIMIT
     # (core/config.py) the user is billed from their wallet like everyone else.
     free_generations_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-
-    # MAX's instant-demo allowance is separate from the generic site-builder
-    # welcome generations.  It is reserved under a row lock before a MAX build
-    # is accepted, so parallel projects/tabs cannot each claim a free build.
-    max_demo_generations_used: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0", default=0
-    )
 
     # Viral-funnel provenance (V4.2b return-edge). Set at registration from the
     # share-link return path: `signup_source` is a bounded enum ("share_link"

@@ -25,16 +25,7 @@ export type MaxAccess = {
   email_delivery_configured: boolean;
   business: BusinessProfile | null;
   can_create_project: boolean;
-  can_launch: boolean;
   reason: string | null;
-  launch_reason: string | null;
-  demo: {
-    limit: number;
-    used: number;
-    remaining: number;
-    available: boolean;
-    upgrade_path: string;
-  };
   legal_document_version: string;
   payments_configured: boolean;
 };
@@ -52,19 +43,8 @@ export function getMaxAccess(): Promise<MaxAccess> {
       email_verified: true,
       email_delivery_configured: true,
       business: mockBusiness,
-      can_create_project: true,
-      can_launch: false,
-      reason: null,
-      launch_reason: mockBusiness
-        ? "subscription_entitlement_required"
-        : "business_profile_required",
-      demo: {
-        limit: 1,
-        used: 0,
-        remaining: 1,
-        available: true,
-        upgrade_path: "/billing/plan",
-      },
+      can_create_project: mockBusiness?.status === "verified",
+      reason: mockBusiness ? null : "business_required",
       legal_document_version: "dev",
       payments_configured: true,
     });

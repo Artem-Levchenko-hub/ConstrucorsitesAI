@@ -206,10 +206,7 @@ async def director_polish_generate(
         if u := event.get("usage"):
             director_usage = u
         if err := event.get("error"):
-            yield {
-                "error": f"director pass failed: {err}",
-                **({"error_code": event["error_code"]} if event.get("error_code") else {}),
-            }
+            yield {"error": f"director pass failed: {err}"}
             return
 
     director_acc = "".join(director_parts).strip()
@@ -237,10 +234,7 @@ async def director_polish_generate(
         if u := event.get("usage"):
             polish_usage = u
         if err := event.get("error"):
-            yield {
-                "error": f"polish pass failed: {err}",
-                **({"error_code": event["error_code"]} if event.get("error_code") else {}),
-            }
+            yield {"error": f"polish pass failed: {err}"}
             return
 
     yield {"pass": "polish", "stage": "end"}

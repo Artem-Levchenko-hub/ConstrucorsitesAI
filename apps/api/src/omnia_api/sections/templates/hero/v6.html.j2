@@ -1,8 +1,8 @@
-<section id="{{ anchor_id }}" class="relative min-h-[88vh] flex items-center overflow-hidden" data-omnia-depth="media">
+<section id="{{ anchor_id }}" class="relative min-h-[88vh] flex items-center overflow-hidden">
   <div class="absolute inset-0 bg-mesh" aria-hidden="true"></div>
-  <img data-depth-layer="1" data-omnia-photo="{{ s.bg_photo }}" alt="" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
-  <div data-depth-layer="2" class="absolute inset-0 {% if s.overlay == 'gradient' %}bg-gradient-to-t from-black/80 via-black/45 to-black/30{% elif s.overlay == 'darker' %}bg-black/70{% else %}bg-black/55{% endif %}" aria-hidden="true"></div>
-  <div data-depth-layer="3" data-depth-content class="relative z-10 w-full max-w-5xl mx-auto px-6 text-center text-protect">
+  <img data-omnia-photo="{{ s.bg_photo }}" alt="" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
+  <div class="absolute inset-0 {% if s.overlay == 'gradient' %}bg-gradient-to-t from-black/80 via-black/45 to-black/30{% elif s.overlay == 'darker' %}bg-black/70{% else %}bg-black/55{% endif %}" aria-hidden="true"></div>
+  <div class="relative w-full max-w-5xl mx-auto px-6 text-center text-protect">
     {% if s.eyebrow %}
     <p class="reveal text-sm uppercase tracking-[0.2em] font-semibold text-white/80 mb-6">{{ s.eyebrow }}</p>
     {% endif %}

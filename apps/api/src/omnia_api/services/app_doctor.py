@@ -26,7 +26,7 @@ from omnia_api.services.file_extractor import (
     extract_edits,
     extract_files,
 )
-from omnia_api.services.llm_client import LLMError, PaidCallAmbiguousError, complete_chat
+from omnia_api.services.llm_client import LLMError, complete_chat
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +51,9 @@ _SYSTEM = (
 
 
 def _build_prompt(category: str, detail: str, file_path: str | None, content: str) -> str:
-    head = "КОМПИЛЯЦИЯ НЕ ПРОХОДИТ" if category == "compile" else "ПРИЛОЖЕНИЕ ПАДАЕТ В РАНТАЙМЕ"
+    head = (
+        "КОМПИЛЯЦИЯ НЕ ПРОХОДИТ" if category == "compile" else "ПРИЛОЖЕНИЕ ПАДАЕТ В РАНТАЙМЕ"
+    )
     loc = f"\nФайл с ошибкой: {file_path}" if file_path else ""
     body = content[:_MAX_FILE_CHARS]
     truncated = "\n…(файл обрезан)…" if len(content) > _MAX_FILE_CHARS else ""
@@ -77,8 +79,6 @@ async def _ask_model(prompt: str, model: str) -> str:
             max_tokens=4000,
             temperature=0.0,
         )
-    except PaidCallAmbiguousError:
-        raise
     except LLMError as exc:
         log.warning("app_doctor: model call failed (give up): %r", exc)
         return ""

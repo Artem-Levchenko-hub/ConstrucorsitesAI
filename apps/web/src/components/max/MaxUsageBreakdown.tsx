@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Check, CircleDashed, Coins, RotateCcw } from "lucide-react";
+import { Check, Coins, RotateCcw } from "lucide-react";
 
 import { getMaxUsage } from "@/lib/api/max-studio";
 import type { Uuid } from "@/lib/api/types";
@@ -21,12 +21,11 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
     retry: false,
   });
   const current = usage.data?.run_cost_rub ?? 0;
-  const pending = usage.data?.run_pending_reservation_rub ?? 0;
 
   return (
     <details className="group relative" data-testid="max-usage-breakdown">
       <summary className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[8px] border border-[#d8d4cb] bg-white px-2.5 text-[10px] font-semibold text-[#494741] hover:bg-[#f5f3ee] [&::-webkit-details-marker]:hidden">
-        <Coins className="size-3.5 text-accent" />
+        <Coins className="size-3.5 text-[#f15a38]" />
         <span className="hidden sm:inline">Расход</span>
         <span>{usage.isLoading ? "…" : `${rub(current)} ₽`}</span>
       </summary>
@@ -50,7 +49,7 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
               <div key={stage.id} className="rounded-[9px] border border-[#e5e1d8] bg-white p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="flex min-w-0 items-center gap-2 text-xs font-medium">
-                    {stage.id === "template" ? <Check className="size-3.5 text-[#248a4b]" /> : <Coins className="size-3.5 text-accent" />}
+                    {stage.id === "template" ? <Check className="size-3.5 text-[#248a4b]" /> : <Coins className="size-3.5 text-[#f15a38]" />}
                     <span className="truncate">{stage.label}</span>
                   </span>
                   <strong className="shrink-0 text-xs">{rub(stage.cost_rub)} ₽</strong>
@@ -62,15 +61,6 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
                 </p>
               </div>
             ))}
-          </div>
-        )}
-        {pending > 0 && (
-          <div className="mt-3 flex gap-2 rounded-[9px] border border-[#ddd6c5] bg-[#f5f1e8] p-3 text-[10px] leading-4 text-[#69645b]">
-            <CircleDashed className="mt-0.5 size-3.5 shrink-0" />
-            <p>
-              До {rub(pending)} ₽ зарезервировано, но не подтверждено и не входит в
-              фактический расход. Повтор платного вызова отключён.
-            </p>
           </div>
         )}
         <p className="mt-3 text-[9px] leading-4 text-[#8d887f]">Данные берутся из фактического gateway-ledger и обновляются во время работы.</p>

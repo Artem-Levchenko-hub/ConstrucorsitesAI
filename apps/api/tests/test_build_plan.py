@@ -14,7 +14,6 @@ from omnia_api.services import build_plan as bp
 from omnia_api.services.build_plan import (
     BuildPlan,
     Capability,
-    build_plan_from_max_product_spec,
     merge_plan_into_spec,
     parse_plan,
     plan_build,
@@ -74,7 +73,9 @@ def test_parse_garbage_is_empty():
 
 def test_truncation_caps():
     big = {
-        "capabilities": [{"id": f"c{i}", "path": f"/api/{i}", "action": "x"} for i in range(40)],
+        "capabilities": [
+            {"id": f"c{i}", "path": f"/api/{i}", "action": "x"} for i in range(40)
+        ],
         "screens": [{"route": f"/s{i}"} for i in range(40)],
         "entities": [{"name": f"E{i}"} for i in range(40)],
     }
@@ -122,56 +123,6 @@ def test_checklist_block():
     assert "/api/clients" in blk
     assert "/dashboard" in blk
     assert BuildPlan().checklist_block() == ""
-
-
-def test_max_checklist_uses_internal_view_and_action_proof_markers():
-    block = parse_plan(json.dumps(_VALID)).checklist_block(max_runtime=True)
-
-    assert 'data-omnia-screen="/dashboard"' in block
-    assert 'data-omnia-capability="create_client"' in block
-    assert "data-omnia-screen-nav" in block
-    assert "data-omnia-persisted-action" in block
-    assert "инструментом `probe`" not in block
-
-
-def test_build_plan_from_max_product_spec_is_bounded_nonempty_and_stable():
-    spec = {
-        "purpose": "Учёт заявок",
-        "audience": "менеджеры",
-        "screens": ["Обзор", "Заявки", "Обзор"] + [f"Экран {i}" for i in range(20)],
-        "primary_action": "создать заявку",
-        "capabilities": ["Фильтр", "Экспорт"],
-        "data": ["Заявка", "Клиент", "Заявка"] + [f"Данные {i}" for i in range(20)],
-        "acceptance": ["Заявка сохраняется"],
-    }
-
-    first = build_plan_from_max_product_spec(spec)
-    second = build_plan_from_max_product_spec(spec)
-
-    assert first.to_dict() == second.to_dict()
-    assert first.summary == "Учёт заявок — для менеджеры"
-    assert 1 <= len(first.screens) <= 8
-    assert 1 <= len(first.entities) <= 8
-    assert len(first.capabilities) == 3
-    assert first.capabilities[0].id == "primary_action"
-    assert [cap.action for cap in first.capabilities[1:]] == ["Фильтр", "Экспорт"]
-    assert first.capabilities[0].path == ""
-    assert first.acceptance == ("Заявка сохраняется",)
-
-
-def test_build_plan_from_max_product_spec_accepts_model_and_falls_back():
-    class _Spec:
-        def model_dump(self, *, mode):
-            assert mode == "json"
-            return {}
-
-    plan = build_plan_from_max_product_spec(_Spec())
-
-    assert not plan.is_empty
-    assert plan.screens[0].route == "/view-1"
-    assert plan.entities[0].name == "Пользовательские данные"
-    assert plan.capabilities[0].action == "выполнить основное действие"
-    assert plan.acceptance
 
 
 def test_from_dict_defensive():

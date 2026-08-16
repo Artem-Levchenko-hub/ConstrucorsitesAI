@@ -51,12 +51,6 @@ class GenerationRun(Base):
     )
     response_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
-    # Public, observable agent state only: plan steps, evidence, artifacts and
-    # the next action. Never stores hidden chain-of-thought. This survives page
-    # reloads and gives a retry a precise checkpoint after process interruption.
-    agent_state: Mapped[dict[str, object]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default="{}"
-    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -1,35 +1,20 @@
 "use client";
 
-import { useRef, useState, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, CircleAlert, MoreVertical, Trash2 } from "lucide-react";
+import { ArrowRight, CircleAlert } from "lucide-react";
 import Link from "next/link";
 
-import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
-import { MaxHowToDialog } from "@/components/max/MaxHowToDialog";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
-import { getMaxHowToGuide } from "@/lib/max-how-to";
 import { getMaxJourney } from "@/lib/max-journey";
 
 export function MaxStudioProjectCard({
   project,
   index,
-  successFocusRef,
 }: {
   project: Project;
   index: number;
-  successFocusRef: RefObject<HTMLElement | null>;
 }) {
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -38,49 +23,13 @@ export function MaxStudioProjectCard({
   });
   const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
-  const howToGuide = getMaxHowToGuide(readiness.isError ? "demo" : nextStage?.id);
   const nextHref = nextStage?.href ?? `/max/${project.id}/dashboard`;
-  const howToHref = readiness.isError ? `/max/${project.id}` : nextHref;
 
   return (
-    <article className="group relative overflow-hidden rounded-[12px] border border-border-default bg-surface-raised transition-colors hover:border-border-strong">
-      <div className="absolute right-2 top-2 z-20">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              ref={menuTriggerRef}
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={`Действия с проектом ${project.name}`}
-              className="size-11 bg-surface/90 text-fg-secondary shadow-sm backdrop-blur hover:bg-surface hover:text-fg-primary"
-            >
-              <MoreVertical className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              className="text-danger focus:text-danger"
-              onSelect={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="size-4" />
-              Удалить проект
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      <DeleteProjectDialog
-        project={project}
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        returnFocusRef={menuTriggerRef}
-        successFocusRef={successFocusRef}
-      />
-
+    <article className="group overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] transition hover:border-[#aaa59b]">
       <Link
         href={`/max/${project.id}`}
-        className="relative block aspect-[16/10] overflow-hidden bg-surface-3"
+        className="relative block aspect-[16/10] overflow-hidden bg-[#ece8df]"
         aria-label={`Открыть редактор проекта ${project.name}`}
       >
         {project.preview_url ? (
@@ -94,9 +43,9 @@ export function MaxStudioProjectCard({
         ) : (
           <div className="grid h-full place-items-center">
             <div className="w-[82px] rounded-[14px] border-4 border-[#171716] bg-white p-2 shadow-lg">
-              <div className="h-8 rounded-[6px] bg-accent" />
-              <div className="mt-2 h-2 rounded bg-surface-3" />
-              <div className="mt-1 h-2 w-2/3 rounded bg-surface-3" />
+              <div className="h-8 rounded-[6px] bg-[#f15a38]" />
+              <div className="mt-2 h-2 rounded bg-[#ece8df]" />
+              <div className="mt-1 h-2 w-2/3 rounded bg-[#ece8df]" />
             </div>
           </div>
         )}
@@ -108,7 +57,7 @@ export function MaxStudioProjectCard({
       <div className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <Link href={`/max/${project.id}`} className="font-semibold hover:text-accent">
+            <Link href={`/max/${project.id}`} className="font-semibold hover:text-[#c84528]">
               {project.name}
             </Link>
             <p className="mt-1 text-xs text-[#8d887f]">
@@ -133,7 +82,7 @@ export function MaxStudioProjectCard({
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e7e3da]">
             <div
-              className="h-full rounded-full bg-accent transition-[width]"
+              className="h-full rounded-full bg-[#f15a38] transition-[width]"
               style={{ width: `${readiness.isSuccess ? journey.progress : 0}%` }}
             />
           </div>
@@ -142,7 +91,7 @@ export function MaxStudioProjectCard({
             {readiness.isError ? (
               <CircleAlert className="size-3.5 shrink-0 text-[#b98618]" />
             ) : (
-              <span className="size-2 shrink-0 rounded-full bg-accent" />
+              <span className="size-2 shrink-0 rounded-full bg-[#f15a38]" />
             )}
             <p className="min-w-0 flex-1 truncate text-xs font-medium text-[#171716]">
               {readiness.isError
@@ -152,21 +101,13 @@ export function MaxStudioProjectCard({
                   : nextStage?.label ?? "Приложение готово к работе"}
             </p>
           </div>
-          {!readiness.isLoading && (
-            <MaxHowToDialog
-              guide={howToGuide}
-              actionHref={howToHref}
-              actionLabel={readiness.isError ? "Открыть редактор" : nextStage?.actionLabel ?? "Открыть управление"}
-              triggerClassName="mt-4 w-full"
-            />
-          )}
 
           <Link
             href={nextHref}
-            className="mt-2 flex min-h-11 items-center justify-between rounded-[8px] border border-border-default px-3 text-xs font-semibold text-fg-primary transition-colors hover:border-accent hover:bg-accent/[.04]"
+            className="mt-4 flex min-h-10 items-center justify-between rounded-[8px] border border-[#d8d4cb] px-3 text-xs font-semibold text-[#171716] transition-colors hover:border-[#f15a38] hover:bg-[#f15a38]/[.04]"
           >
             {nextStage?.actionLabel ?? "Открыть управление"}
-            <ArrowRight className="size-3.5 text-accent transition-transform group-hover:translate-x-0.5" />
+            <ArrowRight className="size-3.5 text-[#f15a38] transition-transform group-hover:translate-x-0.5" />
           </Link>
         </div>
       </div>

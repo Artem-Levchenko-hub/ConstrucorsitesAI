@@ -9,7 +9,6 @@ the label-set we stamp onto containers.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import docker  # type: ignore[import-untyped]
@@ -36,11 +35,8 @@ def test_container_spec_defaults_match_brief() -> None:
     These are the security/quota numbers AGENT-D-ORCHESTRATOR.md promises —
     any change should be intentional and approved."""
     spec = ContainerSpec(
-        name="omnia-dev-x",
-        image="omnia-template-x:dev",
-        port=3200,
-        project_id="00000000-0000-0000-0000-000000000001",
-        env={},
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
     )
     assert spec.cpu_quota == 0.5
     assert spec.memory_mb == 512
@@ -57,11 +53,7 @@ def test_container_spec_is_frozen() -> None:
     import dataclasses
 
     spec = ContainerSpec(
-        name="x",
-        image="y",
-        port=1,
-        project_id="p",
-        env={},
+        name="x", image="y", port=1, project_id="p", env={},
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         spec.port = 2  # type: ignore[misc]
@@ -73,20 +65,10 @@ def test_container_spec_carries_tier_for_hibernate() -> None:
     being respected — no implicit defaults that would silently grant
     pro privileges."""
     free = ContainerSpec(
-        name="x",
-        image="y",
-        port=1,
-        project_id="p",
-        env={},
-        tier="free",
+        name="x", image="y", port=1, project_id="p", env={}, tier="free",
     )
     pro = ContainerSpec(
-        name="x",
-        image="y",
-        port=1,
-        project_id="p",
-        env={},
-        tier="pro",
+        name="x", image="y", port=1, project_id="p", env={}, tier="pro",
     )
     assert free.tier == "free"
     assert pro.tier == "pro"
@@ -96,34 +78,13 @@ def test_container_spec_carries_tier_for_hibernate() -> None:
     assert bare.tier == "free"
 
 
-def test_docker_bind_failure_has_retryable_port_conflict_code() -> None:
-    error = docker.errors.APIError(
-        "failed programming external connectivity: Bind for 127.0.0.1:3364 failed: "
-        "port is already allocated"
-    )
-
-    classified = docker_client._port_conflict_error(error, 3364)
-
-    assert classified is not None
-    assert classified.code == "port_conflict"
-    assert classified.details == {"port": 3364}
-
-
 class _FakeContainer:
-    def __init__(
-        self,
-        cid: str,
-        image: str,
-        status: str = "running",
-        *,
-        manifest_exists: bool = True,
-    ) -> None:
+    def __init__(self, cid: str, image: str, status: str = "running") -> None:
         self.id = cid
         self.status = status
         self.attrs = {"Config": {"Image": image}}
         self.removed = False
         self.started = False
-        self.manifest_exists = manifest_exists
 
     def reload(self) -> None:
         pass
@@ -137,9 +98,6 @@ class _FakeContainer:
 
     def remove(self, force: bool = False) -> None:
         self.removed = True
-
-    def exec_run(self, **_: Any) -> SimpleNamespace:
-        return SimpleNamespace(exit_code=0 if self.manifest_exists else 1)
 
 
 class _FakeContainers:
@@ -183,14 +141,10 @@ class _FakeClient:
         self.networks = _FakeNetworks()
 
 
-def _spec(image: str, *, integrity_path: str | None = None) -> ContainerSpec:
+def _spec(image: str) -> ContainerSpec:
     return ContainerSpec(
-        name="omnia-dev-x",
-        image=image,
-        port=3200,
-        project_id="00000000-0000-0000-0000-000000000001",
-        env={},
-        integrity_path=integrity_path,
+        name="omnia-dev-x", image=image, port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
     )
 
 
@@ -229,30 +183,6 @@ async def test_start_container_reuses_when_image_matches(
     assert cid == "live-id"
 
 
-async def test_start_container_recreates_when_template_core_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    broken = _FakeContainer(
-        "broken-id",
-        "omnia-template-max-miniapp-nextjs:dev",
-        status="running",
-        manifest_exists=False,
-    )
-    client = _FakeClient(broken)
-    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
-
-    cid = await docker_client.start_container(
-        _spec(
-            "omnia-template-max-miniapp-nextjs:dev",
-            integrity_path="package.json",
-        )
-    )
-
-    assert broken.removed is True
-    assert client.containers.run_called is True
-    assert cid == "new-container-id"
-
-
 def test_module_exposes_expected_public_api() -> None:
     """Smoke test: the public surface AGENT-D-ORCHESTRATOR.md promises +
     what's documented in `routers/runtime.py` imports actually exists."""
@@ -263,8 +193,6 @@ def test_module_exposes_expected_public_api() -> None:
         "container_status",
         "destroy_container",
         "find_project_container",
-        "start_history_preview_container",
-        "remove_history_preview_container",
         "wake_container",
         "unpause_container",
         "write_files",
@@ -276,49 +204,6 @@ def test_module_exposes_expected_public_api() -> None:
     }
     for name in expected:
         assert hasattr(docker_client, name), f"missing public symbol: {name}"
-
-
-def test_history_preview_container_name_is_stable_and_bounded() -> None:
-    name = docker_client.history_preview_container_name(
-        "6D7C01B4-46D4-43BF-9CB7-E11FE8E0D705",
-        "5BD134EA-1111-2222-3333-444444444444",
-    )
-    assert name == "omnia-history-6d7c01b446d4-5bd134ea1111"
-    assert len(name) < 64
-    session_name = docker_client.history_preview_container_name(
-        "6D7C01B4-46D4-43BF-9CB7-E11FE8E0D705",
-        "5BD134EA-1111-2222-3333-444444444444",
-        purpose="session",
-    )
-    assert session_name == "omnia-history-session-6d7c01b446d4"
-
-
-def test_history_preview_environment_drops_live_secrets() -> None:
-    environment = docker_client.history_preview_environment(
-        [
-            "PATH=/usr/local/bin:/usr/bin",
-            "NODE_VERSION=22.0.0",
-            "DATABASE_URL=postgresql://live-project",
-            "MAX_BOT_TOKEN=live-secret",
-            "OMNIA_PLATFORM_API_URL=https://platform.example.test",
-            "HTTPS_PROXY=http://egress-proxy:3128",
-            "NO_PROXY=127.0.0.1,localhost",
-        ],
-        {
-            "DATABASE_URL": "postgresql://isolated-history",
-            "AUTH_SECRET": "ephemeral-session-secret",
-        },
-    )
-
-    assert "PATH=/usr/local/bin:/usr/bin" in environment
-    assert "NODE_VERSION=22.0.0" in environment
-    assert "DATABASE_URL=postgresql://isolated-history" in environment
-    assert "AUTH_SECRET=ephemeral-session-secret" in environment
-    assert "HTTPS_PROXY=http://egress-proxy:3128" in environment
-    assert "NO_PROXY=127.0.0.1,localhost" in environment
-    assert all("live-project" not in item for item in environment)
-    assert all("live-secret" not in item for item in environment)
-    assert all("platform.example.test" not in item for item in environment)
 
 
 # ── Sandbox hardening (Phase 1) ─────────────────────────────────────────────
@@ -359,14 +244,9 @@ async def test_start_container_applies_hardening_when_enabled(
     monkeypatch.setattr(docker_client, "_get_client", lambda: client)
 
     spec = ContainerSpec(
-        name="omnia-dev-x",
-        image="omnia-template-x:dev",
-        port=3200,
-        project_id="00000000-0000-0000-0000-000000000001",
-        env={},
-        runtime="runsc",
-        harden=True,
-        pids_limit=512,
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
+        runtime="runsc", harden=True, pids_limit=512,
     )
     await docker_client.start_container(spec)
 
@@ -385,13 +265,9 @@ async def test_start_container_harden_without_pids_limit_omits_it(
     monkeypatch.setattr(docker_client, "_get_client", lambda: client)
 
     spec = ContainerSpec(
-        name="omnia-dev-x",
-        image="omnia-template-x:dev",
-        port=3200,
-        project_id="00000000-0000-0000-0000-000000000001",
-        env={},
-        harden=True,
-        pids_limit=0,
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
+        harden=True, pids_limit=0,
     )
     await docker_client.start_container(spec)
 
@@ -423,11 +299,8 @@ async def test_start_container_creates_per_project_network_when_set(
     monkeypatch.setattr(docker_client, "_get_client", lambda: client)
 
     spec = ContainerSpec(
-        name="omnia-dev-x",
-        image="omnia-template-x:dev",
-        port=3200,
-        project_id="00000000-0000-0000-0000-000000000001",
-        env={},
+        name="omnia-dev-x", image="omnia-template-x:dev", port=3200,
+        project_id="00000000-0000-0000-0000-000000000001", env={},
         network_name="omnia-proj-1",
     )
     await docker_client.start_container(spec)

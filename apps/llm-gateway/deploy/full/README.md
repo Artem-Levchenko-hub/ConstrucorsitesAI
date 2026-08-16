@@ -25,16 +25,6 @@ location /llm/ {
 
 ## Safe update
 
-Production secrets live outside immutable release directories. Every Compose
-command MUST receive the canonical env file explicitly; otherwise a recreated
-gateway can keep an old provider key from its previous container or start with
-an empty value.
-
-```bash
-PROD_ENV=/opt/omnia/apps/llm-gateway/deploy/full/.env
-test -r "$PROD_ENV"
-```
-
 1. Confirm there is no active generation:
 
    ```bash
@@ -49,14 +39,12 @@ test -r "$PROD_ENV"
 3. Validate configuration before changing containers:
 
    ```bash
-   docker compose --env-file "$PROD_ENV" config --quiet
+   docker compose config --quiet
    ```
 
 4. Build and test images under temporary tags first.
 5. Deploy the API before the worker. The API command runs
    `alembic upgrade head`, and the worker waits for the API health check.
-   Pass `--env-file "$PROD_ENV"` to every `docker compose build`, `run`, and
-   `up` command, including a gateway-only restart.
 6. Verify:
 
    ```bash

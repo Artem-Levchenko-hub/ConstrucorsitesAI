@@ -1,7 +1,8 @@
-"""Single dispatch point for configured OpenAI-compatible LLM upstreams.
+"""Single dispatch point for LLM calls — everything goes to llmgw.ru.
 
-Gemini and MAX Studio's Sonnet 5 stay on llmgw.ru. This is a thin façade over
-`providers/llmgw.py` plus the native `/v1/messages` adapter.
+There is exactly ONE upstream and ONE chat model
+(`gemini-3.1-pro-preview-customtools`), so this is a thin façade over
+`providers/llmgw.py` plus a route helper for the native `/v1/messages` adapter.
 
 R-01 (deep module): callers (`routers/chat.py`, `services/streaming.py`,
 `routers/messages_native.py`) see `acompletion` / `slug_to_omnia` /
@@ -34,7 +35,7 @@ def slug_to_omnia(slug: str) -> str | None:
     return llmgw.slug_to_omnia(slug)
 
 
-def native_messages_route(model: str) -> tuple[str, str] | None:
+def native_messages_route() -> tuple[str, str] | None:
     """(api_key, api_base) for the native-agent `/v1/messages` adapter."""
     settings = get_settings()
     if not settings.llmgw_api_key:

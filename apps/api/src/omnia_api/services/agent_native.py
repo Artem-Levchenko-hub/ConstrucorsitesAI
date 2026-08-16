@@ -1,8 +1,8 @@
 """Native structured tool-use build loop for executable app generation.
 
 Supersedes the text-``<omnia:action>`` protocol (``agent_builder.run_agent_build``)
-with native structured tool calls. The caller selects the model; MAX Studio uses
-Sonnet 5 for the whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool returns
+with native structured tool calls. Gemini 3.1 Pro Preview Custom Tools drives the
+whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool returns
 real compiler errors as a ``tool_result`` and the model fixes them itself
 (do → check → fix), with no taste/vision judges here.
 
@@ -17,104 +17,31 @@ stays the prod default until this is verified on real builds and billing is wire
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
-import posixpath
 import re
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
 import structlog
 
 from omnia_api.core.config import PRIMARY_LLM_MODEL, get_settings
-from omnia_api.services.agent_brain import (
-    brain_prompt_view,
-    error_signatures,
-    new_brain,
-    normalize_error_signature,
-    record_acceptance_evidence,
-    record_hypothesis,
-    record_mutation,
-    record_observation,
-    restore_durable_brain,
-    semantic_loop_count,
-    sync_acceptance,
-    upgrade_brain,
-)
-from omnia_api.services.agent_builder import Action, AgentResult, is_agentic_enabled
-from omnia_api.services.max_generation_contract import (
-    MAX_REQUIRED_POST_SEE_SKILL,
-    MAX_REQUIRED_PREWRITE_SKILLS,
-)
+from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
 _MODEL = PRIMARY_LLM_MODEL
-# Match the current native gateway ceiling. Complete product composition is more
-# important than reducing the provider's per-call reservation; bounded retries,
-# truncation handling, and the durable run fuse still prevent unbounded spending.
-_MAX_TOKENS = 32768
+# Providers can pre-reserve the full max_tokens × output price on every call and 402
+# if the key balance is below that reserve — so an over-large ceiling caps how many
+# calls fit the balance (an oversized reserve can 402 mid-build,
+# which surfaced to the user as "соединение потеряно"). 20000 still leaves ~12000
+# tokens for tool args after the 8000 thinking budget — enough for a large file —
+# while cutting the reserve ~35%. Env override: NATIVE_MAX_TOKENS (future).
+_MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
-_ENTRY_FOCUS_THINKING_BUDGET = 2000
 _MAX_TOOL_RESULT_CHARS = 20000
-_GATEWAY_CONNECT_TIMEOUT_SECONDS = 30.0
-_GATEWAY_WRITE_TIMEOUT_SECONDS = 60.0
-_GATEWAY_POOL_TIMEOUT_SECONDS = 30.0
-_CALL_RETRIES = 1  # never duplicate a possibly-billed provider request inside one cycle
-_MAX_PROVIDER_RECONNECT_CYCLES = 3
-_MAX_PROVIDER_TIMEOUT_RESUMES = 2
-_MAX_FREE_AMBIGUOUS_RESUMES = 2
-_MAX_TRUNCATED_WRITE_ABORT_AT = 2
-_STABLE_MAX_NOOP_WRITE_ABORT_AT = 2
-_STABLE_MAX_WORKING_MEMORY_CHARS = 6_000
-_STABLE_MAX_PRODUCT_ENTRY = "src/components/product/ProductApp.tsx"
-_KERNEL_REQUIRED_STYLE_PATH = "src/app/globals.css"
-_KERNEL_PRODUCT_MODULE_PREFIXES = (
-    "src/components/product/",
-    "src/hooks/",
-    "src/lib/product/",
-    "src/store/",
-    "src/data/",
-)
-# One batched inspection turn is enough because the headless runtime contract
-# includes the exact managed API signatures. The next provider turn must create
-# the usable product entry; support-first runs are not recoverable if the
-# provider disappears between files.
-_STABLE_MAX_PREWRITE_INSPECTION_LIMIT = 6
-# One initial visual verdict plus two evidence-led repair passes is the paid QA
-# ceiling. Live canaries showed that allowing eight passes can spend hundreds of
-# roubles while a vision/model disagreement repeatedly redesigns the same screen.
-# A third red verdict is preserved honestly for a later targeted edit instead of
-# charging for five more speculative rewrites.
-_STABLE_MAX_VISUAL_REPAIR_LIMIT = 2
-# One provider response is one planning snapshot: later tool calls in the same
-# response cannot see earlier results.  Bound that batch so a malformed/custom
-# provider response cannot hide an unbounded executor loop inside one agent
-# step, and require a fresh observation after two mutations of the same file.
-_STABLE_MAX_TOOL_OPS_PER_TURN = 16
-_STABLE_MAX_MUTATIONS_PER_PATH_PER_TURN = 2
-_HISTORY_PLACEHOLDER_MARKERS = (
-    "[OMITTED FROM HISTORY:",
-    "[OLDER TOOL RESULT OMITTED:",
-)
-_NOOP_WRITE_REJECTED = (
-    "The file is byte-identical after this edit, so it is not progress and must not be "
-    "compiled again. Make one concrete source change that resolves the reported gap."
-)
-
-
-def _gateway_timeout() -> httpx.Timeout:
-    """The API must outlive the gateway's complete error-classification path."""
-
-    return httpx.Timeout(
-        float(get_settings().native_gateway_read_timeout_seconds),
-        connect=_GATEWAY_CONNECT_TIMEOUT_SECONDS,
-        write=_GATEWAY_WRITE_TIMEOUT_SECONDS,
-        pool=_GATEWAY_POOL_TIMEOUT_SECONDS,
-    )
-
+_HTTP_TIMEOUT_S = 300.0
+_CALL_RETRIES = 3  # bounded transport retry inside one turn; never restart a whole run
+_HARD_MAX_STEPS = 30
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single
@@ -127,16 +54,15 @@ _NO_WRITE_ABORT_AT = 12
 
 # Infra circuit breaker: consecutive turns where EVERY executed tool op died on
 # infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
-# 3 turns tolerates a transient orchestrator restart. Generic builds still abort
-# at that point; MAX can keep repairing while the gateway's durable financial
-# fuse and the parent-task cancellation remain authoritative stop conditions.
+# 3 turns tolerates a transient orchestrator restart; a truly dead container
+# aborts in ~3 turns instead of grinding the whole step budget (2026-07-08:
+# hibernate stopped a container mid-build → 40 min of doomed 500 bursts).
 _INFRA_DEAD_ABORT_AT = 3
 
 # Native tool schemas — mirror the action set of make_container_executor._execute.
 # `done` ends the loop. Kept intentionally minimal (fact tools only): the model
 # decides everything else itself, like Claude Code.
 _STR: dict[str, Any] = {"type": "string"}
-_STR_ARRAY: dict[str, Any] = {"type": "array", "items": _STR}
 
 
 def _tool(
@@ -161,9 +87,7 @@ _TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "write_file",
-        "Create or overwrite a whole file with its FULL content. Keep each file compact; "
-        "if the product is large, split it into components. Across one assistant turn, "
-        "keep all write/edit content below 24000 characters so tool arguments are not truncated.",
+        "Create or overwrite a whole file with its FULL content.",
         {"path": _STR, "content": _STR},
         ["path", "content"],
     ),
@@ -176,6 +100,7 @@ _TOOLS: list[dict[str, Any]] = [
     _tool(
         "build", "Typecheck/compile the app. Returns the real errors to fix (empty = clean).", {}
     ),
+    _tool("bash", "Run a shell command in the dev container.", {"cmd": _STR}, ["cmd"]),
     _tool(
         "read_logs",
         "Tail the live dev-server logs (runtime errors build can't see).",
@@ -243,68 +168,6 @@ _TOOLS: list[dict[str, Any]] = [
         ["create"],
     ),
     _tool(
-        "plan_task",
-        "Create or refine the observable execution plan. Store only objective, concrete "
-        "steps and acceptance criteria — never hidden reasoning. Call once near the start "
-        "of a substantial build; do not spend a separate turn on ceremonial planning.",
-        {
-            "objective": _STR,
-            "steps": _STR_ARRAY,
-            "acceptance_criteria": _STR_ARRAY,
-        },
-        ["objective", "steps", "acceptance_criteria"],
-    ),
-    _tool(
-        "update_plan",
-        "Persist a durable checkpoint after a meaningful milestone. Evidence must be an "
-        "observable tool result (file, clean build, runtime status or visual verdict), not "
-        "private reasoning.",
-        {
-            "step_id": _STR,
-            "status": {
-                "type": "string",
-                "enum": ["pending", "in_progress", "completed", "blocked"],
-            },
-            "summary": _STR,
-            "evidence": _STR_ARRAY,
-            "artifacts": _STR_ARRAY,
-            "next_action": _STR,
-        },
-        ["step_id", "status", "summary"],
-    ),
-    _tool(
-        "discover_capabilities",
-        "Discover operator-approved read-only tools from real MCP servers. Use only when "
-        "fresh external evidence can materially improve the current build; native file, "
-        "build and visual tools remain the primary path.",
-        {"server": _STR},
-    ),
-    _tool(
-        "call_capability",
-        "Call one exact read-only MCP capability returned by discover_capabilities. Never "
-        "invent a server/tool name, never use it for project mutation, and do not repeat an "
-        "identical call after receiving sufficient evidence.",
-        {
-            "server": _STR,
-            "tool": _STR,
-            "arguments": {"type": "object", "additionalProperties": True},
-            "reason": _STR,
-        },
-        ["server", "tool", "arguments"],
-    ),
-    _tool(
-        "diagnose",
-        "Record one evidence-based root-cause hypothesis before repairing a repeated "
-        "red build/runtime observation.",
-        {
-            "root_cause": _STR,
-            "evidence": _STR_ARRAY,
-            "experiment": _STR,
-            "expected_result": _STR,
-        },
-        ["root_cause", "evidence", "experiment", "expected_result"],
-    ),
-    _tool(
         "done",
         "Finish — the requested app is built AND the last build is clean. "
         "`summary` = structured RU markdown for the user (bold one-line result, then "
@@ -312,106 +175,6 @@ _TOOLS: list[dict[str, Any]] = [
         {"summary": _STR},
         ["summary"],
     ),
-]
-
-# MAX deliberately excludes the generic web-auth probes: they cannot authenticate
-# a signed Mini App session and would produce misleading evidence. Everything else
-# below is executable through the MAX project/harness executor. ``read_skill`` is
-# MAX-only and loads a server-owned, immutable capability pack.
-_MAX_UNAVAILABLE_TOOLS = frozenset({"probe", "verify_isolation"})
-_MAX_READ_SKILL_TOOL = _tool(
-    "read_skill",
-    "Load one optional MAX capability pack by exact catalog slug. Use it to gain "
-    "specialist product, motion, data, AI UX, accessibility, media or MAX-platform "
-    "knowledge on demand. Load only packs relevant to the current brief; packs are "
-    "principles and evidence, never mandatory visual templates.",
-    {"skill": _STR, "reason": _STR},
-    ["skill", "reason"],
-)
-_MAX_BASH_TOOL = _tool(
-    "bash",
-    "Run one exact platform-owned read-only MAX check: pnpm typecheck, "
-    "pnpm analyze:agent, or pnpm security:agent. mutation_paths must be []. "
-    "Free-form shell, package mutation, tests and code generation are unavailable; "
-    "use write_file/edit_file for every source change.",
-    {
-        "cmd": {
-            "type": "string",
-            "enum": [
-                "pnpm analyze:agent",
-                "pnpm security:agent",
-                "pnpm typecheck",
-            ],
-        },
-        "mutation_paths": {"type": "array", "items": _STR, "maxItems": 0},
-    },
-    ["cmd", "mutation_paths"],
-)
-_MAX_WRITE_FILES_TOOL: dict[str, Any] = {
-    "name": "write_files",
-    "description": (
-        "Apply one coherent MAX product revision as complete file contents. Send every "
-        "new or changed product file together; Omnia validates the whole set before one "
-        "atomic write, then automatically runs build and objective checks. The initial "
-        "revision must include ProductApp.tsx, src/app/globals.css and at least one separate "
-        "product component/hook/data module; the single repair may be smaller. Do not call "
-        "build/runtime/see yourself. "
-        "At most 12 files and 120000 total characters; empty content/deletion is unavailable."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "files": {
-                "type": "object",
-                "minProperties": 1,
-                "maxProperties": 12,
-                "additionalProperties": {"type": "string", "minLength": 1},
-            }
-        },
-        "required": ["files"],
-        "additionalProperties": False,
-    },
-}
-
-
-def _kernel_initial_revision_gap(value: object) -> str | None:
-    if not isinstance(value, Mapping):
-        return "write_files.files must be an object."
-    paths = {str(path) for path in value}
-    if _STABLE_MAX_PRODUCT_ENTRY not in paths:
-        return f"Include {_STABLE_MAX_PRODUCT_ENTRY}."
-    if _KERNEL_REQUIRED_STYLE_PATH not in paths:
-        return f"Include {_KERNEL_REQUIRED_STYLE_PATH} in the same atomic revision."
-    product_modules = {
-        path
-        for path in paths
-        if path != _STABLE_MAX_PRODUCT_ENTRY
-        and path.endswith((".ts", ".tsx"))
-        and path.startswith(_KERNEL_PRODUCT_MODULE_PREFIXES)
-    }
-    if not product_modules:
-        return "Include at least one separate product component, hook or data module."
-    return None
-
-
-_MAX_SEE_TOOL = _tool(
-    "see",
-    "Run the signed MAX browser/functional gate on the live route. It verifies "
-    "hydration, navigation, primary actions and required persistence; subjective "
-    "screenshot/design scoring is optional and does not block completion.",
-    {"path": _STR},
-)
-_MAX_BASE_TOOLS = [
-    _MAX_SEE_TOOL if tool["name"] == "see" else tool
-    for tool in _TOOLS
-    if tool["name"] not in _MAX_UNAVAILABLE_TOOLS
-]
-_MAX_TOOLS = [
-    *_MAX_BASE_TOOLS[:-1],
-    _MAX_READ_SKILL_TOOL,
-    _MAX_BASH_TOOL,
-    _MAX_WRITE_FILES_TOOL,
-    _MAX_BASE_TOOLS[-1],
 ]
 
 # --- Anthropic prompt caching (AITunnel honours it on the native surface —
@@ -430,368 +193,6 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
     *_TOOLS[:-1],
     {**_TOOLS[-1], "cache_control": _CACHE},
 ]
-_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_MAX_TOOLS[:-1],
-    {**_MAX_TOOLS[-1], "cache_control": _CACHE},
-]
-
-# Stable MAX uses the same mature native-agent lifecycle as ordinary container
-# apps, with MAX-only schemas removing unsafe generic login/isolation probes.
-# Planning, server-owned skills, signed functional proof and read-only capability research
-# are part of the production proof; file/path/secret safety remains enforced by
-# the MAX executor independently of which schemas are advertised.
-_STABLE_MAX_TOOL_NAMES = frozenset(
-    {
-        "plan_task",
-        "update_plan",
-        "list_dir",
-        "read_file",
-        "grep",
-        "docs",
-        "read_skill",
-        "discover_capabilities",
-        "call_capability",
-        "diagnose",
-        "bash",
-        "write_file",
-        "edit_file",
-        "build",
-        "read_logs",
-        "runtime_check",
-        "see",
-        "generate_media",
-        "done",
-    }
-)
-_STABLE_MAX_TOOLS = [tool for tool in _MAX_TOOLS if tool["name"] in _STABLE_MAX_TOOL_NAMES]
-_STABLE_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_TOOLS[:-1],
-    {**_STABLE_MAX_TOOLS[-1], "cache_control": _CACHE},
-]
-
-# Fresh ProductSpec builds use one stable action surface for the whole run.  The
-# kernel, not the model, owns build/runtime/functional transitions.  Keeping the
-# schema constant also preserves provider prompt caching and prevents stale
-# cached tool definitions from reopening model-owned verification loops.
-_STABLE_MAX_KERNEL_TOOLS = [tool for tool in _MAX_TOOLS if tool["name"] == "write_files"]
-_STABLE_MAX_KERNEL_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_KERNEL_TOOLS[:-1],
-    {**_STABLE_MAX_KERNEL_TOOLS[-1], "cache_control": _CACHE},
-]
-
-# A fresh MAX build starts from a known headless runtime. Allow one model turn
-# for batched reads, then expose only the product entry until it exists.
-_STABLE_MAX_FIRST_WRITE_AT = 1
-_STABLE_MAX_ENTRY_FOCUS_AT = _STABLE_MAX_FIRST_WRITE_AT + 1
-_STABLE_MAX_WRITE_REQUIRED = (
-    "A product write is now required. Use write_file or edit_file; "
-    "read/list/grep/build/done calls are disabled until one product file is written."
-)
-_STABLE_MAX_ENTRY_REQUIRED = (
-    "The product entry is still unchanged. Write the complete usable first version directly "
-    f"to `{_STABLE_MAX_PRODUCT_ENTRY}` now (tool content below 24000 characters). Include the "
-    "main screens, navigation, states and styling in this first vertical slice; extract support "
-    "files only after the app exists. Notes, TODOs and decorative placeholders are not progress."
-)
-_STABLE_MAX_PROGRESS_REQUIRED = (
-    "The product entry exists, but this build is not proven yet. Stop reading. Your next "
-    "action must write/edit a required component or run build to expose concrete errors."
-)
-_STABLE_MAX_BUILD_REQUIRED = (
-    "The product changed and must be compiled before any more rewriting. Run build now. "
-    "If it is red, repair only the reported locations; if it is green, continue with "
-    "runtime proof."
-)
-_STABLE_MAX_STYLE_REQUIRED = (
-    "The product component exists, but its product-specific visual system is missing. "
-    "Write the complete `src/app/globals.css` now. Preserve the Tailwind import, style "
-    "the real component classes, mobile states and safe areas; do not rewrite ProductApp."
-)
-_STABLE_MAX_INSPECTION_COMPLETE = (
-    "The MAX core has been inspected enough. Re-reading it will not improve the product. "
-    "Write a product file now; compiler-guided repair will expose any remaining API mismatch."
-)
-_STABLE_MAX_ENTRY_NOW_REQUIRED = (
-    "Create the real usable screen in "
-    f"`{_STABLE_MAX_PRODUCT_ENTRY}` before any supporting product file."
-)
-_HISTORY_PLACEHOLDER_WRITE_REJECTED = (
-    "A transcript history placeholder is not source code and was not written. "
-    "Read the target file again, then submit its actual complete source or a real exact edit."
-)
-
-
-def _stable_max_repair_required(paths: frozenset[str]) -> str:
-    targets = ", ".join(f"`{path}`" for path in sorted(paths)) or "the file named by build"
-    return (
-        f"The build is RED. Fix {targets} now. Read each failing file at most once, then use "
-        "edit_file for the smallest exact repair. write_file is disabled: never recreate the "
-        "whole component during repair or reintroduce earlier errors. Do not read dependencies, "
-        "rewrite unrelated files, or run build before a targeted edit. Preserve the product."
-    )
-
-
-_STABLE_MAX_REPAIR_VERIFY_REQUIRED = (
-    "A targeted repair is applied. Keep the current files: write_file remains disabled. "
-    "Use edit_file for any other already-reported failing location, or run build now."
-)
-
-
-def _stable_max_compact_repair_task(
-    error: str,
-    paths: frozenset[str],
-    written: Mapping[str, str],
-) -> str:
-    sources: list[str] = []
-    remaining = 24_000
-    for path in sorted(paths):
-        content = written.get(path, "")
-        if not content or remaining <= 0:
-            continue
-        lines = content.splitlines()
-        error_lines = sorted(
-            {
-                int(match.group("line"))
-                for match in _TYPESCRIPT_ERROR_LOCATION_RE.finditer(error or "")
-                if match.group("path") == path
-            }
-        )
-        windows: list[tuple[int, int]] = []
-        for line_number in error_lines:
-            center = min(max(line_number - 1, 0), max(len(lines) - 1, 0))
-            start = max(0, center - 8)
-            end = min(len(lines), center + 9)
-            if windows and start <= windows[-1][1] + 2:
-                windows[-1] = (windows[-1][0], max(windows[-1][1], end))
-            else:
-                windows.append((start, end))
-        if not windows:
-            windows = [(0, min(len(lines), 240))]
-        for start, end in windows:
-            if remaining <= 0:
-                break
-            excerpt = "\n".join(lines[start:end])[:remaining]
-            if not excerpt:
-                continue
-            remaining -= len(excerpt)
-            sources.append(
-                f"CURRENT `{path}` lines {start + 1}-{end} "
-                "(exact source; preserve omitted code):\n"
-                f"```tsx\n{excerpt}\n```"
-            )
-    return (
-        "TARGETED COMPILER REPAIR. The current product is already implemented. "
-        "Do not redesign or recreate files. Call edit_file only, replacing the smallest exact "
-        "old_string that fixes all listed errors you can address in one edit. Source windows "
-        "are exact but intentionally omit unrelated code; never include window labels in "
-        "search.\n\n"
-        f"BUILD ERRORS:\n{error[:12_000]}\n\n" + "\n\n".join(sources)
-    )
-
-
-_STABLE_MAX_FIRST_WRITE_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"write_file", "write_files", "edit_file"}
-]
-_STABLE_MAX_FIRST_WRITE_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_FIRST_WRITE_TOOLS[:-1],
-    {**_STABLE_MAX_FIRST_WRITE_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_VISUAL_REPAIR_TOOLS = [
-    tool
-    for tool in _STABLE_MAX_TOOLS
-    if tool["name"] in {"write_file", "edit_file", "generate_media"}
-]
-_STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_VISUAL_REPAIR_TOOLS[:-1],
-    {**_STABLE_MAX_VISUAL_REPAIR_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_REPAIR_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"read_file", "edit_file", "diagnose"}
-]
-_STABLE_MAX_REPAIR_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_REPAIR_TOOLS[:-1],
-    {**_STABLE_MAX_REPAIR_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS = [
-    tool for tool in _STABLE_MAX_TOOLS if tool["name"] in {"diagnose", "edit_file"}
-]
-_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS[:-1],
-    {**_STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_REPAIR_VERIFY_TOOLS = [
-    tool
-    for tool in _STABLE_MAX_TOOLS
-    if tool["name"] in {"read_file", "edit_file", "build", "diagnose"}
-]
-_STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_REPAIR_VERIFY_TOOLS[:-1],
-    {**_STABLE_MAX_REPAIR_VERIFY_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_PROGRESS_TOOLS = [
-    tool
-    for tool in _STABLE_MAX_TOOLS
-    if tool["name"] in {"write_file", "edit_file", "build", "diagnose"}
-]
-_STABLE_MAX_PROGRESS_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_PROGRESS_TOOLS[:-1],
-    {**_STABLE_MAX_PROGRESS_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_BUILD_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
-    {
-        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "build"),
-        "cache_control": _CACHE,
-    }
-]
-_STABLE_MAX_STYLE_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
-    {
-        **_tool(
-            "write_file",
-            "Write the complete product-specific visual system.",
-            {
-                "path": {"type": "string", "enum": ["src/app/globals.css"]},
-                "content": _STR,
-            },
-            ["path", "content"],
-        ),
-        "cache_control": _CACHE,
-    }
-]
-_STABLE_MAX_SOURCE_REPAIR_REQUIRED = (
-    "A concrete source-contract gap remains after a clean build. Stop reading or "
-    "polishing unrelated UI. Write or edit the current product now to fix exactly "
-    "the stated gap, then rebuild."
-)
-_STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED: list[dict[str, Any]] = [
-    _tool(
-        "edit_file",
-        "Apply the remaining exact visual repair to the product stylesheet.",
-        {
-            "path": {"type": "string", "enum": ["src/app/globals.css"]},
-            "search": _STR,
-            "replace": _STR,
-        },
-        ["path", "search", "replace"],
-    ),
-    {
-        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "build"),
-        "cache_control": _CACHE,
-    },
-]
-_STABLE_MAX_PROOF_TOOLS = [tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "runtime_check"]
-_STABLE_MAX_PROOF_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_STABLE_MAX_PROOF_TOOLS[:-1],
-    {**_STABLE_MAX_PROOF_TOOLS[-1], "cache_control": _CACHE},
-]
-_STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED: list[dict[str, Any]] = [
-    {
-        **next(tool for tool in _STABLE_MAX_TOOLS if tool["name"] == "runtime_check"),
-        "cache_control": _CACHE,
-    }
-]
-_STABLE_MAX_PROOF_REQUIRED = (
-    "The product source and build are green. Stop reading or polishing blindly. "
-    "Run runtime_check now; if it reports a concrete issue, edit it on the following "
-    "turn, rebuild, and verify again."
-)
-_STABLE_MAX_RUNTIME_PROOF_REQUIRED = (
-    "The build is green but the final runtime is not proven. Run runtime_check now; "
-    "do not read, rewrite, or call see before the live route is green."
-)
-_STABLE_MAX_VISUAL_REPAIR_REQUIRED = (
-    "A concrete visual issue is already known. Stop searching or rereading. "
-    "Write or edit the product now to apply that visual feedback. If the verdict "
-    "specifically requires real imagery, generate one suitable image first and embed "
-    "its returned hosted URL on the next turn. Then rebuild and verify the render again."
-)
-_STABLE_MAX_VISUAL_FINISH_REQUIRED = (
-    "The component-side visual repair is applied. Before proof, either edit "
-    "`src/app/globals.css` once to finish the exact CSS/layout feedback or run "
-    "build now if no stylesheet change is needed. Do not rewrite ProductApp, "
-    "read files, or skip directly to runtime/see."
-)
-_STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED = [
-    {
-        **_tool(
-            "write_file",
-            f"Write the complete compact product composition to {_STABLE_MAX_PRODUCT_ENTRY}.",
-            {
-                "path": {"type": "string", "enum": [_STABLE_MAX_PRODUCT_ENTRY]},
-                "content": _STR,
-            },
-            ["path", "content"],
-        ),
-        "cache_control": _CACHE,
-    }
-]
-_STABLE_MAX_PREENTRY_READ_TOOLS = [
-    tool
-    for tool in _STABLE_MAX_TOOLS
-    if tool["name"]
-    in {
-        "plan_task",
-        "update_plan",
-        "list_dir",
-        "read_file",
-        "grep",
-        "docs",
-        "read_skill",
-        "discover_capabilities",
-        "call_capability",
-        "bash",
-    }
-]
-_STABLE_MAX_PREENTRY_TOOLS_CACHED = [
-    *_STABLE_MAX_PREENTRY_READ_TOOLS,
-    _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED[0],
-]
-
-# The reliable MAX path from 4cb0ee18 was a single Google tool loop, not a
-# ceremony of nested planners, capability brokers and mandatory visual judges.
-# Keep only the tools that can directly advance or prove the product.  This also
-# shrinks every provider request and leaves more of Gemini's context for the app.
-_MAX_REFERENCE_TOOL_NAMES = frozenset(
-    {
-        "list_dir",
-        "read_file",
-        "grep",
-        "docs",
-        "write_file",
-        "edit_file",
-        "build",
-        "read_logs",
-        "runtime_check",
-        "see",
-        "generate_media",
-        "done",
-    }
-)
-_MAX_REFERENCE_TOOLS = [
-    tool for tool in _TOOLS if str(tool.get("name") or "") in _MAX_REFERENCE_TOOL_NAMES
-]
-_MAX_REFERENCE_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_MAX_REFERENCE_TOOLS[:-1],
-    {**_MAX_REFERENCE_TOOLS[-1], "cache_control": _CACHE},
-]
-
-
-def _kernel_tool_surface(
-    tools: list[dict[str, Any]],
-    *,
-    enabled: bool,
-) -> list[dict[str, Any]]:
-    """Expose diagnosis only to Project Brain runs; preserve legacy schemas."""
-
-    if enabled:
-        return tools
-    filtered = [
-        {key: value for key, value in tool.items() if key != "cache_control"}
-        for tool in tools
-        if tool.get("name") != "diagnose"
-    ]
-    if filtered:
-        filtered[-1] = {**filtered[-1], "cache_control": _CACHE}
-    return filtered
 
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
@@ -823,77 +224,6 @@ def _with_incremental_cache(convo: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [*convo[:-1], {**last, "content": new_content}]
 
 
-def _with_working_memory(
-    convo: list[dict[str, Any]],
-    working_memory: str,
-) -> list[dict[str, Any]]:
-    """Inject one ephemeral server-owned note into the current provider turn.
-
-    The note is derived from executed tools and checkpoint state, never from hidden
-    model reasoning.  It is deliberately not appended to ``convo``: otherwise the
-    same progress summary would accumulate on every turn and become the context
-    pollution it is meant to prevent.  When the turn carries tool results, attach
-    the note to the final result so OpenAI-compatible adapters preserve tool order.
-    """
-
-    note = str(working_memory or "").strip()[:_STABLE_MAX_WORKING_MEMORY_CHARS]
-    if not note or not convo or convo[-1].get("role") != "user":
-        return convo
-    last = convo[-1]
-    content = last.get("content")
-    if isinstance(content, str):
-        return [*convo[:-1], {**last, "content": f"{content}\n\n{note}"}]
-    if not isinstance(content, list):
-        return convo
-    blocks = [dict(block) if isinstance(block, dict) else block for block in content]
-    for index in range(len(blocks) - 1, -1, -1):
-        block = blocks[index]
-        if isinstance(block, dict) and block.get("type") == "tool_result":
-            block["content"] = f"{block.get('content') or ''!s}\n\n{note}"
-            return [*convo[:-1], {**last, "content": blocks}]
-    for index in range(len(blocks) - 1, -1, -1):
-        block = blocks[index]
-        if isinstance(block, dict) and block.get("type") == "text":
-            block["text"] = f"{block.get('text') or ''!s}\n\n{note}"
-            return [*convo[:-1], {**last, "content": blocks}]
-    blocks.append({"type": "text", "text": note})
-    return [*convo[:-1], {**last, "content": blocks}]
-
-
-def _observation_signature(action: Action) -> str | None:
-    """Stable, secret-safe identity for repeatable read-only observations."""
-
-    if action.name == "read_file":
-        return f"read:{action.path}"
-    if action.name == "list_dir":
-        return f"list:{action.path}"
-    if action.name == "grep":
-        raw = f"{action.path}\0{action.args.get('pattern', '')}"
-    elif action.name == "docs":
-        raw = f"{action.args.get('library', '')}\0{action.args.get('query', '')}"
-    elif action.name == "bash" and not action.args.get("mutation_paths"):
-        raw = str(action.args.get("cmd") or "")
-    else:
-        return None
-    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:20]
-    return f"{action.name}:{digest}"
-
-
-def _repeat_observation_error(action: Action) -> dict[str, Any]:
-    target = action.path or action.name
-    return {
-        "ok": False,
-        "status": "warning",
-        "error": (
-            f"Unchanged observation already collected for `{target}`. Its current-version "
-            "result is in the server working note/transcript; repeating it is not progress."
-        ),
-        "summary": f"Skipped repeated unchanged {action.name} observation.",
-        "next_actions": ["Use the known result now: write/edit the required source or run build."],
-        "artifacts": [action.path] if action.path else [],
-    }
-
-
 def _tool_use_to_action(block: dict[str, Any]) -> Action:
     inp = block.get("input") or {}
     if not isinstance(inp, dict):
@@ -901,262 +231,11 @@ def _tool_use_to_action(block: dict[str, Any]) -> Action:
     return Action(name=str(block.get("name", "")), args=dict(inp), raw="")
 
 
-def _normalize_stable_max_action_path(action: Action) -> Action:
-    """Repair one harmless provider path spelling before strict policy checks.
-
-    Some coding models occasionally prefix a project-relative MAX path with one
-    slash (``/src/...``). Only known project roots are repaired; arbitrary
-    absolute paths, duplicate slashes, traversal and backslashes remain intact
-    and are rejected by ``max_model_path_rejection`` in the executor.
-    """
-
-    if action.name == "write_files":
-        raw_files = action.args.get("files")
-        if not isinstance(raw_files, Mapping):
-            return action
-        normalized: dict[str, object] = {}
-        for raw_path, content in raw_files.items():
-            path = str(raw_path)
-            if path.startswith(("/src/", "/public/product/", "/.omnia/")):
-                path = path[1:]
-            normalized[path] = content
-        return Action(
-            name=action.name,
-            args={**action.args, "files": normalized},
-            raw=action.raw,
-        )
-    path = action.path
-    if action.name not in {"list_dir", "read_file", "grep", "write_file", "edit_file"}:
-        return action
-    if not path.startswith(("/src/", "/public/product/", "/.omnia/")):
-        return action
-    return Action(
-        name=action.name,
-        args={**action.args, "path": path[1:]},
-        raw=action.raw,
-    )
-
-
-def _contains_history_placeholder(action: Action) -> bool:
-    if action.name not in {"write_file", "write_files", "edit_file"}:
-        return False
-
-    def _strings(value: object) -> list[str]:
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, Mapping):
-            return [item for nested in value.values() for item in _strings(nested)]
-        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-            return [item for nested in value for item in _strings(nested)]
-        return []
-
-    return any(
-        marker in value
-        for value in _strings(action.args)
-        for marker in _HISTORY_PLACEHOLDER_MARKERS
-    )
-
-
-def _mutation_files(action: Action, observation: Mapping[str, object]) -> dict[str, str]:
-    """Return the exact post-write files for a successful mutation action."""
-
-    if action.name == "write_files":
-        raw = observation.get("files")
-        if not isinstance(raw, Mapping):
-            raw = action.args.get("files")
-        return {
-            str(path): content
-            for path, content in dict(raw or {}).items()
-            if isinstance(path, str) and isinstance(content, str)
-        }
-    if action.name in {"write_file", "edit_file"} and action.path:
-        content = observation.get("content")
-        if not isinstance(content, str) and action.name == "write_file":
-            content = action.args.get("content")
-        return {action.path: content} if isinstance(content, str) else {}
-    return {}
-
-
-def _serialize_tool_payload(payload: dict[str, Any]) -> str:
-    """Keep the structured observation valid JSON inside the provider budget."""
-    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    diagnostics = payload.get("diagnostics")
-    while (
-        len(serialized) > _MAX_TOOL_RESULT_CHARS
-        and isinstance(diagnostics, list)
-        and len(diagnostics) > 5
-    ):
-        diagnostics.pop()
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > _MAX_TOOL_RESULT_CHARS:
-        data = str(payload.get("data") or "")
-        payload["data"] = data[
-            : max(0, len(data) - (len(serialized) - _MAX_TOOL_RESULT_CHARS) - 64)
-        ]
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    while (
-        len(serialized) > _MAX_TOOL_RESULT_CHARS and isinstance(diagnostics, list) and diagnostics
-    ):
-        diagnostics.pop()
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    if len(serialized) > _MAX_TOOL_RESULT_CHARS:
-        payload = {
-            "status": "error",
-            "summary": "Tool observation exceeded the safe structured-result budget.",
-            "data": "",
-            "retry": "never",
-            "diagnostics": [],
-        }
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return serialized
-
-
-def _obs_to_tool_result(
-    tool_use_id: str,
-    obs: dict[str, Any],
-    *,
-    tool_name: str = "",
-) -> dict[str, Any]:
+def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
     ok = bool(obs.get("ok"))
-    # The executor returns the whole post-edit file in ``content`` so the API can
-    # track the exact snapshot. Echoing that same 20–40 KB file back to the model
-    # is both unnecessary (the file is already in the container) and extremely
-    # expensive: every later turn resends it in the conversation. Keep the
-    # immediate observation factual but compact; the model can call read_file if
-    # it genuinely needs to inspect the resulting source again.
-    if ok and tool_name in {"write_file", "write_files", "edit_file"}:
-        content = obs.get("content")
-        size = len(content) if isinstance(content, str) else None
-        if tool_name == "write_files":
-            body = str(
-                obs.get("kernel_verification")
-                or obs.get("detail")
-                or "Product files written; Omnia verification completed."
-            )
-        else:
-            verb = "written" if tool_name == "write_file" else "edited"
-            body = (
-                f"File {verb} successfully"
-                + (f" ({size} characters)" if size is not None else "")
-                + ". Current source is in the container."
-            )
-    else:
-        body = (
-            obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
-        )
-    text = str(body)[: _MAX_TOOL_RESULT_CHARS // 2]
-    status = str(obs.get("status") or ("success" if ok else "error"))
-    raw_next_actions = obs.get("next_actions")
-    next_actions = (
-        [str(item)[:500] for item in raw_next_actions[:6]]
-        if isinstance(raw_next_actions, list)
-        else []
-    )
-    if not next_actions:
-        if ok and tool_name in {"write_file", "edit_file"}:
-            next_actions = ["Run build and fix the exact compiler output if it fails."]
-        elif ok and tool_name == "write_files":
-            next_actions = [
-                "If Omnia reported gaps, submit one coherent repair revision; otherwise stop."
-            ]
-        elif ok and tool_name == "build":
-            next_actions = ["Run the remaining runtime and visual proof after the last write."]
-        elif not ok:
-            next_actions = [
-                "Use the root-cause hint once; stop repeating the identical failing call."
-            ]
-    raw_artifacts = obs.get("artifacts")
-    artifacts = (
-        [str(item)[:500] for item in raw_artifacts[:20]] if isinstance(raw_artifacts, list) else []
-    )
-    if tool_name in {"write_file", "write_files", "edit_file"} and ok:
-        artifacts = list(dict.fromkeys([*artifacts, str(obs.get("path") or "")]))
-        artifacts = [item for item in artifacts if item]
-        if tool_name == "write_files":
-            raw_changed = obs.get("changed_paths")
-            if isinstance(raw_changed, list):
-                artifacts = list(
-                    dict.fromkeys([*artifacts, *[str(path)[:500] for path in raw_changed[:20]]])
-                )
-    root_cause_hint = str(obs.get("root_cause_hint") or "")[:1000]
-    error_signature = str(obs.get("error_signature") or "")[:128]
-    if not ok and tool_name == "build" and not error_signature:
-        error_signature = normalize_error_signature(text)
-    raw_evidence = obs.get("evidence")
-    evidence = (
-        [str(item)[:300] for item in raw_evidence[:20]] if isinstance(raw_evidence, list) else []
-    )
-    if ok and tool_name == "build" and "build:clean" not in evidence:
-        evidence.append("build:clean")
-    retry = str(
-        obs.get("retry")
-        or ("never" if ok else "transient" if obs.get("infra_dead") else "after_change")
-    )
-    if retry not in {"never", "after_change", "transient"}:
-        retry = "never"
-    raw_affected_files = obs.get("affected_files")
-    affected_files = (
-        [str(item)[:300] for item in raw_affected_files[:30]]
-        if isinstance(raw_affected_files, list)
-        else []
-    )
-    raw_diagnostics = obs.get("diagnostics")
-    diagnostics: list[dict[str, str]] = []
-    if isinstance(raw_diagnostics, list):
-        for item in raw_diagnostics[:30]:
-            if not isinstance(item, Mapping):
-                continue
-            diagnostics.append(
-                {
-                    "source": str(item.get("source") or "")[:40],
-                    "code": str(item.get("code") or "")[:80],
-                    "severity": str(item.get("severity") or "")[:20],
-                    "file": str(item.get("file") or "")[:300],
-                    "message": str(item.get("message") or "")[:500],
-                }
-            )
-    raw_analysis_unavailable = obs.get("analysis_unavailable")
-    analysis_unavailable = (
-        [str(item)[:400] for item in raw_analysis_unavailable[:10]]
-        if isinstance(raw_analysis_unavailable, list)
-        else []
-    )
-    payload: dict[str, Any] = {
-        "status": status,
-        "summary": str(obs.get("summary") or text)[:1000],
-        "next_actions": next_actions,
-        "artifacts": artifacts,
-        "data": "" if ok and tool_name in {"write_file", "edit_file"} else text,
-    }
-    if tool_name == "build" or any(
-        key in obs
-        for key in (
-            "root_cause_hint",
-            "error_signature",
-            "evidence",
-            "retry",
-            "affected_files",
-            "diagnostics",
-            "analysis_unavailable",
-        )
-    ):
-        payload.update(
-            {
-                "root_cause_hint": root_cause_hint,
-                "error_signature": error_signature,
-                "evidence": evidence,
-                "retry": retry,
-                "affected_files": affected_files,
-                "diagnostics": diagnostics,
-                "analysis_unavailable": analysis_unavailable,
-            }
-        )
-    serialized = _serialize_tool_payload(payload)
-    block: dict[str, Any] = {
-        "type": "tool_result",
-        "tool_use_id": tool_use_id,
-        "content": serialized,
-    }
+    body = obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
+    text = str(body)[:_MAX_TOOL_RESULT_CHARS]
+    block: dict[str, Any] = {"type": "tool_result", "tool_use_id": tool_use_id, "content": text}
     if not ok:
         block["is_error"] = True
     return block
@@ -1201,79 +280,6 @@ _PARALLEL_PAGES_RE = re.compile(
     r"two parallel pages that resolve to the same path.*?check\s+(\S+)\s+and\s+(\S+)",
     re.IGNORECASE | re.DOTALL,
 )
-
-_TYPESCRIPT_ERROR_PATH_RE = re.compile(r"(?m)^((?:src|app|pages)/.+?)\(\d+,\d+\):\s+error\s+TS\d+")
-_TYPESCRIPT_ERROR_LOCATION_RE = re.compile(
-    r"(?m)^(?P<path>(?:src|app|pages)/.+?)\((?P<line>\d+),\d+\):\s+error\s+TS\d+"
-)
-_TYPESCRIPT_RELATIVE_MODULE_RE = re.compile(
-    r"""(?m)^(?P<source>(?:src|app|pages)/.+?)\(\d+,\d+\):\s+error\s+TS\d+:[^\n]*?"""
-    r"""Module\s+["']+(?P<module>\.{1,2}/[^"']+)["']+"""
-)
-
-
-def _typescript_error_paths(build_output: str) -> frozenset[str]:
-    """Files named by TypeScript diagnostics in a build result."""
-
-    return frozenset(_TYPESCRIPT_ERROR_PATH_RE.findall(build_output or ""))
-
-
-def _typescript_repair_paths(
-    build_output: str,
-    written: Mapping[str, str],
-) -> frozenset[str]:
-    """Diagnostic files plus local modules explicitly named by TypeScript.
-
-    A TS2305/TS2307 reported in ``catalog.ts`` is often fixed in its imported
-    ``types.ts`` contract. Restricting repair edits to the diagnostic file makes
-    that valid compiler-guided repair impossible and leaves the model cycling on
-    reads/builds. Only already-present relative source modules are admitted.
-    """
-
-    paths = set(_typescript_error_paths(build_output))
-    for match in _TYPESCRIPT_RELATIVE_MODULE_RE.finditer(build_output or ""):
-        source = str(match.group("source") or "")
-        module = str(match.group("module") or "")
-        base = posixpath.normpath(posixpath.join(posixpath.dirname(source), module))
-        candidates = (
-            base,
-            f"{base}.ts",
-            f"{base}.tsx",
-            f"{base}/index.ts",
-            f"{base}/index.tsx",
-        )
-        dependency = next((candidate for candidate in candidates if candidate in written), None)
-        if dependency:
-            paths.add(dependency)
-    return frozenset(paths)
-
-
-def _structured_repair_paths(observation: Mapping[str, object]) -> frozenset[str]:
-    """Admit only canonical model-owned MAX files from analyzer observations."""
-    raw = observation.get("affected_files")
-    if not isinstance(raw, list):
-        return frozenset()
-    allowed: set[str] = set()
-    for item in raw[:30]:
-        if not isinstance(item, str) or len(item) > 300 or "\\" in item:
-            continue
-        path = posixpath.normpath(item)
-        if path != item or path.startswith(("/", "../")):
-            continue
-        if path == "src/app/globals.css" or path.startswith(
-            (
-                "src/components/",
-                "src/hooks/",
-                "src/data/",
-                "src/store/",
-                "src/styles/",
-                "src/types/",
-                "src/lib/product/",
-                "public/product/",
-            )
-        ):
-            allowed.add(path)
-    return frozenset(allowed)
 
 
 def _parallel_pages_hint(build_output: str) -> str | None:
@@ -1331,26 +337,13 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
     if name == "write_file":
         content = str(action.args.get("content", "") or "")
         return _cap(f"{len(content)} символов записано:\n\n{content}")
-    if name == "write_files":
-        raw_files = action.args.get("files")
-        paths = sorted(raw_files) if isinstance(raw_files, Mapping) else []
-        total = (
-            sum(len(value) for value in raw_files.values() if isinstance(value, str))
-            if isinstance(raw_files, Mapping)
-            else 0
-        )
-        return _cap(
-            f"Атомарный проход: {len(paths)} файлов, {total} символов.\n"
-            + "\n".join(paths)
-            + (f"\n\n{obs.get('kernel_verification')}" if obs.get("kernel_verification") else "")
-        )
     if name == "edit_file":
         return _cap(obs.get("content") or obs.get("detail") or "правка применена")
     if name == "read_file":
         return _cap(obs.get("content") or "")
     if name == "build":
         return _cap(obs.get("detail") or obs.get("content") or "сборка чистая")
-    if name in ("grep", "list_dir", "read_logs", "docs"):
+    if name in ("grep", "list_dir", "bash", "read_logs", "docs"):
         return _cap(obs.get("detail") or obs.get("content") or "")
     if name in ("runtime_check", "probe", "verify_isolation"):
         return _cap(obs.get("detail") or obs.get("content") or "проверка пройдена")
@@ -1360,16 +353,12 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
 _NATIVE_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
     "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
-    "write_file/edit_file — писать, build — компиляция, read_logs — рантайм, "
+    "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
     "runtime_check — открыть роут в ЖИВОМ приложении, probe — реальный запрос ОТ "
     "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
     "между юзерами, docs — свежая дока библиотек. Думай сколько нужно. Цикл: пиши "
     "код → build → чини РЕАЛЬНЫЕ ошибки до чистоты → ДОКАЖИ что работает → done. Пиши "
-    "полноценно, без заглушек и TODO. Для большой задачи вызови plan_task один раз "
-    "вместе с первыми полезными действиями, затем update_plan только после реальных "
-    "milestones; это наблюдаемый checkpoint, не пересказ скрытых рассуждений. Внешние "
-    "MCP-возможности сначала найди через discover_capabilities и вызывай только когда "
-    "они дают необходимые свежие факты.\n\n"
+    "полноценно, без заглушек и TODO.\n\n"
     "ДОКАЖИ перед done — чистый build это НЕ доказательство работы: "
     "(1) runtime_check главные роуты (чистый typecheck всё равно может 5xx на рендере); "
     "(2) для интерактива (создать/сохранить/отправить/удалить) — probe РЕАЛЬНЫМ запросом "
@@ -1465,88 +454,6 @@ _NATIVE_PREAMBLE = (
     "с коротким пояснением в скобках. По делу и развёрнуто (что сделал → зачем → эффект), без воды."
 )
 
-_MAX_NATIVE_PREAMBLE = (
-    "OMNIA MAX APP ENGINEER — ты автономная senior-команда уровня сильного "
-    "code-agent: продуктовый директор, продуктовый дизайнер, "
-    "motion-дизайнер и инженер MAX Mini Apps в одном агенте. Ты работаешь именно во "
-    "вкладке MAX и создаёшь приложение внутри мессенджера MAX — не обычный сайт, не "
-    "Telegram/VK Mini App и не отдельное веб-приложение. Твоя цель — не просто "
-    "зелёная сборка, а цельный production-grade мобильный продукт с характером, "
-    "реальными сценариями и профессиональной детализацией. Инструменты вызывай "
-    "напрямую: read_file/list_dir/grep — понять защищённое ядро, write_file/edit_file — "
-    "писать продуктовые файлы, build — компиляция, runtime_check — живой роут, see — "
-    "подписанная функциональная browser-проверка без обязательной оценки дизайна, "
-    "bash — только одна из трёх точных "
-    "read-only проверок с mutation_paths=[]: `pnpm typecheck`, `pnpm analyze:agent` или "
-    "`pnpm security:agent`. Не вызывай free-form shell, package mutation, tests или "
-    "code generation; исходники меняй только file tools. "
-    "Пиши полноценно, "
-    "без TODO, заглушек, "
-    "декоративных кнопок и симулированного успеха. В начале существенной сборки уточни "
-    "наблюдаемый план через plan_task, затем фиксируй реальные milestones инструментом "
-    "update_plan. Не записывай скрытые рассуждения. Для свежей внешней документации и "
-    "исследований доступны разрешённые read-only MCP capabilities: сначала "
-    "discover_capabilities, затем один точный call_capability; не подменяй ими работу "
-    "с живым проектом и не зацикливайся на внешнем сервере.\n\n"
-    "АРТ-ДИРЕКЦИЯ ПРИНАДЛЕЖИТ ТЕБЕ. Выбери продуктовую структуру, визуальную систему и "
-    "motion language прямо из брифа и реализуй их без промежуточного дизайн-шаблона. "
-    "Никогда не воспроизводи универсальный dashboard, прошлую генерацию или "
-    "маркетинговый лендинг.\n\n"
-    "ВИЗУАЛЬНАЯ СВОБОДА БЕЗ ШАБЛОНА. Ты владеешь "
-    "src/components/product/ProductApp.tsx, src/app/globals.css и новыми клиентскими "
-    "продуктовыми компонентами. globals.css можно и нужно "
-    'полностью оформить под концепцию, но сохрани корректный `@import "tailwindcss"` '
-    "и располагай внешние font-import ДО него. Это обычный глобальный CSS, не CSS Module: "
-    "никогда не используй в нём `:global(...)`. Не трогай locked layout/provider/runtime. "
-    "Определи собственные семантические CSS variables (`--app-*`) и используй их через "
-    "обычный CSS или Tailwind arbitrary values; не вызывай несуществующие "
-    "`bg-background`/`border-border` без явного mapping. Один доминирующий акцент, "
-    "выразительная типографическая шкала, осмысленные поверхности и ритм важнее радуги, "
-    "градиентов и множества одинаковых карточек.\n\n"
-    "МОБИЛЬНЫЙ ПРОДУКТ, НЕ САЙТ. Проектируй сначала для 360–390px: главное действие "
-    "видно сразу, навигация не перекрывает контент, safe-area учтён, tap targets удобны "
-    "для пальца, данные читаются без горизонтального скролла. Используй реальный профиль "
-    "MAX и Bridge там, где это улучшает сценарий. Loading, empty, error/retry, success, "
-    "selected/pressed/disabled — полноценные состояния, а не подписи в макете. Не ставь "
-    "fixed/sticky CTA поверх прокручиваемых контролов: оставляй действие в потоке либо "
-    "выделяй ему собственную непрозрачную область и реальный spacer. Если вариантов больше "
-    "трёх, используй компактные chips/segmented/grid или progressive disclosure, чтобы до "
-    "главного действия не стояла длинная колонка однотипных карточек.\n\n"
-    "AI-РЕЗУЛЬТАТ — ЭТО ЭКРАН, НЕ СЫРОЙ ТЕКСТ. Проси у managed AI короткий, "
-    "структурированный ответ и показывай его секциями, шагами или списком с ясной "
-    "иерархией. Никогда не выводи длинный `answer` одним сплошным абзацем в общей "
-    "карточке; на 360px сохрани читаемую длину строки и видимое следующее действие.\n\n"
-    "FIRST-RUN БЕЗ ПУСТОТЫ И ФАЛЬШИ. Честное отсутствие истории не означает пустой экран: "
-    "первый viewport должен содержать обещание продукта, одно главное решение/действие и "
-    "полезный следующий слой из брифа (например, выбор цели, каталог или объяснение процесса), "
-    "но не выдуманные достижения. Не растягивай блоки через space-between/min-height так, чтобы "
-    "между ними возникали огромные провалы. При nullable MAX-профиле никогда не показывай имя-"
-    "заглушку «Пользователь», «User» или «Гость»: используй нейтральную фразу без выдуманного "
-    "имени. Loading обязан сохранять ту же брендовую оболочку и геометрию, а 360px и 390px "
-    "после settle должны показывать один и тот же продукт, не разные splash/content экраны.\n\n"
-    "ЖИВОЕ ДВИЖЕНИЕ. Добавляй короткие целевые micro-interactions: press feedback, "
-    "переключение сегментов, изменение progress/counter, появление и удаление строки, "
-    "skeleton→content, bottom sheet, подтверждение успеха/ошибки и MAX haptics. Анимируй "
-    "прежде всего transform/opacity; не строй UX на hover, не запускай бесконечный декор, "
-    "не анимируй всё одновременно и обязательно уважай `prefers-reduced-motion`. Каждая "
-    "анимация должна объяснять действие, изменение состояния или навигационный контекст.\n\n"
-    "НАВЫКИ ПО ПОТРЕБНОСТИ, НЕ ЦЕРЕМОНИЯ. Серверный каталог MAX-навыков доступен "
-    "через read_skill. Загружай только тот capability pack, который реально помогает "
-    "текущему брифу или конкретной ошибке. Ни один навык не является обязательной "
-    "стадией перед записью кода или завершением. Если контекста достаточно — сразу "
-    "создавай продукт, проверяй его и исправляй факты.\n\n"
-    "ДОКАЗАТЕЛЬСТВО ГОТОВНОСТИ. Реализуй целиком → build до чистоты → "
-    "runtime_check после последней записи → один see через подписанную MAX-сессию. "
-    "Объективная browser/functional ошибка блокирует готовность: примени точечную правку "
-    "и повтори доказательство. Субъективный visual score, generic/beautiful verdict или "
-    "совет по дополнительной полировке не блокируют рабочее приложение и не требуют "
-    "редизайна. Не повторяй исправления без нового факта. "
-    "Если QA-инфраструктура недоступна, не перезапускай её вслепую и не объявляй done: "
-    "заверши ход как visual proof unavailable — платформа сохранит last-known-good. "
-    "Исправляй root-cause, не маскируй "
-    "ошибку случайным переписыванием работающего приложения."
-)
-
 
 _EXPLORE_STALL_NUDGE = (
     "[LOOP GUARD] Several turns in a row without writing any file. Stop "
@@ -1561,346 +468,34 @@ _DONE_WHEN_GREEN_NUDGE = (
     "owned resources) and call done NOW."
 )
 _MAX_DONE_WHEN_GREEN_NUDGE = (
-    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write, "
-    "fix any concrete runtime error, then call done NOW. Do not call visual ceremony, "
+    "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
+    "and run see once through the signed MAX preview, then call done NOW. Do not call "
     "generic probe or verify_isolation."
 )
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
-    "MAX uses signed initData and an authenticated preview session. The generic probe and "
-    "verify_isolation tools cannot prove this runtime and are not available in a MAX build. "
-    "The see tool DOES receive a signed MAX preview session and runs objective functional "
-    "browser checks; screenshot/design scoring is optional. Finish "
+    "MAX uses signed initData and an authenticated preview session. The generic probe, "
+    "verify_isolation and see tools currently authenticate as a normal web user and cannot "
+    "prove this runtime. Do NOT call or retry probe/verify_isolation in a MAX build. Finish "
     "the complete source product, run build until clean, run runtime_check after the final "
-    "write, then call see; the executor supplies a signed MAX preview session. A "
-    "objective browser or signed functional failure is not proof: apply one concrete fix, "
-    "rebuild, runtime_check and see again. A subjective visual score or design-polish note "
-    "is advisory and must not trigger redesign or block completion. If visual QA reports "
-    "unavailable, do not retry it blindly."
-)
-
-_MAX_KERNEL_PREAMBLE = (
-    "OMNIA MAX PRODUCT BUILDER. The user questionnaire is already compiled into one "
-    "canonical ProductSpec, a non-empty screen/file/scenario plan and a minimal set of "
-    "preselected capability guidance. Treat that bundle as the only product brief; do not "
-    "reinterpret it or invent a second plan. Build a complete mobile MAX Mini App, not a "
-    "landing page, mockup or one giant component. Submit one coherent multi-file revision "
-    "through write_files with complete contents for ProductApp, product components/hooks "
-    "and globals.css. Keep MAX-owned runtime files locked, use only documented managed APIs, "
-    "and never add secrets, direct DB access, API routes, fake user history or fake success. "
-    "Implement every planned screen, navigation destination, capability, primary action and "
-    "honest "
-    "loading/empty/error/success state. If history is required, persist a real managed action "
-    "and restore it after reload. Omnia automatically runs build, runtime and the signed "
-    "objective functional gate after write_files; never request those checks yourself. If the "
-    "result is red, use the complete error/gap list for one coherent repair write_files pass. "
-    "Do not redesign, polish or repeat a repair without new evidence. Subjective screenshot "
-    "scoring is disabled and is not part of completion. Put each planned view id on its real "
-    "visible view as data-omnia-screen. Put each planned action id on its working clickable "
-    "control as data-omnia-capability and its exact plan text as "
-    "data-omnia-capability-label. Render that action's own visible outcome with "
-    "data-omnia-action-result set to the same action id; a shared generic status is not proof. "
-    "Obey Primary action execution kind exactly: local_navigation must reach its planned view "
-    "without a fake write; managed_write must call createMaxAction with the exact action id "
-    "and show its causal tenant-owned record; catalog_read must call the managed catalog "
-    "integration and show a real catalog item value, never call createMaxAction. "
-    "Keep data-omnia-primary-action plus "
-    "data-omnia-persisted-action on the same primary control when persistence is required."
-)
-
-_MAX_REFERENCE_PREAMBLE = (
-    "Ты — автономный инженер, который за один непрерывный проход строит "
-    "полноценный MAX Mini App. MAX здесь только headless-адаптер Bridge/auth/API и не "
-    "задаёт дизайн или структуру продукта. За один короткий batched-read изучи только "
-    "необходимые сигнатуры, затем ПЕРВОЙ продуктовой записью полностью замени "
-    f"`{_STABLE_MAX_PRODUCT_ENTRY}`: собери в нём рабочий мобильный MVP со всеми главными "
-    "экранами, навигацией и состояниями из брифа. Используй Tailwind-классы или inline styles, "
-    "чтобы этот первый вертикальный срез уже был оформлен; вспомогательные файлы выноси позже. "
-    "Один tool response держи короче 24 000 символов.\n\n"
-    "Не трогай управляемые MAX-файлы, не создавай API routes, не раскрывай секреты и не "
-    "добавляй email/password-вход. Демо-данные и локальные примеры разрешены, когда они "
-    "нужны брифу или первому preview; не выдавай их за MAX-профиль и не вставляй ключи. "
-    "В новой генерации никогда не импортируй `@maxhub/max-ui`: зависимость сохранена только "
-    "для совместимости со старыми снимками. Используй обычный React/Tailwind/product CSS. "
-    "После записи запусти build, исправь только реальные ошибки компилятора и заверши. "
-    "Система сама проверит, что ProductApp видим и гидратирован. Не трать ходы на design/legal "
-    "ceremony, планирование, повторные чтения или формальные чек-листы."
-)
-
-_MAX_REFERENCE_EDIT_PREAMBLE = (
-    "Ты — автономный AI-агент для точечной правки существующего MAX Mini App. "
-    "Сначала прочитай только целевой участок, затем внеси минимальное изменение, "
-    "сохрани все остальные экраны, данные и сценарии. Не переписывай весь продукт, "
-    "не меняй визуальное направление без прямого запроса и не трогай управляемое "
-    "MAX-ядро. Не добавляй платформенную оболочку или юридический футер. После последней "
-    "записи исправь фактические ошибки build/runtime_check и заверши на зелёной версии; "
-    "система сама проверит гидратацию продукта перед публикацией. "
-    "Не создавай демо-данные, секреты, параллельную "
-    "email-авторизацию, API или прямой доступ к БД."
-)
-
-_MAX_NATIVE_EDIT_OVERRIDE = (
-    "MAX EDIT OVERRIDE: preserve the existing product promise, art direction, screens, "
-    "managed data and integrations unless the user explicitly changes them. Inspect only "
-    "the affected source, make the smallest coherent repair, update the observable plan, "
-    "then repeat build/runtime_check/signed see and every functional proof affected by the "
-    "edit. Do not redesign unrelated screens or weaken production acceptance."
+    "write, then call see ONCE; the executor supplies a signed MAX preview session. Apply a "
+    "concrete visual fix if returned, rebuild/runtime_check/see once more, then call done. If "
+    "visual QA reports unavailable, do not retry it."
 )
 
 
-def native_system_prompt(
-    stack_guide: str,
-    skills: str | None = None,
-    *,
-    stable_max_loop: bool = False,
-    stable_max_edit: bool = False,
-    reference_max_loop: bool = False,
-    reference_max_edit: bool = False,
-    kernel_owned_loop: bool = False,
-) -> str:
+def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     """Native-tools system prompt: a short tool-loop preamble + the stack guide (+
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    # MAX keeps the bounded product-first loop but uses the full product/design/
-    # verification contract. Generic login probes remain excluded by MAX schemas.
-    _ = reference_max_loop, reference_max_edit
-    parts = [
-        (
-            _MAX_KERNEL_PREAMBLE
-            if kernel_owned_loop
-            else f"{_MAX_NATIVE_PREAMBLE}\n\n{_MAX_NATIVE_EDIT_OVERRIDE}"
-            if stable_max_edit
-            else _MAX_NATIVE_PREAMBLE
-        )
-        if stable_max_loop
-        else _NATIVE_PREAMBLE,
-        _MAX_NATIVE_VERIFICATION_OVERRIDE if stable_max_loop and not kernel_owned_loop else "",
-        guide,
-    ]
-    # Stable MAX receives exact required/domain skill ids from the persisted
-    # Design Director block; keep the large optional INDEX out of every turn.
-    if skills and skills.strip() and not stable_max_loop:
+    parts = [_NATIVE_PREAMBLE, guide]
+    if skills and skills.strip():
         parts.append(skills.strip())
+    if "MAX PLATFORM CORE CONTRACT" in guide:
+        parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
-
-
-def _stable_max_entry_focus_task(task: str, written: Mapping[str, str]) -> str:
-    """Compact a stale pre-entry transcript into one bounded composition turn."""
-
-    support: list[str] = []
-    budget = 16_000
-    for path, content in written.items():
-        if path == _STABLE_MAX_PRODUCT_ENTRY or budget <= 0:
-            continue
-        excerpt = content[: min(1_800, budget)]
-        support.append(f"FILE {path}\n{excerpt}")
-        budget -= len(excerpt)
-    return (
-        "[FOCUSED PRODUCT ENTRY]\n"
-        "The supporting layer below is already written. Do not read or rewrite it. "
-        f"Now write ONLY `{_STABLE_MAX_PRODUCT_ENTRY}` as a compact complete screen "
-        "composition. Import useful modules when their exports are clear; otherwise keep "
-        "the complete user-facing UI in ProductApp. Stay below 24000 output characters. "
-        "Include all requested screens, navigation, loading/empty/error/success states, and "
-        "real interactions; this is a full application, not a placeholder. Requested product "
-        "definitions such as catalog items, services, plans, categories and prices are valid "
-        "reference content: provide a compact brief-specific fallback when managed content is "
-        "empty, but never invent user accounts, orders, history, metrics or success records.\n\n"
-        f"ORIGINAL TASK\n{task}\n\n"
-        "ALREADY WRITTEN SUPPORT\n" + "\n\n".join(support)
-    )
-
-
-def _stable_max_visual_repair_task(
-    task: str,
-    feedback: str,
-    written: Mapping[str, str],
-) -> str:
-    """Replace a stale build transcript with one evidence-led visual repair turn."""
-
-    preferred = [_STABLE_MAX_PRODUCT_ENTRY, "src/app/globals.css"]
-    paths = [*preferred, *(path for path in written if path not in preferred)]
-    sources: list[str] = []
-    remaining = 72_000
-    for path in paths:
-        content = written.get(path, "")
-        if not content or remaining <= 0:
-            continue
-        excerpt = content[:remaining]
-        remaining -= len(excerpt)
-        sources.append(f"CURRENT `{path}`\n```\n{excerpt}\n```")
-    return (
-        "[FOCUSED VISUAL RESCUE]\n"
-        "The application already compiles and runs, but the rendered desktop/mobile result "
-        "is below the production visual floor. The current source and exact visual verdict "
-        "are included below, so do not read, list, grep, plan, or explain. Your next action "
-        "must write_file or edit_file and apply every concrete issue in one coherent pass. "
-        "When the verdict specifically requires real photography or illustration, you may "
-        "instead call generate_media(kind='image') once, then embed its returned hosted URL "
-        "with edit_file on the following turn. Never substitute an icon or gradient placeholder. "
-        "When both component markup and stylesheet need changes, emit both edits in this "
-        "turn when they fit; otherwise finish the component first and the executor will "
-        "offer one bounded stylesheet-or-build turn next. "
-        "Preserve working behavior, MAX integration, honest empty states, and accessibility. "
-        "Never fix a hidden CTA by floating it over scrollable choices: compact or stage the "
-        "choices and keep the action in flow, or reserve an opaque dock plus an actual spacer. "
-        "A preview identity can be absent; render neutral copy and never expose synthetic "
-        "Пользователь/User/Guest names. "
-        "Catalog, menu, service or plan definitions explicitly requested in the brief are "
-        "product reference content, not fake user records. If managed content is empty, render "
-        "a compact brief-specific fallback with real labels and prices instead of leaving the "
-        "requested primary screen empty. "
-        "Prefer exact edits; keep total tool content below 24000 characters. Do not add fake "
-        "user history, completed activity, statistics, testimonials, or decorative filler.\n\n"
-        f"ORIGINAL TASK\n{task[:12_000]}\n\n"
-        f"LATEST RENDERED VERDICT\n{feedback[:8_000]}\n\n"
-        "CURRENT PRODUCT SOURCE\n" + "\n\n".join(sources)
-    )
-
-
-def _stable_max_source_repair_task(
-    task: str,
-    gap: str,
-    written: Mapping[str, str],
-) -> str:
-    """Compact a green build around one objective source-contract gap."""
-
-    preferred = [
-        _STABLE_MAX_PRODUCT_ENTRY,
-        "src/app/globals.css",
-        ".omnia/max-design-spec.json",
-    ]
-    paths = [*preferred, *(path for path in written if path not in preferred)]
-    sources: list[str] = []
-    remaining = 72_000
-    for path in paths:
-        content = written.get(path, "")
-        if not content or remaining <= 0:
-            continue
-        excerpt = content[:remaining]
-        remaining -= len(excerpt)
-        sources.append(f"CURRENT `{path}`\n```\n{excerpt}\n```")
-    return (
-        "[FOCUSED SOURCE CONTRACT REPAIR]\n"
-        "The application already compiles. One objective production-contract gap remains "
-        "and the current source is included below. Do not read, list, grep, browse, plan, "
-        "or explain. Your next action must write_file or edit_file and fix exactly this gap "
-        "without redesigning working screens. Use the managed MAX integration primitives "
-        "named in the gap; keep provider-connected and unavailable states honest. Preserve "
-        "existing behavior, visual quality, accessibility, and real persisted actions. "
-        "Keep total tool content below 24000 characters. After the edit, build will be "
-        "required automatically.\n\n"
-        f"ORIGINAL TASK\n{task[:12_000]}\n\n"
-        f"EXACT CONTRACT GAP\n{gap[:8_000]}\n\n"
-        "CURRENT PRODUCT SOURCE\n" + "\n\n".join(sources)
-    )
-
-
-def _is_stable_max_source_gap(gap: str | None) -> bool:
-    """Distinguish editable contract debt from skill/runtime/visual proof debt."""
-
-    if not gap:
-        return False
-    lowered = gap.casefold()
-    return not (
-        "src/app/globals.css" in gap
-        or "proof" in lowered
-        or lowered.startswith("read required max capability packs")
-        or lowered.startswith("run runtime_check")
-        or lowered.startswith("run see")
-        or lowered.startswith("read visual-evaluation")
-    )
-
-
-def _stable_max_working_memory(
-    *,
-    product_entry_required: bool,
-    written: Mapping[str, str],
-    last_build_ok: bool | None,
-    last_build_error_paths: frozenset[str],
-    wrote_since_build: bool,
-    proof_after_write: set[str],
-    no_write_turns: int,
-    provider_turn_index: int,
-    recent_mutation_paths: list[str],
-    repeated_observation_paths: list[str],
-    completion_gap: str | None,
-    public_progress: str,
-    brain: Mapping[str, object] | None = None,
-) -> str:
-    """Render compact factual memory for every stable MAX provider call."""
-
-    entry_written = _STABLE_MAX_PRODUCT_ENTRY in written
-    entry_state = (
-        "created_this_run"
-        if entry_written
-        else "required_now"
-        if product_entry_required
-        else "existing_snapshot"
-    )
-    if product_entry_required and not entry_written:
-        phase = "compose_product_entry"
-        next_action = (
-            f"Write the complete usable `{_STABLE_MAX_PRODUCT_ENTRY}` now. Do not create or "
-            "reread more support files."
-        )
-    elif wrote_since_build:
-        phase = "compile_latest_source"
-        next_action = "Run build now; repair only its concrete errors."
-    elif last_build_ok is False:
-        phase = "repair_red_build"
-        targets = ", ".join(sorted(last_build_error_paths)) or "the compiler-reported source"
-        next_action = f"Fix {targets}, then rebuild."
-    elif last_build_ok is True and completion_gap:
-        phase = "finish_acceptance_proof"
-        next_action = completion_gap[:1_200]
-    elif last_build_ok is True:
-        phase = "ready_to_finish"
-        next_action = "Call done; do not redesign or reread the product."
-    elif not product_entry_required and not written:
-        phase = "edit_existing_product"
-        next_action = (
-            "Apply the requested surgical change to the existing live product, then build."
-        )
-    else:
-        phase = "implement_vertical_slice"
-        next_action = "Create the user-facing product, then run build."
-
-    paths = sorted(written)
-    build_state = (
-        "clean" if last_build_ok is True else "red" if last_build_ok is False else "not_run"
-    )
-    progress = str(public_progress or "").strip()[:2_800]
-    rows = [
-        "[SERVER WORKING NOTE v1 — observed facts, not hidden reasoning]",
-        f"Provider turn: {max(0, provider_turn_index)}",
-        f"Phase: {phase}",
-        f"Product entry state: {entry_state}",
-        f"Build after latest mutation: {build_state}",
-        "Written artifacts: " + (", ".join(paths[-20:]) if paths else "none"),
-        "Recent mutations: "
-        + (", ".join(recent_mutation_paths[-12:]) if recent_mutation_paths else "none"),
-        "Proof after latest mutation: "
-        + (", ".join(sorted(proof_after_write)) if proof_after_write else "none"),
-        f"Consecutive turns without source progress: {max(0, no_write_turns)}",
-    ]
-    if repeated_observation_paths:
-        rows.append(
-            "Already observed unchanged; do not reread: "
-            + ", ".join(dict.fromkeys(repeated_observation_paths[-12:]))
-        )
-    rows.append(f"NEXT REQUIRED ACTION: {next_action}")
-    if progress:
-        rows.extend(("", progress))
-    if brain is not None:
-        rows.extend(("", brain_prompt_view(brain, max_chars=2_400)))
-    rows.append(
-        "Treat this note as the authoritative checkpoint. Continue from live files; never "
-        "restart planning or repeat completed observations."
-    )
-    return "\n".join(rows)[:_STABLE_MAX_WORKING_MEMORY_CHARS]
 
 
 async def _call_messages(
@@ -1915,25 +510,21 @@ async def _call_messages(
     message_id: str | None = None,
     free: bool = False,
     stage: str = "native_agent",
-    tools: list[dict[str, Any]] | None = None,
-    model: str = _MODEL,
-    thinking_budget: int = _THINKING_BUDGET,
-    turn_id: str | None = None,
-    resume_count: int = 0,
-    working_memory: str = "",
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
+    import asyncio
+
     payload: dict[str, Any] = {
-        "model": model,
+        "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
-        "thinking": {"type": "enabled", "budget_tokens": thinking_budget},
+        "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
         # Prompt caching: cache the stable system prompt + tool schemas, and a
         # moving breakpoint on the transcript tail (see _with_incremental_cache).
         "system": _system_blocks(system),
-        "tools": tools if tools is not None else _TOOLS_CACHED,
+        "tools": _TOOLS_CACHED,
         "tool_choice": {"type": "auto"},
-        "messages": _with_working_memory(_with_incremental_cache(convo), working_memory),
+        "messages": _with_incremental_cache(convo),
     }
     if user_id:
         payload["user"] = user_id
@@ -1949,118 +540,34 @@ async def _call_messages(
             "free": free,
             "stage": stage,
             "retry_count": attempt,
-            "turn_id": turn_id,
-            "resume_count": max(0, int(resume_count)),
         }
         try:
-            r = await client.post(url, json=payload, timeout=_gateway_timeout())
-            try:
-                parsed_body = r.json()
-            except ValueError as exc:
-                if 200 <= r.status_code < 300:
-                    raise AmbiguousPaidCallError(r.status_code) from exc
-                parsed_body = None
-            if 200 <= r.status_code < 300 and not isinstance(parsed_body, dict):
-                raise AmbiguousPaidCallError(r.status_code)
-            try:
-                error_payload = parsed_body.get("error") or {}
-                error_type = str(error_payload.get("code") or error_payload.get("type") or "")
-            except AttributeError:
-                error_type = ""
-            if error_type == "provider_response_timeout":
-                raise ProviderResponseTimeoutError(r.status_code)
-            if error_type == "paid_call_ambiguous":
-                raise AmbiguousPaidCallError(r.status_code)
-            if error_type in {
-                "auth_error",
-                "authentication_error",
-                "budget_exceeded",
-                "insufficient_balance",
-                "invalid_request",
-                "validation_error",
-            }:
-                raise PermanentProviderError(r.status_code)
-            trusted_rate_limit = error_type in {
-                "rate_limit",
-                "rate_limited",
-                "concurrency_limited",
-            }
-            if r.status_code == 429 and trusted_rate_limit:
+            r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
+            # 402 = provider key out of balance. Retrying can't fix it, so fail
+            # FAST with a human cause instead of grinding 8 backoff retries and
+            # surfacing an opaque "соединение потеряно" 3+ minutes later.
+            if r.status_code == 402:
+                raise RuntimeError(
+                    "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
+                    "пополни ключ и повтори промпт"
+                )
+            if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
                 await asyncio.sleep(6.0 * (attempt + 1))
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
                 continue
-            if r.status_code in {408, 425, 429} or r.status_code >= 500:
-                raise AmbiguousPaidCallError(r.status_code)
-            if r.status_code == 409:
-                if error_type == "run_budget_exhausted":
-                    raise SpendBudgetExceeded
-            # Retrying a rejected request cannot repair credentials, balance,
-            # endpoint or payload validation. Surface only the numeric status:
-            # response bodies may contain provider diagnostics or secrets.
-            if 400 <= r.status_code < 500 and r.status_code not in {408, 425, 429}:
-                raise PermanentProviderError(r.status_code)
             r.raise_for_status()
-            assert isinstance(parsed_body, dict)
-            content = parsed_body.get("content")
-            if not isinstance(content, list) or not content:
-                raise AmbiguousPaidCallError(r.status_code)
-            recognised = False
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                block_type = block.get("type")
-                if block_type in {"text", "thinking", "redacted_thinking"}:
-                    recognised = True
-                elif (
-                    block_type == "tool_use"
-                    and isinstance(block.get("id"), str)
-                    and isinstance(block.get("name"), str)
-                    and isinstance(block.get("input"), dict)
-                ):
-                    recognised = True
-            if not recognised:
-                raise AmbiguousPaidCallError(r.status_code)
-            return parsed_body
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
-            # These failures happen before a response-bearing connection is
-            # available, so the outer MAX reconnect cycle may safely retry.
+            body = r.json()
+            if not isinstance(body, dict):
+                raise RuntimeError("messages API returned a non-object payload")
+            return body
+        except httpx.HTTPError as exc:
+            # oneprovider flakes in SUSTAINED bursts (observed live: series of
+            # 502s + 504s over several minutes killed builds mid-run). Linear
+            # 3-15s backoff only covered ~30s; exponential-with-cap rides out a
+            # multi-minute flake window (~3.5 min total) before giving up.
             last = exc
             await asyncio.sleep(min(45.0, 4.0 * (2**attempt)))
-        except httpx.HTTPError as exc:
-            # Once request transmission may have started, a timeout/protocol
-            # loss can hide a provider response that was already billed.  Do
-            # not let the outer loop repeat that logical paid turn.
-            raise AmbiguousPaidCallError(None) from exc
     raise last or RuntimeError("messages call failed")
-
-
-class PermanentProviderError(RuntimeError):
-    """A provider rejection that reconnecting with the same request cannot fix."""
-
-    def __init__(self, status_code: int) -> None:
-        self.status_code = status_code
-        super().__init__(f"provider rejected request (HTTP {status_code})")
-
-
-class AmbiguousPaidCallError(RuntimeError):
-    """A provider may have billed this call; repeating it would risk double spend."""
-
-    def __init__(self, status_code: int | None) -> None:
-        self.status_code = status_code
-        suffix = f" (HTTP {status_code})" if status_code is not None else ""
-        super().__init__(f"paid provider call has ambiguous settlement{suffix}")
-
-
-class ProviderResponseTimeoutError(RuntimeError):
-    """Gateway closed a provider response whose body stopped making progress."""
-
-    def __init__(self, status_code: int | None) -> None:
-        self.status_code = status_code
-        super().__init__("provider response body timed out")
-
-
-class SpendBudgetExceeded(RuntimeError):
-    """The gateway stopped this run before another paid provider request."""
 
 
 async def run_native_build(
@@ -2068,7 +575,6 @@ async def run_native_build(
     system: str,
     task: str,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
-    prepare_execute: Callable[[Action], Awaitable[Mapping[str, object] | None]] | None = None,
     user_id: Any = None,
     project_id: Any = None,
     run_id: Any = None,
@@ -2076,25 +582,10 @@ async def run_native_build(
     free: bool = False,
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
-    enforce_max_skill_lifecycle: bool = False,
-    reference_max_loop: bool = False,
-    max_steps: int | None = 24,
-    model: str = _MODEL,
-    stable_max_loop: bool = False,
-    stable_max_product_first: bool = True,
-    kernel_owned_loop: bool = False,
-    provider_turn_offset: int = 0,
-    resume_checkpoint: Mapping[str, Any] | None = None,
-    restored_kernel_green: bool = False,
-    checkpoint: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
-    progress_context: Callable[[], str] | None = None,
-    acceptance_criteria: Sequence[str] = (),
-    brain_memory: Mapping[str, object] | None = None,
+    max_steps: int = 24,
 ) -> AgentResult:
-    """Drive one native tool-use loop until the model calls ``done`` after a clean
-    build or reaches ``max_steps``. MAX uses the same bounded loop as the proven
-    pre-Gemini production path; the gateway's durable monetary/request fuse is an
-    independent final guard, not the loop controller.
+    """Drive the native tool-use loop until the model calls ``done`` (with a clean
+    build) or the step budget is hit. Returns the written files + transcript.
 
     ``system`` is the stack/system prompt (reuse ``agent_builder.build_system_prompt``);
     ``task`` is the user's request. One model, full transcript (thinking preserved),
@@ -2104,583 +595,33 @@ async def run_native_build(
     """
     settings = get_settings()
     url = f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
-    brain_enabled = stable_max_loop and is_agentic_enabled(
-        settings.agent_kernel_v2_enabled,
-        settings.agent_kernel_v2_canary_users,
-        str(user_id) if user_id is not None else None,
-    )
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
-    brain_v2: dict[str, object] | None = (
-        (
-            restore_durable_brain(
-                brain_memory,
-                objective=task,
-                acceptance=acceptance_criteria,
-            )
-            if brain_memory
-            else new_brain(task, acceptance_criteria)
-        )
-        if brain_enabled
-        else None
-    )
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
-    last_build_revision: int | None = None
-    last_build_error_paths: frozenset[str] = frozenset()
-    last_build_error_text = ""
-    repair_reads_since_build: set[str] = set()
-    repair_reread_paths: set[str] = set()
-    repair_source_cache: dict[str, str] = {}
-    repair_context_compacted = False
     wrote_since_build = False
     no_write_turns = 0  # consecutive assistant turns with no successful write
-    noop_write_turns = 0  # consecutive turns whose attempted writes changed zero bytes
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
-    successful_skill_ids: set[str] = set()
     proof_after_write: set[str] = set()
-    visual_feedback_step: int | None = None
-    visual_feedback_detail = ""
-    visual_context_compacted_step: int | None = None
-    visual_media_generated_step: int | None = None
-    visual_repair_attempts = 0
-    visual_repair_paths: set[str] = set()
-    visual_finish_pending = False
-    source_repair_context_gap: str | None = None
-    last_green_see_step: int | None = None
-    pending_visual_evaluation_step: int | None = None
-    visual_evaluation_ready = False
-    provider_reconnect_cycles = 0
-    provider_timeout_resumes = 0
-    free_ambiguous_resumes = 0
-    provider_turn_index = 0
-    truncated_no_write_turns = 0
-    turns_without_product_entry = 0
-    entry_focus_compacted = False
-    prewrite_inspection_paths: set[str] = set()
-    prewrite_inspection_ops = 0
-    prewrite_inspection_exhausted = False
-    workspace_revision = 0
-    source_revisions: dict[str, int] = {}
-    observed_revisions: dict[str, int] = {}
-    recent_mutation_paths: list[str] = []
-    repeated_observation_paths: list[str] = []
-    pending_assistant_content: list[dict[str, Any]] | None = None
-    pending_tool_results: list[dict[str, Any]] = []
-    pending_tool_index = 0
-    pending_tool_started_index: int | None = None
-    pending_tool_preparations: dict[str, dict[str, object]] = {}
-    pending_turn_state: dict[str, str | int | bool] = {}
-    resuming_pending_tools = False
-    step_cursor = 0
-    kernel_write_passes = 0
 
-    # A durable MAX continuation restores the exact transcript and provider
-    # cursor.  Persisting immediately before every provider call means an API or
-    # worker death can safely replay that logical turn through the gateway's
-    # settled-turn cache instead of creating a second provider request.
-    if resume_checkpoint:
-        restored_system = resume_checkpoint.get("system")
-        if isinstance(restored_system, str) and restored_system:
-            system = restored_system
-        restored_convo = resume_checkpoint.get("convo")
-        restored_written = resume_checkpoint.get("written")
-        if isinstance(restored_convo, list) and restored_convo:
-            convo = [dict(item) for item in restored_convo if isinstance(item, dict)]
-        if isinstance(restored_written, dict):
-            written = {
-                str(path): str(content)
-                for path, content in restored_written.items()
-                if isinstance(path, str) and isinstance(content, str)
-            }
-        provider_turn_index = max(0, int(resume_checkpoint.get("provider_turn_index") or 0))
-        provider_turn_offset = max(
-            0, int(resume_checkpoint.get("provider_turn_offset") or provider_turn_offset)
-        )
-        step_cursor = max(0, int(resume_checkpoint.get("step_cursor") or 0))
-        last_build_ok = resume_checkpoint.get("last_build_ok")
-        if last_build_ok not in {True, False, None}:
-            last_build_ok = None
-        raw_last_build_revision = resume_checkpoint.get("last_build_revision")
-        if isinstance(raw_last_build_revision, (int, str)):
-            try:
-                last_build_revision = int(raw_last_build_revision)
-            except ValueError:
-                last_build_revision = None
-        last_build_error_text = str(resume_checkpoint.get("last_build_error_text") or "")
-        last_build_error_paths = frozenset(
-            str(item) for item in resume_checkpoint.get("last_build_error_paths", [])
-        )
-        successful_tools = {
-            str(name): int(count)
-            for name, count in dict(resume_checkpoint.get("successful_tools") or {}).items()
-        }
-        successful_skill_ids = set(resume_checkpoint.get("successful_skill_ids") or [])
-        proof_after_write = set(resume_checkpoint.get("proof_after_write") or [])
-        wrote_since_build = bool(resume_checkpoint.get("wrote_since_build"))
-        visual_feedback_step = resume_checkpoint.get("visual_feedback_step")
-        visual_feedback_detail = str(resume_checkpoint.get("visual_feedback_detail") or "")
-        visual_repair_attempts = int(resume_checkpoint.get("visual_repair_attempts") or 0)
-        visual_evaluation_ready = bool(resume_checkpoint.get("visual_evaluation_ready"))
-        last_green_see_step = resume_checkpoint.get("last_green_see_step")
-        pending_visual_evaluation_step = resume_checkpoint.get("pending_visual_evaluation_step")
-        prewrite_inspection_paths = set(resume_checkpoint.get("prewrite_inspection_paths") or [])
-        prewrite_inspection_ops = int(resume_checkpoint.get("prewrite_inspection_ops") or 0)
-        prewrite_inspection_exhausted = bool(resume_checkpoint.get("prewrite_inspection_exhausted"))
-        no_write_turns = int(resume_checkpoint.get("no_write_turns") or 0)
-        noop_write_turns = int(resume_checkpoint.get("noop_write_turns") or 0)
-        infra_dead_turns = int(resume_checkpoint.get("infra_dead_turns") or 0)
-        truncated_no_write_turns = int(resume_checkpoint.get("truncated_no_write_turns") or 0)
-        turns_without_product_entry = int(resume_checkpoint.get("turns_without_product_entry") or 0)
-        entry_focus_compacted = bool(resume_checkpoint.get("entry_focus_compacted"))
-        kernel_write_passes = max(0, int(resume_checkpoint.get("kernel_write_passes") or 0))
-        repair_reads_since_build = set(resume_checkpoint.get("repair_reads_since_build") or [])
-        repair_reread_paths = set(resume_checkpoint.get("repair_reread_paths") or [])
-        repair_source_cache = {
-            str(path): str(content)
-            for path, content in dict(resume_checkpoint.get("repair_source_cache") or {}).items()
-            if isinstance(path, str) and isinstance(content, str)
-        }
-        repair_context_compacted = bool(resume_checkpoint.get("repair_context_compacted"))
-        visual_context_compacted_step = resume_checkpoint.get("visual_context_compacted_step")
-        visual_media_generated_step = resume_checkpoint.get("visual_media_generated_step")
-        visual_repair_paths = set(resume_checkpoint.get("visual_repair_paths") or [])
-        visual_finish_pending = bool(resume_checkpoint.get("visual_finish_pending"))
-        source_repair_context_gap = (
-            str(resume_checkpoint.get("source_repair_context_gap") or "") or None
-        )
-        workspace_revision = int(resume_checkpoint.get("workspace_revision") or 0)
-        source_revisions = {
-            str(path): int(revision)
-            for path, revision in dict(resume_checkpoint.get("source_revisions") or {}).items()
-            if isinstance(path, str) and isinstance(revision, (int, str))
-        }
-        observed_revisions = {
-            str(signature): int(revision)
-            for signature, revision in dict(
-                resume_checkpoint.get("observed_revisions") or {}
-            ).items()
-            if isinstance(signature, str) and isinstance(revision, (int, str))
-        }
-        recent_mutation_paths = [
-            str(path) for path in resume_checkpoint.get("recent_mutation_paths", [])
-        ][-20:]
-        repeated_observation_paths = [
-            str(path) for path in resume_checkpoint.get("repeated_observation_paths", [])
-        ][-20:]
-        restored_brain = resume_checkpoint.get("brain_v2")
-        if brain_enabled and isinstance(restored_brain, Mapping):
-            brain_v2 = upgrade_brain(restored_brain, acceptance=acceptance_criteria)
-        restored_pending = resume_checkpoint.get("pending_assistant_content")
-        if isinstance(restored_pending, list) and restored_pending:
-            resuming_pending_tools = True
-            pending_assistant_content = [
-                dict(item) for item in restored_pending if isinstance(item, dict)
-            ]
-            raw_pending_results = resume_checkpoint.get("pending_tool_results")
-            if isinstance(raw_pending_results, list):
-                pending_tool_results = [
-                    dict(item) for item in raw_pending_results if isinstance(item, dict)
-                ]
-            pending_tool_index = max(0, int(resume_checkpoint.get("pending_tool_index") or 0))
-            pending_tool_count = sum(
-                1 for item in pending_assistant_content if item.get("type") == "tool_use"
-            )
-            pending_tool_index = min(
-                pending_tool_index,
-                pending_tool_count,
-                len(pending_tool_results),
-            )
-            try:
-                restored_started_index = int(
-                    str(resume_checkpoint.get("pending_tool_started_index"))
-                )
-            except (TypeError, ValueError):
-                restored_started_index = -1
-            if restored_started_index == pending_tool_index:
-                pending_tool_started_index = restored_started_index
-            raw_preparations = resume_checkpoint.get("pending_tool_preparations")
-            if isinstance(raw_preparations, Mapping):
-                pending_tool_preparations = {
-                    str(key): dict(value)
-                    for key, value in raw_preparations.items()
-                    if isinstance(value, Mapping)
-                }
-            raw_pending_turn_state = resume_checkpoint.get("pending_turn_state")
-            if isinstance(raw_pending_turn_state, Mapping):
-                pending_turn_state = {
-                    str(key): value
-                    for key, value in raw_pending_turn_state.items()
-                    if isinstance(value, (str, bool, int))
-                }
-            # The exact assistant response is already durable, so do not spend a
-            # provider call replaying it. Rewind only the wire transcript to the
-            # last user boundary; the loop appends the stored assistant turn once.
-            if convo and convo[-1].get("role") == "assistant":
-                convo.pop()
-
-    if (
-        restored_kernel_green
-        and kernel_owned_loop
-        and resume_checkpoint is not None
-        and not resuming_pending_tools
-        and bool(written)
-    ):
-        return AgentResult(
-            done=True,
-            summary=(
-                "Готово — восстановлено зелёное доказательство точной ревизии; "
-                "повторная модель и пользовательское действие не запускались."
-            ),
-            files=written,
-            steps=step_cursor,
-            transcript=convo,
-            stop_reason="kernel_green_recovered",
-        )
-
-    async def _persist_checkpoint() -> None:
-        if checkpoint is None:
-            return
-        state: dict[str, object] = {
-            "version": 4 if brain_v2 is not None else 3,
-            "system": system,
-            "convo": convo,
-            "written": written,
-            "provider_turn_index": provider_turn_index,
-            "provider_turn_offset": provider_turn_offset,
-            "step_cursor": step_cursor,
-            "last_build_ok": last_build_ok,
-            "last_build_revision": last_build_revision,
-            "last_build_error_text": last_build_error_text,
-            "last_build_error_paths": sorted(last_build_error_paths),
-            "successful_tools": successful_tools,
-            "successful_skill_ids": sorted(successful_skill_ids),
-            "proof_after_write": sorted(proof_after_write),
-            "wrote_since_build": wrote_since_build,
-            "visual_feedback_step": visual_feedback_step,
-            "visual_feedback_detail": visual_feedback_detail,
-            "visual_repair_attempts": visual_repair_attempts,
-            "visual_evaluation_ready": visual_evaluation_ready,
-            "last_green_see_step": last_green_see_step,
-            "pending_visual_evaluation_step": pending_visual_evaluation_step,
-            "prewrite_inspection_paths": sorted(prewrite_inspection_paths),
-            "prewrite_inspection_ops": prewrite_inspection_ops,
-            "prewrite_inspection_exhausted": prewrite_inspection_exhausted,
-            "no_write_turns": no_write_turns,
-            "noop_write_turns": noop_write_turns,
-            "infra_dead_turns": infra_dead_turns,
-            "truncated_no_write_turns": truncated_no_write_turns,
-            "turns_without_product_entry": turns_without_product_entry,
-            "entry_focus_compacted": entry_focus_compacted,
-            "kernel_write_passes": kernel_write_passes,
-            "repair_reads_since_build": sorted(repair_reads_since_build),
-            "repair_reread_paths": sorted(repair_reread_paths),
-            "repair_source_cache": repair_source_cache,
-            "repair_context_compacted": repair_context_compacted,
-            "visual_context_compacted_step": visual_context_compacted_step,
-            "visual_media_generated_step": visual_media_generated_step,
-            "visual_repair_paths": sorted(visual_repair_paths),
-            "visual_finish_pending": visual_finish_pending,
-            "source_repair_context_gap": source_repair_context_gap,
-            "workspace_revision": workspace_revision,
-            "source_revisions": source_revisions,
-            "observed_revisions": observed_revisions,
-            "recent_mutation_paths": recent_mutation_paths[-20:],
-            "repeated_observation_paths": repeated_observation_paths[-20:],
-            "pending_assistant_content": pending_assistant_content,
-            "pending_tool_results": pending_tool_results,
-            "pending_tool_index": pending_tool_index,
-            "pending_tool_started_index": pending_tool_started_index,
-            "pending_tool_preparations": pending_tool_preparations,
-            "pending_turn_state": pending_turn_state,
-        }
-        if brain_v2 is not None:
-            state["brain_v2"] = brain_v2
-        await checkpoint(state)
-
-    async def _persist_completed_tool(tool_index: int, results: list[dict[str, Any]]) -> None:
-        nonlocal pending_tool_index, pending_tool_results, pending_tool_started_index
-        pending_tool_index = tool_index + 1
-        pending_tool_results = [dict(item) for item in results]
-        pending_tool_started_index = None
-        pending_tool_preparations.pop(str(tool_index), None)
-        await _persist_checkpoint()
-
-    async def _complete_pending_turn(results: list[dict[str, Any]]) -> None:
-        nonlocal pending_assistant_content, pending_tool_results, pending_tool_index
-        nonlocal pending_tool_started_index
-        nonlocal pending_tool_preparations
-        nonlocal pending_turn_state, resuming_pending_tools
-        convo.append({"role": "user", "content": results})
-        pending_assistant_content = None
-        pending_tool_results = []
-        pending_tool_index = 0
-        pending_tool_started_index = None
-        pending_tool_preparations = {}
-        pending_turn_state = {}
-        resuming_pending_tools = False
-        await _persist_checkpoint()
-
-    # Stable MAX builds get a generous but finite turn and wall-clock envelope.
-    # Both limits are independent so a slow provider or a model that keeps
-    # finding work must still terminate without publishing partial files.
-    max_runtime = "MAX VERIFICATION OVERRIDE" in system or reference_max_loop or stable_max_loop
-    product_first = stable_max_loop and stable_max_product_first
-    max_lifecycle = max_runtime and completion_check is not None and enforce_max_skill_lifecycle
-    effective_max_steps = (
-        max(1, int(4 if max_steps is None else max_steps))
-        if kernel_owned_loop
-        else max(1, int(settings.agent_builder_max_runtime_steps))
-        if max_runtime
-        else max(1, int(40 if max_steps is None else max_steps))
-    )
-    runtime_deadline = (
-        asyncio.get_running_loop().time() + max(1, int(settings.agent_builder_max_runtime_seconds))
-        if max_runtime
-        else None
-    )
+    effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
+    max_runtime = "MAX VERIFICATION OVERRIDE" in system
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
-        for skill in successful_skill_ids:
-            result[f"skill:{skill}"] = 1
-        if visual_evaluation_ready:
-            result["visual_evaluation_after_see"] = 1
         for tool in proof_after_write:
             result[f"{tool}_after_write"] = 1
         return result
 
-    completion_check_failure: str | None = None
-
     def _completion_gap() -> str | None:
-        nonlocal brain_v2, completion_check_failure
         if completion_check is None:
             return None
         try:
-            evidence = _evidence()
-            gap = completion_check(written, evidence)
-            if brain_v2 is not None and gap is None and last_build_ok is True:
-                proof_ids = [
-                    f"{name}@r{workspace_revision}"
-                    for name, count in sorted(evidence.items())
-                    if count > 0
-                ]
-                brain_v2 = record_acceptance_evidence(
-                    brain_v2,
-                    proof_ids=proof_ids,
-                    passed=True,
-                )
-            return gap
+            return completion_check(written, _evidence())
         except Exception as exc:
             log.exception("agent_native.completion_check_failed")
-            completion_check_failure = f"Product acceptance check failed: {type(exc).__name__}."
-            if kernel_owned_loop:
-                return None
             return f"Product acceptance check failed: {type(exc).__name__}."
-
-    def _completion_gap_assuming_kernel_proof() -> str | None:
-        """Expose only source/plan debt before spending browser-proof time."""
-
-        nonlocal completion_check_failure
-        if completion_check is None:
-            return None
-        try:
-            evidence = _evidence()
-            evidence["runtime_check_after_write"] = 1
-            evidence["see_after_write"] = 1
-            return completion_check(written, evidence)
-        except Exception as exc:
-            log.exception("agent_native.kernel_completion_check_failed")
-            completion_check_failure = f"Product acceptance check failed: {type(exc).__name__}."
-            if kernel_owned_loop:
-                return None
-            return f"Product acceptance check failed: {type(exc).__name__}."
-
-    def _record_build_observation(observation: Mapping[str, object]) -> bool:
-        """Update same-revision compiler state; return semantic-loop stop."""
-
-        nonlocal last_build_ok, last_build_revision, last_build_error_text
-        nonlocal last_build_error_paths, repair_context_compacted, wrote_since_build
-        nonlocal brain_v2
-        if observation.get("infra_dead"):
-            return False
-        last_build_ok = bool(observation.get("ok"))
-        last_build_revision = workspace_revision
-        last_build_error_text = str(observation.get("error") or observation.get("detail") or "")
-        last_build_error_paths = (
-            frozenset()
-            if last_build_ok
-            else (
-                _typescript_repair_paths(last_build_error_text, written)
-                | _structured_repair_paths(observation)
-            )
-        )
-        repair_reads_since_build.clear()
-        repair_reread_paths.clear()
-        repair_source_cache.clear()
-        repair_context_compacted = False
-        wrote_since_build = False
-        if brain_v2 is None:
-            return False
-        raw_build_evidence = observation.get("evidence")
-        build_evidence = raw_build_evidence if isinstance(raw_build_evidence, list) else []
-        observed_signature = str(observation.get("error_signature") or "")[:128]
-        build_signature = (
-            ""
-            if last_build_ok
-            else observed_signature or normalize_error_signature(last_build_error_text)
-        )
-        compiler_signatures = [] if last_build_ok else error_signatures(last_build_error_text)
-        structured_signatures: list[str] = []
-        raw_diagnostics = observation.get("diagnostics")
-        if not last_build_ok and isinstance(raw_diagnostics, list):
-            for diagnostic in raw_diagnostics[:30]:
-                if not isinstance(diagnostic, Mapping):
-                    continue
-                if str(diagnostic.get("severity") or "") != "error":
-                    continue
-                structured_signatures.extend(
-                    error_signatures(
-                        f"{diagnostic.get('source') or 'analysis'}/"
-                        f"{diagnostic.get('code') or 'error'}: "
-                        f"{diagnostic.get('message') or ''}"
-                    )
-                )
-        build_diagnostic_signatures = list(
-            dict.fromkeys([*structured_signatures[:30], *compiler_signatures[:10]])
-        )[:40]
-        brain_v2 = record_observation(
-            brain_v2,
-            kind="build",
-            status="ok" if last_build_ok else "error",
-            summary="typecheck clean" if last_build_ok else "typecheck red",
-            error_signature=build_signature,
-            diagnostic_signatures=build_diagnostic_signatures,
-            evidence=[
-                *sorted(last_build_error_paths),
-                *[str(item)[:160] for item in build_evidence[:20]],
-            ],
-        )
-        return not last_build_ok and semantic_loop_count(brain_v2) >= 3
-
-    async def _kernel_verify_revision(step: int) -> dict[str, object]:
-        """Run compiler and objective MAX proof without another provider turn."""
-
-        nonlocal last_build_ok, last_build_error_text, last_build_error_paths
-        try:
-            build = await execute(Action(name="build", args={}, raw=""))
-        except Exception as exc:
-            build = {"ok": False, "infra_dead": True, "error": f"auto build crashed: {exc}"}
-        if emit:
-            await emit(
-                "agent.step",
-                {
-                    "step": step,
-                    "action": "build",
-                    "path": "",
-                    "detail": _step_detail("build", Action("build", {}, ""), dict(build)),
-                    "ok": bool(build.get("ok")),
-                },
-            )
-        if build.get("infra_dead"):
-            return {"status": "infra", "detail": str(build.get("detail") or build.get("error"))}
-        _record_build_observation(build)
-        if not last_build_ok:
-            return {
-                "status": "red",
-                "detail": last_build_error_text or "Build failed.",
-                "build": dict(build),
-            }
-        successful_tools["build"] = successful_tools.get("build", 0) + 1
-        proof_after_write.add("build")
-        source_gap = _completion_gap_assuming_kernel_proof()
-        if completion_check_failure:
-            return {"status": "infra", "detail": completion_check_failure}
-        if source_gap:
-            return {"status": "red", "detail": source_gap, "build": dict(build)}
-
-        proof_results: list[dict[str, object]] = []
-        for proof_action in (
-            Action("runtime_check", {"path": "/"}, ""),
-            Action("see", {"path": "/"}, ""),
-        ):
-            try:
-                proof = await execute(proof_action)
-            except Exception as exc:
-                proof = {
-                    "ok": False,
-                    "infra_dead": True,
-                    "error": f"auto {proof_action.name} crashed: {exc}",
-                }
-            proof_results.append(dict(proof))
-            if emit:
-                await emit(
-                    "agent.step",
-                    {
-                        "step": step,
-                        "action": proof_action.name,
-                        "path": proof_action.path,
-                        "detail": _step_detail(proof_action.name, proof_action, dict(proof)),
-                        "ok": bool(proof.get("ok")),
-                    },
-                )
-            if proof.get("infra_dead"):
-                return {
-                    "status": "infra",
-                    "detail": str(proof.get("detail") or proof.get("error")),
-                }
-            if proof.get("owner_dependency"):
-                return {
-                    "status": "owner",
-                    "detail": str(
-                        proof.get("detail")
-                        or proof.get("error")
-                        or "owner-controlled integration is required"
-                    ),
-                }
-            if proof.get("proof_unavailable") or proof.get("skipped"):
-                return {
-                    "status": "infra",
-                    "detail": str(
-                        proof.get("detail")
-                        or proof.get("error")
-                        or f"{proof_action.name} infrastructure unavailable"
-                    ),
-                }
-            proof_red = not bool(proof.get("ok")) or any(
-                bool(proof.get(key)) for key in ("needs_fix",)
-            )
-            if proof_red:
-                last_build_ok = False
-                last_build_error_text = str(
-                    proof.get("detail") or proof.get("error") or f"{proof_action.name} failed"
-                )
-                last_build_error_paths = _typescript_error_paths(last_build_error_text)
-                return {
-                    "status": "red",
-                    "detail": last_build_error_text,
-                    "build": dict(build),
-                    "proofs": proof_results,
-                }
-            successful_tools[proof_action.name] = successful_tools.get(proof_action.name, 0) + 1
-            proof_after_write.add(proof_action.name)
-        final_gap = _completion_gap()
-        if completion_check_failure:
-            return {"status": "infra", "detail": completion_check_failure}
-        if final_gap:
-            return {
-                "status": "red",
-                "detail": final_gap,
-                "build": dict(build),
-                "proofs": proof_results,
-            }
-        return {
-            "status": "green",
-            "detail": "Build, runtime and signed functional checks are green.",
-            "build": dict(build),
-            "proofs": proof_results,
-        }
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic and prove the tree with one local build only."""
@@ -2743,12 +684,6 @@ async def run_native_build(
                     )
                 if not proof.get("ok"):
                     break
-                if action.name == "see" and (
-                    proof.get("proof_unavailable") or proof.get("skipped")
-                ):
-                    # Fail-soft visual infrastructure is not production proof.
-                    # Preserve the contract gap and return an honest red result.
-                    break
                 successful_tools[action.name] = successful_tools.get(action.name, 0) + 1
                 proof_after_write.add(action.name)
                 gap = _completion_gap()
@@ -2760,23 +695,6 @@ async def run_native_build(
                     steps=steps,
                     transcript=convo,
                     stop_reason="max_steps" if reason == "max_steps" else f"{reason}_red",
-                )
-            if (
-                max_runtime
-                and completion_check is None
-                and reason in {"spend_budget", "provider_stopped", "provider_rejected"}
-            ):
-                # A clean compile proves only that the old tree still builds. A
-                # forced stop during a MAX edit has no product acceptance check,
-                # so reporting green could falsely claim an untouched request is
-                # complete. Let the caller restore the previous snapshot instead.
-                return AgentResult(
-                    done=False,
-                    summary=detail,
-                    files=written,
-                    steps=steps,
-                    transcript=convo,
-                    stop_reason=f"{reason}_red",
                 )
             return AgentResult(
                 done=True,
@@ -2799,165 +717,7 @@ async def run_native_build(
         )
 
     async with httpx.AsyncClient() as client:
-        slice_start_step = step_cursor
-        for local_step in range(effective_max_steps):
-            step = slice_start_step + local_step
-            step_cursor = step
-            if (
-                runtime_deadline is not None
-                and asyncio.get_running_loop().time() >= runtime_deadline
-            ):
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="generation_deadline",
-                    detail="generation wall-clock deadline exceeded",
-                )
-            if pending_visual_evaluation_step is not None and step > pending_visual_evaluation_step:
-                visual_evaluation_ready = True
-            if (
-                stable_max_loop
-                and visual_feedback_step is not None
-                and visual_context_compacted_step != visual_feedback_step
-            ):
-                convo = [
-                    {
-                        "role": "user",
-                        "content": _stable_max_visual_repair_task(
-                            task,
-                            visual_feedback_detail,
-                            written,
-                        ),
-                    }
-                ]
-                visual_context_compacted_step = visual_feedback_step
-            if (
-                product_first
-                and not entry_focus_compacted
-                and _STABLE_MAX_PRODUCT_ENTRY not in written
-                and turns_without_product_entry >= _STABLE_MAX_ENTRY_FOCUS_AT
-            ):
-                convo = [
-                    {
-                        "role": "user",
-                        "content": _stable_max_entry_focus_task(task, written),
-                    }
-                ]
-                entry_focus_compacted = True
-            force_entry_write = (
-                not kernel_owned_loop
-                and product_first
-                and _STABLE_MAX_PRODUCT_ENTRY not in written
-                and (
-                    not max_lifecycle
-                    or all(skill in successful_skill_ids for skill in MAX_REQUIRED_PREWRITE_SKILLS)
-                )
-                and (
-                    turns_without_product_entry >= _STABLE_MAX_FIRST_WRITE_AT
-                    or entry_focus_compacted
-                    or prewrite_inspection_exhausted
-                )
-            )
-            repair_mode = stable_max_loop and not kernel_owned_loop and last_build_ok is False
-            force_repair_write = repair_mode and not wrote_since_build
-            force_repair_verify = repair_mode and wrote_since_build
-            force_visual_finish = stable_max_loop and visual_finish_pending and not repair_mode
-            # A successful product write is not permission to redesign the same
-            # screen again. Live MAX runs repeatedly rewrote ProductApp without
-            # ever compiling it because every rewrite reset the no-write guard.
-            # Force a deterministic build immediately after the initial product
-            # composition and after every green/visual revision. Red-build
-            # repairs keep their existing edit-then-verify flow below.
-            force_build_after_write = (
-                stable_max_loop
-                and not kernel_owned_loop
-                and _STABLE_MAX_PRODUCT_ENTRY in written
-                and wrote_since_build
-                and not repair_mode
-                and not force_visual_finish
-            )
-            if (
-                force_repair_write
-                and last_build_error_paths
-                and not repair_context_compacted
-                and not (brain_v2 is not None and brain_v2.get("diagnosis_required_signature"))
-                and all(
-                    path in written or path in repair_source_cache
-                    for path in last_build_error_paths
-                )
-            ):
-                convo = [
-                    {
-                        "role": "user",
-                        "content": _stable_max_compact_repair_task(
-                            last_build_error_text,
-                            last_build_error_paths,
-                            {**repair_source_cache, **written},
-                        ),
-                    }
-                ]
-                repair_context_compacted = True
-            force_repair_edit_only = force_repair_write and repair_context_compacted
-            force_progress = (
-                stable_max_loop
-                and no_write_turns >= _STABLE_MAX_FIRST_WRITE_AT
-                and _STABLE_MAX_PRODUCT_ENTRY in written
-                and (last_build_ok is None or wrote_since_build)
-            )
-            completion_gap = _completion_gap()
-            force_style_write = (
-                stable_max_loop
-                and not kernel_owned_loop
-                and last_build_ok is True
-                and not wrote_since_build
-                and completion_gap is not None
-                and "src/app/globals.css" in completion_gap
-            )
-            force_source_repair = (
-                stable_max_loop
-                and not kernel_owned_loop
-                and last_build_ok is True
-                and not wrote_since_build
-                and visual_feedback_step is None
-                and _is_stable_max_source_gap(completion_gap)
-            )
-            if force_source_repair and source_repair_context_gap != completion_gap:
-                convo = [
-                    {
-                        "role": "user",
-                        "content": _stable_max_source_repair_task(
-                            task,
-                            str(completion_gap),
-                            written,
-                        ),
-                    }
-                ]
-                source_repair_context_gap = completion_gap
-            force_proof = (
-                stable_max_loop
-                and not kernel_owned_loop
-                and last_build_ok is True
-                and not wrote_since_build
-                and visual_feedback_step is None
-                and completion_gap is not None
-                and "runtime_check" in completion_gap
-            )
-            proof_gap = completion_gap.casefold() if completion_gap is not None else ""
-            force_runtime_proof = force_proof and "runtime_check" in proof_gap
-            force_visual_repair = (
-                stable_max_loop
-                and visual_feedback_step is not None
-                and step >= visual_feedback_step + 1
-            )
-            force_product_progress = (
-                force_entry_write
-                or force_visual_finish
-                or force_build_after_write
-                or force_style_write
-                or force_source_repair
-                or force_repair_write
-                or force_repair_verify
-                or force_progress
-            )
+        for step in range(effective_max_steps):
             call_stage = (
                 "build_plan"
                 if step == 0
@@ -2966,303 +726,19 @@ async def run_native_build(
                 else "native_agent"
             )
             try:
-                await _persist_checkpoint()
-                try:
-                    public_progress = progress_context() if progress_context else ""
-                except Exception:
-                    log.exception("agent_native.progress_context_failed")
-                    public_progress = ""
-                working_memory = (
-                    _stable_max_working_memory(
-                        product_entry_required=product_first,
-                        written=written,
-                        last_build_ok=last_build_ok,
-                        last_build_error_paths=last_build_error_paths,
-                        wrote_since_build=wrote_since_build,
-                        proof_after_write=proof_after_write,
-                        no_write_turns=no_write_turns,
-                        provider_turn_index=provider_turn_index,
-                        recent_mutation_paths=recent_mutation_paths,
-                        repeated_observation_paths=repeated_observation_paths,
-                        completion_gap=completion_gap,
-                        public_progress=public_progress,
-                        brain=brain_v2,
-                    )
-                    if stable_max_loop
-                    else ""
-                )
-                remaining_seconds = (
-                    max(0.1, runtime_deadline - asyncio.get_running_loop().time())
-                    if runtime_deadline is not None
-                    else None
-                )
-                async with asyncio.timeout(remaining_seconds):
-                    resp = (
-                        {
-                            "stop_reason": "tool_use",
-                            "content": pending_assistant_content,
-                        }
-                        if resuming_pending_tools and pending_assistant_content is not None
-                        else await _call_messages(
-                            client,
-                            url,
-                            convo,
-                            system,
-                            user_id=str(user_id) if user_id else None,
-                            project_id=str(project_id) if project_id else None,
-                            run_id=str(run_id) if run_id else None,
-                            message_id=str(message_id) if message_id else None,
-                            free=free,
-                            stage=call_stage,
-                            turn_id=(
-                                f"{run_id or 'run'}:"
-                                f"{max(0, int(provider_turn_offset)) + provider_turn_index}"
-                            ),
-                            resume_count=provider_timeout_resumes + free_ambiguous_resumes,
-                            working_memory=working_memory,
-                            tools=_kernel_tool_surface(
-                                (
-                                    _STABLE_MAX_KERNEL_TOOLS_CACHED
-                                    if kernel_owned_loop
-                                    else _STABLE_MAX_ENTRY_ONLY_TOOLS_CACHED
-                                    if force_entry_write
-                                    else _STABLE_MAX_VISUAL_FINISH_TOOLS_CACHED
-                                    if force_visual_finish
-                                    else _STABLE_MAX_BUILD_ONLY_TOOLS_CACHED
-                                    if force_build_after_write
-                                    else _STABLE_MAX_STYLE_ONLY_TOOLS_CACHED
-                                    if force_style_write
-                                    else _STABLE_MAX_FIRST_WRITE_TOOLS_CACHED
-                                    if force_source_repair
-                                    else _STABLE_MAX_RUNTIME_ONLY_TOOLS_CACHED
-                                    if force_runtime_proof
-                                    else _STABLE_MAX_PROOF_TOOLS_CACHED
-                                    if force_proof
-                                    else _STABLE_MAX_VISUAL_REPAIR_TOOLS_CACHED
-                                    if force_visual_repair
-                                    else _STABLE_MAX_REPAIR_VERIFY_TOOLS_CACHED
-                                    if force_repair_verify
-                                    else _STABLE_MAX_REPAIR_TOOLS_CACHED
-                                    if force_repair_edit_only and repair_reread_paths
-                                    else _STABLE_MAX_REPAIR_EDIT_ONLY_TOOLS_CACHED
-                                    if force_repair_edit_only
-                                    else _STABLE_MAX_PROGRESS_TOOLS_CACHED
-                                    if force_progress
-                                    else _STABLE_MAX_REPAIR_TOOLS_CACHED
-                                    if force_repair_write
-                                    else _STABLE_MAX_PREENTRY_TOOLS_CACHED
-                                    if product_first and _STABLE_MAX_PRODUCT_ENTRY not in written
-                                    else _STABLE_MAX_TOOLS_CACHED
-                                    if stable_max_loop
-                                    else _MAX_REFERENCE_TOOLS_CACHED
-                                    if reference_max_loop
-                                    else _MAX_TOOLS_CACHED
-                                    if max_runtime
-                                    else _TOOLS_CACHED
-                                ),
-                                enabled=brain_v2 is not None,
-                            ),
-                            model=model,
-                            thinking_budget=(
-                                _ENTRY_FOCUS_THINKING_BUDGET
-                                if entry_focus_compacted
-                                and _STABLE_MAX_PRODUCT_ENTRY not in written
-                                else _THINKING_BUDGET
-                            ),
-                        )
-                    )
-                if not resuming_pending_tools:
-                    provider_turn_index += 1
-                provider_timeout_resumes = 0
-                free_ambiguous_resumes = 0
-            except TimeoutError:
-                log.warning("agent_native.generation_deadline", step=step)
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="generation_deadline",
-                    detail="generation wall-clock deadline exceeded during provider call",
-                )
-            except SpendBudgetExceeded:
-                log.warning("agent_native.spend_budget_exhausted", step=step)
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": step,
-                            "action": "spend_budget",
-                            "path": "",
-                            "detail": (
-                                "Достигнут безопасный лимит расходов этой генерации. "
-                                "Новые запросы к LLM остановлены; проверяю уже "
-                                "собранную версию локально без дополнительных списаний."
-                            ),
-                            "ok": False,
-                        },
-                    )
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="spend_budget",
-                    detail="safe generation spend limit reached",
-                )
-            except ProviderResponseTimeoutError as exc:
-                provider_timeout_resumes += 1
-                log.warning(
-                    "agent_native.provider_response_resuming",
-                    step=step,
-                    status_code=exc.status_code,
-                    resume_count=provider_timeout_resumes,
-                )
-                if max_runtime and provider_timeout_resumes <= _MAX_PROVIDER_TIMEOUT_RESUMES:
-                    if emit:
-                        await emit(
-                            "agent.step",
-                            {
-                                "step": step,
-                                "action": "provider_resume",
-                                "path": "",
-                                "detail": (
-                                    "Длинный ответ перестал поступать. Продолжаю тот же "
-                                    "логический шаг с устойчивым идентификатором; уже "
-                                    "завершённый ответ будет получен из журнала без повтора."
-                                ),
-                                "ok": False,
-                            },
-                        )
-                    await asyncio.sleep(min(15.0, 3.0 * provider_timeout_resumes))
-                    continue
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="provider_response_timeout",
-                    detail="provider response timeout recovery exhausted",
-                )
-            except AmbiguousPaidCallError as exc:
-                log.warning(
-                    "agent_native.max_paid_call_ambiguous",
-                    step=step,
-                    status_code=exc.status_code,
+                resp = await _call_messages(
+                    client,
+                    url,
+                    convo,
+                    system,
+                    user_id=str(user_id) if user_id else None,
+                    project_id=str(project_id) if project_id else None,
+                    run_id=str(run_id) if run_id else None,
+                    message_id=str(message_id) if message_id else None,
                     free=free,
-                )
-                if free and max_runtime:
-                    free_ambiguous_resumes += 1
-                    if free_ambiguous_resumes <= _MAX_FREE_AMBIGUOUS_RESUMES:
-                        if emit:
-                            await emit(
-                                "agent.step",
-                                {
-                                    "step": step,
-                                    "action": "provider_resume",
-                                    "path": "",
-                                    "detail": (
-                                        "Ответ бесплатного AI-вызова потерялся. Повторяю тот же "
-                                        "логический шаг с тем же идентификатором; пользовательское "
-                                        "списание не выполняется."
-                                    ),
-                                    "ok": False,
-                                },
-                            )
-                        await asyncio.sleep(min(6.0, 2.0 * free_ambiguous_resumes))
-                        continue
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": step,
-                            "action": (
-                                "provider_recovery_exhausted" if free else "accounting_guard"
-                            ),
-                            "path": "",
-                            "detail": (
-                                "Восстановить ответ бесплатного AI-вызова не удалось; "
-                                "проверяю уже собранную версию локально."
-                                if free
-                                else "Ответ платного вызова неоднозначен. Повтор отключён, "
-                                "чтобы исключить двойное списание; проверяю уже "
-                                "собранную версию локально."
-                            ),
-                            "ok": False,
-                        },
-                    )
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="provider_stopped",
-                    detail=(
-                        "free provider response recovery exhausted"
-                        if free
-                        else "paid provider call was not retried after ambiguous settlement"
-                    ),
-                )
-            except PermanentProviderError as exc:
-                log.warning(
-                    "agent_native.max_provider_rejected",
-                    step=step,
-                    status_code=exc.status_code,
-                )
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": step,
-                            "action": "provider_rejected",
-                            "path": "",
-                            "detail": (
-                                f"AI-провайдер отклонил запрос (HTTP {exc.status_code}); "
-                                "повтор не поможет. "
-                                "Останавливаю новые списания и проверяю уже собранную версию."
-                            ),
-                            "ok": False,
-                        },
-                    )
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="provider_rejected",
-                    detail=f"provider rejected request (HTTP {exc.status_code})",
+                    stage=call_stage,
                 )
             except Exception as exc:
-                if max_runtime:
-                    provider_reconnect_cycles += 1
-                    log.warning(
-                        "agent_native.max_provider_reconnecting",
-                        step=step,
-                        error=type(exc).__name__,
-                        reconnect_cycle=provider_reconnect_cycles,
-                    )
-                    if provider_reconnect_cycles >= _MAX_PROVIDER_RECONNECT_CYCLES:
-                        if emit:
-                            await emit(
-                                "agent.step",
-                                {
-                                    "step": step,
-                                    "action": "provider_stopped",
-                                    "path": "",
-                                    "detail": (
-                                        "LLM-провайдер трижды подряд не ответил. Новые "
-                                        "платные запросы остановлены; проверяю уже "
-                                        "собранную версию локально."
-                                    ),
-                                    "ok": False,
-                                },
-                            )
-                        return await _finish_without_provider(
-                            steps=step,
-                            reason="provider_stopped",
-                            detail=f"gateway error after reconnects: {type(exc).__name__}",
-                        )
-                    if emit:
-                        await emit(
-                            "agent.step",
-                            {
-                                "step": step,
-                                "action": "provider_retry",
-                                "path": "",
-                                "detail": (
-                                    "Связь с LLM временно прервалась; сборка "
-                                    "не остановлена и продолжится автоматически."
-                                ),
-                                "ok": False,
-                            },
-                        )
-                    await asyncio.sleep(15.0)
-                    continue
                 return await _finish_without_provider(
                     steps=step,
                     reason="provider_stopped",
@@ -3271,36 +747,6 @@ async def run_native_build(
 
             content = resp.get("content")
             if not isinstance(content, list):
-                if max_runtime:
-                    provider_reconnect_cycles += 1
-                    log.warning(
-                        "agent_native.max_malformed_provider_retry",
-                        step=step,
-                        reconnect_cycle=provider_reconnect_cycles,
-                    )
-                    if provider_reconnect_cycles >= _MAX_PROVIDER_RECONNECT_CYCLES:
-                        if emit:
-                            await emit(
-                                "agent.step",
-                                {
-                                    "step": step,
-                                    "action": "provider_stopped",
-                                    "path": "",
-                                    "detail": (
-                                        "LLM-провайдер трижды вернул повреждённый ответ. "
-                                        "Новые запросы остановлены; проверяю уже "
-                                        "собранную версию локально."
-                                    ),
-                                    "ok": False,
-                                },
-                            )
-                        return await _finish_without_provider(
-                            steps=step,
-                            reason="provider_stopped",
-                            detail="gateway returned malformed content repeatedly",
-                        )
-                    await asyncio.sleep(5.0)
-                    continue
                 return AgentResult(
                     done=False,
                     summary="malformed upstream (no content list)",
@@ -3309,29 +755,9 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="error",
                 )
-            provider_reconnect_cycles = 0
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
             convo.append({"role": "assistant", "content": content})
-            if pending_assistant_content is None:
-                pending_assistant_content = [
-                    dict(item) for item in content if isinstance(item, dict)
-                ]
-                pending_tool_results = []
-                pending_tool_index = 0
-                pending_tool_started_index = None
-                pending_tool_preparations = {}
-                pending_turn_state = {}
-            elif pending_assistant_content != content:
-                return AgentResult(
-                    done=False,
-                    summary="settled provider turn changed during durable tool replay",
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="checkpoint_conflict",
-                )
-            await _persist_checkpoint()
 
             # Streaming (phase 8): surface Opus's own narration between tool calls to
             # the UI so the workspace reads «как переписка с Claude» — the model
@@ -3345,19 +771,11 @@ async def run_native_build(
             if not tool_uses:
                 _done = resp.get("stop_reason") == "end_turn"
                 _text = _text_of(content)
-                # Prose is not proof. Keep the turn inside the same lifecycle
+                # Prose is not proof. Keep the turn inside the same hard budget
                 # until a real clean build exists; never ship a broken app because
                 # the model happened to finish speaking.
                 gap = _completion_gap() if _done and last_build_ok is True else None
                 if _done and last_build_ok is True and not wrote_since_build and not gap:
-                    pending_assistant_content = None
-                    pending_tool_results = []
-                    pending_tool_index = 0
-                    pending_tool_started_index = None
-                    pending_tool_preparations = {}
-                    pending_turn_state = {}
-                    step_cursor = step + 1
-                    await _persist_checkpoint()
                     return AgentResult(
                         done=True,
                         summary=_text or "Готово — приложение собрано и проверено.",
@@ -3371,122 +789,25 @@ async def run_native_build(
                         "role": "user",
                         "content": (
                             (gap + " " if gap else "")
-                            + "Use write_files now. Omnia will run build and objective "
-                            "proof automatically; do not return prose without source."
-                            if kernel_owned_loop
-                            else (gap + " " if gap else "")
                             + "Перед завершением обязательно вызови build. Если он красный — "
                             "почини ошибки; если чистый — устрани остаток acceptance contract "
                             "и вызови done."
                         ),
                     }
                 )
-                pending_assistant_content = None
-                pending_tool_results = []
-                pending_tool_index = 0
-                pending_tool_started_index = None
-                pending_tool_preparations = {}
-                pending_turn_state = {}
-                step_cursor = step + 1
-                await _persist_checkpoint()
                 continue
 
-            results: list[dict[str, Any]] = list(pending_tool_results)
-            done_summary = str(pending_turn_state.get("done_summary") or "") or None
-            wrote_this_turn = bool(pending_turn_state.get("wrote"))
-            noop_write_this_turn = bool(pending_turn_state.get("noop_write"))
-            visual_proof_unavailable_this_turn = bool(
-                pending_turn_state.get("visual_proof_unavailable")
-            )
-            visual_quality_exhausted_this_turn = bool(
-                pending_turn_state.get("visual_quality_exhausted")
-            )
-            visual_finish_satisfied_this_turn = bool(
-                pending_turn_state.get("visual_finish_satisfied")
-            )
-            semantic_loop_stop = bool(pending_turn_state.get("semantic_loop_stop"))
-            kernel_terminal_this_turn = bool(pending_turn_state.get("kernel_terminal"))
-            kernel_repair_exhausted_this_turn = bool(
-                pending_turn_state.get("kernel_repair_exhausted")
-            )
-            ops_this_turn = int(pending_turn_state.get("ops") or 0)
-            infra_this_turn = int(pending_turn_state.get("infra") or 0)
-            turn_mutation_counts: dict[str, int] = {}
-            raw_turn_mutation_counts = pending_turn_state.get("mutation_counts")
-            if isinstance(raw_turn_mutation_counts, str):
-                try:
-                    decoded_turn_mutation_counts = json.loads(raw_turn_mutation_counts)
-                except json.JSONDecodeError:
-                    decoded_turn_mutation_counts = {}
-                if isinstance(decoded_turn_mutation_counts, Mapping):
-                    for path, count in decoded_turn_mutation_counts.items():
-                        if not isinstance(path, str) or not isinstance(count, (int, str)):
-                            continue
-                        try:
-                            turn_mutation_counts[path] = max(0, int(count))
-                        except ValueError:
-                            continue
-            reconcile_tool_index = (
-                pending_tool_index
-                if resuming_pending_tools and pending_tool_started_index == pending_tool_index
-                else -1
-            )
-            for tool_index, tu in enumerate(tool_uses):
-                if tool_index < pending_tool_index:
-                    continue
+            results: list[dict[str, Any]] = []
+            done_summary: str | None = None
+            wrote_this_turn = False
+            ops_this_turn = 0  # executed (non-done) tool ops this turn
+            infra_this_turn = 0  # of those, how many died on infra
+            for tu in tool_uses:
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
-                if tool_index == reconcile_tool_index and isinstance(tu.get("input"), dict):
-                    tu = {
-                        **tu,
-                        "input": {**tu["input"], "_resume_reconcile": True},
-                    }
-                if semantic_loop_stop:
-                    results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tu_id,
-                            "is_error": True,
-                            "content": (
-                                "Semantic loop stop is active; no further mutation or provider "
-                                "work will run in this generation."
-                            ),
-                        }
-                    )
-                    await _persist_completed_tool(tool_index, results)
-                    continue
                 if name == "done":
-                    if force_product_progress:
-                        results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tu_id,
-                                "is_error": True,
-                                "content": (
-                                    _STABLE_MAX_VISUAL_FINISH_REQUIRED
-                                    if force_visual_finish
-                                    else _STABLE_MAX_BUILD_REQUIRED
-                                    if force_build_after_write
-                                    else _STABLE_MAX_STYLE_REQUIRED
-                                    if force_style_write
-                                    else _STABLE_MAX_SOURCE_REPAIR_REQUIRED
-                                    if force_source_repair
-                                    else _STABLE_MAX_PROGRESS_REQUIRED
-                                    if force_progress
-                                    else _STABLE_MAX_REPAIR_VERIFY_REQUIRED
-                                    if force_repair_verify
-                                    else _STABLE_MAX_ENTRY_REQUIRED
-                                    if force_entry_write
-                                    else _stable_max_repair_required(last_build_error_paths)
-                                    if force_repair_write
-                                    else _STABLE_MAX_WRITE_REQUIRED
-                                ),
-                            }
-                        )
-                        await _persist_completed_tool(tool_index, results)
-                        continue
                     # Fact-gate: refuse a premature done if the model wrote files but
-                    # never confirmed a CLEAN build afterwards.
+                    # never confirmed a CLEAN build afterwards. Bounded (R-10).
                     premature = wrote_since_build or last_build_ok is not True
                     if premature:
                         results.append(
@@ -3498,7 +819,6 @@ async def run_native_build(
                                 "CLEAN (fix any errors) before calling done.",
                             }
                         )
-                        await _persist_completed_tool(tool_index, results)
                         continue
                     gap = _completion_gap()
                     if gap:
@@ -3510,480 +830,16 @@ async def run_native_build(
                                 "content": "Not done yet: " + gap,
                             }
                         )
-                        await _persist_completed_tool(tool_index, results)
                         continue
                     done_summary = str((tu.get("input") or {}).get("summary", ""))
                     results.append({"type": "tool_result", "tool_use_id": tu_id, "content": "done"})
-                    pending_turn_state = {
-                        **pending_turn_state,
-                        "done_summary": done_summary,
-                    }
-                    await _persist_completed_tool(tool_index, results)
                     continue
 
                 action = _tool_use_to_action(tu)
-                if stable_max_loop:
-                    action = _normalize_stable_max_action_path(action)
-                lifecycle_error = ""
-                if max_runtime and name == "read_skill":
-                    skill_id = str(action.args.get("skill") or "").strip().casefold()
-                    if skill_id in successful_skill_ids:
-                        lifecycle_error = (
-                            f"Capability pack `{skill_id}` is already loaded. Apply it instead "
-                            "of spending another tool call."
-                        )
-                    elif (
-                        max_lifecycle
-                        and skill_id == MAX_REQUIRED_POST_SEE_SKILL
-                        and (
-                            "see" not in proof_after_write
-                            or last_green_see_step is None
-                            or step <= last_green_see_step
-                        )
-                    ):
-                        lifecycle_error = (
-                            "Run a green `see` after the latest product write, then load "
-                            "`visual-evaluation` in the next model turn so it can inspect "
-                            "the actual screenshot result."
-                        )
-                    elif max_lifecycle and skill_id not in {
-                        *MAX_REQUIRED_PREWRITE_SKILLS,
-                        MAX_REQUIRED_POST_SEE_SKILL,
-                    }:
-                        optional_skills = successful_skill_ids.difference(
-                            {*MAX_REQUIRED_PREWRITE_SKILLS, MAX_REQUIRED_POST_SEE_SKILL}
-                        )
-                        if len(optional_skills) >= 3:
-                            lifecycle_error = (
-                                "The three optional capability-pack slots are already used. "
-                                "Apply the loaded specialist guidance and continue building."
-                            )
-                elif max_lifecycle and name in {"write_file", "edit_file"}:
-                    missing_skills: list[str] = []
-                    if pending_visual_evaluation_step == step:
-                        lifecycle_error = (
-                            "Apply visual-evaluation in the next model turn after receiving "
-                            "the capability result; a same-turn write cannot use it."
-                        )
-                    else:
-                        missing_skills = [
-                            skill
-                            for skill in MAX_REQUIRED_PREWRITE_SKILLS
-                            if skill not in successful_skill_ids
-                        ]
-                    if not lifecycle_error and missing_skills:
-                        lifecycle_error = (
-                            "Before the first product write, load the required capability packs: "
-                            + ", ".join(missing_skills)
-                            + "."
-                        )
-
-                obs: dict[str, Any]
-                tool_executed = False
-                allowed_progress_tools = (
-                    {"build", "diagnose"}
-                    if force_build_after_write
-                    else {"edit_file", "build", "diagnose"}
-                    if force_visual_finish
-                    else {"write_file", "diagnose"}
-                    if force_style_write
-                    else {"write_file", "edit_file", "diagnose"}
-                    if force_source_repair
-                    else {"read_file", "edit_file", "build", "diagnose"}
-                    if force_repair_verify
-                    else {"read_file", "edit_file", "diagnose"}
-                    if force_repair_edit_only and repair_reread_paths
-                    else {"edit_file", "diagnose"}
-                    if force_repair_edit_only
-                    else {"read_file", "edit_file", "diagnose"}
-                    if force_repair_write
-                    else {"write_file", "edit_file", "build", "diagnose"}
-                    if force_progress
-                    else {"write_file", "edit_file", "diagnose"}
-                )
-                observation_signature = _observation_signature(action)
-                observation_revision = (
-                    source_revisions.get(action.path, 0)
-                    if action.name == "read_file"
-                    else workspace_revision
-                )
-                repeated_observation = bool(
-                    stable_max_loop
-                    and observation_signature
-                    and observed_revisions.get(observation_signature) == observation_revision
-                    and not (
-                        repair_mode
-                        and action.name == "read_file"
-                        and action.path in repair_reread_paths
-                    )
-                )
-                if kernel_owned_loop and name != "write_files":
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "This ProductSpec run exposes one source action only: write_files. "
-                            "Omnia runs build/runtime/functional checks automatically."
-                        ),
-                    }
-                elif kernel_owned_loop and name == "write_files" and kernel_write_passes >= 2:
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "The initial product pass and the single repair pass are already "
-                            "used. Omnia stopped further rewrites to prevent a loop."
-                        ),
-                    }
-                    kernel_repair_exhausted_this_turn = True
-                elif kernel_owned_loop and name == "write_files" and wrote_this_turn:
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "Only one atomic product revision may run per provider turn. "
-                            "Wait for Omnia's build observation before repairing."
-                        ),
-                    }
-                elif (
-                    kernel_owned_loop
-                    and name == "write_files"
-                    and kernel_write_passes == 0
-                    and (_kernel_gap := _kernel_initial_revision_gap(action.args.get("files")))
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "The initial revision must be a coherent multi-file product. "
-                            f"{_kernel_gap}"
-                        ),
-                    }
-                elif _contains_history_placeholder(action):
-                    # The gateway replaces large historical tool arguments with
-                    # explicit markers. A long-running model can occasionally
-                    # echo that marker back as if it were the file body. Never
-                    # let transcript compaction destroy the live source; allow
-                    # one fresh read of the failing path on the next turn.
-                    repair_reads_since_build.discard(action.path)
-                    repair_source_cache.pop(action.path, None)
-                    if visual_feedback_step is not None:
-                        # The next paid turn must receive a fresh, authoritative
-                        # focused source bundle. Otherwise the compacted marker
-                        # remains in the transcript and can be echoed repeatedly.
-                        visual_context_compacted_step = None
-                    obs = {"ok": False, "error": _HISTORY_PLACEHOLDER_WRITE_REJECTED}
-                elif repeated_observation:
-                    repeated_observation_paths.append(action.path or action.name)
-                    repeated_observation_paths = repeated_observation_paths[-20:]
-                    obs = _repeat_observation_error(action)
-                elif stable_max_loop and ops_this_turn >= _STABLE_MAX_TOOL_OPS_PER_TURN:
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "Tool batch limit reached. Use the returned observations, then "
-                            "continue in a fresh model turn instead of executing more stale "
-                            "actions from the same response."
-                        ),
-                    }
-                elif (
-                    stable_max_loop
-                    and name in {"write_file", "edit_file"}
-                    and turn_mutation_counts.get(action.path, 0)
-                    >= _STABLE_MAX_MUTATIONS_PER_PATH_PER_TURN
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            f"{action.path} was already mutated twice in this model turn. "
-                            "Read the combined result in the next turn and apply one coherent "
-                            "follow-up instead of stacking stale same-file edits."
-                        ),
-                    }
-                elif (
-                    stable_max_loop
-                    and name == "build"
-                    and last_build_revision == workspace_revision
-                    and last_build_ok is not None
-                ):
-                    obs = {
-                        "ok": bool(last_build_ok),
-                        "cached": True,
-                        "detail": (
-                            "Build already clean for this workspace revision; reused proof."
-                            if last_build_ok
-                            else last_build_error_text
-                            or (
-                                "Build already failed for this workspace revision; "
-                                "edit source first."
-                            )
-                        ),
-                    }
-                elif visual_proof_unavailable_this_turn and name == "see":
-                    # Tool calls in one assistant response are planned before
-                    # their results return. Execute at most one unavailable
-                    # visual proof in the batch; the bounded retry already ran
-                    # inside ``see_page``.
-                    obs = {
-                        "ok": False,
-                        "error": "Visual QA is unavailable; repeated see was skipped.",
-                    }
-                elif force_runtime_proof and name != "runtime_check":
-                    obs = {"ok": False, "error": _STABLE_MAX_RUNTIME_PROOF_REQUIRED}
-                elif force_visual_finish and (
-                    name not in {"edit_file", "build"}
-                    or (name == "edit_file" and action.path != "src/app/globals.css")
-                ):
-                    obs = {"ok": False, "error": _STABLE_MAX_VISUAL_FINISH_REQUIRED}
-                elif force_proof and name not in {"runtime_check", "see"}:
-                    # Cached provider turns may still reference schemas from an
-                    # earlier unrestricted phase. Enforce the proof transition at
-                    # execution too, otherwise repeated read/grep calls can spend
-                    # the entire generation budget after a green build.
-                    obs = {"ok": False, "error": _STABLE_MAX_PROOF_REQUIRED}
-                elif (
-                    force_visual_repair
-                    and name == "generate_media"
-                    and visual_media_generated_step == visual_feedback_step
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "One visual asset is already generated for this rendered verdict. "
-                            "Embed its returned URL with edit_file now."
-                        ),
-                    }
-                elif (
-                    force_visual_repair
-                    and name
-                    not in {
-                        "write_file",
-                        "edit_file",
-                        "generate_media",
-                    }
-                    and not (force_build_after_write and name == "build")
-                ):
-                    # After one turn to inspect the concrete visual verdict,
-                    # further search only inflates paid context and can hit the
-                    # provider rate limit before the known repair is applied.
-                    obs = {"ok": False, "error": _STABLE_MAX_VISUAL_REPAIR_REQUIRED}
-                elif (
-                    product_first
-                    and _STABLE_MAX_PRODUCT_ENTRY not in written
-                    and name in {"read_file", "list_dir", "grep", "docs"}
-                    and (
-                        prewrite_inspection_ops >= _STABLE_MAX_PREWRITE_INSPECTION_LIMIT
-                        or (name == "read_file" and action.path in prewrite_inspection_paths)
-                    )
-                ):
-                    if prewrite_inspection_ops >= _STABLE_MAX_PREWRITE_INSPECTION_LIMIT:
-                        prewrite_inspection_exhausted = True
-                    obs = {"ok": False, "error": _STABLE_MAX_INSPECTION_COMPLETE}
-                elif (
-                    entry_focus_compacted
-                    and _STABLE_MAX_PRODUCT_ENTRY not in written
-                    and name != "read_skill"
-                    and not (name == "bash" and not action.args.get("mutation_paths"))
-                    and (name != "write_file" or action.path != _STABLE_MAX_PRODUCT_ENTRY)
-                ):
-                    obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
-                elif force_product_progress and name not in allowed_progress_tools:
-                    # Some provider-compatible gateways keep earlier tool schemas
-                    # available for the cached conversation even when this turn
-                    # advertises only write/edit. Enforce the transition at the
-                    # executor boundary too, so an old read tool cannot consume
-                    # more paid turns after the bounded exploration window.
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            _STABLE_MAX_VISUAL_FINISH_REQUIRED
-                            if force_visual_finish
-                            else _STABLE_MAX_BUILD_REQUIRED
-                            if force_build_after_write
-                            else _STABLE_MAX_STYLE_REQUIRED
-                            if force_style_write
-                            else _STABLE_MAX_SOURCE_REPAIR_REQUIRED
-                            if force_source_repair
-                            else _STABLE_MAX_PROGRESS_REQUIRED
-                            if force_progress
-                            else _STABLE_MAX_REPAIR_VERIFY_REQUIRED
-                            if force_repair_verify
-                            else _STABLE_MAX_ENTRY_REQUIRED
-                            if force_entry_write
-                            else _stable_max_repair_required(last_build_error_paths)
-                            if force_repair_write
-                            else _STABLE_MAX_WRITE_REQUIRED
-                        ),
-                    }
-                elif force_style_write and (
-                    name != "write_file" or action.path != "src/app/globals.css"
-                ):
-                    obs = {"ok": False, "error": _STABLE_MAX_STYLE_REQUIRED}
-                elif (
-                    repair_mode
-                    and name == "read_file"
-                    and (
-                        action.path not in last_build_error_paths
-                        or (
-                            action.path in repair_reads_since_build
-                            and action.path not in repair_reread_paths
-                        )
-                    )
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": _stable_max_repair_required(last_build_error_paths),
-                    }
-                elif (
-                    repair_mode
-                    and name == "edit_file"
-                    and last_build_error_paths
-                    and action.path not in last_build_error_paths
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": _stable_max_repair_required(last_build_error_paths),
-                    }
-                elif (
-                    product_first
-                    and _STABLE_MAX_PRODUCT_ENTRY not in written
-                    and name in {"write_file", "edit_file"}
-                    and action.path != _STABLE_MAX_PRODUCT_ENTRY
-                ):
-                    obs = {"ok": False, "error": _STABLE_MAX_ENTRY_NOW_REQUIRED}
-                elif lifecycle_error:
-                    obs = {"ok": False, "error": lifecycle_error}
-                elif (
-                    brain_v2 is not None
-                    and brain_v2.get("diagnosis_required_signature")
-                    and name in {"write_file", "edit_file"}
-                ):
-                    obs = {
-                        "ok": False,
-                        "error": (
-                            "The same build is red. Call `diagnose` first with one root cause, "
-                            "observable evidence, a NEW experiment and its expected result; "
-                            "then apply exactly that repair."
-                        ),
-                    }
-                elif brain_v2 is not None and name == "diagnose":
-                    diagnosis = tu.get("input") or {}
-                    root_cause = str(diagnosis.get("root_cause") or "").strip()
-                    evidence = diagnosis.get("evidence") or []
-                    evidence_items = (
-                        [
-                            item.strip()
-                            for item in evidence
-                            if isinstance(item, str) and item.strip()
-                        ]
-                        if isinstance(evidence, list)
-                        else []
-                    )
-                    experiment = str(diagnosis.get("experiment") or "").strip()
-                    expected_result = str(diagnosis.get("expected_result") or "").strip()
-                    raw_failed_approaches = brain_v2.get("failed_approaches")
-                    failed_approaches = (
-                        raw_failed_approaches if isinstance(raw_failed_approaches, list) else []
-                    )
-                    previous_experiments = {
-                        str(item.get("experiment") or "").strip().casefold()
-                        for item in failed_approaches
-                        if isinstance(item, Mapping)
-                    }
-                    if (
-                        not root_cause
-                        or not evidence_items
-                        or not experiment
-                        or not expected_result
-                        or experiment.casefold() in previous_experiments
-                    ):
-                        obs = {
-                            "ok": False,
-                            "error": (
-                                "Diagnosis rejected: provide evidence and a new falsifiable "
-                                "experiment that has not already failed."
-                            ),
-                        }
-                    else:
-                        brain_v2 = record_hypothesis(
-                            brain_v2,
-                            root_cause=root_cause,
-                            evidence=evidence_items,
-                            experiment=experiment,
-                            expected_result=expected_result,
-                        )
-                        tool_executed = True
-                        obs = {
-                            "ok": True,
-                            "detail": "Diagnosis recorded; apply the stated experiment once.",
-                        }
-                else:
-                    tool_executed = True
-                    preparation = pending_tool_preparations.get(str(tool_index))
-                    if preparation is None and prepare_execute is not None:
-                        try:
-                            raw_preparation = await prepare_execute(action)
-                            preparation = (
-                                dict(raw_preparation)
-                                if isinstance(raw_preparation, Mapping)
-                                else {}
-                            )
-                        except Exception as exc:
-                            preparation = {
-                                "error": f"tool preparation failed: {type(exc).__name__}"
-                            }
-                        pending_tool_preparations[str(tool_index)] = preparation
-                    if preparation:
-                        action = Action(
-                            name=action.name,
-                            args={**action.args, "_durable_preparation": preparation},
-                            raw=action.raw,
-                        )
-                    pending_tool_started_index = tool_index
-                    await _persist_checkpoint()
-                    try:
-                        obs = await execute(action)
-                    except Exception as exc:  # a tool crash must not kill the build
-                        obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
-                    if obs.get("reconciliation_pending"):
-                        # The command has already produced a side effect, while
-                        # rollback infrastructure is temporarily unavailable.
-                        # Keep the durable started marker + preparation intact;
-                        # the next slice retries only reconciliation, never the
-                        # original command.
-                        if emit:
-                            await emit(
-                                "agent.step",
-                                {
-                                    "step": step,
-                                    "action": name,
-                                    "path": action.path,
-                                    "detail": _step_detail(name, action, obs),
-                                    "ok": False,
-                                },
-                            )
-                        return AgentResult(
-                            done=False,
-                            summary=str(obs.get("error") or "tool reconciliation pending"),
-                            files=written,
-                            steps=step + 1,
-                            transcript=convo,
-                            stop_reason="tool_reconciliation_pending",
-                        )
-                if (
-                    tool_executed
-                    and name in {"write_file", "write_files", "edit_file"}
-                    and obs.get("ok")
-                ):
-                    mutation_files = _mutation_files(action, obs)
-                    if mutation_files and all(
-                        written.get(path) == content for path, content in mutation_files.items()
-                    ):
-                        # The live MAX canary exposed a paid source-repair loop
-                        # where the model returned the same product bytes,
-                        # the executor reported success, and a fresh build was
-                        # charged after every false edit. Preserve the existing
-                        # green proof and tell the model that nothing changed.
-                        obs = {"ok": False, "error": _NOOP_WRITE_REJECTED}
-                        noop_write_this_turn = True
-                if tool_executed and obs.get("ok") and observation_signature:
-                    observed_revisions[observation_signature] = observation_revision
+                try:
+                    obs = await execute(action)
+                except Exception as exc:  # a tool crash must not kill the build
+                    obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
                 # Emit AFTER execute so the step carries a `detail` — what the tool
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
@@ -4002,330 +858,32 @@ async def run_native_build(
                 ops_this_turn += 1
                 if obs.get("infra_dead"):
                     infra_this_turn += 1
-                if (
-                    tool_executed
-                    and repair_mode
-                    and name == "edit_file"
-                    and not obs.get("ok")
-                    and action.path in last_build_error_paths
-                ):
-                    # An exact edit can fail because its search text is stale or
-                    # non-unique. Let the next turn reread exactly that failing
-                    # file once; otherwise the edit-only guard creates a permanent
-                    # dead end where every recovery read is rejected.
-                    repair_reads_since_build.discard(action.path)
-                    repair_reread_paths.add(action.path)
-                    repair_source_cache.pop(action.path, None)
-                    observed_revisions.pop(f"read:{action.path}", None)
-                if (
-                    tool_executed
-                    and name in ("write_file", "write_files", "edit_file")
-                    and obs.get("ok")
-                ):
-                    mutation_files = _mutation_files(action, obs)
-                    for path, content in mutation_files.items():
-                        repair_reread_paths.discard(path)
-                        repair_source_cache.pop(path, None)
-                        written[path] = content
+                if name in ("write_file", "edit_file") and obs.get("ok"):
+                    if name == "write_file":
+                        written[action.path] = action.args.get("content", "")
+                    elif isinstance(obs.get("content"), str):
+                        # executor returns the post-edit content (mirrors the
+                        # text loop's tracking at agent_builder.py) — closes the
+                        # gap where edit_file never dirtied the done fact-gate.
+                        written[action.path] = obs["content"]
                     wrote_since_build = True
                     wrote_this_turn = True
-                    workspace_revision += 1
-                    for path in mutation_files:
-                        turn_mutation_counts[path] = turn_mutation_counts.get(path, 0) + 1
-                        source_revisions[path] = source_revisions.get(path, 0) + 1
-                    if brain_v2 is not None:
-                        brain_v2 = record_mutation(
-                            brain_v2,
-                            paths=sorted(mutation_files),
-                            revision=workspace_revision,
-                        )
-                    for path in mutation_files:
-                        observed_revisions.pop(f"read:{path}", None)
-                        recent_mutation_paths.append(path)
-                    recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
-                    if force_visual_finish and "src/app/globals.css" in mutation_files:
-                        visual_finish_satisfied_this_turn = True
-                    if force_source_repair:
-                        source_repair_context_gap = None
-                    # Tool calls in one assistant response are planned before
-                    # any result is returned. Only a write from a LATER turn can
-                    # have applied the visual critique.
-                    if visual_feedback_step is not None and step > visual_feedback_step:
-                        visual_repair_paths.update(mutation_files)
                     proof_after_write.clear()
-                    last_green_see_step = None
-                    if kernel_owned_loop and name == "write_files":
-                        kernel_write_passes += 1
-                        verification = await _kernel_verify_revision(step)
-                        verification_status = str(verification.get("status") or "red")
-                        verification_detail = str(verification.get("detail") or "")
-                        obs = {
-                            **obs,
-                            "kernel_verification": verification_detail,
-                        }
-                        raw_build = verification.get("build")
-                        if isinstance(raw_build, Mapping):
-                            for key in (
-                                "diagnostics",
-                                "affected_files",
-                                "error_signature",
-                                "evidence",
-                                "analysis_unavailable",
-                            ):
-                                if key in raw_build:
-                                    obs[key] = raw_build[key]
-                        if verification_status == "infra":
-                            # Keep the started marker durable. On the next slice
-                            # write_files reconciles exact bytes, then repeats only
-                            # read-only verification; the source mutation is never
-                            # duplicated.
-                            return AgentResult(
-                                done=False,
-                                summary=(
-                                    verification_detail or "verification infrastructure unavailable"
-                                ),
-                                files=written,
-                                steps=step + 1,
-                                transcript=convo,
-                                stop_reason="kernel_verification_pending",
-                            )
-                        if verification_status == "owner":
-                            return AgentResult(
-                                done=False,
-                                summary=(
-                                    verification_detail
-                                    or "Owner-controlled integration configuration is required."
-                                ),
-                                files=written,
-                                steps=step + 1,
-                                transcript=convo,
-                                stop_reason="kernel_owner_dependency",
-                            )
-                        kernel_terminal_this_turn = verification_status == "green"
-                        if not kernel_terminal_this_turn:
-                            last_build_error_text = verification_detail
-                            obs = {
-                                **obs,
-                                "ok": False,
-                                "status": "error",
-                                "error": verification_detail,
-                                "detail": verification_detail,
-                            }
-                        kernel_repair_exhausted_this_turn = (
-                            verification_status != "green" and kernel_write_passes >= 2
-                        )
-                elif tool_executed and name == "bash" and obs.get("ok"):
-                    bash_files = obs.get("files")
-                    if isinstance(bash_files, dict):
-                        for path, content in bash_files.items():
-                            if isinstance(path, str) and isinstance(content, str):
-                                written[path] = content
-                        if bash_files:
-                            wrote_since_build = True
-                            wrote_this_turn = True
-                            workspace_revision += 1
-                            if brain_v2 is not None:
-                                brain_v2 = record_mutation(
-                                    brain_v2,
-                                    paths=[path for path in bash_files if isinstance(path, str)],
-                                    revision=workspace_revision,
-                                )
-                            for path in bash_files:
-                                if not isinstance(path, str):
-                                    continue
-                                source_revisions[path] = source_revisions.get(path, 0) + 1
-                                observed_revisions.pop(f"read:{path}", None)
-                                recent_mutation_paths.append(path)
-                            recent_mutation_paths = list(dict.fromkeys(recent_mutation_paths))[-20:]
-                            proof_after_write.clear()
-                            last_green_see_step = None
-                elif tool_executed and name == "build" and not obs.get("infra_dead"):
-                    if force_visual_finish:
-                        visual_finish_satisfied_this_turn = True
-                    semantic_loop_stop = _record_build_observation(obs) or semantic_loop_stop
-                elif (
-                    tool_executed
-                    and name == "runtime_check"
-                    and not obs.get("ok")
-                    and not obs.get("infra_dead")
-                ):
-                    # A typecheck-clean app can still fail in Next/Turbopack at
-                    # request time. Treat that factual failure as repair debt;
-                    # otherwise the proof gate advertises only runtime_check and
-                    # rejects every attempted source fix forever.
-                    last_build_ok = False
-                    last_build_error_text = str(
-                        obs.get("detail") or obs.get("error") or "runtime check failed"
-                    )
-                    last_build_error_paths = _typescript_error_paths(last_build_error_text)
-                    repair_reads_since_build.clear()
-                    repair_reread_paths.clear()
-                    repair_source_cache.clear()
-                    repair_context_compacted = False
+                elif name == "build":
+                    last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
-                    if brain_v2 is not None:
-                        runtime_signature = normalize_error_signature(last_build_error_text)
-                        brain_v2 = record_observation(
-                            brain_v2,
-                            kind="runtime_check",
-                            status="error",
-                            summary="runtime check red",
-                            error_signature=runtime_signature,
-                            diagnostic_signatures=error_signatures(last_build_error_text),
-                            evidence=sorted(last_build_error_paths),
-                        )
-                        semantic_loop_stop = semantic_loop_count(brain_v2) >= 3
-                if (
-                    tool_executed
-                    and name == "see"
-                    and (obs.get("needs_fix") or (obs.get("verdict") and not obs.get("ok")))
-                ):
-                    # Visual QA may be red because the rendered product made a
-                    # failed browser request.  That is actionable product
-                    # evidence even though the observation itself is ok=False;
-                    # keep the exact verdict and force a focused source repair.
-                    visual_feedback_step = step
-                    visual_feedback_detail = str(
-                        obs.get("detail") or obs.get("error") or "Visual quality is red."
-                    )
-                    visual_repair_paths.clear()
-                    if visual_repair_attempts >= _STABLE_MAX_VISUAL_REPAIR_LIMIT:
-                        visual_quality_exhausted_this_turn = True
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
-                    if name == "plan_task" and brain_v2 is not None:
-                        raw_acceptance = obs.get("acceptance_criteria")
-                        if isinstance(raw_acceptance, list):
-                            brain_v2 = sync_acceptance(
-                                brain_v2,
-                                [item for item in raw_acceptance if isinstance(item, str)],
-                            )
-                    if name == "generate_media" and visual_feedback_step is not None:
-                        visual_media_generated_step = visual_feedback_step
-                    if (
-                        product_first
-                        and _STABLE_MAX_PRODUCT_ENTRY not in written
-                        and name in {"read_file", "list_dir", "grep", "docs"}
-                    ):
-                        prewrite_inspection_ops += 1
-                        if name == "read_file":
-                            prewrite_inspection_paths.add(action.path)
-                        if prewrite_inspection_ops >= _STABLE_MAX_PREWRITE_INSPECTION_LIMIT:
-                            prewrite_inspection_exhausted = True
-                    if repair_mode and name == "read_file":
-                        repair_reads_since_build.add(action.path)
-                        repair_reread_paths.discard(action.path)
-                        if isinstance(obs.get("content"), str):
-                            repair_source_cache[action.path] = obs["content"]
-                    if name == "read_skill":
-                        skill_id = str(action.args.get("skill") or "").strip().casefold()
-                        if skill_id:
-                            successful_skill_ids.add(skill_id)
-                        if skill_id == MAX_REQUIRED_POST_SEE_SKILL and max_lifecycle:
-                            pending_visual_evaluation_step = step
                     if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
-                        if name == "see" and obs.get("needs_fix"):
-                            # Actionable visual feedback was recorded above for
-                            # both ok=True quality verdicts and ok=False browser
-                            # failures.  Neither is production proof yet.
-                            pass
-                        elif name == "see" and (obs.get("proof_unavailable") or obs.get("skipped")):
-                            # A fail-soft visual executor result must never satisfy
-                            # a production visual-proof gate.
-                            last_green_see_step = None
-                            visual_proof_unavailable_this_turn = True
-                        else:
-                            proof_after_write.add(name)
-                            if name == "see":
-                                last_green_see_step = step
+                        proof_after_write.add(name)
+                _tr = _obs_to_tool_result(tu_id, obs)
                 if name == "build" and not obs.get("ok"):
-                    _hint = _build_error_hint(str(obs.get("error") or obs.get("detail") or ""))
+                    _hint = _build_error_hint(str(_tr.get("content") or ""))
                     if _hint:
-                        obs = {
-                            **obs,
-                            "root_cause_hint": (
-                                str(obs.get("root_cause_hint") or "") + _hint
-                            ).strip(),
-                        }
-                _tr = _obs_to_tool_result(tu_id, obs, tool_name=name)
+                        _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
-                pending_turn_state = {
-                    "wrote": wrote_this_turn,
-                    "noop_write": noop_write_this_turn,
-                    "visual_proof_unavailable": visual_proof_unavailable_this_turn,
-                    "visual_quality_exhausted": visual_quality_exhausted_this_turn,
-                    "visual_finish_satisfied": visual_finish_satisfied_this_turn,
-                    "semantic_loop_stop": semantic_loop_stop,
-                    "kernel_terminal": kernel_terminal_this_turn,
-                    "kernel_repair_exhausted": kernel_repair_exhausted_this_turn,
-                    "ops": ops_this_turn,
-                    "infra": infra_this_turn,
-                    "mutation_counts": json.dumps(
-                        turn_mutation_counts,
-                        ensure_ascii=True,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                }
-                await _persist_completed_tool(tool_index, results)
-
-            if force_visual_repair and wrote_this_turn:
-                # A visual verdict commonly requires both component markup and
-                # CSS. Live production traces showed the model applying the
-                # component edits first, then being forced straight into build;
-                # its next globals.css edits were rejected, so the same defects
-                # survived every repair. Offer exactly one bounded stylesheet-
-                # or-build turn, then resume deterministic proof. A CSS-only
-                # repair is also a complete bounded attempt: the next rendered
-                # verdict decides whether markup still needs work. Keeping the
-                # old verdict active after a stylesheet edit traps the model in
-                # an unbounded CSS -> build -> CSS loop without another ``see``.
-                product_repaired = any(
-                    path != "src/app/globals.css" for path in visual_repair_paths
-                )
-                visual_repair_attempts += 1
-                visual_feedback_step = None
-                visual_context_compacted_step = None
-                visual_finish_pending = (
-                    product_repaired and "src/app/globals.css" not in visual_repair_paths
-                )
-                visual_repair_paths.clear()
-            elif force_visual_finish and visual_finish_satisfied_this_turn:
-                visual_finish_pending = False
-
-            if force_entry_write and _STABLE_MAX_PRODUCT_ENTRY not in written:
-                results.append({"type": "text", "text": _STABLE_MAX_ENTRY_REQUIRED})
-
-            response_hit_output_limit = (
-                stable_max_loop
-                and resp.get("stop_reason") == "max_tokens"
-                and any(
-                    tu.get("name") in {"write_file", "write_files", "edit_file"} for tu in tool_uses
-                )
-            )
-            if response_hit_output_limit:
-                if wrote_this_turn:
-                    truncated_no_write_turns = 0
-                else:
-                    truncated_no_write_turns += 1
-                results.append(
-                    {
-                        "type": "text",
-                        "text": (
-                            "[OUTPUT LIMIT] The previous write was truncated before its tool "
-                            "arguments were complete. Do not retry the same large file. Split "
-                            "the screen into smaller component files and keep the TOTAL "
-                            "write payload in the next response below the configured limit. "
-                            "Your next turn must submit one coherent smaller revision."
-                        ),
-                    }
-                )
-            else:
-                truncated_no_write_turns = 0
 
             if done_summary is not None:
-                step_cursor = step + 1
-                await _complete_pending_turn(results)
                 if emit:
                     await emit("agent.done", {"step": step, "files": len(written)})
                 return AgentResult(
@@ -4336,36 +894,10 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="done",
                 )
-
-            # A product-specific acceptance contract is stronger evidence than
-            # one more provider turn whose only purpose is to call ``done``. Once
-            # the final write has a clean build and every required proof is green,
-            # finish locally. This preserves the complete app and avoids resending
-            # the now-large transcript for a ceremonial final response.
-            if (
-                completion_check is not None
-                and last_build_ok is True
-                and not wrote_since_build
-                and _completion_gap() is None
-            ):
-                step_cursor = step + 1
-                await _complete_pending_turn(results)
-                if emit:
-                    await emit("agent.done", {"step": step, "files": len(written)})
-                return AgentResult(
-                    done=True,
-                    summary=(
-                        "Готово — приложение полностью собрано и прошло обязательные "
-                        "проверки без дополнительного запроса к модели."
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="contract_green",
-                )
-            # Infra circuit breaker: generic builds retain the historical abort.
-            # MAX instead waits and keeps the same durable generation alive; a
-            # container/orchestrator restart must never discard completed source.
+            # Infra circuit breaker: a turn where EVERY executed op died on
+            # infra means the container/orchestrator is gone — the model can't
+            # fix that. Abort after a few such turns instead of grinding the
+            # whole step budget against a corpse (2026-07-08 incident).
             if ops_this_turn and infra_this_turn == ops_this_turn:
                 infra_dead_turns += 1
             else:
@@ -4378,14 +910,9 @@ async def run_native_build(
             # branches (looped-but-serves / edit-no-op) already consume it.
             if wrote_this_turn:
                 no_write_turns = 0
-                noop_write_turns = 0
             else:
                 no_write_turns += 1
-                noop_write_turns = noop_write_turns + 1 if noop_write_this_turn else 0
-                _nudge_at = _STABLE_MAX_FIRST_WRITE_AT if stable_max_loop else _NO_WRITE_NUDGE_AT
-                if _nudge_at <= no_write_turns and (
-                    max_runtime or no_write_turns < _NO_WRITE_ABORT_AT
-                ):
+                if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
                     results.append(
                         {
                             "type": "text",
@@ -4402,136 +929,8 @@ async def run_native_build(
                     )
                     if emit:
                         await emit("agent.stalled", {"step": step})
-            if stable_max_loop and noop_write_turns >= _STABLE_MAX_NOOP_WRITE_ABORT_AT:
-                log.warning(
-                    "agent_native.noop_write_abort",
-                    step=step,
-                    consecutive_noop_turns=noop_write_turns,
-                )
-                return await _finish_without_provider(
-                    steps=step + 1,
-                    reason="noop_write",
-                    detail="two consecutive source edits changed zero bytes",
-                )
-            if _STABLE_MAX_PRODUCT_ENTRY in written:
-                turns_without_product_entry = 0
-            else:
-                turns_without_product_entry += 1
-            step_cursor = step + 1
-            await _complete_pending_turn(results)
-            if kernel_terminal_this_turn:
-                if emit:
-                    await emit("agent.done", {"step": step, "files": len(written)})
-                return AgentResult(
-                    done=True,
-                    summary=(
-                        "Готово — приложение собрано целостным проходом; сборка, "
-                        "живой маршрут и подписанная функциональная проверка зелёные."
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="kernel_green",
-                )
-            if kernel_repair_exhausted_this_turn:
-                return AgentResult(
-                    done=False,
-                    summary=(
-                        last_build_error_text
-                        or "Одна ремонтная итерация не закрыла все объективные ошибки."
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="kernel_repair_exhausted",
-                )
-            if semantic_loop_stop:
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": step,
-                            "action": "semantic_loop_stop",
-                            "path": "",
-                            "detail": (
-                                "Три разных исправления дали ту же ошибку; новые LLM-запросы "
-                                "остановлены, evidence сохранён."
-                            ),
-                            "ok": False,
-                        },
-                    )
-                return AgentResult(
-                    done=False,
-                    summary=(
-                        "Три проверенных исправления не изменили одну и ту же ошибку. "
-                        "Гипотезы и evidence сохранены для точечного ремонта без нового цикла."
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="semantic_loop_red",
-                )
-            if visual_quality_exhausted_this_turn and max_runtime:
-                log.warning(
-                    "agent_native.visual_quality_unmet",
-                    step=step,
-                    repair_attempts=visual_repair_attempts,
-                )
-                return AgentResult(
-                    done=False,
-                    summary=(
-                        "Визуальная проверка всё ещё ниже production-уровня после двух "
-                        "сфокусированных исправлений. Результат не опубликован, чтобы не "
-                        "выдать посредственный интерфейс за готовое приложение."
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="visual_quality_unmet",
-                )
-            if visual_proof_unavailable_this_turn and max_runtime and completion_check is not None:
-                # ``see_page`` already performs its own bounded retry using the
-                # same screenshots. Another native-agent turn would only ask the
-                # provider to call ``see`` again, which previously created an
-                # unbounded paid loop while producing no new product evidence.
-                log.warning("agent_native.visual_proof_unavailable", step=step)
-                return AgentResult(
-                    done=False,
-                    summary=(
-                        "Визуальная проверка недоступна после повторной попытки. "
-                        "Результат не отмечен как готовый; повторите генерацию."
-                    ),
-                    files=written,
-                    steps=step + 1,
-                    transcript=convo,
-                    stop_reason="visual_proof_unavailable",
-                )
-            if truncated_no_write_turns >= _MAX_TRUNCATED_WRITE_ABORT_AT:
-                log.warning(
-                    "agent_native.oversized_write_abort",
-                    step=step,
-                    consecutive_truncated_turns=truncated_no_write_turns,
-                )
-                if emit:
-                    await emit(
-                        "agent.step",
-                        {
-                            "step": step,
-                            "action": "output_limit",
-                            "path": "",
-                            "detail": (
-                                "Две записи подряд превысили безопасный размер. Новые "
-                                "платные запросы остановлены; проверяю уже записанные файлы."
-                            ),
-                            "ok": False,
-                        },
-                    )
-                return await _finish_without_provider(
-                    steps=step + 1,
-                    reason="oversized_write",
-                    detail="two consecutive write responses exceeded the output limit",
-                )
-            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and not max_runtime:
+            convo.append({"role": "user", "content": results})
+            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT:
                 log.warning("agent_native.infra_dead_abort", step=step)
                 return AgentResult(
                     done=False,
@@ -4541,10 +940,7 @@ async def run_native_build(
                     transcript=convo,
                     stop_reason="infra_error",
                 )
-            if infra_dead_turns >= _INFRA_DEAD_ABORT_AT and max_runtime:
-                log.warning("agent_native.max_infra_reconnecting", step=step)
-                await asyncio.sleep(15.0)
-            if no_write_turns >= _NO_WRITE_ABORT_AT and not max_runtime:
+            if no_write_turns >= _NO_WRITE_ABORT_AT:
                 return AgentResult(
                     done=False,
                     summary="stuck exploring (reading/verifying) without writing any file",
@@ -4554,8 +950,10 @@ async def run_native_build(
                     stop_reason="exploring",
                 )
 
+    # Hard stop means no more provider calls. A local build decides whether the
+    # tree can ship; otherwise the caller restores the last green snapshot.
     return await _finish_without_provider(
         steps=effective_max_steps,
         reason="max_steps",
-        detail="native turn limit reached",
+        detail="build failed",
     )

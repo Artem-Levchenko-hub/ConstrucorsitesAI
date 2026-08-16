@@ -89,12 +89,10 @@
     var style = document.createElement("style");
     style.id = "omnia-remix-style";
     style.textContent =
-      "#omnia-remix-cta{position:fixed;right:10px;" +
-      "bottom:calc(82px + env(safe-area-inset-bottom));z-index:2147483000;" +
+      "#omnia-remix-cta{position:fixed;right:20px;bottom:20px;z-index:2147483000;" +
       "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}" +
       "#omnia-remix-btn{display:inline-flex;align-items:center;gap:9px;border:0;" +
-      "cursor:pointer;width:46px;height:46px;padding:0;justify-content:center;" +
-      "border-radius:9999px;font-size:15px;" +
+      "cursor:pointer;padding:14px 21px;border-radius:9999px;font-size:15px;" +
       "font-weight:600;letter-spacing:-.01em;color:#fff;text-decoration:none;" +
       "white-space:nowrap;" +
       "background:linear-gradient(90deg,#818cf8,#c084fc);" +
@@ -106,7 +104,6 @@
       "#omnia-remix-btn:active{transform:translateY(0) scale(.99)}" +
       "#omnia-remix-btn .omnia-remix-spark{font-size:16px;line-height:1;" +
       "animation:omnia-remix-spin 4s linear infinite}" +
-      "#omnia-remix-btn .omnia-remix-label{display:none}" +
       "@keyframes omnia-remix-in{from{opacity:0;transform:translateY(14px) scale(.96)}" +
       "to{opacity:1;transform:none}}" +
       "@keyframes omnia-remix-spin{to{transform:rotate(360deg)}}" +
@@ -147,9 +144,7 @@
     (document.head || document.documentElement).appendChild(style);
     (document.body || document.documentElement).appendChild(wrap);
 
-    // MAX products already own persistent mobile navigation. One compact remix
-    // affordance preserves the viral loop without a second fixed watermark
-    // covering the generated product at phone and tablet widths.
+    mountWatermark();
   }
 
   // Viral seed badge (#VIRAL-WATERMARK, pillar 4). A subtle "Сделано на Omnia.AI"
@@ -220,10 +215,7 @@
       "transition:transform .16s ease,box-shadow .16s ease}" +
       "#omnia-wm-make:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(99,102,241,.5)}" +
       "@keyframes omnia-wm-in{from{opacity:0;transform:translateY(12px) scale(.94)}to{opacity:1;transform:none}}" +
-      "@media (max-width:479px){#omnia-wm{left:10px;" +
-      "bottom:calc(82px + env(safe-area-inset-bottom))}" +
-      "#omnia-wm-badge{width:44px;height:44px;padding:0;justify-content:center}" +
-      "#omnia-wm-made,#omnia-wm-name{display:none}}" +
+      "@media (max-width:479px){#omnia-wm-made{display:none}}" +
       "@media (prefers-reduced-motion:reduce){#omnia-wm-badge,#omnia-wm-pop,#omnia-wm-make{" +
       "animation:none!important;transition:none!important}#omnia-wm-badge:hover{transform:none}}";
 

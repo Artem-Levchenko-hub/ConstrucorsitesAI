@@ -36,10 +36,7 @@ def test_models_endpoint_lists_all_supported(client: TestClient) -> None:
     body = r.json()
     assert body["object"] == "list"
     ids = {m["id"] for m in body["data"]}
-    assert ids == {
-        "gemini-3.1-pro-preview-customtools",
-        "claude-sonnet-5",
-    }
+    assert ids == {"gemini-3.1-pro-preview-customtools"}
     # No keys configured in test → all unavailable.
     assert all(m["available"] is False for m in body["data"])
 
@@ -49,7 +46,7 @@ def test_chat_completion_non_streaming_happy_path(client: TestClient) -> None:
         "id": "test-1",
         "object": "chat.completion",
         "created": 1234,
-        "model": "anthropic/claude-sonnet-5",
+        "model": "google/gemini-3.1-pro-preview-customtools",
         "choices": [
             {
                 "index": 0,
@@ -64,7 +61,7 @@ def test_chat_completion_non_streaming_happy_path(client: TestClient) -> None:
         new=AsyncMock(return_value=fake_response),
     ):
         body = {
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": False,
             "user": str(uuid4()),
@@ -78,110 +75,11 @@ def test_chat_completion_non_streaming_happy_path(client: TestClient) -> None:
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["choices"][0]["message"]["content"] == "hi"
-    # 10*0.323/1000 + 5*1.615/1000 = 0.011305 -> 0.0113
-    assert data["metadata"]["cost_rub"] == "0.0113"
-    assert data["metadata"]["actual_model_used"] == "claude-sonnet-5"
+    # 10*1.50/1000 + 5*7.50/1000 = 0.0150 + 0.0375 = 0.0525
+    assert data["metadata"]["cost_rub"] == "0.0525"
+    assert data["metadata"]["actual_model_used"] == "gemini-3.1-pro-preview-customtools"
     assert data["metadata"]["fallback_used"] is False
     assert data["metadata"]["cache_hit"] is False
-
-
-def test_chat_fails_closed_before_provider_when_billing_is_unavailable(
-    client: TestClient,
-) -> None:
-    provider = AsyncMock(return_value={})
-    with (
-        patch(
-            "omnia_gateway.routers.chat.billing.precheck_balance",
-            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
-        ),
-        patch("omnia_gateway.routers.chat.router_module.acompletion", new=provider),
-    ):
-        response = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "claude-sonnet-5",
-                "messages": [{"role": "user", "content": "do not spend"}],
-                "user": str(uuid4()),
-            },
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["error"]["code"] == "billing_unavailable"
-    provider.assert_not_awaited()
-
-
-def test_chat_marks_post_provider_charge_failure_as_ambiguous(client: TestClient) -> None:
-    fake_response = {
-        "id": "provider-completed",
-        "model": "anthropic/claude-sonnet-5",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "completed"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-    with (
-        patch(
-            "omnia_gateway.routers.chat.router_module.acompletion",
-            new=AsyncMock(return_value=fake_response),
-        ),
-        patch(
-            "omnia_gateway.routers.chat.billing.charge",
-            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
-        ),
-    ):
-        response = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "claude-sonnet-5",
-                "messages": [{"role": "user", "content": "one attempt"}],
-                "user": str(uuid4()),
-            },
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["error"]["code"] == "paid_call_ambiguous"
-
-
-def test_chat_marks_post_provider_wallet_race_as_ambiguous(client: TestClient) -> None:
-    from omnia_gateway.core.errors import WalletEmptyError
-
-    fake_response = {
-        "id": "provider-completed-wallet-race",
-        "model": "anthropic/claude-sonnet-5",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "completed"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-    with (
-        patch(
-            "omnia_gateway.routers.chat.router_module.acompletion",
-            new=AsyncMock(return_value=fake_response),
-        ),
-        patch(
-            "omnia_gateway.routers.chat.billing.charge",
-            new=AsyncMock(side_effect=WalletEmptyError("wallet changed after provider call")),
-        ),
-    ):
-        response = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "claude-sonnet-5",
-                "messages": [{"role": "user", "content": "one attempt"}],
-                "user": str(uuid4()),
-            },
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["error"]["code"] == "paid_call_ambiguous"
 
 
 def test_chat_unknown_model_returns_404(client: TestClient) -> None:
@@ -196,11 +94,11 @@ def test_chat_unknown_model_returns_404(client: TestClient) -> None:
 
 
 def test_chat_no_provider_key_returns_upstream_error(client: TestClient) -> None:
-    # Sonnet 5 dispatches to llmgw; with no LLMGW_API_KEY it raises
+    # Gemini Custom Tools dispatches to llmgw; with no LLMGW_API_KEY it raises
     # UpstreamProviderError → 502 (code
     # model_unavailable), the graceful "provider not configured" surface.
     body = {
-        "model": "claude-sonnet-5",
+        "model": "gemini-3.1-pro-preview-customtools",
         "messages": [{"role": "user", "content": "hello"}],
         "stream": False,
     }
@@ -214,7 +112,7 @@ def test_chat_cache_hit_returns_cached_without_calling_llm(client: TestClient) -
         "id": "cached-1",
         "object": "chat.completion",
         "created": 1234,
-        "model": "claude-sonnet-5",
+        "model": "gemini-3.1-pro-preview-customtools",
         "choices": [
             {
                 "index": 0,
@@ -236,7 +134,7 @@ def test_chat_cache_hit_returns_cached_without_calling_llm(client: TestClient) -
         ),
     ):
         body = {
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": False,
         }
@@ -257,7 +155,7 @@ def test_chat_safety_filter_redacts_injection(client: TestClient) -> None:
             "id": "x",
             "object": "chat.completion",
             "created": 0,
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "choices": [
                 {
                     "index": 0,
@@ -273,7 +171,7 @@ def test_chat_safety_filter_redacts_injection(client: TestClient) -> None:
         new=AsyncMock(side_effect=fake_acompletion),
     ):
         body = {
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "messages": [
                 {
                     "role": "user",

@@ -3,28 +3,13 @@ import {
   boolean,
   integer,
   jsonb,
-  type PgTableFn,
-  pgSchema,
   pgTable,
   text,
   timestamp,
-  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
-// Managed apps use a dedicated Postgres schema. Local builds may omit the env
-// and therefore use Postgres' default public schema, which Drizzle represents
-// with pgTable rather than the deliberately forbidden pgSchema("public").
-const schemaName = process.env.OMNIA_DB_SCHEMA;
-const appTable: PgTableFn<string | undefined> =
-  schemaName && schemaName !== "public"
-    ? pgSchema(schemaName).table
-    : pgTable;
-const appSchema = {
-  table: appTable,
-};
-
-export const maxUsers = appSchema.table("max_users", {
+export const maxUsers = pgTable("max_users", {
   id: uuid("id").primaryKey().defaultRandom(),
   maxUserId: text("max_user_id").notNull().unique(),
   firstName: text("first_name").notNull(),
@@ -36,14 +21,14 @@ export const maxUsers = appSchema.table("max_users", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const maxWebhookEvents = appSchema.table("max_webhook_events", {
+export const maxWebhookEvents = pgTable("max_webhook_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   eventKey: text("event_key").notNull().unique(),
   eventType: text("event_type").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const maxCatalogItems = appSchema.table("max_catalog_items", {
+export const maxCatalogItems = pgTable("max_catalog_items", {
   id: uuid("id").primaryKey().defaultRandom(),
   externalId: text("external_id").notNull().unique(),
   title: text("title").notNull(),
@@ -57,25 +42,19 @@ export const maxCatalogItems = appSchema.table("max_catalog_items", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const maxBusinessActions = appSchema.table("max_business_actions", {
+export const maxBusinessActions = pgTable("max_business_actions", {
   id: uuid("id").primaryKey().defaultRandom(),
   maxUserId: text("max_user_id")
     .notNull()
     .references(() => maxUsers.maxUserId, { onDelete: "cascade" }),
   actionType: text("action_type").notNull(),
-  idempotencyKey: text("idempotency_key"),
   status: text("status").notNull().default("new"),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
-}, (table) => [
-  uniqueIndex("max_business_actions_user_idempotency_key_uq").on(
-    table.maxUserId,
-    table.idempotencyKey,
-  ),
-]);
+});
 
-export const maxConsents = appSchema.table("max_consents", {
+export const maxConsents = pgTable("max_consents", {
   id: uuid("id").primaryKey().defaultRandom(),
   maxUserId: text("max_user_id")
     .notNull()
@@ -86,7 +65,7 @@ export const maxConsents = appSchema.table("max_consents", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const maxAnalyticsEvents = appSchema.table("max_analytics_events", {
+export const maxAnalyticsEvents = pgTable("max_analytics_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   maxUserId: text("max_user_id")
     .notNull()
@@ -96,7 +75,7 @@ export const maxAnalyticsEvents = appSchema.table("max_analytics_events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const maxBotOutbox = appSchema.table("max_bot_outbox", {
+export const maxBotOutbox = pgTable("max_bot_outbox", {
   id: uuid("id").primaryKey().defaultRandom(),
   maxUserId: text("max_user_id")
     .notNull()
@@ -110,7 +89,7 @@ export const maxBotOutbox = appSchema.table("max_bot_outbox", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
 });
 
-export const maxAuditLog = appSchema.table("max_audit_log", {
+export const maxAuditLog = pgTable("max_audit_log", {
   id: uuid("id").primaryKey().defaultRandom(),
   maxUserId: text("max_user_id")
     .notNull()

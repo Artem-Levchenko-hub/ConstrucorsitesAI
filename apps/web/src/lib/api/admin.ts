@@ -6,7 +6,6 @@ export type AdminUser = {
   email: string;
   role: "user" | "admin";
   is_admin: boolean;
-  unlimited_generations: boolean;
   status: string;
   email_verified_at: string | null;
   created_at: string;
@@ -17,7 +16,6 @@ export type AdminUser = {
 
 export type AdminUserUpdate = {
   role?: "user" | "admin";
-  unlimited_generations?: boolean;
   email_verified?: boolean;
   status?: "active" | "suspended";
   business_verified?: boolean;

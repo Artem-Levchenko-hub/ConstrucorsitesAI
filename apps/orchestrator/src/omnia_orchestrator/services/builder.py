@@ -23,8 +23,7 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import replace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID
 
@@ -76,59 +75,6 @@ _OVERLAY_PATHS = [
 _TEMPLATE_OWNED_PROD_PATHS = ("scripts/apply-migrations.mjs",)
 
 
-def _is_app_owned_snapshot_path(relative: str) -> bool:
-    return any(relative == root or relative.startswith(f"{root}/") for root in _OVERLAY_PATHS)
-
-
-def _reset_app_owned_paths(build_dir: Path) -> None:
-    """Remove template app files before laying down one immutable snapshot.
-
-    Omissions in a Git tree represent deletions.  Overlaying without this reset
-    would resurrect starter files that the selected version had removed.
-    """
-    for relative in _OVERLAY_PATHS:
-        target = build_dir / relative
-        if target.is_dir() and not target.is_symlink():
-            shutil.rmtree(target)
-        else:
-            target.unlink(missing_ok=True)
-
-
-def _materialize_snapshot(build_dir: Path, source_files: dict[str, str]) -> None:
-    """Write bounded app-owned text files without permitting path escape.
-
-    Production Dockerfiles/configs remain template-owned.  The API repository
-    may contain them, but generated code must never replace that trusted build
-    boundary.
-    """
-    _reset_app_owned_paths(build_dir)
-    resolved_root = build_dir.resolve()
-    for relative, content in sorted(source_files.items()):
-        path = PurePosixPath(relative)
-        if (
-            path.is_absolute()
-            or path.as_posix() != relative
-            or any(part in {"", ".", ".."} for part in path.parts)
-        ):
-            raise OrchestratorError(
-                code="validation_failed",
-                message=f"unsafe source path: {relative!r}",
-                status_code=403,
-            )
-        if not _is_app_owned_snapshot_path(relative):
-            continue
-        destination = build_dir.joinpath(*path.parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        resolved_destination = destination.resolve()
-        if resolved_root not in resolved_destination.parents:
-            raise OrchestratorError(
-                code="validation_failed",
-                message=f"source path escapes build root: {relative!r}",
-                status_code=403,
-            )
-        destination.write_text(content, encoding="utf-8")
-
-
 def _restore_template_owned_prod_files(template_dir: Path, build_dir: Path) -> None:
     for relative in _TEMPLATE_OWNED_PROD_PATHS:
         source = template_dir / relative
@@ -145,15 +91,6 @@ def _restore_template_owned_prod_files(template_dir: Path, build_dir: Path) -> N
 # request. Runtime DSN is resolved from the per-project secrets file (see
 # `_resolve_runtime_dsn`) and overrides this placeholder in the container env.
 _DB_PLACEHOLDER = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
-
-
-def _write_next_build_env(build_dir: Path, project_id: str) -> None:
-    """Provide safe server-only env while Next.js imports routes at build time."""
-    schema = postgres_admin.project_schema_name(UUID(project_id))
-    (build_dir / ".env.production").write_text(
-        f"DATABASE_URL={_DB_PLACEHOLDER}\nOMNIA_DB_SCHEMA={schema}\n",
-        encoding="utf-8",
-    )
 
 
 def _resolve_runtime_dsn(project_id: str) -> str:
@@ -210,9 +147,6 @@ _project_tasks: dict[str, asyncio.Task[None]] = {}
 async def start_deploy(
     project_id: str,
     slug: str | None = None,
-    commit_sha: str | None = None,
-    template: str | None = None,
-    source_files: dict[str, str] | None = None,
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
     idempotency_key: str | None = None,
@@ -225,47 +159,27 @@ async def start_deploy(
     secret}: when set, the built image is deployed to the user's own VPS over
     SSH instead of run locally on our host. None = наш хостинг (текущий путь).
     """
-    exact_snapshot = template is not None and source_files is not None and slug is not None
-    dev_name: str | None = None
-    if not exact_snapshot:
-        dev_name = await docker_client.find_project_container(project_id, kind="dev")
-        if dev_name is None and slug:
-            dev_name = f"omnia-dev-{slug}"
-    if dev_name is None and not exact_snapshot:
+    dev_name = await docker_client.find_project_container(project_id, kind="dev")
+    if dev_name is None and slug:
+        dev_name = f"omnia-dev-{slug}"
+    if dev_name is None:
         raise OrchestratorError(
             code="not_found",
             message="no dev container for this project — provision/start it first",
             status_code=404,
         )
-    resolved_slug = slug or (dev_name.removeprefix("omnia-dev-") if dev_name else "")
+    resolved_slug = slug or dev_name.removeprefix("omnia-dev-")
 
     active = deploy_state.get(project_id)
     if active is not None and deploy_state.is_active(project_id):
-        if commit_sha is not None and active.commit_sha != commit_sha:
-            raise OrchestratorError(
-                code="conflict",
-                message="another revision is already deploying",
-                status_code=409,
-            )
-        # The first task owns this project until the persisted active record
-        # reaches a terminal phase. Replaying the same exact revision must not
-        # start a second build/push/swap coroutine.
         return active
 
-    try:
-        rec = deploy_state.start(
-            project_id,
-            idempotency_key=idempotency_key,
-            commit_sha=commit_sha,
-            target_label=str(target.get("label")) if target and target.get("label") else None,
-            target_id=str(target.get("id")) if target and target.get("id") else None,
-        )
-    except deploy_state.DeployRevisionConflict as exc:
-        raise OrchestratorError(
-            code="conflict",
-            message=str(exc),
-            status_code=409,
-        ) from exc
+    rec = deploy_state.start(
+        project_id,
+        idempotency_key=idempotency_key,
+        target_label=str(target.get("label")) if target and target.get("label") else None,
+        target_id=str(target.get("id")) if target and target.get("id") else None,
+    )
     if rec.phase not in ("building", "queued"):
         return rec
     # Optimistic public URL — deterministic, shown before the build completes.
@@ -277,8 +191,6 @@ async def start_deploy(
             project_id,
             resolved_slug,
             dev_name,
-            template,
-            dict(source_files) if source_files is not None else None,
             target,
             domains,
             rec.run_id,
@@ -357,7 +269,6 @@ async def _deploy_remote(
         "PORT": "3000",
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PROJECT_ID": project_id,
-        "OMNIA_DB_SCHEMA": db_schema or postgres_admin.project_schema_name(UUID(project_id)),
         "OMNIA_PLATFORM_API_URL": os.getenv(
             "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
         ),
@@ -483,9 +394,7 @@ async def _export_project_database(project_id: str) -> tuple[str, str]:
 async def _run(
     project_id: str,
     slug: str,
-    dev_name: str | None,
-    requested_template: str | None = None,
-    source_files: dict[str, str] | None = None,
+    dev_name: str,
     target: dict[str, object] | None = None,
     domains: list[str] | None = None,
     run_id: str = "",
@@ -493,12 +402,7 @@ async def _run(
 ) -> None:
     build_dir = Path(tempfile.mkdtemp(prefix=f"omnia-build-{slug}-"))
     try:
-        log.info(
-            "deploy.start",
-            project_id=project_id,
-            slug=slug,
-            exact_snapshot=source_files is not None,
-        )
+        log.info("deploy.start", project_id=project_id, slug=slug, dev=dev_name)
         deploy_state.update(project_id, phase="building")
         deploy_state.append_log(project_id, "Собираем production-образ")
         await publish_project_event(
@@ -508,10 +412,7 @@ async def _run(
         # 1. Seed the build context from the PROJECT's template (recovered from
         # the dev container's image), falling back to the default. This keeps an
         # entities project on the entities template's Dockerfile.prod/configs.
-        detected_template = (
-            await docker_client.container_image_template(dev_name) if dev_name is not None else None
-        )
-        template = requested_template or detected_template or _DEFAULT_TEMPLATE
+        template = await docker_client.container_image_template(dev_name) or _DEFAULT_TEMPLATE
         log.info("deploy.template", project_id=project_id, template=template)
         stack = get_stack(template)
         is_next_template = _is_next_template(template)
@@ -532,22 +433,10 @@ async def _run(
             ignore=shutil.ignore_patterns("node_modules", ".next", ".git", "__pycache__"),
         )
 
-        # 2. Materialize the exact attested repository tree.  Legacy internal
-        # callers without a snapshot keep the old live-container fallback.
-        if source_files is not None:
-            _materialize_snapshot(build_dir, source_files)
-        else:
-            if dev_name is None:
-                raise OrchestratorError(
-                    code="not_found",
-                    message="deploy source is unavailable",
-                    status_code=404,
-                )
-            await docker_client.unpause_container(dev_name)
-            for rel in _OVERLAY_PATHS:
-                await docker_client.copy_path_from_container(
-                    dev_name, f"/app/{rel}", str(build_dir)
-                )
+        # 2. Overlay the live app files from the dev container.
+        await docker_client.unpause_container(dev_name)
+        for rel in _OVERLAY_PATHS:
+            await docker_client.copy_path_from_container(dev_name, f"/app/{rel}", str(build_dir))
         _restore_template_owned_prod_files(template_dir, build_dir)
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
@@ -557,14 +446,15 @@ async def _run(
                 (build_dir / stale).unlink(missing_ok=True)
             (build_dir / "next.config.ts").write_text(_PROD_NEXT_CONFIG, encoding="utf-8")
 
-        # 2c. Build-time DB env. `next build` imports every route module during
-        # page-data collection: DB-backed templates need a non-empty URL, and
-        # older MAX snapshots call pgSchema with OMNIA_DB_SCHEMA. Pin the real
-        # tenant schema so those immutable snapshots never fall back to the
-        # Drizzle-forbidden public schema. Standalone runtime uses the container
-        # env injected below, so the placeholder URL never serves a request.
+        # 2c. Build-time DATABASE_URL. The template's db module throws at import
+        # if it's unset, and `next build` imports every route module during
+        # page-data collection. `next build` reads .env.production; the
+        # standalone runtime does NOT read .env files (it uses the container env
+        # we inject), so this placeholder never reaches production.
         if is_next_template:
-            _write_next_build_env(build_dir, project_id)
+            (build_dir / ".env.production").write_text(
+                f"DATABASE_URL={_DB_PLACEHOLDER}\n", encoding="utf-8"
+            )
 
         # 2d. Dockerfile.prod has `COPY /app/public ./public`; the template
         # ships no public/ and a generated project may lack one too — ensure it
@@ -619,7 +509,7 @@ async def _run(
 
         # 4. Run the new prod container, replacing any previous one.
         prod_name = f"omnia-app-{slug}"
-        prod_allocator = get_prod_port_allocator()
+        prod_port = await get_prod_port_allocator().acquire(UUID(project_id))
         await docker_client.destroy_container(prod_name)
         # Auth.js v5 envs — same secret as dev so a deploy doesn't log every
         # user out. The dev container's `secrets_root/<id>/auth.secret` is
@@ -633,17 +523,16 @@ async def _run(
         auth_secret = _load_or_create_auth_secret(project_id)
         prod_origin = nginx_writer.prod_url(slug)
 
-        base_spec = docker_client.ContainerSpec(
+        spec = docker_client.ContainerSpec(
             name=prod_name,
             image=tag,
-            port=0,
+            port=prod_port,
             project_id=project_id,
             env={
                 "NODE_ENV": "production",
                 "PORT": "3000",
                 "HOSTNAME": "0.0.0.0",  # standalone server must bind all ifaces
                 "OMNIA_PROJECT_ID": project_id,
-                "OMNIA_DB_SCHEMA": postgres_admin.project_schema_name(UUID(project_id)),
                 "OMNIA_PLATFORM_API_URL": os.getenv(
                     "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
                 ),
@@ -658,29 +547,7 @@ async def _run(
             kind="prod",
             restart_policy_name="unless-stopped",
         )
-        prod_port = 0
-        for attempt in range(5):
-            prod_port = await prod_allocator.acquire(UUID(project_id))
-            spec = replace(base_spec, port=prod_port)
-            try:
-                await docker_client.start_container(spec)
-            except OrchestratorError as exc:
-                await prod_allocator.reject(UUID(project_id), prod_port)
-                if exc.code != "port_conflict" or attempt == 4:
-                    raise
-                await docker_client.destroy_container(prod_name)
-                log.warning(
-                    "deploy.port_conflict_retry",
-                    project_id=project_id,
-                    port=prod_port,
-                    attempt=attempt + 1,
-                )
-                continue
-            except Exception:
-                await prod_allocator.reject(UUID(project_id), prod_port)
-                raise
-            await prod_allocator.confirm(UUID(project_id), prod_port)
-            break
+        await docker_client.start_container(spec)
 
         # 5. Health-poll before swapping traffic.
         if not await _healthy(prod_port):
@@ -742,8 +609,6 @@ async def _run(
             target.clear()
         if runtime_env is not None:
             runtime_env.clear()
-        if source_files is not None:
-            source_files.clear()
         shutil.rmtree(build_dir, ignore_errors=True)
 
 

@@ -8,9 +8,6 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
-import asyncio
-import contextvars
-from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, cast
 from uuid import UUID
 
@@ -21,47 +18,6 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
 
 log = structlog.get_logger(__name__)
-
-_hot_reload_tracker: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
-    "omnia_hot_reload_tracker",
-    default=None,
-)
-_mutation_persistor: contextvars.ContextVar[Callable[[set[str]], Awaitable[None]] | None] = (
-    contextvars.ContextVar("omnia_mutation_persistor", default=None)
-)
-
-
-def bind_hot_reload_tracker(
-    paths: set[str],
-    persist: Callable[[set[str]], Awaitable[None]] | None = None,
-) -> tuple[
-    contextvars.Token[set[str] | None],
-    contextvars.Token[Callable[[set[str]], Awaitable[None]] | None],
-]:
-    return _hot_reload_tracker.set(paths), _mutation_persistor.set(persist)
-
-
-def reset_hot_reload_tracker(
-    tokens: tuple[
-        contextvars.Token[set[str] | None],
-        contextvars.Token[Callable[[set[str]], Awaitable[None]] | None],
-    ],
-) -> None:
-    tracker_token, persistor_token = tokens
-    _hot_reload_tracker.reset(tracker_token)
-    _mutation_persistor.reset(persistor_token)
-
-
-async def track_mutation_paths(paths: Iterable[str]) -> None:
-    """Record potential live-tree mutations before the orchestrator request starts."""
-
-    tracker = _hot_reload_tracker.get()
-    if tracker is None:
-        return
-    tracker.update(path for path in paths if path)
-    persist = _mutation_persistor.get()
-    if persist is not None:
-        await persist(set(tracker))
 
 
 class OrchestratorUnavailable(ApiError):
@@ -186,27 +142,9 @@ async def get_status(project_id: UUID) -> dict[str, Any]:
     return await _request("GET", f"/internal/projects/{project_id}/status")
 
 
-async def heartbeat(project_id: UUID) -> dict[str, Any]:
-    """Keep an actively viewed development preview out of idle hibernation."""
-    return await _request("POST", f"/internal/projects/{project_id}/heartbeat")
-
-
 async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
     """POST a short-lived, signed bootstrap session for a MAX preview."""
     return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")
-
-
-async def validate_max_preview_capability(project_id: UUID, token: str) -> bool:
-    """Validate a server-only MAX development-preview capability."""
-    try:
-        payload = await _request(
-            "POST",
-            f"/internal/projects/{project_id}/max-preview-capability/validate",
-            json={"token": token},
-        )
-    except OrchestratorBadRequest:
-        return False
-    return payload.get("valid") is True and payload.get("project_id") == str(project_id)
 
 
 async def wake(project_id: UUID) -> dict[str, Any]:
@@ -269,9 +207,6 @@ async def deploy(
     project_id: UUID,
     *,
     commit_sha: str | None = None,
-    slug: str | None = None,
-    template: str | None = None,
-    source_files: dict[str, str] | None = None,
     target: dict[str, Any] | None = None,
     domains: list[str] | None = None,
     runtime_env: dict[str, str] | None = None,
@@ -287,12 +222,6 @@ async def deploy(
     payload: dict[str, Any] = {"project_id": str(project_id)}
     if commit_sha:
         payload["commit_sha"] = commit_sha
-    if slug:
-        payload["slug"] = slug
-    if template:
-        payload["template"] = template
-    if source_files is not None:
-        payload["source_files"] = source_files
     if target:
         payload["target"] = target
     if domains:
@@ -368,7 +297,7 @@ async def get_deploy(project_id: UUID) -> dict[str, Any]:
     """GET /internal/projects/<uuid>/deploy — last-known deploy record.
 
     Returns the orchestrator's `DeployResponse` shape:
-    `{project_id, commit_sha, phase, prod_url, image_tag, started_at, finished_at, error}`.
+    `{project_id, phase, prod_url, image_tag, started_at, finished_at, error}`.
     `phase` is one of `queued | building | swapping | done | failed`. For a
     project that has never been deployed the orchestrator returns
     `phase=queued` with no prod_url.
@@ -500,26 +429,6 @@ async def agent_list_dir(project_id: UUID, slug: str, path: str = ".") -> str:
     return detail if isinstance(detail, str) else ""
 
 
-async def agent_list_source_files(project_id: UUID, slug: str) -> list[str]:
-    """List mutable source paths for an exact post-provision reconciliation."""
-
-    resp = await _request(
-        "GET",
-        f"/internal/projects/{project_id}/agent/list-source-files",
-        params={"slug": slug},
-        timeout=60.0,
-    )
-    if not resp.get("ok"):
-        raise OrchestratorUnavailable("Orchestrator could not enumerate runtime source files")
-    raw = resp.get("files")
-    if not isinstance(raw, list):
-        raise OrchestratorUnavailable("Orchestrator returned an invalid source file list")
-    files = [path for path in raw if isinstance(path, str) and path and len(path) <= 500]
-    if len(files) != len(raw) or len(files) > 10_000:
-        raise OrchestratorUnavailable("Orchestrator returned an unsafe source file list")
-    return files
-
-
 async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "src") -> str:
     """Recursive text search under /app; returns matches (or '(no matches)')."""
     resp = await _request(
@@ -531,38 +440,13 @@ async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "
     return detail if isinstance(detail, str) else ""
 
 
-async def agent_build(
-    project_id: UUID,
-    slug: str,
-    *,
-    code_intelligence: bool = False,
-    security_scan: bool = False,
-    dependency_doctor: bool = True,
-) -> dict[str, Any]:
-    """Run typecheck and, when canaried, bounded read-only code intelligence."""
-    # Dependency doctor may update these files before typecheck. Persist the
-    # paths before dispatch and make the bounded mutation non-interruptible so
-    # cancellation cleanup never races a still-running worker thread.
-    if dependency_doctor:
-        await track_mutation_paths(("package.json", "pnpm-lock.yaml"))
-    request_task = asyncio.create_task(
-        _request(
-            "POST",
-            f"/internal/projects/{project_id}/agent/build",
-            params={
-                "slug": slug,
-                **({"code_intelligence": "true"} if code_intelligence else {}),
-                **({"security_scan": "true"} if security_scan else {}),
-                **({"dependency_doctor": "false"} if not dependency_doctor else {}),
-            },
-            timeout=240.0,
-        )
+async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
+    """Run the container typecheck; returns {ok: bool, detail/error: str}."""
+    return await _request(
+        "POST",
+        f"/internal/projects/{project_id}/agent/build",
+        params={"slug": slug},
     )
-    try:
-        return await asyncio.shield(request_task)
-    except asyncio.CancelledError:
-        await request_task
-        raise
 
 
 async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
@@ -594,113 +478,11 @@ async def hot_reload(project_id: UUID, slug: str, files: dict[str, str]) -> dict
     lookup is `omnia-dev-<slug>` (no project_id ↔ container_name registry
     yet, PoC). apps/api always has the slug at hand from its own Project row.
     """
-    await track_mutation_paths(files)
-    request_task = asyncio.create_task(
-        _request(
-            "POST",
-            "/internal/projects/hot-reload",
-            json={"project_id": str(project_id), "files": files},
-            params={"slug": slug},
-            timeout=120.0,
-        )
-    )
-    try:
-        return await asyncio.shield(request_task)
-    except asyncio.CancelledError:
-        # Once the internal request has started, the container may already be
-        # mutating. Wait for its bounded outcome before the generation slot is
-        # released; the caller's cancellation is re-raised afterwards.
-        await request_task
-        raise
-
-
-def require_exact_hot_reload(result: dict[str, Any], files: dict[str, str]) -> None:
-    """Fail closed unless every requested write/delete reached the container."""
-    expected_written = sum(content != "" for content in files.values())
-    expected_deleted = sum(content == "" for content in files.values())
-    try:
-        written = int(result.get("written", -1))
-        deleted = int(result.get("deleted", -1))
-    except (TypeError, ValueError) as exc:
-        raise OrchestratorUnavailable("Orchestrator returned invalid hot-reload counters") from exc
-    dropped = result.get("dropped")
-    if isinstance(dropped, list):
-        dropped_any = bool(dropped)
-    else:
-        dropped_any = bool(str(dropped or "").strip())
-    if dropped_any or written != expected_written or deleted != expected_deleted:
-        raise OrchestratorUnavailable(
-            "Orchestrator did not apply the complete hot-reload tree",
-            details={
-                "expected_written": expected_written,
-                "written": written,
-                "expected_deleted": expected_deleted,
-                "deleted": deleted,
-                "dropped": dropped_any,
-            },
-        )
-
-
-async def hot_reload_exact(
-    project_id: UUID,
-    slug: str,
-    files: dict[str, str],
-) -> dict[str, Any]:
-    result = await hot_reload(project_id, slug, files)
-    require_exact_hot_reload(result, files)
-    return result
-
-
-async def start_history_preview(
-    project_id: UUID, snapshot_id: UUID, files: dict[str, str]
-) -> dict[str, Any]:
-    """Start a private renderer populated from one exact git snapshot."""
     return await _request(
         "POST",
-        "/internal/projects/history-preview",
-        json={
-            "project_id": str(project_id),
-            "snapshot_id": str(snapshot_id),
-            "files": files,
-        },
-        timeout=60.0,
-    )
-
-
-async def stop_history_preview(project_id: UUID, snapshot_id: UUID) -> None:
-    """Best-effort cleanup counterpart for ``start_history_preview``."""
-    await _request(
-        "DELETE",
-        f"/internal/projects/history-preview/{project_id}/{snapshot_id}",
-        timeout=30.0,
-    )
-
-
-async def start_history_preview_session(
-    project_id: UUID, snapshot_id: UUID, files: dict[str, str]
-) -> dict[str, Any]:
-    """Start one isolated interactive sandbox for a historical snapshot."""
-    return await _request(
-        "POST",
-        "/internal/projects/history-preview/session",
-        json={
-            "project_id": str(project_id),
-            "snapshot_id": str(snapshot_id),
-            "files": files,
-        },
-        timeout=420.0,
-    )
-
-
-async def stop_history_preview_session(
-    project_id: UUID, snapshot_id: UUID, session_id: UUID
-) -> None:
-    """Close exactly one historical sandbox generation."""
-    await _request(
-        "DELETE",
-        f"/internal/projects/history-preview/session/{project_id}/{snapshot_id}",
-        params={"session_id": str(session_id)},
-        timeout=30.0,
+        "/internal/projects/hot-reload",
+        json={"project_id": str(project_id), "files": files},
+        params={"slug": slug},
     )
 
 

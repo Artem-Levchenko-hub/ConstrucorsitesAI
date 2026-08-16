@@ -17,7 +17,6 @@ from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.schemas.max_integration import MaxConnectRequest, MaxIntegrationPublic
 from omnia_api.services import max_client, orchestrator_client
-from omnia_api.services.max_access import require_max_business
 
 router = APIRouter(prefix="/api/projects", tags=["max-integrations"])
 
@@ -99,7 +98,6 @@ async def connect_max(
 ) -> MaxIntegrationPublic:
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
-    await require_max_business(session, current_user)
     token = payload.token.strip()
     try:
         bot = await max_client.get_me(token)
@@ -148,7 +146,6 @@ async def verify_max(
 ) -> MaxIntegrationPublic:
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
-    await require_max_business(session, current_user)
     integration = await _integration(session, project_id)
     if integration is None:
         raise ApiError(
@@ -180,7 +177,6 @@ async def activate_max(
 ) -> MaxIntegrationPublic:
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
-    await require_max_business(session, current_user)
     integration = await _integration(session, project_id)
     if integration is None:
         raise ApiError(

@@ -1,6 +1,5 @@
 "use client";
 
-import { useRef, type RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { deleteProject } from "@/lib/api/projects";
@@ -28,28 +27,19 @@ export function DeleteProjectDialog({
   project,
   open,
   onOpenChange,
-  returnFocusRef,
-  successFocusRef,
 }: {
   project: Project;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  returnFocusRef?: RefObject<HTMLButtonElement | null>;
-  successFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const qc = useQueryClient();
-  const deletedRef = useRef(false);
 
   const mutation = useMutation({
     mutationFn: () => deleteProject(project.id),
     onSuccess: () => {
-      deletedRef.current = true;
-      qc.setQueryData<Project[]>(["projects"], (current) =>
-        current?.filter((item) => item.id !== project.id),
-      );
       toast.success(`Проект «${project.name}» удалён`);
+      qc.invalidateQueries({ queryKey: ["projects"] });
       onOpenChange(false);
-      void qc.invalidateQueries({ queryKey: ["projects"], exact: true });
     },
     onError: () => {
       toast.error("Не удалось удалить проект. Попробуйте ещё раз.");
@@ -60,27 +50,16 @@ export function DeleteProjectDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (next) deletedRef.current = false;
         if (!mutation.isPending) onOpenChange(next);
       }}
     >
-      <DialogContent
-        data-light-shell
-        className="border-border-default bg-surface-raised text-fg-primary"
-        onCloseAutoFocus={(event) => {
-          const targetRef = deletedRef.current ? successFocusRef : returnFocusRef;
-          if (!targetRef) return;
-          event.preventDefault();
-          requestAnimationFrame(() => {
-            if (targetRef.current?.isConnected) targetRef.current.focus();
-          });
-        }}
-      >
+      <DialogContent>
         <DialogHeader>
           <DialogTitle>Удалить проект?</DialogTitle>
           <DialogDescription>
-            Проект «{project.name}» исчезнет из Studio. Мы отключим его связь с
-            MAX, рабочее окружение и удалим файлы проекта. Действие нельзя отменить.
+            Это безвозвратно удалит проект «{project.name}», все его снапшоты,
+            файлы и — для приложений — рабочий контейнер с данными. Действие
+            нельзя отменить.
           </DialogDescription>
         </DialogHeader>
 
@@ -90,8 +69,6 @@ export function DeleteProjectDialog({
             variant="ghost"
             onClick={() => onOpenChange(false)}
             disabled={mutation.isPending}
-            className="min-h-11"
-            autoFocus
           >
             Отмена
           </Button>
@@ -100,7 +77,7 @@ export function DeleteProjectDialog({
             variant="danger"
             onClick={() => mutation.mutate()}
             disabled={mutation.isPending}
-            className="min-h-11"
+            autoFocus
           >
             {mutation.isPending ? "Удаление…" : "Удалить навсегда"}
           </Button>

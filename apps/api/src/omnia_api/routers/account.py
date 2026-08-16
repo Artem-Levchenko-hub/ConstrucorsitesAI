@@ -155,7 +155,6 @@ async def export_account_data(
             {
                 "id": str(subscription.id),
                 "status": subscription.status,
-                "is_lifetime": subscription.is_lifetime,
                 "plan": {
                     "code": plan.code,
                     "version": plan.version,
@@ -213,16 +212,12 @@ async def export_account_data(
     }
 
 
-@router.delete(
-    "",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-)
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def request_account_deletion(
     response: Response,
     current_user: CurrentUserDep,
     session: SessionDep,
-) -> Response:
+) -> None:
     now = datetime.now(UTC)
     current_user.status = "deletion_pending"
     current_user.deletion_requested_at = now
@@ -255,5 +250,3 @@ async def request_account_deletion(
         path="/",
         domain=settings.jwt_cookie_domain,
     )
-    response.status_code = status.HTTP_204_NO_CONTENT
-    return response

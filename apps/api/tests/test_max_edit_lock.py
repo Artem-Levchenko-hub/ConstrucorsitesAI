@@ -19,19 +19,15 @@ def test_text_edit_prompt_preserves_max_platform() -> None:
     assert "серверную проверку initData" in system
 
 
-def test_agent_edit_prompt_includes_headless_max_boundary() -> None:
+def test_agent_edit_prompt_includes_max_template_contract() -> None:
     guide = agent_builder.load_stack_system_prompt("max-miniapp-nextjs")
     assert guide is not None
 
     system = agent_builder.build_edit_system_prompt(guide)
 
     assert "STACK-SPECIFIC CONTRACT" in system
-    assert "MAX headless platform adapter" in system
-    assert "Do not edit the locked root page/layout" in system
-    assert "Do not add a MAX visual shell" in system
-    assert "Never import `@maxhub/max-ui`" in system
-    assert "fresh product" in system
-    assert "Demo/local data is allowed" in system
+    assert "Use `window.WebApp` only" in system
+    assert "Do not add Telegram WebApp" in system
 
 
 def test_generic_agent_edit_prompt_is_unchanged_without_stack_guide() -> None:

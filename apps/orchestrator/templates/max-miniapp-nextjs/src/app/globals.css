@@ -1,33 +1,17 @@
 @import "tailwindcss";
 
-/* Neutral runtime baseline. Product generation replaces this visual system. */
 :root {
-  color-scheme: light dark;
-  background: Canvas;
-  color: CanvasText;
+  color-scheme: light;
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 html,
 body {
-  width: 100%;
-  min-width: 0;
   min-height: 100%;
   margin: 0;
-  overflow-x: clip;
-}
-
-body,
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
-
-[data-max-product-canvas="empty"] {
-  min-height: 100dvh;
 }

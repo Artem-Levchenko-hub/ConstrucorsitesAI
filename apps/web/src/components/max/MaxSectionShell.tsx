@@ -11,7 +11,6 @@ import {
   MaxProjectNav,
   type MaxProjectNavKey,
 } from "@/components/max/MaxProjectNav";
-import { MaxJourneyGuide } from "@/components/max/MaxJourneyGuide";
 
 const helpHref: Record<MaxProjectNavKey, string> = {
   editor: "/max/guide#builder",
@@ -73,8 +72,8 @@ export function MaxSectionShell({
           <div className="mx-auto max-w-[1120px]">
             <header className="border-b border-[#d8d4cb] pb-8">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="omnia-kicker text-accent">{eyebrow}</p>
-                <Link href={helpHref[active]} className="inline-flex min-h-11 items-center gap-2 text-xs font-medium text-[#6d6962] hover:text-accent">
+                <p className="omnia-kicker text-[#f15a38]">{eyebrow}</p>
+                <Link href={helpHref[active]} className="inline-flex min-h-11 items-center gap-2 text-xs font-medium text-[#6d6962] hover:text-[#c84528]">
                   <CircleHelp className="size-3.5" />
                   Помощь по этому шагу
                 </Link>
@@ -82,7 +81,6 @@ export function MaxSectionShell({
               <h1 className="mt-3 text-[32px] font-semibold tracking-[-.045em] sm:text-[46px]">{title}</h1>
               <p className="mt-3 max-w-[700px] text-sm leading-6 text-[#6d6962]">{lead}</p>
             </header>
-            <MaxJourneyGuide projectId={projectId} />
             {children}
           </div>
         </main>

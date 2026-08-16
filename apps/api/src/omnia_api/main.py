@@ -1,7 +1,6 @@
-import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -47,7 +46,6 @@ from omnia_api.routers import uploads as uploads_router
 from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
 from omnia_api.services import readiness
-from omnia_api.services.generation_continuity import run_watchdog_forever
 from omnia_api.services.generation_runs import recover_interrupted_generation_runs
 from omnia_api.services.ws_hub import hub
 
@@ -60,17 +58,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     recovered = await recover_interrupted_generation_runs()
     if recovered:
         logger.warning(
-            "reconciled interrupted generation runs after API restart",
+            "finalised interrupted generation runs after API restart",
             extra={"generation_run_count": recovered},
         )
-    continuity_watchdog = asyncio.create_task(run_watchdog_forever())
     await hub.start_listener()
     try:
         yield
     finally:
-        continuity_watchdog.cancel()
-        with suppress(asyncio.CancelledError):
-            await continuity_watchdog
         await hub.stop_listener()
         await dispose_redis()
         await dispose_engine()

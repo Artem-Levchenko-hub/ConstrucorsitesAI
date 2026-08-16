@@ -58,6 +58,7 @@ async function integration<T>(
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
+  if (!initData) throw new Error("Откройте приложение внутри MAX");
   const response = await post(`/api/omnia/integrations/${path}`, {
     initData,
     payload,

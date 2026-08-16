@@ -145,7 +145,7 @@ export function AccountControlCenter({
 
   return (
     <div className="space-y-6">
-      {(view === "all" || view === "organization") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
+      {(view === "all" || view === "organization") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <Building2 className="size-5" />
@@ -178,20 +178,18 @@ export function AccountControlCenter({
       </section>}
 
       {(view === "all" || view === "plan") && (
-        <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
+        <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
           <div className="flex items-start gap-4">
             <div className="rounded-xl bg-accent/10 p-3 text-accent">
               <CreditCard className="size-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="omnia-kicker text-accent">Текущий тариф</p>
+              <p className="omnia-kicker text-[#f15a38]">Текущий тариф</p>
               <h2 className="mt-2 text-2xl font-semibold">
                 {subscription.data?.plan.name ?? "Загрузка…"}
               </h2>
               <p className="mt-1 text-sm text-fg-tertiary">
-                {subscription.data?.is_lifetime
-                  ? "Максимальные возможности закреплены за аккаунтом навсегда"
-                  : subscription.data?.current_period_end
+                {subscription.data?.current_period_end
                   ? `Оплачен до ${new Date(
                       subscription.data.current_period_end,
                     ).toLocaleDateString("ru-RU")}`
@@ -200,9 +198,7 @@ export function AccountControlCenter({
             </div>
             {subscription.data && (
               <span className="rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-success">
-                {subscription.data.is_lifetime
-                  ? "Пожизненно"
-                  : subscription.data.cancel_at_period_end
+                {subscription.data.cancel_at_period_end
                   ? "Отменится в конце периода"
                   : subscription.data.auto_renew
                     ? "Продлевается"
@@ -254,25 +250,21 @@ export function AccountControlCenter({
             </div>
           )}
 
-          {!subscription.data?.is_lifetime && (
-            <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-border-default bg-surface p-4 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5 size-4 accent-accent"
-                checked={autoRenewConsent}
-                onChange={(event) => setAutoRenewConsent(event.target.checked)}
-              />
-              <span>
-                <span className="block font-medium">
-                  Включить автопродление при покупке
-                </span>
-                <span className="mt-1 block text-xs leading-5 text-fg-tertiary">
-                  Разрешаю ежемесячное списание стоимости тарифа с сохранённого
-                  способа оплаты. Согласие можно отозвать здесь в любой момент.
-                </span>
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-[10px] border border-[#d8d4cb] bg-white p-4 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-[#f15a38]"
+              checked={autoRenewConsent}
+              onChange={(event) => setAutoRenewConsent(event.target.checked)}
+            />
+            <span>
+              <span className="block font-medium">Включить автопродление при покупке</span>
+              <span className="mt-1 block text-xs leading-5 text-fg-tertiary">
+                Разрешаю ежемесячное списание стоимости тарифа с сохранённого
+                способа оплаты. Согласие можно отозвать здесь в любой момент.
               </span>
-            </label>
-          )}
+            </span>
+          </label>
 
           <div className="mt-6 grid gap-3 lg:grid-cols-3">
             {(plans.data ?? []).map((plan) => {
@@ -283,8 +275,8 @@ export function AccountControlCenter({
                   key={plan.id}
                   className={`rounded-[12px] border p-5 ${
                     isCurrent
-                      ? "border-accent bg-accent/[.06]"
-                      : "border-border-default bg-surface"
+                      ? "border-[#f15a38] bg-[#fff8f5]"
+                      : "border-[#d8d4cb] bg-white"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -325,7 +317,6 @@ export function AccountControlCenter({
                       variant={isCurrent ? "outline" : "primary"}
                       disabled={
                         isCurrent ||
-                        subscription.data?.is_lifetime ||
                         !paymentConfig.data?.enabled ||
                         subscribe.isPending
                       }
@@ -341,11 +332,11 @@ export function AccountControlCenter({
             })}
           </div>
           <p className="mt-4 text-xs leading-5 text-fg-tertiary">
-            {subscription.data?.is_lifetime
-              ? "Пожизненный тариф не требует оплаты, продления или управления способом оплаты."
-              : "Первая покупка активирует тариф на месяц и начисляет включённый кредит только после подтверждения ЮKassa. Автопродление не включается без отдельного согласия."}
+            Первая покупка активирует тариф на месяц и начисляет включённый
+            кредит только после подтверждения ЮKassa. Автопродление не включается
+            без отдельного согласия.
           </p>
-          {!subscription.data?.is_lifetime && !paymentConfig.data?.enabled && (
+          {!paymentConfig.data?.enabled && (
             <p className="mt-4 rounded-xl bg-warning/10 px-4 py-3 text-sm text-warning">
               {paymentConfig.data?.reason ?? "Платёжный контур пока недоступен"}
             </p>
@@ -353,7 +344,7 @@ export function AccountControlCenter({
         </section>
       )}
 
-      {(view === "all" || view === "billing" || view === "transactions" || view === "plan") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
+      {(view === "all" || view === "billing" || view === "transactions" || view === "plan") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <ReceiptRussianRuble className="size-5" />
@@ -372,7 +363,7 @@ export function AccountControlCenter({
               type="button"
               disabled={!paymentConfig.data?.enabled || pay.isPending}
               onClick={() => pay.mutate(item.code)}
-              className="rounded-[10px] border border-border-default bg-surface p-4 text-left transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-45"
+              className="rounded-[10px] border border-[#d8d4cb] bg-white p-4 text-left transition hover:border-[#f15a38] disabled:cursor-not-allowed disabled:opacity-45"
             >
               <span className="block text-sm font-medium">{item.title}</span>
               <span className="mt-2 block text-lg font-semibold">
@@ -412,7 +403,7 @@ export function AccountControlCenter({
         )}
       </section>}
 
-      {(view === "all" || view === "security") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
+      {(view === "all" || view === "security") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="flex items-start gap-4">
           <div className="rounded-xl bg-accent/10 p-3 text-accent">
             <Shield className="size-5" />
@@ -454,19 +445,19 @@ export function AccountControlCenter({
         </div>
       </section>}
 
-      {(view === "all" || view === "profile") && <section className="rounded-[12px] border border-border-default bg-surface-raised p-6">
+      {(view === "all" || view === "profile") && <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
         <div className="mb-6 grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-2 block text-xs font-medium text-fg-secondary" htmlFor="account-email">Рабочий email</label>
-            <Input id="account-email" value={email} readOnly className="border-border-default bg-surface-base" />
+            <label className="mb-2 block text-xs font-medium text-[#6d6962]" htmlFor="account-email">Рабочий email</label>
+            <Input id="account-email" value={email} readOnly className="border-[#d8d4cb] bg-[#f5f3ee]" />
           </div>
           <div>
-            <label className="mb-2 block text-xs font-medium text-fg-secondary" htmlFor="account-role">Роль</label>
-            <Input id="account-role" value="Владелец бизнеса" readOnly className="border-border-default bg-surface-base" />
+            <label className="mb-2 block text-xs font-medium text-[#6d6962]" htmlFor="account-role">Роль</label>
+            <Input id="account-role" value="Владелец бизнеса" readOnly className="border-[#d8d4cb] bg-[#f5f3ee]" />
           </div>
         </div>
         <h2 className="font-medium">Данные аккаунта</h2>
-        <p className="mt-1 text-sm text-fg-secondary">
+        <p className="mt-1 text-sm text-fg-tertiary">
           Скачайте машиночитаемую копию профиля, согласий, проектов и операций.
         </p>
         <Button variant="outline" className="mt-4" onClick={downloadData}>
@@ -476,7 +467,7 @@ export function AccountControlCenter({
 
         <div className="mt-6 border-t border-danger/20 pt-6">
           <h3 className="text-sm font-medium text-danger">Удаление аккаунта</h3>
-          <p className="mt-1 text-xs leading-5 text-fg-secondary">
+          <p className="mt-1 text-xs leading-5 text-fg-tertiary">
             Доступ и секреты отзываются сразу. Операционные данные удаляются после
             30-дневного защитного периода; обязательные платёжные документы
             сохраняются установленный законом срок.

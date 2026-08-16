@@ -43,24 +43,13 @@ class BusinessReviewPublic(BusinessProfilePublic):
     owner_email: str
 
 
-class MaxDemoEntitlementPublic(BaseModel):
-    limit: int
-    used: int
-    remaining: int
-    available: bool
-    upgrade_path: str = "/billing/plan"
-
-
 class MaxAccessPublic(BaseModel):
     authenticated: bool = True
     email_verified: bool
     email_delivery_configured: bool
     business: BusinessProfilePublic | None = None
     can_create_project: bool
-    can_launch: bool
     reason: str | None = None
-    launch_reason: str | None = None
-    demo: MaxDemoEntitlementPublic
     legal_document_version: str
     payments_configured: bool
 

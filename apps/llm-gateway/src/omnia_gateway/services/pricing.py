@@ -20,35 +20,13 @@ from omnia_gateway.core.errors import ModelNotFoundError
 class ModelPrice:
     rub_per_1k_in: Decimal
     rub_per_1k_out: Decimal
-    provider_usd_per_1m_in_short: Decimal
-    provider_usd_per_1m_out_short: Decimal
-    provider_usd_per_1m_in_long: Decimal
-    provider_usd_per_1m_out_long: Decimal
-    provider_long_context_threshold: int
 
 
 PRICE_TABLE: Mapping[str, ModelPrice] = {
-    "gemini-3.1-pro-preview-customtools": ModelPrice(
-        Decimal("1.50"),
-        Decimal("7.50"),
-        Decimal("2"),
-        Decimal("12"),
-        Decimal("4"),
-        Decimal("18"),
-        200_000,
-    ),
-    # LLMGW catalog price on 2026-08-03: ₽323/₽1615 per 1M input/output.
-    # Provider reservation deliberately uses Sonnet 5's post-introductory
-    # $3/$15 rates, so the financial fuse stays conservative after 2026-08-31.
-    "claude-sonnet-5": ModelPrice(
-        Decimal("0.323"),
-        Decimal("1.615"),
-        Decimal("3"),
-        Decimal("15"),
-        Decimal("3"),
-        Decimal("15"),
-        1_000_000,
-    ),
+    # Gemini 3.1 Pro Preview Custom Tools drives every orchestration role. Image generation
+    # (routers/images.py), video, and whisper
+    # transcription (routers/audio.py) bill via their own paths, not this table.
+    "gemini-3.1-pro-preview-customtools": ModelPrice(Decimal("1.50"), Decimal("7.50")),
 }
 
 _PER_1K = Decimal("1000")
@@ -63,11 +41,6 @@ _QUANT = Decimal("0.0001")  # 4 decimals — matches NUMERIC(12,4) in Postgres
 # so every existing caller is byte-for-byte unchanged.
 _CACHE_HIT_RATE = Decimal("0.1")
 _CACHE_WRITE_RATE = Decimal("1.25")
-_PROVIDER_USD_QUANT = Decimal("0.00000001")
-# Covers JSON/provider framing, hidden safety text, broker markup and pricing
-# drift. Input framing is added before selecting the higher >200K price tier.
-PROVIDER_INPUT_OVERHEAD_TOKENS = 32_000
-_PROVIDER_PRICE_HEADROOM = Decimal("2")
 
 
 def calculate_cost_rub(
@@ -104,38 +77,6 @@ def calculate_cost_rub(
     return cost.quantize(_QUANT)
 
 
-def calculate_provider_cost_usd_upper_bound(
-    model_id: str,
-    tokens_in_ceiling: int,
-    tokens_out_ceiling: int,
-) -> Decimal:
-    """Conservative pre-call provider-cost envelope for a text request.
-
-    ``tokens_in_ceiling`` is already a UTF-8 byte ceiling supplied by the
-    adapter. Add explicit provider framing, use the published high-context tier
-    whenever that enlarged prompt crosses 200K, reserve the complete output
-    allowance, then double the result for broker markup and pricing drift.
-    """
-    if tokens_in_ceiling < 0 or tokens_out_ceiling < 0:
-        raise ValueError("token ceilings must be non-negative")
-    try:
-        price = PRICE_TABLE[model_id]
-    except KeyError as exc:
-        raise ModelNotFoundError(f"Unknown model_id: {model_id}") from exc
-    framed_input = tokens_in_ceiling + PROVIDER_INPUT_OVERHEAD_TOKENS
-    if framed_input > price.provider_long_context_threshold:
-        input_rate = price.provider_usd_per_1m_in_long
-        output_rate = price.provider_usd_per_1m_out_long
-    else:
-        input_rate = price.provider_usd_per_1m_in_short
-        output_rate = price.provider_usd_per_1m_out_short
-    cost = (
-        Decimal(framed_input) * input_rate
-        + Decimal(tokens_out_ceiling) * output_rate
-    ) / Decimal("1000000")
-    return (cost * _PROVIDER_PRICE_HEADROOM).quantize(_PROVIDER_USD_QUANT)
-
-
 @dataclass(frozen=True, slots=True)
 class _ModelMeta:
     display_name: str
@@ -150,12 +91,6 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
         "google",
         1_048_576,
         ("agentic", "coding", "multimodal"),
-    ),
-    "claude-sonnet-5": _ModelMeta(
-        "Claude Sonnet 5",
-        "anthropic",
-        1_000_000,
-        ("agentic", "coding", "tool-use", "multimodal"),
     ),
 }
 

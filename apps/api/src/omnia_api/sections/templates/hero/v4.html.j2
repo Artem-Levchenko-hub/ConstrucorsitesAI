@@ -1,5 +1,5 @@
-<section id="{{ anchor_id }}" class="relative grid lg:grid-cols-2 min-h-[88vh] overflow-hidden" data-omnia-depth="media">
-  <div data-depth-layer="1" class="reveal {% if s.panel_side == 'right' %}lg:order-2 reveal--right{% else %}reveal--left{% endif %} flex items-center bg-{{ theme.neutral }}-50">
+<section id="{{ anchor_id }}" class="relative grid lg:grid-cols-2 min-h-[88vh] overflow-hidden">
+  <div class="reveal {% if s.panel_side == 'right' %}lg:order-2 reveal--right{% else %}reveal--left{% endif %} flex items-center bg-{{ theme.neutral }}-50">
     <div class="w-full max-w-xl mx-auto px-6 py-20 lg:px-16">
       {% if s.eyebrow %}
       <div class="inline-flex items-center gap-2 rounded-full bg-{{ theme.neutral }}-100 text-{{ theme.neutral }}-700 px-4 py-1.5 text-sm font-medium mb-6">
@@ -25,7 +25,7 @@
       </div>
     </div>
   </div>
-  <div data-depth-layer="2" class="relative {% if s.panel_side == 'right' %}lg:order-1{% endif %} min-h-[42vh] lg:min-h-0 overflow-hidden">
+  <div class="relative {% if s.panel_side == 'right' %}lg:order-1{% endif %} min-h-[42vh] lg:min-h-0 overflow-hidden">
     {% if s.image_url %}
     <img src="{{ s.image_url }}" alt="{{ s.image_alt or s.headline }}" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
     {% else %}

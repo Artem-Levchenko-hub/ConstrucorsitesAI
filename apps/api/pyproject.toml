@@ -28,9 +28,6 @@ dependencies = [
     "email-validator>=2.2,<3.0",
     "structlog>=24.1,<25.0",
     "httpx>=0.27,<1.0",
-    # Official MCP Python SDK. Exact pin: v2 is the current stable protocol line
-    # and its public client API is the boundary used by services/mcp_broker.py.
-    "mcp==2.0.0",
     "slowapi>=0.1.9,<1.0",
     "python-slugify>=8.0,<9.0",
     "jinja2>=3.1,<4.0",

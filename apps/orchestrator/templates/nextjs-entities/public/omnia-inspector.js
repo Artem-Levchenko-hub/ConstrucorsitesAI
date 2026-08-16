@@ -3,8 +3,8 @@
  *
  * Lives INSIDE the previewed page. The workspace shell (parent window) talks to
  * it via postMessage; on demand it lets the user hover-highlight and click-pick
- * elements, then reports one pick and immediately releases click interception so
- * the generated app stays interactive. The model edits the HTML *source*, not the live DOM, so we send the
+ * elements, then reports each pick back so the chat can attach it as a commentable
+ * chip. The model edits the HTML *source*, not the live DOM, so we send the
  * element's outerHTML + visible text (more useful for locating it than a CSS
  * selector alone) alongside a best-effort selector.
  *
@@ -64,10 +64,6 @@
   // Save the backend merges these edits into the committed block, and a reload
   // collapses both into one — same look (parity).
   var styleMode = false;
-  var editorMode = "off";
-  var editorSession = "";
-  var editorModeSeq = -1;
-  var retiredEditorSessions = {};
   var hoverLabel = null;
   var hoverLabelText = null;
   var overrideModel = { tokens: {}, elements: {}, fonts: {} };
@@ -571,11 +567,6 @@
         },
       },
     });
-    // Picking is single-shot. Release capture listeners synchronously inside
-    // the iframe as well as notifying the parent, so the very next interaction
-    // reaches the generated app even across a delayed postMessage round-trip.
-    // `disable()` deliberately keeps the selected outline in place.
-    setEditorMode("off");
   }
 
   function blockEarlyInteraction(e) {
@@ -603,8 +594,6 @@
     document.documentElement.style.cursor = "crosshair";
     document.addEventListener("mousemove", onMouseMove, true);
     document.addEventListener("pointerdown", blockEarlyInteraction, true);
-    document.addEventListener("click", recordClickBreadcrumb, true);
-    document.addEventListener("change", recordChangeBreadcrumb, true);
     // Capture phase so we intercept before the site's own click handlers.
     document.addEventListener("click", onClick, true);
     window.addEventListener("scroll", refreshHover, true);
@@ -618,8 +607,6 @@
     document.documentElement.style.cursor = "";
     document.removeEventListener("mousemove", onMouseMove, true);
     document.removeEventListener("pointerdown", blockEarlyInteraction, true);
-    document.removeEventListener("click", recordClickBreadcrumb, true);
-    document.removeEventListener("change", recordChangeBreadcrumb, true);
     document.removeEventListener("click", onClick, true);
     window.removeEventListener("scroll", refreshHover, true);
     window.removeEventListener("resize", refreshHover, true);
@@ -634,67 +621,12 @@
 
   // Atomic mode transition used by the workspace shell. A single command avoids
   // the old inspect-enable/style-disable race when switching Manual → AI.
-  function postEditorState() {
-    var state = { type: "omnia:editor:state", mode: editorMode };
-    if (editorSession && editorModeSeq >= 0) {
-      state.editorSession = editorSession;
-      state.seq = editorModeSeq;
-    }
-    post(state);
-  }
-
   function setEditorMode(mode) {
     if (mode !== "inspect" && mode !== "style") mode = "off";
-    editorMode = mode;
     styleMode = mode === "style";
     if (mode === "off") disable();
     else enable();
-    postEditorState();
-  }
-
-  function setSequencedEditorMode(d) {
-    var hasEnvelope =
-      typeof d.editorSession === "string" &&
-      d.editorSession &&
-      typeof d.seq === "number" &&
-      isFinite(d.seq) &&
-      d.seq >= 0;
-    if (!hasEnvelope) {
-      setEditorMode(d.mode);
-      return;
-    }
-    if (editorSession !== d.editorSession) {
-      if (retiredEditorSessions[d.editorSession]) {
-        postEditorState();
-        return;
-      }
-      if (editorSession) retiredEditorSessions[editorSession] = true;
-      editorSession = d.editorSession;
-      editorModeSeq = -1;
-    }
-    // Replays and delayed commands never mutate state. They only report the
-    // newest accepted mode, allowing the parent to converge without feedback.
-    if (d.seq <= editorModeSeq) {
-      postEditorState();
-      return;
-    }
-    editorModeSeq = d.seq;
-    setEditorMode(d.mode);
-  }
-
-  function isSequencedLegacyReplay(d) {
-    if (
-      typeof d.editorSession !== "string" ||
-      !d.editorSession ||
-      typeof d.seq !== "number"
-    ) {
-      return false;
-    }
-    // Legacy fallbacks carry the same envelope. Old inspectors ignore these
-    // fields and consume the fallback; version 6 must never let any enveloped
-    // fallback (including one from an older session) override atomic state.
-    if (d.editorSession === editorSession) postEditorState();
-    return true;
+    post({ type: "omnia:editor:state", mode: mode });
   }
 
   function clearAll() {
@@ -793,7 +725,7 @@
   }
 
   function post(msg) {
-    if (window.parent && window.parent !== window)
+    if (window.parent)
       window.parent.postMessage(msg, trustedParentOrigin || "*");
   }
 
@@ -804,18 +736,13 @@
     var d = e.data;
     if (!d || typeof d.type !== "string") return;
     switch (d.type) {
-      case "omnia:inspect:ping":
-        post({ type: "omnia:inspect:ready", version: 6 });
-        break;
       case "omnia:editor:set-mode":
-        setSequencedEditorMode(d);
+        setEditorMode(d.mode);
         break;
       case "omnia:inspect:enable":
-        if (isSequencedLegacyReplay(d)) break;
         setEditorMode("inspect");
         break;
       case "omnia:inspect:disable":
-        if (isSequencedLegacyReplay(d)) break;
         if (!styleMode) setEditorMode("off");
         break;
       case "omnia:inspect:clear":
@@ -825,11 +752,9 @@
         removeOne(d.id);
         break;
       case "omnia:style:enable":
-        if (isSequencedLegacyReplay(d)) break;
         setEditorMode("style");
         break;
       case "omnia:style:disable":
-        if (isSequencedLegacyReplay(d)) break;
         if (styleMode) setEditorMode("off");
         break;
       case "omnia:style:set":
@@ -868,6 +793,7 @@
   // the chat. Capture-phase + try/guarded so tracking can never break the page.
   var CRUMB_CAP = 6;
   var crumbs = [];
+
   function pushCrumb(text) {
     var s = collapse(text, 80);
     if (!s) return;
@@ -896,21 +822,26 @@
     return label ? sel + " «" + label + "»" : sel;
   }
 
-  // These handlers are attached only by enable() and removed by disable().
-  // Normal preview mode therefore has zero inspector click/change listeners.
-  function recordClickBreadcrumb(e) {
-    try {
-      if (e && e.target && e.target.nodeType === 1)
-        pushCrumb("клик: " + describeTarget(e.target));
-    } catch (_) {}
-  }
-
-  function recordChangeBreadcrumb(e) {
-    try {
-      if (e && e.target && e.target.nodeType === 1)
-        pushCrumb("ввод: " + describeTarget(e.target));
-    } catch (_) {}
-  }
+  document.addEventListener(
+    "click",
+    function (e) {
+      try {
+        if (e && e.target && e.target.nodeType === 1)
+          pushCrumb("клик: " + describeTarget(e.target));
+      } catch (_) {}
+    },
+    true
+  );
+  document.addEventListener(
+    "change",
+    function (e) {
+      try {
+        if (e && e.target && e.target.nodeType === 1)
+          pushCrumb("ввод: " + describeTarget(e.target));
+      } catch (_) {}
+    },
+    true
+  );
 
   function reportError(sig, payload) {
     if (errCount >= ERR_CAP || errSeen[sig]) return;
@@ -966,5 +897,5 @@
 
   // Tell the parent we're ready so it can (re)send enable after a reload while
   // select-mode is still on.
-  post({ type: "omnia:inspect:ready", version: 6 });
+  post({ type: "omnia:inspect:ready", version: 4 });
 })();

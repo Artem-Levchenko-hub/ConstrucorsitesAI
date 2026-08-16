@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from omnia_api.services import agent_builder as ab
 
 # ── parse_action ────────────────────────────────────────────────────────────
@@ -299,250 +297,6 @@ def test_parse_new_observe_actions():
     assert b is not None and b.name == "read_logs"
 
 
-@pytest.mark.asyncio
-async def test_runtime_check_never_invents_http_200_when_probe_has_no_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    async def runtime_status(*args: object, **kwargs: object) -> dict[str, object]:
-        return {"ok": True, "status_code": None}
-
-    monkeypatch.setattr(orchestrator_client, "runtime_status", runtime_status)
-    execute = ab.make_container_executor(project_id="project", slug="slug")
-
-    result = await execute(ab.Action("runtime_check", {"path": "/"}, ""))
-
-    assert result == {
-        "ok": True,
-        "status_code": None,
-        "detail": "route / did not answer yet; retry runtime_check without changing source",
-    }
-
-
-@pytest.mark.asyncio
-async def test_write_files_uses_one_atomic_hot_reload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    calls: list[dict[str, str]] = []
-
-    async def hot_reload_exact(
-        _project: object, _slug: str, files: dict[str, str]
-    ) -> dict[str, object]:
-        calls.append(dict(files))
-        return {"ok": True}
-
-    monkeypatch.setattr(orchestrator_client, "hot_reload_exact", hot_reload_exact)
-    execute = ab.make_container_executor(project_id="project", slug="slug")
-    files = {
-        "src/components/product/ProductApp.tsx": "export default function App(){return null}",
-        "src/components/product/Nav.tsx": "export const Nav = () => null",
-    }
-
-    result = await execute(ab.Action("write_files", {"files": files}, ""))
-
-    assert result["ok"] is True
-    assert result["changed_paths"] == sorted(files)
-    assert calls == [files]
-
-
-@pytest.mark.asyncio
-async def test_native_bash_runs_in_project_and_tracks_declared_mutations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    state = {"src/components/product/Card.tsx": "before"}
-    tracked: list[tuple[str, ...]] = []
-
-    async def read_file(_project: object, _slug: str, path: str) -> str | None:
-        return state.get(path)
-
-    async def track(paths: object) -> None:
-        tracked.append(tuple(paths))
-
-    async def exec_cmd(_project: object, _slug: str, cmd: str) -> dict[str, object]:
-        assert cmd == "pnpm test && generate-card"
-        state["src/components/product/Card.tsx"] = "after"
-        return {"ok": True, "exit_code": "0", "detail": "tests passed"}
-
-    monkeypatch.setattr(orchestrator_client, "agent_read_file", read_file)
-    monkeypatch.setattr(orchestrator_client, "track_mutation_paths", track)
-    monkeypatch.setattr(orchestrator_client, "agent_exec", exec_cmd)
-    execute = ab.make_container_executor(project_id="project", slug="slug")
-
-    result = await execute(
-        ab.Action(
-            "bash",
-            {
-                "cmd": "pnpm test && generate-card",
-                "mutation_paths": ["src/components/product/Card.tsx"],
-            },
-            "",
-        )
-    )
-
-    assert result["ok"] is True
-    assert result["files"] == {"src/components/product/Card.tsx": "after"}
-    assert tracked == [("src/components/product/Card.tsx",)]
-
-
-@pytest.mark.asyncio
-async def test_native_bash_reconcile_does_not_repeat_uncertain_mutation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    calls: list[str] = []
-
-    async def read_file(_project: object, _slug: str, path: str) -> str:
-        assert path == "src/generated.ts"
-        return "export const generated = true"
-
-    async def forbidden_exec(_project: object, _slug: str, cmd: str) -> dict[str, object]:
-        calls.append(cmd)
-        return {"ok": True}
-
-    monkeypatch.setattr(orchestrator_client, "agent_read_file", read_file)
-    monkeypatch.setattr(orchestrator_client, "agent_exec", forbidden_exec)
-    execute = ab.make_container_executor(project_id="project", slug="slug")
-
-    result = await execute(
-        ab.Action(
-            "bash",
-            {
-                "cmd": "generate-file",
-                "mutation_paths": ["src/generated.ts"],
-                "_resume_reconcile": True,
-            },
-            "",
-        )
-    )
-
-    assert result["ok"] is False
-    assert result["status"] == "uncertain"
-    assert result["retry"] == "never"
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_media_reconcile_does_not_repeat_paid_request() -> None:
-    execute = ab.make_container_executor(project_id="project", slug="slug")
-
-    result = await execute(
-        ab.Action(
-            "generate_media",
-            {
-                "kind": "image",
-                "prompt": "cinematic hero",
-                "_resume_reconcile": True,
-            },
-            "",
-        )
-    )
-
-    assert result["ok"] is False
-    assert result["status"] == "uncertain"
-    assert result["retry"] == "never"
-    assert "Do not repeat" in result["content"]
-
-
-@pytest.mark.asyncio
-async def test_read_only_bash_reconcile_never_repeats_command(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    calls: list[str] = []
-
-    async def forbidden_exec(_project: object, _slug: str, cmd: str) -> dict[str, object]:
-        calls.append(cmd)
-        return {"ok": True}
-
-    monkeypatch.setattr(orchestrator_client, "agent_exec", forbidden_exec)
-    execute = ab.make_container_executor(project_id="project", slug="slug")
-
-    result = await execute(
-        ab.Action(
-            "bash",
-            {"cmd": "pnpm typecheck", "mutation_paths": [], "_resume_reconcile": True},
-            "",
-        )
-    )
-
-    assert result["ok"] is False
-    assert result["status"] == "uncertain"
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_build_preserves_canary_code_intelligence_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    calls: list[bool] = []
-
-    async def build(
-        _project: object, _slug: str, *, code_intelligence: bool = False
-    ) -> dict[str, object]:
-        calls.append(code_intelligence)
-        return {
-            "ok": False,
-            "detail": "TS2307 missing module",
-            "root_cause_hint": "missing import",
-            "affected_files": ["src/components/product/ProductApp.tsx"],
-            "evidence": ["analysis:oxlint:import/no-unresolved"],
-            "diagnostics": [{"source": "oxlint", "message": "missing import"}],
-        }
-
-    monkeypatch.setattr(orchestrator_client, "agent_build", build)
-    execute = ab.make_container_executor(
-        project_id="project",
-        slug="slug",
-        code_intelligence=True,
-    )
-
-    result = await execute(ab.Action("build", {}, ""))
-
-    assert calls == [True]
-    assert result["root_cause_hint"] == "missing import"
-    assert result["affected_files"] == ["src/components/product/ProductApp.tsx"]
-    assert result["diagnostics"] == [{"source": "oxlint", "message": "missing import"}]
-
-
-@pytest.mark.asyncio
-async def test_build_can_disable_dependency_doctor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from omnia_api.services import orchestrator_client
-
-    calls: list[bool] = []
-
-    async def build(
-        _project: object,
-        _slug: str,
-        *,
-        dependency_doctor: bool = True,
-    ) -> dict[str, object]:
-        calls.append(dependency_doctor)
-        return {"ok": True, "detail": "clean"}
-
-    monkeypatch.setattr(orchestrator_client, "agent_build", build)
-    execute = ab.make_container_executor(
-        project_id="project",
-        slug="slug",
-        dependency_doctor=False,
-    )
-
-    result = await execute(ab.Action("build", {}, ""))
-
-    assert result["ok"] is True
-    assert calls == [False]
-
-
 def test_runtime_debug_loop_recovers_then_done():
     """build clean → runtime_check 5xx → read_logs → fix → re-check ok → done.
 
@@ -817,9 +571,9 @@ def test_green_gate_cap_prevents_hang():
 # ── K1 knowledge layer: skills injection ─────────────────────────────────────
 
 
-def test_build_system_prompt_without_skills_keeps_base_contract():
+def test_build_system_prompt_without_skills_is_unchanged():
     p = ab.build_system_prompt("STACK GUIDE")
-    assert p == (ab.LOOP_PROTOCOL + "\n\nSTACK GUIDE\n\n" + ab.DEPTH_EXPERIENCE_CONTRACT)
+    assert p == ab.LOOP_PROTOCOL + "\n\n" + "STACK GUIDE"
     # None / empty skills must not alter the output
     assert ab.build_system_prompt("STACK GUIDE", skills=None) == p
     assert ab.build_system_prompt("STACK GUIDE", skills="   ") == p
@@ -867,15 +621,17 @@ def test_agentic_off_by_default():
 
 
 def test_green_explore_stall_nudges_done_not_write():
-    """After build+runtime are green, observation thrash must nudge done."""
+    """After build+runtime are green, a no-write thrash (bash spiral) must nudge
+    the model to FINISH (done), not to write — fixes the observed see-driven
+    bash spiral that wasted ~10 steps post-success."""
     record: list = []
     replies = [
         '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
         '<omnia:action name="build"></omnia:action>',
         '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
-        '<omnia:action name="read_logs">{"tail":80}</omnia:action>',
-        '<omnia:action name="see">{"path":"/dashboard"}</omnia:action>',
-        '<omnia:action name="see">{"path":"/settings"}</omnia:action>',
+        '<omnia:action name="bash">{"cmd":"pnpm test"}</omnia:action>',
+        '<omnia:action name="bash">{"cmd":"pnpm lint"}</omnia:action>',
+        '<omnia:action name="bash">{"cmd":"echo hi"}</omnia:action>',
         '<omnia:action name="done">{"summary":"crm built"}</omnia:action>',
     ]
     res = asyncio.run(
@@ -892,11 +648,6 @@ def test_green_explore_stall_nudges_done_not_write():
     # the GREEN done-nudge was issued (not the write nudge)
     user_msgs = [m["content"] for m in res.transcript if m["role"] == "user"]
     assert any(m == ab._DONE_WHEN_GREEN_NUDGE for m in user_msgs)
-
-
-def test_arbitrary_shell_is_not_an_agent_action() -> None:
-    assert ab.parse_action('<omnia:action name="bash">{"cmd":"rm -rf src"}</omnia:action>') is None
-    assert "bash" not in ab._KNOWN_ACTIONS
 
 
 _FONTS_IMPORT = (
@@ -919,17 +670,6 @@ def test_css_import_hoist_fonts_with_semicolons() -> None:
 def test_css_import_correct_file_untouched() -> None:
     good = _FONTS_IMPORT + "\n:root{--a:1}"
     assert ab._sanitize_css_imports("src/app/globals.css", good) == good
-
-
-def test_css_import_sanitizer_deduplicates_and_keeps_tailwind_last() -> None:
-    duplicated = (
-        '@import "tailwindcss";\n' + _FONTS_IMPORT + "\n" + _FONTS_IMPORT + "\n:root{--a:1}"
-    )
-
-    out = ab._sanitize_css_imports("src/app/globals.css", duplicated)
-
-    assert out.count(_FONTS_IMPORT) == 1
-    assert out.startswith(_FONTS_IMPORT + '\n@import "tailwindcss";')
 
 
 def test_css_import_charset_stays_first() -> None:

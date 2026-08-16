@@ -25,7 +25,6 @@ ErrorCode = Literal[
     "docker_unavailable",
     "postgres_unavailable",
     "port_exhausted",
-    "port_conflict",
     "invalid_identifier",
     "invalid_path",
     "image_not_found",

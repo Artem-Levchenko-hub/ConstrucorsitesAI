@@ -6,7 +6,6 @@ import type {
   PromptResponse,
   SelectedElement,
 } from "./types";
-import type { MaxProductSpec } from "../max-brief";
 
 export async function listMessages(projectId: string): Promise<Message[]> {
   if (USE_MOCKS) return mockApi.listMessages(projectId);
@@ -47,7 +46,6 @@ export async function sendPrompt(
     skipClarify?: boolean;
     designPresetId?: string | null;
     idempotencyKey?: string;
-    productSpec?: MaxProductSpec | null;
   },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
@@ -89,7 +87,6 @@ export async function sendPrompt(
       // Onboarding-survey palette pick (owner 2026-06-19) — the chosen preset
       // rides with the combined-answers submit so the build uses it directly.
       ...(opts?.designPresetId ? { design_preset_id: opts.designPresetId } : {}),
-      ...(opts?.productSpec ? { product_spec: opts.productSpec } : {}),
     },
   });
 }

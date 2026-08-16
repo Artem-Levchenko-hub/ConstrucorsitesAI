@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type RefObject } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, MoreVertical, Trash2 } from "lucide-react";
 import type { Project } from "@/lib/api/types";
@@ -31,15 +31,8 @@ const TEMPLATE_LABEL: Record<Project["template"], string> = {
   api: "API-сервис",
 };
 
-export function ProjectCard({
-  project,
-  successFocusRef,
-}: {
-  project: Project;
-  successFocusRef?: RefObject<HTMLElement | null>;
-}) {
+export function ProjectCard({ project }: { project: Project }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const menuTriggerRef = useRef<HTMLButtonElement>(null);
 
   return (
     <div className="group relative">
@@ -49,7 +42,6 @@ export function ProjectCard({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              ref={menuTriggerRef}
               variant="ghost"
               size="icon"
               aria-label="Действия с проектом"
@@ -74,8 +66,6 @@ export function ProjectCard({
         project={project}
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        returnFocusRef={menuTriggerRef}
-        successFocusRef={successFocusRef}
       />
 
       <Link

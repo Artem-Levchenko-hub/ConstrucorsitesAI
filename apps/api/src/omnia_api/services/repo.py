@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import tarfile
 import tempfile
@@ -94,10 +93,14 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
                 continue
             rel = path.relative_to(workdir).as_posix()
             blob_oid = repo.create_blob(path.read_bytes())
-            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB))
+            index.add(
+                pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB)
+            )
         index.write()
         tree_oid = index.write_tree()
-        commit_oid = repo.create_commit("HEAD", sig, sig, f"Initial: {template_name}", tree_oid, [])
+        commit_oid = repo.create_commit(
+            "HEAD", sig, sig, f"Initial: {template_name}", tree_oid, []
+        )
         _upload(project_id, workdir)
         return str(commit_oid)
 
@@ -120,10 +123,14 @@ def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> st
         index = repo.index
         for rel, content in sorted(files.items()):
             blob_oid = repo.create_blob(content.encode("utf-8"))
-            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB))
+            index.add(
+                pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB)
+            )
         index.write()
         tree_oid = index.write_tree()
-        commit_oid = repo.create_commit("HEAD", sig, sig, message, tree_oid, [])
+        commit_oid = repo.create_commit(
+            "HEAD", sig, sig, message, tree_oid, []
+        )
         _upload(project_id, workdir)
         return str(commit_oid)
 
@@ -146,7 +153,9 @@ def duplicate_repo(source_id: UUID, dest_id: UUID) -> None:
         )
     except S3Error as e:
         if e.code in {"NoSuchKey", "NoSuchBucket"}:
-            raise RuntimeError(f"repo for source project {source_id} not found in MinIO") from e
+            raise RuntimeError(
+                f"repo for source project {source_id} not found in MinIO"
+            ) from e
         raise
 
 
@@ -193,7 +202,9 @@ def commit_files(
             full.parent.mkdir(parents=True, exist_ok=True)
             full.write_text(content, encoding="utf-8")
             blob_oid = repo.create_blob(content.encode("utf-8"))
-            index.add(pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB))
+            index.add(
+                pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB)
+            )
         index.write()
         tree_oid = index.write_tree()
         sig = _signature()
@@ -202,7 +213,9 @@ def commit_files(
         elif not repo.is_empty:
             head_target = repo.head.target
             parents = [
-                head_target if isinstance(head_target, pygit2.Oid) else pygit2.Oid(hex=head_target)
+                head_target
+                if isinstance(head_target, pygit2.Oid)
+                else pygit2.Oid(hex=head_target)
             ]
         else:
             parents = []
@@ -215,23 +228,6 @@ def commit_files(
         commit_oid = repo.create_commit(None, sig, sig, message, tree_oid, parents)
         _upload(project_id, workdir)
         return str(commit_oid)
-
-
-async def commit_files_async(
-    project_id: UUID,
-    files: dict[str, str],
-    message: str,
-    parent_sha: str | None = None,
-) -> str:
-    """Cancellation barrier for the non-interruptible MinIO/Git write."""
-    task = asyncio.create_task(
-        asyncio.to_thread(commit_files, project_id, files, message, parent_sha)
-    )
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await task
-        raise
 
 
 def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
@@ -287,19 +283,11 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
         if not isinstance(created, pygit2.Commit):
             raise RuntimeError(f"created commit {commit_oid} cannot be loaded")
         checkout_tree = cast(Callable[..., Any], repo.checkout_tree)
-        checkout_tree(created.tree, strategy=pygit2.enums.CheckoutStrategy.FORCE)
+        checkout_tree(
+            created.tree, strategy=pygit2.enums.CheckoutStrategy.FORCE
+        )
         _upload(project_id, workdir)
         return str(commit_oid)
-
-
-async def checkout_async(project_id: UUID, target_commit_sha: str) -> str:
-    """Cancellation barrier for a checkout upload that cannot stop mid-thread."""
-    task = asyncio.create_task(asyncio.to_thread(checkout, project_id, target_commit_sha))
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        await task
-        raise
 
 
 def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str]) -> None:

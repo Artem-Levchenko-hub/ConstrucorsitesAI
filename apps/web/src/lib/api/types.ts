@@ -94,7 +94,6 @@ export type Snapshot = {
   preview_url: string | null;
   is_rollback_target: boolean;
   created_at: IsoDateTime;
-  version_number?: number | null;
 };
 
 export type SnapshotWithFiles = Snapshot & {
@@ -359,7 +358,6 @@ export type WalletState = {
   // stale backend response without the fields doesn't break the type.
   free_generations_left?: number;
   free_generation_limit?: number;
-  unlimited_generations?: boolean;
 };
 
 // How the server will handle a prompt turn (mirrors api PromptResponse.mode):
@@ -498,7 +496,6 @@ export type ApiErrorCode =
   | "integration_provider_unavailable"
   | "integration_connection_failed"
   | "max_registration_required"
-  | "max_demo_exhausted"
   | "email_verification_required"
   | "business_profile_required"
   | "business_verification_required"
@@ -676,9 +673,6 @@ export type MaxPreviewSession = {
 export type MaxUsage = {
   total_cost_rub: number;
   run_cost_rub: number;
-  pending_reservation_rub: number;
-  run_pending_reservation_rub: number;
-  pending_reservation_calls: number;
   run_id: Uuid | null;
   run_status: string | null;
   stages: {

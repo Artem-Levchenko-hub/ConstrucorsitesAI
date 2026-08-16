@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils";
  * (Замысел → Вёрстка → Картинки → Проверка) and multipass (Структура →
  * Контент → Визуал → Сборка); the set is picked per-message from the events
  * seen. Each stage is a node on a vertical timeline: pending (dim) → active
- * (glowing, with a one-line narration of intent) → done
+ * (glowing, with a one-line narration of intent + the working model) → done
  * (accent, locked with a check). Under `prefers-reduced-motion` it degrades to
  * a slim 4-segment bar with no looping animation.
  */
@@ -90,6 +90,11 @@ const FREEFORM_SET = new Set<MultipassStage>(FREEFORM_IDS);
 function pickStages(p: PassProgress): MultipassStage[] {
   const seen = [p.current, ...p.completed];
   return seen.some((s) => s && FREEFORM_SET.has(s)) ? FREEFORM_IDS : MULTIPASS_IDS;
+}
+
+/** Compact a model id for the header line (drop the provider prefix). */
+function shortModel(model: string): string {
+  return model.split("/").pop() ?? model;
 }
 
 /**
@@ -319,6 +324,14 @@ export function PassProgressBar({
                   >
                     {meta?.label ?? id}
                   </span>
+                  {active && progress.currentModel && (
+                    <span
+                      className="min-w-0 truncate font-mono text-[10px] text-fg-tertiary"
+                      title={progress.currentModel}
+                    >
+                      · {shortModel(progress.currentModel)}
+                    </span>
+                  )}
                 </div>
                 <AnimatePresence mode="wait">
                   {active && meta?.narration && (

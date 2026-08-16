@@ -9,14 +9,6 @@ import { defineConfig } from "vitest/config";
 // DOM + DOMParser + MessageEvent so each generator-wide live-render invariant
 // becomes a permanent falsifiable assert (ratchet), money-free, 0 LLM.
 export default defineConfig({
-  oxc: {
-    // Next keeps JSX intact for its own compiler. Vitest needs the automatic
-    // runtime so component-level interaction tests can import client TSX.
-    jsx: {
-      importSource: "react",
-      runtime: "automatic",
-    },
-  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

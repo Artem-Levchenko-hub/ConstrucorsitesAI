@@ -4,36 +4,17 @@ import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, status
-from sqlalchemy import select, text, update
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.deployment_state import (
-    current_snapshot_id_fresh,
-    deployment_is_active,
-)
-from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
-from omnia_api.services.max_project_kit import (
-    MAX_MANAGED_KIT_VERSION,
-    default_max_project_config,
-    max_legacy_snapshot_incompatibility,
-    max_project_config_from_files,
-    render_max_restored_files,
-)
 from omnia_api.services.queue import enqueue_preview
-from omnia_api.services.runtime_sync import (
-    mark_runtime_sync_required,
-)
 
 router = APIRouter(prefix="/api/projects", tags=["rollback"])
 
@@ -90,49 +71,6 @@ async def post_rollback(
     if project is None or project.owner_id != current_user.id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
 
-    # Serialize rollback with prompt acceptance/config sync for this project.
-    # Without the same advisory lock a long Google run can commit on the old
-    # snapshot after rollback and silently mix two histories.
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-        {"project_id": str(project_id)},
-    )
-    # The object was loaded before the advisory lock for the ownership check.
-    # Refresh it under a row lock so a waiter cannot continue with a stale
-    # current_snapshot_id captured before another rollback committed.
-    await session.refresh(project, with_for_update=True)
-    if project.owner_id != current_user.id:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    expected_snapshot_id = project.current_snapshot_id
-    active_generation = (
-        await session.execute(
-            select(GenerationRun.id).where(
-                GenerationRun.project_id == project_id,
-                GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
-            )
-        )
-    ).scalar_one_or_none()
-    if active_generation is not None:
-        raise ApiError(
-            "conflict",
-            "Дождитесь завершения или отмените текущую генерацию перед откатом",
-            status.HTTP_409_CONFLICT,
-        )
-    try:
-        deployment = await orchestrator_client.get_deploy(project_id)
-    except Exception as exc:
-        raise ApiError(
-            "deployment_state_unavailable",
-            "Не удалось безопасно проверить публикацию проекта. Повторите позже.",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
-    if deployment_is_active(deployment):
-        raise ApiError(
-            "conflict",
-            "Дождитесь завершения публикации перед откатом",
-            status.HTTP_409_CONFLICT,
-        )
-
     target = await session.get(Snapshot, payload.snapshot_id)
     if target is None or target.project_id != project_id:
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
@@ -140,196 +78,57 @@ async def post_rollback(
     # The tree the container is serving RIGHT NOW (pre-rollback HEAD) — needed
     # to compute files the rollback must DELETE from the live container below.
     old_sha: str | None = None
-    if expected_snapshot_id is not None:
-        _cur = await session.get(Snapshot, expected_snapshot_id)
+    if project.current_snapshot_id is not None:
+        _cur = await session.get(Snapshot, project.current_snapshot_id)
         old_sha = _cur.commit_sha if _cur is not None else None
-    old_files = await asyncio.to_thread(repo_svc.read_files, project_id, old_sha) if old_sha else {}
 
-    target_files = await asyncio.to_thread(repo_svc.read_files, project_id, target.commit_sha)
-    if project.template == "max_miniapp":
-        incompatibility = max_legacy_snapshot_incompatibility(target_files)
-        if incompatibility:
-            raise ApiError(
-                "conflict",
-                (
-                    "Эта старая версия использует серверную структуру, которую нельзя "
-                    "безопасно восстановить без потери функций. Выберите более новую версию."
-                ),
-                status.HTTP_409_CONFLICT,
-            )
-
-    new_sha = await repo_svc.checkout_async(project_id, target.commit_sha)
-    record: MaxProjectConfig | None = None
-    restored_config = None
-    if project.template == "max_miniapp":
-        record = await session.get(MaxProjectConfig, project_id)
-        historical_config = max_project_config_from_files(target_files)
-        fallback_config = max_project_config_from_files(old_files) or (
-            MaxProjectConfigPayload.model_validate(record.config)
-            if record is not None
-            else default_max_project_config(project.name)
-        )
-        restored_config = historical_config or fallback_config
-        restored_tree = render_max_restored_files(
-            target_files,
-            old_files or target_files,
-            restored_config,
-            project_id,
-        )
-        new_sha = await repo_svc.commit_files_async(
-            project_id,
-            with_rollback_deletions(restored_tree, target_files),
-            "Restore MAX product with current platform core",
-            new_sha,
-        )
-        reverted_files = restored_tree
-    else:
-        historical_config = None
-        reverted_files = target_files
+    new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)
 
     # Container apps: push the rolled-back tree into the live dev container so the
     # preview actually reverts (parity with build / edit / style-patch). Without
     # this the git repo reverts but `omnia-dev-<slug>` keeps serving the post-edit
     # code → the flagship "вернуться назад" is a no-op on the live preview.
-    # Fail closed: a rollback is not successful until the live preview serves the
-    # selected commit too. Otherwise the canonical snapshot and visible app diverge.
-    runtime_patch: dict[str, str] | None = None
+    # Best-effort (R-10): git + snapshot are already the canonical state, so a
+    # momentarily-down orchestrator only delays the live revert, never loses it.
     if project.template in _CONTAINER_NEXT:
-        # A path absent from the target is a real deletion, not permission to
-        # leave a phantom module in the running preview.
-        runtime_patch = with_rollback_deletions(reverted_files, old_files)
+        try:
+            reverted_files = await asyncio.to_thread(
+                repo_svc.read_files, project_id, new_sha
+            )
+            # hot_reload can only add/overwrite — a file CREATED after the target
+            # snapshot would survive the rollback inside the container and keep
+            # breaking the build (2026-07-08: a failed build's phantom modules
+            # outlived a rollback exactly this way and re-poisoned the retry).
+            # write_files treats empty content as "delete this file", so send
+            # every old-tree path missing from the target tree as "".
+            reverted_files = with_rollback_deletions(
+                reverted_files,
+                await asyncio.to_thread(repo_svc.read_files, project_id, old_sha)
+                if old_sha and old_sha != new_sha
+                else {},
+            )
+            await orchestrator_client.hot_reload(
+                project_id=project_id,
+                slug=project.slug,
+                files=reverted_files,
+            )
+        except Exception:
+            # Preview refresh must never block the rollback; it's already committed.
+            pass
 
     new_snapshot = Snapshot(
         project_id=project_id,
         commit_sha=new_sha,
         prompt_text=None,
         model_id=None,
-        parent_id=expected_snapshot_id,
+        parent_id=project.current_snapshot_id,
     )
     session.add(new_snapshot)
     target.is_rollback_target = True
     await session.flush()
-    advanced = (
-        await session.execute(
-            update(Project)
-            .where(
-                Project.id == project_id,
-                Project.current_snapshot_id == expected_snapshot_id,
-            )
-            .values(current_snapshot_id=new_snapshot.id)
-            .returning(Project.id)
-            .execution_options(synchronize_session="fetch")
-        )
-    ).scalar_one_or_none()
-    if advanced is None:
-        if old_sha is not None:
-            try:
-                await repo_svc.checkout_async(project_id, old_sha)
-            except Exception:
-                pass
-        raise ApiError(
-            "conflict",
-            "Проект уже изменился; обновите страницу перед откатом",
-            status.HTTP_409_CONFLICT,
-        )
-    if project.template == "max_miniapp" and restored_config is not None:
-        config_data = restored_config.model_dump(mode="json")
-        if record is None:
-            record = MaxProjectConfig(
-                project_id=project.id,
-                owner_id=current_user.id,
-                config=config_data,
-                config_version=1,
-                managed_kit_version=MAX_MANAGED_KIT_VERSION,
-            )
-            session.add(record)
-        else:
-            config_data["max_url_attached"] = bool(record.config.get("max_url_attached", False))
-            if historical_config is not None:
-                record.config = config_data
-                record.config_version += 1
-            else:
-                record.config = config_data
-            record.managed_kit_version = MAX_MANAGED_KIT_VERSION
-        record.synced_snapshot_id = new_snapshot.id
-    commit_confirmed_after_error = False
-    if runtime_patch is not None:
-        mark_runtime_sync_required(project, runtime_patch)
-    try:
-        await session.commit()
-    except Exception as exc:
-        await session.rollback()
-        try:
-            canonical_snapshot_id = await current_snapshot_id_fresh(project_id)
-        except Exception as state_exc:
-            raise ApiError(
-                "rollback_runtime_unavailable",
-                "Не удалось подтвердить результат отката. Повторите позже.",
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            ) from state_exc
-        if canonical_snapshot_id == new_snapshot.id:
-            # COMMIT succeeded but its acknowledgement was lost. Runtime and DB
-            # already point at the same revision; never compensate backwards.
-            commit_confirmed_after_error = True
-        elif canonical_snapshot_id != expected_snapshot_id:
-            raise ApiError(
-                "conflict",
-                "Проект уже изменился; обновите страницу перед откатом",
-                status.HTTP_409_CONFLICT,
-            ) from exc
-        if commit_confirmed_after_error:
-            pass
-        else:
-            if old_sha is not None:
-                try:
-                    await repo_svc.checkout_async(project_id, old_sha)
-                except Exception:
-                    pass
-            if isinstance(exc, ApiError):
-                raise
-            raise ApiError(
-                "rollback_runtime_unavailable",
-                "Откат не применён: живое превью не удалось синхронизировать.",
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            ) from exc
-    if commit_confirmed_after_error:
-        refreshed = await session.get(Snapshot, new_snapshot.id)
-        if refreshed is None:
-            raise ApiError(
-                "rollback_runtime_unavailable",
-                "Откат сохранён, но его состояние пока нельзя подтвердить.",
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        new_snapshot = refreshed
-    else:
-        await session.refresh(new_snapshot)
-    if runtime_patch is not None:
-        try:
-            await session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-                {"project_id": str(project_id)},
-            )
-            await session.refresh(project, with_for_update=True)
-            if project.current_snapshot_id != new_snapshot.id:
-                raise ApiError(
-                    "conflict",
-                    "Проект уже изменился; обновите страницу перед откатом",
-                    status.HTTP_409_CONFLICT,
-                )
-            await orchestrator_client.hot_reload_exact(
-                project_id=project_id,
-                slug=project.slug,
-                files=runtime_patch,
-            )
-            project.runtime_sync_required = False
-            project.runtime_sync_paths = []
-            await session.commit()
-        except Exception as sync_exc:
-            raise ApiError(
-                "rollback_runtime_unavailable",
-                "Откат сохранён; превью будет восстановлено перед следующим запуском.",
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            ) from sync_exc
+    project.current_snapshot_id = new_snapshot.id
+    await session.commit()
+    await session.refresh(new_snapshot)
 
     await asyncio.to_thread(enqueue_preview, new_snapshot.id)
 

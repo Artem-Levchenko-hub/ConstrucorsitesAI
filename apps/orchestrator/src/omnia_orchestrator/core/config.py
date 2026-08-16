@@ -98,11 +98,6 @@ class Settings(BaseSettings):
     # observable across an orchestrator restart without coupling this host
     # service to the product Postgres.
     deploy_state_path: str = Field(default="/opt/omnia-runtime/state/deploy-runs.json")
-    # Write-ahead cleanup journal for disposable history renderers.  It closes
-    # the crash window before Docker has created a labelled container.
-    history_cleanup_path: str = Field(
-        default="/opt/omnia-runtime/state/history-cleanup.json"
-    )
     # Comma-separated addresses which must never be accepted as BYO targets.
     # Production sets this to the Omnia host address as an extra SSRF guard.
     byo_blocked_ips: str = Field(default="")

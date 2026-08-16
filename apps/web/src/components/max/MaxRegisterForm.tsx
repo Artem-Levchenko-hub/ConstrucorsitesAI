@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
+export function MaxRegisterForm() {
   const [state, action, pending] = useActionState(maxRegisterAction, {
     error: null,
   });
@@ -61,11 +61,11 @@ export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
             name="terms_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-accent"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
           <span className="text-[#6d6962]">
             Принимаю{" "}
-            <Link className="text-accent hover:underline" href="/legal/terms">
+            <Link className="text-[#c84528] hover:underline" href="/legal/terms">
               условия использования
             </Link>
           </span>
@@ -75,11 +75,11 @@ export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
             name="privacy_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-accent"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
           <span className="text-[#6d6962]">
             Ознакомлен с{" "}
-            <Link className="text-accent hover:underline" href="/legal/privacy">
+            <Link className="text-[#c84528] hover:underline" href="/legal/privacy">
               политикой конфиденциальности
             </Link>
           </span>
@@ -89,12 +89,12 @@ export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
             name="personal_data_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-accent"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
           <span className="text-[#6d6962]">
             Даю отдельное{" "}
             <Link
-              className="text-accent hover:underline"
+              className="text-[#c84528] hover:underline"
               href="/legal/personal-data"
             >
               согласие на обработку персональных данных
@@ -105,7 +105,7 @@ export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
           <input
             name="marketing_accepted"
             type="checkbox"
-            className="mt-1 size-4 accent-accent"
+            className="mt-1 size-4 accent-[#f15a38]"
           />
           <span className="text-[#8d887f]">
             Получать новости продукта — необязательно
@@ -121,13 +121,9 @@ export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
 
       <Button
         disabled={pending}
-        className="h-12 w-full rounded-lg bg-accent text-base text-white hover:bg-accent-hover"
+        className="h-12 w-full rounded-lg bg-[#f15a38] text-base text-white hover:bg-[#d94929]"
       >
-        {pending
-          ? "Сохраняем…"
-          : fromDemo
-            ? "Сохранить проект и продолжить"
-            : "Продолжить"}
+        {pending ? "Создаём аккаунт…" : "Продолжить"}
         {!pending && <ArrowRight className="ml-2 size-4" />}
       </Button>
 
@@ -140,7 +136,7 @@ export function MaxRegisterForm({ fromDemo = false }: { fromDemo?: boolean }) {
           const ItemIcon = Icon as typeof Building2;
           return (
             <div key={String(text)} className="flex items-center gap-2">
-              <ItemIcon className="size-3.5 text-accent" />
+              <ItemIcon className="size-3.5 text-[#f15a38]" />
               {String(text)}
             </div>
           );

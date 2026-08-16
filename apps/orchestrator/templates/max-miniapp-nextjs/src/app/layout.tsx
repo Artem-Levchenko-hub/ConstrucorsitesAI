@@ -1,7 +1,6 @@
 import "@maxhub/max-ui/dist/styles.css";
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
-import "./max-runtime.css";
 import "./globals.css";
 
 import { MaxAppProvider } from "@/components/MaxAppProvider";

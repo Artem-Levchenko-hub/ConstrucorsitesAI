@@ -31,8 +31,6 @@ from dataclasses import dataclass
 from omnia_api.core.config import get_settings
 from omnia_api.services import accept_gauntlet, originality, vision_audit
 from omnia_api.services.chip_pixel_gate import FidelitySpec
-from omnia_api.services.depth_experience_gate import feedback as depth_feedback
-from omnia_api.services.depth_experience_gate import scan as scan_depth_experience
 from omnia_api.services.link_validator import find_dead_links
 from omnia_api.services.ui_audit import audit as ui_audit
 
@@ -91,9 +89,6 @@ def _structural_issues(files: dict[str, str]) -> list[str]:
             f"[структура] на странице {h1_count} тегов <h1> — оставь ровно один, "
             "остальные сделай <h2>."
         )
-    depth = scan_depth_experience(files)
-    if depth.judged and not depth.passed:
-        issues.append(depth_feedback(depth))
     return issues
 
 

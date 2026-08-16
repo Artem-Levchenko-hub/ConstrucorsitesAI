@@ -170,7 +170,7 @@ export function MaxProjectSetupDialog({
         >
           <DialogHeader className="shrink-0 px-5 pb-4 pr-16 pt-5 sm:px-7 sm:pb-5 sm:pr-14 sm:pt-7">
             <DialogTitle className="flex items-center gap-2 text-[#171716]">
-              <FileCheck2 className="h-5 w-5 text-accent" />
+              <FileCheck2 className="h-5 w-5 text-[#f15a38]" />
               Данные приложения
             </DialogTitle>
             <DialogDescription className="text-[#6d6962]">
@@ -203,7 +203,7 @@ export function MaxProjectSetupDialog({
 
           {config.isLoading || !current ? (
             <div className="flex min-h-44 flex-1 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-accent" />
+              <Loader2 className="h-5 w-5 animate-spin text-[#f15a38]" />
             </div>
           ) : (
             <>
@@ -296,7 +296,7 @@ export function MaxProjectSetupDialog({
                       id="max-config-colors"
                       className={inputClass}
                       value={current.brand_colors}
-                      placeholder="#471AFF, #FFFFFF"
+                      placeholder="#F15A38, #F5F3EE"
                       onChange={(event) =>
                         setDraft({ ...current, brand_colors: event.target.value })
                       }
@@ -645,7 +645,7 @@ export function MaxProjectSetupDialog({
                         className={cn(
                           "rounded-xl border p-3 text-left",
                           checked
-                            ? "border-accent bg-accent/[.07]"
+                            ? "border-[#f15a38] bg-[#f15a38]/[.07]"
                             : "border-[#d8d4cb] bg-white",
                         )}
                         onClick={() =>
@@ -660,7 +660,7 @@ export function MaxProjectSetupDialog({
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded border",
                               checked
-                                ? "border-accent bg-accent"
+                                ? "border-[#f15a38] bg-[#f15a38]"
                                 : "border-[#d8d4cb]",
                             )}
                           >
@@ -702,7 +702,7 @@ export function MaxProjectSetupDialog({
                 <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#d8d4cb] bg-white p-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-accent"
+                    className="mt-0.5 h-4 w-4 accent-[#f15a38]"
                     checked={current.legal.terms_accepted}
                     onChange={(event) =>
                       setDraft({
@@ -727,7 +727,7 @@ export function MaxProjectSetupDialog({
                 <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#d8d4cb] bg-white p-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-accent"
+                    className="mt-0.5 h-4 w-4 accent-[#f15a38]"
                     checked={current.legal.personal_data_consent}
                     onChange={(event) =>
                       setDraft({

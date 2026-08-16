@@ -12,7 +12,6 @@ class AdminUserPublic(BaseModel):
     email: str
     role: Literal["user", "admin"]
     is_admin: bool
-    unlimited_generations: bool
     status: str
     email_verified_at: datetime | None
     created_at: datetime
@@ -23,7 +22,6 @@ class AdminUserPublic(BaseModel):
 
 class AdminUserUpdate(BaseModel):
     role: Literal["user", "admin"] | None = None
-    unlimited_generations: bool | None = None
     email_verified: bool | None = None
     status: Literal["active", "suspended"] | None = None
     business_verified: bool | None = None
@@ -33,7 +31,6 @@ class AdminUserUpdate(BaseModel):
     def at_least_one_change(self) -> "AdminUserUpdate":
         if (
             self.role is None
-            and self.unlimited_generations is None
             and self.email_verified is None
             and self.status is None
             and self.business_verified is None

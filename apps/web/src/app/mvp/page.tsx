@@ -34,7 +34,7 @@ const statusMeta: Record<
   in_progress: {
     label: "В работе",
     icon: LoaderCircle,
-    className: "border-accent bg-accent/10 text-accent",
+    className: "border-[#f15a38] bg-[#f15a38]/10 text-[#c84528]",
   },
   todo: {
     label: "Дальше",
@@ -68,7 +68,7 @@ export default function MvpChecklistPage() {
               Полный отчёт
             </Link>
             <Link
-              className="inline-flex min-h-11 items-center gap-2 text-accent"
+              className="inline-flex min-h-11 items-center gap-2 text-[#c84528]"
               href="/"
             >
               <ArrowLeft className="size-4" />
@@ -78,10 +78,10 @@ export default function MvpChecklistPage() {
         </div>
       </header>
 
-      <section data-graphite-shell className="border-b border-[#d8d4cb] bg-[#171716] text-white">
+      <section className="border-b border-[#d8d4cb] bg-[#171716] text-white">
         <div className="mx-auto grid max-w-[1200px] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[1fr_320px] lg:items-end">
           <div>
-            <p className="omnia-kicker text-accent">Публичный трекер продукта</p>
+            <p className="omnia-kicker text-[#f15a38]">Публичный трекер продукта</p>
             <h1 className="mt-5 max-w-[820px] text-[42px] font-semibold leading-[1] tracking-[-.05em] sm:text-[64px]">
               Путь до полностью рабочего MVP
             </h1>
@@ -102,7 +102,7 @@ export default function MvpChecklistPage() {
             </div>
             <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
               <div
-                className="h-full rounded-full bg-accent-on-dark"
+                className="h-full rounded-full bg-[#f15a38]"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -122,7 +122,7 @@ export default function MvpChecklistPage() {
                 className="overflow-hidden rounded-[14px] border border-[#d8d4cb] bg-[#fcfbf7]"
               >
                 <div className="grid gap-5 border-b border-[#d8d4cb] p-5 sm:p-7 lg:grid-cols-[90px_1fr_auto] lg:items-start">
-                  <p className="font-mono text-sm text-accent">{section.number}</p>
+                  <p className="font-mono text-sm text-[#f15a38]">{section.number}</p>
                   <div>
                     <h2 className="text-2xl font-semibold tracking-[-.03em]">
                       {section.title}
@@ -179,8 +179,8 @@ export default function MvpChecklistPage() {
           })}
         </div>
 
-        <section data-graphite-shell className="mt-8 rounded-[14px] bg-[#171716] p-6 text-white sm:p-8">
-          <p className="omnia-kicker text-accent">Критерий финиша</p>
+        <section className="mt-8 rounded-[14px] bg-[#171716] p-6 text-white sm:p-8">
+          <p className="omnia-kicker text-[#f15a38]">Критерий финиша</p>
           <h2 className="mt-3 text-2xl font-semibold tracking-[-.03em]">
             Новый пользователь проходит путь без ручного исправления данных
           </h2>
@@ -190,8 +190,8 @@ export default function MvpChecklistPage() {
             сценарием. После этого чек-лист MVP считается закрытым.
           </p>
           <Link
-            href="/max/demo"
-            className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-accent px-5 text-sm font-semibold text-white hover:bg-accent-hover"
+            href="/max/register"
+            className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-[#f15a38] px-5 text-sm font-semibold text-white hover:bg-[#d94929]"
           >
             Открыть MAX Studio
             <ExternalLink className="size-4" />

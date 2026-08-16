@@ -31,10 +31,6 @@ _log = structlog.get_logger("omnia_orchestrator.main")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    try:
-        await runtime.start_history_preview_sweeper()
-    except Exception as exc:
-        _log.warning("startup.history_preview_cleanup_failed", err=str(exc))
     # Upgrade vhosts provisioned before wake-on-request landed. Fail-soft: a
     # broken render rolls back and never takes the shared nginx down.
     try:
@@ -45,7 +41,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await runtime.stop_history_preview_sweeper()
         await stop_hibernate_loop()
 
 

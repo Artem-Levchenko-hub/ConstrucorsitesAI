@@ -1,7 +1,7 @@
 {%- set bg_class = {'mesh':'bg-mesh', 'aurora':'bg-aurora', 'dark':''}[s.background] -%}
-<section id="{{ anchor_id }}" class="relative py-28 md:py-40 overflow-hidden {{ bg_class }}" data-omnia-depth="orbital" data-depth-colors="{{ theme.background }},{{ theme.primary }},{{ theme.accent }},{{ theme.text }}" {% if s.background == 'dark' %}style="background:#0A0A0A"{% endif %}>
+<section id="{{ anchor_id }}" class="relative py-28 md:py-40 overflow-hidden {{ bg_class }}" {% if s.background == 'dark' %}style="background:#0A0A0A"{% endif %}>
   <div class="absolute inset-0 pointer-events-none opacity-30" style="background-image:radial-gradient(circle at 20% 30%, var(--omnia-primary) 0%, transparent 40%), radial-gradient(circle at 80% 70%, var(--omnia-accent) 0%, transparent 45%);"></div>
-  <div data-depth-content class="relative z-10 max-w-5xl mx-auto px-6 text-center">
+  <div class="relative max-w-5xl mx-auto px-6 text-center">
     {% if s.pill_label %}
     <div class="reveal inline-flex items-center gap-2 rounded-full glass-dark px-4 py-1.5 text-sm font-medium text-white/90 mb-8">
       {{ s.pill_label }}

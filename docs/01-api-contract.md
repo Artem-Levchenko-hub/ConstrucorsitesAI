@@ -34,17 +34,12 @@
 |---|---|---|---|
 | `GET` | `/api/admin/access` | — | `{is_admin, role, email}` |
 | `GET` | `/api/admin/users` | `?query=&limit=` | `AdminUser[]` |
-| `PATCH` | `/api/admin/users/:id` | `{role?, unlimited_generations?, email_verified?, status?, business_verified?, note?}` | `AdminUser` |
+| `PATCH` | `/api/admin/users/:id` | `{role?, email_verified?, status?, business_verified?, note?}` | `AdminUser` |
 | `GET` | `/api/admin/audit` | `?limit=` | `AdminAuditEvent[]` |
 
 Изменение роли, статуса и верификации записывается в `admin_audit_events` с
 инициатором, целевым аккаунтом и состоянием до/после. Самоблокировка и снятие
 собственной persisted admin-роли запрещены.
-
-`unlimited_generations` — отдельное account-scoped право владельца/тестера. Оно
-отключает проверку кошелька и расход пробных генераций, но не отключает rate
-limit, single-flight и предохранители одного generation run. Роль `admin` сама
-по себе безлимит не выдаёт.
 
 ### Projects
 
@@ -64,11 +59,8 @@ limit, single-flight и предохранители одного generation run
 | `POST` | `/api/projects/:id/prompt` | `{prompt: string, idempotency_key?: string, model_id?: string, selected_elements?: SelectedElement[]}` | `{run_id, message_id, snapshot_id?, mode, ...}` (snapshot_id появится позже через WS) |
 | `POST` | `/api/projects/:id/generation/cancel` | — | `GenerationRun` со статусом `cancel_requested` (202) |
 | `GET` | `/api/projects/:id/generation` | — | Последний durable `GenerationRun` или `null`; используется для восстановления реального статуса после перезагрузки |
-| `GET` | `/api/projects/:id/snapshots` | `?limit=1..100` | `Snapshot[]` (DESC по `created_at`, `version_number` сохраняет абсолютный номер при усечённой истории) |
+| `GET` | `/api/projects/:id/snapshots` | — | `Snapshot[]` (DESC по `created_at`) |
 | `GET` | `/api/projects/:id/snapshots/:sid` | — | `Snapshot & { files: { [path]: string } }` |
-| `POST` | `/api/projects/:id/snapshots/:sid/preview` | — | `Snapshot` (200 если PNG уже готов, 202 если поставлен в очередь) |
-| `POST` | `/api/projects/:id/snapshots/:sid/session` | — | `{session_id, bootstrap_url, expires_at, ...}` — короткоживущая интерактивная сессия продуктовых файлов commit на актуальном MAX core; БД, auth и env изолированы и удаляются по TTL |
-| `DELETE` | `/api/projects/:id/snapshots/:sid/session` | `?session_id=<uuid>` | 204, закрывает только указанное поколение временной сессии без изменения HEAD |
 | `POST` | `/api/projects/:id/rollback` | `{snapshot_id}` | `Snapshot` (новый — результат отката) |
 | `GET` | `/api/projects/:id/messages` | `?limit=50&before=<msg_id>` | `Message[]` |
 
@@ -88,9 +80,9 @@ Stop — серверная операция: `/generation/cancel` записы�
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
 | `GET` | `/api/billing/plans` | — | Активные версии тарифов `Free`, `Pro`, `Business` |
-| `GET` | `/api/billing/subscription` | — | Текущая подписка платёжного аккаунта вместе с зафиксированной версией тарифа и `is_lifetime` |
+| `GET` | `/api/billing/subscription` | — | Текущая подписка платёжного аккаунта вместе с зафиксированной версией тарифа |
 | `PATCH` | `/api/billing/subscription` | `{action: "cancel" \| "restore", consent_version?}` | Отмена в конце периода или восстановление автопродления с актуальным согласием |
-| `GET` | `/api/wallet` | — | `{balance_rub, recent_charges, free_generations_left, free_generation_limit, unlimited_generations}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
+| `GET` | `/api/wallet` | — | `{balance_rub, recent_charges}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
 | `POST` | `/api/wallet/topup` | `{amount_rub}` | `{balance_rub}`; тестовый маршрут закрыт по умолчанию |
 | `GET` | `/api/payments` | — | Последние платежи текущего платёжного аккаунта |
 | `POST` | `/api/payments` | `{package_code, idempotency_key}` | Разовое пополнение через ЮKassa; недоступно без реквизитов магазина |
@@ -107,13 +99,6 @@ Stop — серверная операция: `/generation/cancel` записы�
 включается только отдельным флагом и актуальной версией согласия. Worker
 повторяет неуспешное списание через 12 часов, сохраняет платные права на
 трёхдневный grace-период и затем создаёт Free-подписку без удаления проектов.
-
-`is_lifetime=true` означает явный бессрочный grant: такая подписка всегда
-`active`, не имеет способа оплаты, даты окончания, следующего списания или
-grace-периода. Она использует обычную версию тарифа и все штатные entitlement
-gates, но исключена из checkout, cancel/restore и renewal worker. Поэтому
-пожизненный Business даёт ровно максимальные текущие права Business, не
-отключая rate limit и safety-ограничения генерации.
 
 ### Models (для селектора в UI)
 
@@ -138,7 +123,6 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 |---|---|---|---|
 | `POST` | `/api/projects/:id/runtime/start` | — | `RuntimeStatus` (после wake) |
 | `POST` | `/api/projects/:id/runtime/stop` | `{pause?: bool}` | `RuntimeStatus` |
-| `POST` | `/api/projects/:id/runtime/heartbeat` | — | `204` (owner preview activity) |
 | `GET` | `/api/projects/:id/runtime` | — | `RuntimeStatus` |
 | `POST` | `/api/projects/:id/deploy` | `{commit_sha?: string}` | `DeployStatus` (асинхронный, прогресс — через WS) |
 | `GET` | `/api/projects/:id/deploy` | — | `DeployStatus` последнего деплоя |

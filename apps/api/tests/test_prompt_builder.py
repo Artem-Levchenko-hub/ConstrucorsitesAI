@@ -132,12 +132,7 @@ def test_fullstack_prompt_excludes_static_kit() -> None:
 
 def test_kit_files_constant() -> None:
     assert KIT_FILES == frozenset(
-        {
-            "assets/omnia-kit.css",
-            "assets/omnia-kit.js",
-            "assets/anime.min.js",
-            "assets/omnia-depth.js",
-        }
+        {"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"}
     )
 
 
@@ -147,7 +142,6 @@ def test_ensure_kit_linked_injects_when_missing() -> None:
     assert "assets/omnia-kit.css" in out
     assert "assets/anime.min.js" in out
     assert "assets/omnia-kit.js" in out
-    assert "assets/omnia-depth.js" in out
     assert out.index("omnia-kit.css") < out.index("</head>")  # injected before </head>
     # anime.min.js must precede omnia-kit.js (kit reads window.anime on load).
     assert out.index("anime.min.js") < out.index("omnia-kit.js")
@@ -157,12 +151,9 @@ def test_ensure_kit_linked_idempotent_when_present() -> None:
     html = (
         '<html><head><link rel="stylesheet" href="assets/omnia-kit.css">'
         '<script src="assets/anime.min.js" defer></script>'
-        '<script src="assets/omnia-kit.js" defer></script>'
-        '<script src="assets/omnia-depth.js" defer></script></head><body></body></html>'
+        '<script src="assets/omnia-kit.js" defer></script></head><body></body></html>'
     )
-    out = _ensure_kit_linked({"index.html": html})
-    assert out["index.html"] == html
-    assert "assets/omnia-depth.js" in out
+    assert _ensure_kit_linked({"index.html": html})["index.html"] == html
 
 
 def test_ensure_kit_linked_ignores_non_html() -> None:
@@ -426,15 +417,8 @@ def test_max_miniapp_prompt_routes_to_platform_stack() -> None:
     sp = build_system_prompt("max_miniapp")
     assert _MAX_MARKER in sp
     assert "MAX_BOT_TOKEN" in sp
-    assert "Платформенный runtime полностью headless" in sp
-    assert "src/components/product/ProductApp.tsx" in sp
-    assert "Демо/local данные разрешены" in sp
-    assert "не импортируй `@maxhub/max-ui`" in sp
-    assert "обязательный legal footer/marker" in sp
-    assert 'data-omnia-native-legal-nav="true"' not in sp
-    assert "АРТ-ДИРЕКЦИЯ" not in sp
-    assert "КОДЕКС ВКУСА" not in sp
-    assert "AWWWARDS" not in sp
+    assert "requireMaxUser()" in sp
+    assert "Telegram WebApp API" in sp
     assert _TGBOT_MARKER not in sp
     assert _SPA_MARKER not in sp
 

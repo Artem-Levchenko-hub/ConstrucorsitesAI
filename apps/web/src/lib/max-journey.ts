@@ -1,9 +1,9 @@
 import type { MaxReadiness } from "@/lib/api/types";
 
 export type MaxJourneyStageId =
-  | "demo"
+  | "project"
+  | "build"
   | "app"
-  | "access"
   | "max"
   | "publish"
   | "verify";
@@ -34,37 +34,37 @@ const STAGE_DEFINITIONS: Array<{
   actionLabel: string;
 }> = [
   {
-    id: "demo",
-    label: "Рабочее демо",
-    shortLabel: "Демо",
-    description: "Omnia собирает кликабельную версию до верификации и оплаты.",
+    id: "project",
+    label: "Проект создан",
+    shortLabel: "Проект",
+    description: "Название и основной сценарий приложения сохранены.",
+    itemIds: [],
+    suffix: "",
+    actionLabel: "Открыть проект",
+  },
+  {
+    id: "build",
+    label: "Сборка приложения",
+    shortLabel: "Сборка",
+    description: "Соберите рабочую версию и проверьте основные экраны.",
     itemIds: ["build"],
     suffix: "",
     actionLabel: "Продолжить сборку",
   },
   {
     id: "app",
-    label: "Карточка и документы",
-    shortLabel: "Материалы",
-    description: "Omnia проверит карточку, поддержку и юридическую готовность.",
+    label: "Данные и политики",
+    shortLabel: "Данные",
+    description: "Заполните сведения о продукте, владельце, поддержке и правилах.",
     itemIds: ["business", "legal"],
     suffix: "/settings?tab=app",
     actionLabel: "Заполнить данные",
   },
   {
-    id: "access",
-    label: "Доступ к запуску",
-    shortLabel: "Доступ",
-    description: "Подтвердите бизнес и подключите тариф только перед запуском.",
-    itemIds: ["max_business", "plan"],
-    suffix: "/onboarding",
-    actionLabel: "Подготовить запуск",
-  },
-  {
     id: "max",
     label: "MAX-бот",
     shortLabel: "MAX-бот",
-    description: "В MAX Partner создайте карточку, дождитесь модерации и вставьте секрет.",
+    description: "Подключите прошедшего модерацию бота из MAX Partner.",
     itemIds: ["bot"],
     suffix: "/settings?tab=bot",
     actionLabel: "Подключить MAX-бота",
@@ -73,8 +73,8 @@ const STAGE_DEFINITIONS: Array<{
     id: "publish",
     label: "Публикация",
     shortLabel: "Публикация",
-    description: "Omnia развернёт production, подготовит HTTPS-адрес и webhook.",
-    itemIds: ["publish", "webhook"],
+    description: "Разверните production-версию и получите постоянный HTTPS-адрес.",
+    itemIds: ["publish"],
     suffix: "/publish",
     actionLabel: "Перейти к публикации",
   },
@@ -82,22 +82,20 @@ const STAGE_DEFINITIONS: Array<{
     id: "verify",
     label: "Проверка в MAX",
     shortLabel: "Проверка",
-    description: "Добавьте готовый HTTPS-адрес в карточку приложения в MAX.",
-    itemIds: ["max_url"],
+    description: "Активируйте webhook, добавьте URL в MAX и проверьте запуск.",
+    itemIds: ["webhook", "max_url"],
     suffix: "/settings?tab=bot",
     actionLabel: "Завершить подключение",
   },
 ];
 
 const ITEM_STAGE: Record<string, MaxJourneyStageId> = {
-  build: "demo",
+  build: "build",
   business: "app",
   legal: "app",
-  max_business: "access",
-  plan: "access",
   bot: "max",
   publish: "publish",
-  webhook: "publish",
+  webhook: "verify",
   max_url: "verify",
 };
 
@@ -106,13 +104,11 @@ function stageIsDone(
   itemIds: string[],
   items: ReadinessItem[],
 ): boolean {
+  if (stageId === "project") return true;
   return itemIds.every((itemId) => items.find((item) => item.id === itemId)?.done === true);
 }
 export function getMaxJourneyItemHref(projectId: string, itemId: string): string {
-  const stageId = ITEM_STAGE[itemId] ?? "demo";
-  if (stageId === "access") {
-    return `/max/onboarding?next=${encodeURIComponent(`/max/${projectId}`)}`;
-  }
+  const stageId = ITEM_STAGE[itemId] ?? "build";
   const definition = STAGE_DEFINITIONS.find((stage) => stage.id === stageId);
   return `/max/${projectId}${definition?.suffix ?? ""}`;
 }
@@ -130,10 +126,7 @@ export function getMaxJourney(
   const prepared = STAGE_DEFINITIONS.map((definition, index) => ({
     ...definition,
     done: stageIsDone(definition.id, definition.itemIds, items),
-    href:
-      definition.id === "access"
-        ? `/max/onboarding?next=${encodeURIComponent(`/max/${projectId}`)}`
-        : `/max/${projectId}${definition.suffix}`,
+    href: `/max/${projectId}${definition.suffix}`,
     position: index + 1,
   }));
   const currentIndex = prepared.findIndex((stage) => !stage.done);

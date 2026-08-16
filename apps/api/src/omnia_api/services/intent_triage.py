@@ -29,10 +29,8 @@ slotted in later without touching any caller.
 
 from __future__ import annotations
 
-import re
-
 ORCHESTRATE = "orchestrate"  # BUILD — regenerate the whole page
-CHEAP = "cheap"  # EDIT — surgical patch, preserve everything else
+CHEAP = "cheap"              # EDIT — surgical patch, preserve everything else
 
 # Explicit "throw the page away and rebuild" intent — forces BUILD even on a
 # project that already has a page. Kept deliberately TIGHT: a bare "переделай"
@@ -41,29 +39,13 @@ CHEAP = "cheap"  # EDIT — surgical patch, preserve everything else
 # Russian stems matched as substrings, so падежи are covered.
 _REBUILD_KEYWORDS: frozenset[str] = frozenset(
     {
-        "с нуля",
-        "заново",
-        "пересоздай",
-        "пересобери",
-        "переделай сайт",
-        "переделай страниц",
-        "переделай весь",
-        "переделай всё",
-        "переделай все",
-        "переделай лендинг",
-        "редизайн",
-        "redesign",
-        "rebuild",
-        "from scratch",
-        "другой сайт",
-        "новый дизайн",
-        "смени дизайн",
-        "сменить дизайн",
-        "поменяй дизайн",
-        "перестрой",
-        "полностью переделай",
-        "полностью обнови",
-        "совершенно друг",
+        "с нуля", "заново", "пересоздай", "пересобери",
+        "переделай сайт", "переделай страниц", "переделай весь",
+        "переделай всё", "переделай все", "переделай лендинг",
+        "редизайн", "redesign", "rebuild", "from scratch",
+        "другой сайт", "новый дизайн", "смени дизайн", "сменить дизайн",
+        "поменяй дизайн", "перестрой", "полностью переделай",
+        "полностью обнови", "совершенно друг",
     }
 )
 
@@ -79,43 +61,16 @@ _REBUILD_KEYWORDS: frozenset[str] = frozenset(
 # входа" edit).
 _STRUCTURAL_KEYWORDS: frozenset[str] = frozenset(
     {
-        "бэкенд",
-        "backend",
-        "fullstack",
-        "full-stack",
-        "фуллстек",
+        "бэкенд", "backend", "fullstack", "full-stack", "фуллстек",
         "серверн",  # серверная часть/логика — distinct from "сервис"
-        "база данных",
-        "базу данных",
-        "базы данных",
-        "базой данных",
-        "многостраничн",
-        "много страниц",
+        "база данных", "базу данных", "базы данных", "базой данных",
+        "многостраничн", "много страниц",
     }
 )
 
 
 def _has_any(text: str, keywords: frozenset[str]) -> bool:
     return any(k in text for k in keywords)
-
-
-_NEGATED_REBUILD_PREFIX_RE = re.compile(
-    r"(?:\bне(?:\s+[\w-]+){0,5}|\b(?:do\s+not|don't|dont)(?:\s+[\w-]+){0,5})\s*$",
-    re.IGNORECASE,
-)
-
-
-def _has_rebuild_intent(text: str) -> bool:
-    """Match explicit rebuilds without treating a prohibition as intent."""
-
-    for keyword in _REBUILD_KEYWORDS:
-        offset = 0
-        while (index := text.find(keyword, offset)) >= 0:
-            prefix = text[max(0, index - 80) : index]
-            if _NEGATED_REBUILD_PREFIX_RE.search(prefix) is None:
-                return True
-            offset = index + len(keyword)
-    return False
 
 
 def decide_intent(
@@ -151,7 +106,7 @@ def decide_intent(
         return ORCHESTRATE
 
     text = (prompt or "").strip().lower()
-    if _has_rebuild_intent(text):
+    if _has_any(text, _REBUILD_KEYWORDS):
         return ORCHESTRATE
     if _has_any(text, _STRUCTURAL_KEYWORDS):
         return ORCHESTRATE

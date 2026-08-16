@@ -63,7 +63,7 @@ const chapters = [
 ] as const;
 
 function Kicker({ children }: { children: ReactNode }) {
-  return <p className="omnia-kicker text-accent">{children}</p>;
+  return <p className="omnia-kicker text-[#f15a38]">{children}</p>;
 }
 
 function GuideSection({
@@ -113,7 +113,7 @@ function StepList({
     <ol className="divide-y divide-[#e7e3da] overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
       {steps.map((step, index) => (
         <li key={step.title} className="grid gap-4 p-5 sm:grid-cols-[44px_minmax(0,1fr)] sm:p-6">
-          <span className="grid size-8 place-items-center rounded-full border border-accent/40 bg-accent/[.06] font-mono text-[10px] font-semibold text-accent">
+          <span className="grid size-8 place-items-center rounded-full border border-[#f15a38]/40 bg-[#f15a38]/[.06] font-mono text-[10px] font-semibold text-[#c84528]">
             {String(index + 1).padStart(2, "0")}
           </span>
           <div>
@@ -162,7 +162,7 @@ function NumberedLegend({ items }: { items: string[] }) {
     <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {items.map((item, index) => (
         <div key={item} className="flex gap-3 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4 text-xs leading-5 text-[#6d6962]">
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-white">{index + 1}</span>
+          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-[#f15a38] text-[10px] font-semibold text-white">{index + 1}</span>
           {item}
         </div>
       ))}
@@ -209,7 +209,7 @@ export default function MaxGuidePage() {
           <div className="flex items-center gap-2">
             <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" />О продукте</Link>
             <Link href="/login?next=/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Войти</Link>
-            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Попробовать демо</Link>
+            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Начать</Link>
           </div>
         </div>
       </header>
@@ -217,7 +217,7 @@ export default function MaxGuidePage() {
       <section data-graphite-shell className="bg-[#171716] px-4 py-16 sm:px-7 sm:py-24 lg:py-28">
         <div className="mx-auto grid max-w-[1320px] gap-12 lg:grid-cols-[1fr_340px] lg:items-end">
           <div>
-            <p className="omnia-kicker text-accent">Omnia / MAX Studio / Docs</p>
+            <p className="omnia-kicker text-[#f15a38]">Omnia / MAX Studio / Docs</p>
             <h1 className="mt-6 max-w-[980px] text-[46px] font-semibold leading-[.96] tracking-[-.055em] sm:text-[68px] lg:text-[84px]">От идеи до запуска в MAX — без пропущенных шагов</h1>
             <p className="mt-7 max-w-[760px] text-base leading-7 text-white/55 sm:text-lg">Полное руководство для владельца бизнеса: что нажимать, какие данные подготовить, как проверить сборку, подключить бота, опубликовать приложение и принять его двумя реальными пользователями.</p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -226,7 +226,7 @@ export default function MaxGuidePage() {
             </div>
           </div>
           <div className="rounded-[14px] border border-white/14 bg-white/[.04] p-6">
-            <div className="flex items-center gap-3"><BookOpenText className="size-5 text-accent" /><p className="text-sm font-semibold">Как читать руководство</p></div>
+            <div className="flex items-center gap-3"><BookOpenText className="size-5 text-[#f15a38]" /><p className="text-sm font-semibold">Как читать руководство</p></div>
             <ul className="mt-5 space-y-3 text-xs leading-5 text-white/48">
               <li>① Идите по главам 00–10 для первого запуска.</li>
               <li>② Цифры на снимках показывают точные места клика.</li>
@@ -261,7 +261,7 @@ export default function MaxGuidePage() {
                 [CreditCard, "Платёжные реквизиты", "Для платного запуска: активный магазин ЮKassa и утверждённая схема чеков."],
               ].map(([Icon, title, text]) => {
                 const ItemIcon = Icon as typeof MailCheck;
-                return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><ItemIcon className="size-5 text-accent" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(text)}</p></article>;
+                return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><ItemIcon className="size-5 text-[#f15a38]" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(text)}</p></article>;
               })}
             </div>
             <Note tone="warning" title="Не начинайте с токена и URL">Сначала создайте и проверьте приложение. Токен подключается до публикации, а production URL появляется только после успешного deploy. URL из безопасного превью в MAX Partner вставлять нельзя.</Note>
@@ -296,7 +296,7 @@ export default function MaxGuidePage() {
                 [MessageSquareText, "Одна задача за сообщение", "Так проще проверить результат и при необходимости откатить только одну правку."],
                 [Smartphone, "Проверяйте как пользователь", "Нажимайте кнопки, создавайте тестовые данные, обновляйте страницу и повторяйте сценарий."],
                 [RefreshCw, "Не перезапускайте генерацию", "При зависшем статусе сначала обновите страницу: серверная задача продолжает работать в фоне."],
-              ].map(([Icon, title, text]) => { const ItemIcon = Icon as typeof MessageSquareText; return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><ItemIcon className="size-5 text-accent" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(text)}</p></article>; })}
+              ].map(([Icon, title, text]) => { const ItemIcon = Icon as typeof MessageSquareText; return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><ItemIcon className="size-5 text-[#f15a38]" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(text)}</p></article>; })}
             </div>
             <h3 className="mt-10 text-lg font-semibold">Шаблоны сообщений агенту</h3>
             <div className="mt-4 grid gap-3">
@@ -305,7 +305,7 @@ export default function MaxGuidePage() {
                 ["Исправление", "На экране заказа кнопка перекрывается клавиатурой. Сохрани текущий дизайн и исправь только mobile layout и safe area."],
                 ["Проверка данных", "Проверь, что пользователь MAX видит только свои заказы. Добавь пустое состояние и понятную ошибку при недоступном сервере."],
                 ["Контент", "Замени тексты каталога на приложенный список. Не меняй backend, навигацию и визуальный стиль."],
-              ].map(([label, prompt]) => <div key={label} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4"><p className="font-mono text-[9px] uppercase tracking-[.14em] text-accent">{label}</p><p className="mt-2 text-sm leading-6 text-[#6d6962]">{prompt}</p></div>)}
+              ].map(([label, prompt]) => <div key={label} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4"><p className="font-mono text-[9px] uppercase tracking-[.14em] text-[#f15a38]">{label}</p><p className="mt-2 text-sm leading-6 text-[#6d6962]">{prompt}</p></div>)}
             </div>
           </GuideSection>
 
@@ -339,13 +339,13 @@ export default function MaxGuidePage() {
               <Checklist title="В Omnia" items={["Проект создан как MAX Mini App.", "Открыта интеграция MAX Bot API.", "Токен вставлен только в защищённое поле.", "Проверка вернула имя и username нужного бота.", "После публикации webhook имеет статус «активен»."]} />
             </div>
             <StepList steps={[
-              { title: "Создайте бота", text: <>Откройте <a className="font-medium text-accent underline" href="https://business.max.ru/" target="_blank" rel="noreferrer">MAX для партнёров</a>, выберите профиль, затем <strong>«Чат-боты» → «Создать»</strong>. Заполните карточку и отправьте на модерацию.</>, result: "Статус бота — «на модерации»." },
+              { title: "Создайте бота", text: <>Откройте <a className="font-medium text-[#c84528] underline" href="https://business.max.ru/" target="_blank" rel="noreferrer">MAX для партнёров</a>, выберите профиль, затем <strong>«Чат-боты» → «Создать»</strong>. Заполните карточку и отправьте на модерацию.</>, result: "Статус бота — «на модерации»." },
               { title: "Дождитесь статуса «создан»", text: <>Пока бот модерируется, его настройки и токен могут быть недоступны. При статусе «требует исправлений» откройте причину, исправьте карточку и отправьте повторно.</>, result: "Бот находится поиском в настоящем клиенте MAX." },
               { title: "Скопируйте токен", text: <><strong>«Чат-боты» → «Перейти» → «Расширенные настройки» → «Настроить»</strong>. Нажмите копирование рядом с токеном.</>, result: "Токен доступен в буфере обмена, но не сохранён в заметках или чате." },
               { title: "Подключите в Studio", text: <>В проекте откройте <strong>«Интеграции» → «MAX Bot API» → «Подключить»</strong>. Вставьте токен и нажмите <strong>«Проверить и сохранить»</strong>.</>, result: "Studio показывает правильное имя и username бота." },
               { title: "Не меняйте токен без причины", text: <>Обновление токена в MAX немедленно делает старый недействительным. Если ротация нужна, сначала выпустите новый токен, затем сразу обновите интеграцию в Studio и проверьте webhook.</>, result: "Интеграция снова имеет статус «активно»." },
             ]} />
-            <Note title="Срок модерации и первоисточник">MAX указывает ориентир до 48 рабочих часов. Актуальные статусы, требования к карточке и порядок получения токена сверяйте в <a className="font-medium text-accent underline" href="https://dev.max.ru/docs/chatbots/bots-create/create" target="_blank" rel="noreferrer">официальной инструкции по созданию и модерации бота</a>.</Note>
+            <Note title="Срок модерации и первоисточник">MAX указывает ориентир до 48 рабочих часов. Актуальные статусы, требования к карточке и порядок получения токена сверяйте в <a className="font-medium text-[#c84528] underline" href="https://dev.max.ru/docs/chatbots/bots-create/create" target="_blank" rel="noreferrer">официальной инструкции по созданию и модерации бота</a>.</Note>
             <Note tone="warning" title="Токен равен паролю бота">Не публикуйте его в сообщениях, документах, GitHub, скриншотах и исходном коде. Если токен попал наружу — обновите его в MAX и переподключите бота в Studio.</Note>
           </GuideSection>
 
@@ -379,7 +379,7 @@ export default function MaxGuidePage() {
               { title: "Сохраните и дождитесь статуса", text: <>Нажмите <strong>«Сохранить»</strong>. Если MAX отправил изменения на повторную модерацию, дождитесь возвращения рабочего статуса.</>, result: "В настоящем чате бота появилась кнопка запуска." },
               { title: "Подтвердите в Studio", text: <>Вернитесь в настройки приложения и включите <strong>«URL добавлен в MAX»</strong>.</>, result: "Readiness равен 100%, приложение готово к приёмке." },
             ]} />
-            <Note title="Официальная схема MAX">Путь к полю ссылки, варианты кнопки и формат внутреннего запуска описаны в <a className="font-medium text-accent underline" href="https://dev.max.ru/help/miniapps" target="_blank" rel="noreferrer">официальной справке по мини-приложениям</a>.</Note>
+            <Note title="Официальная схема MAX">Путь к полю ссылки, варианты кнопки и формат внутреннего запуска описаны в <a className="font-medium text-[#c84528] underline" href="https://dev.max.ru/help/miniapps" target="_blank" rel="noreferrer">официальной справке по мини-приложениям</a>.</Note>
             <Note tone="warning" title="Как отличить production URL">Безопасное превью открывается только внутри защищённой preview-сессии и не подходит для MAX. Production URL постоянный, начинается с HTTPS, открывается отдельно и отображается после deploy со статусом done.</Note>
           </GuideSection>
 
@@ -388,14 +388,14 @@ export default function MaxGuidePage() {
               <Checklist title="Пользователь A — новый" items={["Открывает бота по ссылке или через поиск MAX.", "Нажимает «Открыть» и видит Mini App внутри MAX.", "Создаёт тестовую запись/заказ/действие.", "Закрывает шторку и открывает повторно.", "Видит только собственные данные и сохранённый результат."]} />
               <Checklist title="Пользователь B — изоляция" items={["Использует другой реальный MAX-аккаунт и устройство.", "Первый экран не содержит данных пользователя A.", "Создаёт свой отдельный объект.", "После повторного запуска видит только свой объект.", "Получает сервисное сообщение, если оно входит в сценарий."]} />
             </div>
-            <div data-graphite-shell className="mt-6 rounded-[12px] border border-[#d8d4cb] bg-[#171716] p-6 text-white">
-              <p className="omnia-kicker text-accent">Протокол приёмки</p>
+            <div className="mt-6 rounded-[12px] border border-[#d8d4cb] bg-[#171716] p-6 text-white">
+              <p className="omnia-kicker text-[#f15a38]">Протокол приёмки</p>
               <div className="mt-6 grid gap-px overflow-hidden rounded-[10px] border border-white/12 bg-white/12 sm:grid-cols-3">
                 {[
                   [Users, "2 разных MAX ID", "Сервер получил две независимые личности из валидированного initData."],
                   [ShieldCheck, "Изоляция данных", "Каждый select/update/delete ограничен владельцем объекта."],
                   [Webhook, "Webhook 200", "События MAX приняты, секрет проверен, повторы не создают дубликаты."],
-                ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof Users; return <div key={String(title)} className="bg-[#171716] p-5"><ItemIcon className="size-5 text-accent" /><p className="mt-7 text-sm font-semibold">{String(title)}</p><p className="mt-2 text-xs leading-5 text-white/45">{String(copy)}</p></div>; })}
+                ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof Users; return <div key={String(title)} className="bg-[#171716] p-5"><ItemIcon className="size-5 text-[#f15a38]" /><p className="mt-7 text-sm font-semibold">{String(title)}</p><p className="mt-2 text-xs leading-5 text-white/45">{String(copy)}</p></div>; })}
               </div>
             </div>
             <StepList steps={[
@@ -434,7 +434,7 @@ export default function MaxGuidePage() {
                 ["past_due", "Продление не прошло, действует льготный период."],
                 ["canceled", "Подписка прекращена и больше не продлевается."],
                 ["refunded", "Возврат подтверждён провайдером и отражён в учёте."],
-              ].map(([status, copy]) => <div key={status} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4"><code className="text-[11px] font-semibold text-accent">{status}</code><p className="mt-2 text-xs leading-5 text-[#6d6962]">{copy}</p></div>)}
+              ].map(([status, copy]) => <div key={status} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4"><code className="text-[11px] font-semibold text-[#c84528]">{status}</code><p className="mt-2 text-xs leading-5 text-[#6d6962]">{copy}</p></div>)}
             </div>
           </GuideSection>
 
@@ -451,7 +451,7 @@ export default function MaxGuidePage() {
                 [Link2, "Кнопка в MAX открывает не то", "Сверьте бота и production URL → удалите preview-параметры → сохраните URL и кнопку «Открыть»."],
                 [CreditCard, "Оплата есть, баланс не изменился", "Не платите повторно → откройте транзакции → дождитесь reconcile/webhook → передайте ID платежа поддержке."],
                 [Users, "Пользователи видят чужие данные", "Немедленно остановите приёмку → не продолжайте production → зафиксируйте сценарий и версию для исправления изоляции."],
-              ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof MailCheck; return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><div className="flex gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[#ece8df]"><ItemIcon className="size-4 text-accent" /></span><div><h3 className="text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(copy)}</p></div></div></article>; })}
+              ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof MailCheck; return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><div className="flex gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[#ece8df]"><ItemIcon className="size-4 text-[#f15a38]" /></span><div><h3 className="text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(copy)}</p></div></div></article>; })}
             </div>
             <div className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
               <h3 className="text-base font-semibold">Что приложить к обращению в поддержку</h3>
@@ -466,8 +466,8 @@ export default function MaxGuidePage() {
               <Checklist title="Перед реальной приёмкой" items={["SMTP доставляет подтверждение и восстановление пароля.", "ЮKassa использует настоящий shopId и утверждённую схему чеков.", "Оператор, ИНН, адрес и поддержка совпадают во всех документах.", "MAX-профиль верифицирован, бот промодерирован.", "Токен бота проверен и хранится только в защищённой интеграции.", "Сборка работает в безопасном превью.", "Production deploy имеет статус done и зелёный health.", "Webhook активен, production URL сохранён в MAX Partner.", "Кнопка «Открыть» видна в реальном клиенте MAX.", "Назначены два разных MAX-пользователя."]} />
               <Checklist title="Чистый golden path" items={["Новый пользователь зарегистрировался через UI.", "Email подтверждён по настоящему письму.", "Бизнес-профиль проверен штатным процессом.", "Реальный платёж завершён у провайдера.", "В ledger ровно одно зачисление.", "Проект создан и собран через Studio.", "Безопасное превью открыто через подписанную сессию.", "Публикация выполнена штатным deploy.", "URL добавлен в правильного MAX-бота.", "Два пользователя прошли сценарий и не увидели чужие данные.", "Автопродление управляется из кабинета.", "Во время пути не выполнялись ручные SQL/SSH-правки."]} />
             </div>
-            <div data-graphite-shell className="mt-8 rounded-[14px] bg-[#171716] p-7 text-white sm:p-9">
-              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-accent">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Studio и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в MAX Studio <ArrowRight className="size-4" /></Link></div>
+            <div className="mt-8 rounded-[14px] bg-[#171716] p-7 text-white sm:p-9">
+              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-[#f15a38]">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Studio и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в MAX Studio <ArrowRight className="size-4" /></Link></div>
             </div>
           </GuideSection>
         </div>

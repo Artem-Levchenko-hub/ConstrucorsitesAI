@@ -78,16 +78,6 @@ class Settings(BaseSettings):
     llm_gateway_url: str = Field(default="http://localhost:8001")
     mock_llm: bool = Field(default=True)
 
-    # MCP capability broker. External servers are never connected from the
-    # browser and never handed project credentials directly. The API exposes a
-    # small, read-only meta-tool surface to the native agent and resolves only
-    # operator-controlled servers from this allow-list.
-    mcp_capabilities_enabled: bool = Field(default=True)
-    mcp_context7_enabled: bool = Field(default=True)
-    mcp_servers_json: str = Field(default="")
-    mcp_catalog_ttl_seconds: int = Field(default=900, ge=30, le=86400)
-    mcp_max_result_chars: int = Field(default=12000, ge=1000, le=50000)
-
     # V2 orchestrator (apps/orchestrator on :8003). Internal-only API behind
     # a shared-secret header — token MUST match the one in the orchestrator's
     # /opt/omnia/apps/orchestrator/.env file.
@@ -1019,16 +1009,6 @@ class Settings(BaseSettings):
     # production overrides to 30, so an old AGENT_BUILDER_MAX_STEPS=120 cannot
     # silently reopen the runaway loop.
     agent_builder_max_steps: int = Field(default=24)
-    # Stable MAX builds use a larger native-turn ceiling than generic builds,
-    # but never an unbounded iterator. The wall-clock deadline is independent:
-    # even slow provider and runtime calls must reach a terminal state.
-    agent_builder_max_runtime_steps: int = Field(default=120)
-    agent_builder_max_runtime_seconds: int = Field(default=1200)
-    # Must exceed the gateway's complete 600-second provider-turn deadline plus
-    # connect, request handling and response-classification time. This prevents
-    # the API socket from disappearing just before the gateway returns an exact
-    # terminal response.
-    native_gateway_read_timeout_seconds: int = Field(default=660)
     # Green-gate (Phase 2): when ON, the agent loop refuses a `done` until the
     # last build was clean AND the running app was re-checked after the last
     # write (a clean typecheck is exactly what a model hallucinates completion
@@ -1064,17 +1044,6 @@ class Settings(BaseSettings):
     # protocol stays the prod default until the native path is verified on real builds
     # and billing is wired. Env: USE_NATIVE_AGENT.
     use_native_agent: bool = Field(default=False)
-    # Project Brain + semantic anti-loop. Global OFF preserves the existing
-    # native loop; the per-user allowlist enables an owner-only MAX canary.
-    agent_kernel_v2_enabled: bool = Field(default=False)
-    agent_kernel_v2_canary_users: str = Field(default="")
-    # Read-only Oxlint/dependency analysis automatically enriches the existing
-    # MAX build observation. Separate canary keeps legacy containers fail-safe.
-    max_code_intelligence_enabled: bool = Field(default=False)
-    max_code_intelligence_canary_users: str = Field(default="")
-    # Optional subjective screenshot/vision scoring for MAX. Functional browser,
-    # runtime, build and security proof remain mandatory when this is disabled.
-    max_visual_scoring_enabled: bool = Field(default=False)
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't
@@ -1224,7 +1193,6 @@ def get_settings() -> Settings:
 MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7": "premium",
-    "claude-sonnet-5": "premium",
     "gemini-3.1-pro-preview-customtools": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
@@ -1326,11 +1294,11 @@ def generation_mode(model_id: str | None, project_id: str | None = None) -> Gene
 # ──────────────────────────────────────────────────────────────────────────
 
 PRIMARY_LLM_MODEL = "gemini-3.1-pro-preview-customtools"
-MAX_STUDIO_LLM_MODEL = "claude-sonnet-5"
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-07-31): keep the existing general generator on
-    # Gemini. MAX Studio selects MAX_STUDIO_LLM_MODEL explicitly.
+    # Owner directive (2026-07-31): Gemini 3.1 Pro Preview Custom Tools drives
+    # classify → art direction → implementation → visual audit → repair. Flux
+    # image generation and Seedance video generation remain separate media tools.
     "classify": PRIMARY_LLM_MODEL,  # pick 1 of N presets
     "director": PRIMARY_LLM_MODEL,  # catalog orchestrator — structure
     "polish": PRIMARY_LLM_MODEL,  # writes the real PageIR content (RU copy)
@@ -1363,11 +1331,6 @@ DEFAULT_ROLE_MODEL = PRIMARY_LLM_MODEL
 # Counter lives on User.free_generations_used; the gate is in routers/messages.py
 # and the wallet-skip is in the LLM gateway (metadata.free=true).
 FREE_GENERATION_LIMIT = 3
-# MAX Studio has a deliberately narrower acquisition allowance than the
-# general-purpose builder: one accepted first build per registered account.
-# Follow-up AI work uses the normal wallet path.  Keep this server-owned -- the
-# client only displays the returned entitlement and can never mint another run.
-MAX_DEMO_GENERATION_LIMIT = 1
 
 
 def model_for_role(role: str, override: str | None = None) -> str:

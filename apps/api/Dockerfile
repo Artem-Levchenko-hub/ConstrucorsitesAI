@@ -42,11 +42,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-install-project \
-    && uv run --no-sync playwright install chromium
+RUN uv sync --frozen --no-install-project
 
 COPY . ./
-RUN UV_HTTP_TIMEOUT=300 uv sync --frozen
+RUN uv sync --frozen && uv run playwright install chromium --with-deps || uv run playwright install chromium
 
 ENV PATH="/app/.venv/bin:${PATH}"
 

@@ -1,134 +1,35 @@
 "use client";
 
-import {
-  type CSSProperties,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
   LayoutGrid,
+  LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
+  Settings,
   Smartphone,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { toast } from "sonner";
 
+import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
-import { MaxHowToDialog } from "@/components/max/MaxHowToDialog";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
-import { DownloadButton } from "@/components/workspace/DownloadButton";
-import { getLatestGeneration } from "@/lib/api/messages";
 import { listProjects } from "@/lib/api/projects";
-import {
-  listSnapshots,
-  prepareSnapshotPreview,
-  rollback as rollbackSnapshot,
-  startSnapshotSession,
-  stopSnapshotSession,
-  type SnapshotSession,
-} from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
-import type { Project, Snapshot } from "@/lib/api/types";
-import { getMaxHowToGuide } from "@/lib/max-how-to";
+import type { Project } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
-import {
-  isGenerationActive,
-  shouldDeferMaxRuntimeStart,
-} from "@/lib/max-runtime-start";
-import {
-  MAX_VERSION_HISTORY_LIMIT,
-  visibleMaxSnapshots,
-} from "@/lib/max-version-history";
-import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { cn } from "@/lib/utils";
-import { useInspectorStore } from "@/store/inspector";
-import { useStyleEditStore } from "@/store/styleEdit";
-import { MaxAccountMenu } from "./MaxAccountMenu";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
-import { MaxTrialBadge } from "./MaxTrialBadge";
-
-type HistorySessionRequest = { snapshotId: string; requestId: number };
-
-class StaleHistorySessionRequest extends Error {}
 
 export function MaxWorkspaceShell({
-  project,
-  email,
-}: {
-  project: Project;
-  email: string;
-}) {
-  return (
-    <MaxEditorProjectScope key={project.id} projectId={project.id}>
-      <MaxWorkspaceContent project={project} email={email} />
-    </MaxEditorProjectScope>
-  );
-}
-
-function MaxEditorProjectScope({
-  projectId,
-  children,
-}: {
-  projectId: string;
-  children: ReactNode;
-}) {
-  const editorSession = useId();
-  const inspectorScope = useInspectorStore((state) => state.projectScope);
-  const inspectorSession = useInspectorStore((state) => state.editorSession);
-  const styleScope = useStyleEditStore((state) => state.projectScope);
-  const styleSession = useStyleEditStore((state) => state.editorSession);
-
-  useEffect(() => {
-    // A unique owner resets stale mode even when React remounts the same project.
-    // Cleanup is owner-checked, so a late old cleanup cannot release a newer
-    // workspace instance for the same project.
-    useInspectorStore.getState().scopeToProject(projectId, editorSession);
-    useStyleEditStore.getState().scopeToProject(projectId, editorSession);
-    return () => {
-      useInspectorStore
-        .getState()
-        .releaseProjectScope(projectId, editorSession);
-      useStyleEditStore
-        .getState()
-        .releaseProjectScope(projectId, editorSession);
-    };
-  }, [editorSession, projectId]);
-
-  if (
-    inspectorScope !== projectId ||
-    inspectorSession !== editorSession ||
-    styleScope !== projectId ||
-    styleSession !== editorSession
-  ) {
-    return (
-      <div
-        className="grid h-full min-h-0 place-items-center bg-[#fcfbf7] text-xs text-[#8d887f]"
-        role="status"
-      >
-        Открываем редактор…
-      </div>
-    );
-  }
-
-  return children;
-}
-
-function MaxWorkspaceContent({
   project,
   email,
 }: {
@@ -140,91 +41,7 @@ function MaxWorkspaceContent({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
-  const [desktopNavigationLayout, setDesktopNavigationLayout] = useState(false);
-  const [desktopPreviewLayout, setDesktopPreviewLayout] = useState(false);
-  const [versionSelection, setVersionSelection] = useState<{
-    snapshotId: string;
-    headId: string | null;
-  } | null>(null);
-  const [historySession, setHistorySession] = useState<{
-    snapshotId: string;
-    sessionId: string;
-    url: string;
-  } | null>(null);
-  const activeHistorySession = useRef<{
-    snapshotId: string;
-    sessionId: string;
-  } | null>(null);
-  const [requestedHistorySnapshotId, setRequestedHistorySnapshotId] = useState<
-    string | null
-  >(null);
-  const requestedHistorySnapshot = useRef<string | null>(null);
-  const historySessionRequestId = useRef(0);
-  const historySessionTail = useRef<Promise<void>>(Promise.resolve());
-  const [hasStarterHandoff] = useState(
-    typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("starter") === "1",
-  );
-  const [starterHandoffExpired, setStarterHandoffExpired] = useState(false);
-  const queryClient = useQueryClient();
-  const latestGeneration = useQuery({
-    queryKey: ["generation", project.id],
-    queryFn: () => getLatestGeneration(project.id),
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (isGenerationActive(status)) {
-        return 1_000;
-      }
-      return hasStarterHandoff && !starterHandoffExpired && !query.state.data
-        ? 500
-        : false;
-    },
-  });
-  const deferInitialRuntimeStart = shouldDeferMaxRuntimeStart({
-    generationQueryPending: latestGeneration.isPending || latestGeneration.isFetching,
-    generationStatus: latestGeneration.data?.status,
-    hasGeneration: Boolean(latestGeneration.data),
-    hasStarterHandoff,
-    starterHandoffExpired,
-  });
-  const navigationInteractive = desktopNavigationLayout
-    ? navigationVisible
-    : mobileNavOpen;
-
-  useEffect(() => {
-    const navigationMedia = window.matchMedia("(min-width: 1024px)");
-    const previewMedia = window.matchMedia("(min-width: 1280px)");
-    const update = () => {
-      setDesktopNavigationLayout(navigationMedia.matches);
-      setDesktopPreviewLayout(previewMedia.matches);
-    };
-    update();
-    navigationMedia.addEventListener("change", update);
-    previewMedia.addEventListener("change", update);
-    return () => {
-      navigationMedia.removeEventListener("change", update);
-      previewMedia.removeEventListener("change", update);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!hasStarterHandoff || latestGeneration.data) return;
-    const timeout = window.setTimeout(() => setStarterHandoffExpired(true), 35_000);
-    return () => window.clearTimeout(timeout);
-  }, [hasStarterHandoff, latestGeneration.data]);
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
-  const snapshots = useQuery({
-    queryKey: ["snapshots", project.id],
-    queryFn: () => listSnapshots(project.id, MAX_VERSION_HISTORY_LIMIT + 1),
-    refetchInterval: (query) => {
-      const selectedId = versionSelection?.snapshotId;
-      if (!selectedId) return false;
-      const selected = query.state.data?.find((item) => item.id === selectedId);
-      return selected && !selected.preview_url ? 2_000 : false;
-    },
-  });
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -233,7 +50,6 @@ function MaxWorkspaceContent({
   });
   const journey = getMaxJourney(project.id, readiness.data?.items ?? []);
   const nextStage = readiness.isSuccess ? journey.currentStage : undefined;
-  const howToGuide = getMaxHowToGuide(readiness.isError ? "demo" : nextStage?.id);
   const launchLabel = readiness.isLoading
     ? "Проверяем…"
     : nextStage
@@ -243,255 +59,30 @@ function MaxWorkspaceContent({
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
   );
-  const versionSnapshots = useMemo(
-    () => visibleMaxSnapshots(snapshots.data ?? []),
-    [snapshots.data],
-  );
-  const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
-  // Bind a historical selection to the HEAD it was opened from. When a new
-  // generation lands in the shared cache, the new current version immediately
-  // wins without a state-setting effect or a flash of stale history.
-  const selectedSnapshotId =
-    versionSelection?.headId === currentSnapshotId
-      ? versionSelection.snapshotId
-      : null;
-
-  const preparePreviewMutation = useMutation({
-    mutationFn: (snapshotId: string) =>
-      prepareSnapshotPreview(project.id, snapshotId),
-    onSuccess: (snapshot) => {
-      queryClient.setQueryData<Snapshot[]>(
-        ["snapshots", project.id],
-        (previous) =>
-          previous?.map((item) =>
-            item.id === snapshot.id
-              ? {
-                  ...item,
-                  ...snapshot,
-                  preview_url: snapshot.preview_url ?? item.preview_url,
-                  version_number:
-                    snapshot.version_number ?? item.version_number,
-                }
-              : item,
-          ),
-      );
-    },
-    onError: () => {
-      toast.error("Не удалось подготовить снимок", {
-        description: "Версия сохранена и доступна для восстановления. Повторите просмотр.",
-      });
-    },
-  });
-
-  const historySessionMutation = useMutation({
-    mutationFn: ({
-      snapshotId,
-      requestId,
-    }: HistorySessionRequest): Promise<SnapshotSession> => {
-      const request = historySessionTail.current
-        .catch(() => undefined)
-        .then(async () => {
-          if (historySessionRequestId.current !== requestId) {
-            throw new StaleHistorySessionRequest();
-          }
-          return startSnapshotSession(project.id, snapshotId);
-        });
-      historySessionTail.current = request.then(
-        () => undefined,
-        () => undefined,
-      );
-      return request;
-    },
-    onSuccess: (session, { snapshotId, requestId }) => {
-      if (
-        historySessionRequestId.current === requestId &&
-        requestedHistorySnapshot.current === snapshotId
-      ) {
-        setHistorySession({
-          snapshotId,
-          sessionId: session.session_id,
-          url: session.bootstrap_url,
-        });
-        activeHistorySession.current = {
-          snapshotId,
-          sessionId: session.session_id,
-        };
-      } else {
-        void stopSnapshotSession(project.id, snapshotId, session.session_id);
-      }
-    },
-    onError: (error, { snapshotId, requestId }) => {
-      if (
-        !(error instanceof StaleHistorySessionRequest) &&
-        historySessionRequestId.current === requestId &&
-        requestedHistorySnapshot.current === snapshotId
-      ) {
-        toast.error("Интерактивная версия не открылась", {
-          description:
-            "Снимок остаётся доступен, а восстановление версии работает как обычно.",
-        });
-      }
-    },
-  });
-
-  const cancelHistoryRuntime = useCallback(() => {
-    historySessionRequestId.current += 1;
-    const active = activeHistorySession.current;
-    activeHistorySession.current = null;
-    requestedHistorySnapshot.current = null;
-    if (active) {
-      void stopSnapshotSession(project.id, active.snapshotId, active.sessionId);
-    }
-  }, [project.id]);
-
-  const closeHistorySession = useCallback(() => {
-    cancelHistoryRuntime();
-    setRequestedHistorySnapshotId(null);
-    setHistorySession(null);
-  }, [cancelHistoryRuntime]);
-
-  useEffect(() => {
-    if (!versionSelection || versionSelection.headId === currentSnapshotId) {
-      return;
-    }
-    cancelHistoryRuntime();
-  }, [cancelHistoryRuntime, currentSnapshotId, versionSelection]);
-
-  useEffect(() => {
-    const urls = versionSnapshots
-      .map((snapshot) => snapshot.preview_url)
-      .filter((url): url is string => Boolean(url));
-    if (urls.length === 0) return;
-
-    let cancelled = false;
-    let next = 0;
-    let active = 0;
-    const images = new Set<HTMLImageElement>();
-    const pump = () => {
-      if (cancelled) return;
-      while (active < 2 && next < urls.length) {
-        const image = new Image();
-        images.add(image);
-        active += 1;
-        image.onload = image.onerror = () => {
-          images.delete(image);
-          active -= 1;
-          pump();
-        };
-        image.src = urls[next++];
-      }
-    };
-    const idleId = window.requestIdleCallback
-      ? window.requestIdleCallback(pump, { timeout: 1_000 })
-      : window.setTimeout(pump, 0);
-    return () => {
-      cancelled = true;
-      images.forEach((image) => {
-        image.onload = null;
-        image.onerror = null;
-      });
-      if (window.cancelIdleCallback) window.cancelIdleCallback(idleId);
-      else window.clearTimeout(idleId);
-    };
-  }, [versionSnapshots]);
-
-  useEffect(
-    () => () => {
-      const active = activeHistorySession.current;
-      if (active) {
-        void stopSnapshotSession(project.id, active.snapshotId, active.sessionId);
-      }
-    },
-    [project.id],
-  );
-
-  function selectSnapshot(snapshotId: string | null) {
-    const active = activeHistorySession.current;
-    if (active) {
-      activeHistorySession.current = null;
-      void stopSnapshotSession(project.id, active.snapshotId, active.sessionId);
-    }
-    requestedHistorySnapshot.current = snapshotId;
-    setRequestedHistorySnapshotId(snapshotId);
-    setHistorySession(null);
-    setVersionSelection(
-      snapshotId ? { snapshotId, headId: currentSnapshotId } : null,
-    );
-    if (snapshotId) {
-      const snapshot = versionSnapshots.find((item) => item.id === snapshotId);
-      if (snapshot && !snapshot.preview_url) {
-        preparePreviewMutation.mutate(snapshotId);
-      }
-      const requestId = historySessionRequestId.current + 1;
-      historySessionRequestId.current = requestId;
-      historySessionMutation.mutate({ snapshotId, requestId });
-    } else {
-      historySessionRequestId.current += 1;
-    }
-  }
-
-  const rollbackMutation = useMutation({
-    mutationFn: (snapshotId: string) =>
-      rollbackSnapshot(project.id, snapshotId),
-    onSuccess: (snapshot) => {
-      queryClient.setQueryData<Snapshot[]>(
-        ["snapshots", project.id],
-        (previous) => upsertSnapshotNewest(previous, snapshot),
-      );
-      setVersionSelection(null);
-      closeHistorySession();
-      toast.success("Версия восстановлена", {
-        description:
-          "Создана новая текущая версия. Предыдущее состояние осталось в истории.",
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["snapshots", project.id],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["projects"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["max-managed-kit-sync", project.id],
-      });
-      void queryClient.invalidateQueries({
-        queryKey: ["max-preview-session", project.id],
-      });
-    },
-    onError: (error) => {
-      toast.error("Не удалось восстановить версию", {
-        description:
-          error instanceof Error
-            ? error.message
-            : "Текущая версия не изменена. Повторите попытку.",
-      });
-    },
-  });
-
-  async function restoreSnapshot(snapshotId: string) {
-    await rollbackMutation.mutateAsync(snapshotId);
-  }
 
   return (
     <div
       data-light-shell
       className={cn(
-        "relative isolate grid h-full max-h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 lg:grid-cols-[var(--max-nav-column)_minmax(0,1fr)] xl:grid-cols-[var(--max-nav-column)_minmax(420px,1fr)_var(--max-preview-column)] 2xl:grid-cols-[var(--max-nav-column)_minmax(480px,1fr)_var(--max-preview-column)]",
+        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-200",
+        navigationVisible
+          ? "lg:grid-cols-[220px_minmax(0,1fr)]"
+          : "lg:grid-cols-[minmax(0,1fr)]",
+        navigationVisible && previewPanelVisible
+          ? "xl:grid-cols-[220px_minmax(420px,1fr)_380px] 2xl:grid-cols-[220px_minmax(480px,1fr)_420px]"
+          : navigationVisible
+            ? "xl:grid-cols-[220px_minmax(0,1fr)]"
+            : previewPanelVisible
+              ? "xl:grid-cols-[minmax(420px,1fr)_380px] 2xl:grid-cols-[minmax(480px,1fr)_420px]"
+              : "xl:grid-cols-[minmax(0,1fr)]",
       )}
-      style={
-        {
-          "--max-nav-column": navigationVisible ? "220px" : "0px",
-          "--max-preview-column": previewPanelVisible
-            ? "clamp(380px,20.5vw,420px)"
-            : "0px",
-        } as CSSProperties
-      }
     >
       <aside
-        aria-hidden={!navigationInteractive}
-        inert={!navigationInteractive}
-        className={`fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 w-[220px] flex-col overflow-hidden border-r bg-[#fcfbf7] transition-[transform,opacity,border-color] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 lg:static lg:h-full lg:max-h-full lg:w-full ${navigationVisible ? "lg:translate-x-0 lg:border-[#d8d4cb] lg:opacity-100" : "lg:pointer-events-none lg:-translate-x-2 lg:border-transparent lg:opacity-0"} ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:translate-x-0 ${navigationVisible ? "lg:flex" : "lg:hidden"} ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="flex h-16 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-5">
+        <div className="flex h-16 items-center justify-between border-b border-[#d8d4cb] px-5">
           <BrandMark href="/max" />
           <div className="flex items-center">
             <button
@@ -510,24 +101,17 @@ function MaxWorkspaceContent({
           </div>
         </div>
 
-        <div
-          className="flex min-h-0 flex-1 flex-col p-3"
-          data-testid="max-navigation-scroll"
-        >
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <Link href="/max" className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
             <LayoutGrid className="size-4" /> Все проекты
           </Link>
-          <p className="omnia-kicker mt-5 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
-          <nav
-            className="max-projects-scroll mt-2 min-h-20 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1"
-            aria-label="Ваши Mini Apps"
-            data-testid="max-projects-scroll"
-          >
+          <p className="omnia-kicker mt-6 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
+          <nav className="mt-2 space-y-1">
             {maxProjects.map((item) => {
               const active = item.id === project.id;
               return (
                 <Link key={item.id} href={`/max/${item.id}`} className={`flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs transition ${active ? "bg-[#ece8df] font-medium" : "text-[#6d6962] hover:bg-[#f5f3ee]"}`}>
-                  <Smartphone className={`size-4 ${active ? "text-accent" : ""}`} />
+                  <Smartphone className={`size-4 ${active ? "text-[#f15a38]" : ""}`} />
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
                   {active && <span className="size-1.5 rounded-full bg-[#248a4b]" />}
                 </Link>
@@ -535,23 +119,25 @@ function MaxWorkspaceContent({
             })}
           </nav>
 
-          <div className="mt-3 shrink-0 border-t border-[#d8d4cb] pt-3">
-            <p className="omnia-kicker px-3 text-[#aaa59b]">Проект</p>
-          </div>
-          <div className="max-projects-scroll mt-2 min-h-0 shrink overflow-y-auto overscroll-contain pr-1">
+          <p className="omnia-kicker mt-7 px-3 text-[#aaa59b]">Проект</p>
+          <div className="mt-2">
             <MaxProjectNav projectId={project.id} active="editor" />
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-[#d8d4cb] p-3">
-          <MaxAccountMenu
-            email={email}
-            onNavigate={() => setMobileNavOpen(false)}
-          />
+        <div className="border-t border-[#d8d4cb] p-3">
+          <Link href="/account" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[8px] p-2 hover:bg-[#f5f3ee]">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#171716] text-[11px] font-semibold text-white">{email.slice(0, 1).toUpperCase()}</span>
+            <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{email.split("@")[0]}</span><span className="block truncate text-[9px] text-[#8d887f]">{email}</span></span>
+            <Settings className="size-3.5 text-[#8d887f]" />
+          </Link>
+          <form action={logoutAction} className="mt-1">
+            <button type="submit" className="flex min-h-11 w-full items-center gap-2 rounded-[8px] px-2 text-[10px] text-[#8d887f] hover:bg-[#f5f3ee]"><LogOut className="size-3.5" />Выйти</button>
+          </form>
         </div>
       </aside>
 
-      <section className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#fcfbf7]">
+      <section className="flex min-h-0 min-w-0 flex-col bg-[#fcfbf7]">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#d8d4cb] px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button type="button" onClick={() => setMobileNavOpen(true)} className="grid size-11 shrink-0 place-items-center rounded-[8px] text-[#6d6962] lg:hidden" aria-label="Открыть меню"><Menu className="size-4" /></button>
@@ -573,13 +159,7 @@ function MaxWorkspaceContent({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            <MaxTrialBadge />
             <MaxUsageBreakdown projectId={project.id} />
-            {versionSnapshots.length > 0 && (
-              <div className="hidden md:block">
-                <DownloadButton projectId={project.id} projectSlug={project.slug} />
-              </div>
-            )}
             <Link href={`/max/${project.id}/integrations`} className="hidden h-11 items-center rounded-[8px] border border-[#d8d4cb] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] md:inline-flex">Интеграции</Link>
             <button
               type="button"
@@ -602,7 +182,7 @@ function MaxWorkspaceContent({
                 <PanelRightOpen className="size-3.5" />
               </button>
             )}
-            <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-accent px-3 text-xs font-semibold text-accent-fg transition-colors hover:bg-accent-hover sm:gap-2 sm:px-4">
+            <button type="button" onClick={() => setLaunchOpen(true)} className="inline-flex h-11 items-center gap-1.5 rounded-[8px] bg-[#f15a38] px-3 text-xs font-semibold text-white hover:bg-[#d94929] sm:gap-2 sm:px-4">
               <span className="sm:hidden">Дальше</span>
               <span className="hidden sm:inline">{launchLabel}</span>
               <ChevronDown className="size-3.5" />
@@ -610,42 +190,38 @@ function MaxWorkspaceContent({
           </div>
         </header>
 
-        <MaxHowToDialog
-          guide={howToGuide}
-          actionHref={nextStage?.href}
-          actionLabel={nextStage?.actionLabel}
+        <button
+          type="button"
+          onClick={() => setLaunchOpen(true)}
+          className="flex min-h-14 shrink-0 items-center gap-3 border-b border-[#d8d4cb] bg-[#f5f3ee] px-4 text-left transition-colors hover:bg-[#ece8df] sm:px-5"
+          data-testid="max-next-action-bar"
         >
-          <button
-            type="button"
-            className="flex min-h-[72px] shrink-0 items-center gap-3 border-b border-accent/30 bg-accent/[.06] px-4 py-3 text-left transition-colors hover:bg-accent/[.11] sm:px-5"
-            data-testid="max-next-action-bar"
-          >
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-[10px] font-semibold text-accent-fg shadow-[0_6px_18px_var(--color-accent-subtle)]">
-              {readiness.isSuccess ? nextStage?.position ?? journey.total : "…"}
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#f15a38] text-[10px] font-semibold text-white">
+            {readiness.isSuccess
+              ? nextStage?.position ?? journey.total
+              : "…"}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[9px] font-medium uppercase tracking-[0.12em] text-[#8d887f]">
+              {nextStage ? "Следующий шаг" : "Путь до запуска"}
             </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-accent">
-                {nextStage ? "Следующий шаг" : "Финальная проверка"}
-              </span>
-              <span className="mt-0.5 block truncate text-xs font-semibold text-[#171716]">
-                {readiness.isError
-                  ? "Открыть общую инструкцию"
-                  : readiness.isLoading
-                    ? "Готовим наглядную инструкцию…"
-                    : howToGuide.title}
-              </span>
-              <span className="mt-0.5 block text-[10px] text-[#6d6962]">
-                4 шага с изображением экрана и отметками, куда нажимать
-              </span>
+            <span className="mt-0.5 block truncate text-xs font-semibold text-[#171716]">
+              {readiness.isError
+                ? "Не удалось проверить готовность — откройте панель для повтора"
+                : readiness.isLoading
+                  ? "Проверяем состояние проекта…"
+                  : nextStage?.label ?? "Все обязательные этапы пройдены"}
             </span>
-            <span className="hidden shrink-0 items-center gap-2 rounded-[8px] bg-accent px-3 py-2 text-[11px] font-semibold text-accent-fg sm:inline-flex">
-              Показать, как сделать
-              <ChevronDown className="size-3.5 -rotate-90" />
-            </span>
-          </button>
-        </MaxHowToDialog>
+          </span>
+          <span className="hidden shrink-0 text-[10px] text-[#8d887f] sm:block">
+            {readiness.isSuccess
+              ? `${journey.completedCount} из ${journey.total}`
+              : "Статус обновляется"}
+          </span>
+          <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
+        </button>
 
-        <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">
+        <div className="min-h-0 flex-1 max-studio-chat">
           <ChatPanel
             projectId={project.id}
             projectSlug={project.slug}
@@ -656,135 +232,56 @@ function MaxWorkspaceContent({
         </div>
       </section>
 
-      <div
-        aria-hidden={!previewPanelVisible}
-        inert={!previewPanelVisible}
-        className={cn(
-          "hidden h-full max-h-full min-h-0 overflow-hidden border-l bg-transparent transition-[transform,opacity,border-color] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 xl:block",
-          previewPanelVisible
-            ? "translate-x-0 border-[#d8d4cb] opacity-100"
-            : "pointer-events-none translate-x-2 border-transparent opacity-0",
-        )}
-        data-testid="max-desktop-preview-column"
-      >
-        {desktopPreviewLayout && (
+      {previewPanelVisible && (
+        <div className="hidden min-h-0 bg-transparent xl:block">
           <MaxLivePreview
             project={project}
-            deferInitialRuntimeStart={deferInitialRuntimeStart}
-            snapshots={versionSnapshots}
-            snapshotsLoading={snapshots.isPending}
-            currentSnapshotId={currentSnapshotId}
-            selectedSnapshotId={selectedSnapshotId}
-            historicalSessionUrl={
-              historySession?.snapshotId === selectedSnapshotId
-                ? historySession.url
-                : null
-            }
-            historicalSessionLoading={
-              Boolean(selectedSnapshotId) &&
-              requestedHistorySnapshotId === selectedSnapshotId &&
-              historySessionMutation.isPending
-            }
-            onSelectSnapshot={selectSnapshot}
-            onRestoreSnapshot={restoreSnapshot}
-            restoringSnapshot={rollbackMutation.isPending}
             onClose={() => setPreviewPanelVisible(false)}
           />
-        )}
-      </div>
+        </div>
+      )}
 
-      <AnimatePresence initial={false}>
-        {mobileNavOpen && (
-          <motion.button
+      {mobileNavOpen && <button type="button" className="fixed inset-0 z-40 bg-[#171716]/55 lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Закрыть меню" />}
+
+      {previewOpen && (
+        <div className="fixed inset-0 z-[60] flex justify-end bg-[#171716]/55 backdrop-blur-[2px] xl:hidden">
+          <button
             type="button"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-            className="fixed inset-0 z-40 bg-[#171716]/55 lg:hidden"
-            onClick={() => setMobileNavOpen(false)}
-            aria-label="Закрыть меню"
+            className="absolute inset-0 cursor-default"
+            onClick={() => setPreviewOpen(false)}
+            aria-label="Закрыть живое превью"
           />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence initial={false}>
-        {previewOpen && !desktopPreviewLayout && (
-          <motion.div
-            key="max-mobile-preview-layer"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="fixed inset-0 z-[60] flex justify-end bg-[#171716]/55 backdrop-blur-[2px] xl:hidden"
+          <section
+            className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7] shadow-[-30px_0_80px_rgba(0,0,0,.16)]"
+            aria-label="Живое превью приложения"
+            data-testid="max-mobile-preview"
           >
-            <button
-              type="button"
-              className="absolute inset-0 cursor-default"
-              onClick={() => setPreviewOpen(false)}
-              aria-label="Закрыть живое превью"
-            />
-            <motion.section
-              initial={{ x: 22 }}
-              animate={{ x: 0 }}
-              exit={{ x: 18 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-              className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7] shadow-[-30px_0_80px_rgba(0,0,0,.16)]"
-              aria-label="Живое превью приложения"
-              data-testid="max-mobile-preview"
-            >
-              <div className="min-h-0 flex-1">
-                <MaxLivePreview
-                  project={project}
-                  deferInitialRuntimeStart={deferInitialRuntimeStart}
-                  snapshots={versionSnapshots}
-                  snapshotsLoading={snapshots.isPending}
-                  currentSnapshotId={currentSnapshotId}
-                  selectedSnapshotId={selectedSnapshotId}
-                  historicalSessionUrl={
-                    historySession?.snapshotId === selectedSnapshotId
-                      ? historySession.url
-                      : null
-                  }
-                  historicalSessionLoading={
-                    Boolean(selectedSnapshotId) &&
-                    requestedHistorySnapshotId === selectedSnapshotId &&
-                    historySessionMutation.isPending
-                  }
-                  onSelectSnapshot={selectSnapshot}
-                  onRestoreSnapshot={restoreSnapshot}
-                  restoringSnapshot={rollbackMutation.isPending}
-                  onClose={() => setPreviewOpen(false)}
-                />
-              </div>
-            </motion.section>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-[#d8d4cb] px-3 sm:px-5">
+              <p className="text-sm font-semibold">Превью приложения</p>
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="grid size-11 place-items-center rounded-[8px] text-[#6d6962] hover:bg-[#ece8df]"
+                aria-label="Закрыть превью"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <MaxLivePreview project={project} />
+            </div>
+          </section>
+        </div>
+      )}
 
-      <AnimatePresence initial={false}>
-        {launchOpen && (
-          <motion.div
-            key="max-launch-layer"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="fixed inset-0 z-[70] flex justify-end bg-[#171716]/45 backdrop-blur-[2px]"
-          >
-            <button type="button" className="absolute inset-0 cursor-default" onClick={() => setLaunchOpen(false)} aria-label="Закрыть публикацию" />
-            <motion.div
-              initial={{ x: 22 }}
-              animate={{ x: 0 }}
-              exit={{ x: 18 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-              className="relative h-full w-full max-w-[420px] shadow-[-30px_0_80px_rgba(0,0,0,.16)]"
-            >
-              <MaxLaunchPanel project={project} onClose={() => setLaunchOpen(false)} />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {launchOpen && (
+        <div className="fixed inset-0 z-[70] flex justify-end bg-[#171716]/45 backdrop-blur-[2px]">
+          <button type="button" className="absolute inset-0 cursor-default" onClick={() => setLaunchOpen(false)} aria-label="Закрыть публикацию" />
+          <div className="relative h-full w-full max-w-[420px] shadow-[-30px_0_80px_rgba(0,0,0,.16)]">
+            <MaxLaunchPanel project={project} onClose={() => setLaunchOpen(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

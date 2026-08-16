@@ -39,60 +39,22 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 async def _provision_capturing_spec(
     monkeypatch: pytest.MonkeyPatch,
-    template_dir: Path | None = None,
-    initial_env: dict[str, str] | None = None,
-    allocation_ports: list[int] | None = None,
-    bind_conflicts: int = 0,
-    fatal_start: bool = False,
-    observed: dict[str, object] | None = None,
 ) -> ContainerSpec:
     """Run `provision` with every side-effecting collaborator stubbed; return
     the ContainerSpec that would have been handed to Docker."""
     captured: dict[str, ContainerSpec] = {}
 
-    starts = 0
-
     async def fake_start(spec: ContainerSpec) -> str:
-        nonlocal starts
-        starts += 1
         captured["spec"] = spec
-        if fatal_start:
-            raise RuntimeError("simulated Docker outage")
-        if starts <= bind_conflicts:
-            from omnia_orchestrator.core.errors import OrchestratorError
-
-            raise OrchestratorError(
-                code="port_conflict",
-                message="simulated bind race",
-                status_code=409,
-            )
         return "deadbeef" * 8
 
     # Template copy + source resolution → no filesystem touch.
-    monkeypatch.setattr(
-        provisioner,
-        "_template_source_dir",
-        lambda _t: template_dir or Path("."),
-    )
+    monkeypatch.setattr(provisioner, "_template_source_dir", lambda _t: Path("."))
     monkeypatch.setattr(provisioner, "_copy_template", lambda _s, _d: None)
     monkeypatch.setattr(provisioner, "_load_or_create_auth_secret", lambda _p: "auth-secret")
 
     # Port allocator → fixed port.
-    acquire = AsyncMock(
-        side_effect=allocation_ports if allocation_ports is not None else None,
-        return_value=3210,
-    )
-    allocator = type(
-        "A",
-        (),
-        {
-            "acquire": acquire,
-            "confirm": AsyncMock(),
-            "reject": AsyncMock(),
-        },
-    )()
-    if observed is not None:
-        observed["allocator"] = allocator
+    allocator = type("A", (), {"acquire": AsyncMock(return_value=3210)})()
     monkeypatch.setattr(provisioner, "get_port_allocator", lambda: allocator)
 
     # Postgres → reuse an "existing" DSN so create_schema is never called.
@@ -109,7 +71,6 @@ async def _provision_capturing_spec(
     monkeypatch.setattr(provisioner.nginx_writer, "publish_tls_in_background", lambda *_a: None)
 
     monkeypatch.setattr(provisioner, "start_container", fake_start)
-    monkeypatch.setattr(provisioner, "destroy_container", AsyncMock())
     monkeypatch.setattr(provisioner, "publish_project_event", AsyncMock())
 
     req = ProvisionRequest(
@@ -117,11 +78,8 @@ async def _provision_capturing_spec(
         slug="demo-app",
         template="nextjs-entities",
         tier="free",
-        initial_env=initial_env or {},
     )
     await provisioner.provision(req)
-    if observed is not None:
-        observed["starts"] = starts
     return captured["spec"]
 
 
@@ -140,37 +98,6 @@ async def test_provision_sets_unless_stopped_restart_policy(
     restarts a daemon-stopped container)."""
     spec = await _provision_capturing_spec(monkeypatch)
     assert spec.restart_policy_name == "unless-stopped"
-
-
-async def test_provision_injects_project_schema_for_drizzle_foreign_keys(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spec = await _provision_capturing_spec(monkeypatch)
-
-    assert spec.env["OMNIA_DB_SCHEMA"] == "proj_00000000"
-
-
-async def test_provision_cannot_override_project_schema_through_initial_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spec = await _provision_capturing_spec(
-        monkeypatch,
-        initial_env={"OMNIA_DB_SCHEMA": "public", "DATABASE_URL": "attacker-controlled"},
-    )
-
-    assert spec.env["OMNIA_DB_SCHEMA"] == "proj_00000000"
-    assert spec.env["DATABASE_URL"] == "postgresql://u:p@host/db"
-
-
-async def test_provision_passes_template_manifest_as_integrity_marker(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
-
-    spec = await _provision_capturing_spec(monkeypatch, tmp_path)
-
-    assert spec.integrity_path == "package.json"
 
 
 async def test_provision_memory_is_config_driven(
@@ -217,51 +144,6 @@ async def test_duplicate_project_provisions_are_serialized(
     await asyncio.gather(provisioner.provision(req), provisioner.provision(req))
 
     assert max_active == 1
-
-
-async def test_provision_retries_bind_race_without_leaking_failed_port(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
-
-    spec = await _provision_capturing_spec(
-        monkeypatch,
-        allocation_ports=[3210, 3211],
-        bind_conflicts=1,
-        observed=observed,
-    )
-
-    allocator = observed["allocator"]
-    assert spec.port == 3211
-    assert observed["starts"] == 2
-    allocator.reject.assert_awaited_once_with(  # type: ignore[attr-defined]
-        UUID("00000000-0000-0000-0000-000000000001"), 3210
-    )
-    allocator.confirm.assert_awaited_once_with(  # type: ignore[attr-defined]
-        UUID("00000000-0000-0000-0000-000000000001"), 3211
-    )
-    provisioner.destroy_container.assert_awaited_once_with(  # type: ignore[attr-defined]
-        "omnia-dev-demo-app"
-    )
-
-
-async def test_provision_releases_reservation_on_non_bind_start_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
-
-    with pytest.raises(RuntimeError, match="Docker outage"):
-        await _provision_capturing_spec(
-            monkeypatch,
-            fatal_start=True,
-            observed=observed,
-        )
-
-    allocator = observed["allocator"]
-    allocator.reject.assert_awaited_once_with(  # type: ignore[attr-defined]
-        UUID("00000000-0000-0000-0000-000000000001"), 3210
-    )
-    allocator.confirm.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 # ── Phase 1 egress + network isolation (default OFF = current behaviour) ─────

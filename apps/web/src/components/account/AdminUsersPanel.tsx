@@ -6,7 +6,6 @@ import {
   BadgeCheck,
   Ban,
   CircleAlert,
-  Infinity as InfinityIcon,
   KeyRound,
   Loader2,
   RotateCcw,
@@ -76,7 +75,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
   if (users.isLoading) {
     return (
       <div className="grid min-h-[280px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-accent" />
+        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
       </div>
     );
   }
@@ -132,7 +131,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                     className={cn(
                       "grid size-11 shrink-0 place-items-center rounded-[8px]",
                       user.is_admin
-                        ? "bg-accent/10 text-accent"
+                        ? "bg-[#f15a38]/10 text-[#f15a38]"
                         : "bg-[#ece8df] text-[#6d6962]",
                     )}
                   >
@@ -148,13 +147,8 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                         {user.email}
                       </h2>
                       {user.is_admin && (
-                        <span className="rounded-full bg-accent/10 px-2.5 py-1 text-[10px] font-medium text-accent">
+                        <span className="rounded-full bg-[#f15a38]/10 px-2.5 py-1 text-[10px] font-medium text-[#c8472b]">
                           Администратор
-                        </span>
-                      )}
-                      {user.unlimited_generations && (
-                        <span className="rounded-full bg-[#248a4b]/10 px-2.5 py-1 text-[10px] font-medium text-[#248a4b]">
-                          Безлимит
                         </span>
                       )}
                       <span
@@ -255,23 +249,6 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                       Сделать админом
                     </Button>
                   )}
-                  <Button
-                    variant="outline"
-                    disabled={pending}
-                    onClick={() =>
-                      update.mutate({
-                        user,
-                        change: {
-                          unlimited_generations: !user.unlimited_generations,
-                        },
-                      })
-                    }
-                  >
-                    <InfinityIcon className="size-4" />
-                    {user.unlimited_generations
-                      ? "Отключить безлимит"
-                      : "Включить безлимит"}
-                  </Button>
                   {user.status === "active" ? (
                     <Button
                       variant="outline"

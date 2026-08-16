@@ -69,14 +69,20 @@ _PALETTE_LABELS: tuple[tuple[str, str], ...] = (
     ("background", "BACKGROUND"),
 )
 _HEX_ANY_RE = re.compile(_HEX)
-_FONTS_LANDING_RE = re.compile(r'ШРИФТЫ:\s*дисплей\s*"([^"]+)"\s*·\s*текст\s*"([^"]+)"')
+_FONTS_LANDING_RE = re.compile(
+    r'ШРИФТЫ:\s*дисплей\s*"([^"]+)"\s*·\s*текст\s*"([^"]+)"'
+)
 _FONT_APP_RE = re.compile(r"ШРИФТ:\s*(.+)")
 _MOTION_RE = re.compile(r"MOTION-СИГНАТУРА:\s*(.+)")
 # Landing sections: ``[N] <назначение> | id="<anchor>"``.
-_SECTION_LANDING_RE = re.compile(r'^\s*\[(\d+)\]\s*(.+?)\s*\|\s*id="([^"]+)"', re.MULTILINE)
+_SECTION_LANDING_RE = re.compile(
+    r'^\s*\[(\d+)\]\s*(.+?)\s*\|\s*id="([^"]+)"', re.MULTILINE
+)
 # App/entity nav items: ``- "Дашборд" → "/" (LayoutDashboard)``. The route may
 # be quoted (``"/"``) or bare (``/clients``).
-_NAV_APP_RE = re.compile(r'^\s*-\s*"([^"]+)"\s*→\s*"?(/[^"\s()]*)"?', re.MULTILINE)
+_NAV_APP_RE = re.compile(
+    r'^\s*-\s*"([^"]+)"\s*→\s*"?(/[^"\s()]*)"?', re.MULTILINE
+)
 
 
 def _extract_palette(brief: str) -> dict[str, str]:
@@ -116,7 +122,11 @@ def _extract_fonts(brief: str) -> dict[str, str]:
         paren = re.search(r"\(([A-Za-zА-Яа-я][\w\s-]+)\)", line)
         # First parenthesised family (e.g. "(Manrope)"), else the leading token
         # before any "ИЛИ"/parenthesis the prompt placeholder might leave behind.
-        name = paren.group(1).strip() if paren else line.split("(")[0].split("ИЛИ")[0].strip()
+        name = (
+            paren.group(1).strip()
+            if paren
+            else line.split("(")[0].split("ИЛИ")[0].strip()
+        )
     return {"display": name, "text": name} if name else {}
 
 
@@ -130,7 +140,8 @@ def _extract_sections(brief: str) -> list[dict[str, str]]:
     if out:
         return out
     return [
-        {"id": m.group(2).strip(), "name": m.group(1).strip()} for m in _NAV_APP_RE.finditer(brief)
+        {"id": m.group(2).strip(), "name": m.group(1).strip()}
+        for m in _NAV_APP_RE.finditer(brief)
     ]
 
 
@@ -158,16 +169,16 @@ def parse_brief(brief: str | None) -> dict[str, Any] | None:
 # field, and pass 2 is told to place THAT snippet verbatim — no re-guessing.
 _HERO_VARIANTS = ("hero-centered", "hero-split", "hero-editorial", "hero-cinematic")
 _ARCHETYPE_HERO: dict[str, str] = {
-    "APPLE TECH": "hero-cinematic",  # atmospheric product photo carries it
-    "FINTECH TRUST": "hero-split",  # dashboard/KPI shot beside the promise
-    "LINEAR DARK": "hero-centered",  # SaaS classic: centered headline + CTA
+    "APPLE TECH": "hero-cinematic",        # atmospheric product photo carries it
+    "FINTECH TRUST": "hero-split",         # dashboard/KPI shot beside the promise
+    "LINEAR DARK": "hero-centered",        # SaaS classic: centered headline + CTA
     "EDITORIAL LUXURY": "hero-cinematic",  # big fashion/jewellery photo, black+gold
-    "VIBRANT CONSUMER": "hero-split",  # appetising product shot beside copy
-    "CLINICAL TRUST": "hero-split",  # calm clinic photo + trust copy
-    "BOLD STUDIO": "hero-editorial",  # type-as-hero, .display-fill
-    "KINETIC TYPE": "hero-editorial",  # type-as-hero, .display-fill
-    "REFINED MINIMAL": "hero-centered",  # default for neutral business
-    "NORDIC MINIMAL": "hero-split",  # honest interior/product photo + air
+    "VIBRANT CONSUMER": "hero-split",      # appetising product shot beside copy
+    "CLINICAL TRUST": "hero-split",        # calm clinic photo + trust copy
+    "BOLD STUDIO": "hero-editorial",       # type-as-hero, .display-fill
+    "KINETIC TYPE": "hero-editorial",      # type-as-hero, .display-fill
+    "REFINED MINIMAL": "hero-centered",    # default for neutral business
+    "NORDIC MINIMAL": "hero-split",        # honest interior/product photo + air
 }
 
 
@@ -188,16 +199,16 @@ def _render_archetype_hero_table() -> str:
 # "like an interface"), not just a recoloured hero.
 _COMPOSITION_PROFILES = ("EDITORIAL", "CINEMATIC", "MODULE", "INTERFACE")
 _ARCHETYPE_COMPOSITION: dict[str, str] = {
-    "APPLE TECH": "CINEMATIC",  # product hero, max air + dark cinema sections
-    "FINTECH TRUST": "INTERFACE",  # dense KPI/feature grids, wide container
-    "LINEAR DARK": "INTERFACE",  # SaaS/dev-tools: bento, tight rhythm
-    "EDITORIAL LUXURY": "EDITORIAL",  # book-like air, sparse 2-col, big serif
-    "VIBRANT CONSUMER": "INTERFACE",  # D2C: dense product grids, energetic
-    "CLINICAL TRUST": "MODULE",  # calm modular swiss grid, readable
-    "BOLD STUDIO": "EDITORIAL",  # type-as-hero, max whitespace
-    "KINETIC TYPE": "EDITORIAL",  # type-as-hero, .display-fill, sparse
-    "REFINED MINIMAL": "MODULE",  # quiet modular rhythm, default for business
-    "NORDIC MINIMAL": "MODULE",  # lagom: air as material, hairline grid
+    "APPLE TECH": "CINEMATIC",         # product hero, max air + dark cinema sections
+    "FINTECH TRUST": "INTERFACE",      # dense KPI/feature grids, wide container
+    "LINEAR DARK": "INTERFACE",        # SaaS/dev-tools: bento, tight rhythm
+    "EDITORIAL LUXURY": "EDITORIAL",   # book-like air, sparse 2-col, big serif
+    "VIBRANT CONSUMER": "INTERFACE",   # D2C: dense product grids, energetic
+    "CLINICAL TRUST": "MODULE",        # calm modular swiss grid, readable
+    "BOLD STUDIO": "EDITORIAL",        # type-as-hero, max whitespace
+    "KINETIC TYPE": "EDITORIAL",       # type-as-hero, .display-fill, sparse
+    "REFINED MINIMAL": "MODULE",       # quiet modular rhythm, default for business
+    "NORDIC MINIMAL": "MODULE",        # lagom: air as material, hairline grid
 }
 
 
@@ -652,19 +663,19 @@ def _build_art_director_messages(
     system, so final code quality is unchanged. Swaps only when the first
     message really is the system role (fail-soft)."""
     instruction = (
-        _ART_DIRECTOR_INSTRUCTION_APP if template in _APP_TEMPLATES else _ART_DIRECTOR_INSTRUCTION
+        _ART_DIRECTOR_INSTRUCTION_APP
+        if template in _APP_TEMPLATES
+        else _ART_DIRECTOR_INSTRUCTION
     )
     directive = vendor_directive(model_id, json_strict=False)
     suffix = f"\n\n{directive}" if directive else ""
     msgs = list(base_messages[:-1])
     if system_override and msgs and msgs[0].get("role") == "system":
         msgs[0] = {"role": "system", "content": system_override}
-    msgs.append(
-        {
-            "role": "user",
-            "content": f"{user_prompt}\n\n{instruction}{suffix}",
-        }
-    )
+    msgs.append({
+        "role": "user",
+        "content": f"{user_prompt}\n\n{instruction}{suffix}",
+    })
     return msgs
 
 
@@ -694,7 +705,6 @@ def _build_writer_messages(
     # template doesn't override the system-level language directive. Empty for
     # RU (default) → writer turn is byte-identical to pre-A3 behaviour.
     from omnia_api.services.prompt_builder import _language_directive
-
     _lang_note = _language_directive(language)
     lang_prefix = f"{_lang_note}\n\n" if _lang_note else ""
     msgs = list(base_messages[:-1])
@@ -759,9 +769,7 @@ async def art_director_writer_generate(
     if pipeline_debug.enabled():
         _sys = next((m["content"] for m in base_messages if m.get("role") == "system"), "")
         pipeline_debug.dump(project_id, message_id, "00_system_prompt.md", _sys)
-        pipeline_debug.dump(
-            project_id, message_id, "01_art_director_input.md", ad_msgs[-1]["content"]
-        )
+        pipeline_debug.dump(project_id, message_id, "01_art_director_input.md", ad_msgs[-1]["content"])
     brief_parts: list[str] = []
     ad_usage: dict[str, Any] | None = None
     async for event in stream_chat_completion(
@@ -776,12 +784,6 @@ async def art_director_writer_generate(
         if u := event.get("usage"):
             ad_usage = u
         if err := event.get("error"):
-            if event.get("error_code") == "paid_call_ambiguous":
-                yield {
-                    "error": err,
-                    "error_code": "paid_call_ambiguous",
-                }
-                return
             # The brief failed — let the Writer carry the page alone rather than
             # losing the whole build (R-10 fail-soft). Don't propagate the error.
             brief_parts = []
@@ -802,13 +804,9 @@ async def art_director_writer_generate(
 
     # ─── Pass 2: Writer (streams the HTML to the caller) ─────────────────
     yield {"pass": "writer", "stage": "start", "model": writer_model}
-    writer_msgs = _build_writer_messages(
-        base_messages, user_prompt, brief, writer_model, template, language=language
-    )
+    writer_msgs = _build_writer_messages(base_messages, user_prompt, brief, writer_model, template, language=language)
     if pipeline_debug.enabled():
-        pipeline_debug.dump(
-            project_id, message_id, "01b_writer_input.md", writer_msgs[-1]["content"]
-        )
+        pipeline_debug.dump(project_id, message_id, "01b_writer_input.md", writer_msgs[-1]["content"])
     writer_usage: dict[str, Any] | None = None
     writer_parts: list[str] = []
     async for event in stream_chat_completion(
@@ -824,10 +822,7 @@ async def art_director_writer_generate(
         if u := event.get("usage"):
             writer_usage = u
         if err := event.get("error"):
-            yield {
-                "error": f"writer pass failed: {err}",
-                **({"error_code": event["error_code"]} if event.get("error_code") else {}),
-            }
+            yield {"error": f"writer pass failed: {err}"}
             return
 
     pipeline_debug.dump(project_id, message_id, "03_writer_raw.html", "".join(writer_parts))

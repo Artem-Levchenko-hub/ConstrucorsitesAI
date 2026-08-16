@@ -15,10 +15,10 @@ from uuid import UUID
 
 import httpx
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, Header, Response, status
+from fastapi import APIRouter, Header, status
 from sqlalchemy import select
 
-from omnia_api.core.config import MAX_STUDIO_LLM_MODEL
+from omnia_api.core.config import PRIMARY_LLM_MODEL
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
@@ -41,13 +41,7 @@ from omnia_api.schemas.integration_runtime import (
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
 )
-from omnia_api.services import (
-    integration_oauth,
-    integration_providers,
-    llm_client,
-    orchestrator_client,
-)
-from omnia_api.services.max_proof_authorization import validate_max_proof_authorization
+from omnia_api.services import integration_oauth, integration_providers, llm_client
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
@@ -57,7 +51,6 @@ MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
 class RuntimeContext:
     project_id: UUID
     max_user_id: int
-    is_preview: bool = False
 
 
 def _validate_init_data(init_data: str, bot_token: str) -> int:
@@ -89,28 +82,12 @@ def _validate_init_data(init_data: str, bot_token: str) -> int:
 
 
 async def _runtime_context(
-    session: SessionDep,
-    project_id: UUID,
-    init_data: str | None,
-    *,
-    preview_capability: str | None = None,
-    allow_preview: bool = False,
+    session: SessionDep, project_id: UUID, init_data: str
 ) -> RuntimeContext:
-    if allow_preview and not init_data and preview_capability:
-        if len(
-            preview_capability
-        ) > 128 or not await orchestrator_client.validate_max_preview_capability(
-            project_id, preview_capability
-        ):
-            raise ApiError(
-                "max_preview_capability_invalid",
-                "Защищённая сессия предпросмотра истекла. Обновите предпросмотр.",
-                status.HTTP_401_UNAUTHORIZED,
-            )
-        return RuntimeContext(project_id=project_id, max_user_id=0, is_preview=True)
-
     max_integration = (
-        await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
+        await session.execute(
+            select(MaxIntegration).where(MaxIntegration.project_id == project_id)
+        )
     ).scalar_one_or_none()
     if max_integration is None:
         raise ApiError(
@@ -120,7 +97,7 @@ async def _runtime_context(
         )
     try:
         token = decrypt_strong(max_integration.bot_token_enc)
-        max_user_id = _validate_init_data(init_data or "", token)
+        max_user_id = _validate_init_data(init_data, token)
     except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ApiError(
             "max_init_data_invalid",
@@ -130,7 +107,9 @@ async def _runtime_context(
     return RuntimeContext(project_id=project_id, max_user_id=max_user_id)
 
 
-async def _connections(session: SessionDep, project_id: UUID) -> dict[str, BusinessIntegration]:
+async def _connections(
+    session: SessionDep, project_id: UUID
+) -> dict[str, BusinessIntegration]:
     rows = (
         await session.execute(
             select(BusinessIntegration)
@@ -149,7 +128,9 @@ async def _connections(session: SessionDep, project_id: UUID) -> dict[str, Busin
     return {row.provider: row for row in rows}
 
 
-async def _secrets(session: SessionDep, connection: BusinessIntegration) -> dict[str, str]:
+async def _secrets(
+    session: SessionDep, connection: BusinessIntegration
+) -> dict[str, str]:
     try:
         value = json.loads(decrypt_strong(connection.credentials_enc))
     except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -218,56 +199,15 @@ def _provider_failure(provider: str, response: httpx.Response) -> ApiError:
 async def runtime_integration_status(
     project_id: UUID,
     session: SessionDep,
-    response: Response,
-    x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
-    x_omnia_max_preview_capability: Annotated[
-        str | None,
-        Header(alias="X-Omnia-MAX-Preview-Capability"),
-    ] = None,
-    x_omnia_proof_key: Annotated[
-        str | None,
-        Header(alias="X-Omnia-Proof-Key"),
-    ] = None,
-    x_omnia_proof_authorization: Annotated[
-        str | None,
-        Header(alias="X-Omnia-Proof-Authorization"),
-    ] = None,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeIntegrationStatus:
-    context = await _runtime_context(
-        session,
-        project_id,
-        x_max_init_data,
-        preview_capability=x_omnia_max_preview_capability,
-        allow_preview=True,
-    )
-    proof_requested = x_omnia_proof_key is not None or x_omnia_proof_authorization is not None
-    if proof_requested:
-        proof = (
-            validate_max_proof_authorization(
-                x_omnia_proof_authorization or "",
-                project_id,
-                proof_key=x_omnia_proof_key or "",
-            )
-            if context.is_preview and x_omnia_proof_key and x_omnia_proof_authorization
-            else None
-        )
-        if proof is None:
-            raise ApiError(
-                "max_proof_authorization_invalid",
-                "Защищённое подтверждение проверки недействительно.",
-                status.HTTP_403_FORBIDDEN,
-            )
-        # The locked template requires an exact echo only after both the
-        # project-bound preview capability and API-signed proof token pass.
-        # Untrusted generated JavaScript cannot mint this binding.
-        response.headers["X-Omnia-Proof-Key-Bound"] = proof.proof_key
-        response.headers["Cache-Control"] = "no-store"
+    await _runtime_context(session, project_id, x_max_init_data)
     connections = await _connections(session, project_id)
     metrica = connections.get("yandex_metrica")
     return RuntimeIntegrationStatus(
         providers=sorted(connections),
         capabilities=sorted(
-            {"Встроенный AI"}
+            {"Управляемый Google AI"}
             | {
                 capability
                 for connection in connections.values()
@@ -304,14 +244,10 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
                 )
     except ApiError:
         raise
-    except Exception as exc:
-        # Owner-funded inference must never become unlimited when the shared
-        # limiter is unavailable. Non-AI product features remain online.
-        raise ApiError(
-            "runtime_ai_limits_unavailable",
-            "ИИ временно недоступен: не удалось проверить лимит запросов.",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
+    except Exception:
+        # Billing still fails closed at the gateway wallet. A transient Redis
+        # outage must not take every generated MAX product offline.
+        return
 
 
 @router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
@@ -319,21 +255,11 @@ async def request_runtime_ai(
     project_id: UUID,
     payload: RuntimeAIRequest,
     session: SessionDep,
-    x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
-    x_omnia_max_preview_capability: Annotated[
-        str | None,
-        Header(alias="X-Omnia-MAX-Preview-Capability"),
-    ] = None,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeAIPublic:
-    """Run managed owner-funded AI without exposing provider keys or routing."""
+    """Run real owner-funded Gemini inference without exposing provider keys."""
 
-    context = await _runtime_context(
-        session,
-        project_id,
-        x_max_init_data,
-        preview_capability=x_omnia_max_preview_capability,
-        allow_preview=True,
-    )
+    context = await _runtime_context(session, project_id, x_max_init_data)
     await _enforce_runtime_ai_limits(project_id, context.max_user_id)
     project = await session.get(Project, project_id)
     if project is None:
@@ -360,7 +286,7 @@ async def request_runtime_ai(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            MAX_STUDIO_LLM_MODEL,
+            PRIMARY_LLM_MODEL,
             user_id=str(project.owner_id),
             project_id=str(project.id),
             max_tokens=1_600,
@@ -368,15 +294,6 @@ async def request_runtime_ai(
             stage="runtime_ai",
         )
     except llm_client.LLMError as exc:
-        if exc.code == "paid_call_ambiguous":
-            raise ApiError(
-                "paid_call_ambiguous",
-                (
-                    "Статус платного запроса не подтверждён. Не повторяйте его сразу: "
-                    "проверьте расход или обратитесь в поддержку."
-                ),
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            ) from exc
         raise ApiError(
             "integration_provider_unavailable",
             "ИИ временно недоступен. Попробуйте ещё раз.",
@@ -388,7 +305,7 @@ async def request_runtime_ai(
             "ИИ не вернул ответ. Попробуйте ещё раз.",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    return RuntimeAIPublic(answer=answer.strip(), model="managed-ai")
+    return RuntimeAIPublic(answer=answer.strip(), model=PRIMARY_LLM_MODEL)
 
 
 @router.post("/{project_id}/payments", response_model=RuntimePaymentPublic)
@@ -445,7 +362,9 @@ async def create_runtime_payment(
             request_kwargs: dict[str, Any] = {"headers": headers, "json": body}
             if auth is not None:
                 request_kwargs["auth"] = auth
-            response = await client.post("https://api.yookassa.ru/v3/payments", **request_kwargs)
+            response = await client.post(
+                "https://api.yookassa.ru/v3/payments", **request_kwargs
+            )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise ApiError(
             "integration_provider_unavailable",
@@ -551,12 +470,15 @@ async def create_runtime_lead(
                 if payload.email:
                     fields["EMAIL"] = [{"VALUE": payload.email, "VALUE_TYPE": "WORK"}]
                 if credentials.get("webhook_url"):
-                    url = credentials["webhook_url"].rstrip("/") + "/crm.lead.add.json"
+                    url = (
+                        credentials["webhook_url"].rstrip("/")
+                        + "/crm.lead.add.json"
+                    )
                     response = await client.post(url, json={"fields": fields})
                 else:
-                    endpoint = str(connection.public_config.get("client_endpoint") or "").rstrip(
-                        "/"
-                    )
+                    endpoint = str(
+                        connection.public_config.get("client_endpoint") or ""
+                    ).rstrip("/")
                     response = await client.post(
                         f"{endpoint}/crm.lead.add.json",
                         json={
@@ -631,19 +553,9 @@ async def create_runtime_lead(
 async def get_runtime_catalog(
     project_id: UUID,
     session: SessionDep,
-    x_max_init_data: Annotated[str | None, Header(alias="X-MAX-Init-Data")] = None,
-    x_omnia_max_preview_capability: Annotated[
-        str | None,
-        Header(alias="X-Omnia-MAX-Preview-Capability"),
-    ] = None,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeCatalogPublic:
-    await _runtime_context(
-        session,
-        project_id,
-        x_max_init_data,
-        preview_capability=x_omnia_max_preview_capability,
-        allow_preview=True,
-    )
+    await _runtime_context(session, project_id, x_max_init_data)
     connections = await _connections(session, project_id)
     connection = connections.get("iiko") or connections.get("moysklad")
     if connection is None:
@@ -675,10 +587,8 @@ async def get_runtime_catalog(
                         name=str(row.get("name") or "Товар"),
                         description=str(row.get("description") or ""),
                         price=(
-                            float(
-                                Decimal(str((row.get("salePrices") or [{}])[0].get("value", 0)))
-                                / Decimal(100)
-                            )
+                            Decimal(str((row.get("salePrices") or [{}])[0].get("value", 0)))
+                            / Decimal(100)
                             if row.get("salePrices")
                             else None
                         ),
@@ -705,7 +615,9 @@ async def get_runtime_catalog(
             if organizations_response.status_code >= 300:
                 raise _provider_failure("iikoCloud", organizations_response)
             organizations = organizations_response.json().get("organizations") or []
-            organization_id = str((organizations[0] if organizations else {}).get("id") or "")
+            organization_id = str(
+                (organizations[0] if organizations else {}).get("id") or ""
+            )
             if not organization_id:
                 raise ApiError(
                     "integration_configuration_invalid",
@@ -736,7 +648,7 @@ async def get_runtime_catalog(
                         id=str(product["id"]),
                         name=str(product.get("name") or "Позиция"),
                         description=str(product.get("description") or ""),
-                        price=float(Decimal(str(first_price))) if first_price is not None else None,
+                        price=Decimal(str(first_price)) if first_price is not None else None,
                         available=not bool(product.get("isDeleted")),
                         image_url=str(image_links[0]) if image_links else None,
                     )

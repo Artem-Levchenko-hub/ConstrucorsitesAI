@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 from slugify import slugify
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,13 +27,11 @@ from omnia_api.core.security import create_access_token
 from omnia_api.models.billing import BillingAccount
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
-from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.lead import Lead
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.project import (
@@ -47,6 +45,7 @@ from omnia_api.services import max_client, orchestrator_client, repo_import
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.fork_recap import build_fork_recap
+from omnia_api.services.max_access import require_max_business
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_build_exe, enqueue_preview
 from omnia_api.services.run_bundle import build_launchers
@@ -93,12 +92,13 @@ async def create_project(
     current_user: OptionalUserDep,
 ) -> Project:
     if payload.template == "max_miniapp":
-        if current_user is None or current_user.is_anon or current_user.email is None:
+        if current_user is None:
             raise ApiError(
                 "max_registration_required",
                 "Для MAX Studio нужна регистрация",
                 status.HTTP_403_FORBIDDEN,
             )
+        await require_max_business(session, current_user)
     owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
     short_id = uuid4().hex[:6]
     base_slug = slugify(payload.name)[:60] or "project"
@@ -796,28 +796,6 @@ async def delete_project(
     # the ORM layer when the project row goes.
     await asyncio.to_thread(repo_svc.delete_repo, project.id)
 
-    # Usage is an immutable billing ledger and must survive project deletion.
-    # It points both to Project and to two rows (Message/GenerationRun) that
-    # cascade from Project. PostgreSQL can execute those referential actions in
-    # either order; without this single explicit detach, one SET NULL branch can
-    # validate against a child already removed by another branch and abort the
-    # whole delete with fk_usage_run_id_generation_runs. Preserve the ledger,
-    # but remove every project-owned pointer before starting the cascade.
-    project_message_ids = select(Message.id).where(Message.project_id == project.id)
-    project_run_ids = select(GenerationRun.id).where(
-        GenerationRun.project_id == project.id
-    )
-    await session.execute(
-        update(Usage)
-        .where(
-            or_(
-                Usage.project_id == project.id,
-                Usage.message_id.in_(project_message_ids),
-                Usage.run_id.in_(project_run_ids),
-            )
-        )
-        .values(project_id=None, message_id=None, run_id=None)
-    )
     await session.delete(project)
     await session.commit()
 

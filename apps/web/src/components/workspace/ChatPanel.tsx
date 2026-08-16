@@ -1,12 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
-import { toast } from "sonner";
 import { listMessages } from "@/lib/api/messages";
-import { redactCredentialsBeforeTransport } from "@/lib/credential-safety";
 import type {
   AgentStep,
   DesignPreview,
@@ -22,10 +20,6 @@ import { usePromptStream } from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
 import { restorePersistedAgentSteps } from "@/lib/agent-steps";
-import {
-  parseMaxStarterHandoff,
-  type MaxProductSpec,
-} from "@/lib/max-brief";
 
 type DiscoveryChoices = {
   choices: string[];
@@ -41,13 +35,6 @@ type DiscoveryChoices = {
   recap?: string[] | null;
   // LIVE design-preview tokens (pillars 2×3 — «покажи ЧТО построим»).
   designPreview?: DesignPreview | null;
-};
-
-type PromptSubmitOptions = {
-  skipClarify?: boolean;
-  designPresetId?: string | null;
-  idempotencyKey?: string;
-  productSpec?: MaxProductSpec | null;
 };
 
 export function ChatPanel({
@@ -71,36 +58,6 @@ export function ChatPanel({
     projectId,
     projectSlug,
   );
-
-  const submitSafely = useCallback(
-    (
-      text: string,
-      selections: SelectedElement[] = [],
-      options?: PromptSubmitOptions,
-    ) => {
-      const safe =
-        mode === "max"
-          ? redactCredentialsBeforeTransport(text)
-          : { text, credentialsRemoved: false };
-      if (safe.credentialsRemoved) {
-        toast.success("Секрет удалён до отправки", {
-          description:
-            "Задача продолжит сборку через встроенный AI — ключ не попадёт в сеть, чат или код.",
-        });
-      }
-      let resolvedOptions = options;
-      if (mode === "max" && !options?.productSpec) {
-        const handoff = parseMaxStarterHandoff(
-          window.sessionStorage.getItem(`omnia:max:starter:${projectId}`),
-        );
-        if (handoff) {
-          resolvedOptions = { ...options, productSpec: handoff.productSpec };
-        }
-      }
-      submit(safe.text, modelId, selections, resolvedOptions);
-    },
-    [mode, projectId, submit],
-  );
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -110,16 +67,6 @@ export function ChatPanel({
     queryKey: ["messages", projectId],
     queryFn: () => listMessages(projectId),
   });
-
-  // Keep the strict ProductSpec through transport errors and failed first runs.
-  // Clear it only after a committed snapshot proves the server owns a result.
-  useEffect(() => {
-    if (mode !== "max" || !messages?.some((message) => message.snapshot_id)) return;
-    window.sessionStorage.removeItem(`omnia:max:starter:${projectId}`);
-    if (new URLSearchParams(window.location.search).get("starter") === "1") {
-      window.history.replaceState(null, "", basePath);
-    }
-  }, [basePath, messages, mode, projectId]);
 
   // Re-hydrate the agentic transcript from history: the backend persists each
   // assistant reply's steps on `message.agent_steps`, so after a reload we seed
@@ -141,26 +88,26 @@ export function ChatPanel({
   // (one short question at a time) before the first build. Every later prompt
   // submits the same way.
   const handleSubmit = (text: string, selections: SelectedElement[]) => {
-    submitSafely(text, selections);
+    submit(text, modelId, selections);
   };
 
   // «Починить» on an error card → submit a follow-up fix prompt through the
   // normal pipeline (surgical edit / rebuild as the triage decides).
   const handleFix = (prompt: string) => {
-    submitSafely(prompt);
+    submit(prompt, modelId, []);
   };
 
   // A fork recap card's one-tap starter edit → submit it as the remixer's first
   // prompt through the normal pipeline (the warm first move, pillar 4).
   const handleSuggest = (prompt: string) => {
-    submitSafely(prompt);
+    submit(prompt, modelId, []);
   };
 
   // Discovery chip tapped (or an inline «Другое» answer) → submit it as the
   // user's answer to the question. Used by both single-select and the joined
   // multi-select «Готово» submission (the card builds the combined string).
   const handlePickChoice = (choice: string) => {
-    submitSafely(choice);
+    submit(choice, modelId, []);
   };
 
   // «Я готов — постройте сейчас» — leave the onboarding popup early and build now.
@@ -168,7 +115,7 @@ export function ChatPanel({
   // floor, so the next turn generates instead of asking another question. The
   // user is never trapped in the interview (NORTH STAR pillar 2 — явный skip).
   const handleSkip = () => {
-    submitSafely("Постройте сейчас");
+    submit("Постройте сейчас", modelId, []);
   };
 
   // Determine streaming state from data: an assistant message with
@@ -220,14 +167,14 @@ export function ChatPanel({
   // skip_clarify so the server builds straight away instead of re-interviewing.
   const handleSurveyDone = (combined: string, presetId: string | null) => {
     clearSurvey();
-    submitSafely(combined.trim() || "Постройте сейчас", [], {
+    submit(combined.trim() || "Постройте сейчас", modelId, [], {
       skipClarify: true,
       designPresetId: presetId,
     });
   };
   const handleSurveySkip = () => {
     clearSurvey();
-    submitSafely("Постройте сейчас", [], { skipClarify: true });
+    submit("Постройте сейчас", modelId, [], { skipClarify: true });
   };
 
   // Auto-scroll on new messages / chunks.
@@ -248,25 +195,23 @@ export function ChatPanel({
     if (messages === undefined) return; // wait for the first load
     const params = new URLSearchParams(window.location.search);
     let p = params.get("p");
-    let productSpec: MaxProductSpec | null = null;
     if (!p && params.get("starter") === "1") {
       const key = `omnia:max:starter:${projectId}`;
-      const handoff = parseMaxStarterHandoff(window.sessionStorage.getItem(key));
-      p = handoff?.prompt ?? null;
-      productSpec = handoff?.productSpec ?? null;
+      p = window.sessionStorage.getItem(key);
+      if (p) window.sessionStorage.removeItem(key);
     }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
-      submitSafely(p.trim(), [], {
+      submit(p.trim(), modelId, [], {
         skipClarify: true,
         // Stable on the server across tabs/reloads/devices. Even if the handoff
         // effect somehow fires twice, reserve_generation_run replays this exact
         // run rather than creating a second generation.
         idempotencyKey: `max-starter-${projectId}`,
-        productSpec,
       });
+      window.history.replaceState(null, "", basePath);
     }
-  }, [messages, submitSafely, basePath, projectId]);
+  }, [messages, submit, basePath, projectId]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
@@ -305,14 +250,14 @@ export function ChatPanel({
           <div className="p-6 text-center space-y-2">
             <div className="text-sm text-fg-secondary">
               {mode === "max"
-                ? "Собираем первую рабочую версию из описания бизнеса."
+                ? "Расскажите, что изменить в Mini App."
                 : "Поговорим о вашем сайте."}
             </div>
             <div className="text-xs text-fg-tertiary leading-5">
               {mode === "max" ? (
                 <>
-                  Готовое приложение появится только после зелёной сборки,
-                  проверки всех экранов, главного действия и сохранения данных.
+                  Здесь нельзя переключить проект на обычный сайт: все правки
+                  сохраняют MAX Bridge, мобильный интерфейс и интеграцию бота.
                 </>
               ) : (
                 <>

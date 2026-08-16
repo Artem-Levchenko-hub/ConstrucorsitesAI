@@ -71,18 +71,9 @@ const payloadKey = (t: ColorTarget) =>
 export function StylePanel({
   projectId,
   post,
-  sourceEditing = true,
-  fontEditing = true,
-  tokenEditing = true,
 }: {
   projectId: string;
   post: (msg: Record<string, unknown>) => void;
-  /** Direct source rewrites require a static index.html and are unsafe for MAX/Next.js. */
-  sourceEditing?: boolean;
-  /** Container CSS currently cannot persist external font resources safely. */
-  fontEditing?: boolean;
-  /** Site-wide CSS variables are only useful when the app defines those tokens. */
-  tokenEditing?: boolean;
 }) {
   const selected = useStyleEditStore((s) => s.selected);
   const elements = useStyleEditStore((s) => s.elements);
@@ -111,7 +102,6 @@ export function StylePanel({
   const { data: fonts } = useQuery({
     queryKey: ["fonts"],
     queryFn: listFonts,
-    enabled: fontEditing && Boolean(selected?.editableText),
     staleTime: Infinity,
   });
 
@@ -353,30 +343,26 @@ export function StylePanel({
   const hasEyeDropper = typeof window !== "undefined" && "EyeDropper" in window;
 
   return (
-    // Springs in from its bottom-right anchor only after a manual pick. The
-    // light material surface matches MAX Studio and keeps the editor from
-    // reading like a second, dark application layered over the preview.
+    // Springs in from its bottom-right anchor the moment you pick an element to
+    // edit — the panel feels attached to the corner it lives in.
     <motion.div
       variants={popIn}
       initial="hidden"
       animate="visible"
       style={{ transformOrigin: "bottom right" }}
-      role="dialog"
-      aria-label="Ручная правка элемента"
-      className="absolute right-3 bottom-3 z-40 flex max-h-[calc(100%-1.5rem)] w-[calc(100%-1.5rem)] max-w-72 flex-col rounded-xl border border-border-default bg-surface-overlay shadow-[0_18px_50px_rgba(23,23,22,.18)]"
+      className="absolute right-3 bottom-3 z-40 w-72 rounded-xl border border-border-default bg-surface-panel-dark shadow-2xl flex flex-col max-h-[calc(100%-1.5rem)]"
     >
-      <div className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
+      <div className="flex items-center gap-2 px-3 h-10 border-b border-border-subtle shrink-0">
         <Pipette className="h-4 w-4 text-accent" />
-        <span className="text-xs font-medium text-fg-primary">Правка элемента</span>
+        <span className="text-xs font-medium text-fg-primary">Стиль элемента</span>
         <span className="text-[11px] font-mono text-fg-tertiary truncate">
           {selected.tag}
         </span>
         <button
           type="button"
           onClick={clearAll}
-          className="-mr-2 ml-auto grid size-11 shrink-0 place-items-center rounded-[8px] text-fg-tertiary transition-colors hover:bg-surface-raised hover:text-fg-primary"
+          className="ml-auto text-fg-tertiary hover:text-fg-primary transition-colors"
           title="Закрыть"
-          aria-label="Закрыть ручную правку"
         >
           <X className="h-4 w-4" />
         </button>
@@ -384,7 +370,7 @@ export function StylePanel({
 
       <div className="p-3 space-y-4 overflow-y-auto scrollbar-elegant">
         {/* TEXT — edit the element's content directly (no LLM) */}
-        {sourceEditing && selected.editableText ? (
+        {selected.editableText ? (
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
               <Type className="h-3 w-3" />
@@ -414,7 +400,7 @@ export function StylePanel({
         ) : null}
 
         {/* IMAGE — replace a generated picture with your own (no LLM) */}
-        {sourceEditing && imgSrcs.length > 0 ? (
+        {imgSrcs.length > 0 ? (
           <div className="space-y-2">
             <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
               <ImageUp className="h-3 w-3" />
@@ -549,38 +535,34 @@ export function StylePanel({
             )}
           </div>
 
-          {tokenEditing && (
-            <>
-              <label className="flex cursor-pointer items-center gap-2 text-[11px] text-fg-tertiary">
-                <input
-                  type="checkbox"
-                  checked={siteWide}
-                  onChange={(e) => setSiteWide(e.target.checked)}
-                  className="accent-[var(--color-accent,#3b82f6)]"
-                />
-                <Globe className="h-3 w-3" />
-                Применить ко всему сайту
-              </label>
-              {siteWide && (
-                <select
-                  value={token}
-                  onChange={(e) => setTokenSel(e.target.value)}
-                  className="w-full rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-fg-primary focus:outline-none"
-                >
-                  {SITE_TOKENS.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </>
+          <label className="flex items-center gap-2 text-[11px] text-fg-tertiary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={siteWide}
+              onChange={(e) => setSiteWide(e.target.checked)}
+              className="accent-[var(--color-accent,#3b82f6)]"
+            />
+            <Globe className="h-3 w-3" />
+            Применить ко всему сайту
+          </label>
+          {siteWide && (
+            <select
+              value={token}
+              onChange={(e) => setTokenSel(e.target.value)}
+              className="w-full rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-fg-primary focus:outline-none"
+            >
+              {SITE_TOKENS.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
           )}
           </div>
         ) : null}
 
         {/* FONT — only for editable text */}
-        {fontEditing && selected.editableText ? (
+        {selected.editableText ? (
           <div className="space-y-2">
           <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary">
             <Type className="h-3 w-3" />
@@ -616,9 +598,7 @@ export function StylePanel({
         ) : null}
 
         {/* MOVE — reorder among siblings (swap with prev/next) */}
-        {sourceEditing &&
-        selected.outerHTML &&
-        (selected.prevHTML || selected.nextHTML) ? (
+        {selected.outerHTML && (selected.prevHTML || selected.nextHTML) ? (
           <div className="pt-1 border-t border-border-subtle">
             <div className="flex items-center gap-1.5 text-[11px] text-fg-tertiary mb-1.5">
               Переместить
@@ -667,19 +647,15 @@ export function StylePanel({
             )}
             Убрать элемент
           </Button>
-          {sourceEditing && (
-            <button
-              type="button"
-              onClick={hardDelete}
-              disabled={hardDeleting}
-              title="Вырезать элемент из HTML насовсем"
-              className="w-full text-[10px] text-fg-tertiary hover:text-red-400 disabled:opacity-50 transition-colors"
-            >
-              {hardDeleting
-                ? "удаляю из кода…"
-                : "или удалить из кода насовсем"}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={hardDelete}
+            disabled={hardDeleting}
+            title="Вырезать элемент из HTML насовсем"
+            className="w-full text-[10px] text-fg-tertiary hover:text-red-400 disabled:opacity-50 transition-colors"
+          >
+            {hardDeleting ? "удаляю из кода…" : "или удалить из кода насовсем"}
+          </button>
         </div>
       </div>
 

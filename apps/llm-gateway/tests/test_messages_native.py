@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
-from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
@@ -28,41 +26,6 @@ def app(neutralize_lifespan: None) -> FastAPI:
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("invalid_request", "invalid_request"),
-        ("auth.failed", "auth.failed"),
-        ("credential-like value", ""),
-        ("x" * 81, ""),
-    ],
-)
-def test_upstream_error_type_is_safe_for_logs(raw: str, expected: str) -> None:
-    assert messages_native._safe_upstream_error_type(raw) == expected
-
-
-@pytest.fixture(autouse=True)
-def open_native_run_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Native endpoint tests run without Postgres unless budget behaviour is under test."""
-    monkeypatch.setattr(
-        messages_native.billing,
-        "reserve_native_run_request",
-        AsyncMock(
-            return_value=messages_native.billing.NativeRunReservation(
-                usage_id=UUID("99999999-9999-9999-9999-999999999999"),
-                requests_before=0,
-                cost_rub_before=messages_native.Decimal("0"),
-                provider_cost_usd_before=messages_native.Decimal("0"),
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        messages_native.billing,
-        "release_native_run_reservation",
-        AsyncMock(return_value=None),
-    )
 
 
 def test_openai_messages_preserve_tool_turns() -> None:
@@ -108,59 +71,6 @@ def test_openai_messages_preserve_tool_turns() -> None:
         "tool_call_id": "toolu_1",
         "content": "export default App",
     }
-
-
-def test_openai_messages_compact_completed_large_file_history() -> None:
-    large_source = "export const feature = true;\n" * 1_500
-    large_read = "line from an old read\n" * 1_500
-    latest_error = "src/app/page.tsx(1,1): error TS1005"
-    body = {
-        "messages": [
-            {"role": "user", "content": "Build the complete app"},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "write_1",
-                        "name": "write_file",
-                        "input": {"path": "src/app/page.tsx", "content": large_source},
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "write_1", "content": large_read}
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "tool_use", "id": "build_1", "name": "build", "input": {}}],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "build_1",
-                        "content": latest_error,
-                        "is_error": True,
-                    }
-                ],
-            },
-        ]
-    }
-
-    adapted = messages_native._openai_messages(body)
-    encoded = json.dumps(adapted, ensure_ascii=False)
-
-    assert large_source not in encoded
-    assert large_read not in encoded
-    assert "OMITTED FROM HISTORY" in encoded
-    assert "OLDER TOOL RESULT OMITTED" in encoded
-    assert latest_error in encoded
-    assert len(encoded) < 3_000
 
 
 def test_openai_adapter_preserves_prompt_cache_breakpoints() -> None:
@@ -243,7 +153,7 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
         },
     }
 
-    adapted = messages_native._anthropic_response(upstream, "claude-sonnet-5")
+    adapted = messages_native._anthropic_response(upstream, "gemini-3.1-pro-preview-customtools")
 
     assert adapted["stop_reason"] == "tool_use"
     assert adapted["content"][0] == {
@@ -260,7 +170,7 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
     assert adapted["usage"]["cache_creation_input_tokens"] == 3
 
 
-def test_native_endpoint_uses_sonnet_chat_tools(
+def test_native_endpoint_uses_llmgw_chat_tools(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, Any] = {}
@@ -268,7 +178,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda _model: ("test-key", "https://api.llmgw.ru/v1"),
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
     )
 
     def fake_post(
@@ -304,22 +214,12 @@ def test_native_endpoint_uses_sonnet_chat_tools(
         )
 
     monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
-    monkeypatch.setattr(
-        messages_native.billing,
-        "charge",
-        AsyncMock(return_value=UUID("55555555-5555-5555-5555-555555555555")),
-    )
 
     response = client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "max_tokens": 128,
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "free": True,
-            },
             "system": "Build",
             "messages": [{"role": "user", "content": "Finish"}],
             "tools": [
@@ -339,7 +239,7 @@ def test_native_endpoint_uses_sonnet_chat_tools(
 
     assert response.status_code == 200
     assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
-    assert captured["json"]["model"] == "anthropic/claude-sonnet-5"
+    assert captured["json"]["model"] == "google/gemini-3.1-pro-preview-customtools"
     assert captured["json"]["tools"][0]["function"]["name"] == "done"
     assert response.json()["content"][0] == {
         "type": "tool_use",
@@ -347,9 +247,6 @@ def test_native_endpoint_uses_sonnet_chat_tools(
         "name": "done",
         "input": {"summary": "ok"},
     }
-    assert messages_native.billing.charge.await_args.kwargs[
-        "provider_cost_usd"
-    ] == messages_native._reserve_native_provider_cost("claude-sonnet-5", captured["json"])
 
 
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(
@@ -367,7 +264,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
     )
 
     def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
@@ -397,7 +294,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     response = client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "max_tokens": 1000,
             "user": user_id,
             "metadata": {
@@ -423,14 +320,6 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert kwargs["cache_read_tokens"] == 600
     assert kwargs["cache_write_tokens"] == 200
     assert str(kwargs["provider_cost_usd"]) == "0.125"
-    assert kwargs["reserved_usage_id"] == UUID("99999999-9999-9999-9999-999999999999")
-    reserve_kwargs = messages_native.billing.reserve_native_run_request.await_args.kwargs
-    assert reserve_kwargs["reserved_cost_rub"] > Decimal("0")
-    assert reserve_kwargs["reserved_provider_cost_usd"] > Decimal("0")
-    assert reserve_kwargs["reserved_provider_cost_usd"] != Decimal("0.35")
-    assert reserve_kwargs["max_requests"] == 160
-    assert reserve_kwargs["max_cost_rub"] == Decimal("5000.0")
-    assert reserve_kwargs["max_provider_cost_usd"] == Decimal("10.0")
 
 
 def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
@@ -443,13 +332,13 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     monkeypatch.setattr(
         messages_native,
         "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
     )
 
     response = client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-5",
+            "model": "gemini-3.1-pro-preview-customtools",
             "user": "11111111-1111-1111-1111-111111111111",
             "metadata": {
                 "project_id": "22222222-2222-2222-2222-222222222222",
@@ -462,562 +351,3 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     assert response.status_code == 402
     assert response.json()["error"]["type"] == "wallet_empty"
     precheck.assert_awaited_once()
-
-
-def test_max_native_unmetered_run_skips_wallet_but_records_usage(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    precheck = AsyncMock(side_effect=AssertionError("wallet must not gate MAX"))
-    charge = AsyncMock(return_value=UUID("55555555-5555-5555-5555-555555555555"))
-    monkeypatch.setattr(messages_native.billing, "precheck_balance", precheck)
-    monkeypatch.setattr(messages_native.billing, "charge", charge)
-    monkeypatch.setattr(
-        messages_native.billing,
-        "reserve_native_run_request",
-        AsyncMock(
-            return_value=messages_native.billing.NativeRunReservation(
-                usage_id=UUID("99999999-9999-9999-9999-999999999999"),
-                requests_before=999,
-                cost_rub_before=Decimal("99999"),
-                provider_cost_usd_before=Decimal("999"),
-                unmetered=True,
-            )
-        ),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-
-    def fake_post(*_args: Any, **_kwargs: Any) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "id": "provider-request-max",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"content": "ok", "tool_calls": []},
-                    }
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-            },
-        )
-
-    monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "project_id": "22222222-2222-2222-2222-222222222222",
-                "run_id": "33333333-3333-3333-3333-333333333333",
-            },
-            "messages": [{"role": "user", "content": "finish MAX"}],
-        },
-    )
-
-    assert response.status_code == 200
-    precheck.assert_not_awaited()
-    charge.assert_awaited_once()
-    assert charge.await_args.kwargs["free"] is True
-
-
-def test_native_endpoint_stops_free_run_before_provider_when_run_budget_is_reached(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    reserve = AsyncMock(
-        side_effect=messages_native.billing.RunBudgetExceededError("run budget exhausted")
-    )
-    upstream = pytest.fail
-    monkeypatch.setattr(messages_native.billing, "reserve_native_run_request", reserve)
-    monkeypatch.setattr(messages_native, "_post_llmgw", upstream)
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "do not spend again"}],
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["type"] == "run_budget_exhausted"
-    reserve.assert_awaited_once()
-
-
-def test_native_endpoint_fails_closed_when_run_accounting_is_unavailable(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        messages_native.billing,
-        "reserve_native_run_request",
-        AsyncMock(side_effect=RuntimeError("database unavailable")),
-    )
-    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {"run_id": "33333333-3333-3333-3333-333333333333"},
-            "messages": [{"role": "user", "content": "do not bypass accounting"}],
-        },
-    )
-
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "billing_unavailable"
-
-
-def test_native_endpoint_releases_reservation_after_explicit_upstream_rejection(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    release = AsyncMock(return_value=None)
-    warning = Mock()
-    monkeypatch.setattr(messages_native.billing, "release_native_run_reservation", release)
-    monkeypatch.setattr(messages_native.log, "warning", warning)
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "_post_llmgw",
-        lambda *_args, **_kwargs: httpx.Response(
-            400,
-            json={"error": {"message": "payload rejected", "type": "invalid_request"}},
-        ),
-    )
-    monkeypatch.setattr(messages_native.billing, "charge", AsyncMock())
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "invalid upstream payload"}],
-        },
-    )
-
-    assert response.status_code == 400
-    release.assert_awaited_once_with(UUID("99999999-9999-9999-9999-999999999999"))
-    messages_native.billing.charge.assert_not_awaited()
-    warning.assert_called_once_with(
-        "native_messages.upstream_rejected",
-        run_id="33333333-3333-3333-3333-333333333333",
-        status_code=400,
-        upstream_error_type="invalid_request",
-    )
-
-
-def test_native_endpoint_keeps_reservation_after_ambiguous_upstream_failure(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    release = AsyncMock(return_value=None)
-    monkeypatch.setattr(messages_native.billing, "release_native_run_reservation", release)
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "_post_llmgw",
-        lambda *_args, **_kwargs: httpx.Response(
-            503,
-            json={"error": {"message": "upstream unavailable"}},
-        ),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "ambiguous failure"}],
-        },
-    )
-
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "paid_call_ambiguous"
-    release.assert_not_awaited()
-
-
-def test_native_stream_aggregates_tool_call_fragments(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request = httpx.Request("POST", "https://provider.test/v1/chat/completions")
-    chunks = [
-        {
-            "id": "provider-turn-1",
-            "model": "anthropic/claude-sonnet-5",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "id": "call_1",
-                                "function": {"name": "write_", "arguments": '{"path":'},
-                            }
-                        ]
-                    },
-                    "finish_reason": None,
-                }
-            ],
-        },
-        {
-            "id": "provider-turn-1",
-            "model": "anthropic/claude-sonnet-5",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "function": {
-                                    "name": "file",
-                                    "arguments": '"src/app.tsx","content":"ok"}',
-                                },
-                            }
-                        ]
-                    },
-                    "finish_reason": "tool_calls",
-                }
-            ],
-            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
-        },
-    ]
-    body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
-    upstream = httpx.Response(
-        200,
-        headers={"content-type": "text/event-stream"},
-        content=body,
-        request=request,
-    )
-    sent: dict[str, Any] = {}
-
-    class StreamContext:
-        def __enter__(self) -> httpx.Response:
-            return upstream
-
-        def __exit__(self, *_args: Any) -> None:
-            return None
-
-    class FakeClient:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __enter__(self) -> FakeClient:
-            return self
-
-        def __exit__(self, *_args: Any) -> None:
-            return None
-
-        def stream(self, _method: str, _url: str, **kwargs: Any) -> StreamContext:
-            sent.update(kwargs)
-            return StreamContext()
-
-    monkeypatch.setattr(messages_native.httpx, "Client", FakeClient)
-
-    response = messages_native._post_llmgw(
-        "https://provider.test/v1/chat/completions",
-        {"model": "anthropic/claude-sonnet-5", "messages": []},
-        {"Authorization": "Bearer test"},
-    )
-
-    data = response.json()
-    tool_call = data["choices"][0]["message"]["tool_calls"][0]
-    assert sent["json"]["stream"] is True
-    assert sent["json"]["stream_options"] == {"include_usage": True}
-    assert tool_call["id"] == "call_1"
-    assert tool_call["function"] == {
-        "name": "write_file",
-        "arguments": '{"path":"src/app.tsx","content":"ok"}',
-    }
-    assert data["usage"]["completion_tokens"] == 7
-
-
-def test_native_endpoint_classifies_stalled_response_body(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://provider.test/v1"),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "_post_llmgw",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(httpx.ReadTimeout("stalled body")),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "turn_id": "33333333-3333-3333-3333-333333333333:4",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "long composition"}],
-        },
-    )
-
-    assert response.status_code == 504
-    assert response.json()["error"]["type"] == "provider_response_timeout"
-
-
-def test_native_endpoint_classifies_base_timeout_before_ambiguous_transport(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://provider.test/v1"),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "_post_llmgw",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(httpx.TimeoutException("read idle")),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "turn_id": "33333333-3333-3333-3333-333333333333:5",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "long composition"}],
-        },
-    )
-
-    assert response.status_code == 504
-    assert response.json()["error"]["type"] == "provider_response_timeout"
-
-
-def test_native_endpoint_replays_settled_logical_turn_before_provider(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settled = {
-        "id": "msg_replayed",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-sonnet-5",
-        "content": [{"type": "text", "text": "reconciled"}],
-        "stop_reason": "end_turn",
-        "usage": {"input_tokens": 10, "output_tokens": 2},
-    }
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://provider.test/v1"),
-    )
-    cached = AsyncMock(return_value=settled)
-    monkeypatch.setattr(messages_native, "_cached_turn_result", cached)
-    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "turn_id": "33333333-3333-3333-3333-333333333333:4",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "same logical turn"}],
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["content"][0]["text"] == "reconciled"
-    messages_native.billing.reserve_native_run_request.assert_not_awaited()
-
-
-def test_native_endpoint_marks_post_provider_settlement_failure_as_ambiguous(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "_post_llmgw",
-        lambda *_args, **_kwargs: httpx.Response(
-            200,
-            json={
-                "id": "provider-completed-1",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"content": "completed", "tool_calls": []},
-                    }
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        messages_native.billing,
-        "charge",
-        AsyncMock(side_effect=RuntimeError("database unavailable after provider success")),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "one paid attempt only"}],
-        },
-    )
-
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "paid_call_ambiguous"
-
-
-def test_native_endpoint_marks_post_provider_wallet_race_as_ambiguous(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-    monkeypatch.setattr(
-        messages_native,
-        "_post_llmgw",
-        lambda *_args, **_kwargs: httpx.Response(
-            200,
-            json={
-                "id": "provider-completed-wallet-race",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {"content": "completed", "tool_calls": []},
-                    }
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        messages_native.billing,
-        "charge",
-        AsyncMock(side_effect=WalletEmptyError("wallet changed after provider call")),
-    )
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": "11111111-1111-1111-1111-111111111111",
-            "metadata": {
-                "run_id": "33333333-3333-3333-3333-333333333333",
-                "free": True,
-            },
-            "messages": [{"role": "user", "content": "one paid attempt only"}],
-        },
-    )
-
-    assert response.status_code == 503
-    assert response.json()["error"]["type"] == "paid_call_ambiguous"
-
-
-@pytest.mark.parametrize(
-    ("user", "run_id"),
-    [
-        (None, "33333333-3333-3333-3333-333333333333"),
-        ("11111111-1111-1111-1111-111111111111", None),
-        ("not-a-uuid", "33333333-3333-3333-3333-333333333333"),
-        ("11111111-1111-1111-1111-111111111111", "not-a-uuid"),
-    ],
-)
-def test_native_endpoint_blocks_unattributed_calls_before_provider(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-    user: str | None,
-    run_id: str | None,
-) -> None:
-    reserve = AsyncMock()
-    monkeypatch.setattr(messages_native.billing, "reserve_native_run_request", reserve)
-    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
-    monkeypatch.setattr(
-        messages_native,
-        "native_messages_route",
-        lambda _model: ("test-key", "https://api.aitunnel.ru/v1"),
-    )
-    metadata = {"free": True}
-    if run_id is not None:
-        metadata["run_id"] = run_id
-
-    response = client.post(
-        "/v1/messages",
-        json={
-            "model": "claude-sonnet-5",
-            "user": user,
-            "metadata": metadata,
-            "messages": [{"role": "user", "content": "must be attributed"}],
-        },
-    )
-
-    assert response.status_code == 400
-    assert response.json()["error"]["type"] == "invalid_request_error"
-    reserve.assert_not_awaited()
-
-
-def test_native_product_timeout_is_bounded_but_allows_long_streams() -> None:
-    timeout = messages_native._upstream_timeout()
-    settings = messages_native.get_settings()
-
-    assert timeout.connect == 30.0
-    assert timeout.write == 60.0
-    assert timeout.pool == 30.0
-    assert timeout.read == 180.0
-    assert settings.native_response_total_timeout_seconds == 600

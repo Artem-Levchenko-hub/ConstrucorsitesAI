@@ -4,8 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from omnia_api.schemas.max_product_spec import MaxProductSpec
-
 
 class SelectedElement(BaseModel):
     """Элемент, выделенный пользователем в превью (select-mode), с комментарием.
@@ -92,9 +90,6 @@ class PromptRequest(BaseModel):
     # directly (the palette question is a preset swatch). Optional → ignored when
     # absent. Applied to the project before the build (additive, back-compat).
     design_preset_id: str | None = Field(default=None, max_length=64)
-    # Optional so existing chat clients remain compatible. MAX Studio supplies a
-    # deterministic contract alongside its human-readable first-build prompt.
-    product_spec: MaxProductSpec | None = None
 
 
 class SurveyQuestion(BaseModel):

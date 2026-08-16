@@ -4,7 +4,7 @@ Bills only for tokens actually delivered to the wire. If the client disconnects
 mid-stream, the loop short-circuits and the bill reflects the partial output —
 never the un-streamed tail (per AGENT-C-LLM-GATEWAY.md, M1 cancellation rule).
 
-There is one upstream serving the configured Gemini and Sonnet chat models
+There is exactly one chat model (`gemini-3.1-pro-preview-customtools`) and one upstream
 (llmgw), so the stream source is always `providers/llmgw.astream`.
 """
 
@@ -21,7 +21,7 @@ from uuid import UUID, uuid4
 import structlog
 from fastapi import Request
 
-from omnia_gateway.core.errors import GatewayError, PaidCallAmbiguousError
+from omnia_gateway.core.errors import GatewayError
 from omnia_gateway.providers import llmgw
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services import model_router as router_module
@@ -67,8 +67,6 @@ async def stream_completion(
     fallback_used = False
     cancelled = False
     upstream_error: GatewayError | None = None
-    settlement_error: PaidCallAmbiguousError | None = None
-    billing_attempted = False
 
     # TRUE token streaming from llmgw — the page builds live in the preview.
     source: AsyncIterator[tuple[str, str]] = llmgw.astream(
@@ -122,37 +120,12 @@ async def stream_completion(
         except Exception:
             cost_rub = Decimal("0")
 
-        # Settle before claiming success.  Mark the attempt *before* awaiting:
-        # if the database reply is lost after commit, retrying here could debit
-        # the same streamed completion twice.  The caller receives an explicit
-        # ambiguous terminal event and must not repeat the paid provider call.
-        if user_id is not None and tokens_out > 0:
-            billing_attempted = True
-            try:
-                await billing.charge(
-                    user_id=user_id,
-                    project_id=project_id,
-                    message_id=message_id,
-                    model_id=actual_model,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    cost_rub=cost_rub,
-                    description=f"Streamed completion via {actual_model}",
-                    free=free,
-                )
-            except Exception:
-                log.exception("stream.charge_ambiguous", user_id=str(user_id), model=actual_model)
-                settlement_error = PaidCallAmbiguousError(
-                    "The provider completed but settlement is temporarily unavailable"
-                )
-
-        terminal_error = settlement_error or upstream_error
-        if terminal_error is not None:
+        if upstream_error is not None:
             yield _sse(
                 {
                     "error": {
-                        "code": terminal_error.code,
-                        "message": terminal_error.message,
+                        "code": upstream_error.code,
+                        "message": upstream_error.message,
                     }
                 }
             )
@@ -195,10 +168,7 @@ async def stream_completion(
         except Exception:
             cost_rub_final = Decimal("0")
 
-        if user_id is not None and tokens_out_final > 0 and not billing_attempted:
-            # Cancellation can skip the normal terminal section.  Charge the
-            # delivered prefix once, but never retry an ambiguous attempt.
-            billing_attempted = True
+        if user_id is not None and tokens_out_final > 0:
             try:
                 await billing.charge(
                     user_id=user_id,
@@ -228,13 +198,7 @@ async def stream_completion(
                     "fallback_used": fallback_used,
                     "stream": True,
                     "cancelled": cancelled,
-                    "error": (
-                        settlement_error.code
-                        if settlement_error
-                        else upstream_error.code
-                        if upstream_error
-                        else None
-                    ),
+                    "error": upstream_error.code if upstream_error else None,
                 }
             )
         except Exception:

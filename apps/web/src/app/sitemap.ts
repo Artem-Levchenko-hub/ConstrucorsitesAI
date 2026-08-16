@@ -52,11 +52,5 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority: 0.5,
     },
-    {
-      url: `${PUBLIC_ORIGIN}/max/demo`,
-      lastModified: now,
-      changeFrequency: "weekly",
-      priority: 0.9,
-    },
   ];
 }

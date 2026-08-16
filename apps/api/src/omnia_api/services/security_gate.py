@@ -32,7 +32,6 @@ class SecurityVerdict:
     passed: bool
     checks: list[SecCheck] = field(default_factory=list)
     summary: str = ""
-    executed: bool = True
 
 
 def _h(headers: dict[str, str], name: str) -> str | None:
@@ -48,10 +47,14 @@ def assert_security_headers(headers: dict[str, str]) -> list[SecCheck]:
     """The conservative headers G006 sets must be present on responses."""
     checks: list[SecCheck] = []
     nosniff = _h(headers, "x-content-type-options")
-    checks.append(SecCheck("X-Content-Type-Options: nosniff", nosniff == "nosniff", str(nosniff)))
+    checks.append(
+        SecCheck("X-Content-Type-Options: nosniff", nosniff == "nosniff", str(nosniff))
+    )
     frame = _h(headers, "x-frame-options")
     checks.append(
-        SecCheck("X-Frame-Options present", frame is not None and frame != "", str(frame))
+        SecCheck(
+            "X-Frame-Options present", frame is not None and frame != "", str(frame)
+        )
     )
     return checks
 
@@ -116,7 +119,9 @@ def surface_verdict_from_headers(headers: dict[str, str]) -> SecurityVerdict:
     """
     nosniff = _h(headers, "x-content-type-options")
     checks = [
-        SecCheck("X-Content-Type-Options: nosniff", nosniff == "nosniff", str(nosniff)),
+        SecCheck(
+            "X-Content-Type-Options: nosniff", nosniff == "nosniff", str(nosniff)
+        ),
         assert_cors_safe(headers),
     ]
     return summarize(checks, [])
@@ -131,9 +136,7 @@ async def run_security_gate(base_url: str) -> SecurityVerdict:
     into the build pipeline (a crashed gate reads as "not proven", not "passed")."""
     base_url = (base_url or "").rstrip("/")
     if not base_url:
-        verdict = summarize([SecCheck("preview running", False, "no dev_url")], [])
-        verdict.executed = False
-        return verdict
+        return summarize([SecCheck("preview running", False, "no dev_url")], [])
 
     from playwright.async_api import async_playwright
 
@@ -141,7 +144,9 @@ async def run_security_gate(base_url: str) -> SecurityVerdict:
 
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
+            browser = await p.chromium.launch(
+                headless=True, args=preview_resolver_args()
+            )
             try:
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
@@ -157,12 +162,10 @@ async def run_security_gate(base_url: str) -> SecurityVerdict:
             finally:
                 await browser.close()
     except Exception as exc:
-        verdict = summarize(
+        return summarize(
             [SecCheck("security gate executed", False, f"{type(exc).__name__}: {exc}")],
             [],
         )
-        verdict.executed = False
-        return verdict
 
     headers = res.get("headers") if isinstance(res, dict) else None
     if not isinstance(headers, dict):

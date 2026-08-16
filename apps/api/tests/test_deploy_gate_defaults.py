@@ -16,10 +16,6 @@ def test_deploy_gate_does_not_block_by_default() -> None:
     assert Settings.model_fields["deploy_attestation_blocking"].default is False
 
 
-def test_max_subjective_visual_scoring_is_disabled_by_default() -> None:
-    assert Settings.model_fields["max_visual_scoring_enabled"].default is False
-
-
 def test_deploy_gate_is_always_blocking_in_production() -> None:
     settings = Settings.model_construct(env="prod", deploy_attestation_blocking=False)
     assert blocking_required(settings)
@@ -37,7 +33,9 @@ def test_trigger_deploy_consults_the_attestation() -> None:
 def test_production_compose_enables_blocking_by_default() -> None:
     from pathlib import Path
 
-    compose = (Path(__file__).parents[2] / "llm-gateway/deploy/full/docker-compose.yml").read_text()
+    compose = (
+        Path(__file__).parents[2] / "llm-gateway/deploy/full/docker-compose.yml"
+    ).read_text()
     assert "DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-true}" in compose
     assert "USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}" in compose
     assert "USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-true}" in compose

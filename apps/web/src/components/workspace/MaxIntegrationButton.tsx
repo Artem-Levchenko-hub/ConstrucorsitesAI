@@ -178,21 +178,6 @@ export function MaxIntegrationButton({
                 партнёров. Секрет хранится зашифрованно на backend, не встраивается в
                 приложение и не показывается повторно.
               </div>
-              <ol className="grid gap-2 text-xs leading-5 text-fg-secondary">
-                {[
-                  "Откройте MAX Partner и войдите как подтверждённый владелец проекта.",
-                  "Создайте бота, заполните карточку и дождитесь статуса одобрения.",
-                  "Откройте Bot API и скопируйте секрет целиком, без пробелов.",
-                  "Вернитесь сюда, вставьте секрет ниже и запустите проверку.",
-                ].map((item, index) => (
-                  <li key={item} className="flex gap-2">
-                    <span className="grid size-5 shrink-0 place-items-center rounded-full border border-border-default text-[9px]">
-                      {index + 1}
-                    </span>
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ol>
               <div className="space-y-2">
                 <Label htmlFor="max-bot-token">Секрет бота</Label>
                 <Input
@@ -204,9 +189,6 @@ export function MaxIntegrationButton({
                   placeholder="Вставьте значение из кабинета MAX"
                   data-testid="max-token-input"
                 />
-                <p className="text-[11px] leading-4 text-fg-secondary">
-                  Нужен именно секрет Bot API, не ID бота, username или URL приложения.
-                </p>
               </div>
               <Button
                 className="w-full"

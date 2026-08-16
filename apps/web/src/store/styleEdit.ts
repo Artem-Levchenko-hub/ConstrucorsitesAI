@@ -43,10 +43,6 @@ export type ElementEdit = {
 };
 
 type StyleEditState = {
-  /** MAX editor project that owns the transient unsaved style state. */
-  projectScope: string | null;
-  /** Mounted workspace instance that owns the project scope. */
-  editorSession: string | null;
   /** Style-mode active — clicks select an element to recolor / restyle. */
   styleMode: boolean;
   /** The element under edit (null = panel closed). */
@@ -58,11 +54,7 @@ type StyleEditState = {
   /** Unsaved changes exist. */
   dirty: boolean;
 
-  scopeToProject: (projectId: string, editorSession?: string) => void;
-  releaseProjectScope: (projectId: string, editorSession?: string) => void;
   setStyleMode: (on: boolean) => void;
-  /** Stop intercepting app clicks after a pick, preserving the open panel. */
-  stopStylePicking: () => void;
   selectElement: (el: StyleSelected) => void;
   setElementProp: (
     selector: string,
@@ -78,53 +70,14 @@ type StyleEditState = {
 };
 
 export const useStyleEditStore = create<StyleEditState>((set) => ({
-  projectScope: null,
-  editorSession: null,
   styleMode: false,
   selected: null,
   tokens: {},
   elements: {},
   dirty: false,
 
-  scopeToProject: (projectId, editorSession = "") =>
-    set((state) =>
-      state.projectScope === projectId &&
-      state.editorSession === (editorSession || null)
-        ? state
-        : {
-            projectScope: projectId,
-            editorSession: editorSession || null,
-            styleMode: false,
-            selected: null,
-            tokens: {},
-            elements: {},
-            dirty: false,
-          },
-    ),
-  releaseProjectScope: (projectId, editorSession = "") =>
-    set((state) =>
-      state.projectScope === projectId &&
-      (!editorSession || state.editorSession === editorSession)
-        ? {
-            projectScope: null,
-            editorSession: null,
-            styleMode: false,
-            selected: null,
-            tokens: {},
-            elements: {},
-            dirty: false,
-          }
-        : state,
-    ),
   setStyleMode: (on) =>
-    set((state) => {
-      if (on) return state.styleMode ? state : { styleMode: true };
-      return !state.styleMode && state.selected === null
-        ? state
-        : { styleMode: false, selected: null };
-    }),
-  stopStylePicking: () =>
-    set((state) => (state.styleMode ? { styleMode: false } : state)),
+    set(on ? { styleMode: true } : { styleMode: false, selected: null }),
   selectElement: (el) => set({ selected: el }),
   setElementProp: (selector, key, value) =>
     set((s) => {

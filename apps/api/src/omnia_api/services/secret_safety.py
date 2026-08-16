@@ -9,10 +9,7 @@ container or git object ever sees them.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
 
 _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
@@ -21,44 +18,6 @@ _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
 )
-
-_MAX_RUNTIME_SECRET_ACCESS_RE = re.compile(
-    r"(?i)\b(?:process\.env|import\.meta\.env|Bun\.env|Deno\.env)\b"
-)
-_MAX_PRIVILEGED_RUNTIME_IMPORT_RE = re.compile(
-    r"(?i)(?:from\s+|require\s*\(|import\s*\()[\"']"
-    r"(?:node:)?(?:fs|child_process|cluster|worker_threads)[\"']"
-)
-# A valid directive may share its line with exports or comments, and may appear
-# inside a function body.  Matching the exact string literal anywhere is
-# deliberately conservative: product copy almost never needs to render this
-# phrase, while missing one occurrence creates a secret-bearing Server Action.
-_MAX_SERVER_ACTION_DIRECTIVE_RE = re.compile(r"(?i)[\"']use[ \t]+server[\"']")
-_MAX_SERVER_RUNTIME_IMPORT_RE = re.compile(
-    r"(?i)(?:from\s+|require\s*\(|import\s*(?:\(\s*)?)[\"'](?:"
-    r"server-only|next/(?:server|headers|cache)|"
-    r"@/lib/max/(?:bot-api|session|validate-init-data)"
-    r")[\"']"
-)
-_MAX_RAW_DB_IMPORT_RE = re.compile(
-    r"(?i)(?:from\s+|require\s*\(|import\s*\()[\"'](?:"
-    r"@/lib/db|(?:\.\.?/)+[^\"']*lib/db|drizzle-orm(?:/[^\"']*)?|pg|postgres"
-    r")[\"']"
-)
-
-_MANAGED_AI_HINT = (
-    "Секрет провайдера был удалён до передачи модели. Пользователю нужна AI-функция "
-    "внутри MAX Mini App: реализуй её через управляемый requestOmniaAI из "
-    "@/lib/omnia/integration-client. Не проси и не сохраняй внешний ключ, не создавай "
-    ".env и не имитируй AI локальными ответами."
-)
-
-
-@dataclass(frozen=True)
-class SafeMaxPrompt:
-    chat_text: str
-    model_text: str
-    credential_removed: bool
 
 
 def contains_provider_secret(value: str) -> bool:
@@ -78,58 +37,6 @@ def redact_provider_secrets(value: str) -> str:
     for pattern in _SECRET_TOKEN_PATTERNS:
         redacted = pattern.sub("[CREDENTIAL REDACTED]", redacted)
     return redacted
-
-
-def structured_provider_secret_paths(value: Any, *, limit: int = 8) -> tuple[str, ...]:
-    """Return bounded field paths containing credential-shaped strings.
-
-    Structured contracts are rejected rather than partially redacted. A PEM
-    block, for example, must never leave its body behind after replacing only a
-    header. Paths are safe metadata; secret values are never returned.
-    """
-
-    found: list[str] = []
-
-    def visit(current: Any, path: str) -> None:
-        if len(found) >= limit:
-            return
-        if isinstance(current, str):
-            if contains_provider_secret(current):
-                found.append(path)
-            return
-        if isinstance(current, Mapping):
-            for key, item in current.items():
-                visit(item, f"{path}.{key}")
-                if len(found) >= limit:
-                    return
-            return
-        if isinstance(current, Sequence) and not isinstance(current, (bytes, bytearray)):
-            for index, item in enumerate(current):
-                visit(item, f"{path}[{index}]")
-                if len(found) >= limit:
-                    return
-
-    visit(value, "product_spec")
-    return tuple(found)
-
-
-def prepare_safe_max_prompt(value: str) -> SafeMaxPrompt:
-    """Redact a pasted credential but keep the product request buildable.
-
-    The chat stores only ``chat_text``.  The model receives ``model_text`` with
-    an explicit managed-runtime instruction, never the credential.  This turns
-    an accidental secret paste into a working AI-native app request instead of
-    a dead-end configuration reply.
-    """
-
-    removed = contains_provider_secret(value)
-    chat_text = redact_provider_secrets(value) if removed else value
-    model_text = f"{chat_text}\n\n{_MANAGED_AI_HINT}" if removed else chat_text
-    return SafeMaxPrompt(
-        chat_text=chat_text,
-        model_text=model_text,
-        credential_removed=removed,
-    )
 
 
 def is_secret_file(path: str) -> bool:
@@ -164,40 +71,12 @@ def max_model_write_rejection(path: str, candidate: str) -> str | None:
             "A provider credential was detected and the write was blocked before it "
             "reached the project repository. Use the Studio Integration Hub instead."
         )
-    if _MAX_RUNTIME_SECRET_ACCESS_RE.search(candidate):
-        return (
-            "Generated MAX product code cannot read runtime environment variables. "
-            "Use the managed MAX/integration client; secrets remain server-owned."
-        )
-    if _MAX_PRIVILEGED_RUNTIME_IMPORT_RE.search(candidate):
-        return (
-            "Generated MAX product code cannot import filesystem/process runtime modules. "
-            "Use the managed MAX/integration client instead."
-        )
-    if _MAX_SERVER_ACTION_DIRECTIVE_RE.search(candidate):
-        return (
-            "Generated MAX product code is browser-only and cannot declare Server Actions. "
-            "Use the managed MAX/integration client instead."
-        )
-    if _MAX_SERVER_RUNTIME_IMPORT_RE.search(candidate):
-        return (
-            "Generated MAX product code cannot import server-only Next.js or MAX modules. "
-            "Use the managed MAX/integration client instead."
-        )
-    if _MAX_RAW_DB_IMPORT_RE.search(candidate):
-        return (
-            "Generated MAX product code cannot import a raw database client. "
-            "Use createMaxAction/getMaxActions from the managed integration client."
-        )
     return None
 
 
 __all__ = [
-    "SafeMaxPrompt",
     "contains_provider_secret",
     "is_secret_file",
     "max_model_write_rejection",
-    "prepare_safe_max_prompt",
     "redact_provider_secrets",
-    "structured_provider_secret_paths",
 ]

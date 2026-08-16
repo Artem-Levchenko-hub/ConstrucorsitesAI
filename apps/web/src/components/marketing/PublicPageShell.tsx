@@ -22,14 +22,14 @@ export function PublicPageShell({
           <BrandMark />
           <div className="flex items-center gap-3">
             <Link href="/" className="hidden items-center gap-2 text-xs text-[#6d6962] hover:text-[#171716] sm:inline-flex"><ArrowLeft className="size-4" />На главную</Link>
-            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-9 px-4 text-xs">Попробовать демо</Link>
+            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-9 px-4 text-xs">Создать приложение</Link>
           </div>
         </div>
       </header>
       <main>
         <section data-graphite-shell className="bg-[#171716] px-5 py-20 text-white sm:px-8 lg:py-24">
           <div className="mx-auto max-w-[960px] text-center">
-            <span className="omnia-kicker text-accent">{eyebrow}</span>
+            <span className="omnia-kicker text-[#f15a38]">{eyebrow}</span>
             <h1 className="mt-6 text-[42px] font-semibold leading-[1.03] tracking-[-.05em] sm:text-[58px]">{title}</h1>
             <p className="mx-auto mt-6 max-w-[720px] text-[16px] leading-7 text-white/50">{lead}</p>
           </div>
@@ -56,10 +56,10 @@ export function InfoGrid({
       {items.map(({ Icon, title, text, href }) => {
         const body = (
           <>
-            <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-accent"><Icon className="size-5" /></span>
+            <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><Icon className="size-5" /></span>
             <h2 className="mt-8 text-lg font-semibold">{title}</h2>
             <p className="mt-2 text-sm leading-6 text-[#6d6962]">{text}</p>
-            {href && <span className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-accent">Подробнее <ArrowRight className="size-4" /></span>}
+            {href && <span className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-[#c84528]">Подробнее <ArrowRight className="size-4" /></span>}
           </>
         );
         const className = "rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-7 transition-colors hover:border-[#aaa59b]";

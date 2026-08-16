@@ -20,8 +20,6 @@
 | `password_hash` | text | NOT NULL |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 | `last_login_at` | timestamptz | NULL |
-| `role` | text | NOT NULL DEFAULT `user`, CHECK IN (`user`, `admin`) |
-| `unlimited_generations` | bool | NOT NULL DEFAULT false; account-scoped обход кошелька/пробных счётчиков |
 
 `citext` — case-insensitive (через `CREATE EXTENSION citext`).
 
@@ -183,7 +181,6 @@ CHECK разрешает ровно одного владельца област
 | `plan_id` | uuid | FK → `billing_plans(id)` ON DELETE RESTRICT |
 | `payment_method_id` | uuid | NULL, FK → `billing_payment_methods(id)` |
 | `status` | text | `pending_payment`, `trialing`, `active`, `past_due`, `paused`, `canceled`, `expired` |
-| `is_lifetime` | boolean | Бессрочный grant; только `active`, без payment/period/renewal полей |
 | `auto_renew` | boolean | По умолчанию `false`; включается только явным согласием |
 | `cancel_at_period_end` | boolean | Отмена в конце текущего периода |
 | `current_period_start/end` | timestamptz | NULL для бессрочного Free |
@@ -204,10 +201,6 @@ payment. Успешная проверка суммы одной транзак�
 partial unique index: одновременно может ожидаться только одно списание на
 подписку. После ошибки подписка становится `past_due`, worker повторяет попытки
 до конца grace-периода, затем атомарно завершает её и создаёт Free.
-Пожизненный grant остаётся обычной ссылкой на неизменяемую версию тарифа, но
-`is_lifetime=true` защищает его от checkout и lifecycle worker. Check constraint
-требует `active`, запрещает способ оплаты, автопродление, конец периода,
-следующее списание и grace-период.
 
 ### `billing_payment_methods`
 
@@ -383,8 +376,6 @@ COMMENT ON COLUMN usage.purpose IS
 | `0036` | `billing_accounts`; кошелёк, журнал, платежи и подписка переведены на business-aware владельца | Codex |
 | `0037` | `pending_payment` и partial unique guard для одной незавершённой покупки тарифа на account | Codex |
 | `0038` | версия согласия на renewal, guard одного ожидающего продления и канонический keep-alive проекта | Codex |
-| `0044` | account-scoped `unlimited_generations` и аудируемая выдача creator-прав | Codex |
-| `0045` | бессрочная Business-подписка создателя с fail-closed grant и audit | Codex |
 
 ## Trigger для `updated_at`
 

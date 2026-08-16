@@ -78,17 +78,6 @@ class Project(Base):
         ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
-    # Fail-closed guard for the mutable development runtime. Snapshot/config
-    # commits set it in the same transaction as the canonical pointer, then
-    # clear it only after the exact touched paths were applied to the live
-    # container. A crash or lost COMMIT acknowledgement therefore blocks the
-    # next paid run instead of building on a stale/partial tree.
-    runtime_sync_required: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false", default=False
-    )
-    runtime_sync_paths: Mapped[list[str]] = mapped_column(
-        JSONB, nullable=False, server_default="[]", default=list
-    )
     # BYO-VPS: куда деплоить этот проект. NULL = наш хостинг (текущее поведение,
     # обратная совместимость). Задан → оркестратор запускает prod-образ на VPS
     # пользователя по SSH. ON DELETE SET NULL: удалили цель — проект просто

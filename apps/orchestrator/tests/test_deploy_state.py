@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from omnia_orchestrator.services import deploy_state
 
 
@@ -49,21 +47,3 @@ def test_repeated_idempotency_key_returns_original_result(tmp_path, monkeypatch)
     repeated = deploy_state.start("project-3", idempotency_key="same-request")
     assert repeated is first
     assert repeated.phase == "done"
-
-
-def test_idempotency_key_cannot_replay_another_revision(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("OMNIA_DEPLOY_STATE_PATH", str(tmp_path / "runs.json"))
-    deploy_state.reset_for_tests()
-    deploy_state.start(
-        "project-4",
-        idempotency_key="same-request",
-        commit_sha="a" * 40,
-    )
-    deploy_state.update("project-4", phase="done")
-
-    with pytest.raises(deploy_state.DeployRevisionConflict):
-        deploy_state.start(
-            "project-4",
-            idempotency_key="same-request",
-            commit_sha="b" * 40,
-        )

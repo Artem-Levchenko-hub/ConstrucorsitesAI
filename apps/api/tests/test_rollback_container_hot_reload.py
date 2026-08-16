@@ -20,20 +20,18 @@ git tree held state A ("Управляйте ремзоной без хаоса"
 `src/app/page.tsx` STILL served state B ("ДОГФУД-Б-МАРКЕР") — git and the running
 app diverged. No `hot_reload` line in the api log for the rollback.
 
-**Fix (shipped this run):** rollback.py now commits the canonical rollback
-together with a durable runtime-sync guard, then pushes that exact tree into the
-dev container. A failed live sync returns 503 and leaves the guard set, blocking
-the next mutation/generation until recovery; the canonical history is never
-silently reversed by a best-effort compensation. Static templates are untouched.
+**Fix (shipped this run):** rollback.py now, for `_CONTAINER_NEXT` templates,
+reads the rolled-back tree (`repo_svc.read_files(project_id, new_sha)`) and pushes
+it into the dev container via `orchestrator_client.hot_reload` — best-effort
+(R-10), exact parity with the style-patch path. Static templates are untouched.
 
 These tests LOCK: (1) a container rollback calls hot_reload with the reverted
-tree; (2) a static rollback does NOT; (3) a hot_reload failure blocks the
-snapshot pointer from advancing; (4) deletion-aware sync (was strict-xfail, SHIPPED
+tree; (2) a static rollback does NOT; (3) a hot_reload failure never blocks the
+rollback (best-effort); (4) deletion-aware sync (was strict-xfail, SHIPPED
 2026-07-08): orphans — files in the pre-rollback tree but not the target tree —
 ride along as empty-content delete-intents, which write_files turns into `rm -f`
 in the container, so phantom files can't survive a rollback anymore.
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -43,12 +41,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.core.errors import ApiError
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers import rollback as rollback_mod
-from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.snapshot import RollbackRequest
-from omnia_api.services.max_project_kit import render_max_managed_files
 
 _OWNER = uuid.uuid4()
 _PROJECT_ID = uuid.uuid4()
@@ -63,10 +58,9 @@ class _FakeSession:
     """Minimal async session: get() dispatches by model, mutations are no-ops,
     refresh() stamps created_at so the response/publish path doesn't crash."""
 
-    def __init__(self, project, target_snap, max_config=None):
+    def __init__(self, project, target_snap):
         self._project = project
         self._target = target_snap
-        self._max_config = max_config
         self._added: list = []
         self.committed = False
 
@@ -75,16 +69,7 @@ class _FakeSession:
             return self._project
         if model.__name__ == "Snapshot":
             return self._target if ident == _TARGET_SNAP else None
-        if model.__name__ == "MaxProjectConfig":
-            return self._max_config
         return None
-
-    async def execute(self, statement, _params=None):
-        advanced = str(statement).lstrip().startswith("UPDATE projects")
-        if advanced:
-            self._project.current_snapshot_id = self._added[-1].id
-        value = _PROJECT_ID if advanced else None
-        return SimpleNamespace(scalar_one_or_none=lambda: value)
 
     def add(self, obj):  # sync in SQLAlchemy
         self._added.append(obj)
@@ -101,7 +86,7 @@ class _FakeSession:
     async def commit(self):
         self.committed = True
 
-    async def refresh(self, obj, **_kwargs):
+    async def refresh(self, obj):
         if getattr(obj, "created_at", None) is None:
             obj.created_at = _dt.datetime(2026, 6, 17, 1, 0, 0)
 
@@ -129,8 +114,12 @@ def _make_target():
 
 
 def _patch_common(monkeypatch, hot_calls, *, hot_reload_raises=False):
-    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha")
-    monkeypatch.setattr(rollback_mod.repo_svc, "read_files", lambda pid, sha: dict(_REVERTED_FILES))
+    monkeypatch.setattr(
+        rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha"
+    )
+    monkeypatch.setattr(
+        rollback_mod.repo_svc, "read_files", lambda pid, sha: dict(_REVERTED_FILES)
+    )
 
     async def _hot_reload(*, project_id, slug, files):
         if hot_reload_raises:
@@ -138,12 +127,7 @@ def _patch_common(monkeypatch, hot_calls, *, hot_reload_raises=False):
         hot_calls.append({"project_id": project_id, "slug": slug, "files": files})
         return {"written": len(files)}
 
-    monkeypatch.setattr(rollback_mod.orchestrator_client, "hot_reload_exact", _hot_reload)
-    monkeypatch.setattr(
-        rollback_mod.orchestrator_client,
-        "get_deploy",
-        lambda _project_id: asyncio.sleep(0, result={"phase": "idle"}),
-    )
+    monkeypatch.setattr(rollback_mod.orchestrator_client, "hot_reload", _hot_reload)
     monkeypatch.setattr(rollback_mod, "enqueue_preview", lambda sid: None)
 
     async def _publish(*a, **k):
@@ -157,40 +141,10 @@ def _run_rollback(project):
     session = _FakeSession(project, _make_target())
     user = SimpleNamespace(id=_OWNER)
     payload = RollbackRequest(snapshot_id=_TARGET_SNAP)
-    result = asyncio.run(rollback_mod.post_rollback(_PROJECT_ID, payload, session, user))
+    result = asyncio.run(
+        rollback_mod.post_rollback(_PROJECT_ID, payload, session, user)
+    )
     return session, result
-
-
-def test_rollback_is_blocked_while_generation_is_active(monkeypatch):
-    class _ActiveSession(_FakeSession):
-        async def execute(self, statement, _params=None):
-            active = "generation_runs" in str(statement)
-            advanced = str(statement).lstrip().startswith("UPDATE projects")
-            value = uuid.uuid4() if active else _PROJECT_ID if advanced else None
-            return SimpleNamespace(scalar_one_or_none=lambda: value)
-
-    checkout_called = False
-
-    def _checkout(*_args):
-        nonlocal checkout_called
-        checkout_called = True
-        return "unexpected"
-
-    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", _checkout)
-    session = _ActiveSession(_make_project("max_miniapp"), _make_target())
-
-    with pytest.raises(ApiError) as raised:
-        asyncio.run(
-            rollback_mod.post_rollback(
-                _PROJECT_ID,
-                RollbackRequest(snapshot_id=_TARGET_SNAP),
-                session,
-                SimpleNamespace(id=_OWNER),
-            )
-        )
-
-    assert raised.value.status_code == 409
-    assert checkout_called is False
 
 
 @pytest.mark.parametrize("template", ["nextjs_entities", "fullstack", "spa"])
@@ -224,127 +178,16 @@ def test_static_rollback_does_not_hot_reload(monkeypatch, template):
     assert hot_calls == [], "static rollback should not touch any container"
 
 
-def test_hot_reload_failure_leaves_durable_recovery_guard(monkeypatch):
-    """A down orchestrator may save history but cannot expose it as synchronized."""
+def test_hot_reload_failure_never_blocks_rollback(monkeypatch):
+    """Best-effort (R-10): a down orchestrator must not fail the rollback — git +
+    snapshot are already the canonical state."""
     hot_calls: list = []
     _patch_common(monkeypatch, hot_calls, hot_reload_raises=True)
-    project = _make_project("nextjs_entities")
-    expected_snapshot_id = project.current_snapshot_id
-    session = _FakeSession(project, _make_target())
 
-    async def _fresh_pointer(_project_id):
-        return expected_snapshot_id
+    session, result = _run_rollback(_make_project("nextjs_entities"))
 
-    monkeypatch.setattr(rollback_mod, "current_snapshot_id_fresh", _fresh_pointer)
-    user = SimpleNamespace(id=_OWNER)
-    payload = RollbackRequest(snapshot_id=_TARGET_SNAP)
-
-    with pytest.raises(ApiError) as raised:
-        asyncio.run(rollback_mod.post_rollback(_PROJECT_ID, payload, session, user))
-
-    assert raised.value.status_code == 503
-    assert session.committed is True
-    assert project.current_snapshot_id != expected_snapshot_id
-    assert project.runtime_sync_required is True
-    assert project.runtime_sync_paths
-
-
-def test_max_rollback_restores_committed_business_config(monkeypatch):
-    historical = MaxProjectConfigPayload(
-        app_name="Исторический фитнес",
-        app_type="custom",
-        summary="Старая точная версия",
-    )
-    historical_source = render_max_managed_files(historical)["src/lib/omnia/max-config.ts"]
-    files = {
-        "src/app/page.tsx": "export default function Page(){return <main>History</main>}",
-        "src/lib/omnia/max-config.ts": historical_source,
-    }
-    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", lambda _pid, _sha: "rolledbacksha")
-    monkeypatch.setattr(rollback_mod.repo_svc, "read_files", lambda _pid, _sha: dict(files))
-    monkeypatch.setattr(
-        rollback_mod.repo_svc,
-        "commit_files",
-        lambda _pid, _files, _message, _parent: "restoredsha",
-    )
-    monkeypatch.setattr(
-        rollback_mod.orchestrator_client,
-        "hot_reload_exact",
-        lambda **_kwargs: asyncio.sleep(0, result={"written": len(files)}),
-    )
-    monkeypatch.setattr(
-        rollback_mod.orchestrator_client,
-        "get_deploy",
-        lambda _project_id: asyncio.sleep(0, result={"phase": "idle"}),
-    )
-    monkeypatch.setattr(rollback_mod, "enqueue_preview", lambda _sid: None)
-    monkeypatch.setattr(rollback_mod, "preview_public_url", lambda _key: None)
-    monkeypatch.setattr(rollback_mod, "publish_event", lambda *_a, **_k: asyncio.sleep(0))
-    record = SimpleNamespace(
-        config={
-            "app_name": "Текущий фитнес",
-            "app_type": "custom",
-            "summary": "Новая версия",
-            "max_url_attached": True,
-        },
-        config_version=7,
-        managed_kit_version=1,
-        synced_snapshot_id=None,
-    )
-    project = _make_project("max_miniapp")
-    session = _FakeSession(project, _make_target(), record)
-
-    asyncio.run(
-        rollback_mod.post_rollback(
-            _PROJECT_ID,
-            RollbackRequest(snapshot_id=_TARGET_SNAP),
-            session,
-            SimpleNamespace(id=_OWNER),
-        )
-    )
-
-    assert record.config["app_name"] == "Исторический фитнес"
-    assert record.config["max_url_attached"] is True
-    assert record.config_version == 8
-    assert record.synced_snapshot_id == project.current_snapshot_id
-
-
-def test_max_rollback_refuses_lossy_legacy_server_version(monkeypatch):
-    checkout_called = False
-
-    def _checkout(*_args):
-        nonlocal checkout_called
-        checkout_called = True
-        return "unexpected"
-
-    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", _checkout)
-    monkeypatch.setattr(
-        rollback_mod.repo_svc,
-        "read_files",
-        lambda _pid, _sha: {
-            "src/app/page.tsx": "export default function Page() { return null; }",
-            "src/app/dashboard/page.tsx": "export default function Dashboard() {}",
-        },
-    )
-    monkeypatch.setattr(
-        rollback_mod.orchestrator_client,
-        "get_deploy",
-        lambda _project_id: asyncio.sleep(0, result={"phase": "idle"}),
-    )
-    session = _FakeSession(_make_project("max_miniapp"), _make_target())
-
-    with pytest.raises(ApiError) as raised:
-        asyncio.run(
-            rollback_mod.post_rollback(
-                _PROJECT_ID,
-                RollbackRequest(snapshot_id=_TARGET_SNAP),
-                session,
-                SimpleNamespace(id=_OWNER),
-            )
-        )
-
-    assert raised.value.status_code == 409
-    assert checkout_called is False
+    assert session.committed is True, "rollback was blocked by a hot_reload failure"
+    assert result is not None
 
 
 def test_with_rollback_deletions_pure() -> None:
@@ -381,12 +224,14 @@ def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
             return await super().get(model, ident)
 
     def _read(pid, sha):
-        if sha in {"rolledbacksha", "9747759c" * 5}:
+        if sha == "rolledbacksha":
             return dict(_REVERTED_FILES)  # target tree
         # pre-rollback tree: same files + an orphan the failed edit created
         return {**_REVERTED_FILES, "src/lib/items.ts": "broken phantom module"}
 
-    monkeypatch.setattr(rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha")
+    monkeypatch.setattr(
+        rollback_mod.repo_svc, "checkout", lambda pid, sha: "rolledbacksha"
+    )
     monkeypatch.setattr(rollback_mod.repo_svc, "read_files", _read)
 
     captured: dict = {}
@@ -395,12 +240,7 @@ def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
         captured.update(files)
         return {"written": len(files)}
 
-    monkeypatch.setattr(rollback_mod.orchestrator_client, "hot_reload_exact", _hot_reload)
-    monkeypatch.setattr(
-        rollback_mod.orchestrator_client,
-        "get_deploy",
-        lambda _project_id: asyncio.sleep(0, result={"phase": "idle"}),
-    )
+    monkeypatch.setattr(rollback_mod.orchestrator_client, "hot_reload", _hot_reload)
     monkeypatch.setattr(rollback_mod, "enqueue_preview", lambda sid: None)
 
     async def _publish(*a, **k):

@@ -14,7 +14,6 @@ import type {
   WalletState,
   WsEvent,
 } from "@/lib/api/types";
-import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import {
   cancelGeneration,
   getLatestGeneration,
@@ -28,7 +27,6 @@ import {
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
 import { useWorkspaceStore } from "@/store/workspace";
-import type { MaxProductSpec } from "@/lib/max-brief";
 
 /**
  * Opens a real WebSocket to /api/ws/projects/:id and routes server events
@@ -49,7 +47,6 @@ type PromptSubmitOptions = {
   designPresetId?: string | null;
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
   idempotencyKey?: string;
-  productSpec?: MaxProductSpec | null;
 };
 
 /**
@@ -407,24 +404,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "snapshot.created") {
-        qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) => {
-          const exists = prev?.some(
-            (snapshot) => snapshot.id === event.data.snapshot.id,
-          );
-          const newestVersion = Math.max(
-            0,
-            ...(prev ?? []).map((snapshot) => snapshot.version_number ?? 0),
-          );
-          const snapshot =
-            !exists && event.data.snapshot.version_number == null
-              ? {
-                  ...event.data.snapshot,
-                  version_number: newestVersion + 1,
-                }
-              : event.data.snapshot;
-          return upsertSnapshotNewest(prev, snapshot);
-        });
-        void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
+        qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) => [
+          event.data.snapshot,
+          ...(prev ?? []),
+        ]);
         // Hot-reload: jump the iframe to the freshly-created HEAD so the
         // user sees their generated site immediately without manually
         // clicking the new card in the timeline. `null` = "show HEAD",
@@ -925,17 +908,6 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
-        if (
-          e instanceof ApiError &&
-          e.code === "conflict" &&
-          e.details?.reason === "project_busy"
-        ) {
-          _failPrompt(
-            "Проект ещё подготавливается",
-            "Повторите отправку через несколько секунд.",
-          );
-          return;
-        }
         if (e instanceof ApiError && e.code === "conflict") {
           // Another tab/remount already submitted this project. Drop only this
           // optimistic duplicate and keep the project WS attached to the

@@ -126,13 +126,13 @@ function ProductPreview() {
               <div className="rounded-[10px] bg-white/[.06] p-3 text-white/70">
                 Создай приложение кофейни: каталог, программа лояльности и заказ к выдаче.
               </div>
-              <div className="border-l-2 border-accent pl-3 text-white/55">
+              <div className="border-l-2 border-[#f15a38] pl-3 text-white/55">
                 Собираю каталог и сценарий заказа. Затем подключу профиль MAX и проверю мобильную навигацию.
               </div>
               <div className="space-y-2 pt-3 text-[11px] text-white/35">
                 <p className="flex items-center gap-2"><Check className="size-3.5 text-[#5ac77e]" /> Схема данных создана</p>
                 <p className="flex items-center gap-2"><Check className="size-3.5 text-[#5ac77e]" /> Экран каталога готов</p>
-                <p className="flex items-center gap-2"><span className="size-3 animate-pulse rounded-full bg-accent" /> Настраиваю корзину</p>
+                <p className="flex items-center gap-2"><span className="size-3 animate-pulse rounded-full bg-[#f15a38]" /> Настраиваю корзину</p>
               </div>
             </div>
             <div className="mt-16 rounded-[8px] border border-white/10 p-3 text-[11px] text-white/30">
@@ -145,7 +145,7 @@ function ProductPreview() {
               <div className="rounded-[16px] bg-[#36271f] p-5 text-[#fff7e8]">
                 <p className="text-xs text-white/55">Доброе утро</p>
                 <h3 className="mt-1 text-xl font-semibold">Кофе рядом</h3>
-                <button className="mt-5 rounded-full bg-accent px-4 py-2 text-[11px] font-semibold">Заказать</button>
+                <button className="mt-5 rounded-full bg-[#f15a38] px-4 py-2 text-[11px] font-semibold">Заказать</button>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 {["Капучино", "Флэт уайт", "Раф", "Матча"].map((item, index) => (
@@ -161,7 +161,7 @@ function ProductPreview() {
             <p className="omnia-kicker text-white/35">Готовность</p>
             <p className="mt-3 text-3xl font-semibold">4/7</p>
             <div className="mt-5 h-1.5 rounded-full bg-white/10">
-              <div className="h-full w-4/7 rounded-full bg-accent" />
+              <div className="h-full w-4/7 rounded-full bg-[#f15a38]" />
             </div>
             <div className="mt-7 space-y-4 text-[12px] text-white/45">
               {["Приложение собрано", "MAX-бот проверен", "Интеграции", "Публикация"].map((item, index) => (
@@ -173,7 +173,7 @@ function ProductPreview() {
                 </p>
               ))}
             </div>
-            <button className="mt-9 w-full rounded-[8px] bg-accent py-3 text-xs font-semibold text-white">Продолжить настройку</button>
+            <button className="mt-9 w-full rounded-[8px] bg-[#f15a38] py-3 text-xs font-semibold text-white">Продолжить настройку</button>
           </section>
         </div>
       </div>
@@ -196,12 +196,12 @@ export default function HomePage() {
           </nav>
           <div className="flex items-center gap-2.5">
             <Link href="/login?next=/max" className="hidden px-3 py-2 text-[13px] text-white/65 hover:text-white sm:block">Войти</Link>
-            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-9 px-4 text-[13px]">Попробовать демо</Link>
+            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-9 px-4 text-[13px]">Создать приложение</Link>
           </div>
         </header>
 
         <div className="mx-auto max-w-[1320px] px-5 pb-24 pt-22 text-center sm:px-8 sm:pt-28">
-          <p className="omnia-kicker text-accent">Продуктовая AI-студия</p>
+          <p className="omnia-kicker text-[#f15a38]">Продуктовая AI-студия</p>
           <h1 className="mx-auto mt-6 max-w-[1000px] text-[48px] font-semibold leading-[.98] tracking-[-.055em] sm:text-[72px] lg:text-[92px]">
             Приложение для MAX
             <span className="block text-white/42">без команды разработки</span>
@@ -211,7 +211,7 @@ export default function HomePage() {
             подключит сервисы и доведёт приложение до запуска.
           </p>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link href="/max/demo" className="omnia-button omnia-button-primary min-h-12 px-6">
+            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-12 px-6">
               Начать бесплатно <ArrowRight className="size-4" />
             </Link>
             <Link href="/max/product" className="omnia-button min-h-12 border border-white/20 px-6 text-white hover:bg-white/5">
@@ -226,14 +226,14 @@ export default function HomePage() {
         <div className="mx-auto max-w-[1320px]">
           <div className="flex flex-col gap-5 border-b border-[#d8d4cb] pb-7 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="omnia-kicker text-accent">31 июля 2026</p>
+              <p className="omnia-kicker text-[#f15a38]">31 июля 2026</p>
               <h2 className="mt-3 text-[32px] font-semibold tracking-[-.04em] sm:text-[42px]">
                 Что сделано сегодня
               </h2>
             </div>
             <Link
               href="/otchet/"
-              className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-accent"
+              className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-[#c84528]"
             >
               Открыть полный отчёт
               <ArrowRight className="size-4" />
@@ -242,7 +242,7 @@ export default function HomePage() {
           <div className="grid divide-y divide-[#d8d4cb] lg:grid-cols-4 lg:divide-x lg:divide-y-0">
             {todayUpdates.map(([Icon, title, text]) => (
               <article key={title} className="py-6 lg:px-6 lg:first:pl-0 lg:last:pr-0">
-                <Icon className="size-5 text-accent" />
+                <Icon className="size-5 text-[#f15a38]" />
                 <h3 className="mt-5 text-lg font-semibold">{title}</h3>
                 <p className="mt-2 text-sm leading-6 text-[#6d6962]">{text}</p>
               </article>
@@ -254,7 +254,7 @@ export default function HomePage() {
       <section id="products" className="mx-auto max-w-[1320px] px-5 py-24 sm:px-8 lg:py-32">
         <div className="grid gap-10 border-b border-[#d8d4cb] pb-12 lg:grid-cols-[.75fr_1.25fr] lg:items-end">
           <div>
-            <p className="omnia-kicker text-accent">Направления</p>
+            <p className="omnia-kicker text-[#f15a38]">Направления</p>
             <h2 className="mt-4 text-[38px] font-semibold leading-[1.05] tracking-[-.045em] sm:text-[52px]">Что можно создать</h2>
           </div>
           <p className="max-w-[620px] text-[16px] leading-7 text-[#6d6962] lg:justify-self-end">
@@ -267,16 +267,16 @@ export default function HomePage() {
             const body = (
               <article className="group min-h-[270px] bg-[#fcfbf7] p-7 sm:p-9">
                 <div className="flex items-start justify-between gap-6">
-                  <span className={`grid size-11 place-items-center rounded-[8px] ${index === 0 ? "bg-accent text-white" : "bg-[#ece8df] text-[#6d6962]"}`}>
+                  <span className={`grid size-11 place-items-center rounded-[8px] ${index === 0 ? "bg-[#f15a38] text-white" : "bg-[#ece8df] text-[#6d6962]"}`}>
                     <Icon className="size-5" />
                   </span>
-                  <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[.1em] ${index === 0 ? "border-accent/30 bg-accent/8 text-accent" : "border-[#d8d4cb] text-[#8d887f]"}`}>
+                  <span className={`rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-[.1em] ${index === 0 ? "border-[#f15a38]/30 bg-[#f15a38]/8 text-[#c84528]" : "border-[#d8d4cb] text-[#8d887f]"}`}>
                     {state}
                   </span>
                 </div>
                 <h3 className="mt-14 text-2xl font-semibold tracking-[-.025em]">{title}</h3>
                 <p className="mt-3 max-w-[460px] text-sm leading-6 text-[#6d6962]">{text}</p>
-                {href && <span className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-accent">Подробнее <ArrowRight className="size-4" /></span>}
+                {href && <span className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-[#c84528]">Подробнее <ArrowRight className="size-4" /></span>}
               </article>
             );
             return href ? <Link key={title} href={href}>{body}</Link> : <div key={title}>{body}</div>;
@@ -286,7 +286,7 @@ export default function HomePage() {
 
       <section id="process" data-graphite-shell className="bg-[#171716] px-5 py-24 sm:px-8 lg:py-32">
         <div className="mx-auto max-w-[1320px]">
-          <p className="omnia-kicker text-accent">От идеи до продакшена</p>
+          <p className="omnia-kicker text-[#f15a38]">От идеи до продакшена</p>
           <div className="mt-4 grid gap-8 border-b border-white/15 pb-12 lg:grid-cols-2">
             <h2 className="text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Пять шагов.<br />Без ручной сборки.</h2>
             <p className="max-w-[560px] text-base leading-7 text-white/50 lg:justify-self-end">
@@ -297,7 +297,7 @@ export default function HomePage() {
           <div className="divide-y divide-white/12">
             {steps.map(([number, title, text]) => (
               <article key={number} className="grid gap-4 py-8 sm:grid-cols-[72px_280px_1fr] sm:items-start">
-                <span className="font-mono text-xs text-accent">{number}</span>
+                <span className="font-mono text-xs text-[#f15a38]">{number}</span>
                 <h3 className="text-xl font-semibold">{title}</h3>
                 <p className="max-w-[620px] text-sm leading-6 text-white/48">{text}</p>
               </article>
@@ -309,13 +309,13 @@ export default function HomePage() {
       <section className="mx-auto max-w-[1320px] px-5 py-24 sm:px-8 lg:py-32">
         <div className="grid gap-12 lg:grid-cols-[1fr_1.1fr]">
           <div>
-            <p className="omnia-kicker text-accent">На выходе</p>
+            <p className="omnia-kicker text-[#f15a38]">На выходе</p>
             <h2 className="mt-4 max-w-[560px] text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Полноценный продукт, а не прототип</h2>
             <p className="mt-6 max-w-[540px] text-base leading-7 text-[#6d6962]">
               Исходный код остаётся вашим. Приложение разворачивается в изолированном контейнере,
               получает рабочие данные, версии, мониторинг и возможность отката.
             </p>
-            <Link href="/max/demo" className="omnia-button omnia-button-primary mt-8">Показать моё MAX-приложение <ArrowRight className="size-4" /></Link>
+            <Link href="/max/register" className="omnia-button omnia-button-primary mt-8">Создать MAX-приложение <ArrowRight className="size-4" /></Link>
           </div>
           <div className="grid gap-px overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#d8d4cb] sm:grid-cols-2">
             {[
@@ -327,7 +327,7 @@ export default function HomePage() {
               const ItemIcon = Icon as typeof Box;
               return (
                 <article key={String(title)} className="min-h-[220px] bg-[#fcfbf7] p-7">
-                  <ItemIcon className="size-5 text-accent" />
+                  <ItemIcon className="size-5 text-[#f15a38]" />
                   <h3 className="mt-12 text-xl font-semibold">{String(title)}</h3>
                   <p className="mt-3 text-sm leading-6 text-[#6d6962]">{String(text)}</p>
                 </article>
@@ -341,7 +341,7 @@ export default function HomePage() {
         <div className="mx-auto max-w-[1320px]">
           <div className="grid gap-8 lg:grid-cols-2">
             <div>
-              <p className="omnia-kicker text-accent">Интеграции</p>
+              <p className="omnia-kicker text-[#f15a38]">Интеграции</p>
               <h2 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Сервисы бизнеса<br />подключаются из кабинета</h2>
             </div>
             <p className="max-w-[560px] text-base leading-7 text-[#6d6962] lg:justify-self-end">
@@ -353,7 +353,7 @@ export default function HomePage() {
             {integrations.map(([name, text], index) => (
               <article key={name} className="min-h-[150px] border-b border-r border-[#d8d4cb] p-6">
                 <div className="flex items-center justify-between">
-                  <PlugZap className="size-4 text-accent" />
+                  <PlugZap className="size-4 text-[#f15a38]" />
                   <span className="font-mono text-[9px] text-[#aaa59b]">{String(index + 1).padStart(2, "0")}</span>
                 </div>
                 <h3 className="mt-8 font-semibold">{name}</h3>
@@ -367,7 +367,7 @@ export default function HomePage() {
       <section data-graphite-shell className="bg-[#171716] px-5 py-24 sm:px-8 lg:py-32">
         <div className="mx-auto grid max-w-[1320px] gap-14 lg:grid-cols-[.85fr_1.15fr]">
           <div>
-            <p className="omnia-kicker text-accent">Инфраструктура</p>
+            <p className="omnia-kicker text-[#f15a38]">Инфраструктура</p>
             <h2 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[54px]">Запуск на Omnia<br />или на вашей VPS</h2>
             <p className="mt-6 max-w-[500px] text-sm leading-6 text-white/48">
               Для своей инфраструктуры достаточно IP, пользователя и пароля или SSH-ключа.
@@ -383,7 +383,7 @@ export default function HomePage() {
               const ItemIcon = Icon as typeof Cloud;
               return (
                 <article key={String(title)} className="grid gap-4 rounded-[12px] border border-white/14 p-6 sm:grid-cols-[44px_1fr]">
-                  <span className="grid size-11 place-items-center rounded-[8px] bg-white/8"><ItemIcon className="size-5 text-accent" /></span>
+                  <span className="grid size-11 place-items-center rounded-[8px] bg-white/8"><ItemIcon className="size-5 text-[#f15a38]" /></span>
                   <div>
                     <h3 className="font-semibold">{String(title)}</h3>
                     <p className="mt-2 text-sm leading-6 text-white/45">{String(text)}</p>
@@ -397,7 +397,7 @@ export default function HomePage() {
 
       <section className="mx-auto max-w-[1000px] px-5 py-24 sm:px-8 lg:py-32">
         <div className="text-center">
-          <p className="omnia-kicker text-accent">Ответы</p>
+          <p className="omnia-kicker text-[#f15a38]">Ответы</p>
           <h2 className="mt-4 text-[40px] font-semibold tracking-[-.045em] sm:text-[52px]">Частые вопросы</h2>
         </div>
         <div className="mt-12 divide-y divide-[#d8d4cb] border-y border-[#d8d4cb]">
@@ -415,10 +415,10 @@ export default function HomePage() {
 
       <section className="px-5 pb-5 sm:px-8 sm:pb-8">
         <div data-graphite-shell className="mx-auto max-w-[1320px] rounded-[14px] bg-[#171716] px-6 py-20 text-center sm:px-12">
-          <MessageSquareText className="mx-auto size-7 text-accent" />
+          <MessageSquareText className="mx-auto size-7 text-[#f15a38]" />
           <h2 className="mx-auto mt-6 max-w-[780px] text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[58px]">Опишите приложение.<br />Остальное соберёт Omnia.</h2>
           <p className="mx-auto mt-5 max-w-[560px] text-sm leading-6 text-white/48">Регистрация займёт несколько минут. Первая сборка запускается только после подтверждения владельца.</p>
-          <Link href="/max/demo" className="omnia-button omnia-button-primary mt-8 min-h-12 px-6">Собрать демо бесплатно <ArrowRight className="size-4" /></Link>
+          <Link href="/max/register" className="omnia-button omnia-button-primary mt-8 min-h-12 px-6">Начать бесплатно <ArrowRight className="size-4" /></Link>
         </div>
       </section>
 

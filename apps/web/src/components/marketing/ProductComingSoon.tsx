@@ -29,9 +29,9 @@ export function ProductComingSoon({
       </header>
       <main className="mx-auto grid min-h-[calc(100svh-65px)] max-w-[1440px] lg:grid-cols-[minmax(0,1.1fr)_minmax(400px,.9fr)]">
         <section className="flex flex-col px-5 py-12 sm:px-8 lg:border-r lg:border-[#d8d4cb] lg:px-12 lg:py-16 xl:px-16">
-          <div className="omnia-kicker flex items-center gap-2 text-accent"><Clock3 className="size-4" />{en ? "In development" : "В разработке"}</div>
+          <div className="omnia-kicker flex items-center gap-2 text-[#f15a38]"><Clock3 className="size-4" />{en ? "In development" : "В разработке"}</div>
           <div className="my-auto py-16">
-            <span className="mb-8 grid size-12 place-items-center rounded-[8px] bg-[#ece8df] text-accent"><Icon className="size-6" strokeWidth={1.5} /></span>
+            <span className="mb-8 grid size-12 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><Icon className="size-6" strokeWidth={1.5} /></span>
             <h1 className="max-w-4xl text-[clamp(48px,6.5vw,92px)] font-semibold leading-[.9] tracking-[-.06em]">{title}</h1>
             <p className="mt-8 max-w-2xl text-lg leading-8 text-[#6d6962]">{description}</p>
           </div>

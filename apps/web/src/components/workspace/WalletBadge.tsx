@@ -18,7 +18,6 @@ export function WalletBadge() {
 
   const balance = data?.balance_rub ?? 0;
   const freeLeft = data?.free_generations_left ?? 0;
-  const unlimited = data?.unlimited_generations ?? false;
   const tone =
     balance < 10
       ? "text-danger"
@@ -28,22 +27,14 @@ export function WalletBadge() {
 
   return (
     <div className="inline-flex items-center gap-2">
-      {(unlimited || freeLeft > 0) && (
+      {freeLeft > 0 && (
         <div
           className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-accent/40 bg-accent/10 text-accent text-xs font-medium"
-          title={
-            unlimited
-              ? "Для аккаунта включена безлимитная генерация"
-              : "Omnia сама подбирает модели под задачу. Первые генерации — бесплатно."
-          }
-          aria-label={
-            unlimited
-              ? "Безлимитная генерация включена"
-              : `Осталось ${freeLeft} бесплатных генераций`
-          }
+          title="Omnia сама подбирает модели под задачу. Первые генерации — бесплатно."
+          aria-label={`Осталось ${freeLeft} бесплатных генераций`}
         >
           <Sparkles className="h-3.5 w-3.5" />
-          {unlimited ? "Безлимит" : `${freeLeft} бесплатно`}
+          {freeLeft} бесплатно
         </div>
       )}
       <div

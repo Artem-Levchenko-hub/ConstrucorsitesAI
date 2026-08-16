@@ -18,70 +18,13 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
 from omnia_api.services.generation_runs import (
-    _acquire_generation_lock,
     finalize_generation_run,
-    latest_failed_agent_state,
-    prompt_hash,
     reconcile_completed_build_runs,
     recover_interrupted_generation_runs,
     reserve_generation_run,
-    save_generation_agent_state,
-    set_generation_run_error,
 )
 
 pytestmark = pytest.mark.asyncio
-
-
-async def test_product_spec_is_part_of_idempotency_hash() -> None:
-    prompt = "Собери магазин"
-    first = {"purpose": "Каталог", "screens": ["Главная", "Корзина"]}
-    same_reordered = {"screens": ["Главная", "Корзина"], "purpose": "Каталог"}
-    changed = {"purpose": "Каталог", "screens": ["Главная", "Избранное"]}
-
-    assert prompt_hash(prompt, first) == prompt_hash(prompt, same_reordered)
-    assert prompt_hash(prompt, first) != prompt_hash(prompt, changed)
-    assert prompt_hash(prompt) != prompt_hash(prompt, first)
-
-
-class _LockResult:
-    def __init__(self, acquired: bool) -> None:
-        self.acquired = acquired
-
-    def scalar_one(self) -> bool:
-        return self.acquired
-
-
-class _LockSession:
-    def __init__(self, acquired: bool) -> None:
-        self.acquired = acquired
-        self.calls: list[tuple[object, dict[str, str]]] = []
-
-    async def execute(self, statement: object, params: dict[str, str]) -> _LockResult:
-        self.calls.append((statement, params))
-        return _LockResult(self.acquired)
-
-
-async def test_generation_lock_uses_non_blocking_advisory_lock() -> None:
-    project_id = uuid.uuid4()
-    session = _LockSession(True)
-
-    await _acquire_generation_lock(session, project_id)  # type: ignore[arg-type]
-
-    assert len(session.calls) == 1
-    statement, params = session.calls[0]
-    assert "pg_try_advisory_xact_lock" in str(statement)
-    assert params == {"project_id": str(project_id)}
-
-
-async def test_generation_lock_reports_retryable_project_busy_conflict() -> None:
-    session = _LockSession(False)
-
-    with pytest.raises(ApiError) as blocked:
-        await _acquire_generation_lock(session, uuid.uuid4())  # type: ignore[arg-type]
-
-    assert blocked.value.code == "conflict"
-    assert blocked.value.status_code == 409
-    assert blocked.value.details == {"reason": "project_busy"}
 
 
 async def _owner_and_project(
@@ -151,76 +94,6 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
         "active_message_id": None,
         "active_status": "pending",
     }
-
-
-async def test_same_key_rejects_changed_product_spec(db_session: AsyncSession) -> None:
-    owner, project = await _owner_and_project(db_session)
-    first_spec = {"purpose": "Каталог", "screens": ["Главная", "Корзина"]}
-
-    run, replayed = await reserve_generation_run(
-        db_session,
-        project_id=project.id,
-        user_id=owner.id,
-        idempotency_key="product-spec-11111111",
-        prompt="Собери приложение",
-        product_spec=first_spec,
-    )
-    await db_session.commit()
-    assert replayed is False
-
-    with pytest.raises(ApiError) as reused:
-        await reserve_generation_run(
-            db_session,
-            project_id=project.id,
-            user_id=owner.id,
-            idempotency_key="product-spec-11111111",
-            prompt="Собери приложение",
-            product_spec={"purpose": "Каталог", "screens": ["Главная", "Избранное"]},
-        )
-
-    assert reused.value.code == "conflict"
-    assert reused.value.details == {"run_id": str(run.id)}
-
-
-async def test_primary_generation_failure_is_not_overwritten(
-    db_session: AsyncSession,
-) -> None:
-    owner, project = await _owner_and_project(db_session)
-    run = GenerationRun(
-        project_id=project.id,
-        user_id=owner.id,
-        idempotency_key="primary-failure",
-        prompt_hash="hash",
-        status="running",
-    )
-    db_session.add(run)
-    await db_session.commit()
-
-    first = await set_generation_run_error(
-        run.id,
-        "agent_stopped:provider_rejected_red",
-        session=db_session,
-    )
-    primary = await set_generation_run_error(
-        run.id,
-        "final_verification_failed",
-        session=db_session,
-    )
-    await db_session.refresh(run)
-
-    assert first == "agent_stopped:provider_rejected_red"
-    assert primary == "agent_stopped:provider_rejected_red"
-    assert run.error == "agent_stopped:provider_rejected_red"
-
-    replaced = await set_generation_run_error(
-        run.id,
-        "administrative_repair",
-        preserve_existing=False,
-        session=db_session,
-    )
-    await db_session.refresh(run)
-    assert replaced == "administrative_repair"
-    assert run.error == "administrative_repair"
 
 
 async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
@@ -327,14 +200,10 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     def _spawn(**kwargs: object) -> None:
         spawned.append(kwargs)
 
-    async def _not_deployed(_project_id: uuid.UUID) -> dict[str, object]:
-        return {}
-
     app.dependency_overrides[get_current_user] = _current_user
     monkeypatch.setattr(messages, "get_settings", lambda: settings)
     monkeypatch.setattr(messages, "_spawn_process_prompt", _spawn)
     monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
-    monkeypatch.setattr(messages.orchestrator_client, "get_deploy", _not_deployed)
     payload = {
         "prompt": "Собери статический сайт",
         "skip_clarify": True,
@@ -472,55 +341,6 @@ async def test_tracked_prompt_uses_product_outcome_finalizer(
 
     assert statuses == ["running"]
     assert finalized == [run_id]
-
-
-async def test_tracked_prompt_deadline_always_terminalizes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_id = uuid.uuid4()
-    project_id = uuid.uuid4()
-    message_id = uuid.uuid4()
-    statuses: list[tuple[str, str | None]] = []
-    emergency: list[str] = []
-
-    async def _work() -> None:
-        await asyncio.Future()
-
-    async def _never_cancel(_run_id: uuid.UUID) -> None:
-        await asyncio.Future()
-
-    async def _status(_run_id: uuid.UUID, new_status: str, *, error: str | None = None) -> None:
-        statuses.append((new_status, error))
-
-    async def _error(_project_id: uuid.UUID, _message_id: uuid.UUID, err: str) -> None:
-        emergency.append(err)
-
-    async def _clear(_run_id: uuid.UUID) -> None:
-        return None
-
-    monkeypatch.setattr(messages, "set_generation_run_status", _status)
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", _never_cancel)
-    monkeypatch.setattr(messages, "_emergency_error", _error)
-    monkeypatch.setattr(messages, "clear_generation_cancel", _clear)
-    monkeypatch.setattr(
-        messages,
-        "get_settings",
-        lambda: SimpleNamespace(agent_builder_max_runtime_seconds=-29),
-    )
-
-    await messages._run_tracked_prompt(
-        _work(),
-        run_id=run_id,
-        project_id=project_id,
-        assistant_message_id=message_id,
-        label="deadline-test",
-    )
-
-    assert statuses == [
-        ("running", None),
-        ("failed", "generation_deadline_exceeded"),
-    ]
-    assert emergency and "безопасно остановлена" in emergency[0]
 
 
 async def test_build_without_snapshot_is_failed_product_outcome(
@@ -669,35 +489,3 @@ async def test_startup_recovery_releases_interrupted_run(
     )
     assert replayed is False
     assert replacement.id != run.id
-
-
-async def test_failed_run_keeps_observable_checkpoint_for_retry(
-    db_session: AsyncSession,
-) -> None:
-    owner, project = await _owner_and_project(db_session)
-    run = GenerationRun(
-        project_id=project.id,
-        user_id=owner.id,
-        idempotency_key="checkpoint-recovery",
-        prompt_hash="hash",
-        status="running",
-    )
-    db_session.add(run)
-    await db_session.commit()
-
-    state: dict[str, object] = {
-        "objective": "Собрать MAX-приложение",
-        "steps": [{"id": "step-1", "title": "Собрать экран", "status": "completed"}],
-        "last_tool": "build",
-        "last_summary": "Build clean",
-        "next_action": "Проверить runtime",
-    }
-    await save_generation_agent_state(run.id, state, db_session)
-    assert await recover_interrupted_generation_runs(db_session) == 1
-
-    recovered = await latest_failed_agent_state(
-        db_session,
-        project_id=project.id,
-    )
-
-    assert recovered == state

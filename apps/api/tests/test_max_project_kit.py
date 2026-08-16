@@ -8,7 +8,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
@@ -23,55 +22,11 @@ from omnia_api.schemas.max_studio import (
 )
 from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
-    MAX_KERNEL_MODEL_DIRECTIVE,
     MAX_MANAGED_KIT_VERSION,
-    MAX_MODEL_DIRECTIVE,
-    MAX_PRODUCT_ENTRY_PATH,
-    MAX_PRODUCT_PAGE_PATH,
-    MAX_PRODUCT_RUNTIME_PATH,
     _template_candidates,
-    max_history_product_files,
-    max_legacy_server_file_deletions,
-    max_legacy_snapshot_incompatibility,
-    max_model_path_rejection,
-    max_project_config_from_files,
-    render_max_entry_migration_files,
-    render_max_history_files,
     render_max_managed_files,
-    render_max_restored_files,
+    render_max_starter_files,
 )
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "./src/lib/omnia/integration-client.ts",
-        "src/app/../lib/omnia/integration-client.ts",
-        "src//lib/omnia/integration-client.ts",
-        "src\\lib\\omnia\\integration-client.ts",
-        "/src/app/page.tsx",
-        ".",
-    ],
-)
-def test_max_model_write_paths_must_be_canonical(path: str) -> None:
-    assert max_model_path_rejection(path)
-
-
-def test_max_model_write_path_accepts_normal_product_file() -> None:
-    assert max_model_path_rejection(MAX_PRODUCT_ENTRY_PATH) is None
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "src/app/page.tsx",
-        "src/app/api/debug/route.ts",
-        "src/middleware.ts",
-        "src/lib/db-copy.ts",
-    ],
-)
-def test_max_model_write_path_blocks_server_execution(path: str) -> None:
-    assert max_model_path_rejection(path)
 
 
 def _config() -> MaxProjectConfigPayload:
@@ -100,174 +55,17 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
-def test_history_renderer_keeps_product_files_but_drops_managed_core() -> None:
-    assert max_history_product_files(
-        {
-            "src/app/page.tsx": "export default function Page() {}",
-            "src/app/layout.tsx": "old insecure layout",
-            "src/lib/max/session.ts": "old live auth",
-            "src/lib/omnia/legacy-control.ts": "old platform helper",
-            "src/app/api/orders/route.ts": "old arbitrary api",
-            "src/app/api/custom/score/route.ts": "isolated product api",
-            "src/middleware.ts": "old middleware",
-            "src/instrumentation.ts": "old instrumentation",
-            "public/omnia-inspector.js": "old inspector",
-            "docker-entrypoint.sh": "old entrypoint",
-            "next.config.ts": "old config",
-            "scripts/rewrite-runtime.sh": "old script",
-            "../escape.ts": "nope",
-        }
-    ) == {MAX_PRODUCT_ENTRY_PATH: "export default function Page() {}"}
-
-    runtime_files = render_max_history_files(
-        {
-            "src/app/page.tsx": "historical product",
-            "src/lib/max/session.ts": "old live auth",
-        },
-        _config(),
-        "00000000-0000-0000-0000-000000000001",
-    )
-    assert runtime_files[MAX_PRODUCT_PAGE_PATH] != "historical product"
-    assert runtime_files[MAX_PRODUCT_ENTRY_PATH] == "historical product"
-    assert "OmniaProductRuntime" in runtime_files[MAX_PRODUCT_PAGE_PATH]
-    assert runtime_files["src/lib/max/session.ts"] != "old live auth"
-    assert runtime_files["public/omnia-inspector.js"] != "old inspector"
-    assert "Кофе" in runtime_files["src/lib/omnia/max-config.ts"]
-
-
-def test_empty_initial_history_restores_neutral_generation_canvas() -> None:
-    runtime_files = render_max_history_files({}, _config(), uuid4())
-    config_only_files = render_max_history_files(
-        {"src/lib/omnia/max-config.ts": "managed config only"},
-        _config(),
-        uuid4(),
-    )
-
-    assert 'data-max-product-canvas="empty"' in runtime_files[MAX_PRODUCT_ENTRY_PATH]
-    assert '@import "tailwindcss"' in runtime_files["src/app/globals.css"]
-    assert 'data-max-product-canvas="empty"' in config_only_files[MAX_PRODUCT_ENTRY_PATH]
-
-
-def test_current_managed_root_page_is_not_migrated_into_product_entry() -> None:
-    managed_page = max_project_kit_svc._template_file(MAX_PRODUCT_PAGE_PATH)
-
-    files = render_max_history_files(
-        {MAX_PRODUCT_PAGE_PATH: managed_page},
-        _config(),
-        uuid4(),
-    )
-
-    assert files[MAX_PRODUCT_PAGE_PATH] == managed_page
-    assert files[MAX_PRODUCT_ENTRY_PATH] != managed_page
-    assert 'data-max-product-canvas="empty"' in files[MAX_PRODUCT_ENTRY_PATH]
-
-
-def test_history_preserves_every_current_model_owned_product_artifact() -> None:
-    snapshot = {
-        MAX_PRODUCT_ENTRY_PATH: '"use client"; export default function ProductApp() {}',
-        ".omnia/max-design-spec.json": '{"chosen_direction":"editorial"}',
-        "public/product/worker.js": "self.onmessage = () => {};",
-        "public/product/model.wasm": "binary-placeholder",
-    }
-
-    assert max_legacy_snapshot_incompatibility(snapshot) is None
-    product = max_history_product_files(snapshot)
-    assert product[".omnia/max-design-spec.json"] == snapshot[".omnia/max-design-spec.json"]
-    assert product["public/product/worker.js"] == snapshot["public/product/worker.js"]
-    assert product["public/product/model.wasm"] == snapshot["public/product/model.wasm"]
-
-
-def test_history_refuses_legacy_public_executable_outside_product_root() -> None:
-    snapshot = {"public/legacy-worker.js": "self.onmessage = () => {};"}
-
-    assert max_legacy_snapshot_incompatibility(snapshot)
-    with pytest.raises(ValueError, match="cannot be restored safely"):
-        render_max_history_files(snapshot, _config(), uuid4())
-
-
-@pytest.mark.parametrize(
-    "unsafe_path",
-    [
-        "src/lib/omnia/custom.ts",
-        "src/lib/max/custom.ts",
-        "src/lib/db/custom.ts",
-    ],
-)
-def test_history_refuses_unknown_helpers_inside_platform_prefixes(unsafe_path: str) -> None:
-    snapshot = {
-        MAX_PRODUCT_ENTRY_PATH: (
-            f'import {{ helper }} from "@/{unsafe_path.removeprefix("src/").removesuffix(".ts")}"; '
-            "export default function ProductApp() { return <p>{helper}</p>; }"
-        ),
-        unsafe_path: "export const helper = 'legacy';",
-    }
-
-    assert max_legacy_snapshot_incompatibility(snapshot)
-    with pytest.raises(ValueError, match="cannot be restored safely"):
-        render_max_history_files(snapshot, _config(), uuid4())
-
-
-def test_history_renderer_uses_config_committed_with_snapshot() -> None:
-    historical = _config().model_copy(update={"app_name": "Исторический бренд"})
-    source = render_max_managed_files(historical)["src/lib/omnia/max-config.ts"]
-
-    parsed = max_project_config_from_files({"src/lib/omnia/max-config.ts": source})
-
-    assert parsed is not None
-    assert parsed.app_name == "Исторический бренд"
-    assert max_project_config_from_files({"src/lib/omnia/max-config.ts": "invalid"}) is None
-
-
-def test_max_restore_combines_historical_product_with_current_platform() -> None:
-    restored = render_max_restored_files(
-        {
-            "src/app/page.tsx": "historical page",
-            "docker-entrypoint.sh": "historical entrypoint",
-        },
-        {
-            "src/app/page.tsx": "current page",
-            "docker-entrypoint.sh": "current entrypoint",
-            "next.config.ts": "current next config",
-            "src/middleware.ts": "current untrusted middleware",
-            "src/instrumentation.ts": "current untrusted instrumentation",
-            "src/app/api/private/route.ts": "current untrusted api",
-        },
-        _config(),
-        "00000000-0000-0000-0000-000000000001",
-    )
-
-    assert restored[MAX_PRODUCT_PAGE_PATH] != "historical page"
-    assert restored[MAX_PRODUCT_ENTRY_PATH] == "historical page"
-    assert restored["docker-entrypoint.sh"] != "current entrypoint"
-    assert restored["next.config.ts"] != "current next config"
-    assert restored["docker-entrypoint.sh"] == max_project_kit_svc._template_file(
-        "docker-entrypoint.sh"
-    )
-    assert restored["next.config.ts"] == max_project_kit_svc._template_file("next.config.ts")
-    assert "src/middleware.ts" not in restored
-    assert "src/instrumentation.ts" not in restored
-    assert "src/app/api/private/route.ts" not in restored
-
-
 def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     project_id = uuid4()
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
-        ".dependency-cruiser.cjs",
         "package.json",
         "pnpm-lock.yaml",
         "postcss.config.mjs",
-        "scripts/analyze-code.mjs",
-        "drizzle/0002_action_idempotency.sql",
-        "tsconfig.json",
-        "public/omnia-inspector.js",
-        MAX_PRODUCT_PAGE_PATH,
         "src/app/layout.tsx",
-        "src/app/max-runtime.css",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
-        MAX_PRODUCT_RUNTIME_PATH,
         "src/lib/db/index.ts",
         "src/lib/db/schema.ts",
         "src/lib/max/bot-api.ts",
@@ -282,7 +80,6 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/app/api/omnia/events/route.ts",
         "src/lib/omnia/max-config.ts",
         "src/lib/omnia/client.ts",
-        "src/lib/omnia/max-ui-compat.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
@@ -320,41 +117,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "requestUrl.origin !== window.location.origin" in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
     assert 'from "@/components/OmniaCompliance"' in provider
-    assert "<OmniaCompliance fallback" in provider
-    assert 'className="omnia-max-runtime"' in provider
-    assert "data-max-platform={appearance.platform}" in provider
-    assert "next/dynamic" not in provider
-    assert "legacyMaxUiEnabled" in provider
-    assert "function LegacyMaxUiBoundary" in provider
-    assert "if (!hydrated) return children" in provider
-    assert "useEffect(() => setHydrated(true), [])" in provider
-    assert 'import "@maxhub/max-ui/dist/styles.css"' in files["src/app/layout.tsx"]
-    assert "export const legacyMaxUiEnabled = false;" in files["src/lib/omnia/max-ui-compat.ts"]
-    # Dormant dependency stays pinned only so historical products that imported
-    # it still compile; new runtime/prompt code never applies its visual system.
-    assert '"@maxhub/max-ui": "0.2.0"' in files["package.json"]
     assert "src/components/OmniaCompliance.tsx" in files
-    compliance = files["src/components/OmniaCompliance.tsx"]
-    assert "data-omnia-native-legal-nav" in compliance
-    assert (
-        "COMPLIANCE_FALLBACK_SELECTOR = '[data-omnia-compliance-fallback=\"true\"]'" in compliance
-    )
-    assert "element.closest(COMPLIANCE_FALLBACK_SELECTOR) === null" in compliance
-    assert 'data-omnia-compliance-fallback="true"' in compliance
-    assert "<details" in compliance
-    assert "<footer" not in compliance
-    assert "src/app/max-runtime.css" in files
-    assert "display: contents" in files["src/app/max-runtime.css"]
-    assert 'import "./max-runtime.css"' in files["src/app/layout.tsx"]
-    assert 'data-omnia-product-runtime="true"' in files[MAX_PRODUCT_RUNTIME_PATH]
-    assert 'style={{ display: "contents" }}' in files[MAX_PRODUCT_RUNTIME_PATH]
-    product_runtime = files[MAX_PRODUCT_RUNTIME_PATH]
-    assert 'from "next/dynamic"' not in product_runtime
-    assert 'from "@/components/product/ProductApp"' not in product_runtime
-    assert 'require("@/components/product/ProductApp")' in product_runtime
-    assert "setProductApp(() => productModule.default)" in product_runtime
-    assert "{ProductApp ? <ProductApp /> : null}" in product_runtime
-    assert '"@/*": ["./src/*"]' in files["tsconfig.json"]
+    assert 'from "@/lib/omnia/max-config"' in files["src/components/OmniaCompliance.tsx"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator
@@ -400,177 +164,22 @@ def test_managed_kit_never_contains_model_or_generation_calls() -> None:
     assert "generate(" not in combined
 
 
-def test_entry_migration_preserves_legacy_product_behind_locked_runtime() -> None:
-    legacy = '"use client"; export default function Page() { return <main>Legacy</main>; }'
+def test_starter_kit_has_no_product_page_or_visual_template() -> None:
+    files = render_max_starter_files(_config(), uuid4())
 
-    files = render_max_entry_migration_files({MAX_PRODUCT_PAGE_PATH: legacy})
-
-    assert files[MAX_PRODUCT_ENTRY_PATH] == legacy
-    assert files[MAX_PRODUCT_PAGE_PATH] != legacy
-    assert "OmniaProductRuntime" in files[MAX_PRODUCT_PAGE_PATH]
-    assert 'require("@/components/product/ProductApp")' in files[MAX_PRODUCT_RUNTIME_PATH]
-    assert "useEffect" in files[MAX_PRODUCT_RUNTIME_PATH]
-
-
-def test_entry_migration_does_not_create_a_null_product() -> None:
-    files = render_max_entry_migration_files({})
-
-    assert MAX_PRODUCT_ENTRY_PATH not in files
-
-
-def test_legacy_null_product_restores_neutral_canvas() -> None:
-    legacy_null = """"use client";
-
-// Safe fallback used only when a historical snapshot has no product entry.
-export default function ProductApp() {
-  return null;
-}
-"""
-
-    product = max_history_product_files({MAX_PRODUCT_ENTRY_PATH: legacy_null})
-    rendered = render_max_history_files(
-        {MAX_PRODUCT_ENTRY_PATH: legacy_null},
-        _config(),
-        uuid4(),
-    )
-
-    assert MAX_PRODUCT_ENTRY_PATH not in product
-    assert 'data-max-product-canvas="empty"' in rendered[MAX_PRODUCT_ENTRY_PATH]
-
-
-def test_legacy_max_ui_provider_is_enabled_only_for_historical_imports() -> None:
-    legacy = {
-        MAX_PRODUCT_ENTRY_PATH: (
-            'import { Button } from "@maxhub/max-ui"; '
-            "export default function ProductApp() { return <Button>Go</Button>; }"
-        )
-    }
-    custom = {
-        MAX_PRODUCT_ENTRY_PATH: (
-            "export default function ProductApp() { return <main>Custom</main>; }"
-        )
-    }
-
-    legacy_files = render_max_history_files(legacy, _config(), uuid4())
-    custom_files = render_max_history_files(custom, _config(), uuid4())
-    synced_legacy = max_studio._max_config_sync_files(_config(), uuid4(), legacy)
-
-    assert (
-        "export const legacyMaxUiEnabled = true;" in legacy_files["src/lib/omnia/max-ui-compat.ts"]
-    )
-    assert (
-        "export const legacyMaxUiEnabled = false;" in custom_files["src/lib/omnia/max-ui-compat.ts"]
-    )
-    assert (
-        "export const legacyMaxUiEnabled = true;" in synced_legacy["src/lib/omnia/max-ui-compat.ts"]
-    )
-
-
-def test_legacy_server_cleanup_covers_all_next_execution_entrypoints() -> None:
-    files = max_legacy_server_file_deletions(
-        {
-            "src/app/api/custom/route.ts": "route",
-            "src/app/dashboard/page.tsx": "page",
-            "app/api/leak/route.ts": "shadow route",
-            "src/pages/api/legacy.ts": "handler",
-            "src/instrumentation.ts": "register()",
-            "src/proxy.ts": "proxy()",
-            "next.config.js": "module.exports = {}",
-            "src/app/api/health/route.ts": "platform health",
-            "src/app/globals.css": "body {}",
-        }
-    )
-
-    assert files["src/app/api/custom/route.ts"] == ""
-    assert files["src/app/dashboard/page.tsx"] == ""
-    assert files["app/api/leak/route.ts"] == ""
-    assert files["src/pages/api/legacy.ts"] == ""
-    assert files["src/instrumentation.ts"] == ""
-    assert files["src/proxy.ts"] == ""
-    assert files["next.config.js"] == ""
-    assert "src/app/api/health/route.ts" not in files
-    assert "src/app/globals.css" not in files
-
-
-def test_entry_migration_refuses_incompatible_tree_before_writing() -> None:
-    with pytest.raises(ValueError, match="cannot be migrated safely"):
-        render_max_entry_migration_files(
-            {
-                MAX_PRODUCT_PAGE_PATH: (
-                    'import Widget from "./Widget"; '
-                    "export default function Page() { return <Widget />; }"
-                ),
-                "src/app/Widget.tsx": "export default function Widget() {}",
-            }
-        )
-
-
-def test_config_sync_refuses_lossy_legacy_migration_before_commit() -> None:
-    with pytest.raises(ApiError) as raised:
-        max_studio._max_config_sync_files(
-            _config(),
-            uuid4(),
-            {
-                MAX_PRODUCT_PAGE_PATH: (
-                    'import Dashboard from "./Dashboard"; '
-                    "export default function Page() { return <Dashboard />; }"
-                ),
-                "src/app/dashboard/page.tsx": "export default function Dashboard() {}",
-            },
-        )
-
-    assert raised.value.status_code == 409
-
-
-@pytest.mark.parametrize(
-    "snapshot",
-    [
-        {"src/app/dashboard/page.tsx": "export default function Dashboard() {}"},
-        {"src/app/api/custom/route.ts": "export function GET() {}"},
-        {"src/lib/helpers.ts": "export const value = 1"},
-        {
-            MAX_PRODUCT_PAGE_PATH: (
-                'import Dashboard from "./Dashboard"; '
-                "export default function Page() { return <Dashboard />; }"
-            )
-        },
-    ],
-)
-def test_history_refuses_lossy_legacy_product_restore(snapshot: dict[str, str]) -> None:
-    assert max_legacy_snapshot_incompatibility(snapshot)
-    with pytest.raises(ValueError, match="cannot be restored safely"):
-        render_max_history_files(snapshot, _config(), uuid4())
-
-
-def test_history_refuses_legacy_product_server_action() -> None:
-    snapshot = {
-        "src/app/page.tsx": 'export { default } from "@/components/product/ProductApp";',
-        "src/components/product/ProductApp.tsx": (
-            '"use server";\nexport default async function ProductApp() { return null; }'
-        ),
-    }
-
-    assert max_legacy_snapshot_incompatibility(snapshot)
-    with pytest.raises(ValueError, match="cannot be restored safely"):
-        render_max_history_files(snapshot, _config(), uuid4())
-
-
-@pytest.mark.parametrize(
-    "unsafe_path",
-    ["app/api/leak/route.ts", "next.config.js", "postcss.config.js"],
-)
-def test_history_refuses_root_server_and_build_config_bypasses(unsafe_path: str) -> None:
-    snapshot = {
-        "src/app/page.tsx": "export default function Page() { return null; }",
-        unsafe_path: "export default {};",
-    }
-
-    assert max_legacy_snapshot_incompatibility(snapshot)
+    assert "src/app/page.tsx" not in files
+    assert "src/app/globals.css" in files
+    assert "src/app/layout.tsx" in files
+    css = files["src/app/globals.css"]
+    assert '@import "tailwindcss"' in css
+    assert "generation-canvas" not in css
+    assert "canvas-" not in css
+    assert "feature-grid" not in css
+    assert "TODO" not in "\n".join(files.values())
 
 
 def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
-    project_id = uuid4()
-    files = render_max_managed_files(_config(), project_id)
+    files = render_max_managed_files(_config(), uuid4())
     client = files["src/lib/omnia/integration-client.ts"]
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
 
@@ -579,48 +188,11 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert "text: result.answer" in client
     assert "createMaxAction" in client
     assert "getMaxActions" in client
-    assert 'credentials: "include"' in client
-    assert 'if (!initData) throw new Error("Откройте приложение внутри MAX")' not in client
     assert '"lucide-react": "^0.469.0"' in files["package.json"]
     assert '"tailwindcss": "^4.0.0"' in files["package.json"]
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
-    assert '["ai", "status", "catalog"].includes(operation)' in proxy
-    assert "if (!initData && !previewAllowed)" in proxy
-    assert f'const PROJECT_ID = "{project_id}";' in proxy
     assert "api_key" not in client.lower()
-
-
-def test_model_directive_is_headless_and_matches_locked_max_runtime_api() -> None:
-    assert "MAX HEADLESS PLATFORM ADAPTER" in MAX_MODEL_DIRECTIVE
-    assert "order that best fits the implementation" in MAX_MODEL_DIRECTIVE
-    assert "first product write" not in MAX_MODEL_DIRECTIVE
-    assert "src/components/product/ProductApp.tsx" in MAX_MODEL_DIRECTIVE
-    assert "@/components/MaxAppProvider" in MAX_MODEL_DIRECTIVE
-    assert "firstName" in MAX_MODEL_DIRECTIVE
-    assert "languageCode" in MAX_MODEL_DIRECTIVE
-    assert "requestOmniaAI({ message, instructions, context })" in MAX_MODEL_DIRECTIVE
-    assert "Static product reference content" in MAX_MODEL_DIRECTIVE
-    assert "Never invent user identity" in MAX_MODEL_DIRECTIVE
-    assert "Demo/local data is allowed" not in MAX_MODEL_DIRECTIVE
-    assert "never import `@maxhub/max-ui`" in MAX_MODEL_DIRECTIVE
-    assert "Do not expose credentials" in MAX_MODEL_DIRECTIVE
-    assert "managed support" in MAX_MODEL_DIRECTIVE
-    assert "privacy and terms routes" in MAX_MODEL_DIRECTIVE
-    assert "Never use emoji as interface icons" in MAX_MODEL_DIRECTIVE
-    assert "dark purple AI dashboard" in MAX_MODEL_DIRECTIVE
-    assert "empty decorative charts" in MAX_MODEL_DIRECTIVE
-    assert "editor mode off" in MAX_MODEL_DIRECTIVE
-    assert 'data-omnia-native-legal-nav="true"' not in MAX_MODEL_DIRECTIVE
-
-
-def test_kernel_model_directive_delegates_proof_without_screenshot_loop() -> None:
-    assert "MAX HEADLESS PLATFORM ADAPTER" in MAX_KERNEL_MODEL_DIRECTIVE
-    assert "automatically runs build" in MAX_KERNEL_MODEL_DIRECTIVE
-    assert "Do not start manual proof" in MAX_KERNEL_MODEL_DIRECTIVE
-    assert "visual quality before completion" not in MAX_KERNEL_MODEL_DIRECTIVE
-    assert "clearly labelled demo data" not in MAX_KERNEL_MODEL_DIRECTIVE
-    assert "never invent" in MAX_KERNEL_MODEL_DIRECTIVE
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:
@@ -660,14 +232,6 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
                 "message": message,
                 "parent_sha": parent_sha,
                 "config": files["src/lib/omnia/max-config.ts"],
-                "inspector": files["public/omnia-inspector.js"],
-                "compliance": files["src/components/OmniaCompliance.tsx"],
-                "actions_route": files["src/app/api/omnia/actions/route.ts"],
-                "integrations_route": files[
-                    "src/app/api/omnia/integrations/[...path]/route.ts"
-                ],
-                "schema": files["src/lib/db/schema.ts"],
-                "idempotency_migration": files["drizzle/0002_action_idempotency.sql"],
             }
         )
         return "2" * 40
@@ -683,17 +247,6 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     async def refresh_proof(_session, project):
         proof_refreshes.append(str(project.current_snapshot_id))
 
-    def fake_read(_project_id, _commit_sha):
-        return {
-            MAX_PRODUCT_PAGE_PATH: (
-                '"use client"; export default function Page() { return <main>Coffee</main>; }'
-            ),
-            "src/app/api/omnia/actions/route.ts": "old action route",
-            "src/app/api/omnia/integrations/[...path]/route.ts": "old integrations route",
-            "src/lib/db/schema.ts": "old schema",
-        }
-
-    monkeypatch.setattr(max_studio.repo_svc, "read_files", fake_read)
     monkeypatch.setattr(max_studio.repo_svc, "commit_files", fake_commit)
     monkeypatch.setattr(max_studio.orchestrator_client, "get_status", stopped)
     monkeypatch.setattr(max_studio.orchestrator_client, "get_deploy", not_deployed)
@@ -718,9 +271,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
 
     # A project carrying an older managed kit is upgraded once even when its
     # business config and current snapshot are otherwise unchanged.
-    # Version 31 predates the idempotent action/proof-sandbox runtime. A synced
-    # project must receive every changed managed route, schema and migration.
-    saved.managed_kit_version = 31
+    saved.managed_kit_version = MAX_MANAGED_KIT_VERSION - 1
     await db_session.commit()
     upgraded = await max_studio.put_max_config(project.id, _config(), db_session, user)
     repeated_after_upgrade = await max_studio.put_max_config(
@@ -729,12 +280,6 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     refreshed = await db_session.get(MaxProjectConfig, project.id)
 
     assert len(calls) == 2
-    assert "setSequencedEditorMode" in calls[-1]["inspector"]
-    assert 'data-omnia-compliance-fallback="true"' in calls[-1]["compliance"]
-    assert "onConflictDoNothing" in calls[-1]["actions_route"]
-    assert "X-Omnia-Proof-Sandbox" in calls[-1]["integrations_route"]
-    assert "idempotencyKey" in calls[-1]["schema"]
-    assert 'ADD COLUMN IF NOT EXISTS "idempotency_key"' in calls[-1]["idempotency_migration"]
     assert refreshed is not None
     assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id
@@ -828,7 +373,7 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
                 user_id=user.id,
                 project_id=project.id,
                 run_id=run.id,
-                model_id="claude-sonnet-5",
+                model_id="gemini-3.1-pro-preview-customtools",
                 tokens_in=1_000,
                 tokens_out=100,
                 cost_rub=Decimal("2.5000"),
@@ -841,24 +386,13 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
                 user_id=user.id,
                 project_id=project.id,
                 run_id=run.id,
-                model_id="claude-sonnet-5",
+                model_id="gemini-3.1-pro-preview-customtools",
                 tokens_in=2_000,
                 tokens_out=200,
                 cost_rub=Decimal("5.2500"),
                 stage="native_agent",
                 cache_read_tokens=1_500,
                 retry_count=2,
-            ),
-            Usage(
-                user_id=user.id,
-                project_id=project.id,
-                run_id=run.id,
-                model_id="claude-sonnet-5",
-                tokens_in=0,
-                tokens_out=0,
-                cost_rub=Decimal("80.0000"),
-                stage="native_agent:reservation",
-                provider_request_id="native-budget-reservation",
             ),
         ]
     )
@@ -869,9 +403,6 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
     assert result.run_id == run.id
     assert result.run_status == "running"
     assert result.run_cost_rub == result.total_cost_rub == 7.75
-    assert result.pending_reservation_rub == 80
-    assert result.run_pending_reservation_rub == 80
-    assert result.pending_reservation_calls == 1
     stages = {stage.id: stage for stage in result.stages}
     assert stages["template"].cost_rub == 0
     assert stages["build_plan"].cache_read_tokens == 600

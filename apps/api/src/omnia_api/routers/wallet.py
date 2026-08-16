@@ -6,7 +6,6 @@ from sqlalchemy import select
 from omnia_api.core.config import FREE_GENERATION_LIMIT, get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.models.account import BusinessEntitlement, BusinessMember
 from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.wallet import (
@@ -25,7 +24,9 @@ router = APIRouter(prefix="/api/wallet", tags=["wallet"])
 async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> WalletPublic:
     account = await resolve_billing_account(session, current_user.id)
     wallet = (
-        await session.execute(select(Wallet).where(Wallet.billing_account_id == account.id))
+        await session.execute(
+            select(Wallet).where(Wallet.billing_account_id == account.id)
+        )
     ).scalar_one_or_none()
     if wallet is None:
         raise ApiError("not_found", "wallet not initialized", 404)
@@ -36,24 +37,12 @@ async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> Walle
         .limit(20)
     )
     charges = [ChargePublic.model_validate(c) for c in res.scalars().all()]
-    free_limit = FREE_GENERATION_LIMIT
     used = current_user.free_generations_used or 0
-    business_id = (
-        await session.execute(
-            select(BusinessMember.business_id).where(BusinessMember.user_id == current_user.id)
-        )
-    ).scalar_one_or_none()
-    if business_id is not None:
-        entitlement = await session.get(BusinessEntitlement, business_id)
-        if entitlement is not None:
-            free_limit = entitlement.free_generation_limit
-            used = entitlement.free_generations_used
     return WalletPublic(
         balance_rub=wallet.balance_rub,
         recent_charges=charges,
-        free_generations_left=max(0, free_limit - used),
-        free_generation_limit=free_limit,
-        unlimited_generations=current_user.unlimited_generations,
+        free_generations_left=max(0, FREE_GENERATION_LIMIT - used),
+        free_generation_limit=FREE_GENERATION_LIMIT,
     )
 
 
@@ -70,7 +59,9 @@ async def topup_wallet(
             "Пополнение временно недоступно — идёт подключение оплаты.",
             403,
         )
-    new_balance = await topup_svc(session, current_user.id, payload.amount_rub, "Top-up (MVP stub)")
+    new_balance = await topup_svc(
+        session, current_user.id, payload.amount_rub, "Top-up (MVP stub)"
+    )
     await session.commit()
     # Шлём wallet.updated всем проектам пользователя? В MVP — только если открыт WS.
     # Здесь fan-out по project_id невозможен без list проектов; шлём по user-каналу.

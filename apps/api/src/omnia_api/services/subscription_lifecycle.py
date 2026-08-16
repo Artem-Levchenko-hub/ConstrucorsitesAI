@@ -571,7 +571,6 @@ async def process_subscription_cycle(
                 select(Subscription)
                 .where(
                     Subscription.status.in_(LIVE_SUBSCRIPTION_STATUSES),
-                    Subscription.is_lifetime.is_(False),
                     Subscription.current_period_end.is_not(None),
                     Subscription.current_period_end <= current_time,
                 )

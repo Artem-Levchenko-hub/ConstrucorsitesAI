@@ -36,7 +36,6 @@ def _admin_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_project_short_id_first_8_hex() -> None:
     assert postgres_admin._project_short_id(PROJECT_ID) == "01234567"
-    assert postgres_admin.project_schema_name(PROJECT_ID) == "proj_01234567"
 
 
 def test_quote_ident_accepts_valid() -> None:
@@ -73,7 +72,9 @@ def test_user_facing_host_preserves_external() -> None:
 
 
 def test_build_dsn_shape() -> None:
-    dsn = postgres_admin.build_dsn("proj_01234567_user", "p@ss/w:rd!", "proj_01234567")
+    dsn = postgres_admin.build_dsn(
+        "proj_01234567_user", "p@ss/w:rd!", "proj_01234567"
+    )
     # Host must be rewritten away from localhost to the container-to-container
     # name on the runtime network (NOT the 127.0.0.1:5433 host bind, which is
     # unreachable from a container); password URL-encoded.
@@ -97,11 +98,16 @@ def test_build_dsn_default_port_when_missing(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_normalize_admin_dsn_strips_asyncpg_dialect() -> None:
     assert (
-        postgres_admin._normalize_admin_dsn("postgresql+asyncpg://u:p@h:1/d")
+        postgres_admin._normalize_admin_dsn(
+            "postgresql+asyncpg://u:p@h:1/d"
+        )
         == "postgresql://u:p@h:1/d"
     )
     # Already plain — passthrough.
-    assert postgres_admin._normalize_admin_dsn("postgresql://u:p@h:1/d") == "postgresql://u:p@h:1/d"
+    assert (
+        postgres_admin._normalize_admin_dsn("postgresql://u:p@h:1/d")
+        == "postgresql://u:p@h:1/d"
+    )
 
 
 def test_escape_sql_literal_doubles_single_quotes() -> None:
@@ -170,23 +176,3 @@ async def test_archive_schema_noop_when_absent(
 
     # Nothing to archive → no DDL executed (idempotent re-run).
     assert conn.executed == []
-
-
-@pytest.mark.asyncio
-async def test_drop_schema_releases_connections_and_database_acl(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    conn = _FakeConn(schema_present=True)
-
-    async def _pool() -> _FakePool:
-        return _FakePool(conn)
-
-    monkeypatch.setattr(postgres_admin, "_get_admin_pool", _pool)
-    await postgres_admin.drop_schema(PROJECT_ID)
-
-    joined = " | ".join(conn.executed)
-    assert "pg_terminate_backend" in joined
-    assert 'DROP SCHEMA IF EXISTS "proj_01234567" CASCADE' in joined
-    assert 'REVOKE CONNECT ON DATABASE "omnia_users" FROM "proj_01234567_user"' in joined
-    assert 'DROP OWNED BY "proj_01234567_user"' in joined
-    assert 'DROP ROLE IF EXISTS "proj_01234567_user"' in joined

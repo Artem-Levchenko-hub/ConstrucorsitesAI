@@ -25,7 +25,7 @@ import uuid
 
 from omnia_api.core.config import model_for_role
 from omnia_api.services.design_presets import PRESETS
-from omnia_api.services.llm_client import PaidCallAmbiguousError, stream_chat_completion
+from omnia_api.services.llm_client import stream_chat_completion
 
 log = logging.getLogger(__name__)
 
@@ -339,7 +339,9 @@ def _build_classifier_prompt(
     discovery_spec: dict[str, object] | None = None,
 ) -> str:
     """Промпт для Haiku-классификатора. Короткий и закрытый."""
-    options = "\n".join(f"- {pid}: {preset.one_liner}" for pid, preset in PRESETS.items())
+    options = "\n".join(
+        f"- {pid}: {preset.one_liner}" for pid, preset in PRESETS.items()
+    )
     description = first_prompt.strip() if first_prompt else "(нет описания)"
     spec_hint = _format_spec_hint(discovery_spec)
     return f"""Ты классификатор проектов на дизайн-пресеты.
@@ -391,12 +393,8 @@ async def _llm_classify(
                 if delta := event.get("delta"):
                     chunks.append(delta)
                 if event.get("error"):
-                    if event.get("error_code") == "paid_call_ambiguous":
-                        raise PaidCallAmbiguousError()
                     log.warning("preset classifier llm error: %s", event["error"])
                     return None
-        except PaidCallAmbiguousError:
-            raise
         except Exception:
             log.exception("preset classifier llm exception")
             return None
@@ -405,8 +403,7 @@ async def _llm_classify(
             break
         log.info(
             "preset classifier empty response (attempt=%d, len=%d) — retrying",
-            attempt,
-            len(raw),
+            attempt, len(raw),
         )
     # ищем подстроку с валидным preset_id (модель иногда оборачивает в кавычки/json)
     raw_low = raw.lower()

@@ -165,15 +165,7 @@ focus-ring. Смысл — не только цветом.
 ### 2.9 Цельность
 Один визуальный язык на весь сайт: единые кнопки, карточки, ритм секций.
 
-### 2.10 Интерактивная глубина
-Каждый визуальный сайт получает один уместный depth-момент: управляемую
-ray-marched WebGL-сцену `data-omnia-depth`, настоящий WebGL/Three/canvas или
-медиа-композицию из нескольких perspective-слоёв с pointer/scroll-реакцией.
-Плоский SVG/градиент/parallax не считается 3D. Для строгих бизнес-приложений
-глубина остаётся в hero/overview/onboarding и не мешает таблицам/формам. Всегда
-есть статичный fallback, `prefers-reduced-motion`, пауза вне viewport и mobile.
-
-### 2.11 Финальная самопроверка
+### 2.10 Финальная самопроверка
 Перед выдачей модель мысленно проходит чек-лист (`_SELF_CHECK`): выбран пресет и
 шрифты; 7–9 секций с реальным контентом и ценами в ₽; **каждая** `<a>`/`<button>`
 имеет существующую цель (якорь → есть секция с этим `id`); ничего из запрещённого
@@ -248,9 +240,6 @@ Next.js 15 App Router + React 19 + TypeScript + Tailwind v4 + Drizzle ORM. По�
 - **Встроенный кит:** `assets/omnia-kit.{css,js}` в каждом статическом шаблоне (готовые
   анимированные `index.html`-экземпляры); `KIT_FILES` защищён в `messages.py` — фильтр
   из контекста, дроп из ответа модели, `_ensure_kit_linked` переинжектит теги.
-- **Depth runtime + gate:** `assets/omnia-depth.js` даёт WebGL/media primitive;
-  `services/depth_experience_gate.py` запрещает считать SVG/parallax настоящим 3D
-  и подключён к static acceptance и agent feedback.
 - **Серверная страховка от мёртвых ссылок:** `services/link_validator.py`
   (`find_dead_links`) + one-shot repair-pass в `_process_prompt`: если в статике
   нашлись `href="#"`/битые якоря, модель один раз перегенерирует с конкретным
