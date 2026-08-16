@@ -538,6 +538,7 @@ export type MaxIntegration = {
 };
 
 export type IntegrationCategory =
+  | "ai"
   | "payments"
   | "restaurant"
   | "crm"

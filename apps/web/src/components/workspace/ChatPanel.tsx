@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelLeftClose } from "lucide-react";
+import { toast } from "sonner";
+import {
+  connectAppIntegration,
+  getIntegrationCatalog,
+} from "@/lib/api/app-integrations";
 import { listMessages } from "@/lib/api/messages";
 import type {
   AgentStep,
@@ -16,10 +21,18 @@ import { PromptInput } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
 import { DiscoveryFrame } from "./DiscoveryFrame";
 import { OnboardingSurvey } from "./OnboardingSurvey";
-import { usePromptStream } from "@/hooks/usePromptStream";
+import {
+  usePromptStream,
+  type PromptSubmitOptions,
+} from "@/hooks/usePromptStream";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspaceStore } from "@/store/workspace";
 import { restorePersistedAgentSteps } from "@/lib/agent-steps";
+import {
+  containsChatSecret,
+  redactChatSecrets,
+  resolveChatCredential,
+} from "@/lib/max-chat-credentials";
 
 type DiscoveryChoices = {
   choices: string[];
@@ -61,6 +74,7 @@ export function ChatPanel({
   const toggleChat = useWorkspaceStore((s) => s.toggleChat);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const credentialSubmitPending = useRef(false);
   const qc = useQueryClient();
 
   const { data: messages, isPending } = useQuery({
@@ -87,8 +101,100 @@ export function ChatPanel({
   // submits straight through — the server runs a progressive in-chat discovery
   // (one short question at a time) before the first build. Every later prompt
   // submits the same way.
+  const submitWithCredentialIntake = useCallback(
+    async (
+      text: string,
+      selections: SelectedElement[],
+      opts?: PromptSubmitOptions,
+    ): Promise<boolean> => {
+      const selectionText = selections
+        .flatMap((selection) => Object.values(selection))
+        .filter((value): value is string => typeof value === "string")
+        .join("\n");
+      const credentialSource = [text, selectionText].filter(Boolean).join("\n");
+      if (mode !== "max" || !containsChatSecret(credentialSource)) {
+        await submit(text, modelId, selections, opts);
+        return true;
+      }
+      if (credentialSubmitPending.current) {
+        toast.info("Ключ уже подключается");
+        return false;
+      }
+
+      credentialSubmitPending.current = true;
+      try {
+        const catalog = await qc.fetchQuery({
+          queryKey: ["app-integrations", projectId],
+          queryFn: () => getIntegrationCatalog(projectId),
+          staleTime: 60_000,
+        });
+        const resolution = resolveChatCredential(
+          credentialSource,
+          catalog.providers,
+          text,
+        );
+        if (resolution.kind === "needs_provider") {
+          toast.error("Не понял, к какому провайдеру относится ключ", {
+            description:
+              "Напишите рядом точное название сервиса, например: AITUNNEL — ключ …",
+          });
+          return false;
+        }
+        if (resolution.kind === "needs_fields") {
+          const fields = resolution.labels.length
+            ? ` Нужны также: ${resolution.labels.join(", ")}.`
+            : " Для этого сервиса нужно дополнительное подключение.";
+          toast.error(`Не хватает данных для ${resolution.provider.name}`, {
+            description: `${fields} Откройте «Интеграции» для завершения.`,
+          });
+          return false;
+        }
+        if (resolution.kind !== "match") {
+          return false;
+        }
+
+        const { provider, secretField, secret, safePrompt } = resolution.value;
+        await connectAppIntegration(projectId, provider.key, {
+          [secretField.key]: secret,
+        });
+        await qc.invalidateQueries({
+          queryKey: ["app-integrations", projectId],
+        });
+        toast.success(`${provider.name} подключён`, {
+          description:
+            "Ключ проверен и зашифрован. Агент получил только безопасную ссылку на интеграцию.",
+        });
+        const safeSelections = selections.map((selection) =>
+          Object.fromEntries(
+            Object.entries(selection).map(([key, value]) => [
+              key,
+              typeof value === "string"
+                ? redactChatSecrets(value).replaceAll(
+                    secret,
+                    "[ключ сохранён в Omnia]",
+                  )
+                : value,
+            ]),
+          ) as SelectedElement,
+        );
+        await submit(safePrompt, modelId, safeSelections, opts);
+        return true;
+      } catch (error) {
+        toast.error("Ключ не подключён", {
+          description:
+            error instanceof Error
+              ? error.message
+              : "Проверьте данные и вставьте ключ заново.",
+        });
+        return false;
+      } finally {
+        credentialSubmitPending.current = false;
+      }
+    },
+    [mode, modelId, projectId, qc, submit],
+  );
   const handleSubmit = (text: string, selections: SelectedElement[]) => {
-    submit(text, modelId, selections);
+    void submitWithCredentialIntake(text, selections);
   };
 
   // «Починить» on an error card → submit a follow-up fix prompt through the
@@ -107,7 +213,7 @@ export function ChatPanel({
   // user's answer to the question. Used by both single-select and the joined
   // multi-select «Готово» submission (the card builds the combined string).
   const handlePickChoice = (choice: string) => {
-    submit(choice, modelId, []);
+    void submitWithCredentialIntake(choice, []);
   };
 
   // «Я готов — постройте сейчас» — leave the onboarding popup early and build now.
@@ -165,12 +271,19 @@ export function ChatPanel({
   };
   // «Готово» — fire ONE build prompt with the combined answers + picked preset.
   // skip_clarify so the server builds straight away instead of re-interviewing.
-  const handleSurveyDone = (combined: string, presetId: string | null) => {
-    clearSurvey();
-    submit(combined.trim() || "Постройте сейчас", modelId, [], {
-      skipClarify: true,
-      designPresetId: presetId,
-    });
+  const handleSurveyDone = async (combined: string, presetId: string | null) => {
+    const text = combined.trim() || "Постройте сейчас";
+    const includesSecret = containsChatSecret(text);
+    if (!includesSecret) clearSurvey();
+    const submitted = await submitWithCredentialIntake(
+      text,
+      [],
+      {
+        skipClarify: true,
+        designPresetId: presetId,
+      },
+    );
+    if (submitted && includesSecret) clearSurvey();
   };
   const handleSurveySkip = () => {
     clearSurvey();
@@ -202,7 +315,7 @@ export function ChatPanel({
     }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
-      submit(p.trim(), modelId, [], {
+      void submitWithCredentialIntake(p.trim(), [], {
         skipClarify: true,
         // Stable on the server across tabs/reloads/devices. Even if the handoff
         // effect somehow fires twice, reserve_generation_run replays this exact
@@ -211,7 +324,7 @@ export function ChatPanel({
       });
       window.history.replaceState(null, "", basePath);
     }
-  }, [messages, submit, basePath, projectId]);
+  }, [messages, submitWithCredentialIntake, basePath, projectId]);
 
   return (
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
@@ -312,7 +425,7 @@ export function ChatPanel({
           textareaRef={inputRef}
           placeholder={
             mode === "max"
-              ? "Например: добавь экран наград и кнопку обмена баллов…"
+              ? "Опишите правку или вставьте: AITUNNEL — ключ …"
               : undefined
           }
           ariaLabel={

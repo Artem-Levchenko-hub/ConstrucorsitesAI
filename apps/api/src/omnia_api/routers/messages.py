@@ -1310,10 +1310,23 @@ async def post_prompt(
     from omnia_api.services.secret_safety import (
         contains_provider_secret,
         redact_provider_secrets,
+        redact_selected_element_secrets,
+        selected_elements_contain_provider_secret,
     )
 
-    credential_redirect = project.template == "max_miniapp" and contains_provider_secret(
-        payload.prompt
+    raw_selected_dump = (
+        [el.model_dump() for el in payload.selected_elements]
+        if payload.selected_elements
+        else None
+    )
+    selected_secret = selected_elements_contain_provider_secret(raw_selected_dump)
+    credential_redirect = project.template == "max_miniapp" and (
+        contains_provider_secret(payload.prompt) or selected_secret
+    )
+    selected_dump = (
+        redact_selected_element_secrets(raw_selected_dump)
+        if selected_secret
+        else raw_selected_dump
     )
 
     # Free-tier gate: regular projects keep the historical per-user allowance.
@@ -1353,12 +1366,6 @@ async def post_prompt(
         ).scalar_one_or_none()
         if wallet is None or wallet.balance_rub < RESERVED_BALANCE:
             raise ApiError("wallet_empty", "insufficient balance", 402)
-
-    # Select-mode picks (serialized for JSONB + the background task). Computed
-    # first because the triage below needs the count of picked elements.
-    selected_dump = (
-        [el.model_dump() for el in payload.selected_elements] if payload.selected_elements else None
-    )
 
     # Smart triage — the server decides whether this prompt earns the full
     # Director(Opus)→Polish→Audit orchestration or a single cheap model. First

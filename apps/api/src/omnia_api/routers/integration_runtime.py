@@ -42,6 +42,7 @@ from omnia_api.schemas.integration_runtime import (
     RuntimePaymentStatusRequest,
 )
 from omnia_api.services import integration_oauth, integration_providers, llm_client
+from omnia_api.services.secret_safety import redact_provider_secrets
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
@@ -222,7 +223,12 @@ async def runtime_integration_status(
     )
 
 
-async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None:
+async def _enforce_runtime_ai_limits(
+    project_id: UUID,
+    max_user_id: int,
+    *,
+    fail_closed: bool = False,
+) -> None:
     """Bound owner-funded inference even when a bot user scripts the endpoint."""
 
     buckets = (
@@ -244,10 +250,89 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
                 )
     except ApiError:
         raise
-    except Exception:
+    except Exception as exc:
+        if fail_closed:
+            raise ApiError(
+                "integration_provider_unavailable",
+                "Проверка лимита ИИ временно недоступна. Попробуйте позже.",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
         # Billing still fails closed at the gateway wallet. A transient Redis
         # outage must not take every generated MAX product offline.
         return
+
+
+async def _request_aitunnel_ai(
+    session: SessionDep,
+    connection: BusinessIntegration,
+    *,
+    system_prompt: str,
+    user_message: str,
+) -> RuntimeAIPublic:
+    """Use the owner's encrypted AITUNNEL key without exposing it to the app or agent."""
+
+    credentials = await _secrets(session, connection)
+    api_key = credentials.get("api_key", "")
+    if not api_key:
+        raise ApiError(
+            "integration_credentials_corrupted",
+            "Подключение AITUNNEL повреждено. Подключите сервис заново.",
+            status.HTTP_409_CONFLICT,
+        )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0)) as client:
+            response = await client.post(
+                "https://api.aitunnel.ru/v1/chat/completions",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Omnia-MAX-Runtime/1.0",
+                },
+                json={
+                    "model": "auto",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "max_tokens": 1_600,
+                    "temperature": 0.35,
+                },
+            )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "AITUNNEL временно недоступен. Попробуйте ещё раз.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    if response.status_code >= 300:
+        raise _provider_failure("AITUNNEL", response)
+    try:
+        body = response.json()
+        choices = body.get("choices") if isinstance(body, dict) else None
+        first = choices[0] if isinstance(choices, list) and choices else None
+        message = first.get("message") if isinstance(first, dict) else None
+        answer = message.get("content") if isinstance(message, dict) else None
+        model = body.get("model") if isinstance(body, dict) else None
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        raise ApiError(
+            "integration_request_failed",
+            "AITUNNEL вернул ответ в неизвестном формате.",
+            status.HTTP_502_BAD_GATEWAY,
+        ) from exc
+    if not isinstance(answer, str) or not answer.strip():
+        raise ApiError(
+            "integration_request_failed",
+            "AITUNNEL не вернул ответ. Попробуйте ещё раз.",
+            status.HTTP_502_BAD_GATEWAY,
+        )
+    safe_answer = redact_provider_secrets(
+        answer.replace(api_key, "[CREDENTIAL REDACTED]")
+    )
+    safe_model = redact_provider_secrets(
+        str(model or "aitunnel:auto").replace(api_key, "[CREDENTIAL REDACTED]")
+    )
+    return RuntimeAIPublic(answer=safe_answer.strip()[:16_000], model=safe_model[:200])
 
 
 @router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
@@ -257,13 +342,23 @@ async def request_runtime_ai(
     session: SessionDep,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeAIPublic:
-    """Run real owner-funded Gemini inference without exposing provider keys."""
+    """Run real AI inference without exposing platform or owner provider keys."""
 
     context = await _runtime_context(session, project_id, x_max_init_data)
-    await _enforce_runtime_ai_limits(project_id, context.max_user_id)
     project = await session.get(Project, project_id)
     if project is None:
         raise ApiError("not_found", "Приложение не найдено", status.HTTP_404_NOT_FOUND)
+
+    connections = await _connections(session, project_id)
+    aitunnel = connections.get("aitunnel")
+    if aitunnel is not None:
+        await _enforce_runtime_ai_limits(
+            project_id,
+            context.max_user_id,
+            fail_closed=True,
+        )
+    else:
+        await _enforce_runtime_ai_limits(project_id, context.max_user_id)
 
     system_prompt = (
         "Ты — ИИ-функция внутри MAX Mini App. Отвечай на русском языке, кратко и "
@@ -279,6 +374,13 @@ async def request_runtime_ai(
             payload.context,
             ensure_ascii=False,
             default=str,
+        )
+    if aitunnel is not None:
+        return await _request_aitunnel_ai(
+            session,
+            aitunnel,
+            system_prompt=system_prompt,
+            user_message=user_message,
         )
     try:
         answer = await llm_client.complete_chat(

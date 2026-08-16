@@ -9,7 +9,9 @@ container or git object ever sees them.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
+from typing import Any
 
 _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
@@ -37,6 +39,35 @@ def redact_provider_secrets(value: str) -> str:
     for pattern in _SECRET_TOKEN_PATTERNS:
         redacted = pattern.sub("[CREDENTIAL REDACTED]", redacted)
     return redacted
+
+
+def selected_elements_contain_provider_secret(
+    elements: Sequence[Mapping[str, Any]] | None,
+) -> bool:
+    """Detect credentials in every user-controlled select-mode field."""
+
+    return any(
+        contains_provider_secret(value)
+        for element in elements or ()
+        for value in element.values()
+        if isinstance(value, str)
+    )
+
+
+def redact_selected_element_secrets(
+    elements: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """Return a persistence/model-safe copy of select-mode metadata."""
+
+    if not elements:
+        return None
+    return [
+        {
+            key: redact_provider_secrets(value) if isinstance(value, str) else value
+            for key, value in element.items()
+        }
+        for element in elements
+    ]
 
 
 def is_secret_file(path: str) -> bool:
@@ -79,4 +110,6 @@ __all__ = [
     "is_secret_file",
     "max_model_write_rejection",
     "redact_provider_secrets",
+    "redact_selected_element_secrets",
+    "selected_elements_contain_provider_secret",
 ]
