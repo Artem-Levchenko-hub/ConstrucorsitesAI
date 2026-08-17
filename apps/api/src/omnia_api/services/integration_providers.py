@@ -44,9 +44,30 @@ class IntegrationProvider:
     recommended: bool = False
     requirement: str | None = None
     oauth_supported: bool = False
+    docs_pages: tuple[str, ...] = ()
 
 
 PROVIDERS: tuple[IntegrationProvider, ...] = (
+    IntegrationProvider(
+        key="aitunnel",
+        name="AITUNNEL",
+        category="ai",
+        description="Единый OpenAI-совместимый API для ИИ-функций приложения.",
+        capabilities=("ИИ-ответы", "Анализ", "Генерация текста"),
+        fields=(
+            IntegrationField(
+                "api_key",
+                "API-ключ",
+                "sk-aitunnel-••••••••",
+                "Ключ проверяется через AITUNNEL, шифруется и не передаётся агенту.",
+                secret=True,
+            ),
+        ),
+        available=True,
+        docs_url="https://docs.aitunnel.ru/",
+        recommended=True,
+        docs_pages=("/api/authentication", "/api/reference"),
+    ),
     IntegrationProvider(
         key="yookassa",
         name="ЮKassa",
@@ -330,14 +351,35 @@ async def verify_provider(
                 _provider_http_error(provider.name, response)
                 return f"Магазин {public_values['shop_id']}"
 
+            if provider_key == "aitunnel":
+                response = await client.get(
+                    "https://api.aitunnel.ru/v1/aitunnel/me",
+                    headers={
+                        **headers,
+                        "Authorization": f"Bearer {secret_values['api_key']}",
+                    },
+                )
+                _provider_http_error(provider.name, response)
+                aitunnel_payload = response.json()
+                if not isinstance(aitunnel_payload, dict):
+                    raise IntegrationProviderError(
+                        "AITUNNEL вернул ответ в неизвестном формате."
+                    )
+                account = aitunnel_payload.get("email") or aitunnel_payload.get("id")
+                return f"AITUNNEL · {account}" if account else "AITUNNEL"
+
             if provider_key == "iiko":
                 response = await client.post(
                     "https://api-ru.iiko.services/api/1/access_token",
                     json={"apiLogin": secret_values["api_login"]},
                 )
                 _provider_http_error(provider.name, response)
-                payload: Any = response.json()
-                token = payload.get("token") if isinstance(payload, dict) else payload
+                iiko_payload: Any = response.json()
+                token = (
+                    iiko_payload.get("token")
+                    if isinstance(iiko_payload, dict)
+                    else iiko_payload
+                )
                 if not isinstance(token, str) or not token:
                     raise IntegrationProviderError("iikoCloud не вернул токен доступа.")
                 return "iikoCloud API"

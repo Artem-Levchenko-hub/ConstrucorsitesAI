@@ -219,8 +219,30 @@ export function ChatMessage({
 
 /** The user's words in a soft accent-tinted speech bubble. */
 function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   if (plain) {
-    return <div className="whitespace-pre-wrap break-words text-sm leading-6 text-white">{text}</div>;
+    const collapsible = text.length > 700;
+    return (
+      <div>
+        <div
+          className={cn(
+            "whitespace-pre-wrap break-words text-sm leading-6 text-white",
+            collapsible && !expanded && "max-h-[240px] overflow-hidden",
+          )}
+        >
+          {text}
+        </div>
+        {collapsible && (
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="mt-2 text-xs font-medium text-white/80 underline-offset-2 hover:text-white hover:underline"
+          >
+            {expanded ? "Свернуть" : "Показать полностью"}
+          </button>
+        )}
+      </div>
+    );
   }
   return (
     <div className="inline-block max-w-full whitespace-pre-wrap break-words rounded-2xl rounded-tl-md border border-accent/20 bg-accent-subtle/50 px-3.5 py-2 text-sm leading-6 text-fg-primary">

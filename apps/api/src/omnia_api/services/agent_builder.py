@@ -66,7 +66,7 @@ _ACTION_RE = re.compile(
 )
 
 _KNOWN_ACTIONS = frozenset(
-    {"list_dir", "read_file", "grep", "docs", "write_file", "edit_file", "build",
+    {"list_dir", "read_file", "grep", "docs", "provider_docs", "write_file", "edit_file", "build",
      "bash", "read_logs", "runtime_check", "see", "generate_media", "probe",
      "verify_isolation", "done"}
 )
@@ -831,6 +831,7 @@ ACTIONS:
 - read_file  {"path": "src/app/page.tsx"}
 - grep       {"pattern": "regex", "path": "src"}
 - docs       {"library": "drizzle-orm", "query": "select where"}  — pull CURRENT official docs/signatures for an EXTERNAL library (Next.js, Drizzle, NextAuth, aiogram…) when unsure of an API; use it INSTEAD of guessing
+- provider_docs {"provider": "aitunnel", "query": "authentication and chat completions"} — read bounded official provider documentation; never pass credentials or arbitrary URLs
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
@@ -966,6 +967,7 @@ ACTIONS:
 - read_file  {"path": "src/app/page.tsx"}
 - grep       {"pattern": "regex", "path": "src"}
 - docs       {"library": "drizzle-orm", "query": "select where"}  — pull CURRENT official docs/signatures for an EXTERNAL library (Next.js, Drizzle, NextAuth, aiogram…) when unsure of an API; use it INSTEAD of guessing
+- provider_docs {"provider": "aitunnel", "query": "authentication and chat completions"} — read bounded official provider documentation; never pass credentials or arbitrary URLs
 - write_file {"path": "...", "content": "FULL FILE CONTENT"}   — create/overwrite a whole file
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"}
 - build      {}                                — real typecheck; returns the actual errors
@@ -1399,6 +1401,22 @@ def make_container_executor(
                     "ok": True,
                     "content": _truncate(_docs, _MAX_READ_CHARS),
                     "detail": f"docs: {_lib} / {_q}",
+                }
+
+            if action.name == "provider_docs":
+                from omnia_api.services import provider_docs
+
+                provider_key = str(action.args.get("provider") or "").strip()
+                query = str(action.args.get("query") or "").strip()
+                result = await provider_docs.fetch_provider_docs(provider_key, query)
+                return {
+                    "ok": result.status != "error",
+                    "status": result.status,
+                    "summary": result.summary,
+                    "content": _truncate(result.content, _MAX_READ_CHARS),
+                    "next_actions": list(result.next_actions),
+                    "artifacts": list(result.artifacts),
+                    "detail": f"provider docs: {provider_key}",
                 }
 
             if action.name == "write_file":

@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
@@ -18,7 +18,6 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Header, status
 from sqlalchemy import select
 
-from omnia_api.core.config import PRIMARY_LLM_MODEL
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
@@ -28,7 +27,6 @@ from omnia_api.models.app_integration import (
     ProjectIntegrationBinding,
 )
 from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.models.project import Project
 from omnia_api.schemas.integration_runtime import (
     RuntimeAIPublic,
     RuntimeAIRequest,
@@ -41,10 +39,23 @@ from omnia_api.schemas.integration_runtime import (
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
 )
-from omnia_api.services import integration_oauth, integration_providers, llm_client
+from omnia_api.services import integration_oauth, integration_providers
+from omnia_api.services.secret_safety import redact_provider_secrets
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
+_RUNTIME_AI_LIMIT_SCRIPT = """
+for i = 1, #KEYS do
+  local count = redis.call("INCR", KEYS[i])
+  if count == 1 then
+    redis.call("EXPIRE", KEYS[i], tonumber(ARGV[i * 2]))
+  end
+  if count > tonumber(ARGV[(i - 1) * 2 + 1]) then
+    return i
+  end
+end
+return 0
+"""
 
 
 @dataclass(frozen=True)
@@ -207,8 +218,7 @@ async def runtime_integration_status(
     return RuntimeIntegrationStatus(
         providers=sorted(connections),
         capabilities=sorted(
-            {"Управляемый Google AI"}
-            | {
+            {
                 capability
                 for connection in connections.values()
                 for capability in (connection.capabilities or [])
@@ -223,7 +233,7 @@ async def runtime_integration_status(
 
 
 async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None:
-    """Bound owner-funded inference even when a bot user scripts the endpoint."""
+    """Fail closed before spending an owner's provider balance."""
 
     buckets = (
         (f"omnia:runtime-ai:minute:{project_id}:{max_user_id}", 8, 60),
@@ -232,22 +242,99 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
     )
     try:
         redis = get_redis()
-        for key, limit, ttl in buckets:
-            count = int(await redis.incr(key))
-            if count == 1:
-                await redis.expire(key, ttl)
-            if count > limit:
-                raise ApiError(
-                    "rate_limited",
-                    "Лимит ИИ-запросов временно исчерпан. Попробуйте позже.",
-                    status.HTTP_429_TOO_MANY_REQUESTS,
-                )
+        keys = [key for key, _limit, _ttl in buckets]
+        args = [str(value) for _key, limit, ttl in buckets for value in (limit, ttl)]
+        eval_command = cast(Any, redis.eval)
+        exceeded_bucket = int(
+            await eval_command(_RUNTIME_AI_LIMIT_SCRIPT, len(keys), *keys, *args)
+        )
+        if exceeded_bucket:
+            raise ApiError(
+                "rate_limited",
+                "Лимит ИИ-запросов временно исчерпан. Попробуйте позже.",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )
     except ApiError:
         raise
-    except Exception:
-        # Billing still fails closed at the gateway wallet. A transient Redis
-        # outage must not take every generated MAX product offline.
-        return
+    except Exception as exc:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "Проверка лимита ИИ временно недоступна. Попробуйте позже.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+
+
+async def _request_aitunnel_ai(
+    session: SessionDep,
+    connection: BusinessIntegration,
+    *,
+    system_prompt: str,
+    user_message: str,
+) -> RuntimeAIPublic:
+    """Use an encrypted owner key without exposing it to app code or the agent."""
+
+    credentials = await _secrets(session, connection)
+    api_key = credentials.get("api_key", "")
+    if not api_key:
+        raise ApiError(
+            "integration_credentials_corrupted",
+            "Подключение AITUNNEL повреждено. Подключите сервис заново.",
+            status.HTTP_409_CONFLICT,
+        )
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0)) as client:
+            response = await client.post(
+                "https://api.aitunnel.ru/v1/chat/completions",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Omnia-MAX-Runtime/1.0",
+                },
+                json={
+                    "model": "auto",
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "max_tokens": 1_600,
+                    "temperature": 0.35,
+                },
+            )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "AITUNNEL временно недоступен. Попробуйте ещё раз.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    if response.status_code >= 300:
+        raise _provider_failure("AITUNNEL", response)
+    try:
+        body = response.json()
+        choices = body.get("choices") if isinstance(body, dict) else None
+        first = choices[0] if isinstance(choices, list) and choices else None
+        message = first.get("message") if isinstance(first, dict) else None
+        answer = message.get("content") if isinstance(message, dict) else None
+        model = body.get("model") if isinstance(body, dict) else None
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        raise ApiError(
+            "integration_request_failed",
+            "AITUNNEL вернул ответ в неизвестном формате.",
+            status.HTTP_502_BAD_GATEWAY,
+        ) from exc
+    if not isinstance(answer, str) or not answer.strip():
+        raise ApiError(
+            "integration_request_failed",
+            "AITUNNEL не вернул ответ. Попробуйте ещё раз.",
+            status.HTTP_502_BAD_GATEWAY,
+        )
+    safe_answer = redact_provider_secrets(
+        answer.replace(api_key, "[CREDENTIAL REDACTED]")
+    )
+    safe_model = redact_provider_secrets(
+        str(model or "aitunnel:auto").replace(api_key, "[CREDENTIAL REDACTED]")
+    )
+    return RuntimeAIPublic(answer=safe_answer.strip()[:16_000], model=safe_model[:200])
 
 
 @router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
@@ -257,14 +344,17 @@ async def request_runtime_ai(
     session: SessionDep,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
 ) -> RuntimeAIPublic:
-    """Run real owner-funded Gemini inference without exposing provider keys."""
+    """Run owner-funded AITUNNEL inference through the secretless MAX bridge."""
 
     context = await _runtime_context(session, project_id, x_max_init_data)
+    connection = (await _connections(session, project_id)).get("aitunnel")
+    if connection is None:
+        raise ApiError(
+            "ai_integration_required",
+            "Подключите AITUNNEL к этому приложению",
+            status.HTTP_409_CONFLICT,
+        )
     await _enforce_runtime_ai_limits(project_id, context.max_user_id)
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise ApiError("not_found", "Приложение не найдено", status.HTTP_404_NOT_FOUND)
-
     system_prompt = (
         "Ты — ИИ-функция внутри MAX Mini App. Отвечай на русском языке, кратко и "
         "по существу. Используй только переданный контекст, не выдумывай измерения "
@@ -280,32 +370,12 @@ async def request_runtime_ai(
             ensure_ascii=False,
             default=str,
         )
-    try:
-        answer = await llm_client.complete_chat(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            PRIMARY_LLM_MODEL,
-            user_id=str(project.owner_id),
-            project_id=str(project.id),
-            max_tokens=1_600,
-            temperature=0.35,
-            stage="runtime_ai",
-        )
-    except llm_client.LLMError as exc:
-        raise ApiError(
-            "integration_provider_unavailable",
-            "ИИ временно недоступен. Попробуйте ещё раз.",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
-    if not answer.strip():
-        raise ApiError(
-            "integration_provider_unavailable",
-            "ИИ не вернул ответ. Попробуйте ещё раз.",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
-    return RuntimeAIPublic(answer=answer.strip(), model=PRIMARY_LLM_MODEL)
+    return await _request_aitunnel_ai(
+        session,
+        connection,
+        system_prompt=system_prompt,
+        user_message=user_message,
+    )
 
 
 @router.post("/{project_id}/payments", response_model=RuntimePaymentPublic)

@@ -22,7 +22,10 @@ export function PromptInput({
   placeholder,
   ariaLabel = "Опишите изменение проекта",
 }: {
-  onSubmit: (text: string, selections: SelectedElement[]) => void;
+  onSubmit: (
+    text: string,
+    selections: SelectedElement[],
+  ) => boolean | Promise<boolean>;
   onCancel: () => void;
   onCancelPending: () => void;
   isStreaming: boolean;
@@ -36,6 +39,7 @@ export function PromptInput({
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }) {
   const [value, setValue] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const ref = textareaRef ?? internalRef;
   // Synchronous per-gesture latch. React state updates after the event, so
@@ -63,7 +67,7 @@ export function PromptInput({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value, ref]);
 
-  const send = useCallback(() => {
+  const send = useCallback(async () => {
     if (sendLockRef.current) return;
     const text = value.trim();
     // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
@@ -78,11 +82,15 @@ export function PromptInput({
         : "");
     if (!finalText) return;
     sendLockRef.current = true;
+    setIsSubmitting(true);
     try {
-      onSubmit(finalText, wire);
-      setValue("");
-      clearSelections();
+      const submitted = await onSubmit(finalText, wire);
+      if (submitted) {
+        setValue("");
+        clearSelections();
+      }
     } finally {
+      setIsSubmitting(false);
       // Keep the latch through the current browser event turn. A legitimate
       // later submit uses the freshly-rendered value and is not blocked.
       queueMicrotask(() => {
@@ -110,7 +118,7 @@ export function PromptInput({
         e.key === "Enter" &&
         (value.trim() || useInspectorStore.getState().selections.length)
       ) {
-        send();
+        void send();
       }
     };
     window.addEventListener("keydown", handler);
@@ -121,12 +129,13 @@ export function PromptInput({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
-      send();
+      void send();
     }
   };
 
   return (
     <div
+      aria-busy={isSubmitting}
       className={cn(
         "bg-surface-panel-dark p-3 space-y-2",
         className,
@@ -171,6 +180,7 @@ export function PromptInput({
           ref={ref}
           aria-label={ariaLabel}
           value={value}
+          disabled={isSubmitting}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={
@@ -221,7 +231,7 @@ export function PromptInput({
                 variant="secondary"
                 size="sm"
                 onClick={voice.toggle}
-                disabled={voice.state === "transcribing"}
+                disabled={isSubmitting || voice.state === "transcribing"}
                 className={cn("h-11 px-2.5 sm:h-8", voice.state === "recording" && "text-danger")}
                 title={
                   voice.state === "recording"
@@ -257,8 +267,12 @@ export function PromptInput({
             <Button
               type="button"
               size="sm"
-              onClick={send}
-              disabled={!value.trim() && selections.length === 0}
+              onClick={() => {
+                void send();
+              }}
+              disabled={
+                isSubmitting || (!value.trim() && selections.length === 0)
+              }
               className="h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={
                 isStreaming
@@ -266,8 +280,18 @@ export function PromptInput({
                   : "Отправить"
               }
             >
-              <Send className="h-3.5 w-3.5" />
-              <span>{isStreaming ? "В очередь" : "Отправить"}</span>
+              {isSubmitting ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {isSubmitting
+                  ? "Отправляю…"
+                  : isStreaming
+                    ? "В очередь"
+                    : "Отправить"}
+              </span>
             </Button>
           </div>
         </div>

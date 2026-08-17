@@ -5,7 +5,6 @@ import hmac
 import json
 import time
 from urllib.parse import urlencode
-from uuid import UUID
 
 import httpx
 import pytest
@@ -18,11 +17,9 @@ from omnia_api.models.app_integration import (
     ProjectIntegrationBinding,
 )
 from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.models.project import Project
-from omnia_api.routers import integration_runtime as integration_runtime_router
 from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import projects as projects_router
-from omnia_api.services import integration_providers, llm_client
+from omnia_api.services import integration_providers
 from omnia_api.services import repo as repo_svc
 
 
@@ -122,7 +119,9 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
 
     stored = (
         await db_session.execute(
-            select(BusinessIntegration).where(BusinessIntegration.provider == "yookassa")
+            select(BusinessIntegration).where(
+                BusinessIntegration.provider == "yookassa"
+            )
         )
     ).scalar_one()
     assert "live_secret_value" not in stored.credentials_enc
@@ -143,7 +142,9 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
     reusable = await client.get(f"/api/projects/{second_id}/app-integrations")
     assert reusable.status_code == 200
     assert reusable.json()["connections"][0]["bound_to_project"] is False
-    bound = await client.post(f"/api/projects/{second_id}/app-integrations/yookassa/bind")
+    bound = await client.post(
+        f"/api/projects/{second_id}/app-integrations/yookassa/bind"
+    )
     assert bound.status_code == 200
     assert bound.json()["bound_to_project"] is True
     bindings = list(
@@ -292,7 +293,6 @@ async def test_bound_integration_is_available_to_signed_max_runtime(
     assert runtime.status_code == 200
     assert runtime.json()["providers"] == ["yookassa"]
     assert "Оплата" in runtime.json()["capabilities"]
-    assert "Управляемый Google AI" in runtime.json()["capabilities"]
 
     string_user = await client.get(
         f"/api/runtime/projects/{project_id}/integrations",
@@ -305,54 +305,3 @@ async def test_bound_integration_is_available_to_signed_max_runtime(
         headers={"X-MAX-Init-Data": _max_init_data(token) + "x"},
     )
     assert tampered.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_signed_max_runtime_can_call_managed_google_ai_without_a_client_key(
-    client: httpx.AsyncClient,
-    db_session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project_id = await _register_and_create(client, monkeypatch)
-    project = await db_session.get(Project, UUID(project_id))
-    assert project is not None
-    token = "max-ai-bot-token"
-    db_session.add(
-        MaxIntegration(
-            project_id=project.id,
-            owner_id=project.owner_id,
-            bot_token_enc=encrypt_strong(token),
-            webhook_secret_enc=encrypt_strong("webhook"),
-        )
-    )
-    await db_session.commit()
-
-    async def no_limit(_project_id, _max_user_id) -> None:
-        return None
-
-    captured: dict[str, object] = {}
-
-    async def fake_complete(messages, model, **kwargs) -> str:
-        captured.update({"messages": messages, "model": model, **kwargs})
-        return "Добавьте 20 минут спокойной ходьбы и сохраните ранний отход ко сну."
-
-    monkeypatch.setattr(integration_runtime_router, "_enforce_runtime_ai_limits", no_limit)
-    monkeypatch.setattr(llm_client, "complete_chat", fake_complete)
-
-    response = await client.post(
-        f"/api/runtime/projects/{project.id}/ai",
-        headers={"X-MAX-Init-Data": _max_init_data(token)},
-        json={
-            "message": "Разбери мой день",
-            "instructions": "Ты фитнес-тренер",
-            "context": {"sleepHours": 7.5, "steps": 8_200},
-        },
-    )
-
-    assert response.status_code == 200
-    assert "ходьбы" in response.json()["answer"]
-    assert response.json()["model"] == "gemini-3.1-pro-preview-customtools"
-    assert captured["user_id"] == str(project.owner_id)
-    assert captured["project_id"] == str(project.id)
-    assert captured["stage"] == "runtime_ai"
-    assert "api_key" not in response.text.lower()

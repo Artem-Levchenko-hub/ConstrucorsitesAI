@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type CSSProperties, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
@@ -64,21 +64,19 @@ export function MaxWorkspaceShell({
     <div
       data-light-shell
       className={cn(
-        "grid h-dvh min-h-0 grid-cols-1 overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-200",
-        navigationVisible
-          ? "lg:grid-cols-[220px_minmax(0,1fr)]"
-          : "lg:grid-cols-[minmax(0,1fr)]",
-        navigationVisible && previewPanelVisible
-          ? "xl:grid-cols-[220px_minmax(420px,1fr)_380px] 2xl:grid-cols-[220px_minmax(480px,1fr)_420px]"
-          : navigationVisible
-            ? "xl:grid-cols-[220px_minmax(0,1fr)]"
-            : previewPanelVisible
-              ? "xl:grid-cols-[minmax(420px,1fr)_380px] 2xl:grid-cols-[minmax(480px,1fr)_420px]"
-              : "xl:grid-cols-[minmax(0,1fr)]",
+        "relative isolate grid h-full max-h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden bg-[#fcfbf7] text-[#171716] transition-[grid-template-columns] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 lg:grid-cols-[var(--max-nav-column)_minmax(0,1fr)] 2xl:grid-cols-[var(--max-nav-column)_minmax(480px,1fr)_var(--max-preview-column)]",
       )}
+      style={
+        {
+          "--max-nav-column": navigationVisible ? "220px" : "0px",
+          "--max-preview-column": previewPanelVisible
+            ? "clamp(380px,20.5vw,420px)"
+            : "0px",
+        } as CSSProperties
+      }
     >
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] transition-transform lg:static lg:translate-x-0 ${navigationVisible ? "lg:flex" : "lg:hidden"} ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh min-h-0 w-[220px] flex-col overflow-hidden border-r bg-[#fcfbf7] transition-[transform,opacity,border-color] duration-300 ease-[cubic-bezier(.22,1,.36,1)] motion-reduce:duration-0 lg:static lg:h-full lg:max-h-full lg:w-full ${navigationVisible ? "lg:translate-x-0 lg:border-[#d8d4cb] lg:opacity-100" : "lg:pointer-events-none lg:-translate-x-2 lg:border-transparent lg:opacity-0"} ${
           mobileNavOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -101,12 +99,12 @@ export function MaxWorkspaceShell({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="flex min-h-0 flex-1 flex-col p-3" data-testid="max-navigation-scroll">
           <Link href="/max" className="flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
             <LayoutGrid className="size-4" /> Все проекты
           </Link>
-          <p className="omnia-kicker mt-6 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
-          <nav className="mt-2 space-y-1">
+          <p className="omnia-kicker mt-5 px-3 text-[#aaa59b]">Ваши Mini Apps</p>
+          <nav className="max-projects-scroll mt-2 min-h-20 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1" aria-label="Ваши Mini Apps" data-testid="max-projects-scroll">
             {maxProjects.map((item) => {
               const active = item.id === project.id;
               return (
@@ -119,13 +117,15 @@ export function MaxWorkspaceShell({
             })}
           </nav>
 
-          <p className="omnia-kicker mt-7 px-3 text-[#aaa59b]">Проект</p>
-          <div className="mt-2">
+          <div className="mt-3 shrink-0 border-t border-[#d8d4cb] pt-3">
+            <p className="omnia-kicker px-3 text-[#aaa59b]">Проект</p>
+          </div>
+          <div className="max-projects-scroll mt-2 min-h-0 shrink overflow-y-auto overscroll-contain pr-1">
             <MaxProjectNav projectId={project.id} active="editor" />
           </div>
         </div>
 
-        <div className="border-t border-[#d8d4cb] p-3">
+        <div className="shrink-0 border-t border-[#d8d4cb] p-3">
           <Link href="/account" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[8px] p-2 hover:bg-[#f5f3ee]">
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#171716] text-[11px] font-semibold text-white">{email.slice(0, 1).toUpperCase()}</span>
             <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{email.split("@")[0]}</span><span className="block truncate text-[9px] text-[#8d887f]">{email}</span></span>
@@ -137,7 +137,7 @@ export function MaxWorkspaceShell({
         </div>
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col bg-[#fcfbf7]">
+      <section className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[#fcfbf7]">
         <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-[#d8d4cb] px-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-1 sm:gap-3">
             <button type="button" onClick={() => setMobileNavOpen(true)} className="grid size-11 shrink-0 place-items-center rounded-[8px] text-[#6d6962] lg:hidden" aria-label="Открыть меню"><Menu className="size-4" /></button>
@@ -164,7 +164,7 @@ export function MaxWorkspaceShell({
             <button
               type="button"
               onClick={() => setPreviewOpen(true)}
-              className="grid size-11 place-items-center rounded-[8px] border border-[#d8d4cb] text-[#6d6962] hover:bg-[#f5f3ee] xl:hidden"
+              className="grid size-11 place-items-center rounded-[8px] border border-[#d8d4cb] text-[#6d6962] hover:bg-[#f5f3ee] 2xl:hidden"
               aria-label="Открыть живое превью"
               data-testid="max-mobile-preview-open"
             >
@@ -174,7 +174,7 @@ export function MaxWorkspaceShell({
               <button
                 type="button"
                 onClick={() => setPreviewPanelVisible(true)}
-                className="hidden size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716] xl:grid"
+                className="hidden size-8 place-items-center rounded-full text-[#8d887f] transition-colors hover:bg-[#ece8df] hover:text-[#171716] 2xl:grid"
                 aria-label="Показать панель превью"
                 title="Показать превью"
                 data-testid="max-desktop-preview-open"
@@ -221,7 +221,7 @@ export function MaxWorkspaceShell({
           <ChevronDown className="size-3.5 shrink-0 -rotate-90 text-[#8d887f]" />
         </button>
 
-        <div className="min-h-0 flex-1 max-studio-chat">
+        <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">
           <ChatPanel
             projectId={project.id}
             projectSlug={project.slug}
@@ -233,7 +233,7 @@ export function MaxWorkspaceShell({
       </section>
 
       {previewPanelVisible && (
-        <div className="hidden min-h-0 bg-transparent xl:block">
+        <div className="hidden min-h-0 bg-transparent 2xl:block">
           <MaxLivePreview
             project={project}
             onClose={() => setPreviewPanelVisible(false)}
@@ -244,7 +244,7 @@ export function MaxWorkspaceShell({
       {mobileNavOpen && <button type="button" className="fixed inset-0 z-40 bg-[#171716]/55 lg:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Закрыть меню" />}
 
       {previewOpen && (
-        <div className="fixed inset-0 z-[60] flex justify-end bg-[#171716]/55 backdrop-blur-[2px] xl:hidden">
+        <div className="fixed inset-0 z-[60] flex justify-end bg-[#171716]/55 backdrop-blur-[2px] 2xl:hidden">
           <button
             type="button"
             className="absolute inset-0 cursor-default"

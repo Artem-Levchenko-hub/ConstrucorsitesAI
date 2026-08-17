@@ -107,6 +107,14 @@ _TOOLS: list[dict[str, Any]] = [
         ["library", "query"],
     ),
     _tool(
+        "provider_docs",
+        "Read current public documentation from a provider's SERVER-ALLOWLISTED "
+        "official HTTPS host. No credential is ever sent. Use this before wiring "
+        "a requested external provider; never guess its API.",
+        {"provider": _STR, "query": _STR},
+        ["provider", "query"],
+    ),
+    _tool(
         "write_file",
         "Create or overwrite a whole file with its FULL content.",
         {"path": _STR, "content": _STR},
@@ -364,7 +372,7 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
         return _cap(obs.get("content") or "")
     if name == "build":
         return _cap(obs.get("detail") or obs.get("content") or "сборка чистая")
-    if name in ("grep", "list_dir", "bash", "read_logs", "docs"):
+    if name in ("grep", "list_dir", "bash", "read_logs", "docs", "provider_docs"):
         return _cap(obs.get("detail") or obs.get("content") or "")
     if name in ("runtime_check", "probe", "verify_isolation"):
         return _cap(obs.get("detail") or obs.get("content") or "проверка пройдена")
@@ -377,7 +385,8 @@ _NATIVE_PREAMBLE = (
     "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
     "runtime_check — открыть роут в ЖИВОМ приложении, probe — реальный запрос ОТ "
     "ИМЕНИ залогиненного юзера, verify_isolation — доказать отсутствие утечки данных "
-    "между юзерами, docs — свежая дока библиотек. Думай сколько нужно. Цикл: пиши "
+    "между юзерами, docs — свежая дока библиотек, provider_docs — актуальная "
+    "официальная дока подключённого провайдера. Думай сколько нужно. Цикл: пиши "
     "код → build → чини РЕАЛЬНЫЕ ошибки до чистоты → ДОКАЖИ что работает → done. Пиши "
     "полноценно, без заглушек и TODO.\n\n"
     "ДОКАЖИ перед done — чистый build это НЕ доказательство работы: "
