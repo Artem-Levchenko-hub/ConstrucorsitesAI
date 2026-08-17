@@ -43,7 +43,10 @@ _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
 _CALL_RETRIES = 3  # bounded transport retry inside one turn; never restart a whole run
-_HARD_MAX_STEPS = 30
+# The first verified MAX production loop completed a five-screen product inside
+# one 40-turn transcript. Keep that headroom so callers do not need a second
+# provider pass with a fresh context merely because the old 30-turn clamp fired.
+_HARD_MAX_STEPS = 40
 
 # EXPLORE-STALL guard — parity with run_agent_build's no_write_streak
 # (agent_builder._NO_WRITE_NUDGE_AT/_NO_WRITE_ABORT_AT = 5/14, which count single

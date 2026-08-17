@@ -45,11 +45,12 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "build_max_product_contract" in source
     assert "max_completion_gap" in source
     assert "completion_check=_completion_check" in source
-    assert "_agent_steps = 30" in source
-    assert '"autonomous_recovery"' in source
-    assert "max_source_completion_gap" in source
-    assert "_seg < 2" in source
-    assert "_seg < 3" not in source
+    assert "_agent_step_budget" in source
+    assert "configured_steps=_agent_steps" in source
+    assert "max_steps=_agent_steps" in source
+    assert '"autonomous_recovery"' not in source
+    assert "max_source_completion_gap" not in source
+    assert "_seg < 2" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
     assert '_bounded_stop and project_template != "max_miniapp"' in source
@@ -484,7 +485,7 @@ async def test_native_hard_clamps_legacy_limit_and_forwards_trace_ids(
         max_steps=120,
     )
 
-    assert len(calls) == agent_native._HARD_MAX_STEPS == 30
+    assert len(calls) == agent_native._HARD_MAX_STEPS == 40
     assert res.stop_reason == "max_steps_green"
     assert calls[0]["stage"] == "build_plan"
     assert all(call["project_id"] == "22222222-2222-2222-2222-222222222222" for call in calls)

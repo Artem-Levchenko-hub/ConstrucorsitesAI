@@ -6,13 +6,22 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from omnia_api.routers.messages import _agent_result_message
+from omnia_api.routers.messages import _agent_result_message, _agent_step_budget
 
 
 def _res(**kw) -> SimpleNamespace:
     base = {"done": False, "summary": "", "stop_reason": ""}
     base.update(kw)
     return SimpleNamespace(**base)
+
+
+def test_max_build_restores_proven_single_pass_budget() -> None:
+    assert _agent_step_budget("max_miniapp", configured_steps=24) == 40
+    assert _agent_step_budget("max_miniapp", configured_steps=48) == 48
+
+
+def test_other_stacks_keep_their_configured_budget() -> None:
+    assert _agent_step_budget("nextjs_postgres", configured_steps=24) == 24
 
 
 def test_done_uses_model_summary() -> None:
