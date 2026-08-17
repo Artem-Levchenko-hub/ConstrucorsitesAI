@@ -15,6 +15,8 @@ export default async function AppLayout({
   // дополнительно гарантирует что страничный скролл не появится — скроллятся
   // только внутренние блоки (chat history, code view, preview iframe).
   return (
-    <div className="h-dvh flex flex-col overflow-hidden">{children}</div>
+    <div className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden">
+      {children}
+    </div>
   );
 }

@@ -490,6 +490,7 @@ export type ApiErrorCode =
   | "integration_credentials_corrupted"
   | "integration_provider_unavailable"
   | "integration_connection_failed"
+  | "ai_integration_required"
   | "max_registration_required"
   | "email_verification_required"
   | "business_profile_required"
@@ -533,6 +534,7 @@ export type MaxIntegration = {
 };
 
 export type IntegrationCategory =
+  | "ai"
   | "payments"
   | "restaurant"
   | "crm"

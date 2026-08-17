@@ -20,6 +20,11 @@ _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
 )
+_LABELLED_SECRET_RE = re.compile(
+    r"((?:api[\s_-]*key|ключ|token|токен)\s*(?:[:=—–-]|это)?\s*[\"'`]?)"
+    r"([^\s\"'`,;]{16,})",
+    re.IGNORECASE,
+)
 
 
 def contains_provider_secret(value: str) -> bool:
@@ -29,7 +34,10 @@ def contains_provider_secret(value: str) -> bool:
     briefs that merely mention an API key or an environment-variable name.
     """
 
-    return any(pattern.search(value or "") for pattern in _SECRET_TOKEN_PATTERNS)
+    candidate = value or ""
+    return any(pattern.search(candidate) for pattern in _SECRET_TOKEN_PATTERNS) or bool(
+        _LABELLED_SECRET_RE.search(candidate)
+    )
 
 
 def redact_provider_secrets(value: str) -> str:
@@ -38,6 +46,10 @@ def redact_provider_secrets(value: str) -> str:
     redacted = value or ""
     for pattern in _SECRET_TOKEN_PATTERNS:
         redacted = pattern.sub("[CREDENTIAL REDACTED]", redacted)
+    redacted = _LABELLED_SECRET_RE.sub(
+        lambda match: f"{match.group(1)}[CREDENTIAL REDACTED]",
+        redacted,
+    )
     return redacted
 
 
