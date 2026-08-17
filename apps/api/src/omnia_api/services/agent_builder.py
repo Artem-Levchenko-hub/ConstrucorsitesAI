@@ -1343,6 +1343,7 @@ def make_container_executor(
     project_id: Any,
     slug: str,
     emit: Any = None,
+    vision_context: str = "",
 ) -> Executor:
     """Bind the abstract actions to the live dev container via orchestrator_client.
 
@@ -1352,6 +1353,9 @@ def make_container_executor(
     ``emit`` (optional, same callback the loop uses) lets a multi-stage tool —
     ``generate_media`` — surface its INTERNAL steps (first frame → last frame →
     Kling stitch) as live transcript sub-steps. Absent → those stages run silent.
+
+    ``vision_context`` binds the pre-build design contract to the existing single
+    ``see`` action. It changes visual judgement, not loop count/completion rules.
     """
     from omnia_api.core.config import get_settings
     from omnia_api.services import orchestrator_client
@@ -1528,7 +1532,10 @@ def make_container_executor(
                 from omnia_api.services import agent_vision
 
                 return await agent_vision.see_page(
-                    project_id, path=action.path or "/")
+                    project_id,
+                    path=action.path or "/",
+                    prompt_context=vision_context,
+                )
 
             if action.name == "generate_media":
                 # Real ASSET: generate a photoreal image (flux) or a short cinematic

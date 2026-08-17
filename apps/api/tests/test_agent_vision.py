@@ -48,3 +48,32 @@ async def test_max_see_rejects_invalid_bootstrap_origin() -> None:
     result = await agent_vision.see_page(uuid4(), bootstrap_url="javascript:bad")
 
     assert result == {"ok": False, "error": "invalid preview bootstrap URL"}
+
+
+@pytest.mark.asyncio
+async def test_see_passes_design_contract_to_auditor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import dev_container, vision_audit
+    from omnia_api.workers import preview
+
+    captured: dict[str, Any] = {}
+
+    async def fake_url(_project_id: Any) -> str:
+        return "https://preview.example"
+
+    async def fake_capture(*args: Any, **kwargs: Any) -> dict[int, bytes]:
+        return {1440: b"png", 360: b"png"}
+
+    async def fake_audit(*args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return SimpleNamespace(skipped=True)
+
+    monkeypatch.setattr(dev_container, "resolve_live_url", fake_url)
+    monkeypatch.setattr(preview, "capture_live_url", fake_capture)
+    monkeypatch.setattr(vision_audit, "audit_screenshots", fake_audit)
+
+    result = await agent_vision.see_page(uuid4(), prompt_context="design-contract-v1")
+
+    assert result["ok"] is True
+    assert captured["prompt_context"] == "design-contract-v1"

@@ -3163,8 +3163,40 @@ async def _process_prompt(
                 }
                 await _record_agent_step(step_row)
 
+            # Omnia Design Pro: one pure pre-build classification. Its compact
+            # contract reaches both the coding agent and the already-required
+            # `see`; it never creates an extra generation/acceptance phase.
+            _design_contract = None
+            if orchestrate and get_settings().use_design_intelligence_plugin:
+                try:
+                    from omnia_api.services.design_plugin import build_design_contract
+
+                    _design_contract = build_design_contract(
+                        project_id=str(project_id),
+                        project_name=project_name,
+                        template=project_template,
+                        brief=prompt_text,
+                        preset_id=project_design_preset_id,
+                    )
+                    if _design_contract:
+                        print(
+                            "[PP] design_plugin "
+                            f"version={_design_contract.version} "
+                            f"archetype={_design_contract.archetype} "
+                            f"preset={_design_contract.preset_id}",
+                            flush=True,
+                        )
+                except Exception as _dp_exc:
+                    print(f"[PP] design_plugin skipped: {_dp_exc!r}", flush=True)
+
+            _vision_context = (
+                _design_contract.vision_context if _design_contract else prompt_text
+            )
             _base_agent_executor = agent_builder.make_container_executor(
-                project_id=project_id, slug=project_slug, emit=_agent_emit
+                project_id=project_id,
+                slug=project_slug,
+                emit=_agent_emit,
+                vision_context=_vision_context,
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             if project_template == "max_miniapp":
@@ -3186,7 +3218,7 @@ async def _process_prompt(
                             _visual = await agent_vision.see_page(
                                 project_id,
                                 path=action.path or "/",
-                                prompt_context=prompt_text,
+                                prompt_context=_vision_context,
                                 bootstrap_url=_bootstrap_url,
                             )
                         except Exception as _see_exc:
@@ -3293,7 +3325,9 @@ async def _process_prompt(
             # agent writes distinct UI; works even on the hardcoded realtime
             # template where CSS-token injection is inert. Build only (orchestrate),
             # not surgical edits — a follow-up must not re-theme. Flag-gated, fail-soft.
-            if orchestrate and get_settings().use_design_mood:
+            if _design_contract:
+                _seed_block = _seed_block + "\n\n" + _design_contract.prompt_block
+            elif orchestrate and get_settings().use_design_mood:
                 try:
                     from omnia_api.services.design_dna import design_mood_directive
 

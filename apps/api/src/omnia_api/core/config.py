@@ -971,6 +971,13 @@ class Settings(BaseSettings):
     # token injection is inert). Default ON; flip USE_DESIGN_MOOD=0 to revert.
     use_design_mood: bool = Field(default=True)
 
+    # Bounded design-intelligence plugin (2026-08-17). Classifies a container UI
+    # brief into one product archetype + compact UX contract before the existing
+    # coding-agent pass, then gives the SAME contract to the existing `see` audit.
+    # It adds no model call, phase or completion loop. USE_DESIGN_INTELLIGENCE_PLUGIN=0
+    # restores the legacy design-mood-only path immediately.
+    use_design_intelligence_plugin: bool = Field(default=True)
+
     # Locked-primitive CONTRACT card (2026-06-27, harness-hardening). On a realtime
     # build the seed used to tell the agent «read the fixed files and check the
     # signatures yourself» — a weak model skips the reads and HALLUCINATES names /

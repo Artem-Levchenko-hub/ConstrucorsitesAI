@@ -42,8 +42,10 @@ re-publish externally without verifying terms.
 - **Vendored** — files are in the repo, deploy artefacts include them.
 - **Loader live** — `skill_library.lookup_palette`, `lookup_font_pairing`,
   `random_ux_guidelines`, `format_design_brief` ready to call.
-- **Prompt-builder wiring** — NOT YET. Upstream `services/prompt_builder.py`
-  has a rich `_DESIGN_KIT` + `_STYLE_KIT` + preset system already. Plugging
-  the larger ui-ux-pro-max library in requires extending the preset flow
-  rather than replacing it. See `format_design_brief` for the suggested
-  injection shape; a follow-up PR should hook it in.
+- **Static/freeform wiring** — live through
+  `services.prompt_builder._compute_skill_brief`.
+- **Container-agent wiring** — live through `services.design_plugin`: one
+  versioned pre-build product/UX contract is injected into the existing agent
+  pass and reused by its existing `see` audit. The container path intentionally
+  selects only app-safe UX/icon/chart rows; it does not execute upstream scripts,
+  inject landing-page structure, call a model/network, or add a completion phase.

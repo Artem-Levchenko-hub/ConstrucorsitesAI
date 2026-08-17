@@ -434,6 +434,32 @@ def test_parse_see_action():
     assert a is not None and a.name == "see" and a.path == "/dashboard"
 
 
+def test_container_see_receives_bound_design_context(monkeypatch):
+    """Executor binds author contract to its existing visual-review action."""
+    from omnia_api.services import agent_vision
+
+    captured = {}
+
+    async def _fake_see(project_id, **kwargs):
+        captured.update(project_id=project_id, **kwargs)
+        return {"ok": True, "detail": "beautiful"}
+
+    monkeypatch.setattr(agent_vision, "see_page", _fake_see)
+    execute = ab.make_container_executor(
+        project_id="project-1",
+        slug="slug",
+        vision_context="omnia-design-contract",
+    )
+    result = asyncio.run(execute(ab.Action(name="see", args={"path": "/dashboard"})))
+
+    assert result["ok"] is True
+    assert captured == {
+        "project_id": "project-1",
+        "path": "/dashboard",
+        "prompt_context": "omnia-design-contract",
+    }
+
+
 def test_see_loop_fixes_then_done():
     """build clean → see (ugly) → fix → see (beautiful) → done. `see` is a verify
     action: it runs twice non-consecutively without a false looping abort."""

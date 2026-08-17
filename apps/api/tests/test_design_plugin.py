@@ -1,0 +1,87 @@
+"""Omnia Design Pro: bounded brief → author/auditor contract."""
+
+from omnia_api.services.design_plugin import (
+    KNOWLEDGE_SOURCE,
+    PLUGIN_ID,
+    PLUGIN_VERSION,
+    build_design_contract,
+)
+
+
+def _contract(brief: str, **kwargs: str):
+    result = build_design_contract(
+        project_id="project-1",
+        project_name="Test",
+        template=kwargs.pop("template", "max_miniapp"),
+        brief=brief,
+        preset_id=kwargs.pop("preset_id", None),
+    )
+    assert result is not None
+    return result
+
+
+def test_fitness_max_gets_product_ux_and_mobile_contract() -> None:
+    result = _contract("Фитнес: статистика и разбор тренировок, шаблоны для спортсмена")
+
+    assert result.plugin_id == PLUGIN_ID
+    assert result.version == PLUGIN_VERSION
+    assert result.knowledge_source == KNOWLEDGE_SOURCE
+    assert result.archetype == "fitness-health"
+    assert result.preset_id == "wellness-casual"
+    assert "данные тренировки → понятный анализ" in result.prompt_block
+    assert "3–5 нижних вкладок" in result.prompt_block
+    assert "safe-area" in result.prompt_block
+    assert "ui-ux-pro-max@2026-05-25" in result.prompt_block
+    assert "UX RULES" in result.prompt_block
+    assert "nav_style:        bottom-tabs (mobile primary)" in result.prompt_block
+    assert "CHARTS" in result.prompt_block
+    assert "lucide-react only" in result.prompt_block
+    assert "do not import an uninstalled chart package" in result.prompt_block
+    assert "@phosphor-icons" not in result.prompt_block
+
+
+def test_contract_is_single_pass_and_carries_quality_floor() -> None:
+    block = _contract("CRM для заявок и задач", template="fullstack").prompt_block
+
+    assert "не создавай\nотдельный дизайн-этап" in block
+    assert "loading, empty, error, success" in block
+    assert "touch target ≥44px" in block
+    assert "без одинаковой сетки из карточек" in block
+    assert "ДИЗАЙН-НАСТРОЕНИЕ ЭТОГО ПРОЕКТА" in block
+
+
+def test_marketing_landing_pattern_is_not_injected_into_product() -> None:
+    block = _contract("Мобильное фитнес приложение со статистикой").prompt_block
+    assert "LANDING PATTERN" not in block
+    assert "App Store Style Landing" not in block
+
+
+def test_explicit_valid_preset_wins() -> None:
+    result = _contract("Рабочее приложение", preset_id="festival-brutalist")
+    assert result.preset_id == "festival-brutalist"
+    assert "Festival Brutalist" in result.prompt_block
+
+
+def test_vision_context_is_bounded_and_design_first() -> None:
+    result = _contract("Очень длинный запрос " * 100)
+    assert len(result.vision_context) <= 300
+    assert result.vision_context.startswith(f"{PLUGIN_ID} {PLUGIN_VERSION}")
+    assert "IA:" in result.vision_context
+
+
+def test_non_ui_stack_opts_out() -> None:
+    assert (
+        build_design_contract(
+            project_id="p",
+            project_name="API",
+            template="api",
+            brief="REST API",
+        )
+        is None
+    )
+
+
+def test_contract_is_deterministic() -> None:
+    first = _contract("Сервис бронирования консультаций")
+    second = _contract("Сервис бронирования консультаций")
+    assert first == second
