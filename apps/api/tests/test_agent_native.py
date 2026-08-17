@@ -218,6 +218,55 @@ async def test_native_no_write_guard_nudges_then_aborts(
 
 
 @pytest.mark.asyncio
+async def test_first_max_build_locks_discovery_tools_until_first_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MAX keeps one transcript, but repeated reads cannot consume all 12
+    pre-write turns after the normal discovery allowance is spent."""
+
+    calls = {"n": 0}
+    executed_reads = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] <= agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 1:
+            return _turn(("read_file", {"path": "src/app/layout.tsx"}))
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 2:
+            return _turn(
+                ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})
+            )
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        nonlocal executed_reads
+        if action.name == "read_file":
+            executed_reads += 1
+            return {"ok": True, "content": "platform core"}
+        if action.name == "write_file":
+            return {"ok": True, "content": action.args["content"]}
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build product",
+        execute=execute,
+        completion_check=lambda written, evidence: None if written else "write product files",
+        max_steps=40,
+    )
+
+    assert res.done is True
+    assert res.files == {"src/app/page.tsx": "export default 1"}
+    assert executed_reads == agent_native._MAX_PREWRITE_DISCOVERY_TURNS
+    assert agent_native._MAX_PREWRITE_LOCK_RESULT in str(res.transcript)
+
+
+@pytest.mark.asyncio
 async def test_native_write_resets_no_write_streak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

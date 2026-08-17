@@ -57,6 +57,22 @@ _HARD_MAX_STEPS = 40
 _NO_WRITE_NUDGE_AT = 6
 _NO_WRITE_ABORT_AT = 12
 
+# A brief-aware first MAX build starts from a deliberately UI-free platform
+# core. Sonnet can otherwise spend the entire 12-turn stall allowance repeatedly
+# reading that core (live canary 938937f7: 12 turns, 0 writes) even after the
+# nudge. Once the normal discovery allowance is spent, keep the SAME transcript
+# but make the environment accept implementation actions only. A successful
+# write resets the regular no-write streak and unlocks every tool for repair and
+# verification; infra and hard-stop guards remain unchanged.
+_MAX_PREWRITE_DISCOVERY_TURNS = 6
+_MAX_PREWRITE_ALLOWED_TOOLS = frozenset({"write_file", "edit_file"})
+_MAX_PREWRITE_LOCK_RESULT = (
+    "MAX pre-write discovery budget is exhausted. The platform core and product "
+    "contract are already in context. Do not read, search, build, probe, or inspect "
+    "dependencies again. Implement the product NOW with write_file or edit_file; "
+    "start with src/app/page.tsx or a product component."
+)
+
 # Infra circuit breaker: consecutive turns where EVERY executed tool op died on
 # infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
 # 3 turns tolerates a transient orchestrator restart; a truly dead container
@@ -841,10 +857,21 @@ async def run_native_build(
                     continue
 
                 action = _tool_use_to_action(tu)
-                try:
-                    obs = await execute(action)
-                except Exception as exc:  # a tool crash must not kill the build
-                    obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                _max_prewrite_locked = (
+                    max_runtime
+                    and completion_check is not None
+                    and not written
+                    and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
+                    and name not in _MAX_PREWRITE_ALLOWED_TOOLS
+                )
+                obs: dict[str, Any]
+                if _max_prewrite_locked:
+                    obs = {"ok": False, "error": _MAX_PREWRITE_LOCK_RESULT}
+                else:
+                    try:
+                        obs = await execute(action)
+                    except Exception as exc:  # a tool crash must not kill the build
+                        obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
                 # Emit AFTER execute so the step carries a `detail` — what the tool
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
