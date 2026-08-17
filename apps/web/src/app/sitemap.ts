@@ -22,6 +22,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       "landings",
       "apps",
       "max/product",
+      "max/start",
       "max/guide",
       "pricing",
       "about",

@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   AlertTriangle,
-  ArrowDown,
   ArrowLeft,
   ArrowRight,
   BookOpenText,
@@ -222,7 +221,7 @@ export default function MaxGuidePage() {
             <h1 className="mt-6 max-w-[980px] text-[46px] font-semibold leading-[.96] tracking-[-.055em] sm:text-[68px] lg:text-[84px]">От идеи до запуска в MAX — без пропущенных шагов</h1>
             <p className="mt-7 max-w-[760px] text-base leading-7 text-white/55 sm:text-lg">Полное руководство для владельца бизнеса: что нажимать, какие данные подготовить, как проверить сборку, подключить бота, опубликовать приложение и принять его двумя реальными пользователями.</p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href="#start" className="omnia-button omnia-button-primary min-h-11 px-5">Начать по шагам <ArrowDown className="size-4" /></a>
+              <Link href="/max/start" className="omnia-button omnia-button-primary min-h-11 px-5">Короткий путь: 6 этапов <ArrowRight className="size-4" /></Link>
               <a href="#errors" className="omnia-button min-h-11 border border-white/20 px-5 text-white hover:bg-white/5">У меня ошибка <LifeBuoy className="size-4" /></a>
             </div>
           </div>
@@ -477,7 +476,7 @@ export default function MaxGuidePage() {
       <footer className="border-t border-[#d8d4cb] bg-[#fcfbf7] px-4 py-10 sm:px-7">
         <div className="mx-auto flex max-w-[1320px] flex-col gap-7 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3"><BrandMark /><span className="h-5 w-px bg-[#d8d4cb]" /><span className="text-xs text-[#6d6962]">Руководство MAX Studio</span></div>
-          <div className="flex flex-wrap gap-5 text-xs text-[#6d6962]"><Link href="/max/product">О продукте</Link><Link href="/mvp">Готовность MVP</Link><Link href="/legal/offer">Оферта</Link><Link href="/security">Безопасность</Link><a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" /></a></div>
+          <div className="flex flex-wrap gap-5 text-xs text-[#6d6962]"><Link href="/max/product">О продукте</Link><Link href="/mvp">Статус продукта</Link><Link href="/legal/offer">Оферта</Link><Link href="/security">Безопасность</Link><a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" /></a></div>
         </div>
       </footer>
     </main>

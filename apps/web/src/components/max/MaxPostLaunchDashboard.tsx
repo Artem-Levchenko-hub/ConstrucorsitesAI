@@ -20,23 +20,32 @@ import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
+import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getDeployHistory, getLastDeploy, getRuntime } from "@/lib/api/runtime";
+import { getMaxPublicationState } from "@/lib/max-publication-state";
 
 export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: string; projectName: string }) {
   const runtime = useQuery({ queryKey: ["runtime", projectId], queryFn: () => getRuntime(projectId), retry: false });
   const deploy = useQuery({ queryKey: ["deploy", projectId], queryFn: () => getLastDeploy(projectId), retry: false });
+  const readiness = useQuery({ queryKey: ["max-readiness", projectId], queryFn: () => getMaxReadiness(projectId), retry: false, refetchInterval: 10_000 });
   const history = useQuery({ queryKey: ["deploy-history", projectId], queryFn: () => getDeployHistory(projectId), retry: false });
   const integration = useQuery({ queryKey: ["max-integration", projectId], queryFn: () => getMaxIntegration(projectId), retry: false });
 
-  const healthy = runtime.data?.state === "running" && deploy.data?.phase === "done";
-  const url = deploy.data?.prod_url ?? integration.data?.app_url;
+  const publicationState = getMaxPublicationState(readiness.data, deploy.data?.phase);
+  const healthy = publicationState === "published";
+  const statusLabel = healthy
+    ? "Текущая версия опубликована"
+    : publicationState === "checking"
+      ? "Проверяем публикацию"
+      : "Текущая версия не опубликована";
+  const url = healthy ? deploy.data?.prod_url ?? integration.data?.app_url : null;
 
   return (
     <MaxSectionShell
       projectId={projectId}
       projectName={projectName}
       active="dashboard"
-      eyebrow="09 / Post-launch management"
+      eyebrow="Приложение запущено"
       title="После запуска"
       lead="Production-состояние, URL, контейнер, MAX webhook и история версий. Данные обновляются с сервера — этот экран не имитирует готовность локальными флагами."
     >
@@ -45,12 +54,12 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className={`size-2 rounded-full ${healthy ? "bg-[#248a4b]" : "bg-[#e8c547]"}`} />
-              <span className={`text-xs font-medium ${healthy ? "text-[#248a4b]" : "text-[#745f16]"}`}>{healthy ? "Production работает" : "Нужна проверка"}</span>
+              <span className={`text-xs font-medium ${healthy ? "text-[#248a4b]" : "text-[#745f16]"}`}>{statusLabel}</span>
             </div>
             <h2 className="mt-3 text-2xl font-semibold">{projectName}</h2>
             {url ? (
               <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex min-w-0 items-center gap-1.5 font-mono text-xs text-[#c84528]"><span className="truncate">{url}</span><ExternalLink className="size-3 shrink-0" /></a>
-            ) : <p className="mt-2 text-xs text-[#8d887f]">Постоянный URL появится после публикации</p>}
+            ) : <p className="mt-2 text-xs text-[#8d887f]">Текущая версия появится по постоянному URL после публикации</p>}
           </div>
           <div className="w-full lg:min-w-[280px] lg:w-auto"><RuntimeButton projectId={projectId} display="compact" /></div>
         </div>

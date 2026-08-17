@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRight,
   Bot,
   Check,
   ChevronRight,
@@ -36,10 +35,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  connectAppIntegration,
-  getIntegrationCatalog,
-} from "@/lib/api/app-integrations";
 import { createProject, listProjects } from "@/lib/api/projects";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import {
@@ -51,12 +46,8 @@ import {
   type MaxFeature,
   type MaxStyleId,
 } from "@/lib/max-brief";
-import {
-  containsChatSecret,
-  redactChatSecrets,
-  resolveChatCredential,
-} from "@/lib/max-chat-credentials";
 import { cn } from "@/lib/utils";
+import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
 
 const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя", "История действий"];
 
@@ -116,7 +107,8 @@ export function MaxStudio({ email }: { email: string }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      const rawPrompt = buildMaxProjectPrompt({
+      const project = await createProject({ name: name.trim(), template: "max_miniapp" });
+      const prompt = buildMaxProjectPrompt({
         name,
         idea,
         appType,
@@ -126,46 +118,17 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors,
       });
-      const hasCredential = containsChatSecret(rawPrompt);
-      const scrub = (value: string) =>
-        redactChatSecrets(value).replaceAll(
-          "[ключ сохранён в Omnia]",
-          "[секрет удалён из описания]",
-        );
-      const safeName = hasCredential ? scrub(name).trim() : name.trim();
-      const safeIdea = hasCredential ? scrub(idea).trim() : idea.trim();
-      const safeAudience = hasCredential ? scrub(audience).trim() : audience.trim();
-      const safePrimaryAction = hasCredential
-        ? scrub(primaryAction).trim()
-        : primaryAction.trim();
-      const safeBrandColors = hasCredential
-        ? scrub(brandColors).trim()
-        : brandColors.trim();
-      const project = await createProject({
-        name: safeName,
-        template: "max_miniapp",
-      });
-      let prompt = buildMaxProjectPrompt({
-        name: safeName,
-        idea: safeIdea,
-        appType,
-        audience: safeAudience,
-        primaryAction: safePrimaryAction,
-        features,
-        style,
-        brandColors: safeBrandColors,
-      });
       let configSaved = true;
       try {
         await saveMaxProjectConfig(project.id, {
-          app_name: safeName,
+          app_name: name.trim(),
           app_type: appType,
-          summary: safeIdea,
-          audience: safeAudience,
-          primary_action: safePrimaryAction,
+          summary: idea.trim(),
+          audience: audience.trim(),
+          primary_action: primaryAction.trim(),
           features,
           style,
-          brand_colors: safeBrandColors,
+          brand_colors: brandColors.trim(),
           content: [],
           operator: { legal_name: "", inn: "", ogrn: "", address: "" },
           support: { email: null, phone: "", response_time: "Ответим в течение 2 рабочих дней" },
@@ -182,39 +145,10 @@ export function MaxStudio({ email }: { email: string }) {
       } catch {
         configSaved = false;
       }
-      let credentialReady = !hasCredential;
-      if (hasCredential) {
-        try {
-          const catalog = await getIntegrationCatalog(project.id);
-          const resolution = resolveChatCredential(
-            rawPrompt,
-            catalog.providers,
-            rawPrompt,
-          );
-          if (resolution.kind === "match") {
-            const { provider, secretField, secret, safePrompt } = resolution.value;
-            await connectAppIntegration(project.id, provider.key, {
-              [secretField.key]: secret,
-            });
-            prompt = safePrompt;
-            credentialReady = true;
-          }
-        } catch {
-          credentialReady = false;
-        }
-      }
-      return { project, prompt, configSaved, credentialReady };
+      return { project, prompt, configSaved };
     },
-    onSuccess: ({ project, prompt, configSaved, credentialReady }) => {
+    onSuccess: ({ project, prompt, configSaved }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
-      if (!credentialReady) {
-        toast.warning("Проект создан, но ключ не подключён", {
-          description:
-            "Откройте проект и вставьте в чат точное название провайдера вместе с ключом ещё раз.",
-        });
-        router.push(`/max/${project.id}`);
-        return;
-      }
       toast[configSaved ? "success" : "warning"](
         configSaved ? "MAX Mini App создан" : "Приложение создано",
         {
@@ -257,8 +191,8 @@ export function MaxStudio({ email }: { email: string }) {
             <p className="omnia-kicker text-[#8d887f]">MAX Studio</p>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/max/guide" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex">
-              <CircleHelp className="mr-2 size-3.5" /> Подробная справка
+            <Link href="/max/start" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex">
+              <CircleHelp className="mr-2 size-3.5" /> Быстрый старт
             </Link>
             <Button onClick={() => setDialogOpen(true)} className="bg-[#f15a38] text-white hover:bg-[#d94929]">
               <Plus className="size-4" /> Новый проект
@@ -300,36 +234,11 @@ export function MaxStudio({ email }: { email: string }) {
             ) : (
               <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {maxProjects.map((project, index) => (
-                  <Link key={project.id} href={`/max/${project.id}`} className="group overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] transition hover:border-[#aaa59b]">
-                    <div className="relative aspect-[16/10] overflow-hidden bg-[#ece8df]">
-                      {project.preview_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={project.preview_url} alt="" className="h-full w-full object-cover object-top" />
-                      ) : (
-                        <div className="grid h-full place-items-center">
-                          <div className="w-[82px] rounded-[14px] border-4 border-[#171716] bg-white p-2 shadow-lg">
-                            <div className="h-8 rounded-[6px] bg-[#f15a38]" />
-                            <div className="mt-2 h-2 rounded bg-[#ece8df]" />
-                            <div className="mt-1 h-2 w-2/3 rounded bg-[#ece8df]" />
-                          </div>
-                        </div>
-                      )}
-                      <span className="absolute left-3 top-3 rounded-full bg-[#171716] px-2.5 py-1 font-mono text-[9px] uppercase text-white">MAX Mini App</span>
-                    </div>
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <h2 className="font-semibold">{project.name}</h2>
-                          <p className="mt-1 text-xs text-[#8d887f]">Обновлён {new Date(project.updated_at).toLocaleDateString("ru-RU")}</p>
-                        </div>
-                        <ArrowRight className="size-4 text-[#aaa59b] transition-transform group-hover:translate-x-1 group-hover:text-[#f15a38]" />
-                      </div>
-                      <div className="mt-5 flex items-center justify-between border-t border-[#e7e3da] pt-4 text-[10px] text-[#8d887f]">
-                        <span className="flex items-center gap-1.5"><span className={`size-1.5 rounded-full ${project.current_snapshot_id ? "bg-[#248a4b]" : "bg-[#e8c547]"}`} />{project.current_snapshot_id ? "Сборка готова" : "Нужна первая сборка"}</span>
-                        <span>Проект {String(index + 1).padStart(2, "0")}</span>
-                      </div>
-                    </div>
-                  </Link>
+                  <MaxStudioProjectCard
+                    key={project.id}
+                    project={project}
+                    index={index}
+                  />
                 ))}
                 <button onClick={() => setDialogOpen(true)} className="grid min-h-[280px] place-items-center rounded-[12px] border border-dashed border-[#c9c4b9] bg-transparent p-8 text-center hover:bg-[#fcfbf7]">
                   <span><span className="mx-auto grid size-11 place-items-center rounded-[8px] border border-[#d8d4cb] bg-[#fcfbf7]"><Plus className="size-5 text-[#f15a38]" /></span><span className="mt-4 block text-sm font-semibold">Новый проект</span></span>

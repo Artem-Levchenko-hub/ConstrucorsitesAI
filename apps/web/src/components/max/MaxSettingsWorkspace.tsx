@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   Check,
@@ -12,14 +12,19 @@ import {
   Server,
   ShieldCheck,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { MaxProjectSetupDialog } from "@/components/max/MaxProjectSetupDialog";
 import { ExternalDeployWizard } from "@/components/workspace/ExternalDeployWizard";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
+import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
-import { getMaxProjectConfig } from "@/lib/api/max-studio";
+import {
+  getMaxProjectConfig,
+  saveMaxUrlAttached,
+} from "@/lib/api/max-studio";
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +40,8 @@ export function MaxSettingsWorkspace({
   initialTab?: Tab;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const integration = useQuery({
     queryKey: ["max-integration", projectId],
     queryFn: () => getMaxIntegration(projectId),
@@ -44,6 +51,31 @@ export function MaxSettingsWorkspace({
     queryKey: ["max-config", projectId],
     queryFn: () => getMaxProjectConfig(projectId),
     retry: false,
+  });
+  const confirmMaxUrl = useMutation({
+    mutationFn: async () => {
+      const appUrl = integration.data?.app_url;
+      if (!appUrl) throw new Error("Сначала опубликуйте приложение и получите постоянный URL.");
+
+      await fetch(appUrl, {
+        method: "GET",
+        mode: "no-cors",
+        cache: "no-store",
+      });
+      return saveMaxUrlAttached(projectId, true);
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["max-config", projectId], data);
+      void queryClient.invalidateQueries({ queryKey: ["max-readiness", projectId] });
+      toast.success("Адрес отвечает и подтверждён", {
+        description: "Omnia проверила сетевой ответ. Вставку в MAX Partner подтвердили вы.",
+      });
+    },
+    onError: (error) => {
+      toast.error("Не удалось подтвердить URL", {
+        description: error instanceof Error ? error.message : "Проверьте публикацию и повторите попытку.",
+      });
+    },
   });
 
   function openMaxCabinet(event: React.MouseEvent<HTMLAnchorElement>) {
@@ -69,14 +101,37 @@ export function MaxSettingsWorkspace({
     window.open("https://business.max.ru/", "_blank", "noopener,noreferrer");
   }
 
+  const pageCopy = {
+    bot: {
+      eyebrow: "Этап 4 из 6",
+      title: "MAX-бот",
+      lead: "Подключите прошедшего модерацию бота, проверьте доступ к API и подготовьте webhook для production.",
+    },
+    app: {
+      eyebrow: "Этап 3 из 6",
+      title: "Данные приложения",
+      lead: "Заполните продукт, контент, владельца, поддержку и политики. Статусы основаны на серверной проверке.",
+    },
+    vps: {
+      eyebrow: "Размещение",
+      title: "Собственная VPS",
+      lead: "Подключите свой сервер, если приложению не подходит управляемый хостинг Omnia.",
+    },
+  }[tab];
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    router.replace(`/max/${projectId}/settings?tab=${next}`, { scroll: false });
+  }
+
   return (
     <MaxSectionShell
       projectId={projectId}
       projectName={projectName}
-      active="settings"
-      eyebrow="07 / Bot and MAX setup"
-      title="MAX и приложение"
-      lead="Здесь собраны три независимых шага: проверка бота, данные приложения и инфраструктура. Каждый статус основан на ответе сервера, а не на локальной галочке."
+      active={tab === "app" ? "app" : "bot"}
+      eyebrow={pageCopy.eyebrow}
+      title={pageCopy.title}
+      lead={pageCopy.lead}
     >
       <div className="mt-8 flex flex-wrap gap-2">
         {[
@@ -84,20 +139,25 @@ export function MaxSettingsWorkspace({
           ["app", FileCheck2, "Данные приложения"],
           ["vps", Server, "Своя VPS"],
         ].map(([id, Icon, label]) => (
-          <button key={String(id)} onClick={() => setTab(id as Tab)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm sm:h-10", tab === id ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
+          <button key={String(id)} onClick={() => selectTab(id as Tab)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm sm:h-10", tab === id ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
             <Icon className="size-4" />{String(label)}
           </button>
         ))}
       </div>
 
       {tab === "bot" && (
-        <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
-          <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+        <>
+          <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
+            <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
             <div className="flex items-start justify-between gap-5">
               <div>
                 <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><Bot className="size-5" /></span>
                 <h2 className="mt-6 text-2xl font-semibold">Подключение MAX-бота</h2>
-                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#6d6962]">Бот создаётся и проходит модерацию в платформе MAX для партнёров. Токен нужен для проверки API, webhook и сервисных сообщений.</p>
+                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#6d6962]">
+                  В само мини-приложение токен не попадает. Он нужен только
+                  backend Omnia для Bot API, webhook и сообщений от имени бота. Если
+                  это не нужно, можно просто вставить production URL в MAX Partner вручную.
+                </p>
               </div>
               <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${integration.data?.connected ? "bg-[#248a4b]/10 text-[#248a4b]" : "bg-[#e8c547]/15 text-[#745f16]"}`}>
                 {integration.data?.connected ? "Подключён" : "Не подключён"}
@@ -107,11 +167,11 @@ export function MaxSettingsWorkspace({
               <MaxIntegrationButton projectId={projectId} initialTemplate="max_miniapp" display="panel" emphasized={!integration.data?.connected} label={integration.data?.connected ? "Открыть настройки" : "Проверить и подключить"} />
             </div>
             <p className="mt-5 flex items-center gap-2 text-xs text-[#8d887f]"><ShieldCheck className="size-4 text-[#248a4b]" />Секрет хранится зашифрованно и не отображается повторно.</p>
-          </div>
-          <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+            </div>
+            <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
             <p className="omnia-kicker text-[#8d887f]">Что проверить</p>
             <ol className="mt-5 space-y-4 text-sm">
-              {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "API отвечает из production"].map((item, index) => (
+              {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "Backend Bot API отвечает из production"].map((item, index) => (
                 <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#d8d4cb] font-mono text-[9px] text-[#8d887f]">{index + 1}</span><span className="pt-0.5 text-[#6d6962]">{item}</span></li>
               ))}
             </ol>
@@ -128,8 +188,64 @@ export function MaxSettingsWorkspace({
             <p className="mt-1 text-[10px] leading-4 text-[#8d887f]">
               Если приложение опубликовано, его ссылка скопируется автоматически.
             </p>
-          </aside>
-        </section>
+            </aside>
+          </section>
+
+          <section className="mt-5 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="max-w-[680px]">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`size-2 rounded-full ${config.data?.config.max_url_attached ? "bg-[#248a4b]" : "bg-[#e8c547]"}`}
+                  />
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8d887f]">
+                    URL приложения в MAX
+                  </p>
+                </div>
+                <h2 className="mt-3 text-xl font-semibold">
+                  {config.data?.config.max_url_attached
+                    ? "Подтверждено пользователем"
+                    : "Добавьте HTTPS-адрес в MAX Partner"}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-[#6d6962]">
+                  Omnia скопирует постоянный адрес и откроет кабинет MAX. После вставки
+                  вернитесь сюда: мы проверим доступность приложения и сохраним ваше
+                  подтверждение. MAX пока не сообщает эту настройку через публичный API.
+                </p>
+                {integration.data?.app_url && (
+                  <p className="mt-3 truncate font-mono text-[11px] text-[#8d887f]">
+                    {integration.data.app_url}
+                  </p>
+                )}
+              </div>
+              <div className="flex w-full shrink-0 flex-col gap-2 lg:w-[260px]">
+                <Button asChild variant="outline" className="h-11 border-[#d8d4cb]">
+                  <a
+                    href="https://business.max.ru/"
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={openMaxCabinet}
+                  >
+                    Скопировать и открыть MAX
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                </Button>
+                <Button
+                  type="button"
+                  className="h-11 bg-[#f15a38] text-white hover:bg-[#d94929]"
+                  disabled={!integration.data?.app_url || confirmMaxUrl.isPending}
+                  onClick={() => confirmMaxUrl.mutate()}
+                >
+                  {confirmMaxUrl.isPending
+                    ? "Проверяем адрес…"
+                    : config.data?.config.max_url_attached
+                      ? "Проверить ещё раз"
+                      : "Я вставил URL — проверить"}
+                </Button>
+              </div>
+            </div>
+          </section>
+        </>
       )}
 
       {tab === "app" && (
@@ -150,7 +266,6 @@ export function MaxSettingsWorkspace({
                 ["Данные оператора", Boolean(config.data?.config.operator.legal_name && config.data?.config.operator.inn)],
                 ["Контакты поддержки", Boolean(config.data?.config.support.email || config.data?.config.support.phone)],
                 ["Условия приняты", Boolean(config.data?.config.legal.terms_accepted)],
-                ["URL добавлен в MAX", Boolean(config.data?.config.max_url_attached)],
               ].map(([label, done]) => (
                 <p key={String(label)} className="flex items-center gap-3">
                   <span className={`grid size-5 place-items-center rounded-full border ${done ? "border-[#248a4b] bg-[#248a4b]/5 text-[#248a4b]" : "border-[#d8d4cb] text-transparent"}`}><Check className="size-3" /></span>

@@ -9,16 +9,23 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const { next } = await searchParams;
-  const registerHref = next
-    ? `/register?next=${encodeURIComponent(next)}`
-    : "/register";
+  const maxFlow = next?.startsWith("/max") ?? false;
+  const registerHref = maxFlow
+    ? "/max/register"
+    : next
+      ? `/register?next=${encodeURIComponent(next)}`
+      : "/register";
 
   const t = await getTranslations("auth");
 
   return (
     <AuthCard
-      title={t("login.title")}
-      subtitle={t("login.subtitle")}
+      title={maxFlow ? "Вход в MAX Studio" : t("login.title")}
+      subtitle={
+        maxFlow
+          ? "Продолжите настройку и запуск вашего MAX-приложения."
+          : t("login.subtitle")
+      }
       footer={
         <>
           {t("login.noAccount")}{" "}

@@ -21,14 +21,9 @@ _ACTIVE_PHASES = ("queued", "building", "pushing", "swapping", "cancelling")
 _TERMINAL_PHASES = ("done", "failed", "cancelled")
 
 
-class DeployRevisionConflict(RuntimeError):
-    """An idempotency key or active run is bound to another immutable tree."""
-
-
 @dataclass
 class DeployRecord:
     project_id: str
-    commit_sha: str | None = None
     run_id: str = field(default_factory=lambda: str(uuid4()))
     phase: str = "queued"
     prod_url: str | None = None
@@ -132,27 +127,19 @@ def start(
     project_id: str,
     *,
     idempotency_key: str | None = None,
-    commit_sha: str | None = None,
     target_label: str | None = None,
     target_id: str | None = None,
 ) -> DeployRecord:
     _load()
     current = _records.get(project_id)
     if current is not None and current.phase in _ACTIVE_PHASES:
-        if commit_sha is not None and current.commit_sha != commit_sha:
-            raise DeployRevisionConflict("another revision is already deploying")
         return current
     if idempotency_key:
         for rec in reversed(_history.get(project_id, [])):
             if rec.run_id == idempotency_key:
-                if rec.commit_sha != commit_sha:
-                    raise DeployRevisionConflict(
-                        "idempotency key is already bound to another revision"
-                    )
                 return rec
     rec = DeployRecord(
         project_id=project_id,
-        commit_sha=commit_sha,
         run_id=idempotency_key or str(uuid4()),
         phase="building",
         target_label=target_label,

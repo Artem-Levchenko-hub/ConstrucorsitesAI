@@ -140,6 +140,11 @@ export type Message = {
   /** Persisted agentic transcript — hydrated into the ["agent-steps",…] cache on
    *  history load so AgentTranscript re-renders after a reload. */
   agent_steps?: AgentStep[] | null;
+  /** Durable run timestamps projected by message history for the elapsed timer. */
+  generation_started_at?: IsoDateTime | null;
+  generation_finished_at?: IsoDateTime | null;
+  /** Durable outcome; prevents a rolled-back run from being labelled "ready". */
+  generation_status?: GenerationRunStatus | null;
   created_at: IsoDateTime;
 };
 
@@ -490,7 +495,6 @@ export type ApiErrorCode =
   | "integration_credentials_corrupted"
   | "integration_provider_unavailable"
   | "integration_connection_failed"
-  | "ai_integration_required"
   | "max_registration_required"
   | "email_verification_required"
   | "business_profile_required"
@@ -534,7 +538,6 @@ export type MaxIntegration = {
 };
 
 export type IntegrationCategory =
-  | "ai"
   | "payments"
   | "restaurant"
   | "crm"
@@ -665,6 +668,24 @@ export type MaxReadiness = {
 export type MaxPreviewSession = {
   url: string;
   expires_at: IsoDateTime;
+};
+
+export type MaxUsage = {
+  total_cost_rub: number;
+  run_cost_rub: number;
+  run_id: Uuid | null;
+  run_status: string | null;
+  stages: {
+    id: string;
+    label: string;
+    cost_rub: number;
+    calls: number;
+    tokens_in: number;
+    tokens_out: number;
+    cache_read_tokens: number;
+    cache_write_tokens: number;
+    retries: number;
+  }[];
 };
 
 // === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===

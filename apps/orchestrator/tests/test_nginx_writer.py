@@ -129,11 +129,12 @@ def test_proxy_location_carries_websocket_upgrade() -> None:
 def test_proxy_location_disables_html_cache_only() -> None:
     """A deployed app shell must refresh while hashed assets keep their policy."""
     block = nginx_writer._proxy_location(3200)
+    assert "location ^~ /_next/static/" in block
     assert "proxy_hide_header Cache-Control" in block
-    assert "set $omnia_cache_control $upstream_http_cache_control" in block
-    assert 'if ($upstream_http_content_type ~* "^text/html")' in block
-    assert 'set $omnia_cache_control "no-store"' in block
-    assert "add_header Cache-Control $omnia_cache_control always" in block
+    assert 'add_header Cache-Control "no-store" always' in block
+    static_location, default_location = block.split("    location / {", maxsplit=1)
+    assert "proxy_hide_header Cache-Control" not in static_location
+    assert "proxy_hide_header Cache-Control" in default_location
 
 
 def test_dev_vhost_injects_platform_inspector_for_old_projects() -> None:

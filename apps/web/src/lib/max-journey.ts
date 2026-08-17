@@ -89,15 +89,28 @@ const STAGE_DEFINITIONS: Array<{
   },
 ];
 
+const ITEM_STAGE: Record<string, MaxJourneyStageId> = {
+  build: "build",
+  business: "app",
+  legal: "app",
+  bot: "max",
+  publish: "publish",
+  webhook: "verify",
+  max_url: "verify",
+};
+
 function stageIsDone(
   stageId: MaxJourneyStageId,
   itemIds: string[],
   items: ReadinessItem[],
 ): boolean {
   if (stageId === "project") return true;
-  return itemIds.every(
-    (itemId) => items.find((item) => item.id === itemId)?.done === true,
-  );
+  return itemIds.every((itemId) => items.find((item) => item.id === itemId)?.done === true);
+}
+export function getMaxJourneyItemHref(projectId: string, itemId: string): string {
+  const stageId = ITEM_STAGE[itemId] ?? "build";
+  const definition = STAGE_DEFINITIONS.find((stage) => stage.id === stageId);
+  return `/max/${projectId}${definition?.suffix ?? ""}`;
 }
 
 export function getMaxJourney(

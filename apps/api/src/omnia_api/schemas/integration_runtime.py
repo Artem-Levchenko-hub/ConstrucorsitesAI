@@ -26,11 +26,7 @@ class RuntimePaymentRequest(BaseModel):
     def validate_metadata(cls, value: dict[str, str]) -> dict[str, str]:
         if len(value) > 16:
             raise ValueError("too many metadata values")
-        return {
-            str(key)[:64]: str(item)[:512]
-            for key, item in value.items()
-            if str(key).strip()
-        }
+        return {str(key)[:64]: str(item)[:512] for key, item in value.items() if str(key).strip()}
 
 
 class RuntimePaymentPublic(BaseModel):

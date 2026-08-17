@@ -42,7 +42,7 @@ type StreamHandle = {
   send: (msg: unknown) => void;
 };
 
-export type PromptSubmitOptions = {
+type PromptSubmitOptions = {
   skipClarify?: boolean;
   designPresetId?: string | null;
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
@@ -157,7 +157,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         modelId: string,
         selections?: SelectedElement[],
         opts?: PromptSubmitOptions,
-      ) => Promise<boolean>)
+      ) => void)
     | null
   >(null);
   const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
@@ -753,11 +753,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
         if (activeSubmitSignatureRef.current === submitSignature) {
-          return true;
+          return;
         }
         pendingRef.current = { text: promptText, modelId, selections, opts };
         setPendingPrompt(promptText);
-        return true;
+        return;
       }
       streamingRef.current = true;
       activeSubmitSignatureRef.current = submitSignature;
@@ -872,7 +872,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               ? "Показываю уже готовую сборку"
               : "Предыдущая сборка уже завершена",
           );
-          return true;
+          return;
         }
         // Record how the server will handle this turn ("edit" = surgical, keep
         // the current preview; "build" = full (re)generation). PreviewFrame reads
@@ -938,7 +938,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           toast.info("Генерация уже запущена", {
             description: "Показываю текущую сборку — повтор не отправлен.",
           });
-          return true;
+          return;
         }
         // sendPrompt failed BEFORE the backend even spawned _process_prompt
         // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.
@@ -946,7 +946,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         const errMsg =
           e instanceof Error ? e.message : "не удалось отправить промпт";
         _failPrompt("POST /prompt не прошёл", errMsg);
-        return false;
+        return;
       }
 
       // Swap the optimistic assistant row for the real id (so incoming
@@ -980,7 +980,6 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // the durable run before changing UI state: an active run gets the same
       // WebSocket reattached; a terminal run is hydrated from the API.
       watchMessage(message_id, () => recoverSilentStream(message_id));
-      return true;
     },
     [
       projectId,

@@ -65,7 +65,6 @@ async def see_page(
             return {
                 "ok": False,
                 "error": "preview not running — build or start the app first, then see",
-                "proof_unavailable": True,
             }
         url = base.rstrip("/") + rel
 
@@ -76,17 +75,9 @@ async def see_page(
             bootstrap_url=bootstrap_url,
         )
     except Exception as exc:
-        return {
-            "ok": False,
-            "error": f"could not render {rel}: {type(exc).__name__}",
-            "proof_unavailable": True,
-        }
+        return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}
     if not shots:
-        return {
-            "ok": False,
-            "error": f"render produced no screenshot for {rel}",
-            "proof_unavailable": True,
-        }
+        return {"ok": False, "error": f"render produced no screenshot for {rel}"}
 
     verdict = await vision_audit.audit_screenshots(
         shots, prompt_context=prompt_context, project_id=str(pid)

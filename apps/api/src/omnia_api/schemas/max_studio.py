@@ -105,3 +105,23 @@ class MaxPreviewSessionPublic(BaseModel):
 
     url: str
     expires_at: datetime
+
+
+class MaxUsageStagePublic(BaseModel):
+    id: str
+    label: str
+    cost_rub: float
+    calls: int
+    tokens_in: int
+    tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    retries: int
+
+
+class MaxUsagePublic(BaseModel):
+    total_cost_rub: float
+    run_cost_rub: float
+    run_id: UUID | None = None
+    run_status: str | None = None
+    stages: list[MaxUsageStagePublic]

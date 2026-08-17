@@ -413,33 +413,4 @@
     background-clip: padding-box;
   }
 
-  .max-projects-scroll {
-    scrollbar-width: thin;
-    scrollbar-color: rgb(85 79 196 / 0.7) transparent;
-  }
-  @supports selector(::-webkit-scrollbar) {
-    .max-projects-scroll {
-      scrollbar-width: auto;
-      scrollbar-color: auto;
-    }
-  }
-  .max-projects-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
-  .max-projects-scroll::-webkit-scrollbar-track { background: transparent; }
-  .max-projects-scroll::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: 9999px;
-    background: rgb(85 79 196 / 0.7);
-    background-clip: content-box;
-  }
-  .max-projects-scroll:hover::-webkit-scrollbar-thumb {
-    background: rgb(85 79 196 / 0.86);
-    background-clip: content-box;
-  }
-  .max-projects-scroll::-webkit-scrollbar-button {
-    display: none;
-    width: 0;
-    height: 0;
-  }
-  .max-projects-scroll::-webkit-scrollbar-corner { background: transparent; }
-
 }

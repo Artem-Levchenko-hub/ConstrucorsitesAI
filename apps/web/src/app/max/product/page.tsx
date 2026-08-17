@@ -72,7 +72,7 @@ export default function MaxProductPage() {
             <a href="#bot">MAX-бот</a>
             <a href="#integrations">Интеграции</a>
             <a href="#launch">Запуск</a>
-            <Link href="/max/guide">Руководство</Link>
+            <Link href="/max/start">Как проходит запуск</Link>
           </nav>
           <div className="flex items-center gap-2.5">
             <Link href="/login?next=/max" className="hidden px-3 py-2 text-[13px] text-white/60 sm:block">Войти</Link>
@@ -95,7 +95,7 @@ export default function MaxProductPage() {
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <Link href="/max/register" className="omnia-button omnia-button-primary min-h-12 px-6">Создать приложение <ArrowRight className="size-4" /></Link>
-              <Link href="/max/guide" className="omnia-button min-h-12 border border-white/20 px-6 text-white hover:bg-white/5">Открыть руководство</Link>
+              <Link href="/max/start" className="omnia-button min-h-12 border border-white/20 px-6 text-white hover:bg-white/5">Посмотреть путь запуска</Link>
             </div>
           </div>
           <div className="relative min-h-[470px]">

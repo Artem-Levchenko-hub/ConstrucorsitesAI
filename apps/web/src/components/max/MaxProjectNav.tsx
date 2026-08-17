@@ -67,10 +67,12 @@ export function MaxProjectNav({
   projectId,
   active,
   showProgress = true,
+  variant = "sidebar",
 }: {
   projectId: string;
   active: MaxProjectNavKey;
   showProgress?: boolean;
+  variant?: "sidebar" | "mobile";
 }) {
   const readiness = useQuery({
     queryKey: ["max-readiness", projectId],
@@ -78,6 +80,33 @@ export function MaxProjectNav({
     retry: false,
   });
   const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
+
+  if (variant === "mobile") {
+    return (
+      <nav className="flex min-w-max gap-1 px-3 py-2" aria-label="Разделы проекта MAX">
+        {navigation.map((item) => {
+          const selected = item.key === active;
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.key}
+              href={`/max/${projectId}${item.suffix}`}
+              aria-current={selected ? "page" : undefined}
+              className={cn(
+                "inline-flex h-10 items-center gap-2 rounded-[8px] px-3 text-xs",
+                selected
+                  ? "bg-[#171716] font-medium text-white"
+                  : "text-[#6d6962] hover:bg-[#f5f3ee]",
+              )}
+            >
+              <Icon className="size-3.5" />
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+    );
+  }
 
   return (
     <div>
