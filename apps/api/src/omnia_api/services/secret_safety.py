@@ -21,7 +21,7 @@ _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
 )
 _LABELLED_SECRET_RE = re.compile(
-    r"((?:api[\s_-]*key|ключ|token|токен)\s*(?:[:=—–-]|это)?\s*[\"'`]?)"
+    r"((?:api[\s_-]*key|ключ|token|токен)(?:\s*(?:[:=—–-]|это)\s*|\s+)[\"'`]?)"
     r"([^\s\"'`,;]{16,})",
     re.IGNORECASE,
 )

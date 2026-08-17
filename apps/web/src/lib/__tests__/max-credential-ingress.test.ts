@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 const source = (relative: string) =>
   readFileSync(resolve(process.cwd(), relative), "utf8");
 const chatPanel = source("src/components/workspace/ChatPanel.tsx");
+const maxStudio = source("src/components/max/MaxStudio.tsx");
 const promptInput = source("src/components/workspace/PromptInput.tsx");
 const promptStream = source("src/hooks/usePromptStream.ts");
 
@@ -44,5 +45,14 @@ describe("MAX credential ingress routing", () => {
     expect(chatPanel).toContain(
       "window.sessionStorage.removeItem(starterStorageKey)",
     );
+  });
+
+  it("encrypts a credential before persistence and rejects secret URLs", () => {
+    expect(maxStudio).toContain("const rawPrompt = buildMaxProjectPrompt");
+    expect(maxStudio).toContain("await connectAppIntegration(project.id");
+    expect(maxStudio).toContain("summary: safeIdea");
+    expect(maxStudio).toContain("prompt = safePrompt");
+    expect(chatPanel).toContain("if (urlPrompt && containsChatSecret(urlPrompt))");
+    expect(chatPanel).toContain("Ключ из ссылки не принят");
   });
 });

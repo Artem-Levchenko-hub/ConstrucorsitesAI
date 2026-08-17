@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
@@ -44,6 +44,18 @@ from omnia_api.services.secret_safety import redact_provider_secrets
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
+_RUNTIME_AI_LIMIT_SCRIPT = """
+for i = 1, #KEYS do
+  local count = redis.call("INCR", KEYS[i])
+  if count == 1 then
+    redis.call("EXPIRE", KEYS[i], tonumber(ARGV[i * 2]))
+  end
+  if count > tonumber(ARGV[(i - 1) * 2 + 1]) then
+    return i
+  end
+end
+return 0
+"""
 
 
 @dataclass(frozen=True)
@@ -230,16 +242,18 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
     )
     try:
         redis = get_redis()
-        for key, limit, ttl in buckets:
-            count = int(await redis.incr(key))
-            if count == 1:
-                await redis.expire(key, ttl)
-            if count > limit:
-                raise ApiError(
-                    "rate_limited",
-                    "Лимит ИИ-запросов временно исчерпан. Попробуйте позже.",
-                    status.HTTP_429_TOO_MANY_REQUESTS,
-                )
+        keys = [key for key, _limit, _ttl in buckets]
+        args = [str(value) for _key, limit, ttl in buckets for value in (limit, ttl)]
+        eval_command = cast(Any, redis.eval)
+        exceeded_bucket = int(
+            await eval_command(_RUNTIME_AI_LIMIT_SCRIPT, len(keys), *keys, *args)
+        )
+        if exceeded_bucket:
+            raise ApiError(
+                "rate_limited",
+                "Лимит ИИ-запросов временно исчерпан. Попробуйте позже.",
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )
     except ApiError:
         raise
     except Exception as exc:

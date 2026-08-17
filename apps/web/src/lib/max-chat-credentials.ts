@@ -17,6 +17,9 @@ const PROVIDER_ALIASES: Record<string, string[]> = {
   yookassa: ["yookassa", "юkassa", "юкасса", "ю касса"],
 };
 
+const LABELLED_SECRET_PATTERN =
+  /(?:api[\s_-]*key|ключ|token|токен)(?:\s*(?:[:=—–-]|это)\s*|\s+)["'`]?([^\s"'`,;]{16,})/giu;
+
 export type ChatCredentialMatch = {
   provider: IntegrationProvider;
   secretField: IntegrationField;
@@ -68,17 +71,20 @@ function highConfidenceSecrets(text: string): string[] {
   return [...new Set(matches)];
 }
 
-function keywordSecret(text: string): string | null {
-  const match = text.match(
-    /(?:api[\s_-]*key|ключ|token|токен)\s*(?:[:=—–-]|это)?\s*["'`]?([^\s"'`,;]{16,})/iu,
-  );
-  const candidate = match?.[1]?.trim() ?? "";
-  if (!candidate || /^https?:\/\//i.test(candidate)) return null;
-  return candidate;
+function keywordSecrets(text: string): string[] {
+  return [
+    ...new Set(
+      [...text.matchAll(new RegExp(LABELLED_SECRET_PATTERN))]
+        .map((match) => match[1]?.trim() ?? "")
+        .filter(
+          (candidate) => candidate && !/^https?:\/\//i.test(candidate),
+        ),
+    ),
+  ];
 }
 
 export function containsChatSecret(text: string): boolean {
-  return highConfidenceSecrets(text).length > 0 || keywordSecret(text) !== null;
+  return highConfidenceSecrets(text).length > 0 || keywordSecrets(text).length > 0;
 }
 
 export function redactChatSecrets(text: string): string {
@@ -89,8 +95,9 @@ export function redactChatSecrets(text: string): string {
       "[ключ сохранён в Omnia]",
     );
   }
-  const keyword = keywordSecret(safe);
-  if (keyword) safe = safe.replaceAll(keyword, "[ключ сохранён в Omnia]");
+  for (const keyword of keywordSecrets(safe)) {
+    safe = safe.replaceAll(keyword, "[ключ сохранён в Omnia]");
+  }
   return safe.trim();
 }
 
@@ -99,13 +106,9 @@ export function resolveChatCredential(
   providers: IntegrationProvider[],
   promptText: string = text,
 ): ChatCredentialResolution {
-  const highConfidence = highConfidenceSecrets(text);
-  const fallback = keywordSecret(text);
-  const secrets = highConfidence.length
-    ? highConfidence
-    : fallback
-      ? [fallback]
-      : [];
+  const secrets = [
+    ...new Set([...highConfidenceSecrets(text), ...keywordSecrets(text)]),
+  ];
   if (secrets.length === 0) return { kind: "none" };
 
   const provider = mentionedProvider(text, providers);
@@ -143,7 +146,7 @@ export function resolveChatCredential(
     `Интеграция ${provider.name} уже проверена и подключена через защищённое хранилище Omnia.`,
     "Не запрашивай ключ, не записывай его в код и не создавай .env-файл.",
     integrationHint,
-    `Публичная документация провайдера: ${provider.docs_url}`,
+    `Перед интеграцией изучи актуальную публичную документацию провайдера: ${provider.docs_url}`,
   ]
     .filter(Boolean)
     .join("\n\n");

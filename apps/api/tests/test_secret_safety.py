@@ -24,6 +24,7 @@ def test_secret_detector_blocks_and_redacts_labelled_provider_tokens() -> None:
     safe = redact_provider_secrets(raw)
     assert "provider_token_1234567890" not in safe
     assert "[CREDENTIAL REDACTED]" in safe
+    assert not contains_provider_secret("ключевая_характеристика продукта")
 
 
 def test_max_writer_blocks_secret_files_and_literals() -> None:

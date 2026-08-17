@@ -36,6 +36,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  connectAppIntegration,
+  getIntegrationCatalog,
+} from "@/lib/api/app-integrations";
 import { createProject, listProjects } from "@/lib/api/projects";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import {
@@ -47,6 +51,11 @@ import {
   type MaxFeature,
   type MaxStyleId,
 } from "@/lib/max-brief";
+import {
+  containsChatSecret,
+  redactChatSecrets,
+  resolveChatCredential,
+} from "@/lib/max-chat-credentials";
 import { cn } from "@/lib/utils";
 
 const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя", "История действий"];
@@ -107,8 +116,7 @@ export function MaxStudio({ email }: { email: string }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      const project = await createProject({ name: name.trim(), template: "max_miniapp" });
-      const prompt = buildMaxProjectPrompt({
+      const rawPrompt = buildMaxProjectPrompt({
         name,
         idea,
         appType,
@@ -118,17 +126,46 @@ export function MaxStudio({ email }: { email: string }) {
         style,
         brandColors,
       });
+      const hasCredential = containsChatSecret(rawPrompt);
+      const scrub = (value: string) =>
+        redactChatSecrets(value).replaceAll(
+          "[ключ сохранён в Omnia]",
+          "[секрет удалён из описания]",
+        );
+      const safeName = hasCredential ? scrub(name).trim() : name.trim();
+      const safeIdea = hasCredential ? scrub(idea).trim() : idea.trim();
+      const safeAudience = hasCredential ? scrub(audience).trim() : audience.trim();
+      const safePrimaryAction = hasCredential
+        ? scrub(primaryAction).trim()
+        : primaryAction.trim();
+      const safeBrandColors = hasCredential
+        ? scrub(brandColors).trim()
+        : brandColors.trim();
+      const project = await createProject({
+        name: safeName,
+        template: "max_miniapp",
+      });
+      let prompt = buildMaxProjectPrompt({
+        name: safeName,
+        idea: safeIdea,
+        appType,
+        audience: safeAudience,
+        primaryAction: safePrimaryAction,
+        features,
+        style,
+        brandColors: safeBrandColors,
+      });
       let configSaved = true;
       try {
         await saveMaxProjectConfig(project.id, {
-          app_name: name.trim(),
+          app_name: safeName,
           app_type: appType,
-          summary: idea.trim(),
-          audience: audience.trim(),
-          primary_action: primaryAction.trim(),
+          summary: safeIdea,
+          audience: safeAudience,
+          primary_action: safePrimaryAction,
           features,
           style,
-          brand_colors: brandColors.trim(),
+          brand_colors: safeBrandColors,
           content: [],
           operator: { legal_name: "", inn: "", ogrn: "", address: "" },
           support: { email: null, phone: "", response_time: "Ответим в течение 2 рабочих дней" },
@@ -145,10 +182,39 @@ export function MaxStudio({ email }: { email: string }) {
       } catch {
         configSaved = false;
       }
-      return { project, prompt, configSaved };
+      let credentialReady = !hasCredential;
+      if (hasCredential) {
+        try {
+          const catalog = await getIntegrationCatalog(project.id);
+          const resolution = resolveChatCredential(
+            rawPrompt,
+            catalog.providers,
+            rawPrompt,
+          );
+          if (resolution.kind === "match") {
+            const { provider, secretField, secret, safePrompt } = resolution.value;
+            await connectAppIntegration(project.id, provider.key, {
+              [secretField.key]: secret,
+            });
+            prompt = safePrompt;
+            credentialReady = true;
+          }
+        } catch {
+          credentialReady = false;
+        }
+      }
+      return { project, prompt, configSaved, credentialReady };
     },
-    onSuccess: ({ project, prompt, configSaved }) => {
+    onSuccess: ({ project, prompt, configSaved, credentialReady }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
+      if (!credentialReady) {
+        toast.warning("Проект создан, но ключ не подключён", {
+          description:
+            "Откройте проект и вставьте в чат точное название провайдера вместе с ключом ещё раз.",
+        });
+        router.push(`/max/${project.id}`);
+        return;
+      }
       toast[configSaved ? "success" : "warning"](
         configSaved ? "MAX Mini App создан" : "Приложение создано",
         {

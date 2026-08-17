@@ -64,6 +64,7 @@ describe("MAX chat credential intake", () => {
 
   it("does not classify an environment variable name as a pasted credential", () => {
     expect(containsChatSecret("Используй process.env.AITUNNEL_API_KEY")).toBe(false);
+    expect(containsChatSecret("ключевая_характеристика продукта")).toBe(false);
   });
 
   it("redacts high-confidence and labelled values completely", () => {
@@ -75,5 +76,18 @@ describe("MAX chat credential intake", () => {
     expect(safe).not.toContain(secret);
     expect(safe).not.toContain(labelled);
     expect(safe).toContain("ключ сохранён в Omnia");
+  });
+
+  it("redacts every labelled secret and refuses ambiguous multi-key intake", () => {
+    const first = "provider_token_1234567890";
+    const second = "backup_token_0987654321";
+    const text = `AITUNNEL ключ ${first}; резервный token: ${second}`;
+    const safe = redactChatSecrets(text);
+
+    expect(safe).not.toContain(first);
+    expect(safe).not.toContain(second);
+    expect(resolveChatCredential(text, [aitunnel])).toEqual({
+      kind: "needs_provider",
+    });
   });
 });

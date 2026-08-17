@@ -299,18 +299,23 @@ export function ChatPanel({
     if (autoFiredRef.current) return;
     if (messages === undefined) return; // wait for the first load
     const params = new URLSearchParams(window.location.search);
-    let p = params.get("p");
+    const urlPrompt = params.get("p");
+    let p = urlPrompt;
+    if (urlPrompt && containsChatSecret(urlPrompt)) {
+      // URL may already be logged. Never process or propagate a credential
+      // received through this unsafe legacy transport.
+      window.history.replaceState(null, "", basePath);
+      toast.error("Ключ из ссылки не принят", {
+        description: "Вставьте название провайдера и ключ прямо в поле чата.",
+      });
+      p = null;
+    }
     const starterStorageKey = `omnia:max:starter:${projectId}`;
     if (!p && params.get("starter") === "1") {
       p = window.sessionStorage.getItem(starterStorageKey);
     }
     if (p && p.trim() && messages.length === 0) {
       autoFiredRef.current = true;
-      const containsSecret = containsChatSecret(p);
-      if (containsSecret) {
-        // A credential must not remain in address-bar history even if intake fails.
-        window.history.replaceState(null, "", basePath);
-      }
       void submitWithCredentialIntake(p.trim(), [], {
         skipClarify: true,
         // Stable on the server across tabs/reloads/devices. Even if the handoff
