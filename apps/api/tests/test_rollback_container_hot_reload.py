@@ -190,6 +190,16 @@ def test_hot_reload_failure_never_blocks_rollback(monkeypatch):
     assert result is not None
 
 
+def test_rollback_snapshot_is_a_user_visible_version(monkeypatch):
+    """A deliberate restore is version history; technical snapshots are not."""
+    hot_calls: list = []
+    _patch_common(monkeypatch, hot_calls)
+
+    _, result = _run_rollback(_make_project("spa"))
+
+    assert result.prompt_text == "Восстановление версии"
+
+
 def test_with_rollback_deletions_pure() -> None:
     """Orphans (old-tree-only paths) become delete-intents (""); target content
     always wins over a same-path delete; no old tree → target unchanged."""

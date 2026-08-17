@@ -3,13 +3,39 @@ import type { Snapshot } from "@/lib/api/types";
 const MAX_VERSION_LABEL_LENGTH = 28;
 export const MAX_VERSION_HISTORY_LIMIT = 30;
 
-/** Hide the empty repository bootstrap: it is not a user-visible version. */
+/**
+ * Turn low-level repository snapshots into user-visible versions.
+ *
+ * MAX writes a few technical snapshots around one build (template init,
+ * release-kit sync, proof refresh). They are implementation details, not new
+ * user versions. A snapshot with prompt_text starts a version; later technical
+ * snapshots are folded into it so the representative still points at the real
+ * final HEAD/preview. Rollback snapshots carry a semantic prompt from the API
+ * and therefore correctly start a new version too.
+ */
 export function visibleMaxSnapshots(snapshots: Snapshot[]): Snapshot[] {
-  return snapshots
-    .filter(
-      (snapshot) => snapshot.prompt_text !== null || snapshot.parent_id !== null,
-    )
-    .slice(0, MAX_VERSION_HISTORY_LIMIT);
+  const versions: Snapshot[] = [];
+
+  for (const snapshot of [...snapshots].reverse()) {
+    const prompt = snapshot.prompt_text?.trim();
+    if (prompt) {
+      versions.push(snapshot);
+      continue;
+    }
+
+    if (versions.length === 0) continue;
+
+    const previous = versions[versions.length - 1];
+    versions[versions.length - 1] = {
+      ...snapshot,
+      // Keep the user intent as the label while using the newest technical
+      // snapshot's id, commit and preview as the actual version state.
+      prompt_text: previous.prompt_text,
+      model_id: snapshot.model_id ?? previous.model_id,
+    };
+  }
+
+  return versions.reverse().slice(0, MAX_VERSION_HISTORY_LIMIT);
 }
 
 export function maxSnapshotLabel(snapshot: Snapshot): string {

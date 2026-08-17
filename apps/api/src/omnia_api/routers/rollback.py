@@ -119,7 +119,10 @@ async def post_rollback(
     new_snapshot = Snapshot(
         project_id=project_id,
         commit_sha=new_sha,
-        prompt_text=None,
+        # Rollback is a deliberate user action and therefore a real version.
+        # Technical MAX snapshots use prompt_text=None and are collapsed by the
+        # version rail; this semantic label keeps rollback distinct from them.
+        prompt_text="Восстановление версии",
         model_id=None,
         parent_id=project.current_snapshot_id,
     )

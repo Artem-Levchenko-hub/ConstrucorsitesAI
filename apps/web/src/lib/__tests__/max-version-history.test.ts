@@ -44,18 +44,43 @@ function snapshot(
 }
 
 describe("MAX version history", () => {
-  it("hides the repository bootstrap and keeps a bounded newest-first list", () => {
+  it("collapses bootstrap and technical snapshots into one user version", () => {
     const snapshots = [
-      snapshot("new", "Добавь профиль", "old"),
-      snapshot("rollback", null, "old"),
+      snapshot("release-sync", null, "generated"),
+      snapshot("generated", "Создай приложение", "template-sync"),
+      snapshot("template-sync", null, "starter"),
       snapshot("starter", null, null),
     ];
 
-    expect(visibleMaxSnapshots(snapshots).map((item) => item.id)).toEqual([
-      "new",
-      "rollback",
-    ]);
+    const visible = visibleMaxSnapshots(snapshots);
+
+    expect(visible).toHaveLength(1);
+    expect(visible[0]).toMatchObject({
+      id: "release-sync",
+      prompt_text: "Создай приложение",
+    });
+    expect(maxSnapshotVersion(visible, "release-sync")).toBe(1);
     expect(MAX_VERSION_HISTORY_LIMIT).toBe(30);
+  });
+
+  it("keeps an explicit rollback as a separate version", () => {
+    const snapshots = [
+      snapshot("rollback-sync", null, "rollback"),
+      snapshot("rollback", "Восстановление версии", "generated"),
+      snapshot("generated", "Создай приложение", "starter"),
+      snapshot("starter", null, null),
+    ];
+
+    const visible = visibleMaxSnapshots(snapshots);
+
+    expect(visible.map((item) => item.id)).toEqual([
+      "rollback-sync",
+      "generated",
+    ]);
+    expect(visible.map(maxSnapshotLabel)).toEqual([
+      "Восстановление версии",
+      "Создай приложение",
+    ]);
   });
 
   it("creates compact labels and chronological version numbers", () => {
