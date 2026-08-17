@@ -1,9 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, CircleAlert } from "lucide-react";
+import { ArrowRight, CircleAlert, MoreVertical, Trash2 } from "lucide-react";
 import Link from "next/link";
 
+import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
@@ -15,6 +24,7 @@ export function MaxStudioProjectCard({
   project: Project;
   index: number;
 }) {
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -26,7 +36,38 @@ export function MaxStudioProjectCard({
   const nextHref = nextStage?.href ?? `/max/${project.id}/dashboard`;
 
   return (
-    <article className="group overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] transition hover:border-[#aaa59b]">
+    <article className="group relative overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] transition hover:border-[#aaa59b]">
+      <div className="absolute right-2 top-2 z-20">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label={`Действия с проектом ${project.name}`}
+              className="size-11 bg-[#fcfbf7]/90 text-[#6d6962] shadow-sm backdrop-blur hover:bg-[#fcfbf7] hover:text-[#171716]"
+            >
+              <MoreVertical className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="text-danger focus:text-danger"
+              onSelect={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="size-4" />
+              Удалить проект
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <DeleteProjectDialog
+        project={project}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+      />
+
       <Link
         href={`/max/${project.id}`}
         className="relative block aspect-[16/10] overflow-hidden bg-[#ece8df]"

@@ -1,31 +1,34 @@
 "use client";
 
 import { type CSSProperties, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   LayoutGrid,
-  LogOut,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightOpen,
-  Settings,
   Smartphone,
   X,
 } from "lucide-react";
 import Link from "next/link";
+import { toast } from "sonner";
 
-import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
+import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { listProjects } from "@/lib/api/projects";
+import { listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
-import type { Project } from "@/lib/api/types";
+import type { Project, Snapshot } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
+import { visibleMaxSnapshots } from "@/lib/max-version-history";
+import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { cn } from "@/lib/utils";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
+import { MaxAccountMenu } from "./MaxAccountMenu";
 import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 
@@ -41,7 +44,16 @@ export function MaxWorkspaceShell({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
+  const [versionSelection, setVersionSelection] = useState<{
+    snapshotId: string;
+    headId: string | null;
+  } | null>(null);
+  const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
+  const snapshots = useQuery({
+    queryKey: ["snapshots", project.id],
+    queryFn: () => listSnapshots(project.id),
+  });
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -59,6 +71,56 @@ export function MaxWorkspaceShell({
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
   );
+  const versionSnapshots = useMemo(
+    () => visibleMaxSnapshots(snapshots.data ?? []),
+    [snapshots.data],
+  );
+  const currentSnapshotId =
+    snapshots.data?.[0]?.id ?? project.current_snapshot_id;
+  const selectedSnapshotId =
+    versionSelection?.headId === currentSnapshotId
+      ? versionSelection.snapshotId
+      : null;
+
+  const rollbackMutation = useMutation({
+    mutationFn: (snapshotId: string) =>
+      rollbackSnapshot(project.id, snapshotId),
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData<Snapshot[]>(
+        ["snapshots", project.id],
+        (previous) => upsertSnapshotNewest(previous, snapshot),
+      );
+      setVersionSelection(null);
+      toast.success("Версия восстановлена", {
+        description:
+          "Она стала текущей, а прежнее состояние осталось в истории.",
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["snapshots", project.id],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["max-managed-kit-sync", project.id],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["max-preview-session", project.id],
+      });
+    },
+    onError: (error) => {
+      toast.error("Не удалось восстановить версию", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Текущая версия не изменилась. Повторите попытку.",
+      });
+    },
+  });
+
+  function selectSnapshot(snapshotId: string | null) {
+    setVersionSelection(
+      snapshotId ? { snapshotId, headId: currentSnapshotId } : null,
+    );
+  }
 
   return (
     <div
@@ -126,14 +188,10 @@ export function MaxWorkspaceShell({
         </div>
 
         <div className="shrink-0 border-t border-[#d8d4cb] p-3">
-          <Link href="/account" className="flex min-h-11 min-w-0 items-center gap-2.5 rounded-[8px] p-2 hover:bg-[#f5f3ee]">
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[#171716] text-[11px] font-semibold text-white">{email.slice(0, 1).toUpperCase()}</span>
-            <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{email.split("@")[0]}</span><span className="block truncate text-[9px] text-[#8d887f]">{email}</span></span>
-            <Settings className="size-3.5 text-[#8d887f]" />
-          </Link>
-          <form action={logoutAction} className="mt-1">
-            <button type="submit" className="flex min-h-11 w-full items-center gap-2 rounded-[8px] px-2 text-[10px] text-[#8d887f] hover:bg-[#f5f3ee]"><LogOut className="size-3.5" />Выйти</button>
-          </form>
+          <MaxAccountMenu
+            email={email}
+            onNavigate={() => setMobileNavOpen(false)}
+          />
         </div>
       </aside>
 
@@ -160,6 +218,14 @@ export function MaxWorkspaceShell({
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <MaxUsageBreakdown projectId={project.id} />
+            {versionSnapshots.length > 0 && (
+              <div className="hidden md:block">
+                <DownloadButton
+                  projectId={project.id}
+                  projectSlug={project.slug}
+                />
+              </div>
+            )}
             <Link href={`/max/${project.id}/integrations`} className="hidden h-11 items-center rounded-[8px] border border-[#d8d4cb] px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] md:inline-flex">Интеграции</Link>
             <button
               type="button"
@@ -236,6 +302,15 @@ export function MaxWorkspaceShell({
         <div className="hidden min-h-0 bg-transparent 2xl:block">
           <MaxLivePreview
             project={project}
+            snapshots={versionSnapshots}
+            snapshotsLoading={snapshots.isPending}
+            currentSnapshotId={currentSnapshotId}
+            selectedSnapshotId={selectedSnapshotId}
+            onSelectSnapshot={selectSnapshot}
+            onRestoreSnapshot={async (snapshotId) => {
+              await rollbackMutation.mutateAsync(snapshotId);
+            }}
+            restoringSnapshot={rollbackMutation.isPending}
             onClose={() => setPreviewPanelVisible(false)}
           />
         </div>
@@ -268,7 +343,18 @@ export function MaxWorkspaceShell({
               </button>
             </div>
             <div className="min-h-0 flex-1">
-              <MaxLivePreview project={project} />
+              <MaxLivePreview
+                project={project}
+                snapshots={versionSnapshots}
+                snapshotsLoading={snapshots.isPending}
+                currentSnapshotId={currentSnapshotId}
+                selectedSnapshotId={selectedSnapshotId}
+                onSelectSnapshot={selectSnapshot}
+                onRestoreSnapshot={async (snapshotId) => {
+                  await rollbackMutation.mutateAsync(snapshotId);
+                }}
+                restoringSnapshot={rollbackMutation.isPending}
+              />
             </div>
           </section>
         </div>
