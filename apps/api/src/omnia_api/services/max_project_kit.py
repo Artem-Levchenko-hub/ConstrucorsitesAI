@@ -13,7 +13,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 7
+MAX_MANAGED_KIT_VERSION = 8
 
 
 def _template_candidates(
@@ -83,7 +83,7 @@ export function GET() {
 import { getMaxWebApp } from "@/lib/max/bridge";
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "catalog",
+  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -157,6 +157,26 @@ export function getOmniaCatalog(): Promise<{
   return invoke("catalog");
 }
 
+type OmniaAIInput = {
+  message?: string;
+  prompt?: string;
+  instructions?: string;
+  context?: Record<string, unknown>;
+};
+
+export async function requestOmniaAI(
+  input: OmniaAIInput,
+): Promise<{ answer: string; text: string; model: string }> {
+  const message = input.message || input.prompt;
+  if (!message?.trim()) throw new Error("Введите сообщение для ИИ-функции");
+  const result = await invoke<{ answer: string; model: string }>("ai", {
+    message,
+    instructions: input.instructions,
+    context: input.context,
+  });
+  return { ...result, text: result.answer };
+}
+
 export async function trackOmniaGoal(
   goal: string,
   parameters: Record<string, unknown> = {},
@@ -202,7 +222,7 @@ export async function POST(request: NextRequest, context: Context) {{
   }}
   const {{ path }} = await context.params;
   const operation = path.join("/");
-  if (!["status", "payments", "payment-status", "leads", "catalog"].includes(operation)) {{
+  if (!["status", "payments", "payment-status", "leads", "catalog", "ai"].includes(operation)) {{
     return NextResponse.json({{ error: {{ message: "Unknown capability" }} }}, {{ status: 404 }});
   }}
   const body = await request.json().catch(() => ({{}})) as {{
@@ -221,6 +241,8 @@ export async function POST(request: NextRequest, context: Context) {{
       ? `/api/runtime/projects/${{PROJECT_ID}}/integrations`
       : operation === "catalog"
         ? `/api/runtime/projects/${{PROJECT_ID}}/catalog`
+      : operation === "ai"
+        ? `/api/runtime/projects/${{PROJECT_ID}}/ai`
       : operation === "payment-status"
         ? `/api/runtime/projects/${{PROJECT_ID}}/payments/status`
         : `/api/runtime/projects/${{PROJECT_ID}}/${{operation}}`;

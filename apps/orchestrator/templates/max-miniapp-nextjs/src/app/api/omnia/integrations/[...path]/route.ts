@@ -17,7 +17,7 @@ export async function POST(request: NextRequest, context: Context) {
   const { path } = await context.params;
   const operation = path.join("/");
   if (
-    !["status", "payments", "payment-status", "leads", "catalog"].includes(
+    !["status", "payments", "payment-status", "leads", "catalog", "ai"].includes(
       operation,
     )
   ) {
@@ -42,6 +42,8 @@ export async function POST(request: NextRequest, context: Context) {
       ? `/api/runtime/projects/${PROJECT_ID}/integrations`
       : operation === "catalog"
         ? `/api/runtime/projects/${PROJECT_ID}/catalog`
+      : operation === "ai"
+        ? `/api/runtime/projects/${PROJECT_ID}/ai`
       : operation === "payment-status"
         ? `/api/runtime/projects/${PROJECT_ID}/payments/status`
       : `/api/runtime/projects/${PROJECT_ID}/${operation}`;

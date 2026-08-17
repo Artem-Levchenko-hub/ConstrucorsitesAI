@@ -51,6 +51,7 @@ import { cn } from "@/lib/utils";
 
 const categories: Record<IntegrationCategory | "all", { label: string; icon: LucideIcon }> = {
   all: { label: "Все сервисы", icon: Plug },
+  ai: { label: "ИИ", icon: Sparkles },
   payments: { label: "Оплата", icon: CircleDollarSign },
   restaurant: { label: "Рестораны", icon: Store },
   crm: { label: "CRM", icon: UsersRound },
@@ -61,6 +62,7 @@ const categories: Record<IntegrationCategory | "all", { label: string; icon: Luc
 };
 
 const providerIcons: Record<string, LucideIcon> = {
+  aitunnel: Sparkles,
   yookassa: CircleDollarSign,
   iiko: Store,
   rkeeper: Store,

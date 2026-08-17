@@ -42,7 +42,7 @@ export async function createMaxAction(
 }
 
 async function integration<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "catalog",
+  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -111,6 +111,26 @@ export function getOmniaCatalog(): Promise<{
   }>;
 }> {
   return integration("catalog");
+}
+
+type OmniaAIInput = {
+  message?: string;
+  prompt?: string;
+  instructions?: string;
+  context?: Record<string, unknown>;
+};
+
+export async function requestOmniaAI(
+  input: OmniaAIInput,
+): Promise<{ answer: string; text: string; model: string }> {
+  const message = input.message || input.prompt;
+  if (!message?.trim()) throw new Error("Введите сообщение для ИИ-функции");
+  const result = await integration<{ answer: string; model: string }>("ai", {
+    message,
+    instructions: input.instructions,
+    context: input.context,
+  });
+  return { ...result, text: result.answer };
 }
 
 export async function trackOmniaGoal(

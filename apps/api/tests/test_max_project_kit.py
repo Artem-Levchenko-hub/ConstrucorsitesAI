@@ -72,6 +72,12 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "as const" in config
     assert "max_url_attached" not in config
     assert str(project_id) in files["src/app/api/omnia/integrations/[...path]/route.ts"]
+    integration_client = files["src/lib/omnia/integration-client.ts"]
+    integration_route = files["src/app/api/omnia/integrations/[...path]/route.ts"]
+    assert "requestOmniaAI" in integration_client
+    assert 'invoke<{ answer: string; model: string }>("ai"' in integration_client
+    assert '"catalog", "ai"' in integration_route
+    assert "/api/runtime/projects/${PROJECT_ID}/ai" in integration_route
     preview_route = files["src/app/api/omnia/preview-session/route.ts"]
     assert 'process.env.NODE_ENV !== "development"' in preview_route
     assert "partitioned: true" in preview_route

@@ -93,6 +93,7 @@ ErrorCode = Literal[
     "integration_configuration_invalid",
     "integration_response_invalid",
     "max_init_data_invalid",
+    "ai_integration_required",
     "payment_integration_required",
     "crm_integration_required",
     # MAX Studio account, legal and payment lifecycle.
