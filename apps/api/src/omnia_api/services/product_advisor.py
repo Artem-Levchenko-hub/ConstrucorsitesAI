@@ -75,6 +75,7 @@ _COSMETIC_SIGNALS = (
     "анимац",
     "иконк",
     "отступ",
+    "син",
     "текст",
     "типограф",
     "фон",
@@ -91,7 +92,6 @@ _MATERIAL_ACTION_SIGNALS = (
     "настрой",
     "подключ",
     "реализ",
-    "сделай",
     "создай",
     "add ",
     "connect",
@@ -189,7 +189,9 @@ def is_material_change(prompt: str | None) -> bool:
         return True
     has_material_signal = any(signal in text for signal in _MATERIAL_SIGNALS)
     has_cosmetic_signal = any(signal in text for signal in _COSMETIC_SIGNALS)
-    has_material_action = any(signal in text for signal in _MATERIAL_ACTION_SIGNALS)
+    has_material_action = any(signal in text for signal in _MATERIAL_ACTION_SIGNALS) or any(
+        f"сделай {signal}" in text for signal in _MATERIAL_SIGNALS
+    )
     if has_cosmetic_signal and not has_material_action:
         return False
     if has_material_signal:
