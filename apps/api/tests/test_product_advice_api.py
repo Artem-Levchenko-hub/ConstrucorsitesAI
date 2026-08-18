@@ -191,6 +191,51 @@ async def test_cosmetic_snapshot_reuses_material_advice_cache(
 
 
 @pytest.mark.asyncio
+async def test_long_cosmetic_history_keeps_original_material_baseline(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _user(db_session, "owner-long-history@example.com")
+    project, material, parent = await _project_with_snapshots(db_session, owner)
+    base_time = datetime.now(UTC) + timedelta(minutes=1)
+    for index in range(55):
+        snapshot = Snapshot(
+            project_id=project.id,
+            commit_sha=f"{index + 1:040x}",
+            prompt_text=f"Поменяй цвет кнопки, вариант {index + 1}",
+            parent_id=parent.id,
+            created_at=base_time + timedelta(seconds=index),
+        )
+        db_session.add(snapshot)
+        await db_session.flush()
+        parent = snapshot
+    project.current_snapshot_id = parent.id
+    await db_session.commit()
+    _login(client, owner)
+    redis = FakeRedis()
+    read_commits: list[str] = []
+
+    async def generate(*_args, **_kwargs) -> ProductAdviceResult:
+        return _ranked_result()
+
+    def read_files(_project_id: UUID, commit_sha: str) -> dict[str, str]:
+        read_commits.append(commit_sha)
+        return {"src/app/page.tsx": "Каталог"}
+
+    monkeypatch.setattr(advice_router, "get_redis", lambda: redis)
+    monkeypatch.setattr(advice_router, "generate_product_advice", generate)
+    monkeypatch.setattr(advice_router.repo, "read_files", read_files)
+
+    response = await client.post(f"/api/projects/{project.id}/product-advice")
+
+    assert response.status_code == 200
+    assert response.json()["current_snapshot_id"] == str(parent.id)
+    assert response.json()["analysis_snapshot_id"] == str(material.id)
+    assert read_commits == [material.commit_sha]
+
+
+@pytest.mark.asyncio
 async def test_rollback_snapshot_is_used_as_current_product_state(
     client: httpx.AsyncClient,
     db_session: AsyncSession,

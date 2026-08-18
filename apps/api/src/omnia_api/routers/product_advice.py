@@ -61,7 +61,6 @@ async def _snapshot_history(session: SessionDep, project: Project) -> list[Snaps
                 select(Snapshot)
                 .where(Snapshot.project_id == project.id)
                 .order_by(Snapshot.created_at.desc(), Snapshot.id.desc())
-                .limit(50)
             )
         ).scalars()
     )
