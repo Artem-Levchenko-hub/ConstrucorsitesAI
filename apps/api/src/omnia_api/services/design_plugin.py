@@ -168,6 +168,11 @@ def _pick_pattern(brief: str) -> _ProductPattern:
     return pattern if score else _GENERIC
 
 
+def classify_product_archetype(brief: str) -> str:
+    """Return the stable product archetype shared by design and advice layers."""
+    return _pick_pattern(brief).id
+
+
 def _stable_seed(project_id: str) -> int:
     digest = hashlib.sha256(f"design-plugin:{project_id}".encode()).digest()
     return int.from_bytes(digest[:8], "big")
@@ -334,4 +339,5 @@ __all__ = [
     "PLUGIN_VERSION",
     "DesignContract",
     "build_design_contract",
+    "classify_product_archetype",
 ]
