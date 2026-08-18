@@ -9,12 +9,15 @@ work outside this module.
 
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
+from omnia_api.core.config import get_settings
+from omnia_api.services import llm_client
 from omnia_api.services.design_plugin import classify_product_archetype
 
 ADVISOR_VERSION = "1.0.0"
@@ -154,6 +157,13 @@ class AdviceCandidate(AdviceItem):
     archetypes: tuple[str, ...]
     presence_signals: tuple[str, ...]
     priority: int
+
+
+@dataclass(frozen=True)
+class ProductAdviceResult:
+    archetype: str
+    items: tuple[AdviceItem, ...]
+    source: Literal["model", "fallback"]
 
 
 def is_material_change(prompt: str | None) -> bool:
@@ -678,15 +688,163 @@ def candidate_advice(context: AdviceContext) -> tuple[AdviceItem, ...]:
     )
 
 
+_Complete = Callable[..., Awaitable[str]]
+_MARKUP = re.compile(r"<[^>]*>")
+
+
+def _clean_display(value: object, *, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    cleaned = _MARKUP.sub("", _CONTROL.sub(" ", value))
+    return " ".join(cleaned.split())[:limit].strip()
+
+
+def _parse_ranked_items(raw: str) -> list[dict[str, object]] | None:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return None
+    return [item for item in payload["items"] if isinstance(item, dict)]
+
+
+def _ranking_messages(
+    context: AdviceContext, candidates: Sequence[AdviceItem]
+) -> list[dict[str, str]]:
+    candidate_payload = [
+        {
+            "id": item.id,
+            "kind": item.kind,
+            "title": item.title,
+            "benefit": item.benefit,
+        }
+        for item in candidates
+    ]
+    user_payload = {
+        "project_name": context.project_name,
+        "archetype": context.archetype,
+        "material_request": context.material_prompt,
+        "present_features": list(context.inventory),
+        "candidates": candidate_payload,
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Ты продуктовый советник MAX Mini Apps. Выбери до трёх самых полезных "
+                "кандидатов только из переданных id. Верни только JSON вида "
+                '{"items":[{"id":"...","title":"до 80 символов",'
+                '"benefit":"до 180 символов"}]}. Не добавляй новые функции, код, '
+                "промпты или поля. Поставь первым самое сильное улучшение для пользователя."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
+        },
+    ]
+
+
+async def generate_product_advice(
+    context: AdviceContext,
+    *,
+    complete: _Complete | None = None,
+    model: str | None = None,
+) -> ProductAdviceResult:
+    """Rank bounded candidates; malformed/provider failures use the fallback."""
+    fallback = candidate_advice(context)
+    if not fallback:
+        return ProductAdviceResult(
+            archetype=context.archetype,
+            items=(),
+            source="fallback",
+        )
+
+    complete_fn = complete or llm_client.complete_chat
+    selected_model = model or get_settings().product_advisor_model
+    try:
+        raw = await complete_fn(
+            _ranking_messages(context, fallback),
+            selected_model,
+            stage="product_advisor",
+            free=True,
+            max_tokens=700,
+            temperature=0.1,
+        )
+    except Exception:
+        return ProductAdviceResult(
+            archetype=context.archetype,
+            items=fallback,
+            source="fallback",
+        )
+
+    ranked = _parse_ranked_items(raw)
+    if ranked is None:
+        return ProductAdviceResult(
+            archetype=context.archetype,
+            items=fallback,
+            source="fallback",
+        )
+
+    by_id = {item.id: item for item in fallback}
+    selected: list[AdviceItem] = []
+    used: set[str] = set()
+    for raw_item in ranked:
+        candidate_id = raw_item.get("id")
+        if not isinstance(candidate_id, str) or candidate_id in used:
+            continue
+        candidate = by_id.get(candidate_id)
+        if candidate is None:
+            continue
+        title = _clean_display(raw_item.get("title"), limit=80) or candidate.title
+        benefit = _clean_display(raw_item.get("benefit"), limit=180) or candidate.benefit
+        selected.append(
+            AdviceItem(
+                id=candidate.id,
+                kind=candidate.kind,
+                title=title,
+                benefit=benefit,
+                prompt=candidate.prompt,
+            )
+        )
+        used.add(candidate.id)
+        if len(selected) == MAX_ADVICE_ITEMS:
+            break
+    for candidate in fallback:
+        if len(selected) == MAX_ADVICE_ITEMS:
+            break
+        if candidate.id not in used:
+            selected.append(candidate)
+            used.add(candidate.id)
+    if not selected:
+        return ProductAdviceResult(
+            archetype=context.archetype,
+            items=fallback,
+            source="fallback",
+        )
+    return ProductAdviceResult(
+        archetype=context.archetype,
+        items=tuple(selected),
+        source="model",
+    )
+
+
 __all__ = [
     "ADVISOR_VERSION",
     "MAX_ADVICE_ITEMS",
     "AdviceContext",
     "AdviceItem",
+    "ProductAdviceResult",
     "SnapshotInput",
     "build_advice_context",
     "candidate_advice",
     "choose_analysis_snapshot",
     "extract_feature_inventory",
+    "generate_product_advice",
     "is_material_change",
 ]

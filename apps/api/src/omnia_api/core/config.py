@@ -77,6 +77,9 @@ class Settings(BaseSettings):
 
     llm_gateway_url: str = Field(default="http://localhost:8001")
     mock_llm: bool = Field(default=True)
+    # Cheap, bounded ranking pass for contextual MAX product advice. The
+    # server-owned catalog remains the source of executable prompts.
+    product_advisor_model: str = Field(default="claude-haiku-4-5")
 
     # V2 orchestrator (apps/orchestrator on :8003). Internal-only API behind
     # a shared-secret header — token MUST match the one in the orchestrator's

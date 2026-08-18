@@ -173,6 +173,7 @@ async def complete_chat(
     stage: str | None = None,
     max_tokens: int = 1024,
     temperature: float | None = 0.0,
+    free: bool | None = None,
 ) -> str:
     """Non-streaming completion → assistant text (``""`` on mock/empty).
 
@@ -196,7 +197,7 @@ async def complete_chat(
         "user": user_id,
         "metadata": {
             "project_id": project_id,
-            "free": _free_generation.get(),
+            "free": _free_generation.get() if free is None else free,
             **({"stage": stage} if stage else {}),
         },
         "max_tokens": max_tokens,
