@@ -19,6 +19,7 @@ from typing import Any, Literal
 from omnia_api.core.config import get_settings
 from omnia_api.services import llm_client
 from omnia_api.services.design_plugin import classify_product_archetype
+from omnia_api.services.secret_safety import redact_provider_secrets
 
 ADVISOR_VERSION = "1.0.0"
 MAX_ADVICE_ITEMS = 3
@@ -84,6 +85,18 @@ _COSMETIC_SIGNALS = (
     "font",
     "icon",
     "spacing",
+)
+_MATERIAL_ACTION_SIGNALS = (
+    "добав",
+    "настрой",
+    "подключ",
+    "реализ",
+    "создай",
+    "add ",
+    "connect",
+    "create",
+    "implement",
+    "set up",
 )
 
 _FEATURE_PATTERNS: dict[str, tuple[str, ...]] = {
@@ -171,10 +184,15 @@ def is_material_change(prompt: str | None) -> bool:
     text = (prompt or "").strip().casefold()
     if not text:
         return False
-    if any(signal in text for signal in _MATERIAL_SIGNALS):
+    if "восстановление версии" in text or "restore version" in text:
         return True
-    if any(signal in text for signal in _COSMETIC_SIGNALS):
+    has_material_signal = any(signal in text for signal in _MATERIAL_SIGNALS)
+    has_cosmetic_signal = any(signal in text for signal in _COSMETIC_SIGNALS)
+    has_material_action = any(signal in text for signal in _MATERIAL_ACTION_SIGNALS)
+    if has_cosmetic_signal and not has_material_action:
         return False
+    if has_material_signal:
+        return True
     action = any(signal in text for signal in ("добав", "подключ", "реализ", "сделай", "создай"))
     return action and len(text) >= 80
 
@@ -185,6 +203,9 @@ def choose_analysis_snapshot(snapshots: Sequence[SnapshotInput]) -> SnapshotInpu
         raise ValueError("at least one snapshot is required")
     for snapshot in snapshots:
         if is_material_change(snapshot.prompt_text):
+            return snapshot
+    for snapshot in reversed(snapshots):
+        if (snapshot.prompt_text or "").strip():
             return snapshot
     return snapshots[0]
 
@@ -233,7 +254,7 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _sanitize_context_text(value: str, *, limit: int = 2000) -> str:
-    cleaned = _CONTROL.sub(" ", value or "")
+    cleaned = redact_provider_secrets(_CONTROL.sub(" ", value or ""))
     cleaned = _SECRET_ASSIGNMENT.sub("[credential redacted]", cleaned)
     cleaned = _LONG_SECRET.sub("[credential redacted]", cleaned)
     return " ".join(cleaned.split())[:limit]
@@ -775,6 +796,7 @@ async def generate_product_advice(
             free=True,
             max_tokens=700,
             temperature=0.1,
+            timeout_seconds=12.0,
         )
     except Exception:
         return ProductAdviceResult(
@@ -815,18 +837,18 @@ async def generate_product_advice(
         used.add(candidate.id)
         if len(selected) == MAX_ADVICE_ITEMS:
             break
-    for candidate in fallback:
-        if len(selected) == MAX_ADVICE_ITEMS:
-            break
-        if candidate.id not in used:
-            selected.append(candidate)
-            used.add(candidate.id)
     if not selected:
         return ProductAdviceResult(
             archetype=context.archetype,
             items=fallback,
             source="fallback",
         )
+    for candidate in fallback:
+        if len(selected) == MAX_ADVICE_ITEMS:
+            break
+        if candidate.id not in used:
+            selected.append(candidate)
+            used.add(candidate.id)
     return ProductAdviceResult(
         archetype=context.archetype,
         items=tuple(selected),

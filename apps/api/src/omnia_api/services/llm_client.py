@@ -174,6 +174,7 @@ async def complete_chat(
     max_tokens: int = 1024,
     temperature: float | None = 0.0,
     free: bool | None = None,
+    timeout_seconds: float | None = None,
 ) -> str:
     """Non-streaming completion → assistant text (``""`` on mock/empty).
 
@@ -204,7 +205,12 @@ async def complete_chat(
     }
     if temperature is not None:
         payload["temperature"] = temperature
-    timeout = httpx.Timeout(90.0, connect=5.0, read=90.0)
+    request_timeout = 90.0 if timeout_seconds is None else max(1.0, float(timeout_seconds))
+    timeout = httpx.Timeout(
+        request_timeout,
+        connect=min(5.0, request_timeout),
+        read=request_timeout,
+    )
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload)

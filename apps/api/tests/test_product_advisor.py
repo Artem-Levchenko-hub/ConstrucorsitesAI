@@ -22,11 +22,15 @@ def test_material_change_distinguishes_product_work_from_cosmetics() -> None:
         "Сделай кнопку синей и увеличь отступ",
         "Замени текст заголовка и иконку",
         "Уменьши шрифт, поправь цвет фона",
+        "Поменяй цвет кнопки оплаты",
+        "Исправь текст на экране профиля",
     )
     material = (
         "Добавь избранное с сохранением и отдельным экраном",
         "Сделай историю заказов и повтор заказа",
         "Подключи уведомления о записи",
+        "Добавь оплату и поменяй цвет кнопки",
+        "Восстановление версии",
     )
 
     assert all(not is_material_change(prompt) for prompt in cosmetic)
@@ -41,6 +45,16 @@ def test_choose_analysis_snapshot_reuses_latest_material_parent() -> None:
     )
 
     assert choose_analysis_snapshot(snapshots).id == "feature"
+
+
+def test_choose_analysis_snapshot_uses_first_generated_build_as_baseline() -> None:
+    snapshots = (
+        SnapshotInput("cosmetic", "c" * 40, "Поменяй цвет заголовка"),
+        SnapshotInput("initial", "b" * 40, "Приложение кофейни"),
+        SnapshotInput("starter", "a" * 40, None),
+    )
+
+    assert choose_analysis_snapshot(snapshots).id == "initial"
 
 
 def test_choose_analysis_snapshot_falls_back_to_newest_snapshot() -> None:
@@ -89,6 +103,20 @@ def test_context_uses_shared_archetype_and_discards_raw_source() -> None:
     assert context.archetype == "commerce"
     assert "payments" not in context.inventory
     assert "export default function" not in repr(context)
+
+
+def test_context_redacts_labelled_punctuation_credentials() -> None:
+    credential = "abcdefghijklmnop.qrstuvwxyz123456"
+
+    context = build_advice_context(
+        project_name="Кофе рядом",
+        material_prompt=f"Добавь оплату, ключ: {credential}",
+        discovery_spec=None,
+        files={},
+    )
+
+    assert credential not in context.material_prompt
+    assert "credential redacted" in context.material_prompt.casefold()
 
 
 def test_candidate_advice_suppresses_present_features_and_returns_three() -> None:
@@ -166,6 +194,7 @@ async def test_model_can_rank_but_cannot_replace_server_prompt() -> None:
     assert captured["free"] is True
     assert captured["max_tokens"] == 700
     assert captured["temperature"] == 0.1
+    assert captured["timeout_seconds"] == 12.0
 
 
 @pytest.mark.asyncio
@@ -217,6 +246,28 @@ async def test_malformed_model_output_uses_deterministic_fallback(raw: str) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    ['{"items":[]}', '{"items":[{"id":"unknown","title":"Нет"}]}'],
+)
+async def test_model_output_without_known_candidates_uses_fallback_ttl_source(raw: str) -> None:
+    context = AdviceContext(
+        project_name="Кофе рядом",
+        material_prompt="Каталог кофе",
+        archetype="commerce",
+        inventory=(),
+    )
+
+    async def complete(*_args, **_kwargs):
+        return raw
+
+    result = await generate_product_advice(context, complete=complete)
+
+    assert result.source == "fallback"
+    assert len(result.items) == 3
+
+
+@pytest.mark.asyncio
 async def test_complete_chat_free_override_reaches_gateway_metadata(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -243,13 +294,19 @@ async def test_complete_chat_free_override_reaches_gateway_metadata(monkeypatch)
         "get_settings",
         lambda: SimpleNamespace(mock_llm=False, llm_gateway_url="http://gateway"),
     )
-    monkeypatch.setattr(llm_client.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    def fake_client(**kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return FakeClient()
+
+    monkeypatch.setattr(llm_client.httpx, "AsyncClient", fake_client)
 
     result = await llm_client.complete_chat(
         [{"role": "user", "content": "rank"}],
         "cheap-model",
         free=True,
+        timeout_seconds=12.0,
     )
 
     assert result == "ok"
     assert captured["json"]["metadata"]["free"] is True
+    assert captured["timeout"].read == 12.0

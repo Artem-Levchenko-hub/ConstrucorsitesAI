@@ -17,6 +17,14 @@ def test_secret_detector_is_high_confidence() -> None:
     assert redact_provider_secrets(raw) == "подключи [CREDENTIAL REDACTED]"
 
 
+def test_labelled_arbitrary_credential_is_detected_and_redacted() -> None:
+    credential = "abcdefghijklmnop.qrstuvwxyz123456"
+    raw = f"AITUNNEL — ключ: {credential}"
+
+    assert contains_provider_secret(raw)
+    assert redact_provider_secrets(raw) == "AITUNNEL — ключ: [CREDENTIAL REDACTED]"
+
+
 def test_max_writer_blocks_secret_files_and_literals() -> None:
     assert is_secret_file(".env.local")
     assert is_secret_file("config/secrets.json")

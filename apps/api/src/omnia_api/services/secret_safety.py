@@ -18,6 +18,10 @@ _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
 )
+_LABELLED_SECRET = re.compile(
+    r"(?i)(\b(?:api[_ -]?(?:key|ключ)|token|secret|password|ключ|токен|пароль)"
+    r"\s*(?::|=|—|-)\s*)([A-Za-z0-9][A-Za-z0-9._~+/=-]{15,})"
+)
 
 
 def contains_provider_secret(value: str) -> bool:
@@ -27,13 +31,19 @@ def contains_provider_secret(value: str) -> bool:
     briefs that merely mention an API key or an environment-variable name.
     """
 
-    return any(pattern.search(value or "") for pattern in _SECRET_TOKEN_PATTERNS)
+    candidate = value or ""
+    return bool(_LABELLED_SECRET.search(candidate)) or any(
+        pattern.search(candidate) for pattern in _SECRET_TOKEN_PATTERNS
+    )
 
 
 def redact_provider_secrets(value: str) -> str:
     """Remove recognised credentials before chat persistence or display."""
 
-    redacted = value or ""
+    redacted = _LABELLED_SECRET.sub(
+        lambda match: f"{match.group(1)}[CREDENTIAL REDACTED]",
+        value or "",
+    )
     for pattern in _SECRET_TOKEN_PATTERNS:
         redacted = pattern.sub("[CREDENTIAL REDACTED]", redacted)
     return redacted

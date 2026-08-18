@@ -191,6 +191,48 @@ async def test_cosmetic_snapshot_reuses_material_advice_cache(
 
 
 @pytest.mark.asyncio
+async def test_rollback_snapshot_is_used_as_current_product_state(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _user(db_session, "owner-rollback@example.com")
+    project, _, cosmetic = await _project_with_snapshots(db_session, owner)
+    rollback = Snapshot(
+        project_id=project.id,
+        commit_sha="d" * 40,
+        prompt_text="Восстановление версии",
+        parent_id=cosmetic.id,
+        created_at=datetime.now(UTC) + timedelta(seconds=2),
+    )
+    db_session.add(rollback)
+    await db_session.flush()
+    project.current_snapshot_id = rollback.id
+    await db_session.commit()
+    _login(client, owner)
+    redis = FakeRedis()
+    read_commits: list[str] = []
+
+    async def generate(*_args, **_kwargs) -> ProductAdviceResult:
+        return _ranked_result()
+
+    def read_files(_project_id: UUID, commit_sha: str) -> dict[str, str]:
+        read_commits.append(commit_sha)
+        return {"src/app/page.tsx": "Восстановленный каталог"}
+
+    monkeypatch.setattr(advice_router, "get_redis", lambda: redis)
+    monkeypatch.setattr(advice_router, "generate_product_advice", generate)
+    monkeypatch.setattr(advice_router.repo, "read_files", read_files)
+
+    response = await client.post(f"/api/projects/{project.id}/product-advice")
+
+    assert response.status_code == 200
+    assert response.json()["current_snapshot_id"] == str(rollback.id)
+    assert response.json()["analysis_snapshot_id"] == str(rollback.id)
+    assert read_commits == [rollback.commit_sha]
+
+
+@pytest.mark.asyncio
 async def test_redis_failure_does_not_block_fallback_advice(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
