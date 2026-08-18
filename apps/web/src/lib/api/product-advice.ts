@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { Message } from "./types";
 
 export type ProductAdviceItem = {
   id: string;
@@ -17,6 +18,34 @@ export type ProductAdviceResponse = {
   source: "model" | "fallback" | "cache";
   items: ProductAdviceItem[];
 };
+
+type AdviceMessage = Pick<
+  Message,
+  "role" | "snapshot_id" | "tokens_out" | "generation_status"
+>;
+
+export function getProductAdviceSnapshotId(
+  messages: readonly AdviceMessage[],
+): string | null {
+  const last = messages.at(-1);
+  if (
+    last?.role !== "assistant" ||
+    !last.snapshot_id ||
+    last.tokens_out === null ||
+    (last.generation_status != null &&
+      last.generation_status !== "completed")
+  ) {
+    return null;
+  }
+  return last.snapshot_id;
+}
+
+export function submitProductAdvice(
+  item: ProductAdviceItem,
+  submit: (prompt: string, selections: []) => Promise<boolean>,
+): Promise<boolean> {
+  return submit(item.prompt, []);
+}
 
 export async function requestProductAdvice(
   projectId: string,

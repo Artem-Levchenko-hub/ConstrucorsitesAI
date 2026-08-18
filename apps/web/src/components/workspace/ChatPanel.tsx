@@ -10,6 +10,12 @@ import {
   getIntegrationCatalog,
 } from "@/lib/api/app-integrations";
 import { listMessages } from "@/lib/api/messages";
+import {
+  getProductAdviceSnapshotId,
+  requestProductAdvice,
+  submitProductAdvice,
+  type ProductAdviceItem,
+} from "@/lib/api/product-advice";
 import type {
   AgentStep,
   DesignPreview,
@@ -33,6 +39,7 @@ import {
   redactChatSecrets,
   resolveChatCredential,
 } from "@/lib/max-chat-credentials";
+import { MaxProductAdvisor } from "@/components/max/MaxProductAdvisor";
 
 type DiscoveryChoices = {
   choices: string[];
@@ -261,6 +268,28 @@ export function ChatPanel({
   });
   const showSurvey = !!survey && survey.length > 0 && !surveyDismissed;
 
+  const adviceSnapshotId =
+    mode === "max" ? getProductAdviceSnapshotId(messages ?? []) : null;
+  const productAdvice = useQuery({
+    queryKey: ["product-advice", projectId, adviceSnapshotId],
+    queryFn: () => requestProductAdvice(projectId),
+    enabled: !!adviceSnapshotId && !isStreaming && !showSurvey,
+    staleTime: Infinity,
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+  const [applyingAdviceId, setApplyingAdviceId] = useState<string | null>(null);
+
+  const handleApplyAdvice = async (item: ProductAdviceItem) => {
+    if (applyingAdviceId !== null) return;
+    setApplyingAdviceId(item.id);
+    try {
+      await submitProductAdvice(item, submitWithCredentialIntake);
+    } finally {
+      setApplyingAdviceId(null);
+    }
+  };
+
   const clearSurvey = () => {
     qc.setQueryData(["onboarding-survey", projectId], null);
     setSurveyDismissed(true);
@@ -289,7 +318,7 @@ export function ChatPanel({
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages?.length, last?.content, chips]);
+  }, [messages?.length, last?.content, chips, productAdvice.data?.items.length]);
 
   // `/deep-research` entry hands the user's task over via `?p=`: auto-fire it
   // ONCE on a fresh (empty) project so they land mid-agent-run — the cloud
@@ -401,6 +430,17 @@ export function ChatPanel({
             presentation={embedded ? "studio" : "default"}
           />
         ))}
+
+        {mode === "max" &&
+          !showSurvey &&
+          !isStreaming &&
+          productAdvice.data?.items.length ? (
+            <MaxProductAdvisor
+              items={productAdvice.data.items}
+              applyingId={applyingAdviceId}
+              onApply={handleApplyAdvice}
+            />
+          ) : null}
 
         {!showSurvey && chips && chips.choices.length > 0 && (
           <DiscoveryFrame

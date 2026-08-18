@@ -3,7 +3,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MaxProductAdvisor } from "@/components/max/MaxProductAdvisor";
-import type { ProductAdviceItem } from "@/lib/api/product-advice";
+import {
+  getProductAdviceSnapshotId,
+  submitProductAdvice,
+  type ProductAdviceItem,
+} from "@/lib/api/product-advice";
 
 const ITEMS: ProductAdviceItem[] = [
   {
@@ -118,5 +122,40 @@ describe("MAX product advisor", () => {
     expect(first?.getAttribute("aria-busy")).toBe("true");
     expect(second?.disabled).toBe(false);
     expect(second?.className).toContain("min-h-11");
+  });
+
+  it("requests advice only after the latest assistant build completes", () => {
+    const completed = {
+      role: "assistant" as const,
+      snapshot_id: "snapshot-new",
+      tokens_out: 420,
+      generation_status: "completed" as const,
+    };
+
+    expect(getProductAdviceSnapshotId([completed])).toBe("snapshot-new");
+    expect(
+      getProductAdviceSnapshotId([{ ...completed, tokens_out: null }]),
+    ).toBeNull();
+    expect(
+      getProductAdviceSnapshotId([
+        completed,
+        { ...completed, role: "user" as const },
+      ]),
+    ).toBeNull();
+    expect(
+      getProductAdviceSnapshotId([
+        { ...completed, generation_status: "failed" as const },
+      ]),
+    ).toBeNull();
+    expect(
+      getProductAdviceSnapshotId([{ ...completed, snapshot_id: null }]),
+    ).toBeNull();
+  });
+
+  it("submits the server-owned implementation prompt through the normal chat", async () => {
+    const submit = vi.fn().mockResolvedValue(true);
+
+    await expect(submitProductAdvice(ITEMS[0], submit)).resolves.toBe(true);
+    expect(submit).toHaveBeenCalledWith(ITEMS[0].prompt, []);
   });
 });
