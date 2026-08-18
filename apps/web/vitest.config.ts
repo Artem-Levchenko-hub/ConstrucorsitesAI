@@ -9,6 +9,12 @@ import { defineConfig } from "vitest/config";
 // DOM + DOMParser + MessageEvent so each generator-wide live-render invariant
 // becomes a permanent falsifiable assert (ratchet), money-free, 0 LLM.
 export default defineConfig({
+  oxc: {
+    jsx: {
+      runtime: "automatic",
+      importSource: "react",
+    },
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
