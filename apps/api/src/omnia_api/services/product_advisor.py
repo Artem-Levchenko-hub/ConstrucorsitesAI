@@ -75,7 +75,6 @@ _COSMETIC_SIGNALS = (
     "анимац",
     "иконк",
     "отступ",
-    "син",
     "текст",
     "типограф",
     "фон",
@@ -86,6 +85,12 @@ _COSMETIC_SIGNALS = (
     "font",
     "icon",
     "spacing",
+)
+_VISUAL_CHANGE = re.compile(
+    r"\b(?:(?:син|красн|зел[её]н|ж[её]лт|оранжев|фиолетов|розов|голуб|"
+    r"бирюзов|коричнев|бел|ч[её]рн)(?:ый|ий|ой|ая|яя|ое|ее|ые|ие|ого|"
+    r"его|ей|ому|ему|ым|им|ом|ем|ую|юю|ых|их|ыми|ими)|ярче|темнее|"
+    r"светлее|контрастнее|red|green|blue|yellow|orange|purple|pink|white|black)\b"
 )
 _MATERIAL_ACTION_SIGNALS = (
     "добав",
@@ -188,7 +193,9 @@ def is_material_change(prompt: str | None) -> bool:
     if "восстановление версии" in text or "restore version" in text:
         return True
     has_material_signal = any(signal in text for signal in _MATERIAL_SIGNALS)
-    has_cosmetic_signal = any(signal in text for signal in _COSMETIC_SIGNALS)
+    has_cosmetic_signal = any(signal in text for signal in _COSMETIC_SIGNALS) or bool(
+        _VISUAL_CHANGE.search(text)
+    )
     has_material_action = any(signal in text for signal in _MATERIAL_ACTION_SIGNALS) or any(
         f"сделай {signal}" in text for signal in _MATERIAL_SIGNALS
     )
