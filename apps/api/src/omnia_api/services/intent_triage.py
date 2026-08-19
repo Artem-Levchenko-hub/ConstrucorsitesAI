@@ -30,7 +30,59 @@ slotted in later without touching any caller.
 from __future__ import annotations
 
 ORCHESTRATE = "orchestrate"  # BUILD — regenerate the whole page
-CHEAP = "cheap"              # EDIT — surgical patch, preserve everything else
+CHEAP = "cheap"  # EDIT — surgical patch, preserve everything else
+RETRY_FAILED_BUILD = "retry_failed_build"
+EXPLAIN_FAILED_BUILD = "explain_failed_build"
+
+_FAILED_BUILD_RETRY_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "почини",
+        "исправь",
+        "исправи",
+        "продолжай",
+        "продолжи",
+        "доделай",
+        "попробуй собрать",
+        "собери ещё раз",
+        "собери еще раз",
+        "собери снова",
+        "пересобери",
+        "запусти снова",
+        "перезапусти сборку",
+        "retry",
+        "try again",
+        "fix it",
+        "continue build",
+    }
+)
+
+_FAILED_BUILD_EXPLAIN_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "почему",
+        "объясни",
+        "что сломалось",
+        "что произошло",
+        "какая ошибка",
+        "в чём ошибка",
+        "в чем ошибка",
+        "что за ошибк",
+        "в чём причин",
+        "в чем причин",
+        "причина ошибк",
+        "что случилось",
+        "что пошло не так",
+        "покажи лог",
+        "покажи ошибк",
+        "текст ошибк",
+        "детали ошибк",
+        "what went wrong",
+        "what error",
+        "explain the error",
+        "why did",
+        "error details",
+        "failure reason",
+    }
+)
 
 # Explicit "throw the page away and rebuild" intent — forces BUILD even on a
 # project that already has a page. Kept deliberately TIGHT: a bare "переделай"
@@ -39,13 +91,29 @@ CHEAP = "cheap"              # EDIT — surgical patch, preserve everything else
 # Russian stems matched as substrings, so падежи are covered.
 _REBUILD_KEYWORDS: frozenset[str] = frozenset(
     {
-        "с нуля", "заново", "пересоздай", "пересобери",
-        "переделай сайт", "переделай страниц", "переделай весь",
-        "переделай всё", "переделай все", "переделай лендинг",
-        "редизайн", "redesign", "rebuild", "from scratch",
-        "другой сайт", "новый дизайн", "смени дизайн", "сменить дизайн",
-        "поменяй дизайн", "перестрой", "полностью переделай",
-        "полностью обнови", "совершенно друг",
+        "с нуля",
+        "заново",
+        "пересоздай",
+        "пересобери",
+        "переделай сайт",
+        "переделай страниц",
+        "переделай весь",
+        "переделай всё",
+        "переделай все",
+        "переделай лендинг",
+        "редизайн",
+        "redesign",
+        "rebuild",
+        "from scratch",
+        "другой сайт",
+        "новый дизайн",
+        "смени дизайн",
+        "сменить дизайн",
+        "поменяй дизайн",
+        "перестрой",
+        "полностью переделай",
+        "полностью обнови",
+        "совершенно друг",
     }
 )
 
@@ -61,16 +129,40 @@ _REBUILD_KEYWORDS: frozenset[str] = frozenset(
 # входа" edit).
 _STRUCTURAL_KEYWORDS: frozenset[str] = frozenset(
     {
-        "бэкенд", "backend", "fullstack", "full-stack", "фуллстек",
+        "бэкенд",
+        "backend",
+        "fullstack",
+        "full-stack",
+        "фуллстек",
         "серверн",  # серверная часть/логика — distinct from "сервис"
-        "база данных", "базу данных", "базы данных", "базой данных",
-        "многостраничн", "много страниц",
+        "база данных",
+        "базу данных",
+        "базы данных",
+        "базой данных",
+        "многостраничн",
+        "много страниц",
     }
 )
 
 
 def _has_any(text: str, keywords: frozenset[str]) -> bool:
     return any(k in text for k in keywords)
+
+
+def decide_failed_build_followup(prompt: str) -> str | None:
+    """Classify a turn immediately following a failed first build.
+
+    An explicit repair authorises another build. An explanation request is a
+    read-only turn. Any genuinely new requirement returns ``None`` and keeps the
+    normal first-build router, rather than silently swallowing the user's work.
+    """
+
+    text = (prompt or "").strip().lower()
+    if _has_any(text, _FAILED_BUILD_RETRY_KEYWORDS):
+        return RETRY_FAILED_BUILD
+    if _has_any(text, _FAILED_BUILD_EXPLAIN_KEYWORDS):
+        return EXPLAIN_FAILED_BUILD
+    return None
 
 
 def decide_intent(
@@ -131,4 +223,11 @@ def decide_intent(
     return CHEAP
 
 
-__all__ = ["CHEAP", "ORCHESTRATE", "decide_intent"]
+__all__ = [
+    "CHEAP",
+    "EXPLAIN_FAILED_BUILD",
+    "ORCHESTRATE",
+    "RETRY_FAILED_BUILD",
+    "decide_failed_build_followup",
+    "decide_intent",
+]

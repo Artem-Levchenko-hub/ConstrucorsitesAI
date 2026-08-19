@@ -267,6 +267,91 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
 
 
 @pytest.mark.asyncio
+async def test_max_auxiliary_write_does_not_unlock_product_entry_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One helper write is not a product. The next mutation must create the
+    required user-facing entry instead of extending support code indefinitely."""
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/lib/helper.ts", "content": "export const x=1"})),
+            _turn(("write_file", {"path": "src/lib/second.ts", "content": "export const y=2"})),
+            _turn(("read_file", {"path": "package.json"})),
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "Готово"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    executed: list[tuple[str, str]] = []
+
+    async def execute(action: Any) -> dict[str, Any]:
+        executed.append((action.name, action.path))
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build product",
+        execute=execute,
+        completion_check=lambda files, evidence: (
+            None if "src/app/page.tsx" in files else "Create src/app/page.tsx."
+        ),
+        max_steps=10,
+    )
+
+    assert res.done is True
+    assert ("write_file", "src/lib/helper.ts") in executed
+    assert ("write_file", "src/lib/second.ts") not in executed
+    assert ("read_file", "package.json") not in executed
+    assert ("write_file", "src/app/page.tsx") in executed
+    assert agent_native._MAX_PRODUCT_ENTRY_REQUIRED_RESULT in str(res.transcript)
+
+
+@pytest.mark.asyncio
+async def test_max_auxiliary_rewrites_are_not_product_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changing the same helper forever must hit the bounded no-progress stop."""
+    calls = {"n": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"}))
+        return _turn(
+            (
+                "write_file",
+                {"path": "src/lib/helper.ts", "content": f"export const n={calls['n']}"},
+            )
+        )
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "written"}
+
+    res = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build product",
+        execute=execute,
+        completion_check=lambda files, evidence: None,
+        max_steps=40,
+    )
+
+    assert res.stop_reason == "exploring"
+    assert "without user-facing product progress" in res.summary
+    assert calls["n"] == 1 + agent_native._NO_WRITE_ABORT_AT
+
+
+@pytest.mark.asyncio
 async def test_native_write_resets_no_write_streak(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -328,6 +413,41 @@ async def test_native_edit_file_counts_as_write_and_lands_in_files(
     )
     assert res.stop_reason == "max_steps_green"
     assert res.files == {"e.ts": "post-edit content"}
+
+
+@pytest.mark.asyncio
+async def test_non_max_file_keys_are_not_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MAX entry matching may normalize a path, but other stacks must preserve
+    the executor's exact file key (especially leading-dot config files)."""
+    turns = iter(
+        [
+            _turn(("write_file", {"path": ".config", "content": "exact"})),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "done"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="generic stack",
+        task="write config",
+        execute=execute,
+        max_steps=5,
+    )
+
+    assert res.done is True
+    assert res.files == {".config": "exact"}
 
 
 @pytest.mark.asyncio

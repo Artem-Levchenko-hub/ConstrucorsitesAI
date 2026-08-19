@@ -9,7 +9,37 @@ addition earns the expensive BUILD orchestration. Build-noun follow-ups
 from __future__ import annotations
 
 from omnia_api.services.discovery import detect_appification
-from omnia_api.services.intent_triage import CHEAP, ORCHESTRATE, decide_intent
+from omnia_api.services.intent_triage import (
+    CHEAP,
+    EXPLAIN_FAILED_BUILD,
+    ORCHESTRATE,
+    RETRY_FAILED_BUILD,
+    decide_failed_build_followup,
+    decide_intent,
+)
+
+
+def test_failed_build_explanation_is_not_a_new_build() -> None:
+    assert decide_failed_build_followup("почему сборка упала?") == EXPLAIN_FAILED_BUILD
+    assert decide_failed_build_followup("объясни ошибку") == EXPLAIN_FAILED_BUILD
+    assert decide_failed_build_followup("что сломалось") == EXPLAIN_FAILED_BUILD
+    assert decide_failed_build_followup("что за ошибка?") == EXPLAIN_FAILED_BUILD
+    assert decide_failed_build_followup("в чём причина?") == EXPLAIN_FAILED_BUILD
+    assert decide_failed_build_followup("what went wrong?") == EXPLAIN_FAILED_BUILD
+
+
+def test_failed_build_explicit_repair_retries_build() -> None:
+    assert decide_failed_build_followup("почини и продолжай") == RETRY_FAILED_BUILD
+    assert decide_failed_build_followup("попробуй собрать ещё раз") == RETRY_FAILED_BUILD
+    assert decide_failed_build_followup("retry build") == RETRY_FAILED_BUILD
+    assert decide_failed_build_followup("пересобери снова") == RETRY_FAILED_BUILD
+    # Repair wins when one prompt asks both for the reason and the fix.
+    assert decide_failed_build_followup("почему упало? почини") == RETRY_FAILED_BUILD
+
+
+def test_failed_build_new_requirement_keeps_normal_build_routing() -> None:
+    assert decide_failed_build_followup("сделай красивый экран ошибки") is None
+    assert decide_failed_build_followup("добавь error boundary в React") is None
 
 
 def test_first_prompt_always_orchestrates() -> None:

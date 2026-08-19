@@ -117,7 +117,12 @@ from omnia_api.services.generation_runs import (
     set_generation_run_status,
 )
 from omnia_api.services.image_resolver import resolve_images
-from omnia_api.services.intent_triage import ORCHESTRATE, decide_intent
+from omnia_api.services.intent_triage import (
+    EXPLAIN_FAILED_BUILD,
+    ORCHESTRATE,
+    decide_failed_build_followup,
+    decide_intent,
+)
 from omnia_api.services.link_validator import (
     find_dead_links,
     repair_dead_links_inline,
@@ -846,6 +851,24 @@ _RUN_ASK_TEXT = (
 _RUN_DECLINE_REPLY = "Понял, установщик не собираю. Напиши, что доработать или добавить — сделаю."
 
 
+def _failed_build_explanation(run: GenerationRun) -> str:
+    """User-safe factual explanation; never invokes the code-generation agent."""
+
+    if run.error == "API process restarted before generation completed":
+        reason = "процесс API перезапустился до завершения агента"
+    elif run.error == "build finished without a committed snapshot":
+        reason = (
+            "агент завершил цикл, но система не получила подтверждённый рабочий снимок приложения"
+        )
+    else:
+        reason = "запуск завершился ошибкой до создания проверенного снимка"
+    return (
+        f"Предыдущая попытка завершилась без рабочей версии: {reason}. "
+        "Новую сборку не запускаю. Чтобы попробовать исправление, "
+        "напишите: «почини и продолжай»."
+    )
+
+
 def _spawn_text_turn(
     project_id: UUID,
     assistant_message_id: UUID,
@@ -1337,6 +1360,47 @@ async def post_prompt(
         payload.prompt
     )
 
+    # Snapshot absence alone cannot decide what the user wants after a failed
+    # first build. Read the durable run state before billing/discovery/routing:
+    # an explanation is a text turn, while explicit repair/new requirements keep
+    # the normal build path. Query the immediately previous run (not any stale
+    # historical failure) and exclude the pending run reserved above.
+    _cur_snapshot = (
+        await session.get(Snapshot, project.current_snapshot_id)
+        if project.current_snapshot_id is not None
+        else None
+    )
+    is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
+    _previous_run = None
+    if is_first_build:
+        _previous_run = (
+            await session.execute(
+                select(GenerationRun)
+                .where(
+                    GenerationRun.project_id == project_id,
+                    GenerationRun.user_id == current_user.id,
+                    GenerationRun.id != generation_run.id,
+                )
+                .order_by(GenerationRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    _failed_build_followup = (
+        decide_failed_build_followup(payload.prompt)
+        if _previous_run is not None
+        and _previous_run.status == "failed"
+        and _previous_run.response_mode == "build"
+        else None
+    )
+    explain_failed_build = (
+        not credential_redirect and _failed_build_followup == EXPLAIN_FAILED_BUILD
+    )
+    failed_build_reply = (
+        _failed_build_explanation(_previous_run)
+        if explain_failed_build and _previous_run is not None
+        else None
+    )
+
     # Free-tier gate: regular projects keep the historical per-user allowance.
     # MAX projects spend the allowance attached to the verified business instead,
     # so creating another user account cannot mint another set of free builds for
@@ -1367,7 +1431,7 @@ async def post_prompt(
         is_free = get_settings().unlimited_generations or (
             (current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
         )
-    if not is_free and not credential_redirect:
+    if not is_free and not credential_redirect and not explain_failed_build:
         account = await resolve_billing_account(session, current_user.id)
         wallet = (
             await session.execute(select(Wallet).where(Wallet.billing_account_id == account.id))
@@ -1391,13 +1455,6 @@ async def post_prompt(
     # keying off `current_snapshot_id is None` mislabels EVERY first real prompt
     # as a follow-up and drops it to the cheap path. Treat "current snapshot is
     # the starter" (no prompt_text) as the first build instead.
-    _cur_snapshot = (
-        await session.get(Snapshot, project.current_snapshot_id)
-        if project.current_snapshot_id is not None
-        else None
-    )
-    is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
-
     # Run/install intent (owner 2026-06-19): on a FOLLOW-UP, "как запустить / хочу
     # запустить / установщик / дай поиграть" → DON'T build; hand back a one-click
     # installer-download card (the .zip already ships a run.bat launcher), so the
@@ -1511,6 +1568,7 @@ async def post_prompt(
         and not payload.skip_clarify
         and not selected_dump
         and not credential_redirect
+        and not explain_failed_build
     )
     if interview_eligible and settings.use_progressive_discovery:
         # Gather the prior conversation (questions already asked + answers) to
@@ -1654,6 +1712,7 @@ async def post_prompt(
     if (
         is_first_build
         and not credential_redirect
+        and not explain_failed_build
         and discovery_result is None
         and not discovery_ask
         and not do_clarify
@@ -1776,7 +1835,7 @@ async def post_prompt(
         # App-ification triage rule (P-H1), flag-gated so it's a no-op until enabled.
         appify_enabled=settings.use_followup_appification,
     )
-    orchestrate = intent == ORCHESTRATE and not credential_redirect
+    orchestrate = intent == ORCHESTRATE and not credential_redirect and not explain_failed_build
 
     # Model choice is server-side — the user never picks. `force_model` is the
     # hidden admin override (env FORCE_MODEL). Otherwise the triage decides:
@@ -1840,6 +1899,7 @@ async def post_prompt(
         "clarify"
         if (
             credential_redirect
+            or explain_failed_build
             or discovery_ask
             or async_onboarding
             or do_clarify
@@ -1866,6 +1926,14 @@ async def post_prompt(
                 "или историю проекта. Если ключ уже был отправлен в чат, отзовите его "
                 "у провайдера и создайте новый."
             ),
+            run_id=generation_run.id,
+        )
+    elif explain_failed_build:
+        assert failed_build_reply is not None
+        _spawn_text_turn(
+            project_id,
+            assistant_msg.id,
+            failed_build_reply,
             run_id=generation_run.id,
         )
     elif async_onboarding:
@@ -3189,9 +3257,7 @@ async def _process_prompt(
                 except Exception as _dp_exc:
                     print(f"[PP] design_plugin skipped: {_dp_exc!r}", flush=True)
 
-            _vision_context = (
-                _design_contract.vision_context if _design_contract else prompt_text
-            )
+            _vision_context = _design_contract.vision_context if _design_contract else prompt_text
             _base_agent_executor = agent_builder.make_container_executor(
                 project_id=project_id,
                 slug=project_slug,

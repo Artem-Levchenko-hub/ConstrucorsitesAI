@@ -244,6 +244,85 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     assert len(rows) == 2
 
 
+async def test_failed_first_build_explanation_does_not_spawn_another_build(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    failed_message = Message(
+        project_id=project.id,
+        role="assistant",
+        content="Сборка остановлена: главный экран не создан.",
+        tokens_in=0,
+        tokens_out=0,
+    )
+    db_session.add(failed_message)
+    await db_session.flush()
+    failed_run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=failed_message.id,
+        idempotency_key="failed-first-build",
+        prompt_hash="hash",
+        status="failed",
+        response_mode="build",
+        error="build finished without a committed snapshot",
+    )
+    db_session.add(failed_run)
+    await db_session.commit()
+
+    async def _current_user() -> User:
+        return owner
+
+    settings = SimpleNamespace(
+        unlimited_generations=False,
+        force_model=None,
+        use_progressive_discovery=False,
+        use_clarify_interview=False,
+        use_auto_stack_routing=False,
+        use_followup_appification=False,
+        use_result_type_router=False,
+    )
+    build_spawns: list[dict[str, object]] = []
+    text_spawns: list[tuple[str, uuid.UUID]] = []
+
+    def _spawn_build(**kwargs: object) -> None:
+        build_spawns.append(kwargs)
+
+    def _spawn_text(
+        _project_id: uuid.UUID,
+        _message_id: uuid.UUID,
+        text: str,
+        *,
+        run_id: uuid.UUID,
+    ) -> None:
+        text_spawns.append((text, run_id))
+
+    app.dependency_overrides[get_current_user] = _current_user
+    monkeypatch.setattr(messages, "get_settings", lambda: settings)
+    monkeypatch.setattr(messages, "_spawn_process_prompt", _spawn_build)
+    monkeypatch.setattr(messages, "_spawn_text_turn", _spawn_text)
+    monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    try:
+        response = await client.post(
+            f"/api/projects/{project.id}/prompt",
+            json={
+                "prompt": "Почему прошлая сборка сломалась?",
+                "idempotency_key": "explain-failed-build",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 202
+    assert response.json()["mode"] == "clarify"
+    assert build_spawns == []
+    assert len(text_spawns) == 1
+    assert "Новую сборку не запускаю" in text_spawns[0][0]
+    assert "без рабочей версии" in text_spawns[0][0]
+
+
 class _NoopRedis:
     async def publish(self, *_args: object, **_kwargs: object) -> int:
         return 0

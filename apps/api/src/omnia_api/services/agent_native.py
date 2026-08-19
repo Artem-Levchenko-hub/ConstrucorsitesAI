@@ -65,13 +65,43 @@ _NO_WRITE_ABORT_AT = 12
 # write resets the regular no-write streak and unlocks every tool for repair and
 # verification; infra and hard-stop guards remain unchanged.
 _MAX_PREWRITE_DISCOVERY_TURNS = 6
-_MAX_PREWRITE_ALLOWED_TOOLS = frozenset({"write_file", "edit_file"})
+_MAX_PRODUCT_ENTRY_PATH = "src/app/page.tsx"
 _MAX_PREWRITE_LOCK_RESULT = (
     "MAX pre-write discovery budget is exhausted. The platform core and product "
     "contract are already in context. Do not read, search, build, probe, or inspect "
-    "dependencies again. Implement the product NOW with write_file or edit_file; "
-    "start with src/app/page.tsx or a product component."
+    "dependencies again. Create src/app/page.tsx NOW with write_file or edit_file."
 )
+_MAX_PRODUCT_ENTRY_REQUIRED_RESULT = (
+    "MAX product entry is still missing. A helper, config, or standalone component "
+    "is not a runnable product by itself and does not unlock more exploration. Your "
+    "NEXT action must create src/app/page.tsx with write_file (or edit it if it exists)."
+)
+
+
+def _is_max_product_surface(path: str) -> bool:
+    """True only for files that can visibly advance the generated product."""
+
+    normalized = _normalize_agent_path(path)
+    if normalized == _MAX_PRODUCT_ENTRY_PATH:
+        return True
+    if normalized.startswith("src/components/"):
+        return True
+    if normalized == "src/app/globals.css":
+        return True
+    if normalized.startswith("src/app/api/"):
+        return False
+    return normalized.startswith("src/app/") and normalized.rsplit("/", 1)[-1] in {
+        "error.tsx",
+        "layout.tsx",
+        "loading.tsx",
+        "not-found.tsx",
+        "page.tsx",
+    }
+
+
+def _normalize_agent_path(path: str) -> str:
+    return (path or "").replace("\\", "/").lstrip("./")
+
 
 # Infra circuit breaker: consecutive turns where EVERY executed tool op died on
 # infra (container/orchestrator unreachable — executor tags obs["infra_dead"]).
@@ -630,7 +660,10 @@ async def run_native_build(
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     wrote_since_build = False
-    no_write_turns = 0  # consecutive assistant turns with no successful write
+    # Consecutive turns without a visible/product-surface change. A helper or
+    # config mutation still dirties the build fact-gate, but is not progress.
+    no_write_turns = 0
+    non_entry_writes_before_entry = 0
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
@@ -829,7 +862,7 @@ async def run_native_build(
 
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
-            wrote_this_turn = False
+            product_progress_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
@@ -866,16 +899,31 @@ async def run_native_build(
                     continue
 
                 action = _tool_use_to_action(tu)
+                _max_contract_active = max_runtime and completion_check is not None
+                _max_entry_missing = _MAX_PRODUCT_ENTRY_PATH not in written
                 _max_prewrite_locked = (
-                    max_runtime
-                    and completion_check is not None
-                    and not written
+                    _max_contract_active
+                    and _max_entry_missing
                     and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
-                    and name not in _MAX_PREWRITE_ALLOWED_TOOLS
+                )
+                _max_entry_required = (
+                    _max_contract_active
+                    and _max_entry_missing
+                    and (_max_prewrite_locked or non_entry_writes_before_entry > 0)
                 )
                 obs: dict[str, Any]
-                if _max_prewrite_locked:
-                    obs = {"ok": False, "error": _MAX_PREWRITE_LOCK_RESULT}
+                if _max_entry_required and not (
+                    name in {"write_file", "edit_file"}
+                    and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
+                ):
+                    obs = {
+                        "ok": False,
+                        "error": (
+                            _MAX_PREWRITE_LOCK_RESULT
+                            if _max_prewrite_locked and non_entry_writes_before_entry == 0
+                            else _MAX_PRODUCT_ENTRY_REQUIRED_RESULT
+                        ),
+                    }
                 else:
                     try:
                         obs = await execute(action)
@@ -900,16 +948,32 @@ async def run_native_build(
                 if obs.get("infra_dead"):
                     infra_this_turn += 1
                 if name in ("write_file", "edit_file") and obs.get("ok"):
+                    normalized_path = _normalize_agent_path(action.path)
+                    tracked_path = normalized_path if _max_contract_active else action.path
+                    previous_content = written.get(tracked_path)
+                    next_content: str | None = None
                     if name == "write_file":
-                        written[action.path] = action.args.get("content", "")
+                        next_content = action.args.get("content", "")
                     elif isinstance(obs.get("content"), str):
                         # executor returns the post-edit content (mirrors the
                         # text loop's tracking at agent_builder.py) — closes the
                         # gap where edit_file never dirtied the done fact-gate.
-                        written[action.path] = obs["content"]
+                        next_content = obs["content"]
+                    if next_content is not None:
+                        written[tracked_path] = next_content
                     wrote_since_build = True
-                    wrote_this_turn = True
                     proof_after_write.clear()
+                    content_changed = next_content is None or next_content != previous_content
+                    if _max_contract_active:
+                        if (
+                            _MAX_PRODUCT_ENTRY_PATH not in written
+                            and normalized_path != _MAX_PRODUCT_ENTRY_PATH
+                        ):
+                            non_entry_writes_before_entry += 1
+                        if content_changed and _is_max_product_surface(normalized_path):
+                            product_progress_this_turn = True
+                    elif content_changed:
+                        product_progress_this_turn = True
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
@@ -949,7 +1013,7 @@ async def run_native_build(
             # tool_results (roles must alternate; tool_result blocks must come
             # first), then abort as "exploring" — messages.py's honest-result
             # branches (looped-but-serves / edit-no-op) already consume it.
-            if wrote_this_turn:
+            if product_progress_this_turn:
                 no_write_turns = 0
             else:
                 no_write_turns += 1
@@ -984,7 +1048,10 @@ async def run_native_build(
             if no_write_turns >= _NO_WRITE_ABORT_AT:
                 return AgentResult(
                     done=False,
-                    summary="stuck exploring (reading/verifying) without writing any file",
+                    summary=(
+                        "stuck without user-facing product progress "
+                        "(only reading/verifying or auxiliary-file churn)"
+                    ),
                     files=written,
                     steps=step + 1,
                     transcript=convo,
