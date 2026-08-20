@@ -28,7 +28,8 @@ and replaying engine.createRecord's parse-then-default order; no LLM, no gen):
     C number default "none", qty OMITTED                → 201 qty:"none"      ← BUG
     D number default 0, qty OMITTED                     → 201 qty:0           ← control
     E boolean default "yes", inStock OMITTED            → 201 inStock:"yes"   ← BUG
-    F enum 'pending' PROVIDED                           → 400 Invalid enum    ← control (engine 400s the value it silently writes)
+    F enum 'pending' PROVIDED → 400 Invalid enum
+      ← control (engine 400s the value it silently writes)
   Evidence: _routine/runs/2026-06-16T22-13Z/probe_output_before.txt + probe_harness.mts.
 
 THE FIX (shipped — maximally safe / purely permissive): run the default through

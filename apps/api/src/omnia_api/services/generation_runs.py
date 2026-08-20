@@ -24,8 +24,14 @@ async def compile_terminal_run_memory(session: AsyncSession, run: GenerationRun)
     try:
         from omnia_api.core.config import get_settings
         from omnia_api.services.project_memory import compile_project_memory_revision
+        from omnia_api.services.project_memory_policy import project_memory_enabled
 
-        if not get_settings().use_project_memory:
+        settings = get_settings()
+        if not project_memory_enabled(
+            global_enabled=settings.use_project_memory,
+            canary_users=settings.project_memory_canary_users,
+            user_id=run.user_id,
+        ):
             return
         async with session.begin_nested():
             await compile_project_memory_revision(session, run)

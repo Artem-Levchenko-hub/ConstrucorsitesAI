@@ -63,6 +63,6 @@ def test_card_lists_the_real_names_not_the_hallucinated_one() -> None:
 def test_card_is_nonempty_and_marks_locked() -> None:
     card = ab.realtime_primitives_contract()
     assert len(card) > 500
-    assert "КОНТРАКТ" in card
+    assert "ПРИМИТИВЫ СУБСТРАТА" in card
     assert "@/lib/channels" in card
     assert "@/components/realtime/use-channel" in card

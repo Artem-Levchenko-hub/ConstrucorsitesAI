@@ -132,7 +132,8 @@ from omnia_api.services.link_validator import (
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
-from omnia_api.services.project_memory import record_run_artifacts, render_project_memory_context
+from omnia_api.services.project_memory import record_run_artifacts
+from omnia_api.services.project_memory_policy import load_project_memory_context
 from omnia_api.services.prompt_builder import (
     KIT_FILES,
     build_art_director_system,
@@ -971,7 +972,7 @@ async def _run_async_onboarding(
             "onboarding.survey",
             {
                 "message_id": str(assistant_message_id),
-                "survey": survey,
+                "survey": [question.model_dump(mode="json") for question in survey],
                 "question_index": 1,
                 "question_total": len(plan),
                 "niche": infer_niche_label(prompt) or None,
@@ -3027,8 +3028,11 @@ async def _process_prompt(
             )
             rows = list(reversed(list(res.scalars().all())))
             history_serialized = [{"role": m.role, "content": m.content} for m in rows if m.content]
-            if get_settings().use_project_memory:
-                project_memory_context = await render_project_memory_context(session, project_id)
+            project_memory_context = await load_project_memory_context(
+                session,
+                project_id=project_id,
+                user_id=user_id,
+            )
         print(f"[PP] ctx_loaded sha={current_sha} history={len(history_serialized)}", flush=True)
 
         # B4 — imported repos are ALWAYS surgical-edit only.  We enforce this

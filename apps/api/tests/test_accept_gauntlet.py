@@ -177,7 +177,6 @@ async def test_all_gates_clean_passes(monkeypatch):
         accept_gauntlet.TASTE,
         accept_gauntlet.HIERARCHY,
         accept_gauntlet.DATA,
-        accept_gauntlet.REFERENCE,
     ]
     assert v.render_expected is True
     assert v.passed is True
@@ -216,7 +215,9 @@ async def test_abstain_fails_strict_but_not_hard(monkeypatch):
     # include_rendered fans the BLOCKING rendered legs only — the advisory catalog
     # leg (V1.17) stays off unless its own dial is set, so it is not in abstained.
     assert {g.gate for g in v.abstained} == (
-        set(accept_gauntlet.RENDERED_GATES) - accept_gauntlet.ADVISORY_GATES
+        set(accept_gauntlet.RENDERED_GATES)
+        - accept_gauntlet.ADVISORY_GATES
+        - set(accept_gauntlet.REFERENCE_LEGS)
     )
 
 
@@ -365,7 +366,12 @@ async def test_composition_plus_full_render_has_no_duplicate_legs(monkeypatch):
     # (V1.17) stays off without its own dial.
     assert set(gates) == {
         accept_gauntlet.DEFECT_REGISTRY,
-        *(g for g in accept_gauntlet.RENDERED_GATES if g not in accept_gauntlet.ADVISORY_GATES),
+        *(
+            gate
+            for gate in accept_gauntlet.RENDERED_GATES
+            if gate not in accept_gauntlet.ADVISORY_GATES
+            and gate not in accept_gauntlet.REFERENCE_LEGS
+        ),
     }
 
 
@@ -637,6 +643,24 @@ async def test_reference_off_does_not_run(monkeypatch):
         reference=False,
     )
     assert accept_gauntlet.REFERENCE not in {g.gate for g in v.gates}
+
+
+async def test_reference_not_fanned_by_broad_render_dial(monkeypatch):
+    """The production reference switch remains authoritative when rendered gates run."""
+    _stub_rendered(monkeypatch, wow=_wow(), perf=_perf(), chip=_chip(checked=("palette-bg",)))
+
+    async def _boom(*_args, **_kwargs):  # pragma: no cover
+        raise AssertionError("reference ran without its dedicated dial")
+
+    monkeypatch.setattr(accept_gauntlet.reference_corpus, "audit_files", _boom)
+
+    verdict = await accept_gauntlet.run(
+        files={"index.html": _CLEAN_HTML},
+        include_rendered=True,
+        reference=False,
+    )
+
+    assert accept_gauntlet.REFERENCE not in {gate.gate for gate in verdict.gates}
 
 
 def test_reference_legs_are_reference_only():

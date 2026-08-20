@@ -313,10 +313,13 @@ server {{
 
 async def _reload() -> CmdResult:
     """`nginx -t` then reload. Returns the first failing step (or the reload)."""
-    test = await run(["sudo", "-n", "nginx", "-t"], timeout=20)
+    test = await run(["sudo", "-n", "nginx", "-t"], timeout_seconds=20)
     if not test.ok:
         return test
-    return await run(["sudo", "-n", "systemctl", "reload", "nginx"], timeout=25)
+    return await run(
+        ["sudo", "-n", "systemctl", "reload", "nginx"],
+        timeout_seconds=25,
+    )
 
 
 async def _issue_cert(host: str) -> bool:
@@ -370,7 +373,7 @@ async def _issue_cert(host: str) -> bool:
             "--server", "letsencrypt",
             "--keylength", "ec-256",
         ],
-        timeout=180,
+        timeout_seconds=180,
         env=acme_env,
     )
     install = await run(
@@ -380,7 +383,7 @@ async def _issue_cert(host: str) -> bool:
             "--fullchain-file", str(fullchain),
             "--reloadcmd", "sudo -n systemctl reload nginx",
         ],
-        timeout=60,
+        timeout_seconds=60,
         env=acme_env,
     )
     # Gate on a real installed cert — empty/garbage files would crash nginx.

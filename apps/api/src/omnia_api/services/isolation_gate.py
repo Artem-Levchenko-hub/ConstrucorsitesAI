@@ -41,6 +41,7 @@ from typing import Any
 from uuid import UUID
 
 from omnia_api.services.functional_gate import Check, FunctionalVerdict, summarize
+from omnia_api.services.render_settle import goto_and_settle
 
 _PASSWORD = "iso-gate-1234"
 # Cap how many discovered routes the anonymous sweep probes, so a huge app can't
@@ -200,7 +201,7 @@ async def run_public_access_gate(
                 # A FRESH context with NO login — a true anonymous visitor.
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
-                await page.goto(f"{base_url}/", wait_until="domcontentloaded")
+                await goto_and_settle(page, f"{base_url}/", timeout_ms=30_000)
                 for route in routes:
                     res = await fg._api(page, "GET", route)
                     status = int(res.get("status", 0))
@@ -267,8 +268,8 @@ async def run_isolation_probe(
                 ctx_b = await browser.new_context()
                 page_a = await ctx_a.new_page()
                 page_b = await ctx_b.new_page()
-                await page_a.goto(f"{base}/signin", wait_until="domcontentloaded")
-                await page_b.goto(f"{base}/signin", wait_until="domcontentloaded")
+                await goto_and_settle(page_a, f"{base}/signin", timeout_ms=30_000)
+                await goto_and_settle(page_b, f"{base}/signin", timeout_ms=30_000)
                 for email, page in ((user_a, page_a), (user_b, page_b)):
                     await fg._api(
                         page, "POST", "/api/auth/register",

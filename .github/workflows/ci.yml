@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Gateway tests
+        working-directory: apps/llm-gateway
+        run: uv run --frozen --extra dev pytest -q -p no:warnings
+
+  api-release-gate:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_dev
+      DATABASE_TEST_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_test
+      JWT_SECRET: ci-only-api-jwt-secret-at-least-32-bytes
+      REDIS_URL: redis://127.0.0.1:6379/0
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: omnia
+          POSTGRES_PASSWORD: omnia
+          POSTGRES_DB: omnia_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U omnia -d omnia_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install the locked API environment
+        working-directory: apps/api
+        run: uv sync --frozen
+      - name: Lint and typecheck API
+        working-directory: apps/api
+        run: uv run ruff check . && uv run mypy src
+      - name: Run release-critical API regressions
+        working-directory: apps/api
+        run: >-
+          uv run pytest -q
+          tests/test_acceptance.py
+          tests/test_deploy_gate_defaults.py
+          tests/test_release_identity.py
+          tests/test_readiness.py
+          tests/test_auth.py
+          tests/test_project_memory_policy.py
+          tests/test_generation_runs.py
+          tests/test_project_memory.py
+          tests/test_production_canary.py
+
+  orchestrator-release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install the locked orchestrator environment
+        working-directory: apps/orchestrator
+        run: uv sync --frozen
+      - name: Lint and typecheck orchestrator
+        working-directory: apps/orchestrator
+        run: uv run ruff check . && uv run mypy src
+      - name: Run orchestrator tests
+        working-directory: apps/orchestrator
+        run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Activate the pinned pnpm release
+        run: corepack enable && corepack prepare pnpm@9.15.0 --activate
+      - name: Verify pnpm release
+        run: test "$(pnpm --version)" = "9.15.0"
+      - name: Install web dependencies reproducibly
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+      - name: Assert install did not rewrite manifests or lockfiles
+        run: git diff --exit-code -- apps/web/package.json apps/web/pnpm-lock.yaml apps/web/pnpm-workspace.yaml
+      - name: Typecheck, test, and build web
+        working-directory: apps/web
+        run: pnpm typecheck && pnpm test && pnpm build
+
+  py-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile API and orchestrator sources
+        run: python -m compileall -q apps/api/src apps/orchestrator/src
+
+  image-build:
+    runs-on: ubuntu-latest
+    env:
+      JWT_SECRET: ci-only-jwt-secret
+      SECRETS_ENCRYPTION_KEY: ci-only-encryption-key
+      ORCHESTRATOR_INTERNAL_TOKEN: ci-only-orchestrator-token
+      NEXTAUTH_SECRET: ci-only-nextauth-secret
+      OMNIA_RELEASE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify rendered production policy
+        run: bash infra/release/test-compose-policy.sh
+      - name: Build production API and web images
+        run: docker compose -f apps/llm-gateway/deploy/full/docker-compose.yml build api web
+
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+      - name: Validate GitHub Actions workflows
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          actionlint

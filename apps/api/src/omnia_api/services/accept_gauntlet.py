@@ -95,8 +95,9 @@ CABINET = "cabinet"
 #: floor; ``taste``, ``hierarchy``, ``reference`` and ``catalog`` run at desktop
 #: width. ``reference`` (V1.13b) is the pillar-1 CEILING leg — the candidate must
 #: meet or beat a curated enterprise corpus; it is a member of the order tuple (so
-#: it is fanned by ``run()`` and not orphaned) but, like a flag-gated gate, only
-#: fires when ``include_rendered`` is on OR the ``reference=`` dial is set.
+#: it is fanned by ``run()`` and not orphaned) but fires only when the dedicated
+#: ``reference=`` dial is set. The broad render dial cannot bypass production's
+#: reference-corpus kill switch.
 #: ``catalog`` (V1.17) is the catalog-realism ratchet — see ``ADVISORY_GATES``: it
 #: is in the order tuple (so ``run()`` fans it) but is ADVISORY (a non-blocking
 #: quality-card) and runs ONLY behind its own ``catalog=`` dial, never via
@@ -807,7 +808,13 @@ async def run(
     # own switch, so a hot caller that flips ``include_rendered`` on never silently
     # pays for the advisory render.
     legs: set[str] = (
-        {g for g in RENDERED_GATES if g not in ADVISORY_GATES} if include_rendered else set()
+        {
+            gate
+            for gate in RENDERED_GATES
+            if gate not in ADVISORY_GATES and gate not in REFERENCE_LEGS
+        }
+        if include_rendered
+        else set()
     )
     if composition:
         legs |= set(COMPOSITION_LEGS)

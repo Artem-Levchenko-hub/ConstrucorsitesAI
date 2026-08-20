@@ -26,9 +26,11 @@ omnia-dev-dogfood-datecast-probe-2fe2f6 port 3399, starter `Task` entity with it
 built-in `due` date field, owner-auth via Auth.js credentials — no LLM, no gen):
   - POST /api/entities/Task {title, due:"June 2025", priority:"high"}     → 201 (write accepts it)
   - GET  /api/entities/Task            (no sort — what useEntity sends)    → 200, record present
-  - GET  /api/entities/Task?sort=due&order=asc                            → 500 "internal error"  ← THE BUG
+  - GET  /api/entities/Task?sort=due&order=asc
+    → 500 "internal error"  ← THE BUG
   - GET  /api/entities/Task?sort=due&order=desc                           → 500 (both directions)
-  - GET  /api/entities/Task?due=June 2025   (equality filter, no cast)    → 200, finds the record (safe)
+  - GET  /api/entities/Task?due=June 2025 (equality filter, no cast)
+    → 200, finds the record (safe)
   - CONTROL: DELETE the poison record, re-GET ?sort=due&order=asc         → 200 with sorted rows
         → proves it was EXACTLY the "June 2025" value, not a general sort failure.
   - Container log: `[entities] unexpected error error: invalid input syntax for
