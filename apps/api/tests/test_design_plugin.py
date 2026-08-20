@@ -45,6 +45,16 @@ def test_fitness_max_gets_product_ux_and_mobile_contract() -> None:
     assert "ДИЗАЙН-НАСТРОЕНИЕ ЭТОГО ПРОЕКТА" not in result.prompt_block
 
 
+def test_habit_catalog_stays_wellness_instead_of_becoming_commerce() -> None:
+    result = _contract(
+        "Трекер ежедневных привычек: экран Сегодня, статистика и каталог привычек"
+    )
+
+    assert result.archetype == "fitness-health"
+    assert "сводка прогресса → тренировки/планы" in result.design_markdown
+    assert "корзина" not in result.design_markdown
+
+
 def test_max_contract_persists_secret_free_design_memory() -> None:
     result = _contract("Фитнес-тренер, ключ sk-test-secret")
 

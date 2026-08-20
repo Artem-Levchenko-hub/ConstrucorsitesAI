@@ -626,6 +626,7 @@ def test_load_stack_skills_reads_exact_max_ui_contract():
     assert "@maxhub/max-ui@0.2.0" in block
     assert "DESIGN.md" in block
     assert "Do not import `Panel`, `Grid`, `Container`, `Flex` or `TabBar`" in block
+    assert "Do not browse `node_modules`" in block
     assert "pnpm typecheck" in block
 
 

@@ -24,7 +24,7 @@ from omnia_api.services.design_tokens import DesignTokens, tokens_for_project
 from omnia_api.services.preset_classifier import classify_preset_sync
 
 PLUGIN_ID = "omnia-design-pro"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.1.1"
 KNOWLEDGE_SOURCE = "ui-ux-pro-max@2.13.0+8a1a6d85"
 
 _UI_TEMPLATES = frozenset({"fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp"})
@@ -49,8 +49,11 @@ _PATTERNS = (
             "спортсмен",
             "тренер",
             "здоров",
+            "привыч",
             "fitness",
             "workout",
+            "habit",
+            "wellness",
         ),
         "сводка прогресса → тренировки/планы → разбор → история → профиль",
         "данные тренировки → понятный анализ → следующая рекомендация",

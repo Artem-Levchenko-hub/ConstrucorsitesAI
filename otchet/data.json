@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-20",
-  "version": 20,
+  "version": 21,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2216,13 +2216,13 @@
   {
    "id": "H115",
    "title": "Постоянный дизайн-контракт улучшает MAX без расширения агентского цикла",
-   "status": "testing",
-   "score": null,
+   "status": "partial",
+   "score": 7,
    "category": "MAX / дизайн / skill / vision / надёжность",
    "period": "20.08",
    "description": "Обновить локальный UI/UX Pro Max, сохранить выбранную архитектуру и токены в DESIGN.md, дать агенту точный контракт публичных компонентов @maxhub/max-ui@0.2.0 и обозначать недоступный vision как unverified без фиктивной оценки 10; не добавлять модельные проходы, repair или версии.",
-   "evidence": "Локальный срез подготовлен: UI/UX Pro Max 2.13.0 закреплён точным commit и MIT license; Design Pro 1.1.0 создаёт секрет-free DESIGN.md в существующем starter/snapshot; MAX skill запрещает несуществующие публичные импорты Panel/Grid/Container/Flex/TabBar; score недоступного vision равен null. 61 целевой тест, ещё 42 агентских/MAX unit-проверки, Ruff изменённых runtime-файлов, mypy 225 модулей и MAX TypeScript typecheck зелёные. Production deploy и живой generation-canary выполняются.",
-   "impact": "Ожидаем меньше противоречивых визуальных решений и build-ошибок MAX UI без возврата бесконечного агентского продолжения. Итоговая оценка появится только после живой генерации.",
+   "evidence": "UI/UX Pro Max 2.13.0 закреплён точным upstream commit 8a1a6d85 и MIT license; Design Pro создаёт secret-free DESIGN.md в существующем MAX starter/snapshot; отдельный MAX skill фиксирует реальные exports @maxhub/max-ui@0.2.0; недоступный vision возвращает score=null и status=unverified. Первый production-срез 59bf18ca с Design Pro 1.1.0 развёрнут: API/worker используют один Linux image, публичные /api/health, /web-health, /max и /otchet/ отвечают 200, свежих ошибок API/worker нет. Живой MAX canary ad8e3b1f-be9e-40ee-98aa-5ba062cac181 завершён за 1642 с: один build-run, 74 шага, clean typecheck, runtime/preview 200, ровно 1 generated snapshot из 2 total и 40 файлов; snapshot 23858157-c486-435a-a2c0-b9dd3d71da97 содержит DESIGN.md, src/app/page.tsx и globals.css. Vision judge был недоступен и честно записал skipped без 10/10. Playwright 390x844: overflow=false, console/page errors=0, failed requests=0. Canary также выявил ограничение: модель всё ещё перечитывала пакет, получила 17 красных guard-шагов и только после pre-write budget создала page.tsx; слово «каталог привычек» сначала дало commerce. Follow-up Design Pro 1.1.1 исправляет этот classifier и прямо запрещает повторное исследование node_modules до главного экрана. Локально после фикса: 62 целевых теста, full Ruff и mypy 225 модулей зелёные; ранее в том же срезе зелёные ещё 42 MAX/agent, 25 acceptance и MAX TypeScript typecheck.",
+   "impact": "Технический слой работает: дизайн-память переживает snapshot, точный MAX UI контракт доступен агенту, лишних версий и repair-проходов не добавлено, а отсутствие vision больше не маскируется оценкой 10. Визуально canary аккуратный и рабочий, но пока не «вау»: отдельный skill не остановил повторную разведку и полный run занял 27 минут. Следующий этап должен усиливать следование DESIGN.md и сокращать pre-write цикл, не добавляя новые модельные фазы.",
    "next_vector": "V1"
   }
  ],
@@ -2259,7 +2259,7 @@
     ],
     [
      "UI/UX Pro Max 2.13 + постоянный DESIGN.md + точный MAX UI skill + честный vision-unverified (20.08)",
-     false
+     true
     ]
    ],
    "hyp_ids": [

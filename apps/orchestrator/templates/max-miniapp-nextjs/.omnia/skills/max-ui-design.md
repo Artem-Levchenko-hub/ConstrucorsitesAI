@@ -22,6 +22,10 @@ Use public exports that exist in the pinned package:
 `CellSimple`, `Counter`, `IconButton`, `Input`, `MaxUI`, `Spinner`, `Textarea`,
 `Typography` and the package's exported icons/hooks.
 
+This contract is the dependency inspection result. Do not browse `node_modules`,
+re-read package declarations or probe exports before writing the requested main
+screen; that duplicates verified work and consumes the pre-write budget.
+
 - `Button`: sizes `xsmall | small | medium | large`; variants
   `primary | secondary | ghost | primary-contrast | secondary-contrast |
   overlay | destructive`; supports `stretched`, `iconBefore`, `iconAfter`,
