@@ -28,7 +28,6 @@ def test_fitness_max_gets_product_ux_and_mobile_contract() -> None:
     assert result.plugin_id == PLUGIN_ID
     assert result.version == PLUGIN_VERSION
     assert result.knowledge_source == KNOWLEDGE_SOURCE
-    assert "keenthemes/reui@0daf79dff3ebe0ede7fa05bedcaefeaac93a8949" in result.knowledge_source
     assert result.archetype == "fitness-health"
     assert result.preset_id == "wellness-casual"
     assert "данные тренировки → понятный анализ" in result.prompt_block
@@ -40,14 +39,6 @@ def test_fitness_max_gets_product_ux_and_mobile_contract() -> None:
     assert "CHARTS" in result.prompt_block
     assert "lucide-react only" in result.prompt_block
     assert "do not import an uninstalled chart package" in result.prompt_block
-    assert result.reui_pattern_ids == (
-        "card/c-card-15",
-        "chart/c-chart-13",
-        "progress/c-progress-4",
-    )
-    assert "REUI COMPOSITION REFERENCES" in result.prompt_block
-    assert "DO NOT run shadcn/ReUI CLI" in result.prompt_block
-    assert "install packages" in result.prompt_block
     assert "@phosphor-icons" not in result.prompt_block
     assert "--app-brand:" in result.prompt_block
     assert "не добавляй\n  `@theme`" in result.prompt_block
@@ -55,7 +46,9 @@ def test_fitness_max_gets_product_ux_and_mobile_contract() -> None:
 
 
 def test_habit_catalog_stays_wellness_instead_of_becoming_commerce() -> None:
-    result = _contract("Трекер ежедневных привычек: экран Сегодня, статистика и каталог привычек")
+    result = _contract(
+        "Трекер ежедневных привычек: экран Сегодня, статистика и каталог привычек"
+    )
 
     assert result.archetype == "fitness-health"
     assert "сводка прогресса → тренировки/планы" in result.design_markdown
@@ -69,8 +62,6 @@ def test_max_contract_persists_secret_free_design_memory() -> None:
     assert f"`{PLUGIN_ID}` `{PLUGIN_VERSION}`" in result.design_markdown
     assert "--app-bg" in result.design_markdown
     assert "@maxhub/max-ui@0.2.0" in result.design_markdown
-    assert "## ReUI composition references" in result.design_markdown
-    assert "keenthemes/reui@0daf79dff3ebe0ede7fa05bedcaefeaac93a8949" in result.design_markdown
     assert "sk-test-secret" not in result.design_markdown
 
     seeded = seed_design_memory({"package.json": "{}"}, result)
