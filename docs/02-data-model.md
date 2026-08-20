@@ -76,12 +76,14 @@ Durable-идентичность и жизненный цикл одного п�
 | `id` | uuid | PK |
 | `project_id` | uuid | FK → `projects(id)` ON DELETE CASCADE, NOT NULL |
 | `user_id` | uuid | FK → `users(id)` ON DELETE CASCADE, NOT NULL |
+| `user_message_id` | uuid | FK → `messages(id)` ON DELETE SET NULL; точный prompt-источник памяти проекта |
 | `assistant_message_id` | uuid | FK → `messages(id)` ON DELETE SET NULL, NULL до создания пары сообщений |
 | `idempotency_key` | text | NOT NULL; UNIQUE вместе с `project_id` |
 | `prompt_hash` | text | NOT NULL; защищает от переиспользования ключа с другим payload |
 | `status` | text | NOT NULL; CHECK IN (`pending`, `running`, `cancel_requested`, `cancelled`, `completed`, `failed`) |
 | `response_mode` | text | NULL (`build`, `edit`, `clarify`) |
 | `response_payload` | jsonb | NULL; точный ответ для идемпотентного replay |
+| `agent_state` | jsonb | NOT NULL DEFAULT `{}`; проверенные артефакты запуска: snapshot, commit, изменённые файлы |
 | `error` | text | NULL |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 | `started_at` | timestamptz | NULL |
@@ -95,6 +97,32 @@ Durable-идентичность и жизненный цикл одного п�
 - `(project_id, created_at)` — история запусков.
 - При старте единственного API-процесса оставшиеся активными строки завершаются
   как `failed`: process-local coroutine не может пережить рестарт.
+
+### `project_memory_revisions` (миграция `0046`)
+
+Неизменяемая полная ревизия долговременной памяти проекта после каждого
+завершённого prompt. Модель не пишет таблицу напрямую: memory compiler собирает
+её только из пользовательского сообщения, состояния `generation_runs` и
+подтверждённого snapshot.
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `project_id` | uuid | FK → `projects(id)` ON DELETE CASCADE |
+| `run_id` | uuid | UNIQUE, FK → `generation_runs(id)` ON DELETE CASCADE |
+| `user_message_id` | uuid | FK → `messages(id)` ON DELETE SET NULL |
+| `assistant_message_id` | uuid | FK → `messages(id)` ON DELETE SET NULL |
+| `snapshot_id` | uuid | FK → `snapshots(id)` ON DELETE SET NULL; NULL для clarify/failure/cancel |
+| `parent_id` | uuid | Self-FK ON DELETE SET NULL |
+| `version` | integer | Версия памяти внутри проекта |
+| `outcome` | text | `completed`, `failed` или `cancelled` |
+| `memory` | jsonb | Полное очищенное состояние: правила, запросы, изменения, известные ошибки |
+| `created_at` | timestamptz | NOT NULL DEFAULT now() |
+
+Инварианты: `UNIQUE(project_id, version)` создаёт линейную цепочку; `UNIQUE(run_id)`
+делает компиляцию идемпотентной. Компилятор редактирует credential-shaped значения,
+ограничивает размеры списков и закрывает открытую ошибку только новой версией со
+snapshot. В prompt попадает ограниченная выжимка; текущий код и build имеют приоритет.
 
 ### `billing_accounts`
 
@@ -376,6 +404,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0036` | `billing_accounts`; кошелёк, журнал, платежи и подписка переведены на business-aware владельца | Codex |
 | `0037` | `pending_payment` и partial unique guard для одной незавершённой покупки тарифа на account | Codex |
 | `0038` | версия согласия на renewal, guard одного ожидающего продления и канонический keep-alive проекта | Codex |
+| `0046` | `project_memory_revisions` + точная связь generation run с user message | Codex |
 
 ## Trigger для `updated_at`
 

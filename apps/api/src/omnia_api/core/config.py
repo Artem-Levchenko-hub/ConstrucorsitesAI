@@ -495,6 +495,11 @@ class Settings(BaseSettings):
     # the gates per the plan; the gates remain the guaranteed ceiling.)
     use_skill_injection: bool = Field(default=True)
 
+    # Durable per-project memory. Every terminal prompt compiles one immutable,
+    # secret-redacted revision; the next generation receives a bounded rendering.
+    # Kill switch leaves generation byte-identical and preserves stored revisions.
+    use_project_memory: bool = Field(default=True)
+
     # Full runnable export (P5, knowledge-layer/master plan) — when on, the
     # project download for a CONTAINER stack overlays the skeleton template tree
     # under the generated files so the zip is a RUNNABLE repo (skeleton + your

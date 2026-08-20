@@ -112,6 +112,7 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
+    compile_terminal_run_memory,
     finalize_generation_run,
     reserve_generation_run,
     set_generation_run_status,
@@ -131,6 +132,7 @@ from omnia_api.services.link_validator import (
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
+from omnia_api.services.project_memory import record_run_artifacts, render_project_memory_context
 from omnia_api.services.prompt_builder import (
     KIT_FILES,
     build_art_director_system,
@@ -202,6 +204,7 @@ async def _finalize_cancelled_generation(
         if run is not None:
             run.status = "cancelled"
             run.finished_at = datetime.now(UTC)
+            await compile_terminal_run_memory(session, run)
         await session.commit()
     await publish_event(
         project_id,
@@ -1911,6 +1914,7 @@ async def post_prompt(
     )
     await session.flush()
     generation_run.assistant_message_id = assistant_msg.id
+    generation_run.user_message_id = user_msg.id
     generation_run.response_mode = turn_mode
     await session.commit()
     await session.refresh(user_msg)
@@ -2991,6 +2995,7 @@ async def _process_prompt(
     project_design_preset_id: str | None = None
     project_image_gen_enabled: bool = True
     project_discovery_spec: dict[str, object] | None = None
+    project_memory_context = ""
     project_language: str = "ru"
     project_is_imported: bool = False
 
@@ -3022,6 +3027,8 @@ async def _process_prompt(
             )
             rows = list(reversed(list(res.scalars().all())))
             history_serialized = [{"role": m.role, "content": m.content} for m in rows if m.content]
+            if get_settings().use_project_memory:
+                project_memory_context = await render_project_memory_context(session, project_id)
         print(f"[PP] ctx_loaded sha={current_sha} history={len(history_serialized)}", flush=True)
 
         # B4 — imported repos are ALWAYS surgical-edit only.  We enforce this
@@ -3385,6 +3392,8 @@ async def _process_prompt(
                 if _seed_parts
                 else ""
             )
+            if project_memory_context:
+                _seed_block = _seed_block + "\n\n" + project_memory_context
             # Per-project DESIGN MOOD — make every app look UNIQUE instead of the
             # baked dark zinc/indigo template («дизайн всегда одинаковый»). Seeded
             # curated palette + font + density fed into the BUILD prompt so the
@@ -4929,6 +4938,14 @@ async def _process_prompt(
                     project = await session.get(Project, project_id)
                     if project is not None:
                         project.current_snapshot_id = snapshot.id
+                    memory_run = await session.get(GenerationRun, run_id)
+                    if memory_run is not None:
+                        record_run_artifacts(
+                            memory_run,
+                            snapshot_id=snapshot.id,
+                            commit_sha=new_sha,
+                            changed_files=list(files),
+                        )
                     msg = await session.get(Message, assistant_message_id)
                     if msg is not None:
                         msg.content = accumulated
@@ -5056,6 +5073,7 @@ async def _process_prompt(
             # B4 — imported repos use a stack-neutral generic edit identity
             # instead of the Omnia static/Next.js-specific ones.
             is_imported=project_is_imported,
+            project_memory_context=project_memory_context,
         )
         print(f"[PP] messages_built count={len(messages)} surgical={surgical}", flush=True)
 
@@ -7173,6 +7191,14 @@ async def _process_prompt(
                 project = await session.get(Project, project_id)
                 if project is not None:
                     project.current_snapshot_id = snapshot.id
+                memory_run = await session.get(GenerationRun, run_id)
+                if memory_run is not None:
+                    record_run_artifacts(
+                        memory_run,
+                        snapshot_id=snapshot.id,
+                        commit_sha=new_sha,
+                        changed_files=list(files),
+                    )
 
                 msg = await session.get(Message, assistant_message_id)
                 if msg is not None:
@@ -7334,6 +7360,14 @@ async def _process_prompt(
                                     _rep_proj = await _s.get(Project, project_id)
                                     if _rep_proj is not None:
                                         _rep_proj.current_snapshot_id = _rep_snap.id
+                                    _rep_run = await _s.get(GenerationRun, run_id)
+                                    if _rep_run is not None:
+                                        record_run_artifacts(
+                                            _rep_run,
+                                            snapshot_id=_rep_snap.id,
+                                            commit_sha=_rep_sha,
+                                            changed_files=list(_repaired),
+                                        )
                                     _rep_msg = await _s.get(Message, assistant_message_id)
                                     if _rep_msg is not None:
                                         _rep_msg.content = (_rep_msg.content or "") + (

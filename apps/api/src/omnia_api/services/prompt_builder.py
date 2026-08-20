@@ -4535,6 +4535,25 @@ def build_zone_edit_messages(
     ]
 
 
+def _inject_project_memory(
+    messages: list[dict[str, str]],
+    project_memory_context: str | None,
+) -> list[dict[str, str]]:
+    if not project_memory_context:
+        return messages
+    memory_message = {
+        "role": "user",
+        "content": (
+            "Историческая память проекта. Используй её для преемственности и не "
+            "повторяй известные ошибки. Текущий запрос, код и проверки имеют приоритет.\n\n"
+            + project_memory_context
+        ),
+    }
+    if not messages:
+        return [memory_message]
+    return [messages[0], memory_message, *messages[1:]]
+
+
 def build_messages(
     current_files: dict[str, str],
     history: Sequence[dict[str, str]],
@@ -4549,6 +4568,7 @@ def build_messages(
     discovery_spec: dict[str, Any] | None = None,
     language: str = "ru",
     is_imported: bool = False,
+    project_memory_context: str | None = None,
 ) -> list[dict[str, str]]:
     # Surgical EDIT mode (CHEAP intent on an existing project): a lean,
     # edit-only prompt that forbids rewriting the page or re-rolling the palette.
@@ -4556,10 +4576,17 @@ def build_messages(
     # is_imported forces edit_mode (set upstream in messages.py) and also
     # flows down so _build_edit_messages can select the generic identity.
     if edit_mode:
-        return _build_edit_messages(
-            current_files, history, user_prompt, selected_elements, template,
-            language=language,
-            is_imported=is_imported,
+        return _inject_project_memory(
+            _build_edit_messages(
+                current_files,
+                history,
+                user_prompt,
+                selected_elements,
+                template,
+                language=language,
+                is_imported=is_imported,
+            ),
+            project_memory_context,
         )
 
     # Phase L3 — when the feature flag is on, route through the lean
@@ -4593,13 +4620,16 @@ def build_messages(
         mode = "freeform"
     if mode == "catalog":
         from omnia_api.services.lean_prompt import build_catalog_messages
-        return build_catalog_messages(
-            history=history,
-            user_prompt=user_prompt,
-            selected_elements=selected_elements,
-            preset_id=preset_id,
-            project_id=project_id,
-            discovery_spec=discovery_spec,
+        return _inject_project_memory(
+            build_catalog_messages(
+                history=history,
+                user_prompt=user_prompt,
+                selected_elements=selected_elements,
+                preset_id=preset_id,
+                project_id=project_id,
+                discovery_spec=discovery_spec,
+            ),
+            project_memory_context,
         )
 
     # Freeform: hand the model project-seeded design tokens (palette+fonts) so
@@ -4642,6 +4672,7 @@ def build_messages(
             ),
         }
     ]
+    messages = _inject_project_memory(messages, project_memory_context)
 
     if current_files:
         files_block = "\n\n".join(

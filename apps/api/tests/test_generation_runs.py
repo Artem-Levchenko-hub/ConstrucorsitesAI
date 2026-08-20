@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.deps import get_current_user
@@ -14,6 +15,7 @@ from omnia_api.main import app
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
@@ -133,6 +135,11 @@ async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
     assert second.id != first.id
     await db_session.refresh(first)
     assert first.status == "completed"
+    memory = await db_session.scalar(
+        select(ProjectMemoryRevision).where(ProjectMemoryRevision.run_id == first.id)
+    )
+    assert memory is not None
+    assert memory.version == 1
 
 
 async def test_cancel_endpoint_marks_active_run_and_signals_redis(

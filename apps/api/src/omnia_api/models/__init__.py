@@ -33,6 +33,7 @@ from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
@@ -68,6 +69,7 @@ __all__ = [
     "Payment",
     "Project",
     "ProjectIntegrationBinding",
+    "ProjectMemoryRevision",
     "Snapshot",
     "Subscription",
     "Usage",

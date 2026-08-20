@@ -51,6 +51,20 @@ class GenerationRun(Base):
     )
     response_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    # Exact user turn that created this run. Nullable for historical rows.
+    user_message_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Durable execution evidence. The DB column has existed since migration 0041;
+    # exposing it in the ORM lets project-memory revisions cite exact changed files.
+    agent_state: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default="{}",
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

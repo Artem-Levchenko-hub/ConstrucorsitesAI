@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -13,6 +14,26 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 
 ACTIVE_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
+
+
+async def compile_terminal_run_memory(session: AsyncSession, run: GenerationRun) -> None:
+    """Compile memory behind a savepoint so memory cannot corrupt run state."""
+
+    if run.status not in {"completed", "failed", "cancelled"}:
+        return
+    try:
+        from omnia_api.core.config import get_settings
+        from omnia_api.services.project_memory import compile_project_memory_revision
+
+        if not get_settings().use_project_memory:
+            return
+        async with session.begin_nested():
+            await compile_project_memory_revision(session, run)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "project memory compile failed for run %s",
+            run.id,
+        )
 
 
 def prompt_hash(prompt: str) -> str:
@@ -81,6 +102,7 @@ async def reserve_generation_run(
                 active.error = "build finished without a committed snapshot"
             active.finished_at = datetime.now(UTC)
             await session.flush()
+            await compile_terminal_run_memory(session, active)
             active = None
 
     if active is not None:
@@ -96,6 +118,23 @@ async def reserve_generation_run(
                 "active_status": active.status,
             },
         )
+
+    # Self-heal a missed compiler write (or bootstrap one last pre-0046 run)
+    # before the new worker reads project memory. Idempotency on run_id makes this
+    # a cheap no-op during normal operation.
+    latest_terminal = (
+        await session.execute(
+            select(GenerationRun)
+            .where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.status.in_(("completed", "failed", "cancelled")),
+            )
+            .order_by(GenerationRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest_terminal is not None:
+        await compile_terminal_run_memory(session, latest_terminal)
 
     run = GenerationRun(
         project_id=project_id,
@@ -131,14 +170,15 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
         run.error = "API process restarted before generation completed"
         run.finished_at = now
         if run.assistant_message_id is None:
+            await compile_terminal_run_memory(session, run)
             continue
         message = await session.get(Message, run.assistant_message_id)
-        if message is None or message.tokens_out is not None:
-            continue
-        if marker not in (message.content or ""):
-            message.content = f"{message.content.rstrip()}\n\n{marker}".strip()
-        message.tokens_in = message.tokens_in or 0
-        message.tokens_out = 0
+        if message is not None and message.tokens_out is None:
+            if marker not in (message.content or ""):
+                message.content = f"{message.content.rstrip()}\n\n{marker}".strip()
+            message.tokens_in = message.tokens_in or 0
+            message.tokens_out = 0
+        await compile_terminal_run_memory(session, run)
 
     await session.commit()
     return len(runs)
@@ -189,6 +229,7 @@ async def set_generation_run_status(
             run.finished_at = now
         if error is not None:
             run.error = error[:2000]
+        await compile_terminal_run_memory(session, run)
         await session.commit()
 
 
@@ -206,6 +247,7 @@ async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
     run.finished_at = datetime.now(UTC)
     if build_failed and not run.error:
         run.error = "build finished without a committed snapshot"
+    await compile_terminal_run_memory(session, run)
     await session.commit()
     return run.status
 

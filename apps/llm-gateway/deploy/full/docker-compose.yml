@@ -351,6 +351,8 @@ services:
       # plan→act→observe→verify agent loop (file tools + typecheck) instead of
       # one-shot generation. false = today's pipeline (byte-identical).
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}
+      # Versioned project memory. Set false for instant rollback without data loss.
+      USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-true}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Per-user canary: run the agent loop for these user ids even when the
       # global flag is off (safe prod dogfood, no change for anyone else).

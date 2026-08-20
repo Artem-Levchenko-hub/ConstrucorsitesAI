@@ -958,3 +958,20 @@ def test_entities_ui_dashboard_loading_never_blank() -> None:
     assert _ENTITIES_UI.index("DashboardSkeleton") < _ENTITIES_UI.index(
         '} from "@/components/omnia"'
     )
+
+
+def test_build_messages_injects_project_memory_before_current_request() -> None:
+    memory = "<project_memory>\nKnown failure: do not repeat stale import\n</project_memory>"
+
+    messages = build_messages(
+        {},
+        [],
+        "Исправь главный экран",
+        edit_mode=True,
+        project_memory_context=memory,
+    )
+
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert memory in messages[1]["content"]
+    assert messages[-1]["content"].endswith("Исправь главный экран")
