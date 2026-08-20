@@ -60,9 +60,7 @@ async def test_evaluate_passes_clean(monkeypatch):
     from omnia_api.workers import preview
 
     monkeypatch.setattr(preview, "capture", _capture_stub())
-    res = await acceptance.evaluate(
-        {"index.html": _GOOD}, project_id="p", run_vision=False
-    )
+    res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert res.passed
     assert res.structural_ok
     assert res.responsive_ok
@@ -73,9 +71,7 @@ async def test_evaluate_fails_on_overflow(monkeypatch):
     from omnia_api.workers import preview
 
     monkeypatch.setattr(preview, "capture", _capture_stub(overflow_widths={360}))
-    res = await acceptance.evaluate(
-        {"index.html": _GOOD}, project_id="p", run_vision=False
-    )
+    res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert not res.passed
     assert not res.responsive_ok
     assert "360px" in res.feedback
@@ -101,17 +97,13 @@ async def test_evaluate_render_failure_is_soft(monkeypatch):
     monkeypatch.setattr(preview, "capture", _boom)
     # Render blew up → responsive layer is skipped, not fatal; a clean page
     # still passes on structure alone.
-    res = await acceptance.evaluate(
-        {"index.html": _GOOD}, project_id="p", run_vision=False
-    )
+    res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert res.passed
     assert res.responsive_ok  # skipped == treated as ok
 
 
 async def test_evaluate_no_index_html():
-    res = await acceptance.evaluate(
-        {"style.css": "body{}"}, project_id="p", run_vision=False
-    )
+    res = await acceptance.evaluate({"style.css": "body{}"}, project_id="p", run_vision=False)
     assert not res.passed
     assert res.verdict == "broken"
 
@@ -130,9 +122,7 @@ async def test_evaluate_rejects_planted_gauntlet_defect(monkeypatch):
         "<!doctype html><html lang='ru'><head><title>T</title></head><body>"
         "<h1>Заголовок</h1><a href='/'>Войти</a></body></html>"
     )
-    res = await acceptance.evaluate(
-        {"index.html": planted}, project_id="p", run_vision=False
-    )
+    res = await acceptance.evaluate({"index.html": planted}, project_id="p", run_vision=False)
     assert not res.passed
     assert any("dead-auth-link" in i for i in res.issues)
     assert "гейт" in res.feedback.lower()
@@ -143,9 +133,7 @@ async def test_evaluate_gauntlet_clean_does_not_block(monkeypatch):
     from omnia_api.workers import preview
 
     monkeypatch.setattr(preview, "capture", _capture_stub())
-    res = await acceptance.evaluate(
-        {"index.html": _GOOD}, project_id="p", run_vision=False
-    )
+    res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert res.passed
     assert not any("dead-auth-link" in i for i in res.issues)
 
@@ -396,11 +384,13 @@ async def test_vision_block_failsoft_on_skip(monkeypatch):
     monkeypatch.setattr(preview, "capture", _capture_stub())
     _settings_with(monkeypatch, acceptance_vision_block_enabled=True)
     _clean_gauntlet(monkeypatch)
-    _stub_vision(monkeypatch, verdict="generic", score=5, skipped=True)
+    _stub_vision(monkeypatch, verdict="unverified", score=None, skipped=True)
     res = await acceptance.evaluate(
         {"index.html": _GOOD}, project_id="p", run_vision=True, run_originality=False
     )
     assert res.passed is True
+    assert res.vision_ran is False
+    assert res.score is None
 
 
 async def test_vision_block_sets_vision_blocked_flag(monkeypatch):

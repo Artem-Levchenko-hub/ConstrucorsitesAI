@@ -619,6 +619,16 @@ def test_load_stack_skills_reads_real_drizzle_skills():
     assert "security" in low and "a11y" in low and "perf" in low
 
 
+def test_load_stack_skills_reads_exact_max_ui_contract():
+    block = ab.load_stack_skills("max-miniapp-nextjs")
+
+    assert block is not None
+    assert "@maxhub/max-ui@0.2.0" in block
+    assert "DESIGN.md" in block
+    assert "Do not import `Panel`, `Grid`, `Container`, `Flex` or `TabBar`" in block
+    assert "pnpm typecheck" in block
+
+
 def test_load_stack_skills_absent_or_none_is_none():
     assert ab.load_stack_skills(None) is None
     assert ab.load_stack_skills("definitely-not-a-real-template-xyz") is None

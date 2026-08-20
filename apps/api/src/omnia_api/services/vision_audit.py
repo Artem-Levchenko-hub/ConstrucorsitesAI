@@ -5,8 +5,8 @@ Renders a freeform page → screenshot → asks a vision model "broken / generic
 that feed the self-repair loop.
 
 Best-effort by design (R-10 fail fast → fail SOFT): any gateway error, empty
-answer, or unparseable JSON degrades to a "skipped" verdict that does NOT
-block the page. Vision is a quality signal layered on top of the deterministic
+answer, or unparseable JSON degrades to an explicit "unverified" verdict with
+no score and does NOT block the page. Vision is a quality signal layered on top of the deterministic
 structural/responsive checks — never the sole gate.
 """
 
@@ -28,20 +28,16 @@ log = logging.getLogger(__name__)
 class VisionVerdict:
     """A vision model's read on a rendered page."""
 
-    verdict: str  # "broken" | "generic" | "beautiful" | "skipped"
-    score: int  # 0..10
+    verdict: str  # "broken" | "generic" | "beautiful" | "unverified"
+    score: int | None  # 0..10 only when the judge actually ran
     issues: tuple[str, ...]
     skipped: bool = False
     raw: str = ""
+    unavailable_reason: str = ""
 
-
-# Neutral pass — used whenever vision can't run (mock mode, no gateway, parse
-# fail). Score 10 so a skipped vision never fails the gate on its own.
-_SKIPPED = VisionVerdict(verdict="skipped", score=10, issues=(), skipped=True)
 
 # Skip telemetry. A skip that is DEGRADATION (gateway error, empty answer,
-# unparseable JSON) silently passes the page at score=10 — i.e. a broken judge
-# invisibly disables the whole quality loop. We count skips by reason and emit a
+# unparseable JSON) leaves the page unverified. We count skips by reason and emit a
 # stable, greppable `metric=vision_skip` line so a degraded judge is observable
 # (the real metrics sink is a future cross-cutting item; this is the minimum
 # signal). "mock"/"no_input" are legitimate no-ops, not degradation.
@@ -50,10 +46,10 @@ _skip_counts: dict[str, int] = {}
 
 
 def _skip(reason: str, detail: str = "") -> VisionVerdict:
-    """Record a vision SKIP and return the neutral ``_SKIPPED`` verdict.
+    """Record a vision skip and return an explicit scoreless verdict.
 
     Degradation reasons log at WARNING with a stable ``metric=vision_skip`` tag so a
-    silently-failing judge (which would pass every page at score=10) is visible;
+    failing judge is visible and can never masquerade as a perfect score;
     legitimate no-ops (mock / no screenshots) log at DEBUG."""
     _skip_counts[reason] = _skip_counts.get(reason, 0) + 1
     emit = log.warning if reason in _DEGRADED_SKIPS else log.debug
@@ -62,12 +58,19 @@ def _skip(reason: str, detail: str = "") -> VisionVerdict:
         emit("metric=vision_skip reason=%s count=%d detail=%r", reason, count, detail)
     else:
         emit("metric=vision_skip reason=%s count=%d", reason, count)
-    return _SKIPPED
+    return VisionVerdict(
+        verdict="unverified",
+        score=None,
+        issues=(),
+        skipped=True,
+        unavailable_reason=reason,
+    )
 
 
 def skip_stats() -> dict[str, int]:
     """Snapshot of vision-skip counts by reason (for a future metrics endpoint)."""
     return dict(_skip_counts)
+
 
 # Cap how many viewports we ship to the model — one wide + one narrow is enough
 # to judge composition and mobile, and keeps the multimodal payload small.
@@ -121,11 +124,11 @@ def _data_url(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
-def _coerce_score(value: object) -> int:
+def _coerce_score(value: object) -> int | None:
     try:
         return max(0, min(10, round(float(value))))  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return 0
+        return None
 
 
 def _parse(raw: str) -> VisionVerdict:
@@ -148,11 +151,14 @@ def _parse(raw: str) -> VisionVerdict:
     verdict = str(data.get("verdict", "")).strip().lower()
     if verdict not in {"broken", "generic", "beautiful"}:
         verdict = "generic"
+    score = _coerce_score(data.get("score"))
+    if score is None:
+        return _skip("parse_fail", raw[:200])
     issues_raw = data.get("issues") or []
     issues = tuple(str(i).strip() for i in issues_raw if str(i).strip())[:8]
     return VisionVerdict(
         verdict=verdict,
-        score=_coerce_score(data.get("score", 0)),
+        score=score,
         issues=issues,
         raw=raw[:500],
     )
@@ -170,7 +176,7 @@ async def audit_screenshots(
 
     `screenshots` maps viewport width → PNG bytes. `prompt_context` is the
     user's original request (gives the model intent — "is this what they
-    asked for?"). Returns `_SKIPPED` on mock mode / gateway error / empty.
+    asked for?"). Returns an unverified, scoreless verdict when unavailable.
     """
     settings = get_settings()
     if settings.mock_llm:

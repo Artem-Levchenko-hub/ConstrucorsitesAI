@@ -348,7 +348,7 @@ class Settings(BaseSettings):
     # the resolved (remote MinIO) images to paint → it saw gray placeholders and
     # cried "generic" on pages that look fine live. Net: paid noise. Killed; we
     # maximise brief-adherence at the WRITER instead (art_director_writer.py).
-    # Fail-soft remains: if ever re-enabled, any error degrades to skipped (10).
+    # Fail-soft remains: if ever re-enabled, any error becomes unverified (no score).
     # Override any flag per-env in .env.
     #
     #   use_freeform_render  — premium tier writes free HTML (else catalog/IR)
@@ -621,7 +621,7 @@ class Settings(BaseSettings):
     # catches "ugly by the numbers", but a page that is "not ugly, just generic"
     # (vision verdict=generic, score 5–6, struct+resp OK) clears everything and
     # ships. When True, the vision verdict gates `passed` AGAIN — but only when
-    # vision REALLY ran (a skip/ABSTAIN scores 10 and never blocks, R-10): a page
+    # vision REALLY ran (a skip/ABSTAIN has no score and never blocks, R-10): a page
     # blocks iff `verdict in {broken, generic}` OR `score < acceptance_min_score`.
     # Default OFF = byte-identical to today (vision stays advisory). Flip
     # ACCEPTANCE_VISION_BLOCK_ENABLED=true to make taste a real ship barrier.

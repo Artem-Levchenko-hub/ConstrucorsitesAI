@@ -24,7 +24,11 @@ def test_parse_fenced_with_leading_prose():
 
 
 def test_parse_garbage_is_skipped():
-    assert _parse("totally not json").skipped is True
+    verdict = _parse("totally not json")
+    assert verdict.skipped is True
+    assert verdict.verdict == "unverified"
+    assert verdict.score is None
+    assert verdict.unavailable_reason == "parse_fail"
 
 
 def test_score_is_clamped():
@@ -32,16 +36,25 @@ def test_score_is_clamped():
     assert _parse('{"verdict":"broken","score":-4}').score == 0
 
 
+def test_missing_score_is_unverified_not_zero_or_ten():
+    verdict = _parse('{"verdict":"beautiful","issues":[]}')
+
+    assert verdict.verdict == "unverified"
+    assert verdict.score is None
+    assert verdict.unavailable_reason == "parse_fail"
+
+
 def test_unknown_verdict_defaults_to_generic():
     assert _parse('{"verdict":"meh","score":4}').verdict == "generic"
 
 
 async def test_audit_skips_in_mock(monkeypatch):
-    monkeypatch.setattr(
-        vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": True})()
-    )
+    monkeypatch.setattr(vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": True})())
     v = await vision_audit.audit_screenshots({1440: b"PNG"}, prompt_context="x")
     assert v.skipped is True
+    assert v.verdict == "unverified"
+    assert v.score is None
+    assert v.unavailable_reason == "mock"
 
 
 async def test_audit_parses_real_verdict(monkeypatch):
@@ -51,9 +64,7 @@ async def test_audit_parses_real_verdict(monkeypatch):
         captured["content"] = messages[1]["content"]
         return '{"verdict":"beautiful","score":8,"issues":[]}'
 
-    monkeypatch.setattr(
-        vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": False})()
-    )
+    monkeypatch.setattr(vision_audit, "get_settings", lambda: type("S", (), {"mock_llm": False})())
     monkeypatch.setattr(vision_audit, "complete_chat", fake_complete)
     v = await vision_audit.audit_screenshots(
         {1440: b"PNGWIDE", 375: b"PNGMOBILE"},

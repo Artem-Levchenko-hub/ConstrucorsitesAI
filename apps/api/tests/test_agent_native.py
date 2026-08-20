@@ -62,6 +62,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert '"rm -f -- src/app/page.tsx"' in source
     assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
     assert "normalize_max_globals_css" in source
+    assert "seed_design_memory" in source
     assert "await asyncio.sleep(2)" in source
 
 

@@ -20,15 +20,14 @@ from dataclasses import dataclass
 from omnia_api.services import skill_library
 from omnia_api.services.design_dna import design_mood_directive
 from omnia_api.services.design_presets import PRESETS
+from omnia_api.services.design_tokens import DesignTokens, tokens_for_project
 from omnia_api.services.preset_classifier import classify_preset_sync
 
 PLUGIN_ID = "omnia-design-pro"
-PLUGIN_VERSION = "1.0.0"
-KNOWLEDGE_SOURCE = "ui-ux-pro-max@2026-05-25"
+PLUGIN_VERSION = "1.1.0"
+KNOWLEDGE_SOURCE = "ui-ux-pro-max@2.13.0+8a1a6d85"
 
-_UI_TEMPLATES = frozenset(
-    {"fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp"}
-)
+_UI_TEMPLATES = frozenset({"fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp"})
 
 
 @dataclass(frozen=True)
@@ -159,6 +158,92 @@ class DesignContract:
     preset_id: str
     prompt_block: str
     vision_context: str
+    design_markdown: str
+
+
+def _max_token_directive(tokens: DesignTokens) -> str:
+    """A coherent product palette for MAX without overriding MAX UI internals."""
+    palette = tokens.palette
+    return f"""
+• Палитра продукта «{palette.name}» ({palette.vibe}):
+  --app-bg: {palette.bg}; --app-surface: {palette.surface};
+  --app-text: {palette.text}; --app-muted: {palette.muted};
+  --app-border: {palette.border}; --app-brand: {palette.primary};
+  --app-accent: {palette.accent}.
+• Типографика продукта: display — {tokens.display_font}; body — {tokens.body_font}.
+  Подключение: {tokens.google_fonts_url} (CSS `@import` ставь до Tailwind).
+• В `globals.css` объяви эти `--app-*` переменные и используй их для продуктовых
+  композиций. Не переопределяй внутренние semantic tokens MAX UI и не добавляй
+  `@theme`: контролы уже получают тему от существующего `MaxAppProvider`.
+""".strip()
+
+
+def _render_design_markdown(
+    *,
+    pattern: _ProductPattern,
+    preset_name: str,
+    nav_rule: str,
+    tokens: DesignTokens | None,
+) -> str:
+    """Persistent, secret-free design memory shipped inside the generated app."""
+    token_lines = ""
+    max_ui_lines = ""
+    if tokens is not None:
+        palette = tokens.palette
+        token_lines = f"""
+| Token | Value |
+|---|---|
+| `--app-bg` | `{palette.bg}` |
+| `--app-surface` | `{palette.surface}` |
+| `--app-text` | `{palette.text}` |
+| `--app-muted` | `{palette.muted}` |
+| `--app-border` | `{palette.border}` |
+| `--app-brand` | `{palette.primary}` |
+| `--app-accent` | `{palette.accent}` |
+| Display font | `{tokens.display_font}` |
+| Body font | `{tokens.body_font}` |
+| Font source | `{tokens.google_fonts_url}` |
+""".strip()
+        max_ui_lines = """
+## MAX UI
+
+- Keep the existing `MaxAppProvider` and global MAX UI stylesheet.
+- Use public `@maxhub/max-ui@0.2.0` controls for native interactions.
+- Use `lucide-react` for missing icons; never emoji or hand-drawn SVG icons.
+- Product layout uses the `--app-*` variables above. Do not override MAX UI's
+  internal semantic variables.
+""".strip()
+
+    return (
+        f"""# Product design contract
+
+Managed by `{PLUGIN_ID}` `{PLUGIN_VERSION}` from `{KNOWLEDGE_SOURCE}`.
+This file is persistent project memory. Keep it aligned when the product UI changes.
+
+## Product
+
+- Archetype: `{pattern.id}` ({pattern.label})
+- Direction: {preset_name}
+- Information architecture: {pattern.architecture}
+- Main flow: {pattern.main_flow}
+- Navigation: {nav_rule}
+
+## Foundations
+
+{token_lines or "Use the project design tokens already present in the application."}
+
+## Quality floor
+
+- One dominant block or action per screen; secondary content is quieter.
+- Useful loading, empty, error and success states next to the action.
+- Touch targets are at least 44px; focus is visible; icon-only controls have labels.
+- At 360–390px: no horizontal or nested scrolling; safe areas remain usable.
+- Real Russian copy and data; no dead decorative controls, emoji icons or generic hero.
+
+{max_ui_lines}
+""".strip()
+        + "\n"
+    )
 
 
 def _pick_pattern(brief: str) -> _ProductPattern:
@@ -197,8 +282,7 @@ def _matched_skill_brief(
     )
     low = brief.casefold()
     has_charts = pattern.id == "analytics" or any(
-        cue in low
-        for cue in ("аналит", "статист", "метрик", "график", "chart", "dashboard")
+        cue in low for cue in ("аналит", "статист", "метрик", "график", "chart", "dashboard")
     )
     chart_types = (
         skill_library.lookup_chart_types(
@@ -231,8 +315,7 @@ def _matched_skill_brief(
     if chart_types:
         app_safe.append("  CHARTS (use only when the data shape matches):")
         app_safe.extend(
-            f"    • {chart['data_type']} → {chart['best_chart']}; "
-            f"{chart['when_to_use'][:120]}"
+            f"    • {chart['data_type']} → {chart['best_chart']}; {chart['when_to_use'][:120]}"
             for chart in chart_types
         )
         app_safe.append(
@@ -242,9 +325,7 @@ def _matched_skill_brief(
     return brief_block + "\n\n" + "\n".join(app_safe)
 
 
-def _pick_preset(
-    *, project_name: str, template: str, brief: str, preset_id: str | None
-) -> str:
+def _pick_preset(*, project_name: str, template: str, brief: str, preset_id: str | None) -> str:
     if preset_id in PRESETS:
         return str(preset_id)
     inferred = classify_preset_sync(project_name, template, brief)
@@ -285,7 +366,24 @@ def build_design_contract(
         mobile=mobile,
         brief=brief,
     )
-    mood = design_mood_directive(project_id, industry_hint=brief)
+    tokens = tokens_for_project(project_id, industry_hint=brief) if mobile else None
+    mood = (
+        _max_token_directive(tokens)
+        if tokens is not None
+        else design_mood_directive(project_id, industry_hint=brief)
+    )
+    design_markdown = _render_design_markdown(
+        pattern=pattern,
+        preset_name=preset.name,
+        nav_rule=nav_rule,
+        tokens=tokens,
+    )
+    visual_direction = (
+        f"{preset.name}. Это направление, а не второй набор токенов: точная палитра "
+        "ниже и постоянный `DESIGN.md` имеют приоритет."
+        if mobile
+        else f"{preset.name} — {preset.one_liner}"
+    )
     prompt_block = f"""
 
 OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-контракт первого билда.
@@ -297,7 +395,7 @@ OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-�
 • Информационная архитектура: {pattern.architecture}.
 • Главный путь: {pattern.main_flow}.
 • Навигация: {nav_rule}.
-• Визуальное направление: {preset.name} — {preset.one_liner}
+• Визуальное направление: {visual_direction}
 • Иерархия: один доминирующий блок/действие на экран; не превращай всё в
   одинаковые карточки; вторичное тише, но читаемо.
 • Состояния: loading, empty, error, success должны быть полезными и находиться
@@ -330,7 +428,15 @@ OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-�
         preset_id=selected_preset_id,
         prompt_block=prompt_block,
         vision_context=vision_context,
+        design_markdown=design_markdown,
     )
+
+
+def seed_design_memory(files: dict[str, str], contract: DesignContract | None) -> dict[str, str]:
+    """Attach persistent design memory to an initial seed without another pass."""
+    if contract is None:
+        return files
+    return {**files, "DESIGN.md": contract.design_markdown}
 
 
 __all__ = [
@@ -340,4 +446,5 @@ __all__ = [
     "DesignContract",
     "build_design_contract",
     "classify_product_archetype",
+    "seed_design_memory",
 ]

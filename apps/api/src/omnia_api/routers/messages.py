@@ -3628,6 +3628,12 @@ async def _process_prompt(
                         )
                     )
                     _starter_files = render_max_starter_files(_max_config, project_id)
+                    if _design_contract:
+                        from omnia_api.services.design_plugin import seed_design_memory
+
+                        # Part of the existing core seed/snapshot: no extra model
+                        # call, generation phase, repair or visible version.
+                        _starter_files = seed_design_memory(_starter_files, _design_contract)
                     await _agent_emit(
                         "agent.step",
                         {
@@ -6863,6 +6869,9 @@ async def _process_prompt(
                             "passed": _attempt_verdict.passed,
                             "verdict": _attempt_verdict.verdict,
                             "score": _attempt_verdict.score,
+                            "vision_status": (
+                                "verified" if _attempt_verdict.vision_ran else "unverified"
+                            ),
                         },
                     )
                     # Spend the repair re-roll ONLY on a genuinely deficient page:
@@ -6886,6 +6895,7 @@ async def _process_prompt(
                         or _attempt_verdict.verdict == "broken"
                         or (
                             _attempt_verdict.vision_ran
+                            and _attempt_verdict.score is not None
                             and int(_attempt_verdict.score) < _repair_floor
                         )
                         or _taste_repair

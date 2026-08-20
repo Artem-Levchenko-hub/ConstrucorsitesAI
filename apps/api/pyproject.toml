@@ -70,6 +70,9 @@ filterwarnings = [
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# Exact external snapshot: runtime loaders read its data directly and never
+# import the upstream helper scripts. Keep vendored source byte-faithful.
+extend-exclude = ["skills/ui-ux-pro-max"]
 
 [tool.ruff.lint]
 select = [

@@ -44,7 +44,7 @@ class AcceptanceResult:
     """Verdict of one acceptance pass."""
 
     passed: bool
-    score: int  # vision score, or 10 when vision didn't run
+    score: int | None  # vision score; None when vision did not produce evidence
     verdict: str  # vision verdict or "structural" / "ok"
     structural_ok: bool
     responsive_ok: bool
@@ -62,9 +62,7 @@ class AcceptanceResult:
 
 
 def _html_pool(files: dict[str, str]) -> dict[str, str]:
-    return {
-        p: c for p, c in files.items() if p.endswith((".html", ".htm"))
-    }
+    return {p: c for p, c in files.items() if p.endswith((".html", ".htm"))}
 
 
 def _structural_issues(files: dict[str, str]) -> list[str]:
@@ -171,15 +169,14 @@ async def evaluate(
     if not html_pool or "index.html" not in files:
         return AcceptanceResult(
             passed=False,
-            score=0,
+            score=None,
             verdict="broken",
             structural_ok=False,
             responsive_ok=False,
             vision_ran=False,
             issues=("нет index.html для проверки",),
             feedback=(
-                "Не найден index.html — верни полноценную страницу "
-                'в <file path="index.html">.'
+                'Не найден index.html — верни полноценную страницу в <file path="index.html">.'
             ),
         )
 
@@ -202,9 +199,7 @@ async def evaluate(
         # exactly what the brief asks for) read as "empty / loading screen / no
         # CTA" when only the top screen was shot → false "broken" → destructive
         # repair. Overflow detection is unaffected (it uses scroll_width).
-        shots = await capture(
-            files, widths=widths or DEFAULT_CAPTURE_WIDTHS, full_page=True
-        )
+        shots = await capture(files, widths=widths or DEFAULT_CAPTURE_WIDTHS, full_page=True)
         for w, res in shots.items():
             screenshots[w] = res.png
             if res.has_overflow:
@@ -215,7 +210,13 @@ async def evaluate(
         log.warning("acceptance: render harness failed (responsive skipped): %r", exc)
 
     # ── 4. vision (optional, fail-soft) ───────────────────────────────────
-    verdict = vision_audit.VisionVerdict(verdict="ok", score=10, issues=(), skipped=True)
+    verdict = vision_audit.VisionVerdict(
+        verdict="unverified",
+        score=None,
+        issues=(),
+        skipped=True,
+        unavailable_reason="disabled" if not run_vision else "no_screenshots",
+    )
     vision_ran = False
     if run_vision and screenshots:
         verdict = await vision_audit.audit_screenshots(
@@ -229,13 +230,15 @@ async def evaluate(
     # verdict no longer gates `passed`, it only feeds feedback. The taste barrier
     # (область T, default OFF) RE-ARMS it as a flagged gate: when
     # `acceptance_vision_block_enabled` is on AND vision actually ran (skip/ABSTAIN
-    # scored 10 never blocks — R-10), a page that is broken/generic or scores below
+    # has no score and never blocks — R-10), a page that is broken/generic or scores below
     # `min_score` fails `vision_ok`. Default OFF → `vision_ok` is always True →
     # byte-identical to the advisory behaviour.
     vision_ok = True
     if vision_blocks and vision_ran:
         vision_ok = (
-            verdict.verdict == "beautiful" and int(verdict.score) >= int(min_score)
+            verdict.verdict == "beautiful"
+            and verdict.score is not None
+            and int(verdict.score) >= int(min_score)
         )
 
     # ── 5. originality (optional, fail-soft) — Sprint 4 anti-generic ──────
@@ -294,11 +297,7 @@ async def evaluate(
     # `render_gates` flag (which keeps the wow-dom touch leg behind calibration):
     # a chip→pixel mismatch (dark+violet requested, light render) now fails ship.
     # No spec / empty spec → leg stays off → no extra render, behaviour unchanged.
-    fidelity = (
-        settings.acceptance_gauntlet_fidelity_gate
-        and spec is not None
-        and not spec.is_empty
-    )
+    fidelity = settings.acceptance_gauntlet_fidelity_gate and spec is not None and not spec.is_empty
     try:
         gauntlet = await accept_gauntlet.run(
             files=files,
@@ -332,31 +331,29 @@ async def evaluate(
         if gauntlet.hard_failed:
             gauntlet_ok = False
             gauntlet_classes = list(gauntlet.failed_classes)
-            gauntlet_lines = [
-                f"[гейт:{g.gate}] {g.summary}" for g in gauntlet.hard_failed
-            ]
+            gauntlet_lines = [f"[гейт:{g.gate}] {g.summary}" for g in gauntlet.hard_failed]
     except Exception as exc:  # defensive — gauntlet must never hard-fail the gate
         log.warning("acceptance: gauntlet failed (ignored): %r", exc)
 
-    passed = (
-        structural_ok and responsive_ok and originality_ok and gauntlet_ok
-        and vision_ok
-    )
+    passed = structural_ok and responsive_ok and originality_ok and gauntlet_ok and vision_ok
     # Vision-only block (область T): every objective layer passed and ONLY the
     # taste-barrier flipped the verdict. The caller uses this to avoid dropping a
     # structurally-fine rich freeform to the catalog fallback on a vision-only fail.
     vision_blocked = (
-        not vision_ok
-        and structural_ok and responsive_ok and originality_ok and gauntlet_ok
+        not vision_ok and structural_ok and responsive_ok and originality_ok and gauntlet_ok
     )
 
-    feedback = "" if passed else _build_feedback(
-        structural,
-        overflow_widths,
-        advisory,
-        verdict,
-        originality=[orig_issue] if orig_issue else [],
-        gauntlet=gauntlet_lines,
+    feedback = (
+        ""
+        if passed
+        else _build_feedback(
+            structural,
+            overflow_widths,
+            advisory,
+            verdict,
+            originality=[orig_issue] if orig_issue else [],
+            gauntlet=gauntlet_lines,
+        )
     )
     issues = tuple(
         structural
@@ -371,11 +368,7 @@ async def evaluate(
         else (
             "broken"
             if not gauntlet_ok
-            else (
-                verdict.verdict
-                if vision_ran
-                else ("generic" if orig_issue else "structural")
-            )
+            else (verdict.verdict if vision_ran else ("generic" if orig_issue else "structural"))
         )
     )
     return AcceptanceResult(

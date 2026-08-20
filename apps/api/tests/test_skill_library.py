@@ -9,38 +9,49 @@ test suite is what catches schema drift.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from omnia_api.services import skill_library
 
 
-def test_palettes_load_at_least_100() -> None:
-    """SKILL.md frontmatter claims 161 palettes — assert the loader actually
-    sees a triple-digit count, not just a single header row."""
+def test_palettes_load_current_snapshot() -> None:
     palettes = skill_library._palettes()
-    assert len(palettes) >= 100
+    assert len(palettes) >= 192
     p = palettes[0]
     assert p["primary"].startswith("#")
     assert p["foreground"].startswith("#")
     assert p["product_type"]
 
 
-def test_font_pairings_load_at_least_30() -> None:
+def test_font_pairings_load_current_snapshot() -> None:
     fps = skill_library._font_pairings()
-    assert len(fps) >= 30
+    assert len(fps) >= 74
     fp = fps[0]
     assert fp["heading"]
     assert fp["body"]
     assert "fonts.googleapis.com" in fp["css_import"]
 
 
-def test_ux_guidelines_load_at_least_50() -> None:
+def test_ux_guidelines_load_current_snapshot() -> None:
     rules = skill_library._ux_guidelines()
-    assert len(rules) >= 50
+    assert len(rules) >= 119
     rule = rules[0]
     assert rule["do"]
     assert rule["dont"]
     assert rule["severity"] in {"High", "Medium", "Low"}
+
+
+def test_vendored_snapshot_has_exact_source_and_license() -> None:
+    root = Path(__file__).parents[1] / "skills" / "ui-ux-pro-max"
+    source = json.loads((root / "SOURCE.json").read_text(encoding="utf-8"))
+
+    assert source["version"] == "2.13.0"
+    assert source["commit"] == "8a1a6d857332da32252d77365da90c3f6293b47b"
+    assert source["license"] == "MIT"
+    assert "MIT License" in (root / "LICENSE").read_text(encoding="utf-8")
 
 
 def test_lookup_palette_matches_saas_keyword() -> None:
@@ -101,9 +112,7 @@ def test_format_design_brief_all_sections() -> None:
     palette = skill_library.lookup_palette("SaaS")
     fp = skill_library.lookup_font_pairing("tech")
     rules = skill_library.random_ux_guidelines(limit=3, seed=7)
-    out = skill_library.format_design_brief(
-        palette=palette, font_pairing=fp, guidelines=rules
-    )
+    out = skill_library.format_design_brief(palette=palette, font_pairing=fp, guidelines=rules)
     assert "PALETTE" in out
     assert "FONTS" in out
     assert "UX RULES" in out
@@ -230,9 +239,7 @@ def test_lookup_micro_copy_russian_vertical() -> None:
     """RU verticals (food/medical/legal/realestate/education) emit Cyrillic."""
     out = skill_library.lookup_micro_copy("subscribe", "medical")
     # Should be Cyrillic ("Записаться к врачу" / "Не сейчас")
-    assert any("Ѐ" <= ch <= "ӿ" for ch in out["primary"]), (
-        f"expected Cyrillic primary, got {out!r}"
-    )
+    assert any("Ѐ" <= ch <= "ӿ" for ch in out["primary"]), f"expected Cyrillic primary, got {out!r}"
 
 
 def test_lookup_micro_copy_unknown_pair_fallback() -> None:
@@ -248,16 +255,22 @@ def test_lookup_micro_copy_all_5_contexts_for_each_vertical() -> None:
     copy is never the dumb fallback for known verticals."""
     contexts = ("save", "delete", "subscribe", "cancel", "submit")
     verticals = (
-        "fitness", "saas", "wellness", "food", "medical",
-        "legal", "realestate", "education", "media", "commerce",
+        "fitness",
+        "saas",
+        "wellness",
+        "food",
+        "medical",
+        "legal",
+        "realestate",
+        "education",
+        "media",
+        "commerce",
     )
     for v in verticals:
         for c in contexts:
             out = skill_library.lookup_micro_copy(c, v)
             # Non-fallback values: primary != context.title() (fallback shape).
-            assert out["primary"] != c.title(), (
-                f"missing copy for ({c!r}, {v!r}) — got fallback"
-            )
+            assert out["primary"] != c.title(), f"missing copy for ({c!r}, {v!r}) — got fallback"
 
 
 def test_lookup_design_patterns_has_usability_score() -> None:
@@ -284,7 +297,10 @@ def test_format_design_brief_renders_phase_j_block() -> None:
     out = skill_library.format_design_brief(
         gradient_pair=("#92400e", "#a16207"),
         shadow_tint={
-            "x": 0, "y": 8, "blur": 20, "spread": -2,
+            "x": 0,
+            "y": 8,
+            "blur": 20,
+            "spread": -2,
             "color": "rgba(146, 64, 14, 0.18)",
             "tint_hex": "#5d2e0a",
             "css": "box-shadow: 0 8px 20px -2px rgba(146, 64, 14, 0.18);",
