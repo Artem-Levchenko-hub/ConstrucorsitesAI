@@ -61,20 +61,25 @@ _NO_WRITE_ABORT_AT = 12
 # core. Sonnet can otherwise spend the entire 12-turn stall allowance repeatedly
 # reading that core (live canary 938937f7: 12 turns, 0 writes) even after the
 # nudge. Once the normal discovery allowance is spent, keep the SAME transcript
-# but make the environment accept implementation actions only. A successful
-# write resets the regular no-write streak and unlocks every tool for repair and
-# verification; infra and hard-stop guards remain unchanged.
+# but make the environment accept implementation actions only. The lock is
+# sticky until the product entry exists: a CSS/component/data write must not
+# reopen discovery, otherwise the model can resume reading and burn the rest of
+# the paid transcript. Product writes are never rejected merely because the
+# model stages files before ``page.tsx``; the completion contract still requires
+# that entry before build/done can succeed.
 _MAX_PREWRITE_DISCOVERY_TURNS = 6
 _MAX_PRODUCT_ENTRY_PATH = "src/app/page.tsx"
 _MAX_PREWRITE_LOCK_RESULT = (
     "MAX pre-write discovery budget is exhausted. The platform core and product "
-    "contract are already in context. Do not read, search, build, probe, or inspect "
-    "dependencies again. Create src/app/page.tsx NOW with write_file or edit_file."
+    "contract are already in context. Further read, search, docs, build, probe, and "
+    "inspection actions are blocked until the product entry exists. Continue with "
+    "write_file or edit_file: stage CSS, components, and data as needed, and create "
+    "src/app/page.tsx before verification."
 )
 _MAX_PRODUCT_ENTRY_REQUIRED_RESULT = (
     "MAX product entry is still missing. A helper, config, or standalone component "
-    "is not a runnable product by itself and does not unlock more exploration. Your "
-    "NEXT action must create src/app/page.tsx with write_file (or edit it if it exists)."
+    "is not a runnable product by itself. Continue implementing, but create "
+    "src/app/page.tsx before build or done."
 )
 
 
@@ -663,7 +668,7 @@ async def run_native_build(
     # Consecutive turns without a visible/product-surface change. A helper or
     # config mutation still dirties the build fact-gate, but is not progress.
     no_write_turns = 0
-    non_entry_writes_before_entry = 0
+    max_prewrite_discovery_closed = False
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
@@ -863,6 +868,7 @@ async def run_native_build(
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
             product_progress_this_turn = False
+            mutation_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
             for tu in tool_uses:
@@ -901,28 +907,20 @@ async def run_native_build(
                 action = _tool_use_to_action(tu)
                 _max_contract_active = max_runtime and completion_check is not None
                 _max_entry_missing = _MAX_PRODUCT_ENTRY_PATH not in written
-                _max_prewrite_locked = (
+                if (
                     _max_contract_active
                     and _max_entry_missing
                     and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
-                )
-                _max_entry_required = (
-                    _max_contract_active
-                    and _max_entry_missing
-                    and (_max_prewrite_locked or non_entry_writes_before_entry > 0)
+                ):
+                    max_prewrite_discovery_closed = True
+                _max_prewrite_locked = (
+                    _max_contract_active and _max_entry_missing and max_prewrite_discovery_closed
                 )
                 obs: dict[str, Any]
-                if _max_entry_required and not (
-                    name in {"write_file", "edit_file"}
-                    and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
-                ):
+                if _max_prewrite_locked and name not in {"write_file", "edit_file"}:
                     obs = {
                         "ok": False,
-                        "error": (
-                            _MAX_PREWRITE_LOCK_RESULT
-                            if _max_prewrite_locked and non_entry_writes_before_entry == 0
-                            else _MAX_PRODUCT_ENTRY_REQUIRED_RESULT
-                        ),
+                        "error": _MAX_PREWRITE_LOCK_RESULT,
                     }
                 else:
                     try:
@@ -948,6 +946,7 @@ async def run_native_build(
                 if obs.get("infra_dead"):
                     infra_this_turn += 1
                 if name in ("write_file", "edit_file") and obs.get("ok"):
+                    mutation_this_turn = True
                     normalized_path = _normalize_agent_path(action.path)
                     tracked_path = normalized_path if _max_contract_active else action.path
                     previous_content = written.get(tracked_path)
@@ -965,12 +964,16 @@ async def run_native_build(
                     proof_after_write.clear()
                     content_changed = next_content is None or next_content != previous_content
                     if _max_contract_active:
+                        # Before the runnable entry exists, staged CSS/components
+                        # are useful but not enough to reset the bounded no-page
+                        # clock. Otherwise rewriting one visible helper forever
+                        # can burn all 40 paid turns without creating the app.
+                        entry_exists = _MAX_PRODUCT_ENTRY_PATH in written
                         if (
-                            _MAX_PRODUCT_ENTRY_PATH not in written
-                            and normalized_path != _MAX_PRODUCT_ENTRY_PATH
+                            content_changed
+                            and entry_exists
+                            and _is_max_product_surface(normalized_path)
                         ):
-                            non_entry_writes_before_entry += 1
-                        if content_changed and _is_max_product_surface(normalized_path):
                             product_progress_this_turn = True
                     elif content_changed:
                         product_progress_this_turn = True
@@ -987,6 +990,14 @@ async def run_native_build(
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
+
+            if (
+                max_runtime
+                and completion_check is not None
+                and mutation_this_turn
+                and _MAX_PRODUCT_ENTRY_PATH not in written
+            ):
+                results.append({"type": "text", "text": _MAX_PRODUCT_ENTRY_REQUIRED_RESULT})
 
             if done_summary is not None:
                 if emit:

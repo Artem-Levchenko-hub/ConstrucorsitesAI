@@ -268,26 +268,43 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
 
 
 @pytest.mark.asyncio
-async def test_max_auxiliary_write_does_not_unlock_product_entry_gate(
+async def test_max_prewrite_lock_allows_file_staging_but_blocks_more_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One helper write is not a product. The next mutation must create the
-    required user-facing entry instead of extending support code indefinitely."""
-    turns = iter(
-        [
-            _turn(("write_file", {"path": "src/lib/helper.ts", "content": "export const x=1"})),
-            _turn(("write_file", {"path": "src/lib/second.ts", "content": "export const y=2"})),
-            _turn(("read_file", {"path": "package.json"})),
-            _turn(("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})),
-            _turn(("build", {})),
-            _turn(("done", {"summary": "Готово"})),
-        ]
-    )
+    """Regression for live run 5d496838: after discovery closes, the model may
+    stage CSS/data/components before page.tsx. Only more exploration is rejected."""
+    calls = {"n": 0}
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
-        return next(turns)
+        calls["n"] += 1
+        if calls["n"] <= agent_native._MAX_PREWRITE_DISCOVERY_TURNS:
+            return _turn(("read_file", {"path": "src/app/layout.tsx"}))
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 1:
+            return _turn(
+                ("read_file", {"path": "package.json"}),
+                ("write_file", {"path": "src/app/globals.css", "content": "body{}"}),
+                (
+                    "write_file",
+                    {"path": "src/lib/fitness/data.ts", "content": "export const data=[]"},
+                ),
+                (
+                    "write_file",
+                    {
+                        "path": "src/components/fitness/StatCard.tsx",
+                        "content": "export const StatCard=()=>null",
+                    },
+                ),
+            )
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 2:
+            return _turn(
+                ("read_file", {"path": "src/lib/fitness/data.ts"}),
+                ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"}),
+            )
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 3:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "Готово"}))
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
     executed: list[tuple[str, str]] = []
@@ -307,11 +324,60 @@ async def test_max_auxiliary_write_does_not_unlock_product_entry_gate(
     )
 
     assert res.done is True
-    assert ("write_file", "src/lib/helper.ts") in executed
-    assert ("write_file", "src/lib/second.ts") not in executed
+    assert executed.count(("read_file", "src/app/layout.tsx")) == 6
     assert ("read_file", "package.json") not in executed
+    assert ("read_file", "src/lib/fitness/data.ts") not in executed
+    assert ("write_file", "src/app/globals.css") in executed
+    assert ("write_file", "src/lib/fitness/data.ts") in executed
+    assert ("write_file", "src/components/fitness/StatCard.tsx") in executed
     assert ("write_file", "src/app/page.tsx") in executed
+    assert set(res.files) == {
+        "src/app/globals.css",
+        "src/lib/fitness/data.ts",
+        "src/components/fitness/StatCard.tsx",
+        "src/app/page.tsx",
+    }
+    assert agent_native._MAX_PREWRITE_LOCK_RESULT in str(res.transcript)
     assert agent_native._MAX_PRODUCT_ENTRY_REQUIRED_RESULT in str(res.transcript)
+
+
+@pytest.mark.asyncio
+async def test_max_prewrite_component_churn_remains_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Visible staging without page.tsx must not burn the full paid transcript."""
+    calls = {"n": 0}
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls["n"] += 1
+        return _turn(
+            (
+                "write_file",
+                {
+                    "path": "src/components/fitness/StatCard.tsx",
+                    "content": f"export const n={calls['n']}",
+                },
+            )
+        )
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "written"}
+
+    res = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build product",
+        execute=execute,
+        completion_check=lambda files, evidence: "Create src/app/page.tsx.",
+        max_steps=40,
+    )
+
+    assert res.stop_reason == "exploring"
+    assert res.steps == agent_native._NO_WRITE_ABORT_AT
+    assert calls["n"] == agent_native._NO_WRITE_ABORT_AT
 
 
 @pytest.mark.asyncio
