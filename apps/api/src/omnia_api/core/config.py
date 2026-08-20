@@ -16,7 +16,6 @@ class Settings(BaseSettings):
 
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
-    omnia_release_sha: str = Field(default="unknown")
 
     database_url: str
     database_test_url: str | None = None
@@ -500,9 +499,6 @@ class Settings(BaseSettings):
     # secret-redacted revision; the next generation receives a bounded rendering.
     # Kill switch leaves generation byte-identical and preserves stored revisions.
     use_project_memory: bool = Field(default=True)
-    # Comma-separated authenticated user UUIDs that keep memory enabled while
-    # the global flag is off for a dark production rollout.
-    project_memory_canary_users: str = Field(default="")
 
     # Full runnable export (P5, knowledge-layer/master plan) — when on, the
     # project download for a CONTAINER stack overlays the skeleton template tree
@@ -730,7 +726,7 @@ class Settings(BaseSettings):
     # `--out` report. CI runs `--mode guard` (via test_reference_flip_milestone):
     # this flag ON without a recorded passing milestone turns the suite RED. Mirror
     # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
-    acceptance_gauntlet_reference_gate: bool = Field(default=False)
+    acceptance_gauntlet_reference_gate: bool = Field(default=True)
     # V1.13d — the CEILING RATCHET strength. The reference leg today compares only
     # the BOOLEAN per-axis verdicts (axis passed / failed), so once a generation
     # independently clears the taste/hierarchy floor it "meets or beats" every
@@ -744,7 +740,7 @@ class Settings(BaseSettings):
     # render miss or a thin reference ABSTAINS (R-10), so a flaky corpus render can
     # never sink an otherwise-good page. Independent of the `reference_gate` dial
     # (that decides WHETHER the leg runs; this decides HOW STRICT it is when it does).
-    reference_ceiling_enforced: bool = Field(default=False)
+    reference_ceiling_enforced: bool = Field(default=True)
     # Points a generation may fall below the reference's own richness before the
     # ceiling ratchet fails it (only consulted when `reference_ceiling_enforced`).
     # 0 = strict meet-or-beat; 1 (default) forgives one soft regression so a single
@@ -764,7 +760,7 @@ class Settings(BaseSettings):
     # hot path — it adds one headless render per generation, so the owner flips it on
     # (or the paid-run manifest folds it in) once the niche heuristics have earned
     # trust; the CLI folds it in already.
-    acceptance_gauntlet_catalog_gate: bool = Field(default=False)
+    acceptance_gauntlet_catalog_gate: bool = Field(default=True)
     # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
     # (container-backed), so the composition floor never touched the dominant
     # pillar-1 class. This wires the live-URL path: after a clean hot-reload +
@@ -780,7 +776,7 @@ class Settings(BaseSettings):
     # discriminates with precise classes); flip ON once the legs are calibrated for
     # real entity apps (strip dev-overlay nodes + taste single-family tolerance) —
     # carried as 16/5b. CLI / niche-E2E always run the legs regardless.
-    acceptance_entity_composition_gate: bool = Field(default=False)
+    acceptance_entity_composition_gate: bool = Field(default=True)
 
     # ── Phase 1 / Area D — composition-gate retune (anti-sameness, DARK) ───
     # Why: the ALWAYS-ON composition floor (taste 4/5 + hierarchy 2/3) mechanically

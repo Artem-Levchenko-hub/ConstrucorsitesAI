@@ -26,8 +26,8 @@ Secure-by-default baseline (FIXED — the AI keeps these on):
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware

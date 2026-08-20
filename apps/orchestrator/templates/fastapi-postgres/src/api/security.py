@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -68,15 +68,15 @@ def issue_token(user_id: uuid.UUID) -> str:
     server-side session storage (stateless)."""
     payload: dict[str, Any] = {
         "sub": str(user_id),
-        "exp": datetime.now(tz=UTC)
+        "exp": datetime.now(tz=timezone.utc)
         + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS),
     }
     return jwt.encode(payload, _secret(), algorithm=ALGORITHM)
 
 
 async def current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    session: Annotated[AsyncSession, Depends(get_session)],
+    token: str = Depends(oauth2_scheme),
+    session: AsyncSession = Depends(get_session),
 ) -> User:
     """FastAPI dependency — returns the User matching the bearer token,
     raises 401 otherwise. Use as `Depends(current_user)` in any

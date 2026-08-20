@@ -55,13 +55,13 @@ async def signup(
     session.add(user)
     try:
         await session.commit()
-    except IntegrityError as exc:
+    except IntegrityError:
         # Race-safe: unique constraint on `users.email` catches dupes.
         await session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="email already registered",
-        ) from exc
+        )
     await session.refresh(user)
     return TokenResponse(access_token=issue_token(user.id))
 

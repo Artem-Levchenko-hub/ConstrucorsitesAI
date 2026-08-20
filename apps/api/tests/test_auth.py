@@ -1,8 +1,4 @@
-from types import SimpleNamespace
-
 import httpx
-
-from omnia_api.services.readiness import ReadinessReport
 
 
 async def test_register_creates_user_and_sets_session_cookie(client: httpx.AsyncClient) -> None:
@@ -121,46 +117,26 @@ async def test_logout_clears_cookie_and_subsequent_me_returns_401(
     assert me.status_code == 401
 
 
-async def test_health_endpoint_is_public(client: httpx.AsyncClient, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "omnia_api.main.get_settings",
-        lambda: SimpleNamespace(omnia_release_sha="a7c4fc22"),
-        raising=False,
-    )
+async def test_health_endpoint_is_public(client: httpx.AsyncClient) -> None:
     r = await client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "release_sha": "a7c4fc22"}
+    assert r.json() == {"status": "ok"}
 
 
 async def test_readiness_endpoint_reports_component_state(
     client: httpx.AsyncClient,
     monkeypatch,
 ) -> None:
-    async def healthy() -> ReadinessReport:
-        return ReadinessReport(
-            checks={"database": "ok", "redis": "ok", "worker": "ok"},
-            dependencies={
-                "worker_release_sha": "a7c4fc22",
-                "orchestrator_release_sha": "a7c4fc22",
-            },
-        )
+    async def healthy() -> dict[str, str]:
+        return {"database": "ok", "redis": "ok", "worker": "ok"}
 
     monkeypatch.setattr("omnia_api.services.readiness.probe_readiness", healthy)
-    monkeypatch.setattr(
-        "omnia_api.main.get_settings",
-        lambda: SimpleNamespace(omnia_release_sha="a7c4fc22"),
-    )
     response = await client.get("/api/health")
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
         "service": "api",
-        "release_sha": "a7c4fc22",
         "checks": {"database": "ok", "redis": "ok", "worker": "ok"},
-        "dependencies": {
-            "worker_release_sha": "a7c4fc22",
-            "orchestrator_release_sha": "a7c4fc22",
-        },
     }
 
 
@@ -168,20 +144,10 @@ async def test_readiness_endpoint_fails_when_worker_heartbeat_is_missing(
     client: httpx.AsyncClient,
     monkeypatch,
 ) -> None:
-    async def degraded() -> ReadinessReport:
-        return ReadinessReport(
-            checks={"database": "ok", "redis": "ok", "worker": "failed"},
-            dependencies={
-                "worker_release_sha": "unknown",
-                "orchestrator_release_sha": "a7c4fc22",
-            },
-        )
+    async def degraded() -> dict[str, str]:
+        return {"database": "ok", "redis": "ok", "worker": "failed"}
 
     monkeypatch.setattr("omnia_api.services.readiness.probe_readiness", degraded)
-    monkeypatch.setattr(
-        "omnia_api.main.get_settings",
-        lambda: SimpleNamespace(omnia_release_sha="a7c4fc22"),
-    )
     response = await client.get("/api/health")
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"

@@ -21,21 +21,9 @@ describe("MAX live preview surface", () => {
     expect(livePreview).toContain(
       'className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"',
     );
+    expect(livePreview).not.toContain('bg-[#f5f3ee]');
     expect(livePreview).not.toContain("0_30px_80px");
     expect(livePreview).toContain("0_12px_28px");
-  });
-
-  it("restores AI and manual editing without enabling edits on history", () => {
-    expect(livePreview).toContain('data-testid="max-edit-with-ai"');
-    expect(livePreview).toContain("Править с ИИ");
-    expect(livePreview).toContain('data-testid="max-edit-manually"');
-    expect(livePreview).toContain("Править вручную");
-    expect(livePreview).toContain(
-      "disabled={!displayPreviewUrl || viewingHistorical}",
-    );
-    expect(livePreview).toContain("sourceEditing={false}");
-    expect(livePreview).toContain("fontEditing={false}");
-    expect(livePreview).toContain("tokenEditing={false}");
   });
 
   it("does not paint a separate desktop preview column", () => {

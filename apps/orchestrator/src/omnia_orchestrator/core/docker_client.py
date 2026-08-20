@@ -445,12 +445,7 @@ async def container_image_template(name: str) -> str | None:
     return await asyncio.to_thread(_do)
 
 
-async def write_files(
-    name: str,
-    files: dict[str, str],
-    *,
-    dest_root: str = "/app",
-) -> dict[str, str]:
+async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/app") -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
     `docker cp` semantics (put_archive). Paths in `files` are container-relative
     to `dest_root` (default `/app`, matching Next.js workdir in the template).
@@ -468,9 +463,9 @@ async def write_files(
     Missing container = explicit OrchestratorError (caller should handle).
     """
     import io
-    import posixpath
     import tarfile
     import time
+    import posixpath
 
     log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
 
@@ -490,10 +485,7 @@ async def write_files(
         if c.status not in ("running", "paused"):
             raise OrchestratorError(
                 code="container_failure",
-                message=(
-                    f"container {name} state={c.status}; "
-                    "can't write files into a stopped container"
-                ),
+                message=f"container {name} state={c.status}; can't write files into a stopped container",
                 status_code=409,
             )
 
@@ -703,9 +695,7 @@ async def exec_cmd(
                 message=f"exec on {name} failed: {exc}",
                 status_code=409 if not_running else 500,
             ) from exc
-        out_bytes, err_bytes = (
-            result.output if isinstance(result.output, tuple) else (result.output, b"")
-        )
+        out_bytes, err_bytes = result.output if isinstance(result.output, tuple) else (result.output, b"")
         return {
             "exit_code": str(result.exit_code),
             "stdout": (out_bytes or b"").decode("utf-8", errors="replace")[:max_output],
@@ -715,7 +705,7 @@ async def exec_cmd(
     # exec_run does not honor an explicit timeout; wrap in asyncio.wait_for.
     try:
         return await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except TimeoutError as exc:
+    except asyncio.TimeoutError as exc:
         raise OrchestratorError(
             code="container_failure",
             message=f"exec {cmd[0]} on {name} timed out after {timeout_sec}s",
@@ -894,7 +884,7 @@ async def build_image(
 
     try:
         await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except TimeoutError as exc:
+    except asyncio.TimeoutError as exc:
         raise OrchestratorError(
             code="container_failure",
             message=f"prod build timed out after {timeout_sec}s",

@@ -321,9 +321,7 @@ def test_messages_enqueues_entity_gate_on_entity_template() -> None:
     src = (_SRC / "routers" / "messages.py").read_text(encoding="utf-8")
     assert "enqueue_entity_gate" in src
     # enqueue is scoped to the entity templates that bypass the acceptance gate
-    assert re.search(
-        r'project\.template in \(\s*"nextjs_entities",\s*"fullstack",?\s*\)', src
-    )
+    assert re.search(r'project\.template in \("nextjs_entities", "fullstack"\)', src)
 
 
 # ── Area C: authenticated cabinet gate (DARK) ─────────────────────────────────

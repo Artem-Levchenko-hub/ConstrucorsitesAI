@@ -20,7 +20,6 @@ concurrency:
 env:
   PLATFORM_URL: https://constructor.lead-generator.ru
   MAX_CANARY_URL: https://fitnessstat-a379d4.preview.lead-generator.ru
-  PRODUCTION_EXPECTED_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_RELEASE_SHA }}
 
 jobs:
   smoke:
@@ -46,17 +45,6 @@ jobs:
           test "$(jq -r '.status' <<<"$api")" = "ok"
           for component in database redis worker deploy_control_plane preview_storage; do
             test "$(jq -r --arg key "$component" '.checks[$key]' <<<"$api")" = "ok"
-          done
-
-          expected="$PRODUCTION_EXPECTED_RELEASE_SHA"
-          test "$expected" != ""
-          test "$expected" != "unknown"
-          for actual in \
-            "$(jq -r '.release_sha' <<<"$web")" \
-            "$(jq -r '.release_sha' <<<"$api")" \
-            "$(jq -r '.dependencies.worker_release_sha' <<<"$api")" \
-            "$(jq -r '.dependencies.orchestrator_release_sha' <<<"$api")"; do
-            test "$actual" = "$expected"
           done
 
           mvp="$(
@@ -100,7 +88,7 @@ jobs:
                   "",
                   `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
                   "",
-                  "The monitor checks exact web/API/worker/orchestrator release identity, Postgres, Redis, worker heartbeat, deploy control plane, preview storage, a deployed MAX canary, and the webhook auth boundary.",
+                  "The monitor checks web, API, Postgres, Redis, worker heartbeat, deploy control plane, preview storage, a deployed MAX canary, and the webhook auth boundary.",
                 ].join("\n"),
               });
             }

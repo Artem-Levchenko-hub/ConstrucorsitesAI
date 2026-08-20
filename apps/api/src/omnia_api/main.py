@@ -16,7 +16,6 @@ from omnia_api.core.errors import (
     validation_error_handler,
 )
 from omnia_api.core.redis import dispose_redis
-from omnia_api.core.release import normalize_release_sha
 from omnia_api.routers import account as account_router
 from omnia_api.routers import admin as admin_router
 from omnia_api.routers import app_integrations as app_integrations_router
@@ -123,23 +122,18 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
-        return {
-            "status": "ok",
-            "release_sha": normalize_release_sha(get_settings().omnia_release_sha),
-        }
+        return {"status": "ok"}
 
     @app.get("/api/health", tags=["meta"])
     async def readiness_health() -> JSONResponse:
-        report = await readiness.probe_readiness()
-        healthy = all(value == "ok" for value in report.checks.values())
+        checks = await readiness.probe_readiness()
+        healthy = all(value == "ok" for value in checks.values())
         return JSONResponse(
             status_code=200 if healthy else 503,
             content={
                 "status": "ok" if healthy else "degraded",
                 "service": "api",
-                "release_sha": normalize_release_sha(get_settings().omnia_release_sha),
-                "checks": report.checks,
-                "dependencies": report.dependencies,
+                "checks": checks,
             },
         )
 

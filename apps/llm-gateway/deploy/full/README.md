@@ -1,10 +1,5 @@
 # Full-stack production deployment
 
-> All production updates and rollbacks must follow
-> [`infra/release/README.md`](../../../../infra/release/README.md), including the
-> exact release/rollback confirmation, local gate, dark-memory policy, health
-> identity checks, and disposable canary.
-
 This Compose stack is intended to sit behind nginx on the same host.
 
 ## Security invariants
@@ -58,21 +53,8 @@ location /llm/ {
    curl -fsS http://127.0.0.1:3100/ >/dev/null
    ```
 
-7. Dispatch and watch the repository-owned disposable canary before declaring
-   the deployment complete:
-
-   ```bash
-   test "$(git ls-remote origin refs/heads/main | awk '{print $1}')" = "$RELEASE_SHA"
-   gh workflow run production-generation-canary.yml --ref main
-   gh run watch "$(gh run list --workflow production-generation-canary.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
-   ```
-
-   For local diagnosis with credentials already present in the environment:
-
-   ```bash
-   cd apps/api
-   uv run python scripts/production_generation_canary.py
-   ```
+7. Run a disposable end-to-end generation canary and inspect its terminal
+   `generation_runs` status before declaring the deployment complete.
 
 Never use `docker compose down -v` during an update: it removes production
 volumes.

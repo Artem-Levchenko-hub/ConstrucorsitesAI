@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from omnia_api.services.render_settle import goto_and_settle
-
 
 @dataclass
 class SecCheck:
@@ -152,7 +150,7 @@ async def run_security_gate(base_url: str) -> SecurityVerdict:
             try:
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
-                await goto_and_settle(page, f"{base_url}/", timeout_ms=30_000)
+                await page.goto(f"{base_url}/", wait_until="domcontentloaded")
                 res = await page.evaluate(
                     """async () => {
                         const r = await fetch('/', { credentials: 'include' });

@@ -160,7 +160,7 @@ services:
     build:
       context: ../../../api
       dockerfile: Dockerfile
-    image: ${API_IMAGE:-omnia-api:prod}
+    image: omnia-api:prod
     container_name: omnia-prod-api
     # The agentic builder loads per-stack guides (SYSTEM_PROMPT.md) + skills from
     # the orchestrator templates dir at /orchestrator/templates (agent_builder.
@@ -193,7 +193,6 @@ services:
     environment:
       ENV: prod
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnia}:${POSTGRES_PASSWORD:-omnia}@postgres:5432/${POSTGRES_DB:-omnia}
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
@@ -352,9 +351,8 @@ services:
       # plan→act→observe→verify agent loop (file tools + typecheck) instead of
       # one-shot generation. false = today's pipeline (byte-identical).
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}
-      # Versioned project memory ships dark; canary UUIDs bypass the global switch.
-      USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-false}
-      PROJECT_MEMORY_CANARY_USERS: ${PROJECT_MEMORY_CANARY_USERS:-}
+      # Versioned project memory. Set false for instant rollback without data loss.
+      USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-true}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Per-user canary: run the agent loop for these user ids even when the
       # global flag is off (safe prod dogfood, no change for anyone else).
@@ -395,7 +393,7 @@ services:
   worker:
     # Reuses the omnia-api:prod image built by the `api` service — no separate
     # build step (both Compose race on the same tag otherwise).
-    image: ${API_IMAGE:-omnia-api:prod}
+    image: omnia-api:prod
     container_name: omnia-prod-worker
     # Same as api: the agent loads per-stack guides/skills from the mounted
     # orchestrator templates dir, else it defaults to the entities prompt.
@@ -415,7 +413,6 @@ services:
     environment:
       ENV: prod
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnia}:${POSTGRES_PASSWORD:-omnia}@postgres:5432/${POSTGRES_DB:-omnia}
       REDIS_URL: redis://redis:6379/0
       MINIO_ENDPOINT: minio:9000
@@ -541,8 +538,6 @@ services:
       # plan→act→observe→verify agent loop (file tools + typecheck) instead of
       # one-shot generation. false = today's pipeline (byte-identical).
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
-      USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-false}
-      PROJECT_MEMORY_CANARY_USERS: ${PROJECT_MEMORY_CANARY_USERS:-}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Per-user canary: run the agent loop for these user ids even when the
       # global flag is off (safe prod dogfood, no change for anyone else).
@@ -566,7 +561,7 @@ services:
         NEXT_PUBLIC_WS_URL: ${PUBLIC_WS_ORIGIN:-wss://constructor.lead-generator.ru}
         NEXT_PUBLIC_USE_MOCKS: "false"
         NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
-    image: ${WEB_IMAGE:-omnia-web:prod}
+    image: omnia-web:prod
     container_name: omnia-prod-web
     depends_on:
       api:
@@ -574,7 +569,6 @@ services:
     environment:
       # Server-side fetches from Next.js → api stay inside the docker network,
       # avoiding the public nginx hop and DNS resolution.
-      OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
       INTERNAL_API_URL: http://api:8000
       NEXTAUTH_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}

@@ -33,8 +33,6 @@ from typing import Any, cast
 
 from playwright.async_api import Page
 
-from omnia_api.services.render_settle import goto_and_settle
-
 # A member must see a peer's message within this budget — the whole point of
 # realtime is sub-second delivery, so a slow path is a functional failure.
 _DELIVERY_BUDGET_MS = 1000
@@ -84,7 +82,7 @@ async def _login(page: Page, base_url: str, email: str, password: str) -> None:
     (mirrors :func:`auth_session.establish_session`) and is markup-independent —
     verified live against a generated messenger. Requires the gate browser to reach
     the app's canonical auth origin (see :func:`preview_resolver_args`)."""
-    await goto_and_settle(page, f"{base_url}/signin", timeout_ms=30_000)
+    await page.goto(f"{base_url}/signin", wait_until="domcontentloaded")
     result = cast(
         dict[str, Any],
         await page.evaluate(
@@ -204,7 +202,7 @@ async def run_functional_gate(base_url: str) -> FunctionalVerdict:
 
                 # 1. Signup (registration is unauthenticated; run from any page
                 #    that has the right origin for a relative fetch).
-                await goto_and_settle(page_t, f"{base_url}/signin", timeout_ms=30_000)
+                await page_t.goto(f"{base_url}/signin", wait_until="domcontentloaded")
                 for email in (teacher, student, outsider):
                     res = await _api(
                         page_t,

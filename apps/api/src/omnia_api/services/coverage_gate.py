@@ -36,7 +36,6 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 from omnia_api.services.build_plan import BuildPlan
-from omnia_api.services.render_settle import goto_and_settle
 
 log = logging.getLogger(__name__)
 
@@ -219,7 +218,7 @@ async def run_coverage_gate(
             try:
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
-                await goto_and_settle(page, f"{base}/signin", timeout_ms=30_000)
+                await page.goto(f"{base}/signin", wait_until="domcontentloaded")
                 await fg._api(
                     page, "POST", "/api/auth/register",
                     {"email": _email, "password": _password},

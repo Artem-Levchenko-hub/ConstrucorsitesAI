@@ -1211,13 +1211,13 @@ def test_infer_result_type_none_for_vague() -> None:
     ("rt", "expected"),
     [
         ("landing", "spa"),
-        ("web_app", "fullstack"),
+        ("web_app", "nextjs_entities"),
         ("tool", "spa"),
         ("site", "spa"),
         ("code", "code"),
         ("static", "static"),
         ("LANDING", "spa"),  # case-insensitive
-        ("  web_app  ", "fullstack"),  # trimmed
+        ("  web_app  ", "nextjs_entities"),  # trimmed
         ("garbage", None),
         ("", None),
     ],

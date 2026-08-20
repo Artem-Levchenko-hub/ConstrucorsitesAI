@@ -3,28 +3,9 @@ export type EditorMode = "inspect" | "style" | "off";
 export type EditorBridgeMessage = {
   type: string;
   mode?: EditorMode;
-  editorSession?: string;
-  seq?: number;
 };
 
-export type EditorModeTransition = {
-  editorSession: string;
-  seq: number;
-  mode: EditorMode;
-};
-
-export type EditorModeAck = {
-  mode?: unknown;
-  editorSession?: unknown;
-  seq?: unknown;
-};
-
-type StopEditorPickingHandlers = {
-  setInspectMode: (on: boolean) => void;
-  stopStylePicking: () => void;
-  postMessage: (message: EditorBridgeMessage) => void;
-};
-
+/** Resolve the exact iframe origin used for postMessage; null means do not send. */
 export function previewTargetOrigin(
   iframeSrc: string,
   baseOrigin: string,
@@ -39,138 +20,44 @@ export function previewTargetOrigin(
   }
 }
 
-export function editorModeMessages(
-  mode: EditorMode,
-  transition?: Pick<EditorModeTransition, "editorSession" | "seq">,
-): EditorBridgeMessage[] {
-  const envelope = transition
-    ? { editorSession: transition.editorSession, seq: transition.seq }
-    : {};
+/**
+ * Build one deterministic mode transition for both inspector generations.
+ *
+ * Existing live projects can still carry the pre-atomic inspector, which only
+ * understands inspect/style enable/disable messages. New inspectors understand
+ * `editor:set-mode` too. Sending both protocols is safe as long as the legacy
+ * pair is ordered so the requested enable is always last:
+ *
+ * - inspect: disable style, then enable inspect;
+ * - style: disable inspect, then enable style;
+ * - off: disable both.
+ *
+ * This keeps old containers editable without bringing back the former
+ * Manual -> AI race between independent React effects.
+ */
+export function editorModeMessages(mode: EditorMode): EditorBridgeMessage[] {
   const atomic: EditorBridgeMessage = {
     type: "omnia:editor:set-mode",
     mode,
-    ...envelope,
   };
 
   if (mode === "inspect") {
     return [
       atomic,
-      { type: "omnia:style:disable", ...envelope },
-      { type: "omnia:inspect:enable", ...envelope },
+      { type: "omnia:style:disable" },
+      { type: "omnia:inspect:enable" },
     ];
   }
   if (mode === "style") {
     return [
       atomic,
-      { type: "omnia:inspect:disable", ...envelope },
-      { type: "omnia:style:enable", ...envelope },
+      { type: "omnia:inspect:disable" },
+      { type: "omnia:style:enable" },
     ];
   }
   return [
     atomic,
-    { type: "omnia:inspect:disable", ...envelope },
-    { type: "omnia:style:disable", ...envelope },
+    { type: "omnia:inspect:disable" },
+    { type: "omnia:style:disable" },
   ];
-}
-
-type EditorModeSyncOptions = {
-  editorSession: string;
-  postMessage?: (message: EditorBridgeMessage) => void;
-  retryDelays?: readonly number[];
-  setTimer?: (callback: () => void, delay: number) => ReturnType<typeof setTimeout>;
-  clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
-};
-
-export function createEditorModeSync({
-  editorSession,
-  postMessage = () => undefined,
-  retryDelays = [120, 450, 1_100],
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-}: EditorModeSyncOptions) {
-  let seq = 0;
-  let current: EditorModeTransition | null = null;
-  let acknowledgedSeq = -1;
-  let sendMessage = postMessage;
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-
-  function cancelPending() {
-    timers.forEach(clearTimer);
-    timers.clear();
-  }
-
-  function send(transition: EditorModeTransition) {
-    if (current?.seq !== transition.seq) return;
-    editorModeMessages(transition.mode, transition).forEach(sendMessage);
-  }
-
-  function transition(mode: EditorMode): EditorModeTransition {
-    cancelPending();
-    const next = { editorSession, seq: ++seq, mode };
-    current = next;
-    acknowledgedSeq = -1;
-    send(next);
-    retryDelays.forEach((delay) => {
-      const timer = setTimer(() => {
-        timers.delete(timer);
-        send(next);
-      }, delay);
-      timers.add(timer);
-    });
-    return next;
-  }
-
-  function resend() {
-    if (current) send(current);
-  }
-
-  function acknowledge(data: EditorModeAck): boolean {
-    if (!current || data.mode !== current.mode) return false;
-    const sequenced =
-      typeof data.editorSession === "string" &&
-      typeof data.seq === "number";
-    if (
-      sequenced &&
-      (data.editorSession !== current.editorSession || data.seq !== current.seq)
-    ) {
-      return false;
-    }
-    if (acknowledgedSeq === current.seq) return false;
-    acknowledgedSeq = current.seq;
-    cancelPending();
-    return true;
-  }
-
-  function isAcknowledged(mode = current?.mode) {
-    return Boolean(current && mode === current.mode && acknowledgedSeq === current.seq);
-  }
-
-  function dispose() {
-    cancelPending();
-    current = null;
-  }
-
-  return {
-    transition,
-    resend,
-    acknowledge,
-    cancelPending,
-    dispose,
-    isAcknowledged,
-    setPostMessage: (next: (message: EditorBridgeMessage) => void) => {
-      sendMessage = next;
-    },
-    getCurrent: () => current,
-  };
-}
-
-export function stopEditorPickingAfterPick(
-  mode: EditorMode,
-  handlers: StopEditorPickingHandlers,
-): boolean {
-  if (mode === "off") return false;
-  if (mode === "style") handlers.stopStylePicking();
-  else handlers.setInspectMode(false);
-  editorModeMessages("off").forEach(handlers.postMessage);
-  return true;
 }

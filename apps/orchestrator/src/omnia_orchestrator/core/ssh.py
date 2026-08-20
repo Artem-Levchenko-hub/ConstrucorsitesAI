@@ -114,7 +114,7 @@ async def host_key(host: str, port: int) -> str | None:
     """Read a key without authenticating, so first-use confirmation leaks no credential."""
     scan = await run(
         ["ssh-keyscan", "-p", str(port), "-t", "ed25519,ecdsa,rsa", host],
-        timeout_seconds=15,
+        timeout=15,
     )
     lines = [
         line.strip()

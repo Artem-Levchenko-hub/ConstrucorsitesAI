@@ -37,14 +37,6 @@ def _capture_stub(overflow_widths=()):
     return _fake
 
 
-def _disable_optional_reference_gates(monkeypatch):
-    _settings_with(
-        monkeypatch,
-        acceptance_gauntlet_reference_gate=False,
-        reference_ceiling_enforced=False,
-    )
-
-
 def test_structural_clean():
     assert _structural_issues({"index.html": _GOOD}) == []
 
@@ -68,8 +60,6 @@ async def test_evaluate_passes_clean(monkeypatch):
     from omnia_api.workers import preview
 
     monkeypatch.setattr(preview, "capture", _capture_stub())
-    _disable_optional_reference_gates(monkeypatch)
-    _clean_gauntlet(monkeypatch)
     res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert res.passed
     assert res.structural_ok
@@ -105,8 +95,6 @@ async def test_evaluate_render_failure_is_soft(monkeypatch):
         raise RuntimeError("no chromium here")
 
     monkeypatch.setattr(preview, "capture", _boom)
-    _disable_optional_reference_gates(monkeypatch)
-    _clean_gauntlet(monkeypatch)
     # Render blew up → responsive layer is skipped, not fatal; a clean page
     # still passes on structure alone.
     res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
@@ -145,8 +133,6 @@ async def test_evaluate_gauntlet_clean_does_not_block(monkeypatch):
     from omnia_api.workers import preview
 
     monkeypatch.setattr(preview, "capture", _capture_stub())
-    _disable_optional_reference_gates(monkeypatch)
-    _clean_gauntlet(monkeypatch)
     res = await acceptance.evaluate({"index.html": _GOOD}, project_id="p", run_vision=False)
     assert res.passed
     assert not any("dead-auth-link" in i for i in res.issues)
@@ -325,7 +311,6 @@ async def test_evaluate_reference_dials_default_off(monkeypatch):
     from omnia_api.workers import preview
 
     monkeypatch.setattr(preview, "capture", _capture_stub())
-    _disable_optional_reference_gates(monkeypatch)
     captured: dict[str, object] = {}
     _clean_gauntlet(monkeypatch, captured)
     await acceptance.evaluate(

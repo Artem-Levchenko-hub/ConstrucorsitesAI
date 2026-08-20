@@ -27,8 +27,7 @@ LIVE PROOF (run #35 — ran the DEPLOYED image's OWN registry.ts via
 and replaying engine.createRecord's parse-then-default order; no LLM, no gen):
   image omnia-template-nextjs-entities:dev (03694596fbc7)
     A  required+default field, status OMITTED          → 400 "status: Required"   ← THE BUG
-    B same field but required:false (default only), omitted → 201, status:"new"
-      ← control: default works only when NOT required
+    B  same field but required:false (default only), omitted → 201, status:"new"  ← control: default works only when NOT required
     C  required string, name:""                         → 201, name:""            ← facet 2
     D  required string, name:"   "                      → 201, name:"   "          ← facet 2
     E  required+default field, status PROVIDED          → 201, status:"paid"       ← control

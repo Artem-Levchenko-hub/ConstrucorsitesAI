@@ -17,7 +17,7 @@ LIVE PROOF (run #17, throwaway container from the deployed base image
 starter `Task` entity, owner-auth via Auth.js credentials — no LLM, no gen):
   - Seeded 55 `Task` records; the OLDEST is titled "Zebra-UNIQUE-OMEGA-001".
   - GET /api/entities/Task              (no params — what useEntity sends)  → 50 rows, MARK ABSENT
-  - GET ?title=Zebra-UNIQUE-OMEGA-001 (exact, full value) → 1 row (it DOES exist)
+  - GET ?title=Zebra-UNIQUE-OMEGA-001   (exact, full value)                 → 1 row   (it DOES exist)
   - GET ?title=Zebra                    (prefix substring)                  → 0 rows
   - GET ?title=UNIQUE                   (infix substring)                   → 0 rows
   - GET ?title=zebra-unique-omega-001   (exact value, wrong case)           → 0 rows  (no ILIKE)

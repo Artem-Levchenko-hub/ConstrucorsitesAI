@@ -20,10 +20,6 @@ def test_project_memory_defaults_on() -> None:
     assert Settings.model_fields["use_project_memory"].default is True
 
 
-def test_project_memory_canary_allowlist_defaults_empty() -> None:
-    assert Settings.model_fields["project_memory_canary_users"].default == ""
-
-
 def test_deploy_gate_is_always_blocking_in_production() -> None:
     settings = Settings.model_construct(env="prod", deploy_attestation_blocking=False)
     assert blocking_required(settings)
@@ -44,5 +40,6 @@ def test_production_compose_enables_blocking_by_default() -> None:
     compose = (Path(__file__).parents[2] / "llm-gateway/deploy/full/docker-compose.yml").read_text()
     assert "DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-true}" in compose
     assert "USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}" in compose
+    assert "USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-true}" in compose
     assert "USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-true}" in compose
     assert "AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-true}" in compose

@@ -23,7 +23,6 @@ class Settings(BaseSettings):
 
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
-    omnia_release_sha: str = Field(default="unknown")
 
     # Shared Postgres for *user* projects (NOT omnia-mvp app DB).
     database_url: str

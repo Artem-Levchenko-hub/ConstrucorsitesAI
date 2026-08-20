@@ -899,18 +899,6 @@ def _rendered_surrogates(a: FrozenAnalysis) -> list[GateVerdict]:
         )
     )
 
-    # CABINET needs an authenticated live /dashboard session. The frozen corpus
-    # contains public reference pages, so this advisory leg is explicitly waived
-    # as not applicable while remaining present in the manifest universe.
-    out.append(
-        _surrogate(
-            accept_gauntlet.CABINET,
-            passed=True,
-            classes=(),
-            detail="public frozen corpus has no authenticated cabinet surface",
-        )
-    )
-
     return out
 
 
