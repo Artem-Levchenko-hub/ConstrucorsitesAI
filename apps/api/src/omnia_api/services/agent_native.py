@@ -64,9 +64,8 @@ _NO_WRITE_ABORT_AT = 12
 # but make the environment accept implementation actions only. The lock is
 # sticky until the product entry exists: a CSS/component/data write must not
 # reopen discovery, otherwise the model can resume reading and burn the rest of
-# the paid transcript. Product writes are never rejected merely because the
-# model stages files before ``page.tsx``; the completion contract still requires
-# that entry before build/done can succeed.
+# the paid transcript. One whole assistant turn may stage parallel product
+# writes; the next turn must create ``page.tsx`` before more work continues.
 _MAX_PREWRITE_DISCOVERY_TURNS = 6
 _MAX_PRODUCT_ENTRY_PATH = "src/app/page.tsx"
 _MAX_PREWRITE_LOCK_RESULT = (
@@ -669,6 +668,7 @@ async def run_native_build(
     # config mutation still dirties the build fact-gate, but is not progress.
     no_write_turns = 0
     max_prewrite_discovery_closed = False
+    max_entry_staging_turn_complete = False
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
@@ -916,8 +916,17 @@ async def run_native_build(
                 _max_prewrite_locked = (
                     _max_contract_active and _max_entry_missing and max_prewrite_discovery_closed
                 )
+                _max_entry_write = (
+                    name in {"write_file", "edit_file"}
+                    and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
+                )
+                _max_entry_required = (
+                    _max_contract_active and _max_entry_missing and max_entry_staging_turn_complete
+                )
                 obs: dict[str, Any]
-                if _max_prewrite_locked and name not in {"write_file", "edit_file"}:
+                if _max_entry_required and not _max_entry_write:
+                    obs = {"ok": False, "error": _MAX_PRODUCT_ENTRY_REQUIRED_RESULT}
+                elif _max_prewrite_locked and name not in {"write_file", "edit_file"}:
                     obs = {
                         "ok": False,
                         "error": _MAX_PREWRITE_LOCK_RESULT,
@@ -997,6 +1006,7 @@ async def run_native_build(
                 and mutation_this_turn
                 and _MAX_PRODUCT_ENTRY_PATH not in written
             ):
+                max_entry_staging_turn_complete = True
                 results.append({"type": "text", "text": _MAX_PRODUCT_ENTRY_REQUIRED_RESULT})
 
             if done_summary is not None:

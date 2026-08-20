@@ -300,6 +300,10 @@ async def test_max_prewrite_lock_allows_file_staging_but_blocks_more_discovery(
         if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 2:
             return _turn(
                 ("read_file", {"path": "src/lib/fitness/data.ts"}),
+                (
+                    "write_file",
+                    {"path": "src/components/fitness/ExtraCard.tsx", "content": "extra"},
+                ),
                 ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"}),
             )
         if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 3:
@@ -327,6 +331,7 @@ async def test_max_prewrite_lock_allows_file_staging_but_blocks_more_discovery(
     assert executed.count(("read_file", "src/app/layout.tsx")) == 6
     assert ("read_file", "package.json") not in executed
     assert ("read_file", "src/lib/fitness/data.ts") not in executed
+    assert ("write_file", "src/components/fitness/ExtraCard.tsx") not in executed
     assert ("write_file", "src/app/globals.css") in executed
     assert ("write_file", "src/lib/fitness/data.ts") in executed
     assert ("write_file", "src/components/fitness/StatCard.tsx") in executed
