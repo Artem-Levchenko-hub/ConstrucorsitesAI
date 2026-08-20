@@ -36,7 +36,10 @@ def test_models_endpoint_lists_all_supported(client: TestClient) -> None:
     body = r.json()
     assert body["object"] == "list"
     ids = {m["id"] for m in body["data"]}
-    assert ids == {"gemini-3.1-pro-preview-customtools"}
+    assert ids == {
+        "gemini-3.1-pro-preview-customtools",
+        "claude-sonnet-5",
+    }
     # No keys configured in test → all unavailable.
     assert all(m["available"] is False for m in body["data"])
 

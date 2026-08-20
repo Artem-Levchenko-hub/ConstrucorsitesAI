@@ -1,6 +1,6 @@
 """Async subprocess runner with a mandatory timeout.
 
-R-01 (deep module): callers get one `await run([...], timeout=...)` that
+R-01 (deep module): callers get one `await run([...], timeout_seconds=...)` that
 hides asyncio subprocess plumbing, decoding, and timeout handling.
 R-10/R-32 (stability): every external command has an explicit timeout — a
 hung `nginx`, `certbot`, or `systemctl` must never block the event loop
@@ -33,16 +33,19 @@ class CmdResult:
 
 
 async def run(
-    cmd: list[str], *, timeout: float = 30.0, env: dict[str, str] | None = None
+    cmd: list[str],
+    *,
+    timeout_seconds: float = 30.0,
+    env: dict[str, str] | None = None,
 ) -> CmdResult:
-    """Run `cmd` (no shell), capture output, enforce `timeout` seconds.
+    """Run `cmd` (no shell), capture output, enforce a bounded duration.
 
     Returns a CmdResult even on failure/timeout (rc != 0); never raises for a
     non-zero exit — callers decide how to react. Only raises if the binary is
     missing (FileNotFoundError), which is a real misconfiguration. `env`, when
     given, replaces the child's environment (default: inherit the parent's).
     """
-    log.info("shell.run", cmd=cmd, timeout=timeout)
+    log.info("shell.run", cmd=cmd, timeout=timeout_seconds)
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -50,12 +53,12 @@ async def run(
         env=env,
     )
     try:
-        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except TimeoutError:
         proc.kill()
         await proc.wait()
-        log.warning("shell.timeout", cmd=cmd, timeout=timeout)
-        return CmdResult(rc=124, stdout="", stderr=f"timed out after {timeout}s")
+        log.warning("shell.timeout", cmd=cmd, timeout=timeout_seconds)
+        return CmdResult(rc=124, stdout="", stderr=f"timed out after {timeout_seconds}s")
 
     out = (out_b or b"").decode("utf-8", errors="replace")
     err = (err_b or b"").decode("utf-8", errors="replace")

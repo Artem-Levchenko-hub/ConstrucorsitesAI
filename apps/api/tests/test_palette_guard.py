@@ -68,14 +68,20 @@ def test_all_banned_hexes_are_six_digit_lowercase() -> None:
         assert len(h) == 7 and h.startswith("#")
 
 
-def test_on_palette_page_untouched() -> None:
+def test_on_palette_page_only_gets_missing_kit_brand_floor() -> None:
     good = (
         f"<html><head><style>:root {{ --bg: {PAL.bg}; --primary: {PAL.primary}; "
         f"--text: {PAL.text}; }}</style></head><body>hi</body></html>"
     )
     fixed, changed = repair_html(good, PAL)
-    assert changed is False
-    assert fixed == good
+    assert changed is True
+    assert f"--bg: {PAL.bg};" in fixed
+    assert f"--primary: {PAL.primary};" in fixed
+    assert f"--text: {PAL.text};" in fixed
+    assert 'id="omnia-brand-vars"' in fixed
+    fixed_again, changed_again = repair_html(fixed, PAL)
+    assert changed_again is False
+    assert fixed_again == fixed
 
 
 def test_var_reference_not_touched() -> None:

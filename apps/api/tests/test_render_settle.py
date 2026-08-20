@@ -73,6 +73,17 @@ class _BoomPage:
         raise RuntimeError("clock skew")
 
 
+class _NeverFontsPage:
+    async def wait_for_load_state(self, *a, **k):
+        return None
+
+    async def evaluate(self, *a, **k):
+        await asyncio.Event().wait()
+
+    async def wait_for_timeout(self, *a, **k):
+        return None
+
+
 # ── 1. helper behaviour ──────────────────────────────────────────────────────
 
 
@@ -103,6 +114,11 @@ def test_goto_and_settle_navigates_at_domcontentloaded_then_settles():
 def test_settle_is_best_effort_and_never_raises():
     # Must complete cleanly even when every underlying step blows up.
     asyncio.run(rs.settle(_BoomPage()))
+
+
+def test_settle_bounds_a_never_resolving_font_promise(monkeypatch):
+    monkeypatch.setattr(rs, "FONT_TIMEOUT_MS", 10)
+    asyncio.run(asyncio.wait_for(rs.settle(_NeverFontsPage()), timeout=0.2))
 
 
 def test_goto_and_settle_does_not_swallow_navigation_errors():

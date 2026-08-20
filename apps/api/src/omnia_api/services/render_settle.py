@@ -21,6 +21,7 @@ network or font load degrades to a slightly earlier read, never a raise.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 # Canonical settle budget — every render leg waits the same way.
 LOAD_TIMEOUT_MS = 4_000
 NETWORKIDLE_TIMEOUT_MS = 8_000
+FONT_TIMEOUT_MS = 4_000
 PAINT_BEAT_MS = 900
 
 # Stranger first-paint budget (V4.0b). NORTH STAR pillar 4: "коллега открыл → за
@@ -64,7 +66,10 @@ async def settle(page: Page) -> None:
     except Exception:
         pass
     try:
-        await page.evaluate("() => document.fonts.ready")
+        await asyncio.wait_for(
+            page.evaluate("() => document.fonts.ready"),
+            timeout=FONT_TIMEOUT_MS / 1_000,
+        )
     except Exception:
         pass
     try:

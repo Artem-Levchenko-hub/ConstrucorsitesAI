@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
+from omnia_api.services.generation_runs import compile_terminal_run_memory
 from omnia_api.services.project_memory import (
     compile_project_memory_revision,
     record_run_artifacts,
@@ -34,6 +38,74 @@ async def _project(session: AsyncSession) -> tuple[User, Project]:
     session.add(project)
     await session.commit()
     return owner, project
+
+
+async def test_terminal_memory_compiles_for_canary_when_global_is_off(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _project(db_session)
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="memory-canary-enabled",
+        prompt_hash="hash",
+        status="completed",
+        response_mode="build",
+        finished_at=datetime.now(UTC),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    monkeypatch.setattr(
+        "omnia_api.core.config.get_settings",
+        lambda: SimpleNamespace(
+            use_project_memory=False,
+            project_memory_canary_users=str(owner.id),
+        ),
+    )
+
+    await compile_terminal_run_memory(db_session, run)
+
+    revision = (
+        await db_session.execute(
+            select(ProjectMemoryRevision).where(ProjectMemoryRevision.run_id == run.id)
+        )
+    ).scalar_one_or_none()
+    assert revision is not None
+
+
+async def test_terminal_memory_stays_off_for_non_canary(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _project(db_session)
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="memory-canary-disabled",
+        prompt_hash="hash",
+        status="completed",
+        response_mode="build",
+        finished_at=datetime.now(UTC),
+    )
+    db_session.add(run)
+    await db_session.flush()
+    monkeypatch.setattr(
+        "omnia_api.core.config.get_settings",
+        lambda: SimpleNamespace(
+            use_project_memory=False,
+            project_memory_canary_users=str(uuid.uuid4()),
+        ),
+    )
+
+    await compile_terminal_run_memory(db_session, run)
+
+    revision = (
+        await db_session.execute(
+            select(ProjectMemoryRevision).where(ProjectMemoryRevision.run_id == run.id)
+        )
+    ).scalar_one_or_none()
+    assert revision is None
 
 
 async def test_memory_revision_links_verified_prompt_and_snapshot(

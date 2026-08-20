@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from omnia_orchestrator.core.config import get_settings
+from omnia_orchestrator.core.release import normalize_release_sha
+
 router = APIRouter(tags=["meta"])
 
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    # TODO sprint A1: extend with actual docker.ping() + asyncpg.fetchval("SELECT 1")
-    # probes so the api↔orchestrator handshake can fail fast on bad deploys.
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "release_sha": normalize_release_sha(get_settings().omnia_release_sha),
+    }
