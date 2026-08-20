@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
@@ -9,11 +9,15 @@ import {
   ExternalLink,
   GitCommitHorizontal,
   Loader2,
+  MousePointer2,
   PanelRightClose,
+  Pencil,
   Play,
   RefreshCw,
   Signal,
+  Sparkles,
   Wifi,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,6 +31,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { StylePanel } from "@/components/workspace/StylePanel";
+import {
   createMaxPreviewSession,
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
@@ -36,7 +50,15 @@ import {
   maxSnapshotLabel,
   maxSnapshotVersion,
 } from "@/lib/max-version-history";
-import { shortSha } from "@/lib/utils";
+import {
+  createEditorModeSync,
+  previewTargetOrigin,
+  stopEditorPickingAfterPick,
+  type EditorMode,
+} from "@/lib/editor-bridge";
+import { cn, shortSha } from "@/lib/utils";
+import { useInspectorStore } from "@/store/inspector";
+import { useStyleEditStore } from "@/store/styleEdit";
 import { MaxVersionRail } from "./MaxVersionRail";
 
 const SCREEN_WIDTH = 390;
@@ -68,12 +90,32 @@ export function MaxLivePreview({
   onClose?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const editorInstanceId = useId();
+  const selectionIdPrefix = `${editorInstanceId}|`;
   const started = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
+  const previousPickIds = useRef<string[]>([]);
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
+  const [loadedPreviewUrl, setLoadedPreviewUrl] = useState<string | null>(null);
+  const [inspectorReady, setInspectorReady] = useState(false);
   const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
+  const inspectMode = useInspectorStore((state) => state.inspectMode);
+  const setInspectMode = useInspectorStore((state) => state.setInspectMode);
+  const addSelection = useInspectorStore((state) => state.addSelection);
+  const selections = useInspectorStore((state) => state.selections);
+  const styleMode = useStyleEditStore((state) => state.styleMode);
+  const setStyleMode = useStyleEditStore((state) => state.setStyleMode);
+  const stopStylePicking = useStyleEditStore(
+    (state) => state.stopStylePicking,
+  );
+  const styleSelected = useStyleEditStore((state) => state.selected);
+  const activeEditorMode: EditorMode = styleMode
+    ? "style"
+    : inspectMode
+      ? "inspect"
+      : "off";
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -141,23 +183,51 @@ export function MaxLivePreview({
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    const syncPreviewChrome = (event: MessageEvent) => {
-      if (
-        event.source !== previewFrame.current?.contentWindow ||
-        event.data?.type !== "omnia:inspect:ready"
-      ) {
-        return;
-      }
-      previewFrame.current?.contentWindow?.postMessage(
-        { type: "omnia:preview:chrome", hideScrollbar: true },
-        "*",
-      );
-    };
-
-    window.addEventListener("message", syncPreviewChrome);
-    return () => window.removeEventListener("message", syncPreviewChrome);
+  const postToPreview = useCallback((message: Record<string, unknown>) => {
+    const frame = previewFrame.current;
+    if (!frame?.contentWindow) return;
+    const targetOrigin = previewTargetOrigin(frame.src, window.location.origin);
+    if (targetOrigin) frame.contentWindow.postMessage(message, targetOrigin);
   }, []);
+  const [editorModeSync] = useState(() =>
+    createEditorModeSync({ editorSession: editorInstanceId }),
+  );
+  useEffect(() => {
+    editorModeSync.setPostMessage(postToPreview);
+    return () => editorModeSync.setPostMessage(() => undefined);
+  }, [editorModeSync, postToPreview]);
+  useEffect(() => () => editorModeSync.dispose(), [editorModeSync]);
+
+  const replayPendingStyles = useCallback(() => {
+    const propNames = {
+      color: "color",
+      background_color: "background-color",
+      border_color: "border-color",
+    } as const;
+    const { elements } = useStyleEditStore.getState();
+    Object.entries(elements).forEach(([selector, edit]) => {
+      Object.entries(propNames).forEach(([key, prop]) => {
+        const value = edit[key as keyof typeof propNames];
+        if (!value) return;
+        postToPreview({
+          type: "omnia:style:set",
+          target: "element",
+          selector,
+          prop,
+          value,
+        });
+      });
+    });
+  }, [postToPreview]);
+
+  const selectEditorMode = useCallback(
+    (mode: EditorMode) => {
+      editorModeSync.transition(mode);
+      setStyleMode(mode === "style");
+      setInspectMode(mode === "inspect");
+    },
+    [editorModeSync, setInspectMode, setStyleMode],
+  );
 
   // A relative same-origin fallback is both correct behind the production
   // reverse proxy and stable across SSR/hydration. Reading window.location
@@ -197,6 +267,176 @@ export function MaxLivePreview({
   const restoreTargetVersion = restoreTargetSnapshot
     ? maxSnapshotVersion(snapshots, restoreTargetSnapshot.id)
     : null;
+
+  useEffect(() => {
+    if (viewingHistorical) selectEditorMode("off");
+  }, [selectEditorMode, viewingHistorical]);
+
+  useEffect(() => {
+    if (!displayPreviewUrl || loadedPreviewUrl !== displayPreviewUrl) {
+      editorModeSync.cancelPending();
+      return;
+    }
+    const current = editorModeSync.getCurrent();
+    if (!current || current.mode !== activeEditorMode) {
+      editorModeSync.transition(activeEditorMode);
+    }
+    return () => editorModeSync.cancelPending();
+  }, [activeEditorMode, displayPreviewUrl, editorModeSync, loadedPreviewUrl]);
+
+  useEffect(() => {
+    function onPreviewMessage(event: MessageEvent) {
+      const frame = previewFrame.current;
+      const frameWindow = frame?.contentWindow;
+      if (!frameWindow || event.source !== frameWindow) return;
+      const expectedOrigin = previewTargetOrigin(
+        frame.src,
+        window.location.origin,
+      );
+      if (!expectedOrigin || event.origin !== expectedOrigin) return;
+
+      const data = event.data as {
+        type?: string;
+        el?: Record<string, unknown>;
+        mode?: unknown;
+        editorSession?: unknown;
+        seq?: unknown;
+      };
+      if (!data || typeof data.type !== "string") return;
+      if (data.type === "omnia:inspect:ready") {
+        frame.dataset.maxPreviewReady = "true";
+        setInspectorReady(true);
+        postToPreview({ type: "omnia:preview:chrome", hideScrollbar: true });
+        editorModeSync.resend();
+        replayPendingStyles();
+        return;
+      }
+      if (data.type === "omnia:editor:state") {
+        editorModeSync.acknowledge(data);
+        return;
+      }
+      if (data.type !== "omnia:pick" || !data.el) return;
+
+      const element = data.el;
+      const selector = String(element.selector ?? "");
+      if (!selector) return;
+      const pickedMode: EditorMode = useStyleEditStore.getState().styleMode
+        ? "style"
+        : useInspectorStore.getState().inspectMode
+          ? "inspect"
+          : "off";
+      if (pickedMode === "off") return;
+
+      if (pickedMode === "style") {
+        useStyleEditStore.getState().selectElement({
+          selector,
+          tag: String(element.tag ?? ""),
+          color: String(element.color ?? ""),
+          backgroundColor: String(element.backgroundColor ?? ""),
+          borderColor: String(element.borderColor ?? ""),
+          fontFamily: String(element.fontFamily ?? ""),
+          src: String(element.src ?? ""),
+          srcs: Array.isArray(element.srcs) ? element.srcs.map(String) : [],
+          editableText: Boolean(element.editableText),
+          editText: String(element.editText ?? ""),
+          textIndex:
+            typeof element.textIndex === "number" ? element.textIndex : 0,
+          outerHTML: String(element.outerHTML ?? ""),
+          htmlIndex:
+            typeof element.htmlIndex === "number" ? element.htmlIndex : 0,
+          prevHTML: String(element.prevHTML ?? ""),
+          prevIndex:
+            typeof element.prevIndex === "number" ? element.prevIndex : 0,
+          nextHTML: String(element.nextHTML ?? ""),
+          nextIndex:
+            typeof element.nextIndex === "number" ? element.nextIndex : 0,
+        });
+        editorModeSync.cancelPending();
+        stopEditorPickingAfterPick("style", {
+          setInspectMode,
+          stopStylePicking,
+          postMessage: postToPreview,
+        });
+        return;
+      }
+
+      const rawId = String(element.id ?? "");
+      if (!rawId) return;
+      const alreadySelected = useInspectorStore
+        .getState()
+        .selections.some((selection) => selection.selector === selector);
+      if (alreadySelected) {
+        postToPreview({ type: "omnia:inspect:remove", id: rawId });
+      } else {
+        addSelection({
+          id: `${selectionIdPrefix}${rawId}`,
+          selector,
+          label: element.label ? String(element.label) : null,
+          text: element.text ? String(element.text) : null,
+          html: element.html ? String(element.html) : null,
+          comment: "",
+        });
+        toast.success("Элемент добавлен в правку", {
+          description:
+            "Опишите изменение в чате — ИИ затронет только выделенное.",
+        });
+      }
+      editorModeSync.cancelPending();
+      stopEditorPickingAfterPick("inspect", {
+        setInspectMode,
+        stopStylePicking,
+        postMessage: postToPreview,
+      });
+    }
+
+    window.addEventListener("message", onPreviewMessage);
+    return () => window.removeEventListener("message", onPreviewMessage);
+  }, [
+    addSelection,
+    editorModeSync,
+    postToPreview,
+    replayPendingStyles,
+    selectionIdPrefix,
+    setInspectMode,
+    stopStylePicking,
+  ]);
+
+  const previousEditorMode = useRef<EditorMode>("off");
+  const hadStyleSelection = useRef(false);
+  useEffect(() => {
+    const leftStyleMode =
+      previousEditorMode.current === "style" &&
+      activeEditorMode !== "style" &&
+      !styleSelected;
+    const closedStylePanel = hadStyleSelection.current && !styleSelected;
+    if (leftStyleMode || closedStylePanel) {
+      postToPreview({ type: "omnia:inspect:clear" });
+    }
+    previousEditorMode.current = activeEditorMode;
+    hadStyleSelection.current = Boolean(styleSelected);
+  }, [activeEditorMode, postToPreview, styleSelected]);
+
+  useEffect(() => {
+    const current = selections
+      .map((selection) => selection.id)
+      .filter((id) => id.startsWith(selectionIdPrefix));
+    const removed = previousPickIds.current.filter(
+      (id) => !current.includes(id),
+    );
+    if (removed.length > 0) {
+      if (current.length === 0) {
+        postToPreview({ type: "omnia:inspect:clear" });
+      } else {
+        removed.forEach((id) => {
+          postToPreview({
+            type: "omnia:inspect:remove",
+            id: id.slice(selectionIdPrefix.length),
+          });
+        });
+      }
+    }
+    previousPickIds.current = current;
+  }, [postToPreview, selectionIdPrefix, selections]);
   const preparationLabel = !runtimeRunning
     ? "Запускаем сервер приложения"
     : !managedKit.isSuccess
@@ -272,6 +512,12 @@ export function MaxLivePreview({
             <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#aaa59b]"}`} />
             {connected ? "Подключено" : "Запускается"}
           </span>
+          <MaxEditMenu
+            mode={activeEditorMode}
+            disabled={!displayPreviewUrl || viewingHistorical}
+            selectionCount={selections.length}
+            onModeChange={selectEditorMode}
+          />
           {onClose && (
             <button
               type="button"
@@ -377,12 +623,25 @@ export function MaxLivePreview({
                       allow="clipboard-read; clipboard-write"
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
+                      data-max-project-id={project.id}
+                      data-max-preview-ready={
+                        loadedPreviewUrl === displayPreviewUrl && inspectorReady
+                          ? "true"
+                          : "false"
+                      }
                       onLoad={(event) => {
+                        event.currentTarget.dataset.maxPreviewReady = "false";
+                        setInspectorReady(false);
+                        editorModeSync.dispose();
+                        editorModeSync.transition(activeEditorMode);
                         if (previewUrl) setLastWorkingUrl(previewUrl);
-                        event.currentTarget.contentWindow?.postMessage(
-                          { type: "omnia:preview:chrome", hideScrollbar: true },
-                          "*",
-                        );
+                        if (displayPreviewUrl) {
+                          setLoadedPreviewUrl(displayPreviewUrl);
+                        }
+                        postToPreview({
+                          type: "omnia:preview:chrome",
+                          hideScrollbar: true,
+                        });
                       }}
                       />
                       {!previewUrl && preparing && (
@@ -507,6 +766,15 @@ export function MaxLivePreview({
         </div>
         </div>
       </div>
+      {!viewingHistorical && styleSelected && (
+        <StylePanel
+          projectId={project.id}
+          post={postToPreview}
+          sourceEditing={false}
+          fontEditing={false}
+          tokenEditing={false}
+        />
+      )}
       <Dialog
         open={Boolean(
           restoreTargetSnapshot && restoreTargetId === selectedSnapshotId,
@@ -549,5 +817,102 @@ export function MaxLivePreview({
         </DialogContent>
       </Dialog>
     </aside>
+  );
+}
+
+function MaxEditMenu({
+  mode,
+  disabled,
+  selectionCount,
+  onModeChange,
+}: {
+  mode: EditorMode;
+  disabled: boolean;
+  selectionCount: number;
+  onModeChange: (mode: EditorMode) => void;
+}) {
+  const active = mode !== "off";
+  const label =
+    mode === "inspect" ? "с ИИ" : mode === "style" ? "вручную" : "выключен";
+  const Icon =
+    mode === "inspect" ? Sparkles : mode === "style" ? Pencil : MousePointer2;
+  const selectionLabel =
+    mode === "inspect" && selectionCount > 0
+      ? `, выбрано: ${selectionCount}`
+      : "";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          data-testid="max-edit-menu-trigger"
+          aria-label={`Режим правки: ${label}${selectionLabel}`}
+          aria-pressed={active}
+          title={
+            disabled ? "Для правки откройте текущую версию" : "Править приложение"
+          }
+          className={cn(
+            "relative inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-[9px] border px-2.5 text-[10px] font-semibold transition-[color,background-color,border-color,transform] duration-150 active:scale-[.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-45",
+            active
+              ? "border-accent/35 bg-accent/10 text-accent"
+              : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
+          )}
+        >
+          <Icon className="size-3.5" />
+          <span className="hidden 2xl:inline">Править</span>
+          {mode === "inspect" && selectionCount > 0 && (
+            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 text-[8px] font-semibold leading-none text-accent-fg tabular-nums">
+              {selectionCount}
+            </span>
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        sideOffset={8}
+        className="w-56 border-[#d8d4cb] bg-[#fcfbf7] p-1 text-[#171716] shadow-[0_14px_36px_rgba(23,23,22,.14)]"
+        data-testid="max-edit-menu"
+      >
+        <DropdownMenuRadioGroup
+          value={mode}
+          onValueChange={(value) => {
+            if (value === "inspect" || value === "style" || value === "off") {
+              onModeChange(value);
+            }
+          }}
+        >
+          <DropdownMenuRadioItem
+            value="inspect"
+            data-testid="max-edit-with-ai"
+            className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
+          >
+            <Sparkles className="size-3.5 shrink-0 text-accent" />
+            Править с ИИ
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem
+            value="style"
+            data-testid="max-edit-manually"
+            className="min-h-11 gap-2 rounded-[8px] py-2 pl-8 pr-2.5 text-xs font-medium focus:bg-[#f5f3ee]"
+          >
+            <Pencil className="size-3.5 shrink-0 text-[#725f4f]" />
+            Править вручную
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        {active && (
+          <>
+            <DropdownMenuSeparator className="bg-[#e7e3da]" />
+            <DropdownMenuItem
+              onSelect={() => onModeChange("off")}
+              className="min-h-10 rounded-[8px] px-2.5 py-2 text-[11px] text-[#6d6962] focus:bg-[#f5f3ee]"
+            >
+              <X className="size-3.5" />
+              Закончить правку
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

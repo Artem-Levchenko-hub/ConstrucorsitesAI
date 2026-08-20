@@ -1,6 +1,13 @@
 "use client";
 
-import { type CSSProperties, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
@@ -26,6 +33,8 @@ import { getMaxJourney } from "@/lib/max-journey";
 import { visibleMaxSnapshots } from "@/lib/max-version-history";
 import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { cn } from "@/lib/utils";
+import { useInspectorStore } from "@/store/inspector";
+import { useStyleEditStore } from "@/store/styleEdit";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
 import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxAccountMenu } from "./MaxAccountMenu";
@@ -33,6 +42,65 @@ import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 
 export function MaxWorkspaceShell({
+  project,
+  email,
+}: {
+  project: Project;
+  email: string;
+}) {
+  return (
+    <MaxEditorProjectScope key={project.id} projectId={project.id}>
+      <MaxWorkspaceContent project={project} email={email} />
+    </MaxEditorProjectScope>
+  );
+}
+
+function MaxEditorProjectScope({
+  projectId,
+  children,
+}: {
+  projectId: string;
+  children: ReactNode;
+}) {
+  const editorSession = useId();
+  const inspectorScope = useInspectorStore((state) => state.projectScope);
+  const inspectorSession = useInspectorStore((state) => state.editorSession);
+  const styleScope = useStyleEditStore((state) => state.projectScope);
+  const styleSession = useStyleEditStore((state) => state.editorSession);
+
+  useEffect(() => {
+    useInspectorStore.getState().scopeToProject(projectId, editorSession);
+    useStyleEditStore.getState().scopeToProject(projectId, editorSession);
+    return () => {
+      useInspectorStore
+        .getState()
+        .releaseProjectScope(projectId, editorSession);
+      useStyleEditStore
+        .getState()
+        .releaseProjectScope(projectId, editorSession);
+    };
+  }, [editorSession, projectId]);
+
+  if (
+    inspectorScope !== projectId ||
+    inspectorSession !== editorSession ||
+    styleScope !== projectId ||
+    styleSession !== editorSession
+  ) {
+    return (
+      <div
+        className="grid h-full min-h-0 place-items-center bg-[#fcfbf7] text-xs text-[#8d887f]"
+        role="status"
+      >
+        Открываем редактор…
+      </div>
+    );
+  }
+
+  return children;
+}
+
+function MaxWorkspaceContent({
   project,
   email,
 }: {
