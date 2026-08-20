@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-20",
-  "version": 21,
+  "version": 22,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -187,6 +187,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "20.08",
+   "what": "Поручил подключить ReUI как источник более сильных UI-композиций для MAX-приложений, не ломая текущую рабочую генерацию.",
+   "impact": "В Design Pro добавлен закреплённый MIT-каталог из 1072 ReUI-композиций. По брифу детерминированно выбираются не более трёх релевантных паттернов, ссылки и решения сохраняются в DESIGN.md; чужой runtime и новые модельные проходы не добавляются. Визуальный эффект ожидает пользовательскую генерацию."
+  },
   {
    "date": "01.08",
    "what": "Поручил полностью упростить UX MAX Studio: оставить один понятный путь от проекта до запуска, показывать пользователю следующее действие и убрать конкурирующие чек-листы и технический шум.",
@@ -2224,6 +2229,18 @@
    "evidence": "UI/UX Pro Max 2.13.0 закреплён точным upstream commit 8a1a6d85 и MIT license; Design Pro создаёт secret-free DESIGN.md в существующем MAX starter/snapshot; отдельный MAX skill фиксирует реальные exports @maxhub/max-ui@0.2.0; недоступный vision возвращает score=null и status=unverified. Первый production-срез 59bf18ca с Design Pro 1.1.0 развёрнут: API/worker используют один Linux image, публичные /api/health, /web-health, /max и /otchet/ отвечают 200, свежих ошибок API/worker нет. Живой MAX canary ad8e3b1f-be9e-40ee-98aa-5ba062cac181 завершён за 1642 с: один build-run, 74 шага, clean typecheck, runtime/preview 200, ровно 1 generated snapshot из 2 total и 40 файлов; snapshot 23858157-c486-435a-a2c0-b9dd3d71da97 содержит DESIGN.md, src/app/page.tsx и globals.css. Vision judge был недоступен и честно записал skipped без 10/10. Playwright 390x844: overflow=false, console/page errors=0, failed requests=0. Canary также выявил ограничение: модель всё ещё перечитывала пакет, получила 17 красных guard-шагов и только после pre-write budget создала page.tsx; слово «каталог привычек» сначала дало commerce. Follow-up Design Pro 1.1.1 исправляет этот classifier и прямо запрещает повторное исследование node_modules до главного экрана. Локально после фикса: 62 целевых теста, full Ruff и mypy 225 модулей зелёные; ранее в том же срезе зелёные ещё 42 MAX/agent, 25 acceptance и MAX TypeScript typecheck.",
    "impact": "Технический слой работает: дизайн-память переживает snapshot, точный MAX UI контракт доступен агенту, лишних версий и repair-проходов не добавлено, а отсутствие vision больше не маскируется оценкой 10. Визуально canary аккуратный и рабочий, но пока не «вау»: отдельный skill не остановил повторную разведку и полный run занял 27 минут. Следующий этап должен усиливать следование DESIGN.md и сокращать pre-write цикл, не добавляя новые модельные фазы.",
    "next_vector": "V1"
+  },
+  {
+   "id": "H116",
+   "title": "ReUI-каталог повышает композиционное качество MAX без нового агентского цикла",
+   "status": "testing",
+   "score": null,
+   "category": "MAX / дизайн / ReUI / retrieval / композиции",
+   "period": "20.08",
+   "description": "Закрепить открытый ReUI на точной ревизии и использовать его как локальный каталог композиционных референсов: выбирать по пользовательскому брифу до трёх подходящих паттернов и добавлять их в текущий Design Pro и DESIGN.md без установки ReUI, shadcn CLI или дополнительных LLM-проходов.",
+   "evidence": "Из официального keenthemes/reui на commit 0daf79dff3ebe0ede7fa05bedcaefeaac93a8949 получен детерминированный каталог 1072 композиций и точный MIT license. Retriever покрывает профили, формы, календари, таблицы, фильтры, пустые состояния, аналитику, историю и чат; лимит — три паттерна. Мобильный guard не предлагает desktop data-grid без явного запроса, а prompt запрещает CLI, новые пакеты и копирование несовместимых импортов. Повторная синхронизация сохранила SHA-256 каталога и лицензии; 115 целевых и соседних агентских тестов, full Ruff lint и mypy 228 модулей проходят. Общий исторический pytest-suite имеет независимый baseline-сбой test_acceptance.py::test_evaluate_passes_clean; живая MAX-генерация намеренно оставлена владельцу.",
+   "impact": "Агент получает конкретные композиционные идеи вместо общей просьбы «сделай красиво», при этом рабочий MAX runtime, модельный цикл и зависимости сгенерированного проекта не меняются. Реальный прирост визуального качества пока не оценён и требует следующей пользовательской генерации.",
+   "next_vector": "V1"
   }
  ],
  "vectors": [
@@ -2260,6 +2277,10 @@
     [
      "UI/UX Pro Max 2.13 + постоянный DESIGN.md + точный MAX UI skill + честный vision-unverified (20.08)",
      true
+    ],
+    [
+     "ReUI: 1072 закреплённые композиции → до 3 brief-aware референсов в Design Pro и DESIGN.md; ждёт живой генерации (20.08)",
+     false
     ]
    ],
    "hyp_ids": [
@@ -2271,7 +2292,8 @@
     "H79",
     "H81",
     "H90",
-    "H115"
+    "H115",
+    "H116"
    ]
   },
   {

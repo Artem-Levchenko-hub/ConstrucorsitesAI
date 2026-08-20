@@ -22,10 +22,17 @@ from omnia_api.services.design_dna import design_mood_directive
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.design_tokens import DesignTokens, tokens_for_project
 from omnia_api.services.preset_classifier import classify_preset_sync
+from omnia_api.services.reui_catalog import (
+    REUI_SOURCE,
+    format_reui_markdown,
+    format_reui_prompt,
+    select_reui_patterns,
+)
 
 PLUGIN_ID = "omnia-design-pro"
-PLUGIN_VERSION = "1.1.1"
-KNOWLEDGE_SOURCE = "ui-ux-pro-max@2.13.0+8a1a6d85"
+PLUGIN_VERSION = "1.2.0"
+_UIUX_SOURCE = "ui-ux-pro-max@2.13.0+8a1a6d85"
+KNOWLEDGE_SOURCE = f"{_UIUX_SOURCE}; {REUI_SOURCE}"
 
 _UI_TEMPLATES = frozenset({"fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp"})
 
@@ -159,6 +166,7 @@ class DesignContract:
     knowledge_source: str
     archetype: str
     preset_id: str
+    reui_pattern_ids: tuple[str, ...]
     prompt_block: str
     vision_context: str
     design_markdown: str
@@ -187,6 +195,7 @@ def _render_design_markdown(
     preset_name: str,
     nav_rule: str,
     tokens: DesignTokens | None,
+    reui_markdown: str,
 ) -> str:
     """Persistent, secret-free design memory shipped inside the generated app."""
     token_lines = ""
@@ -234,6 +243,8 @@ This file is persistent project memory. Keep it aligned when the product UI chan
 ## Foundations
 
 {token_lines or "Use the project design tokens already present in the application."}
+
+{reui_markdown}
 
 ## Quality floor
 
@@ -370,6 +381,13 @@ def build_design_contract(
         brief=brief,
     )
     tokens = tokens_for_project(project_id, industry_hint=brief) if mobile else None
+    reui_patterns = select_reui_patterns(
+        brief=brief,
+        archetype=pattern.id,
+        mobile=mobile,
+    )
+    reui_prompt = format_reui_prompt(reui_patterns, mobile=mobile)
+    reui_markdown = format_reui_markdown(reui_patterns)
     mood = (
         _max_token_directive(tokens)
         if tokens is not None
@@ -380,6 +398,7 @@ def build_design_contract(
         preset_name=preset.name,
         nav_rule=nav_rule,
         tokens=tokens,
+        reui_markdown=reui_markdown,
     )
     visual_direction = (
         f"{preset.name}. Это направление, а не второй набор токенов: точная палитра "
@@ -409,6 +428,7 @@ OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-�
   не закрывают поля/CTA; длинный текст и пустые данные не ломают сетку.
 • Анти-generic: без emoji вместо иконок, без радуги градиентов, без hero лендинга
   внутри рабочего приложения, без одинаковой сетки из карточек на каждом экране.
+{reui_prompt}
 {matched_skill_brief}
 {mood}
 """.strip()
@@ -429,6 +449,7 @@ OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-�
         knowledge_source=KNOWLEDGE_SOURCE,
         archetype=pattern.id,
         preset_id=selected_preset_id,
+        reui_pattern_ids=tuple(item.id for item in reui_patterns),
         prompt_block=prompt_block,
         vision_context=vision_context,
         design_markdown=design_markdown,
