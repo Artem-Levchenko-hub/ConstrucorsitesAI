@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.generation_telegram_report import GenerationTelegramReport
@@ -165,10 +165,13 @@ class _FakeMinio:
 def _patch_runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
+    database_url: str,
     files: dict[str, str] | None = None,
     render_error: bool = False,
     upload_error: bool = False,
 ) -> None:
+    settings = preview.get_settings().model_copy(update={"database_url": database_url})
+    monkeypatch.setattr(preview, "get_settings", lambda: settings)
     _FakeMinio.upload_error = upload_error
     _FakeMinio.uploads = []
     monkeypatch.setattr(preview.repo_svc, "read_files", lambda *_args: files or {})
@@ -186,6 +189,12 @@ def _patch_runtime(
     )
 
 
+def _test_database_url(session: AsyncSession) -> str:
+    bind = session.bind
+    assert isinstance(bind, AsyncEngine)
+    return bind.url.render_as_string(hide_password=False)
+
+
 async def test_success_marks_preview_ready_in_snapshot_transaction(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -193,7 +202,11 @@ async def test_success_marks_preview_ready_in_snapshot_transaction(
     snapshot, report = await _seed_report(db_session)
     snapshot_id = snapshot.id
     report_id = report.run_id
-    _patch_runtime(monkeypatch, files={"index.html": "<main>готово</main>"})
+    _patch_runtime(
+        monkeypatch,
+        database_url=_test_database_url(db_session),
+        files={"index.html": "<main>готово</main>"},
+    )
 
     await preview._render_async(str(snapshot_id))
     db_session.expire_all()
@@ -226,7 +239,11 @@ async def test_early_exit_records_fixed_preview_code(
     snapshot, report = await _seed_report(db_session, template=template)
     snapshot_id = snapshot.id
     report_id = report.run_id
-    _patch_runtime(monkeypatch, files=files)
+    _patch_runtime(
+        monkeypatch,
+        database_url=_test_database_url(db_session),
+        files=files,
+    )
 
     async def _live_url(*_args: object) -> str | None:
         return live_url
@@ -260,6 +277,7 @@ async def test_render_and_upload_errors_record_fixed_code(
     report_id = report.run_id
     _patch_runtime(
         monkeypatch,
+        database_url=_test_database_url(db_session),
         files={"index.html": "<main>готово</main>"},
         render_error=render_error,
         upload_error=upload_error,
@@ -281,7 +299,11 @@ async def test_observer_ready_failure_does_not_fail_successful_preview(
 ) -> None:
     snapshot, _report = await _seed_report(db_session)
     snapshot_id = snapshot.id
-    _patch_runtime(monkeypatch, files={"index.html": "<main>готово</main>"})
+    _patch_runtime(
+        monkeypatch,
+        database_url=_test_database_url(db_session),
+        files={"index.html": "<main>готово</main>"},
+    )
 
     async def _observer_failure(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("observer unavailable")
