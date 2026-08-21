@@ -5,6 +5,7 @@ release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 updater="${release_dir}/update-env-value.sh"
 gate="${release_dir}/local-release-gate.sh"
 rollback_manifest="${release_dir}/rollback-manifest.sh"
+compose_policy="${release_dir}/test-compose-policy.sh"
 runbook="${release_dir}/README.md"
 test_root="$(mktemp -d)"
 trap 'rm -rf "${test_root}"' EXIT
@@ -13,6 +14,11 @@ fail() {
   echo "release tool test failed: $1" >&2
   exit 1
 }
+
+grep -Fq 'blank_env="$(mktemp)"' "${compose_policy}" \
+  || fail "compose policy does not create an isolated empty environment"
+grep -Fq 'docker compose --env-file "${blank_env}"' "${compose_policy}" \
+  || fail "compose policy can auto-load a production .env"
 
 file_mode() {
   if stat -f '%Lp' "$1" >/dev/null 2>&1; then
