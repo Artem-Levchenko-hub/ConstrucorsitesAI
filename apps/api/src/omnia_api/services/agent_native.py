@@ -66,15 +66,23 @@ _NO_WRITE_ABORT_AT = 12
 # verification; infra and hard-stop guards remain unchanged.
 _MAX_PREWRITE_DISCOVERY_TURNS = 6
 _MAX_PRODUCT_ENTRY_PATH = "src/app/page.tsx"
+_MAX_ENTRY_WRITE_GUIDANCE = (
+    "Build the first runnable vertical slice from the user's brief now. Write a real, "
+    "self-contained src/app/page.tsx with the product's primary screen, main user action, "
+    "representative content, and required states — not a placeholder. Reuse only platform "
+    "core imports that already exist; do not import product components, data modules, or "
+    "styles you merely plan to create later. After this entry is written, the full toolset "
+    "returns so you can extract components, add styles/data, build, and repair normally."
+)
 _MAX_PREWRITE_LOCK_RESULT = (
     "MAX pre-write discovery budget is exhausted. The platform core and product "
     "contract are already in context. Do not read, search, build, probe, or inspect "
-    "dependencies again. Create src/app/page.tsx NOW with write_file or edit_file."
+    "dependencies again. " + _MAX_ENTRY_WRITE_GUIDANCE
 )
 _MAX_PRODUCT_ENTRY_REQUIRED_RESULT = (
     "MAX product entry is still missing. A helper, config, or standalone component "
-    "is not a runnable product by itself and does not unlock more exploration. Your "
-    "NEXT action must create src/app/page.tsx with write_file (or edit it if it exists)."
+    "is not a runnable product by itself and does not unlock more exploration. "
+    + _MAX_ENTRY_WRITE_GUIDANCE
 )
 
 
@@ -262,7 +270,7 @@ _MAX_ENTRY_WRITE_TOOLS: list[dict[str, Any]] = [
     {
         **_tool(
             "write_file",
-            "Create the MAX product entry now. The path is fixed; provide the full file content.",
+            _MAX_ENTRY_WRITE_GUIDANCE,
             {
                 "path": {"type": "string", "enum": [_MAX_PRODUCT_ENTRY_PATH]},
                 "content": _STR,
@@ -808,7 +816,10 @@ async def run_native_build(
                 max_runtime
                 and completion_check is not None
                 and _MAX_PRODUCT_ENTRY_PATH not in written
-                and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
+                and (
+                    no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
+                    or non_entry_writes_before_entry > 0
+                )
             )
             call_stage = (
                 "build_plan"
@@ -1018,6 +1029,15 @@ async def run_native_build(
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
+
+            if (
+                max_runtime
+                and completion_check is not None
+                and _MAX_PRODUCT_ENTRY_PATH not in written
+                and non_entry_writes_before_entry > 0
+                and _MAX_PRODUCT_ENTRY_REQUIRED_RESULT not in str(results)
+            ):
+                results.append({"type": "text", "text": _MAX_PRODUCT_ENTRY_REQUIRED_RESULT})
 
             if done_summary is not None:
                 if emit:

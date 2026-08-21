@@ -243,6 +243,9 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
                 "type": "string",
                 "enum": ["src/app/page.tsx"],
             }
+            assert forced_tools[0]["description"] == agent_native._MAX_ENTRY_WRITE_GUIDANCE
+            assert "self-contained src/app/page.tsx" in str(convo[-1])
+            assert "do not import product components" in str(convo[-1])
             assert kwargs["tool_choice"] == {"type": "tool", "name": "write_file"}
             return _turn(
                 ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})
@@ -288,17 +291,26 @@ async def test_max_auxiliary_write_does_not_unlock_product_entry_gate(
     turns = iter(
         [
             _turn(("write_file", {"path": "src/lib/helper.ts", "content": "export const x=1"})),
-            _turn(("write_file", {"path": "src/lib/second.ts", "content": "export const y=2"})),
-            _turn(("read_file", {"path": "package.json"})),
             _turn(("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})),
             _turn(("build", {})),
             _turn(("done", {"summary": "Готово"})),
         ]
     )
 
+    calls = {"n": 0}
+
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            assert kwargs["tools"] is None
+            assert kwargs["tool_choice"] is None
+        elif calls["n"] == 2:
+            assert [tool["name"] for tool in kwargs["tools"]] == ["write_file"]
+            assert kwargs["tools"][0]["description"] == agent_native._MAX_ENTRY_WRITE_GUIDANCE
+            assert kwargs["tool_choice"] == {"type": "tool", "name": "write_file"}
+            assert agent_native._MAX_PRODUCT_ENTRY_REQUIRED_RESULT in str(convo[-1])
         return next(turns)
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
@@ -324,6 +336,7 @@ async def test_max_auxiliary_write_does_not_unlock_product_entry_gate(
     assert ("read_file", "package.json") not in executed
     assert ("write_file", "src/app/page.tsx") in executed
     assert agent_native._MAX_PRODUCT_ENTRY_REQUIRED_RESULT in str(res.transcript)
+    assert agent_native._MAX_ENTRY_WRITE_GUIDANCE in str(res.transcript)
 
 
 @pytest.mark.asyncio
