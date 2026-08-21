@@ -25,6 +25,14 @@ def test_labelled_arbitrary_credential_is_detected_and_redacted() -> None:
     assert redact_provider_secrets(raw) == "AITUNNEL — ключ: [CREDENTIAL REDACTED]"
 
 
+def test_telegram_bot_token_is_detected_without_a_label() -> None:
+    credential = "12345678:" + "A" * 30
+    raw = f"bot credential {credential}"
+
+    assert contains_provider_secret(raw)
+    assert redact_provider_secrets(raw) == "bot credential [CREDENTIAL REDACTED]"
+
+
 def test_max_writer_blocks_secret_files_and_literals() -> None:
     assert is_secret_file(".env.local")
     assert is_secret_file("config/secrets.json")
