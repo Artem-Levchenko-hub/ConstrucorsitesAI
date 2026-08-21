@@ -16,6 +16,7 @@ _SECRET_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b"),
+    re.compile(r"\b[0-9]{8,12}:[A-Za-z0-9_-]{30,}\b"),
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
 )
 _LABELLED_SECRET = re.compile(

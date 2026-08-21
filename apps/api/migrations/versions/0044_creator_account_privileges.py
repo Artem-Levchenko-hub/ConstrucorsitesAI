@@ -26,10 +26,13 @@ def upgrade() -> None:
         ),
     )
     # This is an explicit owner-directed production grant, not a role-wide
-    # implication. CITEXT makes the match case-insensitive. The owner identified
-    # this as an existing account, so anything other than one updated row aborts
-    # the transactional migration instead of reporting a false successful grant.
+    # implication. A truly empty fresh install has no production account to
+    # grant and must remain bootstrap-able by the disposable release gate. Once
+    # any account exists, keep the original fail-closed production invariant.
     connection = op.get_bind()
+    existing_user_count = connection.scalar(sa.text("SELECT count(*) FROM users"))
+    if existing_user_count == 0:
+        return
     grant_result = connection.execute(
         sa.text(
             """

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import tempfile
 from collections.abc import Callable, Sequence
@@ -26,6 +27,10 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.services import dev_container
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.generation_telegram_reports import (
+    mark_snapshot_preview_failed,
+    mark_snapshot_preview_ready,
+)
 
 VIEWPORT: ViewportSize = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
@@ -54,6 +59,7 @@ DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (360, 768, 1440)
 # Sub-pixel rounding means scrollWidth can exceed the viewport by ~1px even on
 # a perfectly-fitting page; only flag real horizontal overflow above this.
 _OVERFLOW_TOLERANCE_PX = 2
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -452,6 +458,15 @@ async def _render_async(snapshot_id: str) -> None:
 
     engine = create_async_engine(settings.database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _record_failure(code: str) -> None:
+        try:
+            async with factory() as report_session:
+                await mark_snapshot_preview_failed(report_session, sid, code)
+                await report_session.commit()
+        except Exception:
+            log.warning("generation_report code=preview_failure_hook_failed")
+
     try:
         async with factory() as session:
             snapshot = await session.get(Snapshot, sid)
@@ -476,95 +491,109 @@ async def _render_async(snapshot_id: str) -> None:
         is_container = template in CONTAINER_NEXT
         has_index = "index.html" in files
         if not has_index and not is_container:
+            await _record_failure("source_missing")
             return
 
         live_url: str | None = None
         if is_container:
             live_url = await _resolve_live_url(project_id)
             if live_url is None:
+                await _record_failure("container_unreachable")
                 return  # container not running / unreachable — no thumbnail now
 
         with tempfile.TemporaryDirectory(prefix=f"omnia-preview-{sid}-") as tmp:
             workdir = Path(tmp)
             png_path = workdir / "preview.png"
 
-            if live_url is not None:
-                target_url = live_url
-            else:
-                for path, content in files.items():
-                    full = workdir / path
-                    full.parent.mkdir(parents=True, exist_ok=True)
-                    full.write_text(_rewrite_minio_to_internal(content), encoding="utf-8")
-                target_url = (workdir / "index.html").as_uri()
+            try:
+                if live_url is not None:
+                    target_url = live_url
+                else:
+                    for path, content in files.items():
+                        full = workdir / path
+                        full.parent.mkdir(parents=True, exist_ok=True)
+                        full.write_text(_rewrite_minio_to_internal(content), encoding="utf-8")
+                    target_url = (workdir / "index.html").as_uri()
 
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                try:
-                    page = await browser.new_page(viewport=VIEWPORT, reduced_motion="reduce")
-                    # Abort unreachable web fonts so the screenshot's font-wait
-                    # can't hang → blank white thumbnail (2026-07-18).
-                    await _block_external_fonts(page)
-                    # Reroute public MinIO assets to the internal endpoint so a
-                    # live container app's images + video actually paint (worker
-                    # has no public egress) — "always load everything, even the
-                    # cinematic video effect".
-                    if live_url is not None:
-                        await _route_media_internal(page)
-                    await page.goto(
-                        target_url,
-                        wait_until="domcontentloaded",
-                        timeout=GOTO_TIMEOUT_MS,
-                    )
-                    # A live container app paints its shell first, then fetches its
-                    # data client-side — wait for that to settle so the thumbnail
-                    # shows real content, not the empty skeleton. Static pages
-                    # render off disk with no such fetch (and load the Tailwind
-                    # Play-CDN, where networkidle never fires) → they skip it.
-                    if live_url is not None:
-                        await _await_container_ready(page)
-                    # Same settle as capture(): fonts + images painted + JIT beat,
-                    # and reduced_motion so reveal-animated content isn't opacity:0.
-                    await _await_paint(page)
-                    await page.screenshot(path=str(png_path), full_page=False)
-                finally:
-                    await browser.close()
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    try:
+                        page = await browser.new_page(viewport=VIEWPORT, reduced_motion="reduce")
+                        # Abort unreachable web fonts so the screenshot's font-wait
+                        # can't hang → blank white thumbnail (2026-07-18).
+                        await _block_external_fonts(page)
+                        # Reroute public MinIO assets to the internal endpoint so a
+                        # live container app's images + video actually paint (worker
+                        # has no public egress) — "always load everything, even the
+                        # cinematic video effect".
+                        if live_url is not None:
+                            await _route_media_internal(page)
+                        await page.goto(
+                            target_url,
+                            wait_until="domcontentloaded",
+                            timeout=GOTO_TIMEOUT_MS,
+                        )
+                        # A live container app paints its shell first, then fetches its
+                        # data client-side — wait for that to settle so the thumbnail
+                        # shows real content, not the empty skeleton. Static pages
+                        # render off disk with no such fetch (and load the Tailwind
+                        # Play-CDN, where networkidle never fires) → they skip it.
+                        if live_url is not None:
+                            await _await_container_ready(page)
+                        # Same settle as capture(): fonts + images painted + JIT beat,
+                        # and reduced_motion so reveal-animated content isn't opacity:0.
+                        await _await_paint(page)
+                        await page.screenshot(path=str(png_path), full_page=False)
+                    finally:
+                        await browser.close()
 
-            # Content-hash the PNG into the key so a RE-render (bug-fix / repair)
-            # produces a NEW url the browser has never cached. `<sid>.png` was
-            # served `immutable`, so a fixed re-render stayed BLANK/stale in the
-            # browser even after Ctrl+Shift+R (owner 2026-07-18). Content-addressed
-            # → the key changes ONLY when the screenshot changes, so `immutable`
-            # is now correct AND the cache always busts on a real re-render.
-            digest = hashlib.sha256(png_path.read_bytes()).hexdigest()[:12]
-            preview_key = f"{snapshot_id}-{digest}.png"
+                # Content-hash the PNG into the key so a RE-render (bug-fix / repair)
+                # produces a NEW url the browser has never cached. `<sid>.png` was
+                # served `immutable`, so a fixed re-render stayed BLANK/stale in the
+                # browser even after Ctrl+Shift+R (owner 2026-07-18). Content-addressed
+                # → the key changes ONLY when the screenshot changes, so `immutable`
+                # is now correct AND the cache always busts on a real re-render.
+                digest = hashlib.sha256(png_path.read_bytes()).hexdigest()[:12]
+                preview_key = f"{snapshot_id}-{digest}.png"
+            except Exception:
+                await _record_failure("render_failed")
+                raise
 
-            client = Minio(
-                settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key.get_secret_value(),
-                secure=settings.minio_secure,
-            )
-            # Self-heal the previews bucket's public-read policy on every render
-            # so a private/mis-provisioned bucket never leaves thumbnails 403 in
-            # the browser (owner report 2026-07-18 — the project-card photos and
-            # snapshot preview all 403'd because `previews` was never made public).
-            await asyncio.to_thread(
-                minio_core.ensure_public_bucket,
-                client,
-                settings.minio_bucket_previews,
-            )
-            await asyncio.to_thread(
-                client.fput_object,
-                settings.minio_bucket_previews,
-                preview_key,
-                str(png_path),
-                content_type="image/png",
-            )
+            try:
+                client = Minio(
+                    settings.minio_endpoint,
+                    access_key=settings.minio_access_key,
+                    secret_key=settings.minio_secret_key.get_secret_value(),
+                    secure=settings.minio_secure,
+                )
+                # Self-heal the previews bucket's public-read policy on every render
+                # so a private/mis-provisioned bucket never leaves thumbnails 403 in
+                # the browser (owner report 2026-07-18 — the project-card photos and
+                # snapshot preview all 403'd because `previews` was never made public).
+                await asyncio.to_thread(
+                    minio_core.ensure_public_bucket,
+                    client,
+                    settings.minio_bucket_previews,
+                )
+                await asyncio.to_thread(
+                    client.fput_object,
+                    settings.minio_bucket_previews,
+                    preview_key,
+                    str(png_path),
+                    content_type="image/png",
+                )
+            except Exception:
+                await _record_failure("upload_failed")
+                raise
 
         async with factory() as session:
             await session.execute(
                 update(Snapshot).where(Snapshot.id == sid).values(preview_key=preview_key)
             )
+            try:
+                await mark_snapshot_preview_ready(session, sid)
+            except Exception:
+                log.warning("generation_report code=preview_ready_hook_failed")
             await session.commit()
 
         preview_url = (

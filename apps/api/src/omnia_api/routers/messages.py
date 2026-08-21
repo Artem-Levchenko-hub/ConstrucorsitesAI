@@ -117,6 +117,11 @@ from omnia_api.services.generation_runs import (
     reserve_generation_run,
     set_generation_run_status,
 )
+from omnia_api.services.generation_telegram_reports import (
+    create_report_for_run,
+    record_report_stage,
+    sync_terminal_report,
+)
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.intent_triage import (
     EXPLAIN_FAILED_BUILD,
@@ -174,6 +179,31 @@ _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 _PROMPT_TASKS: dict[UUID, asyncio.Task[None]] = {}
 
 
+async def _record_generation_report_stage(run_id: UUID, stage: str) -> None:
+    """Persist observer progress without ever affecting generation work."""
+
+    try:
+        await record_report_stage(run_id, stage)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "generation_report code=stage_hook_failed run=%s",
+            str(run_id).split("-", 1)[0],
+        )
+
+
+async def _record_generation_pass_stage(
+    run_id: UUID,
+    pass_name: str,
+    event_stage: str,
+) -> None:
+    if event_stage != "start":
+        return
+    if pass_name in {"art_director", "director"}:
+        await _record_generation_report_stage(run_id, "director")
+    elif pass_name in {"writer", "polish", "assembly"}:
+        await _record_generation_report_stage(run_id, "writer")
+
+
 async def _wait_for_generation_cancel(run_id: UUID) -> None:
     while True:
         try:
@@ -204,6 +234,19 @@ async def _finalize_cancelled_generation(
         if run is not None:
             run.status = "cancelled"
             run.finished_at = datetime.now(UTC)
+            try:
+                await sync_terminal_report(
+                    session,
+                    run,
+                    enabled=bool(
+                        getattr(get_settings(), "dev_generation_telegram_reports", False)
+                    ),
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "generation_report code=cancel_hook_failed run=%s",
+                    str(run.id).split("-", 1)[0],
+                )
             await compile_terminal_run_memory(session, run)
         await session.commit()
     await publish_event(
@@ -1916,6 +1959,17 @@ async def post_prompt(
     generation_run.assistant_message_id = assistant_msg.id
     generation_run.user_message_id = user_msg.id
     generation_run.response_mode = turn_mode
+    try:
+        await create_report_for_run(
+            session,
+            generation_run,
+            enabled=bool(getattr(settings, "dev_generation_telegram_reports", False)),
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "generation_report code=accept_hook_failed run=%s",
+            str(generation_run.id).split("-", 1)[0],
+        )
     await session.commit()
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
@@ -2903,6 +2957,7 @@ async def _process_prompt(
     import logging as _log_mod
 
     _log = _log_mod.getLogger(__name__)
+    await _record_generation_report_stage(run_id, "routing")
     # Mark this async context free (gateway skips wallet debit) for the whole
     # generation — the contextvar rides every stream_chat_completion call below.
     set_free_generation(is_free)
@@ -3720,6 +3775,8 @@ async def _process_prompt(
                         },
                     )
 
+            if _agent_res is None:
+                await _record_generation_report_stage(run_id, "writer")
             if _agent_res is None and get_settings().use_native_agent:
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
                 # model end-to-end via native Anthropic tools + preserved thinking;
@@ -4561,6 +4618,7 @@ async def _process_prompt(
                     flush=True,
                 )
 
+            await _record_generation_report_stage(run_id, "acceptance")
             # Runtime functional gate — the behavioural "works + does not leak" proof
             # (research finding: this gate was defined+unit-tested but UNWIRED; only
             # the static guardrail ran). Drive the live realtime preview and feed a red
@@ -4924,6 +4982,7 @@ async def _process_prompt(
                     f"AI(agent): {prompt_text[:50]}",
                     current_sha,
                 )
+                await _record_generation_report_stage(run_id, "snapshot")
                 async with factory() as session:
                     snapshot = Snapshot(
                         project_id=project_id,
@@ -4991,6 +5050,7 @@ async def _process_prompt(
                     except Exception as _ae:  # never affect the build
                         print(f"[ATTEST] persist skipped: {_ae}", flush=True)
                 await asyncio.to_thread(enqueue_preview, _agent_snap_id)
+                await _record_generation_report_stage(run_id, "preview")
                 await publish_event(
                     project_id,
                     "snapshot.created",
@@ -5265,6 +5325,7 @@ async def _process_prompt(
                 and project_template not in CONTAINER_NEXT
             )
             if _adw_active:
+                await _record_generation_report_stage(run_id, "director")
                 # Mark the freeform path so the post-writer image-resolve and
                 # design-judge stages emit their llm.pass progress (4-segment bar).
                 state["freeform"] = True
@@ -5301,6 +5362,7 @@ async def _process_prompt(
                     language=project_language,
                 )
             elif _dp_active:
+                await _record_generation_report_stage(run_id, "director")
                 source = director_polish_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -5316,6 +5378,7 @@ async def _process_prompt(
                 and orchestrate
                 and (force_multipass or use_model in multipass_set)
             ):
+                await _record_generation_report_stage(run_id, "writer")
                 source = multipass_generate(
                     base_messages=messages,
                     user_prompt=prompt_text,
@@ -5325,6 +5388,7 @@ async def _process_prompt(
                     message_id=assistant_message_id,
                 )
             else:
+                await _record_generation_report_stage(run_id, "writer")
                 # B2 — the `single_shot` role (Opus) owns the non-catalog
                 # freeform fallback: with catalog/IR OFF an orchestrated build
                 # still needs one strong model. With catalog ON (prod default)
@@ -5413,6 +5477,11 @@ async def _process_prompt(
                     state["error"] = event["error"]
                     return
                 elif "pass" in event:
+                    await _record_generation_pass_stage(
+                        run_id,
+                        str(event["pass"]),
+                        str(event["stage"]),
+                    )
                     # B.3 — pass-progress events. Fan out via WS so the
                     # frontend can show "Шаг 1/2: Структура" / "Шаг 2/2:
                     # Сборка" indicators. Frontend wiring deferred — this
@@ -6569,6 +6638,7 @@ async def _process_prompt(
 
         if files and project_image_gen_enabled:
             await _emit_stage("images", "start")
+            await _record_generation_report_stage(run_id, "images")
             try:
                 # Hard cap: a broken image upstream (flux 501 / pexels timeout)
                 # must NEVER hang the build — on timeout we ship the page as-is so
@@ -6770,6 +6840,7 @@ async def _process_prompt(
             and _gen_mode in ("freeform", "catalog")
         ):
             await _emit_stage("judge", "start")
+            await _record_generation_report_stage(run_id, "acceptance")
             from omnia_api.services import acceptance as _acceptance
 
             # Design judge (premium / on-button): force the Awwwards vision-critic
@@ -7168,6 +7239,7 @@ async def _process_prompt(
                 f"AI: {prompt_text[:50]}",
                 current_sha,
             )
+            await _record_generation_report_stage(run_id, "snapshot")
             async with factory() as session:
                 # Orchestrated runs record the "topmix-v1" label; a fired
                 # fallback records the model that actually produced the output;
@@ -7235,6 +7307,7 @@ async def _process_prompt(
                 await session.refresh(snapshot)
 
             await asyncio.to_thread(enqueue_preview, new_snapshot_id)
+            await _record_generation_report_stage(run_id, "preview")
             await publish_event(
                 project_id,
                 "snapshot.created",
@@ -7347,6 +7420,7 @@ async def _process_prompt(
                                     "AI: авто-починка сборки",
                                     new_sha,
                                 )
+                                await _record_generation_report_stage(run_id, "snapshot")
                                 async with factory() as _s:
                                     _rep_snap = Snapshot(
                                         project_id=project_id,
@@ -7378,6 +7452,7 @@ async def _process_prompt(
                                     await _s.commit()
                                     await _s.refresh(_rep_snap)
                                 await asyncio.to_thread(enqueue_preview, _rep_snap.id)
+                                await _record_generation_report_stage(run_id, "preview")
                                 await publish_event(
                                     project_id,
                                     "snapshot.created",

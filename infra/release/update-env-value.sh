@@ -8,7 +8,24 @@ fi
 
 input_file="$1"
 key="$2"
-value="$3"
+value_arg="$3"
+
+if [[ "${value_arg}" == "-" ]]; then
+  value=""
+  if IFS= read -r value; then
+    :
+  elif [[ -z "${value}" ]]; then
+    echo "stdin environment value is missing" >&2
+    exit 2
+  fi
+  extra_line=""
+  if IFS= read -r extra_line || [[ -n "${extra_line}" ]]; then
+    echo "stdin environment value must be exactly one line" >&2
+    exit 2
+  fi
+else
+  value="${value_arg}"
+fi
 
 if [[ ! "${key}" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
   echo "invalid environment key" >&2

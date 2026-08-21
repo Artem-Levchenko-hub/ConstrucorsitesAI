@@ -500,6 +500,15 @@ class Settings(BaseSettings):
     # secret-redacted revision; the next generation receives a bounded rendering.
     # Kill switch leaves generation byte-identical and preserves stored revisions.
     use_project_memory: bool = Field(default=True)
+
+    # Temporary internal-development observer. Disabled by default so user
+    # generations never leave the product boundary unless ops explicitly enables
+    # it. Telegram credentials are consumed only by the dedicated report worker.
+    dev_generation_telegram_reports: bool = Field(default=False)
+    telegram_bot_token: SecretStr | None = Field(default=None)
+    # Zero is a disabled sentinel; enabled delivery requires a negative group id.
+    telegram_chat_id: int = Field(default=0)
+
     # Full runnable export (P5, knowledge-layer/master plan) — when on, the
     # project download for a CONTAINER stack overlays the skeleton template tree
     # under the generated files so the zip is a RUNNABLE repo (skeleton + your

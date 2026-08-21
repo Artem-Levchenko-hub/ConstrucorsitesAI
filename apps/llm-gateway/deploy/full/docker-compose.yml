@@ -354,6 +354,9 @@ services:
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}
       # Versioned project memory ships dark until a separate configuration release.
       USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-false}
+      # Internal-development generation observer. Telegram credentials never enter
+      # this container; the API only creates durable report rows when enabled.
+      DEV_GENERATION_TELEGRAM_REPORTS: ${DEV_GENERATION_TELEGRAM_REPORTS:-false}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Per-user canary: run the agent loop for these user ids even when the
       # global flag is off (safe prod dogfood, no change for anyone else).
@@ -541,6 +544,9 @@ services:
       # one-shot generation. false = today's pipeline (byte-identical).
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-false}
       USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-false}
+      # Preview callbacks update durable observer state, but this general RQ
+      # worker never receives Telegram credentials or sends external reports.
+      DEV_GENERATION_TELEGRAM_REPORTS: ${DEV_GENERATION_TELEGRAM_REPORTS:-false}
       AGENT_BUILDER_MAX_STEPS: ${AGENT_BUILDER_MAX_STEPS:-14}
       # Per-user canary: run the agent loop for these user ids even when the
       # global flag is off (safe prod dogfood, no change for anyone else).
@@ -554,6 +560,35 @@ services:
       # Join the user-container runtime network so the preview job can reach a
       # running dev container by name (omnia-dev-<slug>:3000) to screenshot it.
       - omnia-runtime
+
+  generation-report-worker:
+    # Reuses the exact revision-tagged API image; it owns no build context.
+    image: ${API_IMAGE:-omnia-api:prod}
+    container_name: omnia-prod-generation-report-worker
+    command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.generation_reports"]
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      ENV: prod
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-omnia}:${POSTGRES_PASSWORD:-omnia}@postgres:5432/${POSTGRES_DB:-omnia}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-omnia}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-omnia-minio-secret-please-change}
+      MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
+      DEV_GENERATION_TELEGRAM_REPORTS: ${DEV_GENERATION_TELEGRAM_REPORTS:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-0}
+    restart: unless-stopped
+    networks:
+      - omnia-prod
 
   web:
     build:

@@ -9,8 +9,10 @@ The repository must have a GitHub Environment named `production` whose
 deployment branch policy allows only the protected `main` branch. Store
 `PRODUCTION_CANARY_EMAIL`, `PRODUCTION_CANARY_PASSWORD`, `TELEGRAM_BOT_TOKEN`,
 and `TELEGRAM_CHAT_ID` as secrets in that environment, not as repository-level
-secrets. `TELEGRAM_CHAT_ID` must identify the group that receives the daily
-canary result. Do not add required reviewers to the environment unless
+secrets. `TELEGRAM_CHAT_ID` must identify the approved team group. A bot token
+that has ever been pasted into chat, a ticket, a command argument, or a log must
+be revoked in BotFather and replaced before this procedure. Do not add required
+reviewers to the environment unless
 scheduled canaries are intentionally expected to wait for approval. The
 workflow also rejects every ref except `refs/heads/main` before checkout and
 exposes credentials only to the steps that consume them.
@@ -81,6 +83,18 @@ docker inspect --format '{{.Image}}' omnia-prod-worker \
   >"${RELEASE_RECORD}/worker-image-id.txt"
 docker inspect --format '{{.Image}}' omnia-prod-web \
   >"${RELEASE_RECORD}/web-image-id.txt"
+if docker container inspect omnia-prod-generation-report-worker >/dev/null 2>&1; then
+  printf 'present\n' >"${RELEASE_RECORD}/report-worker-status.txt"
+  docker inspect --format '{{.Image}}' omnia-prod-generation-report-worker \
+    >"${RELEASE_RECORD}/report-worker-image-id.txt"
+  grep -Eq '^sha256:[0-9a-f]{64}$' \
+    "${RELEASE_RECORD}/report-worker-image-id.txt"
+  cmp -s "${RELEASE_RECORD}/api-image-id.txt" \
+    "${RELEASE_RECORD}/report-worker-image-id.txt"
+else
+  printf 'absent\n' >"${RELEASE_RECORD}/report-worker-status.txt"
+  printf 'absent\n' >"${RELEASE_RECORD}/report-worker-image-id.txt"
+fi
 grep -Eq '^sha256:[0-9a-f]{64}$' "${RELEASE_RECORD}/api-image-id.txt"
 grep -Eq '^sha256:[0-9a-f]{64}$' "${RELEASE_RECORD}/worker-image-id.txt"
 grep -Eq '^sha256:[0-9a-f]{64}$' "${RELEASE_RECORD}/web-image-id.txt"
@@ -155,9 +169,29 @@ bash infra/release/update-env-value.sh \
 bash infra/release/update-env-value.sh \
   "${candidate_full_env}" REFERENCE_CEILING_ENFORCED false
 bash infra/release/update-env-value.sh \
+  "${candidate_full_env}" DEV_GENERATION_TELEGRAM_REPORTS true
+bash infra/release/update-env-value.sh \
   "${candidate_full_env}" OMNIA_RELEASE_SHA "${RELEASE_SHA}"
 bash infra/release/update-env-value.sh \
   "${candidate_orchestrator_env}" OMNIA_RELEASE_SHA "${RELEASE_SHA}"
+
+# Read the newly rotated bot token and the approved fixed group id from the
+# operator terminal. stdin mode keeps both values out of argv and shell history.
+# Do not enable xtrace around this block.
+set +x
+IFS= read -r -s -p 'New Telegram bot token: ' telegram_bot_token </dev/tty
+printf '\n' >/dev/tty
+[[ "${telegram_bot_token}" =~ ^[0-9]{8,12}:[A-Za-z0-9_-]{30,}$ ]]
+printf '%s\n' "${telegram_bot_token}" \
+  | bash infra/release/update-env-value.sh \
+    "${candidate_full_env}" TELEGRAM_BOT_TOKEN -
+unset telegram_bot_token
+IFS= read -r -s -p 'Approved negative Telegram group id: ' telegram_chat_id </dev/tty
+printf '\n' >/dev/tty
+[[ "${telegram_chat_id}" =~ ^-[1-9][0-9]*$ ]]
+printf '%s\n' "${telegram_chat_id}" \
+  | bash infra/release/update-env-value.sh \
+    "${candidate_full_env}" TELEGRAM_CHAT_ID -
 ```
 
 Render and assert the dark policy on the production host:
@@ -171,8 +205,23 @@ for service_name in api worker; do
   test "$(jq -r --arg service "${service_name}" '.services[$service].environment.USE_PROJECT_MEMORY' "${rendered_compose}")" = false
   test "$(jq -r --arg service "${service_name}" '.services[$service].environment.ACCEPTANCE_GAUNTLET_REFERENCE_GATE' "${rendered_compose}")" = false
   test "$(jq -r --arg service "${service_name}" '.services[$service].environment.REFERENCE_CEILING_ENFORCED' "${rendered_compose}")" = false
+  test "$(jq -r --arg service "${service_name}" '.services[$service].environment.DEV_GENERATION_TELEGRAM_REPORTS' "${rendered_compose}")" = true
   test "$(jq -r --arg service "${service_name}" '.services[$service].environment.OMNIA_RELEASE_SHA' "${rendered_compose}")" = "${RELEASE_SHA}"
 done
+report_service='generation-report-worker'
+test "$(jq -r --arg service "${report_service}" '.services[$service].environment.DEV_GENERATION_TELEGRAM_REPORTS' "${rendered_compose}")" = true
+test "$(jq -r --arg service "${report_service}" '.services[$service].environment.TELEGRAM_CHAT_ID' "${rendered_compose}")" = "${telegram_chat_id}"
+test "$(jq -r --arg service "${report_service}" '.services[$service].environment.OMNIA_RELEASE_SHA' "${rendered_compose}")" = "${RELEASE_SHA}"
+jq -e --arg service "${report_service}" \
+  '.services[$service].environment.TELEGRAM_BOT_TOKEN
+   | type == "string" and test("^[0-9]{8,12}:[A-Za-z0-9_-]{30,}$")' \
+  "${rendered_compose}" >/dev/null
+for required_name in DATABASE_URL MINIO_ENDPOINT MINIO_ACCESS_KEY MINIO_SECRET_KEY MINIO_BUCKET_PREVIEWS; do
+  jq -e --arg service "${report_service}" --arg name "${required_name}" \
+    '.services[$service].environment[$name] | type == "string" and length > 0' \
+    "${rendered_compose}" >/dev/null
+done
+unset telegram_chat_id
 test "$(jq -r '.services.web.environment.OMNIA_RELEASE_SHA' "${rendered_compose}")" = "${RELEASE_SHA}"
 ```
 
@@ -254,6 +303,13 @@ if [[ "${api_ready}" != true ]]; then
   exit 1
 fi
 docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps worker
+docker compose --env-file "${full_env}" -f "${compose_file}" \
+  up -d --no-deps generation-report-worker
+test "$(docker inspect --format '{{.State.Running}}' \
+  omnia-prod-generation-report-worker)" = true
+test "$(docker inspect --format '{{.Image}}' \
+  omnia-prod-generation-report-worker)" = \
+  "$(docker image inspect --format '{{.Id}}' "omnia-api:${RELEASE_SHA}")"
 docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps web
 
 mv -f "${candidate_orchestrator_env}" "${orchestrator_env}"
@@ -329,13 +385,55 @@ gh workflow run production-generation-canary.yml --ref main
 gh run watch "$(gh run list --workflow production-generation-canary.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status
 ```
 
+With the protected canary credentials already loaded into the operator
+environment, run the observer acceptance. The script never reads Telegram
+credentials or chat history; its output contains only run lifecycle metadata.
+
+```bash
+umask 077
+acceptance_output="${RELEASE_RECORD}/dev-generation-telegram-acceptance.json"
+test -n "${PRODUCTION_CANARY_EMAIL:-}"
+test -n "${PRODUCTION_CANARY_PASSWORD:-}"
+[[ "${PRODUCTION_CANARY_EMAIL}" != *$'\n'* && "${PRODUCTION_CANARY_EMAIL}" != *$'\r'* ]]
+[[ "${PRODUCTION_CANARY_PASSWORD}" != *$'\n'* && "${PRODUCTION_CANARY_PASSWORD}" != *$'\r'* ]]
+printf '%s\n%s\n' \
+  "${PRODUCTION_CANARY_EMAIL}" "${PRODUCTION_CANARY_PASSWORD}" \
+| docker exec -i \
+    -e "PRODUCTION_EXPECTED_RELEASE_SHA=${RELEASE_SHA}" \
+    -e DEV_TELEGRAM_ACCEPTANCE_CANCEL=false \
+    omnia-prod-api sh -lc '
+      set -eu
+      IFS= read -r PRODUCTION_CANARY_EMAIL
+      IFS= read -r PRODUCTION_CANARY_PASSWORD
+      export PRODUCTION_CANARY_EMAIL PRODUCTION_CANARY_PASSWORD
+      /app/.venv/bin/python /app/scripts/dev_generation_telegram_acceptance.py
+    ' >"${acceptance_output}"
+jq -e '
+  keys == ["cleanup", "runs"] and
+  .cleanup == true and
+  (.runs | length == 2) and
+  all(.runs[];
+    (keys == ["finished_at", "mode", "preview", "run_id", "snapshot", "started_at", "terminal_status"]) and
+    .terminal_status == "completed" and .snapshot == true and .preview == true)
+' "${acceptance_output}" >/dev/null
+```
+
+In the approved team group, a human must confirm exactly those two run ids each
+have one start message containing the exact user-authored canary message and no
+system/effective prompt, followed by a threaded successful finish and PNG
+preview. Do not use `getUpdates`, bot update history, or Telegram chat scraping
+as a delivery queue or automated proof.
+Optionally repeat with `DEV_TELEGRAM_ACCEPTANCE_CANCEL=true`; the third record
+must be `cancelled` with `snapshot=false` and `preview=false`, and its threaded
+Telegram finish must say that it was cancelled.
+
 Keep `USE_PROJECT_MEMORY=false`. Enabling memory globally is a separate approved
 configuration release after its own canary evidence.
 
 ## 8. Rollback
 
 Rollback immediately on health, migration/startup, generation, preview, or
-cleanup failure. Keep migration `0046` applied: it is additive. Never run an
+cleanup failure. Keep migration `0047` applied: it is additive. Never run an
 Alembic downgrade.
 
 ```bash
@@ -398,10 +496,14 @@ rollback_web_image="$(tr -d '\n' <"${RELEASE_RECORD}/web-image-id.txt")"
 [[ "${rollback_web_image}" =~ ^sha256:[0-9a-f]{64}$ ]]
 docker image inspect "${rollback_api_image}" "${rollback_web_image}" >/dev/null
 
-git checkout --detach "${ROLLBACK_SHA}"
-test "$(git rev-parse HEAD)" = "${ROLLBACK_SHA}"
+# This container may not exist on the rollback revision. Remove it by stable
+# container name while the current release is still checked out, then restore
+# the protected full environment before switching to older Compose code.
+docker rm -f omnia-prod-generation-report-worker >/dev/null 2>&1 || true
 mv -f "${rollback_full_candidate}" "${full_env}"
 rollback_full_candidate=""
+git checkout --detach "${ROLLBACK_SHA}"
+test "$(git rev-parse HEAD)" = "${ROLLBACK_SHA}"
 docker tag "${rollback_api_image}" omnia-api:prod
 docker tag "${rollback_web_image}" omnia-web:prod
 compose_file=apps/llm-gateway/deploy/full/docker-compose.yml
@@ -409,7 +511,7 @@ docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps api
 
 api_ready=false
 for _attempt in $(seq 1 60); do
-  if curl -fsS --max-time 5 http://127.0.0.1:8200/health >/dev/null; then
+  if curl -fsS --max-time 5 http://127.0.0.1:8200/api/health >/dev/null; then
     api_ready=true
     break
   fi
@@ -421,6 +523,13 @@ if [[ "${api_ready}" != true ]]; then
 fi
 
 docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps worker
+if docker compose --env-file "${full_env}" -f "${compose_file}" config --services \
+  | grep -Fxq generation-report-worker; then
+  docker compose --env-file "${full_env}" -f "${compose_file}" \
+    up -d --no-deps generation-report-worker
+  test "$(docker inspect --format '{{.Image}}' \
+    omnia-prod-generation-report-worker)" = "${rollback_api_image}"
+fi
 docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps web
 mv -f "${rollback_orchestrator_candidate}" "${orchestrator_env}"
 rollback_orchestrator_candidate=""
@@ -479,6 +588,113 @@ recovery takes priority, and the monitor must remain visibly red until an
 identity-aware release is restored. Preserve `RELEASE_RECORD`, the rollback
 pointer and its external helper/updater bundle, and the two permission-protected
 environment backups until the rollback is accepted.
+
+## 9. Mandatory pre-public observer disable proof
+
+This observer is development-only. Before public launch, perform a separately
+approved configuration release at an exact confirmed SHA. First repeat the
+zero-active-generation query from section 4. Then disable the flag in a
+permission-preserving candidate, validate all three consumers, and recreate the
+API, preview worker, and report worker:
+
+```bash
+set -euo pipefail
+cd /opt/omnia
+active_generations="$(docker exec omnia-prod-postgres sh -lc \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
+  "select status,count(*) from generation_runs
+   where status in ('"'"'pending'"'"','"'"'running'"'"','"'"'cancel_requested'"'"')
+   group by status;"')"
+test -z "${active_generations}"
+
+full_env=/opt/omnia/apps/llm-gateway/deploy/full/.env
+compose_file=apps/llm-gateway/deploy/full/docker-compose.yml
+disable_candidate="$(mktemp "${full_env}.disable-observer.XXXXXX")"
+disable_backup="${full_env}.pre-public-observer-disable-$(date -u +%Y%m%dT%H%M%SZ)"
+disable_render="$(mktemp)"
+trap 'rm -f "${disable_candidate:-}" "${disable_render:-}"' EXIT
+cp -p "${full_env}" "${disable_candidate}"
+cp -p "${full_env}" "${disable_backup}"
+test "$(stat -c '%a:%u:%g' "${disable_candidate}")" = \
+  "$(stat -c '%a:%u:%g' "${full_env}")"
+test "$(stat -c '%a:%u:%g' "${disable_backup}")" = \
+  "$(stat -c '%a:%u:%g' "${full_env}")"
+bash infra/release/update-env-value.sh \
+  "${disable_candidate}" DEV_GENERATION_TELEGRAM_REPORTS false
+chmod 600 "${disable_render}"
+docker compose --env-file "${disable_candidate}" -f "${compose_file}" \
+  config --format json >"${disable_render}"
+for service_name in api worker generation-report-worker; do
+  test "$(jq -r --arg service "${service_name}" \
+    '.services[$service].environment.DEV_GENERATION_TELEGRAM_REPORTS' \
+    "${disable_render}")" = false
+done
+rm -f "${disable_render}"
+disable_render=""
+mv -f "${disable_candidate}" "${full_env}"
+disable_candidate=""
+docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps api
+api_ready=false
+for _attempt in $(seq 1 60); do
+  if curl -fsS --max-time 5 http://127.0.0.1:8200/api/health >/dev/null; then
+    api_ready=true
+    break
+  fi
+  sleep 2
+done
+test "${api_ready}" = true
+docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps worker
+docker compose --env-file "${full_env}" -f "${compose_file}" \
+  up -d --no-deps generation-report-worker
+test "$(docker inspect --format '{{.State.Running}}' \
+  omnia-prod-generation-report-worker)" = true
+trap - EXIT
+```
+
+Run the disposable build/edit acceptance again and prove its validated run ids
+have no observer rows. The output file is redacted by construction:
+
+```bash
+umask 077
+pre_public_output="${RELEASE_RECORD}/pre-public-observer-disable.json"
+test -n "${PRODUCTION_CANARY_EMAIL:-}"
+test -n "${PRODUCTION_CANARY_PASSWORD:-}"
+[[ "${PRODUCTION_CANARY_EMAIL}" != *$'\n'* && "${PRODUCTION_CANARY_EMAIL}" != *$'\r'* ]]
+[[ "${PRODUCTION_CANARY_PASSWORD}" != *$'\n'* && "${PRODUCTION_CANARY_PASSWORD}" != *$'\r'* ]]
+printf '%s\n%s\n' \
+  "${PRODUCTION_CANARY_EMAIL}" "${PRODUCTION_CANARY_PASSWORD}" \
+| docker exec -i \
+    -e "PRODUCTION_EXPECTED_RELEASE_SHA=${RELEASE_SHA}" \
+    -e DEV_TELEGRAM_ACCEPTANCE_CANCEL=false \
+    omnia-prod-api sh -lc '
+      set -eu
+      IFS= read -r PRODUCTION_CANARY_EMAIL
+      IFS= read -r PRODUCTION_CANARY_PASSWORD
+      export PRODUCTION_CANARY_EMAIL PRODUCTION_CANARY_PASSWORD
+      /app/.venv/bin/python /app/scripts/dev_generation_telegram_acceptance.py
+    ' >"${pre_public_output}"
+jq -e '.cleanup == true and (.runs | length == 2)' \
+  "${pre_public_output}" >/dev/null
+run_id_sql=""
+while IFS= read -r run_id; do
+  [[ "${run_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+  run_id_sql+="${run_id_sql:+,}'${run_id}'::uuid"
+done < <(jq -r '.runs[].run_id' "${pre_public_output}")
+test -n "${run_id_sql}"
+report_count="$(
+  printf 'select count(*) from generation_telegram_reports where run_id in (%s);\n' \
+    "${run_id_sql}" \
+  | docker exec -i omnia-prod-postgres sh -lc \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At'
+)"
+test "${report_count}" = 0
+```
+
+A human must also confirm that neither run produced a Telegram message. Keep the
+source default `false`, preserve the redacted output and zero-row result in the
+release record, and retain the permission-protected env backup until the
+configuration release is accepted. Re-enabling after public launch requires a
+new privacy and operations review.
 
 Never run `docker compose down -v` during release or rollback. It deletes
 production volumes.
