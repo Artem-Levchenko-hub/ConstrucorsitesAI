@@ -157,6 +157,7 @@ run_step api_migrate api.log "API local database migration" bash -c \
 run_step api_tests api.log "Release-critical API tests" bash -c \
   'cd apps/api && uv run pytest -q \
     tests/test_deploy_gate_defaults.py \
+    tests/test_creator_privilege_migration.py \
     tests/test_release_identity.py \
     tests/test_readiness.py \
     tests/test_auth.py \

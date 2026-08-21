@@ -142,6 +142,7 @@ fi
 grep -Fq 'config --services' "${runbook}" \
   || fail "rollback does not detect whether the old revision owns the report worker"
 for focused_test in \
+  tests/test_creator_privilege_migration.py \
   tests/test_generation_telegram_delivery.py \
   tests/test_generation_telegram_reports.py \
   tests/test_generation_telegram_preview.py \

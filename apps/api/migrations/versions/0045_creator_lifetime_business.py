@@ -37,10 +37,14 @@ def upgrade() -> None:
         "AND grace_period_ends_at IS NULL)",
     )
 
-    # Keep the complete grant in the migration transaction. Every lookup must
-    # resolve exactly once: a missing/ambiguous user, billing owner, live
-    # subscription, active Business revision, or an in-flight checkout aborts
-    # the deploy rather than granting a partial or replaceable entitlement.
+    # A disposable fresh install has no creator account or subscription yet, so
+    # it only needs the schema. On every nonempty database, keep the complete
+    # grant in the migration transaction and retain the original fail-closed
+    # production invariants below.
+    connection = op.get_bind()
+    existing_user_count = connection.scalar(sa.text("SELECT count(*) FROM users"))
+    if existing_user_count == 0:
+        return
     op.execute(
         """
             DO $$
