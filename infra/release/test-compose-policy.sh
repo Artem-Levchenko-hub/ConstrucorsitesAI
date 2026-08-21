@@ -9,7 +9,9 @@ fi
 repo_root="$(git rev-parse --show-toplevel)"
 compose_file="${repo_root}/apps/llm-gateway/deploy/full/docker-compose.yml"
 rendered="$(mktemp)"
-trap 'rm -f "${rendered}"' EXIT
+blank_env="$(mktemp)"
+chmod 600 "${blank_env}"
+trap 'rm -f "${rendered}" "${blank_env}"' EXIT
 
 (
   unset USE_PROJECT_MEMORY
@@ -20,7 +22,7 @@ trap 'rm -f "${rendered}"' EXIT
     ORCHESTRATOR_INTERNAL_TOKEN="compose-policy-orchestrator-token" \
     NEXTAUTH_SECRET="compose-policy-nextauth-secret" \
     OMNIA_RELEASE_SHA="0123456789abcdef0123456789abcdef01234567" \
-    docker compose -f "${compose_file}" config --format json
+    docker compose --env-file "${blank_env}" -f "${compose_file}" config --format json
 ) >"${rendered}"
 
 python3 - "${rendered}" <<'PY'
