@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Response, status
 from fastapi.responses import StreamingResponse
 from slugify import slugify
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,11 +27,13 @@ from omnia_api.core.security import create_access_token
 from omnia_api.models.billing import BillingAccount
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.lead import Lead
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.project import (
@@ -795,6 +797,28 @@ async def delete_project(
     # Bare-repo tarball in MinIO (idempotent). Snapshots + messages cascade at
     # the ORM layer when the project row goes.
     await asyncio.to_thread(repo_svc.delete_repo, project.id)
+
+    # Keep the immutable billing ledger while breaking every project-owned FK
+    # path before PostgreSQL cascades messages and generation runs. Production
+    # migrations can order the SET NULL/CASCADE triggers differently from a
+    # fresh metadata schema; without this explicit update, deleting a project
+    # may try to null one usage reference after another target row is gone.
+    project_run_ids = select(GenerationRun.id).where(
+        GenerationRun.project_id == project.id
+    )
+    project_message_ids = select(Message.id).where(Message.project_id == project.id)
+    await session.execute(
+        update(Usage)
+        .where(
+            or_(
+                Usage.project_id == project.id,
+                Usage.run_id.in_(project_run_ids),
+                Usage.message_id.in_(project_message_ids),
+            )
+        )
+        .values(project_id=None, run_id=None, message_id=None)
+        .execution_options(synchronize_session=False)
+    )
 
     await session.delete(project)
     await session.commit()

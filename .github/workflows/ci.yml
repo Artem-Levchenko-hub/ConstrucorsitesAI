@@ -74,6 +74,7 @@ jobs:
           tests/test_auth.py
           tests/test_agent_native.py
           tests/test_generation_runs.py
+          tests/test_projects_delete.py
           tests/test_project_memory.py
           tests/test_production_canary.py
 

@@ -10,16 +10,20 @@ exercised live in E2E).
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.deps import get_current_user
 from omnia_api.main import app
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 
 pytestmark = pytest.mark.asyncio
@@ -138,6 +142,71 @@ async def test_delete_cascades_messages(
 
     assert resp.status_code == 204
     assert await db_session.get(Message, msg_id) is None
+
+
+async def test_delete_project_preserves_usage_and_clears_project_refs(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    as_user,
+    fake_teardown,
+) -> None:
+    # Production accumulated these FKs in this order through migrations. The
+    # resulting PostgreSQL trigger order differs from fresh metadata.create_all
+    # and exposes the multi-path SET NULL/CASCADE race this test protects.
+    for ddl in (
+        "ALTER TABLE usage DROP CONSTRAINT fk_usage_project_id_projects",
+        "ALTER TABLE generation_runs "
+        "DROP CONSTRAINT fk_generation_runs_project_id_projects",
+        "ALTER TABLE usage ADD CONSTRAINT fk_usage_project_id_projects "
+        "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL",
+        "ALTER TABLE generation_runs "
+        "ADD CONSTRAINT fk_generation_runs_project_id_projects "
+        "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE",
+    ):
+        await db_session.execute(text(ddl))
+    owner = await _make_user(db_session, "usage-owner@example.com")
+    project = await _make_project(db_session, owner, template="nextjs_entities")
+    message = Message(project_id=project.id, role="assistant", content="done")
+    db_session.add(message)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=message.id,
+        idempotency_key=str(uuid.uuid4()),
+        prompt_hash="prompt-hash",
+        status="completed",
+        response_mode="build",
+        agent_state={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+    usage = Usage(
+        user_id=owner.id,
+        project_id=project.id,
+        message_id=message.id,
+        run_id=run.id,
+        model_id="test-model",
+        tokens_in=10,
+        tokens_out=20,
+        cost_rub=Decimal("0.1000"),
+    )
+    db_session.add(usage)
+    await db_session.commit()
+    usage_id = usage.id
+    db_session.expunge_all()
+    as_user(owner)
+
+    response = await client.delete(f"/api/projects/{project.id}")
+
+    assert response.status_code == 204
+    assert await db_session.get(Project, project.id) is None
+    db_session.expire_all()
+    preserved_usage = await db_session.get(Usage, usage_id)
+    assert preserved_usage is not None
+    assert preserved_usage.project_id is None
+    assert preserved_usage.message_id is None
+    assert preserved_usage.run_id is None
 
 
 async def test_delete_foreign_project_forbidden(
