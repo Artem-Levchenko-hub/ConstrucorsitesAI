@@ -253,6 +253,31 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
     {**_TOOLS[-1], "cache_control": _CACHE},
 ]
 
+# Once MAX discovery is exhausted, a warning alone is not a constraint: the
+# provider can keep selecting read/helper tools from the full schema and the
+# executor can only reject them after another paid turn. For exactly one
+# recovery state, expose and force the single action that can unlock the normal
+# loop. The regular toolset returns immediately after the entry is written.
+_MAX_ENTRY_WRITE_TOOLS: list[dict[str, Any]] = [
+    {
+        **_tool(
+            "write_file",
+            "Create the MAX product entry now. The path is fixed; provide the full file content.",
+            {
+                "path": {"type": "string", "enum": [_MAX_PRODUCT_ENTRY_PATH]},
+                "content": _STR,
+            },
+            ["path", "content"],
+        ),
+        "cache_control": _CACHE,
+    }
+]
+_MAX_ENTRY_WRITE_CHOICE: dict[str, Any] = {
+    "type": "tool",
+    "name": "write_file",
+    "disable_parallel_tool_use": True,
+}
+
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
     """System prompt as a single cache-marked text block (Anthropic's `system`
@@ -570,6 +595,8 @@ async def _call_messages(
     message_id: str | None = None,
     free: bool = False,
     stage: str = "native_agent",
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
@@ -582,8 +609,8 @@ async def _call_messages(
         # Prompt caching: cache the stable system prompt + tool schemas, and a
         # moving breakpoint on the transcript tail (see _with_incremental_cache).
         "system": _system_blocks(system),
-        "tools": _TOOLS_CACHED,
-        "tool_choice": {"type": "auto"},
+        "tools": tools if tools is not None else _TOOLS_CACHED,
+        "tool_choice": dict(tool_choice) if tool_choice is not None else {"type": "auto"},
         "messages": _with_incremental_cache(convo),
     }
     if user_id:
@@ -781,6 +808,12 @@ async def run_native_build(
 
     async with httpx.AsyncClient() as client:
         for step in range(effective_max_steps):
+            force_max_entry_write = (
+                max_runtime
+                and completion_check is not None
+                and _MAX_PRODUCT_ENTRY_PATH not in written
+                and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
+            )
             call_stage = (
                 "build_plan"
                 if step == 0
@@ -800,6 +833,8 @@ async def run_native_build(
                     message_id=str(message_id) if message_id else None,
                     free=free,
                     stage=call_stage,
+                    tools=_MAX_ENTRY_WRITE_TOOLS if force_max_entry_write else None,
+                    tool_choice=(_MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None),
                 )
             except Exception as exc:
                 return await _finish_without_provider(
@@ -1018,11 +1053,19 @@ async def run_native_build(
             else:
                 no_write_turns += 1
                 if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
+                    max_entry_write_required = (
+                        max_runtime
+                        and completion_check is not None
+                        and _MAX_PRODUCT_ENTRY_PATH not in written
+                        and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
+                    )
                     results.append(
                         {
                             "type": "text",
                             "text": (
-                                (
+                                _MAX_PREWRITE_LOCK_RESULT
+                                if max_entry_write_required
+                                else (
                                     _MAX_DONE_WHEN_GREEN_NUDGE
                                     if max_runtime
                                     else _DONE_WHEN_GREEN_NUDGE

@@ -222,8 +222,8 @@ async def test_native_no_write_guard_nudges_then_aborts(
 async def test_first_max_build_locks_discovery_tools_until_first_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MAX keeps one transcript, but repeated reads cannot consume all 12
-    pre-write turns after the normal discovery allowance is spent."""
+    """After discovery closes, the next provider turn is forced to write the
+    fixed MAX entry instead of spending another paid turn on a rejected read."""
 
     calls = {"n": 0}
     executed_reads = 0
@@ -232,13 +232,28 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
         calls["n"] += 1
-        if calls["n"] <= agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 1:
+        if calls["n"] <= agent_native._MAX_PREWRITE_DISCOVERY_TURNS:
+            assert kwargs["tools"] is None
+            assert kwargs["tool_choice"] is None
             return _turn(("read_file", {"path": "src/app/layout.tsx"}))
-        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 2:
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 1:
+            forced_tools = kwargs["tools"]
+            assert [tool["name"] for tool in forced_tools] == ["write_file"]
+            assert forced_tools[0]["input_schema"]["properties"]["path"] == {
+                "type": "string",
+                "enum": ["src/app/page.tsx"],
+            }
+            assert kwargs["tool_choice"] == {
+                "type": "tool",
+                "name": "write_file",
+                "disable_parallel_tool_use": True,
+            }
             return _turn(
                 ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})
             )
-        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 3:
+        if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 2:
+            assert kwargs["tools"] is None
+            assert kwargs["tool_choice"] is None
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
 
@@ -264,6 +279,7 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
     assert res.done is True
     assert res.files == {"src/app/page.tsx": "export default 1"}
     assert executed_reads == agent_native._MAX_PREWRITE_DISCOVERY_TURNS
+    assert calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 3
     assert agent_native._MAX_PREWRITE_LOCK_RESULT in str(res.transcript)
 
 
