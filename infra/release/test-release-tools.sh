@@ -112,6 +112,81 @@ grep -Fq \
   'install -m 700 infra/release/update-env-value.sh "${rollback_env_updater}"' \
   "${runbook}" \
   || fail "runbook does not persist the rollback updater before mutation"
+grep -Fq \
+  '"${candidate_full_env}" TELEGRAM_BOT_TOKEN -' \
+  "${runbook}" \
+  || fail "runbook does not inject the Telegram token through stdin"
+grep -Fq \
+  '"${candidate_full_env}" TELEGRAM_CHAT_ID -' \
+  "${runbook}" \
+  || fail "runbook does not inject the Telegram chat id through stdin"
+grep -Fq \
+  '"${candidate_full_env}" DEV_GENERATION_TELEGRAM_REPORTS true' \
+  "${runbook}" \
+  || fail "runbook does not enable reports in the reviewed candidate env"
+grep -Fq 'omnia-prod-generation-report-worker' "${runbook}" \
+  || fail "runbook does not account for the generation report worker"
+grep -Fq 'report-worker-image-id.txt' "${runbook}" \
+  || fail "runbook does not capture the generation report worker image"
+grep -Fq 'Keep migration `0047` applied' "${runbook}" \
+  || fail "runbook does not preserve the additive observer migration"
+grep -Fq 'DEV_GENERATION_TELEGRAM_REPORTS false' "${runbook}" \
+  || fail "runbook does not document the pre-public kill switch"
+for focused_test in \
+  tests/test_generation_telegram_delivery.py \
+  tests/test_generation_telegram_reports.py \
+  tests/test_generation_telegram_preview.py \
+  tests/test_generation_report_worker.py \
+  tests/test_generation_report_compose.py \
+  tests/test_dev_generation_telegram_acceptance.py; do
+  grep -Fq "${focused_test}" "${gate}" \
+    || fail "release gate omits ${focused_test}"
+done
+
+report_remove_line="$(grep -nF \
+  'docker rm -f omnia-prod-generation-report-worker' "${runbook}" \
+  | tail -1 | cut -d: -f1)"
+rollback_checkout_line="$(grep -nF \
+  'git checkout --detach "${ROLLBACK_SHA}"' "${runbook}" \
+  | tail -1 | cut -d: -f1)"
+rollback_env_restore_line="$(grep -nF \
+  'mv -f "${rollback_full_candidate}" "${full_env}"' "${runbook}" \
+  | tail -1 | cut -d: -f1)"
+[[ -n "${report_remove_line}" && -n "${rollback_checkout_line}" ]] \
+  || fail "runbook omits report-worker rollback cleanup or checkout"
+((report_remove_line < rollback_checkout_line)) \
+  || fail "runbook removes the report worker after checking out the old revision"
+((rollback_env_restore_line < rollback_checkout_line)) \
+  || fail "runbook restores the protected env after checking out the old revision"
+
+# A rollback retry may start from an old checkout with no report-worker service
+# or release helpers. Stable container-name cleanup and the persisted bundle
+# must still be sufficient from a clean shell.
+old_checkout="${test_root}/old-revision-without-report-worker"
+runtime_bin="${test_root}/runtime-bin"
+rollback_docker_calls="${test_root}/rollback-docker-calls.log"
+mkdir -p "${old_checkout}" "${runtime_bin}"
+cat >"${runtime_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${ROLLBACK_DOCKER_CALLS}"
+[[ "$*" == "rm -f omnia-prod-generation-report-worker" ]]
+EOF
+chmod +x "${runtime_bin}/docker"
+if ! env -i \
+  PATH="${runtime_bin}:/usr/bin:/bin" \
+  ROLLBACK_DOCKER_CALLS="${rollback_docker_calls}" \
+  bash -c '
+    set -euo pipefail
+    cd "$1"
+    test ! -e infra/release/rollback-manifest.sh
+    test ! -e apps/llm-gateway/deploy/full/docker-compose.yml
+    docker rm -f omnia-prod-generation-report-worker
+  ' _ "${old_checkout}"; then
+  fail "rollback cleanup required the new Compose service or checkout helpers"
+fi
+grep -Fxq 'rm -f omnia-prod-generation-report-worker' "${rollback_docker_calls}" \
+  || fail "rollback did not remove the report worker by stable container name"
+
 release_sha=0123456789abcdef0123456789abcdef01234567
 rollback_sha=89abcdef0123456789abcdef0123456789abcdef
 printf 'OMNIA_RELEASE_SHA=old\n' >"${rollback_candidate}"
