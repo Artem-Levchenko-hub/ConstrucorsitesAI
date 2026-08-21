@@ -28,16 +28,46 @@ file_mode() {
   fi
 }
 
+file_uid() {
+  if stat -f '%u' "$1" >/dev/null 2>&1; then
+    stat -f '%u' "$1"
+  else
+    stat -c '%u' "$1"
+  fi
+}
+
 env_file="${test_root}/production.env"
 printf 'A=1\nTARGET=old\nB=2\nTARGET=duplicate\n' >"${env_file}"
 chmod 600 "${env_file}"
+original_env_uid="$(file_uid "${env_file}")"
 bash "${updater}" "${env_file}" TARGET new >"${test_root}/updater.out"
 expected_file="${test_root}/expected.env"
 printf 'A=1\nB=2\nTARGET=new\n' >"${expected_file}"
 cmp -s "${env_file}" "${expected_file}" || fail "updater changed unrelated lines"
 [[ "$(file_mode "${env_file}")" == "600" ]] || fail "updater changed file mode"
+[[ "$(file_uid "${env_file}")" == "${original_env_uid}" ]] \
+  || fail "updater changed file owner"
 grep -Fxq "updated TARGET in ${env_file}" "${test_root}/updater.out" \
   || fail "updater did not print its redacted confirmation"
+
+stdin_secret="stdin-secret-never-print"
+printf '%s\n' "${stdin_secret}" \
+  | bash "${updater}" "${env_file}" TELEGRAM_BOT_TOKEN - \
+    >"${test_root}/stdin-updater.out" 2>"${test_root}/stdin-updater.err"
+grep -Fxq "TELEGRAM_BOT_TOKEN=${stdin_secret}" "${env_file}" \
+  || fail "updater did not read a secret from stdin"
+grep -Fxq "updated TELEGRAM_BOT_TOKEN in ${env_file}" "${test_root}/stdin-updater.out" \
+  || fail "stdin updater did not print its key-only confirmation"
+if grep -R -Fq "${stdin_secret}" \
+  "${test_root}/stdin-updater.out" "${test_root}/stdin-updater.err"; then
+  fail "stdin updater printed the secret value"
+fi
+[[ "$(file_mode "${env_file}")" == "600" ]] \
+  || fail "stdin updater changed file mode"
+if printf 'first\nsecond\n' \
+  | bash "${updater}" "${env_file}" TELEGRAM_BOT_TOKEN - >/dev/null 2>&1; then
+  fail "stdin updater accepted more than one input line"
+fi
 
 if bash "${updater}" "${env_file}" TARGET $'unsafe\nvalue' >/dev/null 2>&1; then
   fail "updater accepted a newline-containing value"
