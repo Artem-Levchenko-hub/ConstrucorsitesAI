@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
@@ -218,6 +219,71 @@ async def test_expired_lease_at_attempt_limit_is_failed_instead_of_stuck(
     assert stored.last_delivery_error_code == "lease_attempts_exhausted"
 
 
+async def test_start_checkpoint_refreshes_only_the_active_attempt_lease(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    worker = _worker()
+    run, _report, _snapshot = await _seed(db_session)
+    run_id = run.id
+    factory = _factory(test_engine)
+    now = datetime.now(UTC) - timedelta(seconds=30)
+
+    active_claim = await worker.claim_due_report(factory, now)
+    assert active_claim is not None
+    db_session.expire_all()
+    before = await db_session.get(GenerationTelegramReport, run_id)
+    assert before is not None and before.lease_until is not None
+    original_lease = before.lease_until
+
+    await worker._persist_start_message_id(factory, active_claim, 701)
+    db_session.expire_all()
+    refreshed = await db_session.get(GenerationTelegramReport, run_id)
+    assert refreshed is not None
+    assert refreshed.start_message_id == 701
+    assert refreshed.lease_until is not None
+    assert refreshed.lease_until > original_lease
+
+
+async def test_stale_attempt_cannot_overwrite_the_reclaimed_delivery_state(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    worker = _worker()
+    run, _report, _snapshot = await _seed(db_session)
+    run_id = run.id
+    factory = _factory(test_engine)
+    now = datetime.now(UTC)
+    stale_claim = await worker.claim_due_report(factory, now)
+    assert stale_claim is not None
+    active_claim = await worker.claim_due_report(
+        factory,
+        now + timedelta(seconds=worker.LEASE_SECONDS + 1),
+    )
+    assert active_claim is not None and active_claim.attempt == stale_claim.attempt + 1
+    db_session.expire_all()
+    reclaimed = await db_session.get(GenerationTelegramReport, run_id)
+    assert reclaimed is not None and reclaimed.lease_until is not None
+    reclaimed_lease = reclaimed.lease_until
+
+    await worker._persist_start_message_id(factory, stale_claim, 701)
+    await worker._mark_success(factory, stale_claim)
+    await worker._mark_failure(
+        factory,
+        stale_claim,
+        code="telegram_timeout",
+        retryable=True,
+        now=now,
+    )
+    db_session.expire_all()
+    stored = await db_session.get(GenerationTelegramReport, run_id)
+    assert stored is not None
+    assert stored.start_message_id == 701
+    assert stored.start_state == "sending"
+    assert stored.start_attempts == active_claim.attempt
+    assert stored.lease_until == reclaimed_lease
+
+
 async def test_long_prompt_resume_keeps_start_message_id_and_does_not_duplicate_text(
     db_session: AsyncSession,
     test_engine: AsyncEngine,
@@ -308,6 +374,50 @@ async def test_completed_snapshot_finish_sends_exact_preview_bytes_as_thread_rep
     ]
     assert "✅ BUILD завершён" in telegram.photos[0][1]
     assert telegram.messages == []
+
+
+async def test_never_resolving_preview_load_is_bounded_and_retried(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _worker()
+    run, _report, _snapshot = await _seed(
+        db_session,
+        status="completed",
+        start_state="sent",
+        start_message_id=812,
+        finish_state="pending",
+        terminal_status="completed",
+        with_snapshot=True,
+        preview_key="private/preview.png",
+    )
+    run_id = run.id
+    factory = _factory(test_engine)
+    claim = await worker.claim_due_report(factory, datetime.now(UTC))
+    assert claim is not None and claim.event == "finish"
+
+    async def _never(_key: str) -> bytes:
+        await asyncio.Event().wait()
+        return b"unreachable"
+
+    monkeypatch.setattr(worker, "PREVIEW_LOAD_TIMEOUT_SECONDS", 0.01, raising=False)
+    await asyncio.wait_for(
+        worker.deliver_claim(
+            factory,
+            claim,
+            _Telegram(),
+            now=datetime.now(UTC),
+            load_preview=_never,
+            enabled=True,
+        ),
+        timeout=1,
+    )
+    db_session.expire_all()
+    stored = await db_session.get(GenerationTelegramReport, run_id)
+    assert stored is not None
+    assert stored.finish_state == "pending"
+    assert stored.last_delivery_error_code == "preview_load_failed"
 
 
 async def test_preview_wait_consumes_no_attempt_then_warns_and_sends_one_late_photo(

@@ -392,11 +392,22 @@ credentials or chat history; its output contains only run lifecycle metadata.
 ```bash
 umask 077
 acceptance_output="${RELEASE_RECORD}/dev-generation-telegram-acceptance.json"
-cd /opt/omnia/apps/api
-DEV_TELEGRAM_ACCEPTANCE_CANCEL=false \
-  uv run python scripts/dev_generation_telegram_acceptance.py \
-  >"${acceptance_output}"
-cd /opt/omnia
+test -n "${PRODUCTION_CANARY_EMAIL:-}"
+test -n "${PRODUCTION_CANARY_PASSWORD:-}"
+[[ "${PRODUCTION_CANARY_EMAIL}" != *$'\n'* && "${PRODUCTION_CANARY_EMAIL}" != *$'\r'* ]]
+[[ "${PRODUCTION_CANARY_PASSWORD}" != *$'\n'* && "${PRODUCTION_CANARY_PASSWORD}" != *$'\r'* ]]
+printf '%s\n%s\n' \
+  "${PRODUCTION_CANARY_EMAIL}" "${PRODUCTION_CANARY_PASSWORD}" \
+| docker exec -i \
+    -e "PRODUCTION_EXPECTED_RELEASE_SHA=${RELEASE_SHA}" \
+    -e DEV_TELEGRAM_ACCEPTANCE_CANCEL=false \
+    omnia-prod-api sh -lc '
+      set -eu
+      IFS= read -r PRODUCTION_CANARY_EMAIL
+      IFS= read -r PRODUCTION_CANARY_PASSWORD
+      export PRODUCTION_CANARY_EMAIL PRODUCTION_CANARY_PASSWORD
+      /app/.venv/bin/python /app/scripts/dev_generation_telegram_acceptance.py
+    ' >"${acceptance_output}"
 jq -e '
   keys == ["cleanup", "runs"] and
   .cleanup == true and
@@ -512,6 +523,13 @@ if [[ "${api_ready}" != true ]]; then
 fi
 
 docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps worker
+if docker compose --env-file "${full_env}" -f "${compose_file}" config --services \
+  | grep -Fxq generation-report-worker; then
+  docker compose --env-file "${full_env}" -f "${compose_file}" \
+    up -d --no-deps generation-report-worker
+  test "$(docker inspect --format '{{.Image}}' \
+    omnia-prod-generation-report-worker)" = "${rollback_api_image}"
+fi
 docker compose --env-file "${full_env}" -f "${compose_file}" up -d --no-deps web
 mv -f "${rollback_orchestrator_candidate}" "${orchestrator_env}"
 rollback_orchestrator_candidate=""
@@ -639,11 +657,22 @@ have no observer rows. The output file is redacted by construction:
 ```bash
 umask 077
 pre_public_output="${RELEASE_RECORD}/pre-public-observer-disable.json"
-cd /opt/omnia/apps/api
-DEV_TELEGRAM_ACCEPTANCE_CANCEL=false \
-  uv run python scripts/dev_generation_telegram_acceptance.py \
-  >"${pre_public_output}"
-cd /opt/omnia
+test -n "${PRODUCTION_CANARY_EMAIL:-}"
+test -n "${PRODUCTION_CANARY_PASSWORD:-}"
+[[ "${PRODUCTION_CANARY_EMAIL}" != *$'\n'* && "${PRODUCTION_CANARY_EMAIL}" != *$'\r'* ]]
+[[ "${PRODUCTION_CANARY_PASSWORD}" != *$'\n'* && "${PRODUCTION_CANARY_PASSWORD}" != *$'\r'* ]]
+printf '%s\n%s\n' \
+  "${PRODUCTION_CANARY_EMAIL}" "${PRODUCTION_CANARY_PASSWORD}" \
+| docker exec -i \
+    -e "PRODUCTION_EXPECTED_RELEASE_SHA=${RELEASE_SHA}" \
+    -e DEV_TELEGRAM_ACCEPTANCE_CANCEL=false \
+    omnia-prod-api sh -lc '
+      set -eu
+      IFS= read -r PRODUCTION_CANARY_EMAIL
+      IFS= read -r PRODUCTION_CANARY_PASSWORD
+      export PRODUCTION_CANARY_EMAIL PRODUCTION_CANARY_PASSWORD
+      /app/.venv/bin/python /app/scripts/dev_generation_telegram_acceptance.py
+    ' >"${pre_public_output}"
 jq -e '.cleanup == true and (.runs | length == 2)' \
   "${pre_public_output}" >/dev/null
 run_id_sql=""

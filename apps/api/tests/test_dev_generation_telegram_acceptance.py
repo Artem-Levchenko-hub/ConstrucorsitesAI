@@ -122,7 +122,12 @@ class _Scenario:
         raise AssertionError(f"unexpected request {method} {path}")
 
 
-def _runner(scenario: _Scenario, *, include_cancel: bool = False):
+def _runner(
+    scenario: _Scenario,
+    *,
+    include_cancel: bool = False,
+    sleeps: list[float] | None = None,
+):
     from scripts import dev_generation_telegram_acceptance as acceptance
 
     ticks = iter(range(1000))
@@ -131,14 +136,15 @@ def _runner(scenario: _Scenario, *, include_cancel: bool = False):
         include_cancel=include_cancel,
         transport=httpx.MockTransport(scenario.handler),
         clock=lambda: float(next(ticks)),
-        sleep=lambda _seconds: None,
+        sleep=(sleeps.append if sleeps is not None else lambda _seconds: None),
         wall_clock=lambda: datetime(2026, 8, 21, 12, 0, tzinfo=UTC),
     )
 
 
 def test_acceptance_runs_build_edit_and_emits_only_redacted_summary() -> None:
     scenario = _Scenario()
-    summary = _runner(scenario).run()
+    sleeps: list[float] = []
+    summary = _runner(scenario, sleeps=sleeps).run()
 
     assert summary["cleanup"] is True
     assert summary["runs"] == [
@@ -178,6 +184,7 @@ def test_acceptance_runs_build_edit_and_emits_only_redacted_summary() -> None:
         ("DELETE", f"/api/projects/{PROJECT_ID}"),
         ("POST", "/api/auth/logout"),
     ]
+    assert sleeps[-1] == 20.0
 
 
 def test_acceptance_optional_cancel_is_requested_and_verified() -> None:

@@ -22,6 +22,7 @@ CANCEL_PROMPT = "Измени текст кнопки добавления за�
 
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _CLEANUP_TIMEOUT_SECONDS = 10.0
+_DELIVERY_GRACE_SECONDS = 20.0
 _ACTIVE_STATUSES = {"pending", "running", "cancel_requested"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -103,6 +104,8 @@ class DevGenerationTelegramAcceptance:
         except BaseException as exc:
             caught = exc
         finally:
+            if project_id is not None and self.records:
+                self._allow_delivery_grace()
             if project_id is not None and not self._cleanup_request(
                 "DELETE",
                 f"/api/projects/{project_id}",
@@ -277,6 +280,18 @@ class DevGenerationTelegramAcceptance:
         if remaining <= 0:
             raise CanaryFailure("acceptance deadline exceeded")
         self._sleep(min(self.config.poll_seconds, remaining))
+
+    def _allow_delivery_grace(self) -> None:
+        """Leave one bounded worker window before cascade-deleting report rows."""
+
+        remaining = max(0.0, self._remaining_seconds())
+        delay = min(_DELIVERY_GRACE_SECONDS, remaining)
+        if delay <= 0:
+            return
+        try:
+            self._sleep(delay)
+        except Exception:
+            return
 
     def _remaining_seconds(self) -> float:
         return self._deadline - self._clock()

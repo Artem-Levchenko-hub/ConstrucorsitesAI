@@ -34,6 +34,7 @@ LEASE_SECONDS = 45
 MAX_ATTEMPTS = 8
 BACKOFF_SECONDS = (5, 15, 60, 180, 300, 600, 900, 900)
 PREVIEW_WAIT_SECONDS = 300
+PREVIEW_LOAD_TIMEOUT_SECONDS = 15.0
 
 Event = Literal["start", "finish"]
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -77,6 +78,12 @@ def _due(value: datetime | None, now: datetime) -> bool:
 
 def _is_enabled(value: EnabledCheck) -> bool:
     return bool(value() if callable(value) else value)
+
+
+def _claim_is_current(report: GenerationTelegramReport, claim: ReportClaim) -> bool:
+    if claim.event == "start":
+        return report.start_state == "sending" and report.start_attempts == claim.attempt
+    return report.finish_state == "sending" and report.finish_attempts == claim.attempt
 
 
 async def reconcile_waiting_previews(factory: SessionFactory, now: datetime) -> int:
@@ -290,6 +297,8 @@ async def _persist_start_message_id(
         )
         if report is not None and report.start_message_id is None:
             report.start_message_id = int(message_id)
+        if report is not None and _claim_is_current(report, claim):
+            report.lease_until = datetime.now(UTC) + timedelta(seconds=LEASE_SECONDS)
         await session.commit()
 
 
@@ -306,6 +315,8 @@ async def _mark_success(
             with_for_update=True,
         )
         if report is None:
+            return
+        if not _claim_is_current(report, claim):
             return
         if claim.event == "start":
             report.start_state = "sent"
@@ -334,6 +345,8 @@ async def _mark_failure(
             with_for_update=True,
         )
         if report is None:
+            return
+        if not _claim_is_current(report, claim):
             return
         report.lease_until = None
         report.last_delivery_error_code = code
@@ -454,7 +467,10 @@ async def _deliver_finish(
         outcome = "completed_no_snapshot"
     elif bundle.snapshot.preview_key:
         try:
-            png = await load_preview(bundle.snapshot.preview_key)
+            png = await asyncio.wait_for(
+                load_preview(bundle.snapshot.preview_key),
+                timeout=PREVIEW_LOAD_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
             raise _DeliveryFailure("preview_load_failed", retryable=True) from exc
         if not png:
@@ -678,6 +694,7 @@ __all__ = [
     "LEASE_SECONDS",
     "MAX_ATTEMPTS",
     "POLL_SECONDS",
+    "PREVIEW_LOAD_TIMEOUT_SECONDS",
     "PREVIEW_WAIT_SECONDS",
     "ReportClaim",
     "claim_due_report",

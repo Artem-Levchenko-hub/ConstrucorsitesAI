@@ -132,6 +132,15 @@ grep -Fq 'Keep migration `0047` applied' "${runbook}" \
   || fail "runbook does not preserve the additive observer migration"
 grep -Fq 'DEV_GENERATION_TELEGRAM_REPORTS false' "${runbook}" \
   || fail "runbook does not document the pre-public kill switch"
+grep -Fq \
+  '/app/.venv/bin/python /app/scripts/dev_generation_telegram_acceptance.py' \
+  "${runbook}" \
+  || fail "runbook does not use the revision-tagged API image for acceptance"
+if grep -Fq 'uv run python scripts/dev_generation_telegram_acceptance.py' "${runbook}"; then
+  fail "runbook relies on an unverified host API environment for acceptance"
+fi
+grep -Fq 'config --services' "${runbook}" \
+  || fail "rollback does not detect whether the old revision owns the report worker"
 for focused_test in \
   tests/test_generation_telegram_delivery.py \
   tests/test_generation_telegram_reports.py \
@@ -158,6 +167,10 @@ rollback_env_restore_line="$(grep -nF \
   || fail "runbook removes the report worker after checking out the old revision"
 ((rollback_env_restore_line < rollback_checkout_line)) \
   || fail "runbook restores the protected env after checking out the old revision"
+rollback_report_restore_line="$(grep -nF 'config --services' "${runbook}" \
+  | tail -1 | cut -d: -f1)"
+((rollback_checkout_line < rollback_report_restore_line)) \
+  || fail "runbook checks old-revision report-worker support before checkout"
 
 # A rollback retry may start from an old checkout with no report-worker service
 # or release helpers. Stable container-name cleanup and the persisted bundle
