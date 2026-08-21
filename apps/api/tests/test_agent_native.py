@@ -243,11 +243,7 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
                 "type": "string",
                 "enum": ["src/app/page.tsx"],
             }
-            assert kwargs["tool_choice"] == {
-                "type": "tool",
-                "name": "write_file",
-                "disable_parallel_tool_use": True,
-            }
+            assert kwargs["tool_choice"] == {"type": "tool", "name": "write_file"}
             return _turn(
                 ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})
             )

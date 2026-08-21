@@ -272,11 +272,7 @@ _MAX_ENTRY_WRITE_TOOLS: list[dict[str, Any]] = [
         "cache_control": _CACHE,
     }
 ]
-_MAX_ENTRY_WRITE_CHOICE: dict[str, Any] = {
-    "type": "tool",
-    "name": "write_file",
-    "disable_parallel_tool_use": True,
-}
+_MAX_ENTRY_WRITE_CHOICE: dict[str, str] = {"type": "tool", "name": "write_file"}
 
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
