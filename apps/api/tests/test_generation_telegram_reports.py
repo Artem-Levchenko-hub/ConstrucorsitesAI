@@ -248,7 +248,11 @@ async def test_duplicate_report_insert_isolated_from_outer_generation_transactio
 @pytest.mark.asyncio
 async def test_stage_recording_is_forward_only_and_ignores_unknown_stage(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from omnia_api.core import db as core_db
+
+    monkeypatch.setattr(core_db, "get_engine", lambda: db_session.bind)
     service = _report_service()
     run, _project, _user_message, _assistant_message, _snapshot = await _create_run(db_session)
     assert await service.create_report_for_run(db_session, run, enabled=True)

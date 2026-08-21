@@ -13,17 +13,20 @@ from omnia_api.core.deps import get_current_user
 from omnia_api.core.errors import ApiError
 from omnia_api.main import app
 from omnia_api.models.generation_run import GenerationRun
+from omnia_api.models.generation_telegram_report import GenerationTelegramReport
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
+from omnia_api.services import generation_runs
 from omnia_api.services.generation_runs import (
     finalize_generation_run,
     reconcile_completed_build_runs,
     recover_interrupted_generation_runs,
     reserve_generation_run,
+    set_generation_run_status,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -100,6 +103,7 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
 
 async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     first, _ = await reserve_generation_run(
@@ -120,7 +124,18 @@ async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
     await db_session.flush()
     first.assistant_message_id = assistant.id
     first.status = "running"
+    db_session.add(GenerationTelegramReport(run_id=first.id))
     await db_session.commit()
+
+    monkeypatch.setattr(
+        generation_runs,
+        "get_settings",
+        lambda: SimpleNamespace(
+            dev_generation_telegram_reports=True,
+            use_project_memory=True,
+        ),
+        raising=False,
+    )
 
     second, replayed = await reserve_generation_run(
         db_session,
@@ -140,6 +155,10 @@ async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(
     )
     assert memory is not None
     assert memory.version == 1
+    report = await db_session.get(GenerationTelegramReport, first.id)
+    assert report is not None
+    assert report.terminal_status == "completed"
+    assert report.finish_state == "pending"
 
 
 async def test_cancel_endpoint_marks_active_run_and_signals_redis(
@@ -201,6 +220,7 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
         use_auto_stack_routing=False,
         use_followup_appification=False,
         use_result_type_router=False,
+        dev_generation_telegram_reports=True,
     )
     spawned: list[dict[str, object]] = []
 
@@ -249,6 +269,108 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
         )
     ).all()
     assert len(rows) == 2
+    reports = list(
+        (
+            await db_session.execute(
+                select(GenerationTelegramReport).where(
+                    GenerationTelegramReport.run_id == uuid.UUID(first.json()["run_id"])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(reports) == 1
+    assert reports[0].last_stage == "accepted"
+
+
+async def test_report_creation_failure_does_not_change_prompt_acceptance(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+
+    async def _current_user() -> User:
+        return owner
+
+    async def _observer_failure(*_args: object, **_kwargs: object) -> bool:
+        raise RuntimeError("observer unavailable")
+
+    settings = SimpleNamespace(
+        unlimited_generations=False,
+        force_model=None,
+        use_progressive_discovery=False,
+        use_clarify_interview=False,
+        use_auto_stack_routing=False,
+        use_followup_appification=False,
+        use_result_type_router=False,
+        dev_generation_telegram_reports=True,
+    )
+    spawned: list[dict[str, object]] = []
+    app.dependency_overrides[get_current_user] = _current_user
+    monkeypatch.setattr(messages, "get_settings", lambda: settings)
+    monkeypatch.setattr(messages, "create_report_for_run", _observer_failure)
+    monkeypatch.setattr(messages, "_spawn_process_prompt", lambda **kwargs: spawned.append(kwargs))
+    monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    try:
+        response = await client.post(
+            f"/api/projects/{project.id}/prompt",
+            json={
+                "prompt": "Собери сайт при недоступном наблюдателе",
+                "skip_clarify": True,
+                "idempotency_key": "observer-failure",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 202
+    run_id = uuid.UUID(response.json()["run_id"])
+    run = await db_session.get(GenerationRun, run_id)
+    assert run is not None
+    assert run.status == "pending"
+    assert run.user_message_id is not None
+    assert run.assistant_message_id is not None
+    assert await db_session.get(GenerationTelegramReport, run_id) is None
+    assert len(spawned) == 1
+
+
+async def test_normalized_report_pass_stages_are_ordered_and_fail_soft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid.uuid4()
+    seen: list[str] = []
+
+    async def _record(_run_id: uuid.UUID, stage: str) -> None:
+        assert _run_id == run_id
+        seen.append(stage)
+
+    monkeypatch.setattr(messages, "record_report_stage", _record)
+    await messages._record_generation_report_stage(run_id, "routing")
+    await messages._record_generation_pass_stage(run_id, "art_director", "start")
+    await messages._record_generation_pass_stage(run_id, "art_director", "end")
+    await messages._record_generation_pass_stage(run_id, "writer", "start")
+    await messages._record_generation_report_stage(run_id, "images")
+    await messages._record_generation_report_stage(run_id, "acceptance")
+    await messages._record_generation_report_stage(run_id, "snapshot")
+    await messages._record_generation_report_stage(run_id, "preview")
+
+    assert seen == [
+        "routing",
+        "director",
+        "writer",
+        "images",
+        "acceptance",
+        "snapshot",
+        "preview",
+    ]
+
+    async def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("observer unavailable")
+
+    monkeypatch.setattr(messages, "record_report_stage", _raise)
+    await messages._record_generation_report_stage(run_id, "routing")
 
 
 async def test_failed_first_build_explanation_does_not_spawn_another_build(
@@ -290,6 +412,7 @@ async def test_failed_first_build_explanation_does_not_spawn_another_build(
         use_auto_stack_routing=False,
         use_followup_appification=False,
         use_result_type_router=False,
+        dev_generation_telegram_reports=True,
     )
     build_spawns: list[dict[str, object]] = []
     text_spawns: list[tuple[str, uuid.UUID]] = []
@@ -328,6 +451,8 @@ async def test_failed_first_build_explanation_does_not_spawn_another_build(
     assert len(text_spawns) == 1
     assert "Новую сборку не запускаю" in text_spawns[0][0]
     assert "без рабочей версии" in text_spawns[0][0]
+    new_run_id = text_spawns[0][1]
+    assert await db_session.get(GenerationTelegramReport, new_run_id) is None
 
 
 class _NoopRedis:
@@ -431,6 +556,7 @@ async def test_tracked_prompt_uses_product_outcome_finalizer(
 
 async def test_build_without_snapshot_is_failed_product_outcome(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     assistant = Message(
@@ -452,7 +578,19 @@ async def test_build_without_snapshot_is_failed_product_outcome(
         response_mode="build",
     )
     db_session.add(run)
+    await db_session.flush()
+    db_session.add(GenerationTelegramReport(run_id=run.id))
     await db_session.commit()
+
+    monkeypatch.setattr(
+        generation_runs,
+        "get_settings",
+        lambda: SimpleNamespace(
+            dev_generation_telegram_reports=True,
+            use_project_memory=False,
+        ),
+        raising=False,
+    )
 
     assert await finalize_generation_run(run.id, db_session) == "failed"
 
@@ -460,10 +598,15 @@ async def test_build_without_snapshot_is_failed_product_outcome(
     assert run.status == "failed"
     assert run.finished_at is not None
     assert run.error == "build finished without a committed snapshot"
+    report = await db_session.get(GenerationTelegramReport, run.id)
+    assert report is not None
+    assert report.terminal_status == "failed"
+    assert report.finish_state == "pending"
 
 
 async def test_build_with_snapshot_is_completed_product_outcome(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     snapshot = Snapshot(
@@ -494,13 +637,119 @@ async def test_build_with_snapshot_is_completed_product_outcome(
         response_mode="build",
     )
     db_session.add(run)
+    await db_session.flush()
+    db_session.add(GenerationTelegramReport(run_id=run.id))
     await db_session.commit()
+
+    monkeypatch.setattr(
+        generation_runs,
+        "get_settings",
+        lambda: SimpleNamespace(
+            dev_generation_telegram_reports=True,
+            use_project_memory=False,
+        ),
+        raising=False,
+    )
 
     assert await finalize_generation_run(run.id, db_session) == "completed"
 
     await db_session.refresh(run)
     assert run.status == "completed"
     assert run.finished_at is not None
+    report = await db_session.get(GenerationTelegramReport, run.id)
+    assert report is not None
+    assert report.terminal_status == "completed"
+    assert report.finish_state == "waiting_preview"
+    assert report.last_stage == "snapshot"
+
+
+async def test_exception_status_commits_report_with_run(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.core import db as core_db
+
+    owner, project = await _owner_and_project(db_session)
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="exception-report",
+        prompt_hash="hash",
+        status="running",
+        response_mode="edit",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    run_id = run.id
+    db_session.add(GenerationTelegramReport(run_id=run.id))
+    await db_session.commit()
+    monkeypatch.setattr(
+        generation_runs,
+        "get_settings",
+        lambda: SimpleNamespace(
+            dev_generation_telegram_reports=True,
+            use_project_memory=False,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(core_db, "get_engine", lambda: db_session.bind)
+
+    await set_generation_run_status(run_id, "failed", error="model failed")
+    db_session.expire_all()
+
+    persisted_run = await db_session.get(GenerationRun, run_id)
+    report = await db_session.get(GenerationTelegramReport, run_id)
+    assert persisted_run is not None
+    assert persisted_run.status == "failed"
+    assert report is not None
+    assert report.terminal_status == "failed"
+    assert report.finish_state == "pending"
+
+
+async def test_cancel_finalizer_commits_report_with_run(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(project_id=project.id, role="assistant", content="В работе")
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="cancel-report",
+        prompt_hash="hash",
+        status="running",
+        response_mode="build",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    run_id = run.id
+    db_session.add(GenerationTelegramReport(run_id=run.id))
+    await db_session.commit()
+
+    async def _publish(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(messages, "publish_event", _publish)
+    monkeypatch.setattr(messages, "get_engine", lambda: db_session.bind)
+    monkeypatch.setattr(
+        messages,
+        "get_settings",
+        lambda: SimpleNamespace(dev_generation_telegram_reports=True),
+    )
+
+    await messages._finalize_cancelled_generation(project.id, assistant.id, run_id)
+    db_session.expire_all()
+
+    persisted_run = await db_session.get(GenerationRun, run_id)
+    report = await db_session.get(GenerationTelegramReport, run_id)
+    assert persisted_run is not None
+    assert persisted_run.status == "cancelled"
+    assert report is not None
+    assert report.terminal_status == "cancelled"
+    assert report.finish_state == "pending"
 
 
 async def test_reconcile_historical_completed_build_without_snapshot(
@@ -537,6 +786,7 @@ async def test_reconcile_historical_completed_build_without_snapshot(
 
 async def test_startup_recovery_releases_interrupted_run(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     assistant = Message(
@@ -555,7 +805,19 @@ async def test_startup_recovery_releases_interrupted_run(
         status="running",
     )
     db_session.add(run)
+    await db_session.flush()
+    db_session.add(GenerationTelegramReport(run_id=run.id))
     await db_session.commit()
+
+    monkeypatch.setattr(
+        generation_runs,
+        "get_settings",
+        lambda: SimpleNamespace(
+            dev_generation_telegram_reports=True,
+            use_project_memory=False,
+        ),
+        raising=False,
+    )
 
     assert await recover_interrupted_generation_runs(db_session) == 1
 
@@ -565,6 +827,10 @@ async def test_startup_recovery_releases_interrupted_run(
     assert run.finished_at is not None
     assert assistant.tokens_out == 0
     assert "прервана перезапуском сервера" in assistant.content
+    report = await db_session.get(GenerationTelegramReport, run.id)
+    assert report is not None
+    assert report.terminal_status == "failed"
+    assert report.finish_state == "pending"
 
     replacement, replayed = await reserve_generation_run(
         db_session,
