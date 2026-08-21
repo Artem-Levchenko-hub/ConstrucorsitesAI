@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -523,3 +524,147 @@ def test_cli_prints_only_fixed_public_failure_without_traceback(
     assert captured.err == "production canary failed\n"
     assert "signed URL" not in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_cli_writes_safe_generation_failure_for_daily_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts import production_generation_canary as cli
+
+    class FailingCanary:
+        def __init__(self, _config: object, *, emit: object) -> None:
+            pass
+
+        def run(self) -> None:
+            raise canary_module.CanaryFailure("generation reached a failed terminal status")
+
+    result_path = tmp_path / "production-canary-result.json"
+    monkeypatch.setattr(cli, "ProductionCanary", FailingCanary)
+    monkeypatch.setattr(cli.CanaryConfig, "from_env", lambda: object())
+    monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
+
+    assert cli.main() == 1
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "error": "Тестовая генерация завершилась с ошибкой.",
+        "status": "failure",
+    }
+
+
+def test_cli_writes_success_for_daily_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts import production_generation_canary as cli
+
+    class SuccessfulCanary:
+        def __init__(self, _config: object, *, emit: object) -> None:
+            pass
+
+        def run(self) -> None:
+            return None
+
+    result_path = tmp_path / "production-canary-result.json"
+    monkeypatch.setattr(cli, "ProductionCanary", SuccessfulCanary)
+    monkeypatch.setattr(cli.CanaryConfig, "from_env", lambda: object())
+    monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
+
+    assert cli.main() == 0
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {"status": "success"}
+
+
+@pytest.mark.parametrize(
+    ("failure_reason", "report_error"),
+    [
+        (
+            "generation deadline exceeded",
+            "Тестовая генерация превысила лимит времени.",
+        ),
+        (
+            "preview did not become ready",
+            "Превью тестовой генерации не запустилось.",
+        ),
+        (
+            "release dependency health mismatch",
+            "Production-зависимости не прошли проверку здоровья.",
+        ),
+        (
+            "public API returned an unexpected status",
+            "Production API вернул ошибку.",
+        ),
+        (
+            "project cleanup failed",
+            "Не удалось удалить тестовый проект.",
+        ),
+    ],
+)
+def test_cli_reports_actionable_known_failure_category(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure_reason: str,
+    report_error: str,
+) -> None:
+    from scripts import production_generation_canary as cli
+
+    class FailingCanary:
+        def __init__(self, _config: object, *, emit: object) -> None:
+            pass
+
+        def run(self) -> None:
+            raise canary_module.CanaryFailure(failure_reason)
+
+    result_path = tmp_path / "production-canary-result.json"
+    monkeypatch.setattr(cli, "ProductionCanary", FailingCanary)
+    monkeypatch.setattr(cli.CanaryConfig, "from_env", lambda: object())
+    monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
+
+    assert cli.main() == 1
+    assert json.loads(result_path.read_text(encoding="utf-8"))["error"] == report_error
+
+
+def test_cli_writes_configuration_failure_for_daily_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts import production_generation_canary as cli
+
+    result_path = tmp_path / "production-canary-result.json"
+
+    def fail_config() -> object:
+        raise canary_module.CanaryConfigurationError("secret name must stay private")
+
+    monkeypatch.setattr(cli.CanaryConfig, "from_env", fail_config)
+    monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
+
+    assert cli.main() == 1
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "error": "Не удалось запустить тестовые генерации: неверная конфигурация.",
+        "status": "failure",
+    }
+    assert "secret name" not in result_path.read_text(encoding="utf-8")
+
+
+def test_cli_writes_fixed_internal_failure_without_exception_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from scripts import production_generation_canary as cli
+
+    class BrokenCanary:
+        def __init__(self, _config: object, *, emit: object) -> None:
+            pass
+
+        def run(self) -> None:
+            raise RuntimeError("response body must stay private")
+
+    result_path = tmp_path / "production-canary-result.json"
+    monkeypatch.setattr(cli, "ProductionCanary", BrokenCanary)
+    monkeypatch.setattr(cli.CanaryConfig, "from_env", lambda: object())
+    monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
+
+    assert cli.main() == 1
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "error": "Техническая ошибка production-canary.",
+        "status": "failure",
+    }
+    assert "response body" not in result_path.read_text(encoding="utf-8")

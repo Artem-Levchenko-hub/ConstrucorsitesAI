@@ -10,4 +10,7 @@ The paid public-API build/edit monitor lives in
 It is always available through `workflow_dispatch`; its daily schedule runs only
 when `PRODUCTION_GENERATION_CANARY_ENABLED=true`. The workflow requires the
 `PRODUCTION_EXPECTED_RELEASE_SHA` repository variable and the
-`PRODUCTION_CANARY_EMAIL` / `PRODUCTION_CANARY_PASSWORD` secrets.
+`PRODUCTION_CANARY_EMAIL` / `PRODUCTION_CANARY_PASSWORD` secrets. Daily
+success/failure reports are sent to a Telegram group using the
+`TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` secrets. Failure messages contain
+only a fixed, safe error category produced by the canary.
