@@ -7,12 +7,13 @@ Unix-socket database URLs and writes evidence only to ignored
 
 The repository must have a GitHub Environment named `production` whose
 deployment branch policy allows only the protected `main` branch. Store
-`PRODUCTION_CANARY_EMAIL` and `PRODUCTION_CANARY_PASSWORD` as secrets in that
-environment, not as repository-level secrets. Do not add required reviewers to
-the environment unless scheduled canaries are intentionally expected to wait
-for approval. The workflow also rejects every ref except `refs/heads/main`
-before checkout and exposes these credentials only to its configuration check
-and canary process.
+`PRODUCTION_CANARY_EMAIL`, `PRODUCTION_CANARY_PASSWORD`, `TELEGRAM_BOT_TOKEN`,
+and `TELEGRAM_CHAT_ID` as secrets in that environment, not as repository-level
+secrets. `TELEGRAM_CHAT_ID` must identify the group that receives the daily
+canary result. Do not add required reviewers to the environment unless
+scheduled canaries are intentionally expected to wait for approval. The
+workflow also rejects every ref except `refs/heads/main` before checkout and
+exposes credentials only to the steps that consume them.
 
 ## 1. Owner confirmation
 
