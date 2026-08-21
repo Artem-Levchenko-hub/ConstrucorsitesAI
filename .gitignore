@@ -51,6 +51,7 @@ infra/data/
 playwright-report/
 test-results/
 coverage/
+.release-evidence/
 
 # Generated backups (env + docker-compose) — never commit, may contain secrets
 .env.bak
