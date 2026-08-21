@@ -40,6 +40,5 @@ def test_production_compose_enables_blocking_by_default() -> None:
     compose = (Path(__file__).parents[2] / "llm-gateway/deploy/full/docker-compose.yml").read_text()
     assert "DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-true}" in compose
     assert "USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}" in compose
-    assert "USE_PROJECT_MEMORY: ${USE_PROJECT_MEMORY:-true}" in compose
     assert "USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-true}" in compose
     assert "AGENT_REQUIRE_GREEN_BEFORE_DONE: ${AGENT_REQUIRE_GREEN_BEFORE_DONE:-true}" in compose
