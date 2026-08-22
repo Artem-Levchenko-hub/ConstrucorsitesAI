@@ -203,6 +203,14 @@ for removed_key in \
 done
 grep -Fq "to_regclass('public.generation_telegram_reports') IS NULL" "${runbook}" \
   || fail "runbook does not prove the observer table is absent"
+grep -Fq \
+  'gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --body "$RELEASE_SHA"' \
+  "${runbook}" \
+  || fail "runbook does not update the repository variable consumed by production smoke"
+grep -Fq \
+  'gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --env production --body "$RELEASE_SHA"' \
+  "${runbook}" \
+  || fail "runbook does not update the production-environment variable consumed by canary"
 grep -Fq 'gh secret delete TELEGRAM_BOT_TOKEN --env production' "${runbook}" \
   || fail "runbook does not remove the production-environment bot secret"
 grep -Fq 'gh secret delete TELEGRAM_CHAT_ID --env production' "${runbook}" \

@@ -361,6 +361,9 @@ Set the protected expected revision, run both workflows from main, and require
 success before deleting secrets.
 
 ~~~bash
+# Production smoke has no environment binding and reads the repository value.
+gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --body "$RELEASE_SHA"
+# The paid generation canary is bound to the production environment.
 gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --env production --body "$RELEASE_SHA"
 gh workflow run production-smoke.yml --ref main
 smoke_run="$(gh run list --workflow production-smoke.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
