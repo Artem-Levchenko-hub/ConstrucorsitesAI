@@ -9,29 +9,11 @@ from fastapi import status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
-from omnia_api.services.generation_telegram_reports import sync_terminal_report
 
 ACTIVE_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
-
-
-async def _sync_generation_report(session: AsyncSession, run: GenerationRun) -> None:
-    """Keep observer state in the run transaction without coupling outcomes."""
-
-    try:
-        await sync_terminal_report(
-            session,
-            run,
-            enabled=bool(getattr(get_settings(), "dev_generation_telegram_reports", False)),
-        )
-    except Exception:
-        logging.getLogger(__name__).warning(
-            "generation_report code=terminal_hook_failed run=%s",
-            str(run.id).split("-", 1)[0],
-        )
 
 
 async def compile_terminal_run_memory(session: AsyncSession, run: GenerationRun) -> None:
@@ -40,6 +22,7 @@ async def compile_terminal_run_memory(session: AsyncSession, run: GenerationRun)
     if run.status not in {"completed", "failed", "cancelled"}:
         return
     try:
+        from omnia_api.core.config import get_settings
         from omnia_api.services.project_memory import compile_project_memory_revision
 
         if not get_settings().use_project_memory:
@@ -119,7 +102,6 @@ async def reserve_generation_run(
                 active.error = "build finished without a committed snapshot"
             active.finished_at = datetime.now(UTC)
             await session.flush()
-            await _sync_generation_report(session, active)
             await compile_terminal_run_memory(session, active)
             active = None
 
@@ -188,7 +170,6 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
         run.error = "API process restarted before generation completed"
         run.finished_at = now
         if run.assistant_message_id is None:
-            await _sync_generation_report(session, run)
             await compile_terminal_run_memory(session, run)
             continue
         message = await session.get(Message, run.assistant_message_id)
@@ -197,7 +178,6 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
                 message.content = f"{message.content.rstrip()}\n\n{marker}".strip()
             message.tokens_in = message.tokens_in or 0
             message.tokens_out = 0
-        await _sync_generation_report(session, run)
         await compile_terminal_run_memory(session, run)
 
     await session.commit()
@@ -249,7 +229,6 @@ async def set_generation_run_status(
             run.finished_at = now
         if error is not None:
             run.error = error[:2000]
-        await _sync_generation_report(session, run)
         await compile_terminal_run_memory(session, run)
         await session.commit()
 
@@ -268,7 +247,6 @@ async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
     run.finished_at = datetime.now(UTC)
     if build_failed and not run.error:
         run.error = "build finished without a committed snapshot"
-    await _sync_generation_report(session, run)
     await compile_terminal_run_memory(session, run)
     await session.commit()
     return run.status
@@ -322,7 +300,6 @@ async def _reconcile_completed_build_runs(session: AsyncSession) -> int:
         run.status = "failed"
         run.error = run.error or "build finished without a committed snapshot"
         run.finished_at = run.finished_at or datetime.now(UTC)
-        await _sync_generation_report(session, run)
         changed += 1
     await session.commit()
     return changed

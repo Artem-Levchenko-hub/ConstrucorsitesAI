@@ -25,7 +25,6 @@ from omnia_api.models.billing import (
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.generation_telegram_report import GenerationTelegramReport
 from omnia_api.models.hero_media_asset import HeroMediaAsset
 from omnia_api.models.hero_media_brief import HeroMediaBrief
 from omnia_api.models.hero_media_render import HeroMediaRender
@@ -58,7 +57,6 @@ __all__ = [
     "CustomDomain",
     "DeployTarget",
     "GenerationRun",
-    "GenerationTelegramReport",
     "HeroMediaAsset",
     "HeroMediaBrief",
     "HeroMediaRender",
