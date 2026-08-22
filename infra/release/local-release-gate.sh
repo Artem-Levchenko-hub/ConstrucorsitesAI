@@ -151,7 +151,7 @@ run_step api_sync api.log "API locked dependency sync" bash -c \
   'cd apps/api && uv sync --frozen'
 run_step api_ruff api.log "API lint" bash -c 'cd apps/api && uv run ruff check .'
 run_step api_mypy api.log "API typecheck" bash -c \
-  'cd apps/api && MYPYPATH=src uv run mypy src scripts/dev_generation_telegram_acceptance.py'
+  'cd apps/api && MYPYPATH=src uv run mypy src'
 run_step api_migrate api.log "API local database migration" bash -c \
   'cd apps/api && uv run alembic upgrade head'
 run_step api_tests api.log "Release-critical API tests" bash -c \
@@ -163,12 +163,8 @@ run_step api_tests api.log "Release-critical API tests" bash -c \
     tests/test_auth.py \
     tests/test_agent_native.py \
     tests/test_generation_runs.py \
-    tests/test_generation_telegram_delivery.py \
-    tests/test_generation_telegram_reports.py \
-    tests/test_generation_telegram_preview.py \
-    tests/test_generation_report_worker.py \
-    tests/test_generation_report_compose.py \
-    tests/test_dev_generation_telegram_acceptance.py \
+    tests/test_generation_telegram_removal_migration.py \
+    tests/test_telegram_reporting_removed.py \
     tests/test_render_settle.py \
     tests/test_project_memory.py \
     tests/test_production_canary.py'

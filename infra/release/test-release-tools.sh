@@ -3,10 +3,12 @@ set -euo pipefail
 
 release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 updater="${release_dir}/update-env-value.sh"
+remover="${release_dir}/remove-env-value.sh"
 gate="${release_dir}/local-release-gate.sh"
 rollback_manifest="${release_dir}/rollback-manifest.sh"
 compose_policy="${release_dir}/test-compose-policy.sh"
 runbook="${release_dir}/README.md"
+ci_workflow="${release_dir}/../../.github/workflows/ci.yml"
 test_root="$(mktemp -d)"
 trap 'rm -rf "${test_root}"' EXIT
 
@@ -33,6 +35,14 @@ file_uid() {
     stat -f '%u' "$1"
   else
     stat -c '%u' "$1"
+  fi
+}
+
+file_gid() {
+  if stat -f '%g' "$1" >/dev/null 2>&1; then
+    stat -f '%g' "$1"
+  else
+    stat -c '%g' "$1"
   fi
 }
 
@@ -76,6 +86,42 @@ if bash "${updater}" "${env_file}" 'unsafe-key' value >/dev/null 2>&1; then
   fail "updater accepted an unsafe key"
 fi
 
+remove_env="${test_root}/remove.env"
+printf 'A=1\nTELEGRAM_BOT_TOKEN=first\nB=2\nTELEGRAM_BOT_TOKEN=second\n' \
+  >"${remove_env}"
+chmod 600 "${remove_env}"
+original_remove_uid="$(file_uid "${remove_env}")"
+original_remove_gid="$(file_gid "${remove_env}")"
+bash "${remover}" "${remove_env}" TELEGRAM_BOT_TOKEN \
+  >"${test_root}/remover.out" 2>"${test_root}/remover.err"
+expected_remove_env="${test_root}/expected-remove.env"
+printf 'A=1\nB=2\n' >"${expected_remove_env}"
+cmp -s "${remove_env}" "${expected_remove_env}" \
+  || fail "remover changed unrelated lines or kept duplicate keys"
+[[ "$(file_mode "${remove_env}")" == "600" ]] \
+  || fail "remover changed file mode"
+[[ "$(file_uid "${remove_env}")" == "${original_remove_uid}" ]] \
+  || fail "remover changed file owner"
+[[ "$(file_gid "${remove_env}")" == "${original_remove_gid}" ]] \
+  || fail "remover changed file group"
+grep -Fxq "removed TELEGRAM_BOT_TOKEN from ${remove_env}" \
+  "${test_root}/remover.out" \
+  || fail "remover did not print its key-only confirmation"
+if grep -R -Fq 'first' "${test_root}/remover.out" "${test_root}/remover.err" \
+  || grep -R -Fq 'second' "${test_root}/remover.out" "${test_root}/remover.err"; then
+  fail "remover printed a removed value"
+fi
+if bash "${remover}" "${remove_env}" 'unsafe-key' >/dev/null 2>&1; then
+  fail "remover accepted an unsafe key"
+fi
+if bash "${remover}" "${test_root}/missing.env" TARGET >/dev/null 2>&1; then
+  fail "remover accepted a missing file"
+fi
+ln -s "${remove_env}" "${test_root}/linked.env"
+if bash "${remover}" "${test_root}/linked.env" TARGET >/dev/null 2>&1; then
+  fail "remover accepted a symlink"
+fi
+
 rollback_record="${test_root}/release-record"
 full_env_backup="${test_root}/full.env.pre-release"
 orchestrator_env_backup="${test_root}/orchestrator.env.pre-release"
@@ -85,6 +131,7 @@ checked_out_manifest="${checked_out_release}/rollback-manifest.sh"
 checked_out_updater="${checked_out_release}/update-env-value.sh"
 runtime_manifest="${test_root}/omnia-runtime/releases/rollback-manifest.sh"
 runtime_updater="${test_root}/omnia-runtime/releases/update-env-value.sh"
+runtime_remover="${test_root}/omnia-runtime/releases/remove-env-value.sh"
 rollback_candidate="${test_root}/rollback-candidate.env"
 mkdir -p "${rollback_record}"
 touch "${full_env_backup}" "${orchestrator_env_backup}"
@@ -93,6 +140,7 @@ cp "${rollback_manifest}" "${checked_out_manifest}"
 cp "${updater}" "${checked_out_updater}"
 install -m 700 "${checked_out_manifest}" "${runtime_manifest}"
 install -m 700 "${checked_out_updater}" "${runtime_updater}"
+install -m 700 "${remover}" "${runtime_remover}"
 rm -rf "${test_root}/checkout"
 [[ ! -e "${test_root}/checkout" ]] \
   || fail "simulated rollback checkout retained release tooling"
@@ -113,97 +161,82 @@ grep -Fq \
   "${runbook}" \
   || fail "runbook does not persist the rollback updater before mutation"
 grep -Fq \
-  '"${candidate_full_env}" TELEGRAM_BOT_TOKEN -' \
+  'removal_env_tool=/opt/omnia-runtime/releases/remove-env-value.sh' \
   "${runbook}" \
-  || fail "runbook does not inject the Telegram token through stdin"
+  || fail "runbook does not load the env remover outside the checkout"
 grep -Fq \
-  '"${candidate_full_env}" TELEGRAM_CHAT_ID -' \
+  'install -m 700 infra/release/remove-env-value.sh "${removal_env_tool}"' \
   "${runbook}" \
-  || fail "runbook does not inject the Telegram chat id through stdin"
+  || fail "runbook does not persist the env remover before mutation"
 grep -Fq \
-  '"${candidate_full_env}" DEV_GENERATION_TELEGRAM_REPORTS true' \
+  'compat_migration=/opt/omnia-runtime/releases/0048_remove_generation_telegram_reports.py' \
   "${runbook}" \
-  || fail "runbook does not enable reports in the reviewed candidate env"
-grep -Fq 'omnia-prod-generation-report-worker' "${runbook}" \
-  || fail "runbook does not account for the generation report worker"
-grep -Fq 'report-worker-image-id.txt' "${runbook}" \
-  || fail "runbook does not capture the generation report worker image"
-grep -Fq 'Keep migration `0047` applied' "${runbook}" \
-  || fail "runbook does not preserve the additive observer migration"
-grep -Fq 'DEV_GENERATION_TELEGRAM_REPORTS false' "${runbook}" \
-  || fail "runbook does not document the pre-public kill switch"
+  || fail "runbook does not persist the 0048 rollback compatibility migration"
 grep -Fq \
-  '/app/.venv/bin/python /app/scripts/dev_generation_telegram_acceptance.py' \
+  'install -m 600 apps/api/migrations/versions/0048_remove_generation_telegram_reports.py "${compat_migration}"' \
   "${runbook}" \
-  || fail "runbook does not use the revision-tagged API image for acceptance"
-if grep -Fq 'uv run python scripts/dev_generation_telegram_acceptance.py' "${runbook}"; then
-  fail "runbook relies on an unverified host API environment for acceptance"
+  || fail "runbook does not install the 0048 rollback compatibility migration"
+grep -Fq -- \
+  '-v "${compat_migration}:/app/migrations/versions/0048_remove_generation_telegram_reports.py:ro"' \
+  "${runbook}" \
+  || fail "runbook does not preflight the rollback image with the 0048 shim"
+grep -Fq -- '--name "$preflight_api"' "${runbook}" \
+  || fail "runbook does not start the rollback API image during preflight"
+grep -Fq 'http://127.0.0.1:8000/health' "${runbook}" \
+  || fail "runbook does not health-probe the rollback API preflight"
+grep -Fq 'docker logs "$preflight_api"' "${runbook}" \
+  || fail "runbook does not capture rollback API startup failure logs"
+grep -Fq \
+  'docker compose --env-file "$full_env" -f "$compose_file" ps -q "$service_name"' \
+  "${runbook}" \
+  || fail "runbook does not scope env verification to platform Compose services"
+if grep -Fq 'for container_id in $(docker ps -q)' "${runbook}"; then
+  fail "runbook scans unrelated user runtime containers"
 fi
-grep -Fq 'config --services' "${runbook}" \
-  || fail "rollback does not detect whether the old revision owns the report worker"
+for removed_key in \
+  DEV_GENERATION_TELEGRAM_REPORTS \
+  TELEGRAM_BOT_TOKEN \
+  TELEGRAM_CHAT_ID; do
+  grep -Fq 'bash "${removal_env_tool}" "${candidate_full_env}" '"${removed_key}" \
+    "${runbook}" \
+    || fail "runbook does not remove ${removed_key} through the protected candidate"
+done
+grep -Fq "to_regclass('public.generation_telegram_reports') IS NULL" "${runbook}" \
+  || fail "runbook does not prove the observer table is absent"
+grep -Fq 'gh secret delete TELEGRAM_BOT_TOKEN --env production' "${runbook}" \
+  || fail "runbook does not remove the production-environment bot secret"
+grep -Fq 'gh secret delete TELEGRAM_CHAT_ID --env production' "${runbook}" \
+  || fail "runbook does not remove the production-environment chat secret"
+grep -Fq 'BotFather' "${runbook}" \
+  || fail "runbook does not require manual bot token revocation"
+grep -Fq 'Never run an Alembic downgrade' "${runbook}" \
+  || fail "runbook permits destructive schema downgrade"
 for focused_test in \
   tests/test_creator_privilege_migration.py \
-  tests/test_generation_telegram_delivery.py \
-  tests/test_generation_telegram_reports.py \
-  tests/test_generation_telegram_preview.py \
-  tests/test_generation_report_worker.py \
-  tests/test_generation_report_compose.py \
-  tests/test_dev_generation_telegram_acceptance.py; do
+  tests/test_generation_telegram_removal_migration.py \
+  tests/test_telegram_reporting_removed.py; do
   grep -Fq "${focused_test}" "${gate}" \
     || fail "release gate omits ${focused_test}"
 done
-
-report_remove_line="$(grep -nF \
-  'docker rm -f omnia-prod-generation-report-worker' "${runbook}" \
-  | tail -1 | cut -d: -f1)"
-rollback_checkout_line="$(grep -nF \
-  'git checkout --detach "${ROLLBACK_SHA}"' "${runbook}" \
-  | tail -1 | cut -d: -f1)"
-rollback_env_restore_line="$(grep -nF \
-  'mv -f "${rollback_full_candidate}" "${full_env}"' "${runbook}" \
-  | tail -1 | cut -d: -f1)"
-[[ -n "${report_remove_line}" && -n "${rollback_checkout_line}" ]] \
-  || fail "runbook omits report-worker rollback cleanup or checkout"
-((report_remove_line < rollback_checkout_line)) \
-  || fail "runbook removes the report worker after checking out the old revision"
-((rollback_env_restore_line < rollback_checkout_line)) \
-  || fail "runbook restores the protected env after checking out the old revision"
-rollback_report_restore_line="$(grep -nF 'config --services' "${runbook}" \
-  | tail -1 | cut -d: -f1)"
-((rollback_checkout_line < rollback_report_restore_line)) \
-  || fail "runbook checks old-revision report-worker support before checkout"
-
-# A rollback retry may start from an old checkout with no report-worker service
-# or release helpers. Stable container-name cleanup and the persisted bundle
-# must still be sufficient from a clean shell.
-old_checkout="${test_root}/old-revision-without-report-worker"
-runtime_bin="${test_root}/runtime-bin"
-rollback_docker_calls="${test_root}/rollback-docker-calls.log"
-mkdir -p "${old_checkout}" "${runtime_bin}"
-cat >"${runtime_bin}/docker" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${ROLLBACK_DOCKER_CALLS}"
-[[ "$*" == "rm -f omnia-prod-generation-report-worker" ]]
-EOF
-chmod +x "${runtime_bin}/docker"
-if ! env -i \
-  PATH="${runtime_bin}:/usr/bin:/bin" \
-  ROLLBACK_DOCKER_CALLS="${rollback_docker_calls}" \
-  bash -c '
-    set -euo pipefail
-    cd "$1"
-    test ! -e infra/release/rollback-manifest.sh
-    test ! -e apps/llm-gateway/deploy/full/docker-compose.yml
-    docker rm -f omnia-prod-generation-report-worker
-  ' _ "${old_checkout}"; then
-  fail "rollback cleanup required the new Compose service or checkout helpers"
+for ci_migration_test in \
+  tests/test_generation_telegram_removal_migration.py \
+  tests/test_migrations_single_head.py; do
+  grep -Fq "${ci_migration_test}" "${ci_workflow}" \
+    || fail "CI omits ${ci_migration_test}"
+done
+if grep -Fq 'DEV_GENERATION_TELEGRAM_REPORTS true' "${runbook}"; then
+  fail "runbook still enables the removed observer"
 fi
-grep -Fxq 'rm -f omnia-prod-generation-report-worker' "${rollback_docker_calls}" \
-  || fail "rollback did not remove the report worker by stable container name"
+if grep -Fq 'dev_generation_telegram_acceptance.py' "${runbook}"; then
+  fail "runbook still invokes the removed observer acceptance"
+fi
+if grep -Fq 'up -d --no-deps generation-report-worker' "${runbook}"; then
+  fail "runbook still rolls out the removed report worker"
+fi
 
 release_sha=0123456789abcdef0123456789abcdef01234567
 rollback_sha=89abcdef0123456789abcdef0123456789abcdef
-printf 'OMNIA_RELEASE_SHA=old\n' >"${rollback_candidate}"
+printf 'OMNIA_RELEASE_SHA=old\nTELEGRAM_CHAT_ID=old\n' >"${rollback_candidate}"
 bash "${runtime_manifest}" write \
   "${rollback_pointer}" \
   "${rollback_record}" \
@@ -224,6 +257,7 @@ if ! env -i PATH="${PATH}" bash -c '
   expected_rollback="$7"
   updater="$8"
   candidate="$9"
+  remover="${10}"
   test "$(bash "${tool}" read "${pointer}" release_record)" = "${expected_record}"
   test "$(bash "${tool}" read "${pointer}" full_env_backup)" = "${expected_full}"
   test "$(bash "${tool}" read "${pointer}" orchestrator_env_backup)" = "${expected_orchestrator}"
@@ -231,6 +265,8 @@ if ! env -i PATH="${PATH}" bash -c '
   test "$(bash "${tool}" read "${pointer}" rollback_sha)" = "${expected_rollback}"
   bash "${updater}" "${candidate}" OMNIA_RELEASE_SHA "${expected_rollback}" >/dev/null
   grep -Fxq "OMNIA_RELEASE_SHA=${expected_rollback}" "${candidate}"
+  bash "${remover}" "${candidate}" TELEGRAM_CHAT_ID >/dev/null
+  ! grep -Eq '^TELEGRAM_CHAT_ID=' "${candidate}"
 ' _ \
   "${runtime_manifest}" \
   "${rollback_pointer}" \
@@ -240,7 +276,8 @@ if ! env -i PATH="${PATH}" bash -c '
   "${release_sha}" \
   "${rollback_sha}" \
   "${runtime_updater}" \
-  "${rollback_candidate}"; then
+  "${rollback_candidate}" \
+  "${runtime_remover}"; then
   fail "rollback bundle was not recoverable from a clean shell after checkout"
 fi
 

@@ -40,16 +40,12 @@ jobs:
           PRODUCTION_CANARY_EMAIL: ${{ secrets.PRODUCTION_CANARY_EMAIL }}
           PRODUCTION_CANARY_PASSWORD: ${{ secrets.PRODUCTION_CANARY_PASSWORD }}
           PRODUCTION_EXPECTED_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_RELEASE_SHA }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
           for name in \
             PRODUCTION_CANARY_EMAIL \
             PRODUCTION_CANARY_PASSWORD \
-            PRODUCTION_EXPECTED_RELEASE_SHA \
-            TELEGRAM_BOT_TOKEN \
-            TELEGRAM_CHAT_ID; do
+            PRODUCTION_EXPECTED_RELEASE_SHA; do
             if [[ -z "${!name}" ]]; then
               echo "::error::${name} is not configured"
               exit 1
@@ -124,11 +120,3 @@ jobs:
                 state: "closed",
               });
             }
-
-      - name: Report generation canary to Telegram
-        if: always()
-        env:
-          PRODUCTION_CANARY_RESULT_FILE: ${{ runner.temp }}/production-canary-result.json
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python3 infra/monitoring/telegram_generation_report.py
