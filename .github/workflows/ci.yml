@@ -77,7 +77,9 @@ jobs:
           tests/test_projects_delete.py
           tests/test_project_memory.py
           tests/test_production_canary.py
-          tests/test_telegram_generation_report.py
+          tests/test_generation_telegram_removal_migration.py
+          tests/test_migrations_single_head.py
+          tests/test_telegram_reporting_removed.py
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest
