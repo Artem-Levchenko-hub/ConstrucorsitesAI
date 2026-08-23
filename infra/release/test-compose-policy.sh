@@ -8,6 +8,7 @@ fi
 
 repo_root="$(git rev-parse --show-toplevel)"
 compose_file="${repo_root}/apps/llm-gateway/deploy/full/docker-compose.yml"
+env_example="${repo_root}/apps/llm-gateway/deploy/full/.env.example"
 rendered="$(mktemp)"
 blank_env="$(mktemp)"
 chmod 600 "${blank_env}"
@@ -37,8 +38,8 @@ services = document["services"]
 api = services["api"]["environment"]
 worker = services["worker"]["environment"]
 
-assert api["USE_PROJECT_MEMORY"] == "false"
-assert worker["USE_PROJECT_MEMORY"] == "false"
+assert api["USE_PROJECT_MEMORY"] == "true"
+assert worker["USE_PROJECT_MEMORY"] == "true"
 assert api["ACCEPTANCE_GAUNTLET_REFERENCE_GATE"] == "false"
 assert worker["ACCEPTANCE_GAUNTLET_REFERENCE_GATE"] == "false"
 assert api["REFERENCE_CEILING_ENFORCED"] == "false"
@@ -50,5 +51,7 @@ for service in services.values():
     assert "TELEGRAM_BOT_TOKEN" not in environment
     assert "TELEGRAM_CHAT_ID" not in environment
 PY
+
+grep -qx 'USE_PROJECT_MEMORY=true' "${env_example}"
 
 echo "rendered production Compose policy passed"

@@ -1,9 +1,10 @@
-# Production release and Telegram reporting removal
+# Production release: reporting removal and project memory
 
 This is the canonical production path for the release that removes both Omnia
 generation-reporting integrations. It preserves the public build/edit canary
 and GitHub incident lifecycle. It removes the observer runtime, its table,
 Compose worker, host environment keys, and GitHub secrets.
+It also enables bounded, versioned project memory for the API and worker.
 
 Never print secret values. Inspect and delete Telegram configuration by key
 name only. Never run an Alembic downgrade: revision 0048 deletes observer-only
@@ -204,10 +205,10 @@ cleanup_preflight
 trap - EXIT
 ~~~
 
-## 6. Build and render the removal release
+## 6. Build and render the release
 
-Create permission-preserving candidates. The first rollout changes only release
-identity; host secret keys are removed after exact health is established.
+Create permission-preserving candidates. This rollout updates release identity
+and activates project memory; host secret keys are removed after exact health.
 
 ~~~bash
 compose_file=apps/llm-gateway/deploy/full/docker-compose.yml
@@ -223,6 +224,7 @@ trap cleanup_candidates EXIT
 cp -p "$full_env" "$candidate_full_env"
 cp -p "$orchestrator_env" "$candidate_orchestrator_env"
 bash infra/release/update-env-value.sh "$candidate_full_env" OMNIA_RELEASE_SHA "$RELEASE_SHA"
+bash infra/release/update-env-value.sh "$candidate_full_env" USE_PROJECT_MEMORY true
 bash infra/release/update-env-value.sh "$candidate_orchestrator_env" OMNIA_RELEASE_SHA "$RELEASE_SHA"
 
 bash infra/release/test-compose-policy.sh
@@ -231,6 +233,9 @@ docker compose --env-file "$candidate_full_env" -f "$compose_file" config --form
 jq -e '.services | has("generation-report-worker") | not' "$rendered_compose" >/dev/null
 for service_name in api worker web; do
   test "$(jq -r --arg service "$service_name" '.services[$service].environment.OMNIA_RELEASE_SHA' "$rendered_compose")" = "$RELEASE_SHA"
+done
+for service_name in api worker; do
+  test "$(jq -r --arg service "$service_name" '.services[$service].environment.USE_PROJECT_MEMORY' "$rendered_compose")" = true
 done
 for removed_name in DEV_GENERATION_TELEGRAM_REPORTS TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
   jq -e --arg name "$removed_name" 'all(.services[]; ((.environment // {}) | has($name) | not))' "$rendered_compose" >/dev/null
