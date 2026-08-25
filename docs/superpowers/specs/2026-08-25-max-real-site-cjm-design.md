@@ -6,6 +6,22 @@ Create a standalone interactive customer-journey prototype that looks and behave
 
 The result is not a technical architecture map. It is a product experience that owners can click through while contextual notes explain why every step exists, what the customer understands, and how the path recovers from errors.
 
+### 1.1 Conversion and delight principles
+
+The journey optimizes for the shortest honest path to the first generation and an informed subscription decision:
+
+- Show a concrete phone result before registration so the user understands the promised outcome first.
+- Ask for one decision per screen and only information required by the next step.
+- Registration uses email and password only; business details appear later, when their purpose is visible.
+- The brief has no more than five required business questions and uses examples instead of professional terminology.
+- Recommend a plan only after showing a personalized future-app summary. Explain the recommendation and keep all plans equally selectable.
+- Never preselect a paid plan, marketing consent, or renewal; never use artificial scarcity, countdowns, hidden limits, or guilt copy.
+- Free starts without a card. Paid conversion comes from visible product value, relevant capabilities, and a transparent order summary.
+- Preserve every completed answer across validation and recovery so an error never feels like punishment.
+- Use restrained delight at three earned moments: plan activation, first usable preview, and verified publication. Celebration never blocks the next action.
+- Each screen has one dominant CTA with a concrete result verb; secondary actions remain visibly secondary.
+- Notes explain the customer benefit and business rationale without exposing implementation details.
+
 ## 2. Deliverables
 
 - New standalone artifact: `C:\Users\79133\Downloads\omnia-max-cjm-real-site.html`.
@@ -115,6 +131,7 @@ Do not expose source code, APIs, server state, internal services, LLM names, dat
 - Compact explanation of what Omnia creates and what remains under the owner’s control.
 - CTA: “Начать со своей задачи”.
 - Outcome: value is understood before requesting account data.
+- Delight moment: the phone preview reacts to the selected business example and makes the future result feel personal without pretending it has already been generated.
 
 ### Phase B — Account and buyer
 
@@ -152,6 +169,7 @@ Do not expose source code, APIs, server state, internal services, LLM names, dat
 - Omnia returns a plain-language summary: proposed screens, customer action, source materials, integrations, and launch assumptions.
 - Every block is editable before purchase.
 - Outcome: the user sees what will be generated and corrects misunderstandings early.
+- Conversion rule: show “why this plan may fit” only after the user approves this summary; do not interrupt the brief with pricing.
 
 #### 8. Plan selection
 
@@ -189,6 +207,7 @@ Do not expose source code, APIs, server state, internal services, LLM names, dat
 - Paid branch: exact amount for the current period, renewal state, receipt address, and demo payment action.
 - A failed payment keeps the brief, buyer, plan, and accepted document version; the user can retry, change method, or switch to Free. Switching plans requires a fresh plan summary and contract acceptance.
 - Outcome: an active plan with an understandable confirmation.
+- Delight moment: a compact success transition confirms the chosen plan and immediately offers the next productive action; it does not trap the user in a modal.
 
 ### Phase E — First creation
 
@@ -212,6 +231,7 @@ Do not expose source code, APIs, server state, internal services, LLM names, dat
 - Clearly distinguish owner-provided materials, platform components, third-party licenses, and generated output.
 - Do not promise absolute uniqueness or automatic exclusive rights to fully machine-generated output.
 - Outcome: the owner can review and correct before publication.
+- Delight moment: reveal the first usable phone preview as the reward for completing the setup, then place correction and publication actions next to it.
 
 ### Phase F — Publication
 
@@ -228,6 +248,7 @@ Do not expose source code, APIs, server state, internal services, LLM names, dat
 - Failure offers retry or rollback to the last ready version.
 - Success shows the public MAX URL and next recommended action.
 - Outcome: a verified published result, not a vague “done” badge.
+- Delight moment: show the live URL, a small success animation that respects reduced motion, and one useful next action.
 
 ### Phase G — After launch
 
