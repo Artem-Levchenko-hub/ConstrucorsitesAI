@@ -8,6 +8,11 @@ const source = readFileSync(
   "utf8",
 );
 
+const launchVisual = source.slice(
+  source.indexOf("export function LaunchVisual"),
+  source.indexOf("export function PartnerVisual"),
+);
+
 const partnerVisual = source.slice(
   source.indexOf("export function PartnerVisual"),
   source.indexOf("export function DashboardVisual"),
@@ -18,5 +23,15 @@ describe("MAX guide visuals", () => {
     expect(partnerVisual).toContain('bg-[#121519] text-white');
     expect(partnerVisual).not.toMatch(/bg-\[#(?:f4f5f7|f7f8fa|eef0f3)\]/i);
     expect(partnerVisual).not.toContain('text-[#15171a]');
+  });
+
+  it("keeps all six launch stages visible", () => {
+    expect(launchVisual).toContain("Безопасный вход MAX");
+    expect(launchVisual).toContain("Шаг 5 из 6");
+  });
+
+  it("shows the URL-first MAX Partner path without an early token step", () => {
+    expect(partnerVisual).toContain("Токен не требуется");
+    expect(partnerVisual).not.toContain("Секрет бота");
   });
 });
