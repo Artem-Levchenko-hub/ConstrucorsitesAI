@@ -369,7 +369,6 @@ export function LaunchVisual() {
     ["Сборка проверена", true],
     ["Приложение заполнено", true],
     ["Юридические данные", true],
-    ["Безопасный вход MAX", true],
     ["Production опубликован", false],
     ["URL добавлен в MAX", false],
   ] as const;
@@ -392,11 +391,11 @@ export function LaunchVisual() {
             </div>
           </div>
           <aside className="w-[36%] border-l border-[#2b2d32] bg-[#191b20] p-[4%]">
-            <div className="flex items-center justify-between"><p className="text-[11px] font-semibold">Запуск в MAX</p><span className="text-[9px] font-semibold">67%</span></div>
-            <div className="mt-2 h-1.5 rounded-full bg-[#25272b]"><div className="h-full w-2/3 rounded-full bg-[#4f81f7]" /></div>
-            <div className="mt-[7%] border-l-2 border-[#4f81f7] pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#828491]">Шаг 5 из 6</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#828491]">Получите постоянный HTTPS-адрес.</p></div>
+            <div className="flex items-center justify-between"><p className="text-[11px] font-semibold">Запуск в MAX</p><span className="text-[9px] font-semibold">60%</span></div>
+            <div className="mt-2 h-1.5 rounded-full bg-[#25272b]"><div className="h-full w-3/5 rounded-full bg-[#4f81f7]" /></div>
+            <div className="mt-[7%] border-l-2 border-[#4f81f7] pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#828491]">Шаг 4 из 5</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#828491]">Получите постоянный HTTPS-адрес.</p></div>
             <div className="mt-[7%] space-y-1 border-y border-[#25272b] py-2">
-              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 4 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 4 ? "bg-[#4f81f7]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-success-fg" : index === 4 ? "border-[#4f81f7] bg-[#4f81f7] text-[#121519]" : "border-[#2b2d32] text-[#828491]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
+              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 3 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 3 ? "bg-[#4f81f7]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-success-fg" : index === 3 ? "border-[#4f81f7] bg-[#4f81f7] text-[#121519]" : "border-[#2b2d32] text-[#828491]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
             </div>
             <div className="mt-[7%] grid grid-cols-2 gap-1.5"><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Приложение</button><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Запуск в MAX</button></div>
           </aside>
@@ -423,9 +422,7 @@ export function PartnerVisual() {
         <div className="min-w-0 flex-1 p-[5%]">
           <div className="flex items-center justify-between"><div><p className="text-[8px] text-[#9fa1b1]">Чат-боты / Кофе рядом</p><h3 className="mt-1 text-[18px] font-semibold">Расширенные настройки</h3></div><span className="rounded-full bg-[#248a4b]/10 px-2.5 py-1 text-[7px] font-semibold text-success-fg">Бот создан</span></div>
           <div className="mt-[5%] rounded-xl border border-[#2b2d32] bg-[#191b20] p-[5%] shadow-[0_8px_30px_rgba(0,0,0,.22)]">
-            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Секрет бота</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Для проверки подписанного запуска и Bot API.</p></div><button data-guide-target="partner-copy" className="flex items-center gap-1 rounded-md border border-[#2b2d32] px-2 py-1.5 text-[7px]"><Copy className="size-3" />Копировать</button></div>
-            <div className="mt-2 rounded-md border border-[#2b2d32] bg-[#121519] px-3 py-2 font-mono text-[7px] text-[#9fa1b1]">••••••••••••••••••••••••</div>
-            <div className="my-[5%] h-px bg-[#2b2d32]" />
+            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Ссылка на мини-приложение</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Вставьте production URL из Omnia. Токен для этого не требуется.</p></div><button data-guide-target="partner-copy" className="flex items-center gap-1 rounded-md border border-[#2b2d32] px-2 py-1.5 text-[7px]"><Copy className="size-3" />Копировать</button></div>
             <label className="block text-[10px] font-semibold">Ссылка на мини-приложение</label>
             <div className="mt-2 flex gap-2"><div data-guide-target="partner-url" className="min-w-0 flex-1 truncate rounded-md border-2 border-[#4f81f7] bg-[#121519] px-3 py-2 font-mono text-[7px]">https://app-42.lead-generator.ru</div><button className="rounded-md border border-[#2b2d32] px-3 text-[7px]">Проверить</button></div>
             <div className="mt-[4%]"><p className="text-[9px] font-semibold">Кнопка запуска</p><div className="mt-2 flex gap-2 text-[7px]"><button className="rounded-full border-2 border-[#4f81f7] bg-[#1c1e23] px-3 py-1.5 font-semibold text-[#6a95fa]">Открыть</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Старт</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Играть</button></div></div>
