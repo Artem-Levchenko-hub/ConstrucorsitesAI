@@ -54,11 +54,11 @@ export function PasswordResetForm({ token }: { token: string }) {
   if (!token) {
     return (
       <div className="text-center">
-        <span className="mx-auto grid size-11 place-items-center rounded-[8px] bg-[#c63d35]/10 text-[#c63d35]">
+        <span className="mx-auto grid size-11 place-items-center rounded-[8px] bg-[#c63d35]/10 text-danger-fg">
           <AlertTriangle className="size-5" />
         </span>
         <p className="mt-4 text-sm font-medium">Ссылка недействительна</p>
-        <p className="mt-2 text-xs leading-5 text-[#6d6962]">
+        <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
           Запросите новую ссылку восстановления — старая могла истечь или уже использоваться.
         </p>
         <Button asChild className="mt-5">

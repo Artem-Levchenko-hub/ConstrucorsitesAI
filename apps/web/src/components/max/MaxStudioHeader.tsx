@@ -26,12 +26,12 @@ export function MaxStudioHeader({
   const initial = email.slice(0, 1).toUpperCase();
 
   return (
-    <header data-light-shell className="flex h-16 shrink-0 items-center justify-between border-b border-[#d8d4cb] bg-[#fcfbf7]/95 px-5 text-[#171716] backdrop-blur-xl sm:px-8">
+    <header data-product-shell className="flex h-16 shrink-0 items-center justify-between border-b border-[#2b2d32] bg-[#191b20]/95 px-5 text-white backdrop-blur-xl sm:px-8">
       <div className="flex min-w-0 items-center gap-3">
         <BrandMark href="/max" label="MAX Studio" />
         {compact && (
-          <span className="hidden items-center gap-2 text-xs text-[#8d887f] sm:flex">
-            <span className="h-4 w-px bg-[#d8d4cb]" />
+          <span className="hidden items-center gap-2 text-xs text-[#828491] sm:flex">
+            <span className="h-4 w-px bg-[#2b2d32]" />
             <span>Редактор</span>
           </span>
         )}
@@ -42,7 +42,7 @@ export function MaxStudioHeader({
           asChild
           variant="ghost"
           size="sm"
-          className="hidden text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716] sm:inline-flex"
+          className="hidden text-[#9fa1b1] hover:bg-[#121519] hover:text-white sm:inline-flex"
         >
           <Link href="/projects">
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -55,12 +55,12 @@ export function MaxStudioHeader({
             <Button
               variant="ghost"
               size="sm"
-              className="gap-2 px-1.5 text-[#171716] hover:bg-[#f5f3ee]"
+              className="gap-2 px-1.5 text-white hover:bg-[#121519]"
             >
               <Avatar className="h-8 w-8">
                 <AvatarFallback>{initial}</AvatarFallback>
               </Avatar>
-              <ChevronDown className="h-3.5 w-3.5 text-[#8d887f]" />
+              <ChevronDown className="h-3.5 w-3.5 text-[#828491]" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">

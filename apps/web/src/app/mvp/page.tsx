@@ -34,17 +34,17 @@ const statusMeta: Record<
   in_progress: {
     label: "В работе",
     icon: LoaderCircle,
-    className: "border-[#f15a38] bg-[#f15a38]/10 text-[#c84528]",
+    className: "border-[#4f81f7] bg-[#4f81f7]/10 text-[#6a95fa]",
   },
   todo: {
     label: "Дальше",
     icon: Circle,
-    className: "border-[#aaa59b] text-[#aaa59b]",
+    className: "border-[#828491] text-[#828491]",
   },
   external: {
     label: "Нужен внешний доступ",
     icon: Clock3,
-    className: "border-[#b98618] bg-[#e8c547]/15 text-[#8a650e]",
+    className: "border-[#6a95fa] bg-[#e8c547]/15 text-[#4f81f7]",
   },
 };
 
@@ -54,21 +54,21 @@ export default function MvpChecklistPage() {
   const progress = Math.round((completed / items.length) * 100);
 
   return (
-    <main className="min-h-screen bg-[#f5f3ee] text-[#171716]">
-      <header className="border-b border-[#d8d4cb] bg-[#fcfbf7]">
+    <main className="min-h-screen bg-[#121519] text-white">
+      <header className="border-b border-[#2b2d32] bg-[#191b20]">
         <div className="mx-auto flex h-18 max-w-[1200px] items-center justify-between px-5 sm:px-8">
           <div className="[&>a]:min-h-11">
             <BrandMark />
           </div>
           <div className="flex items-center gap-4 text-xs font-medium sm:text-sm">
             <Link
-              className="inline-flex min-h-11 items-center text-[#6d6962] hover:text-[#171716]"
+              className="inline-flex min-h-11 items-center text-[#9fa1b1] hover:text-white"
               href="/otchet/"
             >
               Полный отчёт
             </Link>
             <Link
-              className="inline-flex min-h-11 items-center gap-2 text-[#c84528]"
+              className="inline-flex min-h-11 items-center gap-2 text-[#6a95fa]"
               href="/"
             >
               <ArrowLeft className="size-4" />
@@ -78,10 +78,10 @@ export default function MvpChecklistPage() {
         </div>
       </header>
 
-      <section className="border-b border-[#d8d4cb] bg-[#171716] text-white">
+      <section className="border-b border-[#2b2d32] bg-[#121519] text-white">
         <div className="mx-auto grid max-w-[1200px] gap-10 px-5 py-16 sm:px-8 sm:py-20 lg:grid-cols-[1fr_320px] lg:items-end">
           <div>
-            <p className="omnia-kicker text-[#f15a38]">Публичный трекер продукта</p>
+            <p className="omnia-kicker text-[#4f81f7]">Публичный трекер продукта</p>
             <h1 className="mt-5 max-w-[820px] text-[42px] font-semibold leading-[1] tracking-[-.05em] sm:text-[64px]">
               Путь до полностью рабочего MVP
             </h1>
@@ -102,7 +102,7 @@ export default function MvpChecklistPage() {
             </div>
             <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
               <div
-                className="h-full rounded-full bg-[#f15a38]"
+                className="h-full rounded-full bg-[#4f81f7]"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -119,24 +119,24 @@ export default function MvpChecklistPage() {
               <section
                 key={section.id}
                 id={section.id}
-                className="overflow-hidden rounded-[14px] border border-[#d8d4cb] bg-[#fcfbf7]"
+                className="overflow-hidden rounded-[14px] border border-[#2b2d32] bg-[#191b20]"
               >
-                <div className="grid gap-5 border-b border-[#d8d4cb] p-5 sm:p-7 lg:grid-cols-[90px_1fr_auto] lg:items-start">
-                  <p className="font-mono text-sm text-[#f15a38]">{section.number}</p>
+                <div className="grid gap-5 border-b border-[#2b2d32] p-5 sm:p-7 lg:grid-cols-[90px_1fr_auto] lg:items-start">
+                  <p className="font-mono text-sm text-[#4f81f7]">{section.number}</p>
                   <div>
                     <h2 className="text-2xl font-semibold tracking-[-.03em]">
                       {section.title}
                     </h2>
-                    <p className="mt-2 max-w-[720px] text-sm leading-6 text-[#6d6962]">
+                    <p className="mt-2 max-w-[720px] text-sm leading-6 text-[#9fa1b1]">
                       {section.description}
                     </p>
                   </div>
-                  <p className="text-xs font-medium tabular-nums text-[#8d887f]">
+                  <p className="text-xs font-medium tabular-nums text-[#828491]">
                     {sectionDone} / {section.items.length}
                   </p>
                 </div>
 
-                <ol className="divide-y divide-[#e7e3da]">
+                <ol className="divide-y divide-[#25272b]">
                   {section.items.map((item) => {
                     const meta = statusMeta[item.status];
                     const Icon = meta.icon;
@@ -156,16 +156,16 @@ export default function MvpChecklistPage() {
                         </span>
                         <div>
                           <h3 className="text-sm font-semibold">{item.title}</h3>
-                          <p className="mt-1 text-xs leading-5 text-[#6d6962]">
+                          <p className="mt-1 text-xs leading-5 text-[#9fa1b1]">
                             {item.detail}
                           </p>
                         </div>
                         <div className="pl-9 text-left sm:pl-0 sm:text-right">
-                          <p className="text-[10px] font-semibold uppercase tracking-[.12em] text-[#8d887f]">
+                          <p className="text-[10px] font-semibold uppercase tracking-[.12em] text-[#828491]">
                             {meta.label}
                           </p>
                           {item.completedAt && (
-                            <p className="mt-1 text-[11px] text-[#248a4b]">
+                            <p className="mt-1 text-[11px] text-success-fg">
                               {item.completedAt}
                             </p>
                           )}
@@ -179,8 +179,8 @@ export default function MvpChecklistPage() {
           })}
         </div>
 
-        <section className="mt-8 rounded-[14px] bg-[#171716] p-6 text-white sm:p-8">
-          <p className="omnia-kicker text-[#f15a38]">Критерий финиша</p>
+        <section className="mt-8 rounded-[14px] bg-[#121519] p-6 text-white sm:p-8">
+          <p className="omnia-kicker text-[#4f81f7]">Критерий финиша</p>
           <h2 className="mt-3 text-2xl font-semibold tracking-[-.03em]">
             Новый пользователь проходит путь без ручного исправления данных
           </h2>
@@ -191,7 +191,7 @@ export default function MvpChecklistPage() {
           </p>
           <Link
             href="/max/register"
-            className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-[#f15a38] px-5 text-sm font-semibold text-white hover:bg-[#d94929]"
+            className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-[#4f81f7] px-5 text-sm font-semibold text-[#121519] hover:bg-[#6a95fa]"
           >
             Открыть MAX Studio
             <ExternalLink className="size-4" />

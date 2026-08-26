@@ -90,10 +90,10 @@ export function AdminVerificationPanel() {
     reviews.error.status === 403
   ) {
     return (
-      <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-8 text-center">
-        <CircleAlert className="mx-auto size-7 text-[#c63d35]" />
+      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
+        <CircleAlert className="mx-auto size-7 text-danger-fg" />
         <h2 className="mt-4 text-lg font-semibold">Нет административного доступа</h2>
-        <p className="mt-2 text-sm text-[#6d6962]">
+        <p className="mt-2 text-sm text-[#9fa1b1]">
           Этот аккаунт не имеет роли администратора.
         </p>
       </section>
@@ -102,7 +102,7 @@ export function AdminVerificationPanel() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-3 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2">
           {(["pending", "all"] as const).map((value) => (
             <button
@@ -112,8 +112,8 @@ export function AdminVerificationPanel() {
               className={cn(
                 "h-9 rounded-[8px] border px-3 text-xs",
                 filter === value
-                  ? "border-[#171716] bg-[#171716] text-white"
-                  : "border-[#d8d4cb] text-[#6d6962]",
+                  ? "border-[#25272b] bg-[#121519] text-white"
+                  : "border-[#2b2d32] text-[#9fa1b1]",
               )}
             >
               {value === "pending" ? "Ожидают" : "Все заявки"}
@@ -121,25 +121,25 @@ export function AdminVerificationPanel() {
           ))}
         </div>
         <label className="relative block w-full sm:w-[300px]">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#aaa59b]" />
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Название, ИНН или email"
-            className="border-[#d8d4cb] bg-white pl-9"
+            className="border-[#2b2d32] bg-[#191b20] pl-9"
           />
         </label>
       </div>
 
       {reviews.isLoading ? (
         <div className="grid min-h-[260px] place-items-center">
-          <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+          <Loader2 className="size-6 animate-spin text-[#4f81f7]" />
         </div>
       ) : reviews.isError ? (
-        <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-8 text-center">
-          <CircleAlert className="mx-auto size-7 text-[#c63d35]" />
+        <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
+          <CircleAlert className="mx-auto size-7 text-danger-fg" />
           <h2 className="mt-4 text-lg font-semibold">Не удалось загрузить очередь</h2>
-          <p className="mt-2 text-sm text-[#6d6962]">
+          <p className="mt-2 text-sm text-[#9fa1b1]">
             {reviews.error instanceof Error
               ? reviews.error.message
               : "Повторите попытку"}
@@ -149,10 +149,10 @@ export function AdminVerificationPanel() {
           </Button>
         </section>
       ) : visible.length === 0 ? (
-        <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-10 text-center">
-          <Check className="mx-auto size-7 text-[#248a4b]" />
+        <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-10 text-center">
+          <Check className="mx-auto size-7 text-success-fg" />
           <h2 className="mt-4 text-lg font-semibold">Очередь пуста</h2>
-          <p className="mt-2 text-sm text-[#6d6962]">
+          <p className="mt-2 text-sm text-[#9fa1b1]">
             Новых заявок на ручную проверку сейчас нет.
           </p>
         </section>
@@ -161,11 +161,11 @@ export function AdminVerificationPanel() {
           {visible.map((item) => (
             <article
               key={item.id}
-              className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5 sm:p-6"
+              className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-6"
             >
               <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex min-w-0 gap-4">
-                  <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]">
+                  <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]">
                     <Building2 className="size-5" />
                   </span>
                   <div className="min-w-0">
@@ -175,20 +175,20 @@ export function AdminVerificationPanel() {
                         className={cn(
                           "rounded-full px-2.5 py-1 text-[10px] font-medium",
                           item.status === "verified"
-                            ? "bg-[#248a4b]/10 text-[#248a4b]"
+                            ? "bg-[#248a4b]/10 text-success-fg"
                             : item.status === "pending"
-                              ? "bg-[#e8c547]/15 text-[#745f16]"
-                              : "bg-[#c63d35]/10 text-[#c63d35]",
+                              ? "bg-[#e8c547]/15 text-[#e8c547]"
+                              : "bg-[#c63d35]/10 text-danger-fg",
                         )}
                       >
                         {statusLabels[item.status]}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm text-[#6d6962]">
+                    <p className="mt-2 text-sm text-[#9fa1b1]">
                       {kindLabels[item.kind]} · ИНН {item.inn}
                       {item.ogrn ? ` · ОГРН ${item.ogrn}` : ""}
                     </p>
-                    <p className="mt-1 text-xs text-[#8d887f]">
+                    <p className="mt-1 text-xs text-[#828491]">
                       Владелец: {item.owner_email} · Заявка от{" "}
                       {new Date(item.created_at).toLocaleDateString("ru-RU")}
                     </p>
@@ -205,7 +205,7 @@ export function AdminVerificationPanel() {
                         }))
                       }
                       placeholder="Комментарий к решению"
-                      className="border-[#d8d4cb] bg-white"
+                      className="border-[#2b2d32] bg-[#191b20]"
                     />
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <Button
@@ -218,7 +218,7 @@ export function AdminVerificationPanel() {
                             note: notes[item.inn],
                           })
                         }
-                        className="border-[#c63d35]/30 text-[#c63d35]"
+                        className="border-[#c63d35]/30 text-danger-fg"
                       >
                         <X className="size-4" />
                         Отклонить

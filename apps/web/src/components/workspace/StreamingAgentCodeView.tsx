@@ -161,7 +161,7 @@ export function StreamingAgentCodeView({
             className="flex items-center gap-1.5 py-1 pr-2 text-fg-tertiary"
           >
             <span className="w-3 shrink-0" />
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-amber-400/70" />
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-blue-400/70" />
             <span className="font-mono text-xs truncate">{node.name}</span>
           </div>
           {node.children.map((c) => renderNode(c, depth + 1))}
@@ -174,9 +174,9 @@ export function StreamingAgentCodeView({
     const glow = isCurrent && activeNow;
     const activeSel = node.path === activePath;
     // Activity accent: writing = accent (brand), reading = amber.
-    const dot = a.kind === "write" ? "bg-accent" : "bg-amber-400";
-    const ring = a.kind === "write" ? "ring-accent/50" : "ring-amber-400/50";
-    const tint = a.kind === "write" ? "bg-accent/10" : "bg-amber-400/10";
+    const dot = a.kind === "write" ? "bg-accent" : "bg-blue-400";
+    const ring = a.kind === "write" ? "ring-accent/50" : "ring-blue-400/50";
+    const tint = a.kind === "write" ? "bg-accent/10" : "bg-blue-400/10";
     return (
       <button
         key={node.path}
@@ -245,13 +245,13 @@ export function StreamingAgentCodeView({
             <span
               className={cn(
                 "h-1.5 w-1.5 rounded-full",
-                tip.kind === "write" ? "bg-accent" : "bg-amber-400",
+                tip.kind === "write" ? "bg-accent" : "bg-blue-400",
               )}
             />
             <span
               className={cn(
                 "font-mono text-[10px] uppercase tracking-wider",
-                tip.kind === "write" ? "text-accent" : "text-amber-400",
+                tip.kind === "write" ? "text-accent" : "text-blue-400",
               )}
             >
               {tip.status}
@@ -282,7 +282,7 @@ export function StreamingAgentCodeView({
         {/* Legend — what the colours mean (живая расшифровка, не серо). */}
         <div className="flex items-center gap-3 border-t border-border-subtle/60 px-3 py-1.5">
           <span className="flex items-center gap-1.5 text-[10px] font-mono text-fg-tertiary">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> читает
+            <span className="h-1.5 w-1.5 rounded-full bg-blue-400" /> читает
           </span>
           <span className="flex items-center gap-1.5 text-[10px] font-mono text-fg-tertiary">
             <span className="h-1.5 w-1.5 rounded-full bg-accent" /> пишет
@@ -310,7 +310,7 @@ export function StreamingAgentCodeView({
                   animate={{ opacity: 1 }}
                   className={cn(
                     "text-[10px] font-mono uppercase tracking-wider shrink-0",
-                    active.kind === "write" ? "text-accent" : "text-amber-400",
+                    active.kind === "write" ? "text-accent" : "text-blue-400",
                   )}
                 >
                   {active.kind === "write" ? "пишется…" : "читается…"}

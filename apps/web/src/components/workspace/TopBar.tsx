@@ -79,7 +79,7 @@ export function TopBar({
   const maxMode = workspaceMode === "max";
 
   return (
-    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#1e243f] bg-[#080a10]/95 px-5 backdrop-blur-xl sm:px-6">
+    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[#25272b] bg-[#121519]/95 px-5 backdrop-blur-xl sm:px-6">
       <div className="flex shrink-0 items-center gap-4">
         <BrandMark inverse href={maxMode ? "/max" : "/projects"} />
         {maxMode && (
@@ -186,7 +186,7 @@ export function TopBar({
               aria-label={`${tNav("account")}: ${user.email}`}
             >
               <Avatar className="h-7 w-7 ring-1 ring-white/20">
-                <AvatarFallback className="bg-[#f15a38] font-semibold text-white">
+                <AvatarFallback className="bg-accent font-semibold text-accent-fg">
                   {initial}
                 </AvatarFallback>
               </Avatar>

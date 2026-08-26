@@ -18,9 +18,8 @@ const localeSwitcher = readFileSync(
 
 describe("dark workspace top bar contrast", () => {
   it("keeps the inverse brand label readable", () => {
-    expect(brandMark).toContain(
-      'inverse ? "text-[#fcfbf7]" : "text-[#171716]"',
-    );
+    expect(brandMark).toContain('className="text-[18px] text-fg-primary"');
+    expect(brandMark).toContain("bg-accent text-accent-fg");
   });
 
   it("uses the dark language switcher treatment", () => {
@@ -33,7 +32,7 @@ describe("dark workspace top bar contrast", () => {
 
   it("renders a high-contrast account trigger in every state", () => {
     expect(topBar).toContain(
-      'className="bg-[#f15a38] font-semibold text-white"',
+      'className="bg-accent font-semibold text-accent-fg"',
     );
     expect(topBar).toContain("border-white/15 bg-white/[0.05]");
     expect(topBar).toContain("data-[state=open]:border-white/35");

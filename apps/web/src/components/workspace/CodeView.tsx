@@ -164,9 +164,9 @@ export function CodeView({
               )}
             />
             {isOpen ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
+              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-blue-400/80" />
             ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
+              <Folder className="h-3.5 w-3.5 shrink-0 text-blue-400/80" />
             )}
             <span className="font-mono text-xs truncate">{node.name}</span>
           </button>

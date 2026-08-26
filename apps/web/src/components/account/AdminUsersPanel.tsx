@@ -75,17 +75,17 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
   if (users.isLoading) {
     return (
       <div className="grid min-h-[280px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+        <Loader2 className="size-6 animate-spin text-[#4f81f7]" />
       </div>
     );
   }
 
   if (users.isError) {
     return (
-      <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-8 text-center">
-        <CircleAlert className="mx-auto size-7 text-[#c63d35]" />
+      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
+        <CircleAlert className="mx-auto size-7 text-danger-fg" />
         <h2 className="mt-4 text-lg font-semibold">Аккаунты не загрузились</h2>
-        <p className="mt-2 text-sm text-[#6d6962]">
+        <p className="mt-2 text-sm text-[#9fa1b1]">
           {users.error instanceof Error
             ? users.error.message
             : "Повторите попытку"}
@@ -103,15 +103,15 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-4">
+      <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-4">
         <label className="relative block">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#aaa59b]" />
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Email, организация или ИНН"
             aria-label="Поиск аккаунтов"
-            className="border-[#d8d4cb] bg-white pl-9"
+            className="border-[#2b2d32] bg-[#191b20] pl-9"
           />
         </label>
       </div>
@@ -123,7 +123,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
           return (
             <article
               key={user.id}
-              className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"
+              className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"
             >
               <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
                 <div className="flex min-w-0 gap-4">
@@ -131,8 +131,8 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                     className={cn(
                       "grid size-11 shrink-0 place-items-center rounded-[8px]",
                       user.is_admin
-                        ? "bg-[#f15a38]/10 text-[#f15a38]"
-                        : "bg-[#ece8df] text-[#6d6962]",
+                        ? "bg-[#4f81f7]/10 text-[#4f81f7]"
+                        : "bg-[#2b2d32] text-[#9fa1b1]",
                     )}
                   >
                     {user.is_admin ? (
@@ -147,7 +147,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                         {user.email}
                       </h2>
                       {user.is_admin && (
-                        <span className="rounded-full bg-[#f15a38]/10 px-2.5 py-1 text-[10px] font-medium text-[#c8472b]">
+                        <span className="rounded-full bg-[#4f81f7]/10 px-2.5 py-1 text-[10px] font-medium text-[#4f81f7]">
                           Администратор
                         </span>
                       )}
@@ -155,28 +155,28 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                         className={cn(
                           "rounded-full px-2.5 py-1 text-[10px] font-medium",
                           user.status === "active"
-                            ? "bg-[#248a4b]/10 text-[#248a4b]"
-                            : "bg-[#c63d35]/10 text-[#c63d35]",
+                            ? "bg-[#248a4b]/10 text-success-fg"
+                            : "bg-[#c63d35]/10 text-danger-fg",
                         )}
                       >
                         {statusLabel(user.status)}
                       </span>
                     </div>
-                    <p className="mt-2 text-xs leading-5 text-[#6d6962]">
+                    <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
                       Email:{" "}
                       {user.email_verified_at
                         ? "подтверждён"
                         : "не подтверждён"}{" "}
                       · Баланс: {Number(user.wallet_balance_rub).toLocaleString("ru-RU")} ₽
                     </p>
-                    <p className="text-xs leading-5 text-[#8d887f]">
+                    <p className="text-xs leading-5 text-[#828491]">
                       Создан {new Date(user.created_at).toLocaleDateString("ru-RU")}
                       {user.last_login_at
                         ? ` · Вход ${new Date(user.last_login_at).toLocaleDateString("ru-RU")}`
                         : " · Ещё не входил"}
                     </p>
                     {user.business && (
-                      <p className="mt-2 text-xs leading-5 text-[#6d6962]">
+                      <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
                         {user.business.legal_name} · ИНН {user.business.inn} ·{" "}
                         {user.business.status === "verified"
                           ? "организация подтверждена"
@@ -253,7 +253,7 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                     <Button
                       variant="outline"
                       disabled={pending || isSelf}
-                      className="border-[#c63d35]/30 text-[#c63d35]"
+                      className="border-[#c63d35]/30 text-danger-fg"
                       onClick={() =>
                         update.mutate({
                           user,

@@ -3,35 +3,35 @@
 /* Omnia product system — Figma 00 / Foundations. */
 
 @theme {
-  --color-bg-base: #f5f3ee;
-  --color-bg-elevated-1: #fcfbf7;
-  --color-surface: #ffffff;
-  --color-surface-2: #f5f3ee;
-  --color-surface-3: #ece8df;
+  --color-bg-base: #121519;
+  --color-bg-elevated-1: #191b20;
+  --color-surface: #191b20;
+  --color-surface-2: #1c1e23;
+  --color-surface-3: #2b2d32;
 
-  --color-separator: #e7e3da;
-  --color-separator-solid: #d8d4cb;
+  --color-separator: #25272b;
+  --color-separator-solid: #2b2d32;
 
-  --color-label-1: #171716;
-  --color-label-2: #6d6962;
-  --color-label-3: #8d887f;
-  --color-label-4: #aaa59b;
+  --color-label-1: #ffffff;
+  --color-label-2: #9fa1b1;
+  --color-label-3: #828491;
+  --color-label-4: #828491;
 
-  --color-accent: #f15a38;
-  --color-accent-fg: #ffffff;
+  --color-accent: #4f81f7;
+  --color-accent-fg: #121519;
 
   --color-system-red: #c63d35;
-  --color-system-orange: #f59e0b;
+  --color-system-blue: #4f81f7;
   --color-system-yellow: #e8c547;
   --color-system-green: #248a4b;
   --color-system-teal: #3d7c79;
-  --color-system-indigo: #725f4f;
+  --color-system-indigo: #6366f1;
 
-  --material-ultrathin-bg: rgb(252 251 247 / 0.65);
-  --material-thin-bg: rgb(252 251 247 / 0.78);
-  --material-regular-bg: rgb(252 251 247 / 0.88);
-  --material-thick-bg: rgb(252 251 247 / 0.94);
-  --material-ultrathick-bg: rgb(252 251 247 / 0.98);
+  --material-ultrathin-bg: rgb(25 27 32 / 0.65);
+  --material-thin-bg: rgb(25 27 32 / 0.78);
+  --material-regular-bg: rgb(25 27 32 / 0.88);
+  --material-thick-bg: rgb(25 27 32 / 0.94);
+  --material-ultrathick-bg: rgb(25 27 32 / 0.98);
 
   --radius-xs: 6px;
   --radius-sm: 8px;
@@ -54,41 +54,44 @@
     Menlo, Monaco, Consolas, monospace;
 
   /* Legacy aliases — kept until W2 component sweep replaces direct refs. */
-  --color-surface-base: #f5f3ee;
-  --color-surface-raised: #fcfbf7;
-  --color-surface-overlay: #ffffff;
-  --color-surface-input: #ffffff;
-  --color-surface-panel-dark: #171716;
-  --color-surface-glass: rgb(252 251 247 / 0.84);
-  --color-border-subtle: #e7e3da;
-  --color-border-default: #d8d4cb;
-  --color-border-strong: #aaa59b;
-  --color-border-accent: #f15a38;
-  --color-fg-primary: #171716;
-  --color-fg-secondary: #6d6962;
-  --color-fg-tertiary: #8d887f;
-  --color-fg-muted: #aaa59b;
-  --color-fg-on-accent: #ffffff;
-  --color-accent-hover: #d94929;
-  --color-accent-subtle: rgb(241 90 56 / 0.1);
-  --color-accent-secondary: #e8c547;
+  --color-surface-base: #121519;
+  --color-surface-raised: #191b20;
+  --color-surface-overlay: #2b2d32;
+  --color-surface-input: #2b2d32;
+  --color-surface-panel-dark: #191b20;
+  --color-surface-glass: rgb(25 27 32 / 0.84);
+  --color-border-subtle: #25272b;
+  --color-border-default: #2b2d32;
+  --color-border-strong: #828491;
+  --color-border-accent: #4f81f7;
+  --color-fg-primary: #ffffff;
+  --color-fg-secondary: #9fa1b1;
+  --color-fg-tertiary: #828491;
+  --color-fg-muted: #828491;
+  --color-fg-on-accent: #121519;
+  --color-fg-on-danger: #ffffff;
+  --color-accent-hover: #6a95fa;
+  --color-accent-subtle: rgb(79 129 247 / 0.12);
+  --color-accent-secondary: #6a95fa;
   --color-success: #248a4b;
+  --color-success-fg: #4ade80;
   --color-warning: #e8c547;
   --color-danger: #c63d35;
+  --color-danger-fg: #f87171;
   --color-info: #3d7c79;
 
-  --color-paper: #fcfbf7;
-  --color-warm-white: #f5f3ee;
-  --color-ink: #171716;
-  --color-graphite: #121311;
-  --color-muted-ink: #6d6962;
-  --color-warm-border: #d8d4cb;
-  --color-publish: #f15a38;
+  --color-paper: #191b20;
+  --color-warm-white: #121519;
+  --color-ink: #ffffff;
+  --color-graphite: #121519;
+  --color-muted-ink: #9fa1b1;
+  --color-warm-border: #2b2d32;
+  --color-publish: #4f81f7;
 }
 
 @layer base {
   html {
-    color-scheme: light;
+    color-scheme: dark;
     scroll-behavior: smooth;
     /* `clip` (not `hidden`) kills stray horizontal scroll app-wide without
        creating a scroll container — so it never breaks position: sticky. */
@@ -112,43 +115,43 @@
     font-family: var(--font-display);
   }
 
-  [data-light-shell] {
-    color-scheme: light;
-    --color-bg-base: #f5f3ee;
-    --color-bg-elevated-1: #fcfbf7;
-    --color-surface: #ffffff;
-    --color-surface-2: #f5f3ee;
-    --color-surface-3: #ece8df;
-    --color-surface-base: #f5f3ee;
-    --color-surface-raised: #fcfbf7;
-    --color-surface-overlay: #ffffff;
-    --color-surface-input: #ffffff;
-    --color-surface-panel-dark: #171716;
-    --color-surface-glass: rgb(252 251 247 / 0.84);
-    --color-border-subtle: #e7e3da;
-    --color-border-default: #d8d4cb;
-    --color-border-strong: #aaa59b;
-    --color-fg-primary: #171716;
-    --color-fg-secondary: #6d6962;
-    --color-fg-tertiary: #8d887f;
-    --color-fg-muted: #aaa59b;
-    --color-accent: #f15a38;
-    --color-accent-hover: #d94929;
-    --color-accent-subtle: rgb(241 90 56 / 0.1);
-    --color-accent-secondary: #e8c547;
+  [data-product-shell] {
+    color-scheme: dark;
+    --color-bg-base: #121519;
+    --color-bg-elevated-1: #191b20;
+    --color-surface: #191b20;
+    --color-surface-2: #1c1e23;
+    --color-surface-3: #2b2d32;
+    --color-surface-base: #121519;
+    --color-surface-raised: #191b20;
+    --color-surface-overlay: #2b2d32;
+    --color-surface-input: #2b2d32;
+    --color-surface-panel-dark: #191b20;
+    --color-surface-glass: rgb(25 27 32 / 0.84);
+    --color-border-subtle: #25272b;
+    --color-border-default: #2b2d32;
+    --color-border-strong: #828491;
+    --color-fg-primary: #ffffff;
+    --color-fg-secondary: #9fa1b1;
+    --color-fg-tertiary: #828491;
+    --color-fg-muted: #828491;
+    --color-accent: #4f81f7;
+    --color-accent-hover: #6a95fa;
+    --color-accent-subtle: rgb(79 129 247 / 0.12);
+    --color-accent-secondary: #6a95fa;
     color: var(--color-ink);
     background: var(--color-warm-white);
   }
 
   [data-graphite-shell] {
     color-scheme: dark;
-    color: #fcfbf7;
-    background: #171716;
+    color: #ffffff;
+    background: #121519;
   }
 
   ::selection {
     background: var(--color-accent);
-    color: #ffffff;
+    color: #121519;
   }
 
   :focus-visible {
@@ -217,9 +220,9 @@
   }
 
   .omnia-card {
-    border: 1px solid #d8d4cb;
+    border: 1px solid #2b2d32;
     border-radius: 12px;
-    background: #fcfbf7;
+    background: #191b20;
   }
 
   .omnia-button {
@@ -236,42 +239,42 @@
   }
 
   .omnia-button-primary {
-    border: 1px solid #f15a38;
-    background: #f15a38;
-    color: #ffffff;
+    border: 1px solid #4f81f7;
+    background: #4f81f7;
+    color: #121519;
   }
 
   .omnia-button-primary:hover {
-    border-color: #d94929;
-    background: #d94929;
+    border-color: #6a95fa;
+    background: #6a95fa;
   }
 
   .omnia-button-secondary {
-    border: 1px solid #d8d4cb;
-    background: #fcfbf7;
-    color: #171716;
+    border: 1px solid #2b2d32;
+    background: #191b20;
+    color: #ffffff;
   }
 
   .omnia-button-secondary:hover {
-    background: #f5f3ee;
+    background: #121519;
   }
 
   .omnia-input {
     min-height: 44px;
     width: 100%;
-    border: 1px solid #d8d4cb;
+    border: 1px solid #2b2d32;
     border-radius: 8px;
-    background: #ffffff;
+    background: #2b2d32;
     padding: 0 12px;
-    color: #171716;
+    color: #ffffff;
   }
 
   .omnia-input::placeholder {
-    color: #aaa59b;
+    color: #828491;
   }
 
   .omnia-rule {
-    border-color: #d8d4cb;
+    border-color: #2b2d32;
   }
 
   .font-display {
@@ -283,14 +286,14 @@
   }
 
   .max-studio-chat .max-studio-prompt {
-    border-top: 1px solid #d8d4cb;
-    background: #fcfbf7;
+    border-top: 1px solid #2b2d32;
+    background: #191b20;
     padding: 20px;
   }
 
   .max-studio-chat .max-studio-prompt > div:last-child {
-    border-color: #d8d4cb;
-    background: #ffffff;
+    border-color: #2b2d32;
+    background: #2b2d32;
   }
 
   .max-studio-chat .max-studio-prompt textarea {
@@ -301,31 +304,31 @@
 
   .studio-grid {
     background-image:
-      linear-gradient(rgb(23 23 22 / 0.035) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(23 23 22 / 0.035) 1px, transparent 1px);
+      linear-gradient(rgb(159 161 177 / 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(159 161 177 / 0.06) 1px, transparent 1px);
     background-size: 32px 32px;
     background-position: center top;
   }
 
   .studio-glow {
-    background: radial-gradient(circle at 50% 0%, rgb(241 90 56 / 0.09), transparent 42%);
+    background: radial-gradient(circle at 50% 0%, rgb(79 129 247 / 0.12), transparent 42%);
   }
 
   .studio-card {
-    border: 1px solid #d8d4cb;
-    background: #fcfbf7;
+    border: 1px solid #2b2d32;
+    background: #191b20;
     border-radius: 12px;
   }
 
   .warm-shell {
-    color-scheme: light;
-    color: #171716;
-    background: #f5f3ee;
+    color-scheme: dark;
+    color: #ffffff;
+    background: #121519;
   }
 
   .warm-card {
-    border: 1px solid #d8d4cb;
-    background: #fcfbf7;
+    border: 1px solid #2b2d32;
+    background: #191b20;
     border-radius: 12px;
   }
 
@@ -335,7 +338,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.5rem;
-    border: 1px solid #d8d4cb;
+    border: 1px solid #2b2d32;
     border-radius: 8px;
     padding: 0.65rem 1.1rem;
     font-size: 0.875rem;
@@ -348,16 +351,16 @@
   }
   .marketing-button:active { transform: translateY(1px); }
   .marketing-button-primary {
-    border-color: #f15a38;
-    background: #f15a38;
+    border-color: #4f81f7;
+    background: #4f81f7;
+    color: #121519;
+  }
+  .marketing-button-primary:hover { background: #6a95fa; }
+  .marketing-button-secondary {
+    background: #191b20;
     color: #ffffff;
   }
-  .marketing-button-primary:hover { background: #d94929; }
-  .marketing-button-secondary {
-    background: #fcfbf7;
-    color: #171716;
-  }
-  .marketing-button-secondary:hover { background: #ece8df; }
+  .marketing-button-secondary:hover { background: #2b2d32; }
 
   .product-state {
     display: inline-flex;
@@ -402,14 +405,14 @@
 
   .max-studio-scroll {
     scrollbar-width: thin;
-    scrollbar-color: rgb(141 131 255 / 0.45) transparent;
+    scrollbar-color: rgb(79 129 247 / 0.45) transparent;
   }
   .max-studio-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
   .max-studio-scroll::-webkit-scrollbar-track { background: transparent; }
   .max-studio-scroll::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 9999px;
-    background: rgb(141 131 255 / 0.38);
+    background: rgb(79 129 247 / 0.38);
     background-clip: padding-box;
   }
 

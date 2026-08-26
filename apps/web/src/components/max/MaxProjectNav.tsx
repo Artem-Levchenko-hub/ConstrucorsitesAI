@@ -95,8 +95,8 @@ export function MaxProjectNav({
               className={cn(
                 "inline-flex h-10 items-center gap-2 rounded-[8px] px-3 text-xs",
                 selected
-                  ? "bg-[#171716] font-medium text-white"
-                  : "text-[#6d6962] hover:bg-[#f5f3ee]",
+                  ? "bg-[#121519] font-medium text-white"
+                  : "text-[#9fa1b1] hover:bg-[#121519]",
               )}
             >
               <Icon className="size-3.5" />
@@ -111,8 +111,8 @@ export function MaxProjectNav({
   return (
     <div>
       {showProgress && (
-        <div className="mb-3 rounded-[8px] border border-[#d8d4cb] bg-[#f5f3ee] px-3 py-3">
-          <div className="flex items-center justify-between gap-2 text-[10px] text-[#8d887f]">
+        <div className="mb-3 rounded-[8px] border border-[#2b2d32] bg-[#121519] px-3 py-3">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-[#828491]">
             <span>Путь до запуска</span>
             <span className="tabular-nums">
               {readiness.isSuccess
@@ -120,9 +120,9 @@ export function MaxProjectNav({
                 : "Проверяем…"}
             </span>
           </div>
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#d8d4cb]">
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#2b2d32]">
             <div
-              className="h-full rounded-full bg-[#f15a38] transition-[width]"
+              className="h-full rounded-full bg-[#4f81f7] transition-[width]"
               style={{ width: `${readiness.isSuccess ? journey.progress : 0}%` }}
             />
           </div>
@@ -145,20 +145,20 @@ export function MaxProjectNav({
               className={cn(
                 "flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs transition-colors",
                 selected
-                  ? "bg-[#ece8df] font-medium text-[#171716]"
-                  : "text-[#6d6962] hover:bg-[#f5f3ee] hover:text-[#171716]",
+                  ? "bg-[#2b2d32] font-medium text-white"
+                  : "text-[#9fa1b1] hover:bg-[#121519] hover:text-white",
               )}
             >
-              <Icon className={cn("size-4 shrink-0", selected && "text-[#f15a38]")} />
+              <Icon className={cn("size-4 shrink-0", selected && "text-[#4f81f7]")} />
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
               {readiness.isSuccess && stage?.status === "completed" && (
-                <span className="grid size-4 shrink-0 place-items-center rounded-full bg-[#248a4b]/10 text-[#248a4b]">
+                <span className="grid size-4 shrink-0 place-items-center rounded-full bg-[#248a4b]/10 text-success-fg">
                   <Check className="size-2.5" />
                 </span>
               )}
               {readiness.isSuccess && stage?.status === "current" && (
                 <span
-                  className="size-2 shrink-0 rounded-full bg-[#f15a38]"
+                  className="size-2 shrink-0 rounded-full bg-[#4f81f7]"
                   aria-label="Текущий этап"
                 />
               )}

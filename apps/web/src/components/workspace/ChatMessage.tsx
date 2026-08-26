@@ -95,12 +95,12 @@ export function ChatMessage({
             ? "bg-accent-subtle border border-accent/40"
             : "bg-surface-overlay border border-border-default",
           studio && "h-8 w-8 border-0",
-          studio && isUser && "bg-[#6d6962] text-white",
-          studio && !isUser && "bg-[#ece8df] text-[#f15a38]",
+          studio && isUser && "bg-[#9fa1b1] text-[#121519]",
+          studio && !isUser && "bg-[#2b2d32] text-[#4f81f7]",
         )}
       >
         {isUser ? (
-          <UserIcon className="h-3.5 w-3.5 text-accent" />
+          <UserIcon className={cn("h-3.5 w-3.5", studio ? "text-[#121519]" : "text-accent")} />
         ) : (
           <Bot className="h-3.5 w-3.5 text-fg-secondary" />
         )}
@@ -119,8 +119,8 @@ export function ChatMessage({
         <div
           className={cn(
             "text-sm text-fg-primary leading-6 space-y-2",
-            studio && "w-full rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] px-4 py-3.5",
-            studio && isUser && "border-[#f15a38] bg-[#f15a38] text-white",
+            studio && "w-full rounded-[10px] border border-[#2b2d32] bg-[#191b20] px-4 py-3.5",
+            studio && isUser && "border-[#4f81f7] bg-[#4f81f7] text-[#121519]",
           )}
         >
           {!isUser && streaming && projectId && (
@@ -226,7 +226,7 @@ function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) 
       <div>
         <div
           className={cn(
-            "whitespace-pre-wrap break-words text-sm leading-6 text-white",
+            "whitespace-pre-wrap break-words text-sm leading-6 text-inherit",
             collapsible && !expanded && "max-h-[240px] overflow-hidden",
           )}
         >
@@ -236,7 +236,7 @@ function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) 
           <button
             type="button"
             onClick={() => setExpanded((current) => !current)}
-            className="mt-2 text-xs font-medium text-white/80 underline-offset-2 hover:text-white hover:underline"
+            className="mt-2 text-xs font-medium text-inherit underline-offset-2 hover:underline"
           >
             {expanded ? "Свернуть" : "Показать полностью"}
           </button>
@@ -536,7 +536,7 @@ function AppErrorCard({
       className={cn(
         "overflow-hidden rounded-xl border",
         isIncomplete
-          ? "border-amber-500/30 bg-amber-500/5"
+          ? "border-blue-500/30 bg-blue-500/5"
           : "border-red-500/30 bg-red-500/5",
       )}
     >
@@ -544,13 +544,13 @@ function AppErrorCard({
         <span
           className={cn(
             "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
-            isIncomplete ? "bg-amber-500/15" : "bg-red-500/15",
+            isIncomplete ? "bg-blue-500/15" : "bg-red-500/15",
           )}
         >
           <AlertTriangle
             className={cn(
               "h-3.5 w-3.5",
-              isIncomplete ? "text-amber-400" : "text-red-400",
+              isIncomplete ? "text-blue-400" : "text-red-400",
             )}
           />
         </span>
@@ -563,7 +563,7 @@ function AppErrorCard({
               className={cn(
                 "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
                 isIncomplete
-                  ? "bg-amber-500/15 text-amber-300"
+                  ? "bg-blue-500/15 text-blue-300"
                   : "bg-red-500/15 text-red-300",
               )}
             >
@@ -583,7 +583,7 @@ function AppErrorCard({
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors",
                   isIncomplete
-                    ? "border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20"
+                    ? "border-blue-500/30 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20"
                     : "border-red-500/30 bg-red-500/10 text-red-200 hover:bg-red-500/20",
                 )}
               >
@@ -628,7 +628,7 @@ function AppErrorCard({
             transition={{ duration: 0.2, ease: EASE_OUT }}
             className={cn(
               "overflow-hidden border-t",
-              isIncomplete ? "border-amber-500/20" : "border-red-500/20",
+              isIncomplete ? "border-blue-500/20" : "border-red-500/20",
             )}
           >
             <pre className="scrollbar-elegant max-h-64 overflow-auto bg-surface-base/60 p-3 text-[11px] font-mono leading-relaxed text-fg-secondary">

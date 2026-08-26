@@ -23,7 +23,7 @@ export function AdminControlCenter({
 
   return (
     <div className="space-y-5">
-      <div className="flex gap-2 overflow-x-auto rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-2">
+      <div className="flex gap-2 overflow-x-auto rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-2">
         {tabs.map(([id, label, Icon]) => (
           <button
             key={id}
@@ -32,8 +32,8 @@ export function AdminControlCenter({
             className={cn(
               "flex h-10 shrink-0 items-center gap-2 rounded-[8px] px-4 text-xs font-medium",
               tab === id
-                ? "bg-[#171716] text-white"
-                : "text-[#6d6962] hover:bg-[#ece8df]",
+                ? "bg-[#121519] text-white"
+                : "text-[#9fa1b1] hover:bg-[#2b2d32]",
             )}
           >
             <Icon className="size-4" />

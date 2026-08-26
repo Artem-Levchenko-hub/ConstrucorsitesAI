@@ -15,6 +15,14 @@ const usageBreakdown = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxUsageBreakdown.tsx"),
   "utf8",
 );
+const previewFrame = readFileSync(
+  resolve(process.cwd(), "src/components/workspace/PreviewFrame.tsx"),
+  "utf8",
+);
+const streamingPreviewFrame = readFileSync(
+  resolve(process.cwd(), "src/components/workspace/StreamingPreviewFrame.tsx"),
+  "utf8",
+);
 
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
@@ -31,13 +39,26 @@ describe("MAX live preview surface", () => {
       'className="hidden min-h-0 bg-transparent 2xl:block"',
     );
     expect(workspaceShell).toContain(
-      'className="relative flex h-full w-full max-w-[460px] flex-col bg-[#fcfbf7]',
+      'className="relative flex h-full w-full max-w-[460px] flex-col bg-surface-raised',
     );
     expect(workspaceShell).toContain(
-      'overflow-hidden bg-[#fcfbf7] text-[#171716]',
+      "overflow-hidden bg-surface-raised text-fg-primary",
     );
     expect(workspaceShell).not.toContain(
       '<section className="flex min-h-0 min-w-0 flex-col border-r',
+    );
+  });
+
+  it("preserves white generated-app canvases inside the dark product chrome", () => {
+    expect(livePreview).toContain(
+      'className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}',
+    );
+    expect(livePreview).toContain(
+      'className="absolute inset-0 size-full border-0 bg-white"',
+    );
+    expect(previewFrame.match(/className="h-full bg-white border-0 mx-auto shadow-xl"/g)).toHaveLength(2);
+    expect(streamingPreviewFrame).toContain(
+      'className="h-full bg-white border-0 mx-auto shadow-xl"',
     );
   });
 

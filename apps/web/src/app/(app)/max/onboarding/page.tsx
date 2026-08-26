@@ -9,7 +9,7 @@ export default async function MaxOnboardingPage() {
   if (!session || session.isAnon) redirect("/max/register");
 
   return (
-    <div data-light-shell className="flex h-full min-h-0 flex-col overflow-hidden bg-[#f5f3ee]">
+    <div data-product-shell className="flex h-full min-h-0 flex-col overflow-hidden bg-[#121519]">
       <MaxStudioHeader email={session.email} />
       <MaxOnboarding email={session.email} />
     </div>

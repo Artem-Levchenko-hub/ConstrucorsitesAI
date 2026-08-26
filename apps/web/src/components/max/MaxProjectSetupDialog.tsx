@@ -98,9 +98,9 @@ export function MaxProjectSetupDialog({
     onError: (error) =>
       toast.error("Не удалось сохранить", { description: errorMessage(error) }),
   });
-  const inputClass = "h-11 border-[#d8d4cb] bg-white sm:h-10";
+  const inputClass = "h-11 border-[#2b2d32] bg-[#191b20] sm:h-10";
   const sectionClass =
-    "space-y-4 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4";
+    "space-y-4 rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4";
   const saved = config.data?.config;
   const changedSections = current && saved
     ? [
@@ -141,7 +141,7 @@ export function MaxProjectSetupDialog({
             ? cn(
                 "h-11 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]",
                 !emphasized &&
-                  "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee]",
+                  "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1] hover:bg-[#121519]",
               )
             : "h-11 gap-1.5 px-2.5 text-xs sm:h-7"
         }
@@ -165,21 +165,21 @@ export function MaxProjectSetupDialog({
         }}
       >
         <DialogContent
-          data-light-shell
-          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#d8d4cb] bg-[#fcfbf7] p-0 text-[#171716] sm:max-h-[92dvh] sm:max-w-[760px] sm:p-0"
+          data-product-shell
+          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#2b2d32] bg-[#191b20] p-0 text-white sm:max-h-[92dvh] sm:max-w-[760px] sm:p-0"
         >
           <DialogHeader className="shrink-0 px-5 pb-4 pr-16 pt-5 sm:px-7 sm:pb-5 sm:pr-14 sm:pt-7">
-            <DialogTitle className="flex items-center gap-2 text-[#171716]">
-              <FileCheck2 className="h-5 w-5 text-[#f15a38]" />
+            <DialogTitle className="flex items-center gap-2 text-white">
+              <FileCheck2 className="h-5 w-5 text-[#4f81f7]" />
               Данные приложения
             </DialogTitle>
-            <DialogDescription className="text-[#6d6962]">
+            <DialogDescription className="text-[#9fa1b1]">
               Заполните четыре раздела. Изменения применяются одной безопасной
               версией и не запускают повторную генерацию.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="shrink-0 border-y border-[#e7e3da] px-5 py-3 sm:px-7">
+          <div className="shrink-0 border-y border-[#25272b] px-5 py-3 sm:px-7">
             <div className="flex gap-2 overflow-x-auto" role="tablist" aria-label="Разделы данных приложения">
               {SETUP_SECTIONS.map((item) => (
                 <button
@@ -191,8 +191,8 @@ export function MaxProjectSetupDialog({
                   className={cn(
                     "h-9 shrink-0 rounded-[8px] border px-3 text-xs font-medium transition-colors",
                     section === item.id
-                      ? "border-[#171716] bg-[#171716] text-white"
-                      : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962] hover:bg-[#f5f3ee]",
+                      ? "border-[#25272b] bg-[#121519] text-white"
+                      : "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1] hover:bg-[#121519]",
                   )}
                 >
                   {item.label}
@@ -203,7 +203,7 @@ export function MaxProjectSetupDialog({
 
           {config.isLoading || !current ? (
             <div className="flex min-h-44 flex-1 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-[#f15a38]" />
+              <Loader2 className="h-5 w-5 animate-spin text-[#4f81f7]" />
             </div>
           ) : (
             <>
@@ -216,7 +216,7 @@ export function MaxProjectSetupDialog({
                     <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Продукт</h3>
-                  <p className="mt-1 text-xs text-[#8d887f]">
+                  <p className="mt-1 text-xs text-[#828491]">
                     Главный сценарий и тексты, которыми пользуются бот и приложение.
                   </p>
                 </div>
@@ -250,7 +250,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-summary">Описание сервиса</Label>
                     <Textarea
                       id="max-config-summary"
-                      className="min-h-24 border-[#d8d4cb] bg-white"
+                      className="min-h-24 border-[#2b2d32] bg-[#191b20]"
                       value={current.summary}
                       maxLength={1000}
                       onChange={(event) =>
@@ -262,7 +262,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-type">Тип приложения</Label>
                     <select
                       id="max-config-type"
-                      className="h-11 w-full rounded-md border border-[#d8d4cb] bg-white px-3 text-sm sm:h-10"
+                      className="h-11 w-full rounded-md border border-[#2b2d32] bg-[#191b20] px-3 text-sm sm:h-10"
                       value={current.app_type}
                       onChange={(event) =>
                         setDraft({
@@ -296,7 +296,7 @@ export function MaxProjectSetupDialog({
                       id="max-config-colors"
                       className={inputClass}
                       value={current.brand_colors}
-                      placeholder="#F15A38, #F5F3EE"
+                      placeholder="#4f81f7, #121519"
                       onChange={(event) =>
                         setDraft({ ...current, brand_colors: event.target.value })
                       }
@@ -306,7 +306,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-style">Визуальный стиль</Label>
                     <select
                       id="max-config-style"
-                      className="h-11 w-full rounded-md border border-[#d8d4cb] bg-white px-3 text-sm sm:h-10"
+                      className="h-11 w-full rounded-md border border-[#2b2d32] bg-[#191b20] px-3 text-sm sm:h-10"
                       value={current.style}
                       onChange={(event) =>
                         setDraft({
@@ -327,7 +327,7 @@ export function MaxProjectSetupDialog({
                     </Label>
                     <Textarea
                       id="max-config-features"
-                      className="min-h-20 border-[#d8d4cb] bg-white"
+                      className="min-h-20 border-[#2b2d32] bg-[#191b20]"
                       value={current.features.join(", ")}
                       placeholder="Заказы, бонусы, запись, уведомления"
                       onChange={(event) =>
@@ -341,7 +341,7 @@ export function MaxProjectSetupDialog({
                         })
                       }
                     />
-                    <p className="text-[10px] leading-4 text-[#8d887f]">
+                    <p className="text-[10px] leading-4 text-[#828491]">
                       Перечислите через запятую до 24 функций. Они попадут в
                       управляемую конфигурацию приложения без повторной генерации.
                     </p>
@@ -355,7 +355,7 @@ export function MaxProjectSetupDialog({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="text-sm font-semibold">Каталог и контент</h3>
-                    <p className="mt-1 text-xs text-[#8d887f]">
+                    <p className="mt-1 text-xs text-[#828491]">
                       Товары, услуги, события, награды или уроки — без обращения к модели.
                     </p>
                   </div>
@@ -385,7 +385,7 @@ export function MaxProjectSetupDialog({
                   </Button>
                 </div>
                 {current.content.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-[#d8d4cb] p-4 text-center text-xs text-[#8d887f]">
+                  <p className="rounded-xl border border-dashed border-[#2b2d32] p-4 text-center text-xs text-[#828491]">
                     Добавьте управляемые элементы, если приложению нужен каталог.
                   </p>
                 ) : (
@@ -393,7 +393,7 @@ export function MaxProjectSetupDialog({
                     {current.content.map((item, index) => (
                       <div
                         key={item.id}
-                        className="grid gap-3 rounded-xl border border-[#d8d4cb] bg-white p-3 sm:grid-cols-[minmax(0,1fr)_160px_auto]"
+                        className="grid gap-3 rounded-xl border border-[#2b2d32] bg-[#191b20] p-3 sm:grid-cols-[minmax(0,1fr)_160px_auto]"
                       >
                         <div className="space-y-2">
                           <Input
@@ -408,7 +408,7 @@ export function MaxProjectSetupDialog({
                           />
                           <Textarea
                             aria-label={`Описание элемента ${index + 1}`}
-                            className="min-h-16 border-[#d8d4cb] bg-white text-xs"
+                            className="min-h-16 border-[#2b2d32] bg-[#191b20] text-xs"
                             value={item.description}
                             placeholder="Описание"
                             onChange={(event) => {
@@ -461,8 +461,8 @@ export function MaxProjectSetupDialog({
                             className={cn(
                               "inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs sm:min-h-9",
                               item.active
-                                ? "bg-[#248a4b]/10 text-[#248a4b]"
-                                : "bg-[#f5f3ee] text-[#8d887f]",
+                                ? "bg-[#248a4b]/10 text-success-fg"
+                                : "bg-[#121519] text-[#828491]",
                             )}
                             onClick={() => {
                               const content = [...current.content];
@@ -476,14 +476,14 @@ export function MaxProjectSetupDialog({
                             <span
                               className={cn(
                                 "size-2 rounded-full",
-                                item.active ? "bg-[#248a4b]" : "bg-[#aaa59b]",
+                                item.active ? "bg-[#248a4b]" : "bg-[#828491]",
                               )}
                             />
                             {item.active ? "Показан" : "Скрыт"}
                           </button>
                           <button
                             type="button"
-                            className="flex h-11 w-11 items-center justify-center rounded-lg text-[#8d887f] hover:bg-danger/10 hover:text-danger sm:h-9 sm:w-9"
+                            className="flex h-11 w-11 items-center justify-center rounded-lg text-[#828491] hover:bg-danger/10 hover:text-danger sm:h-9 sm:w-9"
                             aria-label={`Удалить ${item.title}`}
                             onClick={() =>
                               setDraft({
@@ -508,7 +508,7 @@ export function MaxProjectSetupDialog({
                     <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Владелец и поддержка</h3>
-                  <p className="mt-1 text-xs text-[#8d887f]">
+                  <p className="mt-1 text-xs text-[#828491]">
                     Эти сведения попадут в политику, условия и страницу поддержки.
                   </p>
                 </div>
@@ -630,7 +630,7 @@ export function MaxProjectSetupDialog({
                     <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Политики MAX</h3>
-                  <p className="mt-1 text-xs text-[#8d887f]">
+                  <p className="mt-1 text-xs text-[#828491]">
                     Отметьте реальные функции — студия включит нужные правила.
                   </p>
                 </div>
@@ -645,8 +645,8 @@ export function MaxProjectSetupDialog({
                         className={cn(
                           "rounded-xl border p-3 text-left",
                           checked
-                            ? "border-[#f15a38] bg-[#f15a38]/[.07]"
-                            : "border-[#d8d4cb] bg-white",
+                            ? "border-[#4f81f7] bg-[#4f81f7]/[.07]"
+                            : "border-[#2b2d32] bg-[#191b20]",
                         )}
                         onClick={() =>
                           setDraft({
@@ -660,15 +660,15 @@ export function MaxProjectSetupDialog({
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded border",
                               checked
-                                ? "border-[#f15a38] bg-[#f15a38]"
-                                : "border-[#d8d4cb]",
+                                ? "border-[#4f81f7] bg-[#4f81f7]"
+                                : "border-[#2b2d32]",
                             )}
                           >
                             {checked && <Check className="h-3 w-3" />}
                           </span>
                           {item.label}
                         </span>
-                        <span className="mt-2 block text-[10px] leading-4 text-[#8d887f]">
+                        <span className="mt-2 block text-[10px] leading-4 text-[#828491]">
                           {item.description}
                         </span>
                       </button>
@@ -679,7 +679,7 @@ export function MaxProjectSetupDialog({
                   <Label htmlFor="max-age-rating">Возрастная маркировка</Label>
                   <select
                     id="max-age-rating"
-                    className="h-11 w-full rounded-md border border-[#d8d4cb] bg-white px-3 text-sm sm:h-10 sm:w-48"
+                    className="h-11 w-full rounded-md border border-[#2b2d32] bg-[#191b20] px-3 text-sm sm:h-10 sm:w-48"
                     value={current.legal.age_rating}
                     onChange={(event) =>
                       setDraft({
@@ -699,10 +699,10 @@ export function MaxProjectSetupDialog({
                     ))}
                   </select>
                 </div>
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#d8d4cb] bg-white p-3">
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#2b2d32] bg-[#191b20] p-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-[#f15a38]"
+                    className="mt-0.5 h-4 w-4 accent-[#4f81f7]"
                     checked={current.legal.terms_accepted}
                     onChange={(event) =>
                       setDraft({
@@ -718,16 +718,16 @@ export function MaxProjectSetupDialog({
                     <span className="block text-xs font-medium">
                       Подтверждаю корректность данных владельца
                     </span>
-                    <span className="mt-1 block text-[10px] leading-4 text-[#8d887f]">
+                    <span className="mt-1 block text-[10px] leading-4 text-[#828491]">
                       Автоматический комплект — основа. Владелец отвечает за
                       актуальность реквизитов и соответствие своей деятельности закону.
                     </span>
                   </span>
                 </label>
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#d8d4cb] bg-white p-3">
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#2b2d32] bg-[#191b20] p-3">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 accent-[#f15a38]"
+                    className="mt-0.5 h-4 w-4 accent-[#4f81f7]"
                     checked={current.legal.personal_data_consent}
                     onChange={(event) =>
                       setDraft({
@@ -743,7 +743,7 @@ export function MaxProjectSetupDialog({
                     <span className="block text-xs font-medium">
                       Запрашивать согласие на обработку персональных данных
                     </span>
-                    <span className="mt-1 block text-[10px] leading-4 text-[#8d887f]">
+                    <span className="mt-1 block text-[10px] leading-4 text-[#828491]">
                       Оставьте включённым, если приложение получает имя, телефон,
                       email, адрес или другие данные пользователя.
                     </span>
@@ -755,10 +755,10 @@ export function MaxProjectSetupDialog({
               </div>
 
               <div
-                className="flex shrink-0 flex-col gap-3 border-t border-[#e7e3da] px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:pt-4"
+                className="flex shrink-0 flex-col gap-3 border-t border-[#25272b] px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:pt-4"
                 data-testid="max-settings-footer"
               >
-                <p className="text-xs text-[#8d887f]">
+                <p className="text-xs text-[#828491]">
                   {changedSections > 0
                     ? `Изменено разделов: ${changedSections}`
                     : "Все изменения сохранены"}

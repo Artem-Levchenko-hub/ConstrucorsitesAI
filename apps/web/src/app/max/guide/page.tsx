@@ -63,7 +63,7 @@ const chapters = [
 ] as const;
 
 function Kicker({ children }: { children: ReactNode }) {
-  return <p className="omnia-kicker text-[#f15a38]">{children}</p>;
+  return <p className="omnia-kicker text-[#4f81f7]">{children}</p>;
 }
 
 function GuideSection({
@@ -82,13 +82,13 @@ function GuideSection({
   children: ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-24 border-t border-[#d8d4cb] py-16 sm:py-20 lg:py-24">
+    <section id={id} className="scroll-mt-24 border-t border-[#2b2d32] py-16 sm:py-20 lg:py-24">
       <div className="grid gap-6 lg:grid-cols-[120px_minmax(0,1fr)]">
-        <p className="font-mono text-[12px] text-[#aaa59b]">{number}</p>
+        <p className="font-mono text-[12px] text-[#828491]">{number}</p>
         <div className="min-w-0">
           <Kicker>{eyebrow}</Kicker>
           <h2 className="mt-3 max-w-[850px] text-[34px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[48px]">{title}</h2>
-          <p className="mt-5 max-w-[780px] text-[15px] leading-7 text-[#6d6962]">{lead}</p>
+          <p className="mt-5 max-w-[780px] text-[15px] leading-7 text-[#9fa1b1]">{lead}</p>
           <div className="mt-10">{children}</div>
         </div>
       </div>
@@ -98,7 +98,7 @@ function GuideSection({
 
 function Route({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-md border border-[#d8d4cb] bg-[#fcfbf7] px-2 py-1 font-mono text-[11px] text-[#6d6962]">
+    <span className="inline-flex items-center rounded-md border border-[#2b2d32] bg-[#191b20] px-2 py-1 font-mono text-[11px] text-[#9fa1b1]">
       {children}
     </span>
   );
@@ -110,17 +110,17 @@ function StepList({
   steps: Array<{ title: string; text: ReactNode; result?: string }>;
 }) {
   return (
-    <ol className="divide-y divide-[#e7e3da] overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
+    <ol className="divide-y divide-[#25272b] overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
       {steps.map((step, index) => (
         <li key={step.title} className="grid gap-4 p-5 sm:grid-cols-[44px_minmax(0,1fr)] sm:p-6">
-          <span className="grid size-8 place-items-center rounded-full border border-[#f15a38]/40 bg-[#f15a38]/[.06] font-mono text-[10px] font-semibold text-[#c84528]">
+          <span className="grid size-8 place-items-center rounded-full border border-[#4f81f7]/40 bg-[#4f81f7]/[.06] font-mono text-[10px] font-semibold text-[#6a95fa]">
             {String(index + 1).padStart(2, "0")}
           </span>
           <div>
             <h3 className="text-sm font-semibold">{step.title}</h3>
-            <div className="mt-2 text-sm leading-6 text-[#6d6962]">{step.text}</div>
+            <div className="mt-2 text-sm leading-6 text-[#9fa1b1]">{step.text}</div>
             {step.result && (
-              <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-[#248a4b]">
+              <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-success-fg">
                 <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
                 <span><strong>Результат:</strong> {step.result}</span>
               </p>
@@ -142,9 +142,9 @@ function Note({
   children: ReactNode;
 }) {
   const styles = {
-    info: "border-[#d8d4cb] bg-[#fcfbf7] text-[#171716]",
-    warning: "border-[#e8c547]/50 bg-[#e8c547]/10 text-[#745f16]",
-    success: "border-[#248a4b]/35 bg-[#248a4b]/[.06] text-[#185f35]",
+    info: "border-[#2b2d32] bg-[#191b20] text-white",
+    warning: "border-[#e8c547]/50 bg-[#e8c547]/10 text-[#e8c547]",
+    success: "border-[#248a4b]/35 bg-[#248a4b]/[.06] text-success-fg",
   }[tone];
   const Icon = tone === "warning" ? AlertTriangle : tone === "success" ? CheckCircle2 : CircleHelp;
   return (
@@ -161,8 +161,8 @@ function NumberedLegend({ items }: { items: string[] }) {
   return (
     <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
       {items.map((item, index) => (
-        <div key={item} className="flex gap-3 rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4 text-xs leading-5 text-[#6d6962]">
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-[#f15a38] text-[10px] font-semibold text-white">{index + 1}</span>
+        <div key={item} className="flex gap-3 rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4 text-xs leading-5 text-[#9fa1b1]">
+          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-[#4f81f7] text-[10px] font-semibold text-[#121519]">{index + 1}</span>
           {item}
         </div>
       ))}
@@ -172,14 +172,14 @@ function NumberedLegend({ items }: { items: string[] }) {
 
 function StatusTable({ rows }: { rows: Array<[string, string, string]> }) {
   return (
-    <div className="overflow-x-auto rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
+    <div className="overflow-x-auto rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
       <table className="w-full min-w-[680px] border-collapse text-left text-sm">
-        <thead className="bg-[#ece8df] text-[10px] uppercase tracking-[.12em] text-[#6d6962]">
+        <thead className="bg-[#2b2d32] text-[10px] uppercase tracking-[.12em] text-[#9fa1b1]">
           <tr><th className="p-4 font-medium">Статус</th><th className="p-4 font-medium">Что означает</th><th className="p-4 font-medium">Что делать</th></tr>
         </thead>
-        <tbody className="divide-y divide-[#e7e3da]">
+        <tbody className="divide-y divide-[#25272b]">
           {rows.map(([status, meaning, action]) => (
-            <tr key={status} className="align-top"><td className="p-4 font-medium text-[#171716]">{status}</td><td className="p-4 leading-6 text-[#6d6962]">{meaning}</td><td className="p-4 leading-6 text-[#6d6962]">{action}</td></tr>
+            <tr key={status} className="align-top"><td className="p-4 font-medium text-white">{status}</td><td className="p-4 leading-6 text-[#9fa1b1]">{meaning}</td><td className="p-4 leading-6 text-[#9fa1b1]">{action}</td></tr>
           ))}
         </tbody>
       </table>
@@ -189,11 +189,11 @@ function StatusTable({ rows }: { rows: Array<[string, string, string]> }) {
 
 function Checklist({ title, items }: { title: string; items: string[] }) {
   return (
-    <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5 sm:p-6">
+    <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-6">
       <h3 className="text-base font-semibold">{title}</h3>
       <ul className="mt-5 space-y-3">
         {items.map((item) => (
-          <li key={item} className="flex gap-3 text-sm leading-6 text-[#6d6962]"><span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded border border-[#c9c4b9] bg-white"><Check className="size-3 text-[#248a4b]" /></span>{item}</li>
+          <li key={item} className="flex gap-3 text-sm leading-6 text-[#9fa1b1]"><span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded border border-[#2b2d32] bg-[#191b20]"><Check className="size-3 text-success-fg" /></span>{item}</li>
         ))}
       </ul>
     </div>
@@ -202,22 +202,22 @@ function Checklist({ title, items }: { title: string; items: string[] }) {
 
 export default function MaxGuidePage() {
   return (
-    <main data-light-shell className="min-h-screen bg-[#f5f3ee] text-[#171716]">
-      <header className="sticky top-0 z-50 border-b border-[#d8d4cb] bg-[#fcfbf7]/95 backdrop-blur">
+    <main data-product-shell className="min-h-screen bg-[#121519] text-white">
+      <header className="sticky top-0 z-50 border-b border-[#2b2d32] bg-[#191b20]/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-7">
-          <div className="flex min-w-0 items-center gap-3"><BrandMark href="/" /><span className="hidden h-5 w-px bg-[#d8d4cb] sm:block" /><span className="hidden truncate text-xs font-medium text-[#6d6962] sm:block">Руководство MAX Studio</span></div>
+          <div className="flex min-w-0 items-center gap-3"><BrandMark href="/" /><span className="hidden h-5 w-px bg-[#2b2d32] sm:block" /><span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство MAX Studio</span></div>
           <div className="flex items-center gap-2">
-            <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" />О продукте</Link>
+            <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" />О продукте</Link>
             <Link href="/login?next=/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Войти</Link>
             <Link href="/max/register" className="omnia-button omnia-button-primary min-h-10 px-4 text-xs">Начать</Link>
           </div>
         </div>
       </header>
 
-      <section data-graphite-shell className="bg-[#171716] px-4 py-16 sm:px-7 sm:py-24 lg:py-28">
+      <section data-graphite-shell className="bg-[#121519] px-4 py-16 sm:px-7 sm:py-24 lg:py-28">
         <div className="mx-auto grid max-w-[1320px] gap-12 lg:grid-cols-[1fr_340px] lg:items-end">
           <div>
-            <p className="omnia-kicker text-[#f15a38]">Omnia / MAX Studio / Docs</p>
+            <p className="omnia-kicker text-[#4f81f7]">Omnia / MAX Studio / Docs</p>
             <h1 className="mt-6 max-w-[980px] text-[46px] font-semibold leading-[.96] tracking-[-.055em] sm:text-[68px] lg:text-[84px]">От идеи до запуска в MAX — без пропущенных шагов</h1>
             <p className="mt-7 max-w-[760px] text-base leading-7 text-white/55 sm:text-lg">Полное руководство для владельца бизнеса: что нажимать, какие данные подготовить, как проверить сборку, подключить бота, опубликовать приложение и принять его двумя реальными пользователями.</p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -226,7 +226,7 @@ export default function MaxGuidePage() {
             </div>
           </div>
           <div className="rounded-[14px] border border-white/14 bg-white/[.04] p-6">
-            <div className="flex items-center gap-3"><BookOpenText className="size-5 text-[#f15a38]" /><p className="text-sm font-semibold">Как читать руководство</p></div>
+            <div className="flex items-center gap-3"><BookOpenText className="size-5 text-[#4f81f7]" /><p className="text-sm font-semibold">Как читать руководство</p></div>
             <ul className="mt-5 space-y-3 text-xs leading-5 text-white/48">
               <li>① Идите по главам 00–10 для первого запуска.</li>
               <li>② Цифры на снимках показывают точные места клика.</li>
@@ -241,10 +241,10 @@ export default function MaxGuidePage() {
       <div className="mx-auto grid max-w-[1440px] gap-10 px-4 sm:px-7 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-14">
         <aside className="hidden lg:block">
           <nav aria-label="Оглавление" className="sticky top-24 py-10">
-            <p className="omnia-kicker px-3 text-[#aaa59b]">Оглавление</p>
+            <p className="omnia-kicker px-3 text-[#828491]">Оглавление</p>
             <div className="mt-4 max-h-[calc(100dvh-150px)] space-y-0.5 overflow-y-auto pr-2">
               {chapters.map(([id, label, number]) => (
-                <a key={id} href={`#${id}`} className="flex items-center gap-3 rounded-md px-3 py-2 text-[11px] text-[#6d6962] hover:bg-[#fcfbf7] hover:text-[#171716]"><span className="font-mono text-[8px] text-[#aaa59b]">{number}</span>{label}</a>
+                <a key={id} href={`#${id}`} className="flex items-center gap-3 rounded-md px-3 py-2 text-[11px] text-[#9fa1b1] hover:bg-[#191b20] hover:text-white"><span className="font-mono text-[8px] text-[#828491]">{number}</span>{label}</a>
               ))}
             </div>
           </nav>
@@ -261,7 +261,7 @@ export default function MaxGuidePage() {
                 [CreditCard, "Платёжные реквизиты", "Для платного запуска: активный магазин ЮKassa и утверждённая схема чеков."],
               ].map(([Icon, title, text]) => {
                 const ItemIcon = Icon as typeof MailCheck;
-                return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><ItemIcon className="size-5 text-[#f15a38]" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(text)}</p></article>;
+                return <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"><ItemIcon className="size-5 text-[#4f81f7]" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{String(text)}</p></article>;
               })}
             </div>
             <Note tone="warning" title="Не начинайте с токена и URL">Сначала создайте и проверьте приложение. Токен подключается до публикации, а production URL появляется только после успешного deploy. URL из безопасного превью в MAX Partner вставлять нельзя.</Note>
@@ -296,7 +296,7 @@ export default function MaxGuidePage() {
                 [MessageSquareText, "Одна задача за сообщение", "Так проще проверить результат и при необходимости откатить только одну правку."],
                 [Smartphone, "Проверяйте как пользователь", "Нажимайте кнопки, создавайте тестовые данные, обновляйте страницу и повторяйте сценарий."],
                 [RefreshCw, "Не перезапускайте генерацию", "При зависшем статусе сначала обновите страницу: серверная задача продолжает работать в фоне."],
-              ].map(([Icon, title, text]) => { const ItemIcon = Icon as typeof MessageSquareText; return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><ItemIcon className="size-5 text-[#f15a38]" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(text)}</p></article>; })}
+              ].map(([Icon, title, text]) => { const ItemIcon = Icon as typeof MessageSquareText; return <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"><ItemIcon className="size-5 text-[#4f81f7]" /><h3 className="mt-6 text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{String(text)}</p></article>; })}
             </div>
             <h3 className="mt-10 text-lg font-semibold">Шаблоны сообщений агенту</h3>
             <div className="mt-4 grid gap-3">
@@ -305,7 +305,7 @@ export default function MaxGuidePage() {
                 ["Исправление", "На экране заказа кнопка перекрывается клавиатурой. Сохрани текущий дизайн и исправь только mobile layout и safe area."],
                 ["Проверка данных", "Проверь, что пользователь MAX видит только свои заказы. Добавь пустое состояние и понятную ошибку при недоступном сервере."],
                 ["Контент", "Замени тексты каталога на приложенный список. Не меняй backend, навигацию и визуальный стиль."],
-              ].map(([label, prompt]) => <div key={label} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4"><p className="font-mono text-[9px] uppercase tracking-[.14em] text-[#f15a38]">{label}</p><p className="mt-2 text-sm leading-6 text-[#6d6962]">{prompt}</p></div>)}
+              ].map(([label, prompt]) => <div key={label} className="rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4"><p className="font-mono text-[9px] uppercase tracking-[.14em] text-[#4f81f7]">{label}</p><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{prompt}</p></div>)}
             </div>
           </GuideSection>
 
@@ -339,13 +339,13 @@ export default function MaxGuidePage() {
               <Checklist title="В Omnia" items={["Проект создан как MAX Mini App.", "Открыта интеграция MAX Bot API.", "Токен вставлен только в защищённое поле.", "Проверка вернула имя и username нужного бота.", "После публикации webhook имеет статус «активен»."]} />
             </div>
             <StepList steps={[
-              { title: "Создайте бота", text: <>Откройте <a className="font-medium text-[#c84528] underline" href="https://business.max.ru/" target="_blank" rel="noreferrer">MAX для партнёров</a>, выберите профиль, затем <strong>«Чат-боты» → «Создать»</strong>. Заполните карточку и отправьте на модерацию.</>, result: "Статус бота — «на модерации»." },
+              { title: "Создайте бота", text: <>Откройте <a className="font-medium text-[#6a95fa] underline" href="https://business.max.ru/" target="_blank" rel="noreferrer">MAX для партнёров</a>, выберите профиль, затем <strong>«Чат-боты» → «Создать»</strong>. Заполните карточку и отправьте на модерацию.</>, result: "Статус бота — «на модерации»." },
               { title: "Дождитесь статуса «создан»", text: <>Пока бот модерируется, его настройки и токен могут быть недоступны. При статусе «требует исправлений» откройте причину, исправьте карточку и отправьте повторно.</>, result: "Бот находится поиском в настоящем клиенте MAX." },
               { title: "Скопируйте токен", text: <><strong>«Чат-боты» → «Перейти» → «Расширенные настройки» → «Настроить»</strong>. Нажмите копирование рядом с токеном.</>, result: "Токен доступен в буфере обмена, но не сохранён в заметках или чате." },
               { title: "Подключите в Studio", text: <>В проекте откройте <strong>«Интеграции» → «MAX Bot API» → «Подключить»</strong>. Вставьте токен и нажмите <strong>«Проверить и сохранить»</strong>.</>, result: "Studio показывает правильное имя и username бота." },
               { title: "Не меняйте токен без причины", text: <>Обновление токена в MAX немедленно делает старый недействительным. Если ротация нужна, сначала выпустите новый токен, затем сразу обновите интеграцию в Studio и проверьте webhook.</>, result: "Интеграция снова имеет статус «активно»." },
             ]} />
-            <Note title="Срок модерации и первоисточник">MAX указывает ориентир до 48 рабочих часов. Актуальные статусы, требования к карточке и порядок получения токена сверяйте в <a className="font-medium text-[#c84528] underline" href="https://dev.max.ru/docs/chatbots/bots-create/create" target="_blank" rel="noreferrer">официальной инструкции по созданию и модерации бота</a>.</Note>
+            <Note title="Срок модерации и первоисточник">MAX указывает ориентир до 48 рабочих часов. Актуальные статусы, требования к карточке и порядок получения токена сверяйте в <a className="font-medium text-[#6a95fa] underline" href="https://dev.max.ru/docs/chatbots/bots-create/create" target="_blank" rel="noreferrer">официальной инструкции по созданию и модерации бота</a>.</Note>
             <Note tone="warning" title="Токен равен паролю бота">Не публикуйте его в сообщениях, документах, GitHub, скриншотах и исходном коде. Если токен попал наружу — обновите его в MAX и переподключите бота в Studio.</Note>
           </GuideSection>
 
@@ -379,7 +379,7 @@ export default function MaxGuidePage() {
               { title: "Сохраните и дождитесь статуса", text: <>Нажмите <strong>«Сохранить»</strong>. Если MAX отправил изменения на повторную модерацию, дождитесь возвращения рабочего статуса.</>, result: "В настоящем чате бота появилась кнопка запуска." },
               { title: "Подтвердите в Studio", text: <>Вернитесь в настройки приложения и включите <strong>«URL добавлен в MAX»</strong>.</>, result: "Readiness равен 100%, приложение готово к приёмке." },
             ]} />
-            <Note title="Официальная схема MAX">Путь к полю ссылки, варианты кнопки и формат внутреннего запуска описаны в <a className="font-medium text-[#c84528] underline" href="https://dev.max.ru/help/miniapps" target="_blank" rel="noreferrer">официальной справке по мини-приложениям</a>.</Note>
+            <Note title="Официальная схема MAX">Путь к полю ссылки, варианты кнопки и формат внутреннего запуска описаны в <a className="font-medium text-[#6a95fa] underline" href="https://dev.max.ru/help/miniapps" target="_blank" rel="noreferrer">официальной справке по мини-приложениям</a>.</Note>
             <Note tone="warning" title="Как отличить production URL">Безопасное превью открывается только внутри защищённой preview-сессии и не подходит для MAX. Production URL постоянный, начинается с HTTPS, открывается отдельно и отображается после deploy со статусом done.</Note>
           </GuideSection>
 
@@ -388,14 +388,14 @@ export default function MaxGuidePage() {
               <Checklist title="Пользователь A — новый" items={["Открывает бота по ссылке или через поиск MAX.", "Нажимает «Открыть» и видит Mini App внутри MAX.", "Создаёт тестовую запись/заказ/действие.", "Закрывает шторку и открывает повторно.", "Видит только собственные данные и сохранённый результат."]} />
               <Checklist title="Пользователь B — изоляция" items={["Использует другой реальный MAX-аккаунт и устройство.", "Первый экран не содержит данных пользователя A.", "Создаёт свой отдельный объект.", "После повторного запуска видит только свой объект.", "Получает сервисное сообщение, если оно входит в сценарий."]} />
             </div>
-            <div className="mt-6 rounded-[12px] border border-[#d8d4cb] bg-[#171716] p-6 text-white">
-              <p className="omnia-kicker text-[#f15a38]">Протокол приёмки</p>
+            <div className="mt-6 rounded-[12px] border border-[#2b2d32] bg-[#121519] p-6 text-white">
+              <p className="omnia-kicker text-[#4f81f7]">Протокол приёмки</p>
               <div className="mt-6 grid gap-px overflow-hidden rounded-[10px] border border-white/12 bg-white/12 sm:grid-cols-3">
                 {[
                   [Users, "2 разных MAX ID", "Сервер получил две независимые личности из валидированного initData."],
                   [ShieldCheck, "Изоляция данных", "Каждый select/update/delete ограничен владельцем объекта."],
                   [Webhook, "Webhook 200", "События MAX приняты, секрет проверен, повторы не создают дубликаты."],
-                ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof Users; return <div key={String(title)} className="bg-[#171716] p-5"><ItemIcon className="size-5 text-[#f15a38]" /><p className="mt-7 text-sm font-semibold">{String(title)}</p><p className="mt-2 text-xs leading-5 text-white/45">{String(copy)}</p></div>; })}
+                ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof Users; return <div key={String(title)} className="bg-[#121519] p-5"><ItemIcon className="size-5 text-[#4f81f7]" /><p className="mt-7 text-sm font-semibold">{String(title)}</p><p className="mt-2 text-xs leading-5 text-white/45">{String(copy)}</p></div>; })}
               </div>
             </div>
             <StepList steps={[
@@ -434,7 +434,7 @@ export default function MaxGuidePage() {
                 ["past_due", "Продление не прошло, действует льготный период."],
                 ["canceled", "Подписка прекращена и больше не продлевается."],
                 ["refunded", "Возврат подтверждён провайдером и отражён в учёте."],
-              ].map(([status, copy]) => <div key={status} className="rounded-[10px] border border-[#d8d4cb] bg-[#fcfbf7] p-4"><code className="text-[11px] font-semibold text-[#c84528]">{status}</code><p className="mt-2 text-xs leading-5 text-[#6d6962]">{copy}</p></div>)}
+              ].map(([status, copy]) => <div key={status} className="rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4"><code className="text-[11px] font-semibold text-[#6a95fa]">{status}</code><p className="mt-2 text-xs leading-5 text-[#9fa1b1]">{copy}</p></div>)}
             </div>
           </GuideSection>
 
@@ -451,12 +451,12 @@ export default function MaxGuidePage() {
                 [Link2, "Кнопка в MAX открывает не то", "Сверьте бота и production URL → удалите preview-параметры → сохраните URL и кнопку «Открыть»."],
                 [CreditCard, "Оплата есть, баланс не изменился", "Не платите повторно → откройте транзакции → дождитесь reconcile/webhook → передайте ID платежа поддержке."],
                 [Users, "Пользователи видят чужие данные", "Немедленно остановите приёмку → не продолжайте production → зафиксируйте сценарий и версию для исправления изоляции."],
-              ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof MailCheck; return <article key={String(title)} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5"><div className="flex gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[#ece8df]"><ItemIcon className="size-4 text-[#f15a38]" /></span><div><h3 className="text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#6d6962]">{String(copy)}</p></div></div></article>; })}
+              ].map(([Icon, title, copy]) => { const ItemIcon = Icon as typeof MailCheck; return <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"><div className="flex gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[#2b2d32]"><ItemIcon className="size-4 text-[#4f81f7]" /></span><div><h3 className="text-sm font-semibold">{String(title)}</h3><p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{String(copy)}</p></div></div></article>; })}
             </div>
-            <div className="mt-8 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+            <div className="mt-8 rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
               <h3 className="text-base font-semibold">Что приложить к обращению в поддержку</h3>
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                {["Email аккаунта без пароля", "Название и ID проекта", "Точное время с часовым поясом", "Какую кнопку нажали", "Полный текст ошибки", "Скриншот без токенов и ПДн", "Production URL, если ошибка после deploy", "Ожидаемый и фактический результат"].map((item) => <p key={item} className="flex gap-2 text-sm text-[#6d6962]"><Check className="mt-0.5 size-4 shrink-0 text-[#248a4b]" />{item}</p>)}
+                {["Email аккаунта без пароля", "Название и ID проекта", "Точное время с часовым поясом", "Какую кнопку нажали", "Полный текст ошибки", "Скриншот без токенов и ПДн", "Production URL, если ошибка после deploy", "Ожидаемый и фактический результат"].map((item) => <p key={item} className="flex gap-2 text-sm text-[#9fa1b1]"><Check className="mt-0.5 size-4 shrink-0 text-success-fg" />{item}</p>)}
               </div>
             </div>
           </GuideSection>
@@ -466,17 +466,17 @@ export default function MaxGuidePage() {
               <Checklist title="Перед реальной приёмкой" items={["SMTP доставляет подтверждение и восстановление пароля.", "ЮKassa использует настоящий shopId и утверждённую схему чеков.", "Оператор, ИНН, адрес и поддержка совпадают во всех документах.", "MAX-профиль верифицирован, бот промодерирован.", "Токен бота проверен и хранится только в защищённой интеграции.", "Сборка работает в безопасном превью.", "Production deploy имеет статус done и зелёный health.", "Webhook активен, production URL сохранён в MAX Partner.", "Кнопка «Открыть» видна в реальном клиенте MAX.", "Назначены два разных MAX-пользователя."]} />
               <Checklist title="Чистый golden path" items={["Новый пользователь зарегистрировался через UI.", "Email подтверждён по настоящему письму.", "Бизнес-профиль проверен штатным процессом.", "Реальный платёж завершён у провайдера.", "В ledger ровно одно зачисление.", "Проект создан и собран через Studio.", "Безопасное превью открыто через подписанную сессию.", "Публикация выполнена штатным deploy.", "URL добавлен в правильного MAX-бота.", "Два пользователя прошли сценарий и не увидели чужие данные.", "Автопродление управляется из кабинета.", "Во время пути не выполнялись ручные SQL/SSH-правки."]} />
             </div>
-            <div className="mt-8 rounded-[14px] bg-[#171716] p-7 text-white sm:p-9">
-              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-[#f15a38]">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Studio и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в MAX Studio <ArrowRight className="size-4" /></Link></div>
+            <div className="mt-8 rounded-[14px] bg-[#121519] p-7 text-white sm:p-9">
+              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-[#4f81f7]">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Studio и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в MAX Studio <ArrowRight className="size-4" /></Link></div>
             </div>
           </GuideSection>
         </div>
       </div>
 
-      <footer className="border-t border-[#d8d4cb] bg-[#fcfbf7] px-4 py-10 sm:px-7">
+      <footer className="border-t border-[#2b2d32] bg-[#191b20] px-4 py-10 sm:px-7">
         <div className="mx-auto flex max-w-[1320px] flex-col gap-7 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3"><BrandMark /><span className="h-5 w-px bg-[#d8d4cb]" /><span className="text-xs text-[#6d6962]">Руководство MAX Studio</span></div>
-          <div className="flex flex-wrap gap-5 text-xs text-[#6d6962]"><Link href="/max/product">О продукте</Link><Link href="/mvp">Статус продукта</Link><Link href="/legal/offer">Оферта</Link><Link href="/security">Безопасность</Link><a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" /></a></div>
+          <div className="flex items-center gap-3"><BrandMark /><span className="h-5 w-px bg-[#2b2d32]" /><span className="text-xs text-[#9fa1b1]">Руководство MAX Studio</span></div>
+          <div className="flex flex-wrap gap-5 text-xs text-[#9fa1b1]"><Link href="/max/product">О продукте</Link><Link href="/mvp">Статус продукта</Link><Link href="/legal/offer">Оферта</Link><Link href="/security">Безопасность</Link><a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" /></a></div>
         </div>
       </footer>
     </main>

@@ -174,11 +174,11 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
 
   return (
     <section
-      className="space-y-4 rounded-xl border border-[#d8d4cb] bg-[#fcfbf7] p-4"
+      className="space-y-4 rounded-xl border border-[#2b2d32] bg-[#191b20] p-4"
       data-testid="external-deploy-wizard"
     >
       <div className="flex items-start gap-3">
-        <span className="rounded-lg bg-[#f15a38]/10 p-2 text-[#f15a38]">
+        <span className="rounded-lg bg-[#4f81f7]/10 p-2 text-[#4f81f7]">
           <Rocket className="h-4 w-4" />
         </span>
         <div>
@@ -197,7 +197,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
           "Проект запускается по HTTPS",
         ].map((step, index) => (
           <div key={step} className="rounded-md bg-surface-overlay/70 p-2">
-            <span className="mb-1 block font-semibold text-[#f15a38]">
+            <span className="mb-1 block font-semibold text-[#4f81f7]">
               0{index + 1}
             </span>
             {step}
@@ -278,7 +278,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 disabled={!!target}
                 className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${
                   authType === "password"
-                    ? "border-[#f15a38] bg-[#f15a38]/10"
+                    ? "border-[#4f81f7] bg-[#4f81f7]/10"
                     : "border-border-subtle text-fg-secondary"
                 }`}
               >
@@ -293,7 +293,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 disabled={!!target}
                 className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${
                   authType === "key"
-                    ? "border-[#f15a38] bg-[#f15a38]/10"
+                    ? "border-[#4f81f7] bg-[#4f81f7]/10"
                     : "border-border-subtle text-fg-secondary"
                 }`}
               >
@@ -428,9 +428,9 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
             {completed ? (
               <CheckCircle2 className="h-4 w-4 text-success" />
             ) : activeDeploy || deployQuery.isFetching ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[#f15a38]" />
+              <Loader2 className="h-4 w-4 animate-spin text-[#4f81f7]" />
             ) : (
-              <Rocket className="h-4 w-4 text-[#f15a38]" />
+              <Rocket className="h-4 w-4 text-[#4f81f7]" />
             )}
             <p className="flex-1 text-xs font-semibold">
               {completed
@@ -456,7 +456,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
               href={deployQuery.data.prod_url}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1 text-xs text-[#c84528] hover:underline"
+              className="flex items-center gap-1 text-xs text-[#6a95fa] hover:underline"
             >
               Открыть сайт <ExternalLink className="h-3 w-3" />
             </a>

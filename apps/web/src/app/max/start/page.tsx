@@ -71,24 +71,24 @@ const steps = [
 
 export default function MaxQuickStartPage() {
   return (
-    <main data-light-shell className="min-h-screen bg-[#f5f3ee] text-[#171716]">
-      <header className="border-b border-[#d8d4cb] bg-[#fcfbf7]">
+    <main data-product-shell className="min-h-screen bg-[#121519] text-white">
+      <header className="border-b border-[#2b2d32] bg-[#191b20]">
         <div className="mx-auto flex min-h-16 max-w-[1120px] items-center justify-between gap-4 px-5 sm:px-8">
           <BrandMark href="/max/product" label="MAX Studio" />
           <div className="flex items-center gap-2">
-            <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#6d6962] hover:text-[#171716] sm:inline-flex">
+            <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#9fa1b1] hover:text-white sm:inline-flex">
               Полное руководство
             </Link>
-            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-[#f15a38] px-4 text-xs font-semibold text-white hover:bg-[#d94929]">
+            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-[#4f81f7] px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
               Открыть Studio
             </Link>
           </div>
         </div>
       </header>
 
-      <section className="border-b border-[#d8d4cb] bg-[#171716] text-white">
+      <section className="border-b border-[#2b2d32] bg-[#121519] text-white">
         <div className="mx-auto max-w-[1120px] px-5 py-14 sm:px-8 sm:py-20">
-          <p className="omnia-kicker text-[#f15a38]">Быстрый старт</p>
+          <p className="omnia-kicker text-[#4f81f7]">Быстрый старт</p>
           <h1 className="mt-4 max-w-[760px] text-[42px] font-semibold leading-[1.04] tracking-[-.05em] sm:text-[62px]">
             От идеи до запуска за шесть этапов
           </h1>
@@ -104,20 +104,20 @@ export default function MaxQuickStartPage() {
           {steps.map((step) => {
             const Icon = step.icon;
             return (
-              <li key={step.number} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-5 sm:p-7">
+              <li key={step.number} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-7">
                 <div className="flex items-center justify-between gap-4">
-                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]">
+                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]">
                     <Icon className="size-4" />
                   </span>
-                  <span className="font-mono text-xs text-[#aaa59b]">{step.number} / 06</span>
+                  <span className="font-mono text-xs text-[#828491]">{step.number} / 06</span>
                 </div>
                 <h2 className="mt-6 text-xl font-semibold">{step.title}</h2>
-                <p className="mt-2 text-sm leading-6 text-[#6d6962]">{step.text}</p>
-                <div className="mt-5 rounded-[8px] border border-[#e7e3da] bg-[#f5f3ee] p-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8d887f]">Результат этапа</p>
-                  <p className="mt-2 text-xs leading-5 text-[#171716]">{step.result}</p>
+                <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{step.text}</p>
+                <div className="mt-5 rounded-[8px] border border-[#25272b] bg-[#121519] p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#828491]">Результат этапа</p>
+                  <p className="mt-2 text-xs leading-5 text-white">{step.result}</p>
                 </div>
-                <Link href={step.href} className="mt-5 inline-flex min-h-11 items-center gap-2 text-xs font-semibold text-[#c84528] hover:underline">
+                <Link href={step.href} className="mt-5 inline-flex min-h-11 items-center gap-2 text-xs font-semibold text-[#6a95fa] hover:underline">
                   Подробная инструкция
                   <ArrowRight className="size-3.5" />
                 </Link>

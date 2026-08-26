@@ -24,7 +24,7 @@ export function MaxVersionRail({
 }) {
   return (
     <nav
-      className="max-projects-scroll relative h-full w-[76px] shrink-0 overflow-y-auto overscroll-contain border-r border-[#e7e3da] py-2 pl-1 pr-1"
+      className="max-projects-scroll relative h-full w-[76px] shrink-0 overflow-y-auto overscroll-contain border-r border-[#25272b] py-2 pl-1 pr-1"
       aria-label="История версий"
       aria-busy={loading}
       data-testid="max-version-rail"
@@ -35,14 +35,14 @@ export function MaxVersionRail({
           <span className="sr-only">Загружаем историю версий</span>
         </div>
       ) : snapshots.length === 0 ? (
-        <div className="flex min-h-28 flex-col items-center justify-center gap-2 px-1 text-center text-[9px] leading-3 text-[#aaa59b]">
+        <div className="flex min-h-28 flex-col items-center justify-center gap-2 px-1 text-center text-[9px] leading-3 text-[#828491]">
           <GitCommitHorizontal className="size-3.5" />
           Версии появятся здесь
         </div>
       ) : (
         <ol className="relative flex min-h-full flex-col items-stretch justify-center py-1">
           <span
-            className="absolute bottom-6 left-[15px] top-6 w-px bg-[#d8d4cb]"
+            className="absolute bottom-6 left-[15px] top-6 w-px bg-[#2b2d32]"
             aria-hidden="true"
           />
           {snapshots.map((snapshot) => {
@@ -66,19 +66,19 @@ export function MaxVersionRail({
                   title={`v${version} · ${label}`}
                   className={cn(
                     "group grid min-h-11 w-full grid-cols-[22px_minmax(0,1fr)] items-center gap-1 rounded-[8px] text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
-                    isSelected ? "bg-accent/10" : "hover:bg-[#f5f3ee]",
+                    isSelected ? "bg-accent/10" : "hover:bg-[#121519]",
                   )}
                   data-testid={`max-version-${version}`}
                 >
                   <span className="grid size-[22px] place-items-center">
                     <span
                       className={cn(
-                        "block size-2.5 rounded-full border-2 bg-[#fcfbf7] transition-[border-color,background-color,box-shadow]",
+                        "block size-2.5 rounded-full border-2 bg-[#191b20] transition-[border-color,background-color,box-shadow]",
                         isCurrent
                           ? "border-accent bg-accent shadow-[0_0_0_3px_var(--color-accent-subtle)]"
                           : isSelected
                             ? "border-accent shadow-[0_0_0_3px_var(--color-accent-subtle)]"
-                            : "border-[#aaa59b] group-hover:border-accent",
+                            : "border-[#828491] group-hover:border-accent",
                       )}
                       aria-hidden="true"
                     />
@@ -87,12 +87,12 @@ export function MaxVersionRail({
                     <span
                       className={cn(
                         "block text-[9px] font-semibold leading-3 tabular-nums",
-                        isCurrent || isSelected ? "text-accent" : "text-[#6d6962]",
+                        isCurrent || isSelected ? "text-accent" : "text-[#9fa1b1]",
                       )}
                     >
                       v{version}
                     </span>
-                    <span className="block truncate text-[9px] leading-3 text-[#6d6962]">
+                    <span className="block truncate text-[9px] leading-3 text-[#9fa1b1]">
                       {isCurrent ? "Текущая" : label}
                     </span>
                   </span>

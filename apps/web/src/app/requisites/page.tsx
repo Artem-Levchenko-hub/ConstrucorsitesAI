@@ -21,16 +21,16 @@ export default function RequisitesPage() {
       </LegalSection>
 
       <LegalSection title="Идентификационные данные">
-        <dl className="overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
-          <div className="grid gap-1 border-b border-[#e5e1d8] p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
-            <dt className="text-sm text-[#8d887f]">Статус</dt>
-            <dd className="font-medium text-[#171716]">
+        <dl className="overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
+          <div className="grid gap-1 border-b border-[#2b2d32] p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
+            <dt className="text-sm text-[#828491]">Статус</dt>
+            <dd className="font-medium text-white">
               Самозанятый, плательщик НПД
             </dd>
           </div>
           <div className="grid gap-1 p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
-            <dt className="text-sm text-[#8d887f]">ИНН</dt>
-            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-[#171716]">
+            <dt className="text-sm text-[#828491]">ИНН</dt>
+            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-white">
               220504676540
             </dd>
           </div>
@@ -43,7 +43,7 @@ export default function RequisitesPage() {
           генерация программного кода, публикация и сопутствующие цифровые
           услуги. Актуальные пакеты стоят 490 ₽, 1 490 ₽ и 3 990 ₽. Подробный
           состав и сумма зачисления указаны на странице{" "}
-          <Link className="font-medium text-[#c84528]" href="/pricing">
+          <Link className="font-medium text-[#6a95fa]" href="/pricing">
             «Тарифы»
           </Link>
           .
@@ -62,13 +62,13 @@ export default function RequisitesPage() {
 
       <LegalSection title="Документы">
         <div className="flex flex-col items-start gap-2">
-          <Link className="font-medium text-[#c84528]" href="/legal/offer">
+          <Link className="font-medium text-[#6a95fa]" href="/legal/offer">
             Публичная оферта
           </Link>
-          <Link className="font-medium text-[#c84528]" href="/legal/refunds">
+          <Link className="font-medium text-[#6a95fa]" href="/legal/refunds">
             Оплата и возвраты
           </Link>
-          <Link className="font-medium text-[#c84528]" href="/legal/privacy">
+          <Link className="font-medium text-[#6a95fa]" href="/legal/privacy">
             Политика конфиденциальности
           </Link>
         </div>
@@ -78,7 +78,7 @@ export default function RequisitesPage() {
         <p>
           По вопросам сервиса, документов и платежей:{" "}
           <a
-            className="font-medium text-[#c84528]"
+            className="font-medium text-[#6a95fa]"
             href="mailto:support@lead-generator.ru"
           >
             support@lead-generator.ru
@@ -89,7 +89,7 @@ export default function RequisitesPage() {
           href="https://npd.nalog.ru/check-status/"
           target="_blank"
           rel="noreferrer"
-          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#c84528]"
+          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#6a95fa]"
         >
           Проверить статус самозанятого на сайте ФНС
           <ExternalLink className="size-4" />

@@ -489,7 +489,7 @@ export function HeroMediaPanel({
                           className={cn(
                             "grid h-8 w-8 place-items-center rounded-full border text-xs font-semibold",
                             active &&
-                              "border-accent bg-accent text-on-accent",
+                              "border-accent bg-accent text-accent-fg",
                             complete &&
                               "border-success/50 bg-success/15 text-success",
                             !active &&

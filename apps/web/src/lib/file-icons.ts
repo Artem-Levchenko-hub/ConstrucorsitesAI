@@ -36,9 +36,9 @@ export function fileIcon(name: string): FileIcon {
     case "sass":
       return { Icon: Palette, color: "text-sky-400" };
     case "json":
-      return { Icon: FileJson, color: "text-amber-400" };
+      return { Icon: FileJson, color: "text-blue-400" };
     case "html":
-      return { Icon: FileCode2, color: "text-orange-400" };
+      return { Icon: FileCode2, color: "text-blue-400" };
     case "sql":
       return { Icon: Database, color: "text-violet-400" };
     case "md":

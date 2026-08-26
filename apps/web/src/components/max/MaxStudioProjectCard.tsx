@@ -36,7 +36,7 @@ export function MaxStudioProjectCard({
   const nextHref = nextStage?.href ?? `/max/${project.id}/dashboard`;
 
   return (
-    <article className="group relative overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] transition hover:border-[#aaa59b]">
+    <article className="group relative overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20] transition hover:border-[#828491]">
       <div className="absolute right-2 top-2 z-20">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -45,7 +45,7 @@ export function MaxStudioProjectCard({
               variant="ghost"
               size="icon"
               aria-label={`Действия с проектом ${project.name}`}
-              className="size-11 bg-[#fcfbf7]/90 text-[#6d6962] shadow-sm backdrop-blur hover:bg-[#fcfbf7] hover:text-[#171716]"
+              className="size-11 bg-[#191b20]/90 text-[#9fa1b1] shadow-sm backdrop-blur hover:bg-[#191b20] hover:text-white"
             >
               <MoreVertical className="size-4" />
             </Button>
@@ -70,7 +70,7 @@ export function MaxStudioProjectCard({
 
       <Link
         href={`/max/${project.id}`}
-        className="relative block aspect-[16/10] overflow-hidden bg-[#ece8df]"
+        className="relative block aspect-[16/10] overflow-hidden bg-[#2b2d32]"
         aria-label={`Открыть редактор проекта ${project.name}`}
       >
         {project.preview_url ? (
@@ -83,14 +83,14 @@ export function MaxStudioProjectCard({
           />
         ) : (
           <div className="grid h-full place-items-center">
-            <div className="w-[82px] rounded-[14px] border-4 border-[#171716] bg-white p-2 shadow-lg">
-              <div className="h-8 rounded-[6px] bg-[#f15a38]" />
-              <div className="mt-2 h-2 rounded bg-[#ece8df]" />
-              <div className="mt-1 h-2 w-2/3 rounded bg-[#ece8df]" />
+            <div className="w-[82px] rounded-[14px] border-4 border-[#25272b] bg-[#191b20] p-2 shadow-lg">
+              <div className="h-8 rounded-[6px] bg-[#4f81f7]" />
+              <div className="mt-2 h-2 rounded bg-[#2b2d32]" />
+              <div className="mt-1 h-2 w-2/3 rounded bg-[#2b2d32]" />
             </div>
           </div>
         )}
-        <span className="absolute left-3 top-3 rounded-full bg-[#171716] px-2.5 py-1 font-mono text-[9px] uppercase text-white">
+        <span className="absolute left-3 top-3 rounded-full bg-[#121519] px-2.5 py-1 font-mono text-[9px] uppercase text-white">
           MAX Mini App
         </span>
       </Link>
@@ -98,20 +98,20 @@ export function MaxStudioProjectCard({
       <div className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <Link href={`/max/${project.id}`} className="font-semibold hover:text-[#c84528]">
+            <Link href={`/max/${project.id}`} className="font-semibold hover:text-[#6a95fa]">
               {project.name}
             </Link>
-            <p className="mt-1 text-xs text-[#8d887f]">
+            <p className="mt-1 text-xs text-[#828491]">
               Обновлён {new Date(project.updated_at).toLocaleDateString("ru-RU")}
             </p>
           </div>
-          <span className="font-mono text-[9px] text-[#aaa59b]">
+          <span className="font-mono text-[9px] text-[#828491]">
             {String(index + 1).padStart(2, "0")}
           </span>
         </div>
 
-        <div className="mt-5 border-t border-[#e7e3da] pt-4">
-          <div className="flex items-center justify-between gap-3 text-[10px] text-[#8d887f]">
+        <div className="mt-5 border-t border-[#25272b] pt-4">
+          <div className="flex items-center justify-between gap-3 text-[10px] text-[#828491]">
             <span>Путь до запуска</span>
             <span className="tabular-nums">
               {readiness.isSuccess
@@ -121,20 +121,20 @@ export function MaxStudioProjectCard({
                   : "Проверяем…"}
             </span>
           </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#e7e3da]">
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#25272b]">
             <div
-              className="h-full rounded-full bg-[#f15a38] transition-[width]"
+              className="h-full rounded-full bg-[#4f81f7] transition-[width]"
               style={{ width: `${readiness.isSuccess ? journey.progress : 0}%` }}
             />
           </div>
 
           <div className="mt-4 flex items-center gap-2">
             {readiness.isError ? (
-              <CircleAlert className="size-3.5 shrink-0 text-[#b98618]" />
+              <CircleAlert className="size-3.5 shrink-0 text-[#6a95fa]" />
             ) : (
-              <span className="size-2 shrink-0 rounded-full bg-[#f15a38]" />
+              <span className="size-2 shrink-0 rounded-full bg-[#4f81f7]" />
             )}
-            <p className="min-w-0 flex-1 truncate text-xs font-medium text-[#171716]">
+            <p className="min-w-0 flex-1 truncate text-xs font-medium text-white">
               {readiness.isError
                 ? "Не удалось проверить готовность"
                 : readiness.isLoading
@@ -145,10 +145,10 @@ export function MaxStudioProjectCard({
 
           <Link
             href={nextHref}
-            className="mt-4 flex min-h-10 items-center justify-between rounded-[8px] border border-[#d8d4cb] px-3 text-xs font-semibold text-[#171716] transition-colors hover:border-[#f15a38] hover:bg-[#f15a38]/[.04]"
+            className="mt-4 flex min-h-10 items-center justify-between rounded-[8px] border border-[#2b2d32] px-3 text-xs font-semibold text-white transition-colors hover:border-[#4f81f7] hover:bg-[#4f81f7] hover:text-[#121519]"
           >
             {nextStage?.actionLabel ?? "Открыть управление"}
-            <ArrowRight className="size-3.5 text-[#f15a38] transition-transform group-hover:translate-x-0.5" />
+            <ArrowRight className="size-3.5 text-[#4f81f7] transition-transform group-hover:translate-x-0.5" />
           </Link>
         </div>
       </div>

@@ -128,7 +128,7 @@ export function NewProjectDialog() {
               onClick={() => setMode("create")}
               className={`px-3 h-7 rounded-full text-xs font-medium transition-colors ${
                 mode === "create"
-                  ? "bg-accent text-white shadow-sm"
+                  ? "bg-accent text-[#121519] shadow-sm"
                   : "text-fg-tertiary hover:text-fg-secondary"
               }`}
             >
@@ -139,7 +139,7 @@ export function NewProjectDialog() {
               onClick={() => setMode("import")}
               className={`px-3 h-7 rounded-full text-xs font-medium transition-colors ${
                 mode === "import"
-                  ? "bg-accent text-white shadow-sm"
+                  ? "bg-accent text-[#121519] shadow-sm"
                   : "text-fg-tertiary hover:text-fg-secondary"
               }`}
             >

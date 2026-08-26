@@ -197,25 +197,25 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >
       <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_300px]">
-        <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
+        <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
           <div className="flex items-start gap-4">
-            <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#f15a38] text-white"><Sparkles className="size-5" /></span>
+            <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#4f81f7] text-[#121519]"><Sparkles className="size-5" /></span>
             <div>
-              <p className="omnia-kicker text-[#f15a38]">Рекомендуемый набор</p>
+              <p className="omnia-kicker text-[#4f81f7]">Рекомендуемый набор</p>
               <h2 className="mt-1 text-xl font-semibold">{catalog.data?.recommended_pack?.title ?? "Базовый контур приложения"}</h2>
-              <p className="mt-2 text-sm leading-6 text-[#6d6962]">{catalog.data?.recommended_pack?.description ?? "Оплата, CRM, учёт и аналитика для вашего сценария."}</p>
+              <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{catalog.data?.recommended_pack?.description ?? "Оплата, CRM, учёт и аналитика для вашего сценария."}</p>
             </div>
           </div>
-          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">
+          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 min-h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
             {pack.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             Подключить рекомендуемые
           </Button>
         </div>
-        <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-          <p className="omnia-kicker text-[#8d887f]">Состояние</p>
-          <p className="mt-3 text-3xl font-semibold">{connectedCount}<span className="text-lg text-[#aaa59b]"> / {catalog.data?.providers.length ?? 0}</span></p>
-          <p className="mt-2 text-xs text-[#6d6962]">сервисов активно в этом проекте</p>
-          <div className="mt-5 flex items-center gap-2 text-xs text-[#248a4b]"><ShieldCheck className="size-4" /> Секреты зашифрованы</div>
+        <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
+          <p className="omnia-kicker text-[#828491]">Состояние</p>
+          <p className="mt-3 text-3xl font-semibold">{connectedCount}<span className="text-lg text-[#828491]"> / {catalog.data?.providers.length ?? 0}</span></p>
+          <p className="mt-2 text-xs text-[#9fa1b1]">сервисов активно в этом проекте</p>
+          <div className="mt-5 flex items-center gap-2 text-xs text-success-fg"><ShieldCheck className="size-4" /> Секреты зашифрованы</div>
         </div>
       </section>
 
@@ -225,33 +225,33 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             {(Object.keys(categories) as Array<IntegrationCategory | "all">).map((key) => {
               const item = categories[key];
               return (
-                <button key={key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
+                <button key={key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-[#25272b] bg-[#121519] text-white" : "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1]")}>
                   <item.icon className="size-3.5" />{item.label}
                 </button>
               );
             })}
           </div>
           <label className="relative block w-full lg:w-[280px]">
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#aaa59b]" />
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 border-[#d8d4cb] bg-[#fcfbf7] pl-9 sm:h-9" />
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
+            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 border-[#2b2d32] bg-[#191b20] pl-9 sm:h-9" />
           </label>
         </div>
 
-        <div className="mt-5 overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
-          <div className="hidden grid-cols-[1.3fr_1fr_150px_150px] border-b border-[#d8d4cb] px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-[#8d887f] lg:grid">
+        <div className="mt-5 overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
+          <div className="hidden grid-cols-[1.3fr_1fr_150px_150px] border-b border-[#2b2d32] px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-[#828491] lg:grid">
             <span>Сервис</span><span>Возможности</span><span>Статус</span><span />
           </div>
           {catalog.isLoading ? (
-            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-[#f15a38]" /></div>
+            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-[#4f81f7]" /></div>
           ) : catalog.isError ? (
             <div className="grid min-h-[260px] place-items-center px-6 py-10 text-center">
               <div className="max-w-[420px]">
-                <Plug className="mx-auto size-7 text-[#aaa59b]" />
+                <Plug className="mx-auto size-7 text-[#828491]" />
                 <h3 className="mt-4 text-base font-semibold">Не удалось загрузить сервисы</h3>
-                <p className="mt-2 text-sm leading-6 text-[#6d6962]">{message(catalog.error)}</p>
+                <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{message(catalog.error)}</p>
                 <Button
                   variant="outline"
-                  className="mt-5 border-[#d8d4cb] bg-[#fcfbf7]"
+                  className="mt-5 border-[#2b2d32] bg-[#191b20]"
                   onClick={() => void catalog.refetch()}
                 >
                   <RefreshCw className="size-4" />
@@ -260,7 +260,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
               </div>
             </div>
           ) : (
-            <div className="divide-y divide-[#e7e3da]">
+            <div className="divide-y divide-[#25272b]">
               {visible.map((provider) => {
                 const connection = connections.get(provider.key);
                 const connected = connection?.status === "active" && connection.bound_to_project;
@@ -269,23 +269,23 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                 return (
                   <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_1fr_150px_150px] lg:items-center">
                     <div className="flex items-center gap-3">
-                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#d8d4cb] bg-white text-[#f15a38]"><Icon className="size-4" /></span>
-                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className="mt-1 line-clamp-1 text-xs text-[#8d887f]">{provider.description}</p></div>
+                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#2b2d32] bg-[#191b20] text-[#4f81f7]"><Icon className="size-4" /></span>
+                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className="mt-1 line-clamp-1 text-xs text-[#828491]">{provider.description}</p></div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {provider.capabilities.slice(0, 3).map((item) => <span key={item} className="rounded-full border border-[#d8d4cb] px-2 py-1 text-[9px] text-[#6d6962]">{item}</span>)}
+                      {provider.capabilities.slice(0, 3).map((item) => <span key={item} className="rounded-full border border-[#2b2d32] px-2 py-1 text-[9px] text-[#9fa1b1]">{item}</span>)}
                     </div>
                     <div>
-                      {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#248a4b]"><Check className="size-3.5" />Подключено</span>
-                        : reusable ? <span className="text-xs text-[#c84528]">Есть у бизнеса</span>
-                        : provider.available ? <span className="text-xs text-[#8d887f]">Не подключено</span>
-                        : <span className="text-xs text-[#aaa59b]">Готовим</span>}
+                      {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-fg"><Check className="size-3.5" />Подключено</span>
+                        : reusable ? <span className="text-xs text-[#6a95fa]">Есть у бизнеса</span>
+                        : provider.available ? <span className="text-xs text-[#828491]">Не подключено</span>
+                        : <span className="text-xs text-[#828491]">Готовим</span>}
                     </div>
                     <div className="flex justify-end gap-1">
                       {connected ? (
                         <>
-                          <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#6d6962] hover:bg-[#f5f3ee] sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
-                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#8d887f] hover:bg-[#c63d35]/10 hover:text-[#c63d35] sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
+                          <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#9fa1b1] hover:bg-[#121519] sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
+                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#828491] hover:bg-[#c63d35]/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : reusable ? (
@@ -293,7 +293,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                       ) : provider.available ? (
                         <Button size="sm" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
                       ) : (
-                        <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-[#8d887f]">Требования <ExternalLink className="size-3" /></a>
+                        <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-[#828491]">Требования <ExternalLink className="size-3" /></a>
                       )}
                     </div>
                   </article>
@@ -312,40 +312,40 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       >
         {selected && (
           <DialogContent
-            data-light-shell
-            className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#d8d4cb] bg-[#fcfbf7] p-0 text-[#171716] sm:max-h-[90dvh] sm:max-w-[600px] sm:p-0"
+            data-product-shell
+            className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#2b2d32] bg-[#191b20] p-0 text-white sm:max-h-[90dvh] sm:max-w-[600px] sm:p-0"
           >
-            <header className="shrink-0 border-b border-[#d8d4cb] p-5 pr-16 sm:p-6 sm:pr-14">
+            <header className="shrink-0 border-b border-[#2b2d32] p-5 pr-16 sm:p-6 sm:pr-14">
               <div>
-                <p className="omnia-kicker text-[#f15a38]">Подключение</p>
-                <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
+                <p className="omnia-kicker text-[#4f81f7]">Подключение</p>
+                <DialogTitle className="mt-2 text-2xl font-semibold text-white">
                   {selected.name}
                 </DialogTitle>
-                <DialogDescription className="mt-2 max-w-[470px] text-sm leading-6 text-[#6d6962]">
+                <DialogDescription className="mt-2 max-w-[470px] text-sm leading-6 text-[#9fa1b1]">
                   {selected.description}
                 </DialogDescription>
               </div>
             </header>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
               {selected.oauth_available && (
-                <div className="rounded-[10px] border border-[#f15a38]/30 bg-[#f15a38]/[.06] p-4">
+                <div className="rounded-[10px] border border-[#4f81f7]/30 bg-[#4f81f7]/[.06] p-4">
                   <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
-                  <p className="mt-1 text-xs leading-5 text-[#6d6962]">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
-                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-[#f15a38] text-white hover:bg-[#d94929]">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
+                  <p className="mt-1 text-xs leading-5 text-[#9fa1b1]">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
+                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
                 </div>
               )}
               {selected.fields.map((field) => (
                 <div key={field.key} className="space-y-2">
                   <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>
-                  <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-[#d8d4cb] bg-white" />
-                  {field.help && <p className="text-xs leading-5 text-[#8d887f]">{field.help}</p>}
+                  <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-[#2b2d32] bg-[#191b20]" />
+                  {field.help && <p className="text-xs leading-5 text-[#828491]">{field.help}</p>}
                 </div>
               ))}
-              <div className="rounded-[10px] bg-[#f5f3ee] p-4 text-xs leading-5 text-[#6d6962]"><ShieldCheck className="mb-2 size-4 text-[#248a4b]" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
+              <div className="rounded-[10px] bg-[#121519] p-4 text-xs leading-5 text-[#9fa1b1]"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
             </div>
-            <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
-              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-[#8d887f]">Документация сервиса</a>
-              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
+            <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#2b2d32] p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
+              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-[#828491]">Документация сервиса</a>
+              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
             </footer>
           </DialogContent>
         )}

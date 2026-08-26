@@ -15,24 +15,24 @@ export function AdminAuditPanel() {
   if (audit.isLoading) {
     return (
       <div className="grid min-h-[240px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-[#f15a38]" />
+        <Loader2 className="size-6 animate-spin text-[#4f81f7]" />
       </div>
     );
   }
   if (audit.isError) {
     return (
-      <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-8 text-center">
-        <CircleAlert className="mx-auto size-7 text-[#c63d35]" />
+      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
+        <CircleAlert className="mx-auto size-7 text-danger-fg" />
         <h2 className="mt-4 text-lg font-semibold">Журнал не загрузился</h2>
       </section>
     );
   }
   if (!audit.data?.length) {
     return (
-      <section className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-10 text-center">
-        <History className="mx-auto size-7 text-[#8d887f]" />
+      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-10 text-center">
+        <History className="mx-auto size-7 text-[#828491]" />
         <h2 className="mt-4 text-lg font-semibold">Изменений пока нет</h2>
-        <p className="mt-2 text-sm text-[#6d6962]">
+        <p className="mt-2 text-sm text-[#9fa1b1]">
           Выдача прав и подтверждения появятся здесь.
         </p>
       </section>
@@ -40,21 +40,21 @@ export function AdminAuditPanel() {
   }
 
   return (
-    <div className="overflow-hidden rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7]">
+    <div className="overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
       {audit.data.map((event) => (
         <article
           key={event.id}
-          className="border-b border-[#e5e1d8] p-4 last:border-b-0 sm:p-5"
+          className="border-b border-[#2b2d32] p-4 last:border-b-0 sm:p-5"
         >
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm font-medium">
               {event.actor_email} → {event.target_email}
             </p>
-            <time className="text-xs text-[#8d887f]">
+            <time className="text-xs text-[#828491]">
               {new Date(event.created_at).toLocaleString("ru-RU")}
             </time>
           </div>
-          <p className="mt-2 text-xs leading-5 text-[#6d6962]">
+          <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
             Роль: {String(event.details.before?.role ?? "—")} →{" "}
             {String(event.details.after?.role ?? "—")} · Статус:{" "}
             {String(event.details.before?.status ?? "—")} →{" "}

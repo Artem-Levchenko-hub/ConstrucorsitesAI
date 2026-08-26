@@ -139,7 +139,7 @@ export function MaxSettingsWorkspace({
           ["app", FileCheck2, "Данные приложения"],
           ["vps", Server, "Своя VPS"],
         ].map(([id, Icon, label]) => (
-          <button key={String(id)} onClick={() => selectTab(id as Tab)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm sm:h-10", tab === id ? "border-[#171716] bg-[#171716] text-white" : "border-[#d8d4cb] bg-[#fcfbf7] text-[#6d6962]")}>
+          <button key={String(id)} onClick={() => selectTab(id as Tab)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm sm:h-10", tab === id ? "border-[#25272b] bg-[#121519] text-white" : "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1]")}>
             <Icon className="size-4" />{String(label)}
           </button>
         ))}
@@ -148,31 +148,31 @@ export function MaxSettingsWorkspace({
       {tab === "bot" && (
         <>
           <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
-            <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+            <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 sm:p-8">
             <div className="flex items-start justify-between gap-5">
               <div>
-                <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><Bot className="size-5" /></span>
+                <span className="grid size-11 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]"><Bot className="size-5" /></span>
                 <h2 className="mt-6 text-2xl font-semibold">Подключение MAX-бота</h2>
-                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#6d6962]">
+                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#9fa1b1]">
                   В само мини-приложение токен не попадает. Он нужен только
                   backend Omnia для Bot API, webhook и сообщений от имени бота. Если
                   это не нужно, можно просто вставить production URL в MAX Partner вручную.
                 </p>
               </div>
-              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${integration.data?.connected ? "bg-[#248a4b]/10 text-[#248a4b]" : "bg-[#e8c547]/15 text-[#745f16]"}`}>
+              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${integration.data?.connected ? "bg-[#248a4b]/10 text-success-fg" : "bg-[#e8c547]/15 text-[#e8c547]"}`}>
                 {integration.data?.connected ? "Подключён" : "Не подключён"}
               </span>
             </div>
             <div className="mt-7 max-w-[260px]">
               <MaxIntegrationButton projectId={projectId} initialTemplate="max_miniapp" display="panel" emphasized={!integration.data?.connected} label={integration.data?.connected ? "Открыть настройки" : "Проверить и подключить"} />
             </div>
-            <p className="mt-5 flex items-center gap-2 text-xs text-[#8d887f]"><ShieldCheck className="size-4 text-[#248a4b]" />Секрет хранится зашифрованно и не отображается повторно.</p>
+            <p className="mt-5 flex items-center gap-2 text-xs text-[#828491]"><ShieldCheck className="size-4 text-success-fg" />Секрет хранится зашифрованно и не отображается повторно.</p>
             </div>
-            <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-            <p className="omnia-kicker text-[#8d887f]">Что проверить</p>
+            <aside className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
+            <p className="omnia-kicker text-[#828491]">Что проверить</p>
             <ol className="mt-5 space-y-4 text-sm">
               {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "Backend Bot API отвечает из production"].map((item, index) => (
-                <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#d8d4cb] font-mono text-[9px] text-[#8d887f]">{index + 1}</span><span className="pt-0.5 text-[#6d6962]">{item}</span></li>
+                <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#2b2d32] font-mono text-[9px] text-[#828491]">{index + 1}</span><span className="pt-0.5 text-[#9fa1b1]">{item}</span></li>
               ))}
             </ol>
             <a
@@ -180,25 +180,25 @@ export function MaxSettingsWorkspace({
               target="_blank"
               rel="noreferrer"
               onClick={openMaxCabinet}
-              className="mt-6 inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-[#c84528]"
+              className="mt-6 inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-[#6a95fa]"
             >
               Открыть кабинет MAX
               <ExternalLink className="size-3" />
             </a>
-            <p className="mt-1 text-[10px] leading-4 text-[#8d887f]">
+            <p className="mt-1 text-[10px] leading-4 text-[#828491]">
               Если приложение опубликовано, его ссылка скопируется автоматически.
             </p>
             </aside>
           </section>
 
-          <section className="mt-5 rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
+          <section className="mt-5 rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 sm:p-8">
             <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
               <div className="max-w-[680px]">
                 <div className="flex items-center gap-2">
                   <span
                     className={`size-2 rounded-full ${config.data?.config.max_url_attached ? "bg-[#248a4b]" : "bg-[#e8c547]"}`}
                   />
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8d887f]">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#828491]">
                     URL приложения в MAX
                   </p>
                 </div>
@@ -207,19 +207,19 @@ export function MaxSettingsWorkspace({
                     ? "Подтверждено пользователем"
                     : "Добавьте HTTPS-адрес в MAX Partner"}
                 </h2>
-                <p className="mt-2 text-sm leading-6 text-[#6d6962]">
+                <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">
                   Omnia скопирует постоянный адрес и откроет кабинет MAX. После вставки
                   вернитесь сюда: мы проверим доступность приложения и сохраним ваше
                   подтверждение. MAX пока не сообщает эту настройку через публичный API.
                 </p>
                 {integration.data?.app_url && (
-                  <p className="mt-3 truncate font-mono text-[11px] text-[#8d887f]">
+                  <p className="mt-3 truncate font-mono text-[11px] text-[#828491]">
                     {integration.data.app_url}
                   </p>
                 )}
               </div>
               <div className="flex w-full shrink-0 flex-col gap-2 lg:w-[260px]">
-                <Button asChild variant="outline" className="h-11 border-[#d8d4cb]">
+                <Button asChild variant="outline" className="h-11 border-[#2b2d32]">
                   <a
                     href="https://business.max.ru/"
                     target="_blank"
@@ -232,7 +232,7 @@ export function MaxSettingsWorkspace({
                 </Button>
                 <Button
                   type="button"
-                  className="h-11 bg-[#f15a38] text-white hover:bg-[#d94929]"
+                  className="h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]"
                   disabled={!integration.data?.app_url || confirmMaxUrl.isPending}
                   onClick={() => confirmMaxUrl.mutate()}
                 >
@@ -250,14 +250,14 @@ export function MaxSettingsWorkspace({
 
       {tab === "app" && (
         <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
-          <div className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6 sm:p-8">
-            <span className="grid size-11 place-items-center rounded-[8px] bg-[#ece8df] text-[#f15a38]"><FileCheck2 className="size-5" /></span>
+          <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 sm:p-8">
+            <span className="grid size-11 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]"><FileCheck2 className="size-5" /></span>
             <h2 className="mt-6 text-2xl font-semibold">Данные готового приложения</h2>
-            <p className="mt-3 max-w-[620px] text-sm leading-6 text-[#6d6962]">Название, сценарий, функции, стиль, управляемый контент, оператор, поддержка, возрастной рейтинг и обязательные юридические страницы. Эти изменения версионируются без расходов на модель.</p>
+            <p className="mt-3 max-w-[620px] text-sm leading-6 text-[#9fa1b1]">Название, сценарий, функции, стиль, управляемый контент, оператор, поддержка, возрастной рейтинг и обязательные юридические страницы. Эти изменения версионируются без расходов на модель.</p>
             <div className="mt-7 max-w-[260px]"><MaxProjectSetupDialog projectId={projectId} display="panel" emphasized={!config.data?.config.legal.terms_accepted} label="Открыть данные приложения" /></div>
           </div>
-          <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-            <p className="omnia-kicker text-[#8d887f]">Готовность</p>
+          <aside className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
+            <p className="omnia-kicker text-[#828491]">Готовность</p>
             <div className="mt-5 space-y-4 text-sm">
               {[
                 ["Название и сценарий", Boolean(config.data?.config.app_name && config.data?.config.summary)],
@@ -268,8 +268,8 @@ export function MaxSettingsWorkspace({
                 ["Условия приняты", Boolean(config.data?.config.legal.terms_accepted)],
               ].map(([label, done]) => (
                 <p key={String(label)} className="flex items-center gap-3">
-                  <span className={`grid size-5 place-items-center rounded-full border ${done ? "border-[#248a4b] bg-[#248a4b]/5 text-[#248a4b]" : "border-[#d8d4cb] text-transparent"}`}><Check className="size-3" /></span>
-                  <span className={done ? "text-[#6d6962]" : "text-[#171716]"}>{String(label)}</span>
+                  <span className={`grid size-5 place-items-center rounded-full border ${done ? "border-[#248a4b] bg-[#248a4b]/5 text-success-fg" : "border-[#2b2d32] text-transparent"}`}><Check className="size-3" /></span>
+                  <span className={done ? "text-[#9fa1b1]" : "text-white"}>{String(label)}</span>
                 </p>
               ))}
             </div>
@@ -279,15 +279,15 @@ export function MaxSettingsWorkspace({
 
       {tab === "vps" && (
         <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_300px]">
-          <div className="[&>section]:rounded-[12px] [&>section]:border-[#d8d4cb] [&>section]:bg-[#fcfbf7] [&>section]:p-6">
+          <div className="[&>section]:rounded-[12px] [&>section]:border-[#2b2d32] [&>section]:bg-[#191b20] [&>section]:p-6">
             <ExternalDeployWizard projectId={projectId} />
           </div>
-          <aside className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-6">
-            <p className="omnia-kicker text-[#8d887f]">Безопасность</p>
-            <div className="mt-5 space-y-5 text-xs leading-5 text-[#6d6962]">
-              <p className="flex gap-3"><KeyRound className="mt-0.5 size-4 shrink-0 text-[#f15a38]" />Пароль или SSH-ключ шифруется и используется только серверным provisioner.</p>
-              <p className="flex gap-3"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#f15a38]" />Перед установкой показываем fingerprint хоста и просим подтвердить его.</p>
-              <p className="flex gap-3"><CircleAlert className="mt-0.5 size-4 shrink-0 text-[#f15a38]" />Сначала проверяем Docker, порт, DNS и права. Деплой не начнётся на неподходящем сервере.</p>
+          <aside className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
+            <p className="omnia-kicker text-[#828491]">Безопасность</p>
+            <div className="mt-5 space-y-5 text-xs leading-5 text-[#9fa1b1]">
+              <p className="flex gap-3"><KeyRound className="mt-0.5 size-4 shrink-0 text-[#4f81f7]" />Пароль или SSH-ключ шифруется и используется только серверным provisioner.</p>
+              <p className="flex gap-3"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#4f81f7]" />Перед установкой показываем fingerprint хоста и просим подтвердить его.</p>
+              <p className="flex gap-3"><CircleAlert className="mt-0.5 size-4 shrink-0 text-[#4f81f7]" />Сначала проверяем Docker, порт, DNS и права. Деплой не начнётся на неподходящем сервере.</p>
             </div>
           </aside>
         </section>

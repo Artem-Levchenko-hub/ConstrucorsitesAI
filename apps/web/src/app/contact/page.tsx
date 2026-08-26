@@ -16,11 +16,11 @@ export default function ContactPage() {
           { Icon: Building2, title: "Корпоративный запуск", text: "Интеграции с внутренними системами, собственная VPS и сопровождение.", href: "mailto:sales@lead-generator.ru", label: "sales@lead-generator.ru" },
           { Icon: Mail, title: "Поддержка", text: "Вопросы по аккаунту, публикации, оплате и работающим приложениям.", href: "mailto:support@lead-generator.ru", label: "support@lead-generator.ru" },
         ].map(({ Icon, title, text, href, label }) => (
-          <article key={title} className="rounded-[12px] border border-[#d8d4cb] bg-[#fcfbf7] p-7">
-            <Icon className="h-6 w-6 text-[#f15a38]" />
+          <article key={title} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-7">
+            <Icon className="h-6 w-6 text-[#4f81f7]" />
             <h2 className="mt-5 text-[18px] font-semibold">{title}</h2>
-            <p className="mt-2 min-h-12 text-[14px] leading-6 text-[#6d6962]">{text}</p>
-            <Link href={href} className="mt-7 inline-flex items-center gap-2 text-[13px] font-semibold text-[#c84528]">
+            <p className="mt-2 min-h-12 text-[14px] leading-6 text-[#9fa1b1]">{text}</p>
+            <Link href={href} className="mt-7 inline-flex items-center gap-2 text-[13px] font-semibold text-[#6a95fa]">
               {label}
               <Send className="h-4 w-4" />
             </Link>

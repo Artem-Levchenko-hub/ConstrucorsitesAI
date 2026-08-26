@@ -61,21 +61,21 @@ const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя
 
 function StudioNav({ email }: { email: string }) {
   return (
-    <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[#d8d4cb] bg-[#fcfbf7] md:flex">
-      <div className="flex h-16 items-center border-b border-[#d8d4cb] px-5">
+    <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[#2b2d32] bg-[#191b20] md:flex">
+      <div className="flex h-16 items-center border-b border-[#2b2d32] px-5">
         <BrandMark />
       </div>
       <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 text-sm">
-        <Link href="/max" className="flex items-center gap-3 rounded-[8px] bg-[#ece8df] px-3 py-2.5 font-medium">
+        <Link href="/max" className="flex items-center gap-3 rounded-[8px] bg-[#2b2d32] px-3 py-2.5 font-medium">
           <LayoutGrid className="size-4" /> Проекты
         </Link>
         <MaxStudioAccountDisclosure />
       </nav>
-      <div className="border-t border-[#d8d4cb] p-3">
+      <div className="border-t border-[#2b2d32] p-3">
         <p className="truncate px-3 text-xs font-medium">{email}</p>
-        <p className="mt-1 px-3 text-[10px] text-[#8d887f]">Владелец MAX Studio</p>
+        <p className="mt-1 px-3 text-[10px] text-[#828491]">Владелец MAX Studio</p>
         <form action={logoutAction}>
-          <button className="mt-3 flex w-full items-center gap-3 rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee]">
+          <button className="mt-3 flex w-full items-center gap-3 rounded-[8px] px-3 py-2 text-xs text-[#9fa1b1] hover:bg-[#121519]">
             <LogOut className="size-3.5" /> Выйти
           </button>
         </form>
@@ -240,21 +240,21 @@ export function MaxStudio({ email }: { email: string }) {
     );
 
   return (
-    <div data-light-shell className="flex h-full min-h-0 bg-[#f5f3ee] text-[#171716]">
+    <div data-product-shell className="flex h-full min-h-0 bg-[#121519] text-white">
       <StudioNav email={email} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#d8d4cb] bg-[#fcfbf7] px-5 sm:px-7">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-5 sm:px-7">
           <div className="flex items-center gap-3 md:hidden">
             <BrandMark />
           </div>
           <div className="hidden md:block">
-            <p className="omnia-kicker text-[#8d887f]">MAX Studio</p>
+            <p className="omnia-kicker text-[#828491]">MAX Studio</p>
           </div>
           <div className="flex items-center gap-2">
-            <Link href="/max/start" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#6d6962] hover:bg-[#f5f3ee] sm:inline-flex">
+            <Link href="/max/start" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex">
               <CircleHelp className="mr-2 size-3.5" /> Быстрый старт
             </Link>
-            <Button onClick={() => setDialogOpen(true)} className="bg-[#f15a38] text-white hover:bg-[#d94929]">
+            <Button onClick={() => setDialogOpen(true)} className="bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
               <Plus className="size-4" /> Новый проект
             </Button>
           </div>
@@ -262,16 +262,16 @@ export function MaxStudio({ email }: { email: string }) {
 
         <main className="min-h-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 sm:py-10 lg:px-12">
           <div className="mx-auto max-w-[1120px]">
-            <div className="flex flex-col gap-6 border-b border-[#d8d4cb] pb-8 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-col gap-6 border-b border-[#2b2d32] pb-8 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <p className="omnia-kicker text-[#f15a38]">Рабочее пространство</p>
+                <p className="omnia-kicker text-[#4f81f7]">Рабочее пространство</p>
                 <h1 className="mt-3 text-[36px] font-semibold tracking-[-.045em] sm:text-[44px]">Мои приложения</h1>
-                <p className="mt-2 text-sm text-[#6d6962]">Создание, публикация и управление MAX Mini Apps.</p>
+                <p className="mt-2 text-sm text-[#9fa1b1]">Создание, публикация и управление MAX Mini Apps.</p>
               </div>
               {maxProjects.length > 0 && (
                 <label className="relative w-full sm:w-[260px]">
-                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#aaa59b]" />
-                  <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" className="h-10 border-[#d8d4cb] bg-[#fcfbf7] pl-9" />
+                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
+                  <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" className="h-10 border-[#2b2d32] bg-[#191b20] pl-9" />
                 </label>
               )}
             </div>
@@ -281,12 +281,12 @@ export function MaxStudio({ email }: { email: string }) {
                 {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-[260px] rounded-[12px]" />)}
               </div>
             ) : maxProjects.length === 0 ? (
-              <section className="mt-8 grid min-h-[460px] place-items-center rounded-[12px] border border-dashed border-[#c9c4b9] bg-[#fcfbf7] p-8 text-center">
+              <section className="mt-8 grid min-h-[460px] place-items-center rounded-[12px] border border-dashed border-[#2b2d32] bg-[#191b20] p-8 text-center">
                 <div className="max-w-[430px]">
-                  <span className="mx-auto grid size-12 place-items-center rounded-[10px] bg-[#ece8df] text-[#f15a38]"><FolderKanban className="size-5" /></span>
+                  <span className="mx-auto grid size-12 place-items-center rounded-[10px] bg-[#2b2d32] text-[#4f81f7]"><FolderKanban className="size-5" /></span>
                   <h2 className="mt-6 text-2xl font-semibold tracking-[-.025em]">Первого проекта ещё нет</h2>
-                  <p className="mt-3 text-sm leading-6 text-[#6d6962]">Опишите задачу — Omnia создаст рабочее приложение, а затем проведёт через интеграции, MAX-бота и публикацию.</p>
-                  <Button onClick={() => setDialogOpen(true)} className="mt-7 bg-[#f15a38] text-white hover:bg-[#d94929]">
+                  <p className="mt-3 text-sm leading-6 text-[#9fa1b1]">Опишите задачу — Omnia создаст рабочее приложение, а затем проведёт через интеграции, MAX-бота и публикацию.</p>
+                  <Button onClick={() => setDialogOpen(true)} className="mt-7 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
                     <Plus className="size-4" /> Создать приложение
                   </Button>
                 </div>
@@ -300,8 +300,8 @@ export function MaxStudio({ email }: { email: string }) {
                     index={index}
                   />
                 ))}
-                <button onClick={() => setDialogOpen(true)} className="grid min-h-[280px] place-items-center rounded-[12px] border border-dashed border-[#c9c4b9] bg-transparent p-8 text-center hover:bg-[#fcfbf7]">
-                  <span><span className="mx-auto grid size-11 place-items-center rounded-[8px] border border-[#d8d4cb] bg-[#fcfbf7]"><Plus className="size-5 text-[#f15a38]" /></span><span className="mt-4 block text-sm font-semibold">Новый проект</span></span>
+                <button onClick={() => setDialogOpen(true)} className="grid min-h-[280px] place-items-center rounded-[12px] border border-dashed border-[#2b2d32] bg-transparent p-8 text-center hover:bg-[#191b20]">
+                  <span><span className="mx-auto grid size-11 place-items-center rounded-[8px] border border-[#2b2d32] bg-[#191b20]"><Plus className="size-5 text-[#4f81f7]" /></span><span className="mt-4 block text-sm font-semibold">Новый проект</span></span>
                 </button>
               </div>
             )}
@@ -311,8 +311,8 @@ export function MaxStudio({ email }: { email: string }) {
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent
-          data-light-shell
-          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#d8d4cb] bg-[#fcfbf7] p-0 text-[#171716] sm:max-h-[92dvh] sm:max-w-[720px] sm:p-0"
+          data-product-shell
+          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#2b2d32] bg-[#191b20] p-0 text-white sm:max-h-[92dvh] sm:max-w-[720px] sm:p-0"
         >
           <form
             className="contents"
@@ -321,13 +321,13 @@ export function MaxStudio({ email }: { email: string }) {
               if (ready && !create.isPending) create.mutate();
             }}
           >
-            <div className="shrink-0 border-b border-[#d8d4cb] px-5 pb-5 pr-16 pt-5 sm:p-6 sm:pr-14">
+            <div className="shrink-0 border-b border-[#2b2d32] px-5 pb-5 pr-16 pt-5 sm:p-6 sm:pr-14">
               <div>
-                <p className="omnia-kicker text-[#f15a38]">Новый MAX-проект</p>
-                <DialogTitle className="mt-2 text-2xl font-semibold text-[#171716]">
+                <p className="omnia-kicker text-[#4f81f7]">Новый MAX-проект</p>
+                <DialogTitle className="mt-2 text-2xl font-semibold text-white">
                   Что создаём?
                 </DialogTitle>
-                <DialogDescription className="mt-1 text-sm text-[#6d6962]">
+                <DialogDescription className="mt-1 text-sm text-[#9fa1b1]">
                   Короткого описания достаточно для первой сборки.
                 </DialogDescription>
               </div>
@@ -336,38 +336,38 @@ export function MaxStudio({ email }: { email: string }) {
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-5 sm:p-6">
               <div className="space-y-2">
                 <Label htmlFor="max-project-name">Название</Label>
-                <Input id="max-project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Кофе рядом" className="h-11 border-[#d8d4cb] bg-white" maxLength={100} />
+                <Input id="max-project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Кофе рядом" className="h-11 border-[#2b2d32] bg-[#191b20]" maxLength={100} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
-                <Textarea id="max-project-idea" value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-24 resize-none border-[#d8d4cb] bg-white" maxLength={600} />
+                <Textarea id="max-project-idea" value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-24 resize-none border-[#2b2d32] bg-[#191b20]" maxLength={600} />
               </div>
               <fieldset>
                 <legend className="text-sm font-medium">Тип приложения</legend>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {MAX_APP_TYPES.map((item) => (
-                    <button key={item.id} type="button" onClick={() => setAppType(item.id)} className={cn("rounded-[10px] border p-3 text-left", appType === item.id ? "border-[#f15a38] bg-[#f15a38]/[.06]" : "border-[#d8d4cb] hover:border-[#aaa59b]")}>
-                      <span className="flex items-center justify-between text-sm font-medium">{item.label}{appType === item.id && <Check className="size-4 text-[#f15a38]" />}</span>
-                      <span className="mt-1 block text-xs leading-5 text-[#8d887f]">{item.description}</span>
+                    <button key={item.id} type="button" onClick={() => setAppType(item.id)} className={cn("rounded-[10px] border p-3 text-left", appType === item.id ? "border-[#4f81f7] bg-[#4f81f7]/[.06]" : "border-[#2b2d32] hover:border-[#828491]")}>
+                      <span className="flex items-center justify-between text-sm font-medium">{item.label}{appType === item.id && <Check className="size-4 text-[#4f81f7]" />}</span>
+                      <span className="mt-1 block text-xs leading-5 text-[#828491]">{item.description}</span>
                     </button>
                   ))}
                 </div>
               </fieldset>
 
-              <details className="group rounded-[10px] border border-[#d8d4cb]">
+              <details className="group rounded-[10px] border border-[#2b2d32]">
                 <summary className="flex cursor-pointer list-none items-center justify-between p-4 text-sm font-medium [&::-webkit-details-marker]:hidden">
-                  Уточнить функции и стиль <ChevronRight className="size-4 text-[#8d887f] transition-transform group-open:rotate-90" />
+                  Уточнить функции и стиль <ChevronRight className="size-4 text-[#828491] transition-transform group-open:rotate-90" />
                 </summary>
-                <div className="space-y-5 border-t border-[#e7e3da] p-4">
+                <div className="space-y-5 border-t border-[#25272b] p-4">
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" value={audience} onChange={(event) => setAudience(event.target.value)} className="border-[#d8d4cb] bg-white" /></div>
-                    <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={primaryAction} onChange={(event) => setPrimaryAction(event.target.value)} className="border-[#d8d4cb] bg-white" /></div>
+                    <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" value={audience} onChange={(event) => setAudience(event.target.value)} className="border-[#2b2d32] bg-[#191b20]" /></div>
+                    <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={primaryAction} onChange={(event) => setPrimaryAction(event.target.value)} className="border-[#2b2d32] bg-[#191b20]" /></div>
                   </div>
                   <div>
                     <p className="text-sm font-medium">Функции</p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {MAX_FEATURES.map((feature) => (
-                        <button key={feature} type="button" onClick={() => toggleFeature(feature)} className={cn("rounded-full border px-3 py-1.5 text-xs", features.includes(feature) ? "border-[#f15a38] bg-[#f15a38]/[.07] text-[#c84528]" : "border-[#d8d4cb] text-[#6d6962]")}>{feature}</button>
+                        <button key={feature} type="button" onClick={() => toggleFeature(feature)} className={cn("rounded-full border px-3 py-1.5 text-xs", features.includes(feature) ? "border-[#4f81f7] bg-[#4f81f7]/[.07] text-[#6a95fa]" : "border-[#2b2d32] text-[#9fa1b1]")}>{feature}</button>
                       ))}
                     </div>
                   </div>
@@ -375,20 +375,20 @@ export function MaxStudio({ email }: { email: string }) {
                     <p className="text-sm font-medium">Стиль</p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-3">
                       {MAX_STYLES.map((item) => (
-                        <button key={item.id} type="button" onClick={() => setStyle(item.id)} className={cn("rounded-[8px] border p-3 text-left text-xs", style === item.id ? "border-[#f15a38] bg-[#f15a38]/[.07]" : "border-[#d8d4cb]")}>{item.label}</button>
+                        <button key={item.id} type="button" onClick={() => setStyle(item.id)} className={cn("rounded-[8px] border p-3 text-left text-xs", style === item.id ? "border-[#4f81f7] bg-[#4f81f7]/[.07]" : "border-[#2b2d32]")}>{item.label}</button>
                       ))}
                     </div>
                   </div>
-                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="#F15A38, графит, молочный" className="border-[#d8d4cb] bg-white" /></div>
+                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="#4f81f7, графит, молочный" className="border-[#2b2d32] bg-[#191b20]" /></div>
                 </div>
               </details>
             </div>
 
-            <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#d8d4cb] bg-[#fcfbf7] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5">
-              <p className="hidden text-xs text-[#8d887f] sm:block">Генерация начнётся один раз после открытия проекта.</p>
+            <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#2b2d32] bg-[#191b20] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5">
+              <p className="hidden text-xs text-[#828491] sm:block">Генерация начнётся один раз после открытия проекта.</p>
               <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
                 <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
-                <Button disabled={!ready || create.isPending} className="min-h-11 bg-[#f15a38] text-white hover:bg-[#d94929]">
+                <Button disabled={!ready || create.isPending} className="min-h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
                   {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                   Создать проект
                 </Button>

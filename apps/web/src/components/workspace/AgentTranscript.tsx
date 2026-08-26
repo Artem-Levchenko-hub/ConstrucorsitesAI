@@ -252,7 +252,7 @@ export function AgentTranscript({
                           failed
                             ? "text-red-400"
                             : s.kind !== "step"
-                              ? "text-amber-400"
+                              ? "text-blue-400"
                               : s.action === "done"
                                 ? "text-accent"
                                 : "text-fg-secondary",

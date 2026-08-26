@@ -48,8 +48,8 @@ export async function AccountShell({
   const page = copy[active];
   const isAdmin = await getMaxAdminAccessServer();
   return (
-    <div data-light-shell className="flex h-dvh min-h-0 bg-[#f5f3ee] text-[#171716]">
-      <aside data-graphite-shell className="hidden w-[220px] shrink-0 flex-col bg-[#171716] text-white md:flex">
+    <div data-product-shell className="flex h-dvh min-h-0 bg-[#121519] text-white">
+      <aside data-graphite-shell className="hidden w-[220px] shrink-0 flex-col bg-[#121519] text-white md:flex">
         <div className="flex h-16 items-center border-b border-white/12 px-5"><BrandMark inverse href="/max" /></div>
         <nav className="flex-1 p-3">
           <Link href="/max" className="mb-5 flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs text-white/55 hover:bg-white/[.06] hover:text-white"><LayoutGrid className="size-4" />MAX Studio</Link>
@@ -57,12 +57,12 @@ export async function AccountShell({
           <div className="mt-2 space-y-1">
             {navigation.map(([id, href, Icon, label]) => (
               <Link key={id} href={href} className={`flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs ${active === id ? "bg-white/10 font-medium text-white" : "text-white/50 hover:bg-white/[.06] hover:text-white"}`}>
-                <Icon className={`size-4 ${active === id ? "text-[#f15a38]" : ""}`} />{label}
+                <Icon className={`size-4 ${active === id ? "text-[#4f81f7]" : ""}`} />{label}
               </Link>
             ))}
             {isAdmin && (
               <Link href="/admin/max" className={`flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs ${active === "admin" ? "bg-white/10 font-medium text-white" : "text-white/50 hover:bg-white/[.06] hover:text-white"}`}>
-                <ScanSearch className={`size-4 ${active === "admin" ? "text-[#f15a38]" : ""}`} />
+                <ScanSearch className={`size-4 ${active === "admin" ? "text-[#4f81f7]" : ""}`} />
                 Админ-центр
               </Link>
             )}
@@ -76,17 +76,17 @@ export async function AccountShell({
         </div>
       </aside>
       <div className="min-w-0 flex-1 overflow-y-auto">
-        <header className="flex h-16 items-center justify-between border-b border-[#d8d4cb] bg-[#fcfbf7] px-5 sm:px-8">
+        <header className="flex h-16 items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-5 sm:px-8">
           <div className="md:hidden"><BrandMark href="/max" /></div>
-          <p className="hidden text-xs text-[#8d887f] md:block">Настройки Omnia</p>
-          <span className="truncate text-xs text-[#6d6962]">{email}</span>
+          <p className="hidden text-xs text-[#828491] md:block">Настройки Omnia</p>
+          <span className="truncate text-xs text-[#9fa1b1]">{email}</span>
         </header>
         <main className="px-5 py-8 sm:px-8 sm:py-10 lg:px-12">
           <div className="mx-auto max-w-[900px]">
-            <header className="border-b border-[#d8d4cb] pb-8">
-              <p className="omnia-kicker text-[#f15a38]">{page.eyebrow}</p>
+            <header className="border-b border-[#2b2d32] pb-8">
+              <p className="omnia-kicker text-[#4f81f7]">{page.eyebrow}</p>
               <h1 className="mt-3 text-[36px] font-semibold tracking-[-.045em] sm:text-[46px]">{page.title}</h1>
-              <p className="mt-3 max-w-[680px] text-sm leading-6 text-[#6d6962]">{page.lead}</p>
+              <p className="mt-3 max-w-[680px] text-sm leading-6 text-[#9fa1b1]">{page.lead}</p>
             </header>
             <div className="mt-8">{children}</div>
           </div>
