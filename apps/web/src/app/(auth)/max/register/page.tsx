@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, Building2, Check, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Check, MailCheck, ShieldCheck } from "lucide-react";
 import { redirect } from "next/navigation";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
@@ -30,16 +30,17 @@ export default async function MaxRegisterPage() {
             Сначала аккаунт. Затем приложение.
           </h1>
           <p className="mt-6 max-w-[500px] text-base leading-7 text-[#9fa1b1]">
-            MAX принимает ботов от организаций, ИП и самозанятых. Omnia один раз
-            проверит владельца и сохранит реквизиты для следующих приложений.
+            Для первого проекта нужен только рабочий email. Бизнес-профиль и
+            модерация бота проходят в MAX Partner; Omnia не просит повторно ИНН и ОГРН,
+            а секрет подключается один раз только перед production.
           </p>
           <div className="mt-10 space-y-4 border-t border-[#2b2d32] pt-7 text-sm text-[#9fa1b1]">
             {[
-              [Building2, "ООО, ИП или самозанятый"],
-              [ShieldCheck, "Реквизиты и согласия сохраняются защищённо"],
-              [Check, "Один бизнес — один бесплатный старт"],
+              [MailCheck, "Подтвердите email и сразу создавайте проект"],
+              [ShieldCheck, "Без ИНН, ОГРН и секрета до первого результата"],
+              [Check, "MAX и платежи подключаются только перед запуском"],
             ].map(([Icon, text]) => {
-              const ItemIcon = Icon as typeof Building2;
+              const ItemIcon = Icon as typeof MailCheck;
               return <p key={String(text)} className="flex items-center gap-3"><ItemIcon className="size-4 text-[#4f81f7]" />{String(text)}</p>;
             })}
           </div>
@@ -48,7 +49,7 @@ export default async function MaxRegisterPage() {
         <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 shadow-[0_24px_70px_rgba(23,23,22,.06)] sm:p-8">
           <h2 className="text-[28px] font-semibold tracking-[-.03em]">Создать аккаунт</h2>
           <p className="mb-7 mt-2 text-sm leading-6 text-[#9fa1b1]">
-            После регистрации подтвердите email и добавьте данные владельца.
+            После регистрации подтвердите email — и сразу переходите к созданию проекта.
           </p>
           <MaxRegisterForm />
         </section>
