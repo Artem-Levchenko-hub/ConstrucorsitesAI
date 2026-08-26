@@ -47,7 +47,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
       active="dashboard"
       eyebrow="Приложение запущено"
       title="После запуска"
-      lead="Production-состояние, URL, контейнер, MAX webhook и история версий. Данные обновляются с сервера — этот экран не имитирует готовность локальными флагами."
+      lead="Production-состояние, URL, контейнер, связь с MAX и история версий. Данные обновляются с сервера — этот экран не имитирует готовность локальными флагами."
     >
       <section className="mt-8 rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
         <div className="flex flex-col gap-5 border-b border-[#2b2d32] p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
@@ -79,8 +79,8 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
         {[
           [Cloud, "Контейнер", runtime.data?.state === "running", runtime.data?.state ?? "Нет данных"],
           [Activity, "Health-check", healthy, healthy ? "Отвечает" : "Нужна проверка"],
-          [Bot, "MAX-бот", Boolean(integration.data?.connected), integration.data?.bot_name ?? "Не подключён"],
-          [Webhook, "Webhook", integration.data?.status === "active", integration.data?.status === "active" ? "Активен" : "Не активирован"],
+          [Bot, "Безопасный вход", Boolean(integration.data?.connected), integration.data?.bot_name ?? "Не подключён"],
+          [Webhook, "Связь с MAX", integration.data?.status === "active", integration.data?.status === "active" ? "Активна" : "Нужна проверка"],
         ].map(([Icon, title, ok, copy]) => {
           const ItemIcon = Icon as typeof Cloud;
           return (

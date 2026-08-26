@@ -42,10 +42,10 @@ const navigation: Array<{
   { key: "integrations", label: "Интеграции", suffix: "/integrations", icon: Plug },
   {
     key: "bot",
-    label: "MAX-бот",
+    label: "MAX",
     suffix: "/settings?tab=bot",
     icon: Bot,
-    stageId: "max",
+    stageId: "bot",
   },
   {
     key: "publish",
@@ -59,7 +59,6 @@ const navigation: Array<{
     label: "После запуска",
     suffix: "/dashboard",
     icon: BarChart3,
-    stageId: "verify",
   },
 ];
 

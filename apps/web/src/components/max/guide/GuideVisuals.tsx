@@ -12,12 +12,12 @@ import {
   ExternalLink,
   FileCheck2,
   LayoutGrid,
+  Link2,
   Plug,
   Rocket,
   ShieldCheck,
   Smartphone,
   Sparkles,
-  Webhook,
 } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
@@ -324,7 +324,7 @@ export function BuilderVisual() {
 
 export function IntegrationVisual() {
   return (
-    <ScreenshotFrame label="Снимок 03" title="Интеграции → подключение сервиса и MAX-бота">
+    <ScreenshotFrame label="Снимок 03" title="Дополнительно → интеграции после запуска">
       <div className="flex h-full text-white">
         <Sidebar active="Интеграции" />
         <div className="min-w-0 flex-1 p-[4%]">
@@ -333,7 +333,7 @@ export function IntegrationVisual() {
           <p className="mt-1 text-[8px] text-[#828491]">Секреты хранятся зашифрованно и не попадают в код проекта.</p>
           <div className="mt-[5%] grid grid-cols-2 gap-[3%]">
             {[
-              ["MAX Bot API", "Точка входа, сообщения и webhook", Bot, "Подключить", true],
+              ["AITUNNEL", "AI-провайдер для сценариев приложения", Plug, "Подключить", true],
               ["ЮKassa", "Платежи, возвраты и статусы", ShieldCheck, "Подключить", false],
               ["Битрикс24", "Лиды и сделки", Plug, "Подключить", false],
               ["Яндекс Метрика", "События и конверсии", Activity, "Подключить", false],
@@ -349,9 +349,9 @@ export function IntegrationVisual() {
             })}
           </div>
           <div className="absolute bottom-[7%] right-[5%] w-[38%] rounded-lg border border-[#2b2d32] bg-[#191b20] p-[3%] shadow-xl">
-            <div className="flex items-center gap-2"><Bot className="size-4 text-[#4f81f7]" /><p className="text-[10px] font-semibold">Подключить MAX-бота</p></div>
-            <p className="mt-2 text-[7px] leading-3 text-[#828491]">Вставьте токен из MAX для партнёров. Токен будет проверен через API.</p>
-            <div data-guide-target="integration-token" className="mt-2 rounded-md border border-[#2b2d32] px-2 py-2 font-mono text-[7px] text-[#828491]">Введите токен бота</div>
+            <div className="flex items-center gap-2"><Plug className="size-4 text-[#4f81f7]" /><p className="text-[10px] font-semibold">Подключить провайдера</p></div>
+            <p className="mt-2 text-[7px] leading-3 text-[#828491]">Используйте защищённую форму только для нужного приложению сервиса.</p>
+            <div data-guide-target="integration-token" className="mt-2 rounded-md border border-[#2b2d32] px-2 py-2 font-mono text-[7px] text-[#828491]">Введите API-ключ</div>
             <button className="mt-2 rounded-md bg-[#4f81f7] px-3 py-1.5 text-[7px] font-semibold text-[#121519]">Проверить и сохранить</button>
           </div>
         </div>
@@ -366,9 +366,10 @@ export function IntegrationVisual() {
 
 export function LaunchVisual() {
   const steps = [
+    ["Сборка проверена", true],
     ["Приложение заполнено", true],
     ["Юридические данные", true],
-    ["MAX-бот подключён", true],
+    ["Безопасный вход MAX", true],
     ["Production опубликован", false],
     ["URL добавлен в MAX", false],
   ] as const;
@@ -385,19 +386,19 @@ export function LaunchVisual() {
               <div className="mt-[5%] grid grid-cols-3 gap-2 text-[7px]">
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Версия</p><p className="mt-1 font-semibold">v.12</p></div>
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Health</p><p className="mt-1 font-semibold">готов</p></div>
-                <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Webhook</p><p className="mt-1 font-semibold">ожидает URL</p></div>
+                <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">URL</p><p className="mt-1 font-semibold">после deploy</p></div>
               </div>
               <button data-guide-target="launch-publish" className="mt-[6%] flex items-center gap-1.5 rounded-md bg-[#4f81f7] px-3 py-2 text-[8px] font-semibold text-[#121519]"><Rocket className="size-3" />Опубликовать</button>
             </div>
           </div>
           <aside className="w-[36%] border-l border-[#2b2d32] bg-[#191b20] p-[4%]">
-            <div className="flex items-center justify-between"><p className="text-[11px] font-semibold">Запуск в MAX</p><span className="text-[9px] font-semibold">60%</span></div>
-            <div className="mt-2 h-1.5 rounded-full bg-[#25272b]"><div className="h-full w-3/5 rounded-full bg-[#4f81f7]" /></div>
-            <div className="mt-[7%] border-l-2 border-[#4f81f7] pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#828491]">Шаг 4 из 5</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#828491]">Получите постоянный HTTPS-адрес.</p></div>
+            <div className="flex items-center justify-between"><p className="text-[11px] font-semibold">Запуск в MAX</p><span className="text-[9px] font-semibold">67%</span></div>
+            <div className="mt-2 h-1.5 rounded-full bg-[#25272b]"><div className="h-full w-2/3 rounded-full bg-[#4f81f7]" /></div>
+            <div className="mt-[7%] border-l-2 border-[#4f81f7] pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#828491]">Шаг 5 из 6</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#828491]">Получите постоянный HTTPS-адрес.</p></div>
             <div className="mt-[7%] space-y-1 border-y border-[#25272b] py-2">
-              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 3 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 3 ? "bg-[#4f81f7]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-success-fg" : index === 3 ? "border-[#4f81f7] bg-[#4f81f7] text-[#121519]" : "border-[#2b2d32] text-[#828491]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
+              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 4 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 4 ? "bg-[#4f81f7]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-success-fg" : index === 4 ? "border-[#4f81f7] bg-[#4f81f7] text-[#121519]" : "border-[#2b2d32] text-[#828491]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
             </div>
-            <div className="mt-[7%] grid grid-cols-2 gap-1.5"><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Приложение</button><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">MAX-бот</button></div>
+            <div className="mt-[7%] grid grid-cols-2 gap-1.5"><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Приложение</button><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Запуск в MAX</button></div>
           </aside>
         </div>
       </div>
@@ -422,7 +423,7 @@ export function PartnerVisual() {
         <div className="min-w-0 flex-1 p-[5%]">
           <div className="flex items-center justify-between"><div><p className="text-[8px] text-[#9fa1b1]">Чат-боты / Кофе рядом</p><h3 className="mt-1 text-[18px] font-semibold">Расширенные настройки</h3></div><span className="rounded-full bg-[#248a4b]/10 px-2.5 py-1 text-[7px] font-semibold text-success-fg">Бот создан</span></div>
           <div className="mt-[5%] rounded-xl border border-[#2b2d32] bg-[#191b20] p-[5%] shadow-[0_8px_30px_rgba(0,0,0,.22)]">
-            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Токен бота</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Используется сервером для Bot API.</p></div><button data-guide-target="partner-copy" className="flex items-center gap-1 rounded-md border border-[#2b2d32] px-2 py-1.5 text-[7px]"><Copy className="size-3" />Копировать</button></div>
+            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Секрет бота</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Для проверки подписанного запуска и Bot API.</p></div><button data-guide-target="partner-copy" className="flex items-center gap-1 rounded-md border border-[#2b2d32] px-2 py-1.5 text-[7px]"><Copy className="size-3" />Копировать</button></div>
             <div className="mt-2 rounded-md border border-[#2b2d32] bg-[#121519] px-3 py-2 font-mono text-[7px] text-[#9fa1b1]">••••••••••••••••••••••••</div>
             <div className="my-[5%] h-px bg-[#2b2d32]" />
             <label className="block text-[10px] font-semibold">Ссылка на мини-приложение</label>
@@ -433,9 +434,8 @@ export function PartnerVisual() {
         </div>
       </div>
       <CalloutLayer callouts={[
-        { number: 1, target: "partner-copy", offset: [8, -7] },
-        { number: 2, target: "partner-url", offset: [30, -4] },
-        { number: 3, target: "partner-save", offset: [-15, 5] },
+        { number: 1, target: "partner-url", offset: [30, -4] },
+        { number: 2, target: "partner-save", offset: [-15, 5] },
       ]} />
     </ScreenshotFrame>
   );
@@ -452,8 +452,8 @@ export function DashboardVisual() {
             {[
               [Cloud, "Контейнер", "Работает", true],
               [Activity, "Health-check", "Отвечает", true],
-              [Bot, "MAX-бот", "Кофе рядом", true],
-              [Webhook, "Webhook", "Активен", true],
+              [Bot, "MAX", "URL подключён", true],
+              [Link2, "Открытие", "Работает", true],
             ].map(([Icon, title, copy, ok]) => {
               const ItemIcon = Icon as typeof Cloud;
               return <div key={String(title)} className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[8%]"><div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-[#4f81f7]" /></span>{ok ? <Check className="size-3.5 text-success-fg" /> : <CircleAlert className="size-3.5 text-[#6a95fa]" />}</div><p className="mt-[14%] text-[8px] font-semibold">{String(title)}</p><p className="mt-1 text-[7px] text-[#828491]">{String(copy)}</p></div>;
@@ -480,12 +480,13 @@ export function GoldenPathVisual() {
   const nodes = [
     ["1", "Аккаунт", "Email подтверждён", FileCheck2],
     ["2", "Проект", "Сборка проверена", Sparkles],
-    ["3", "MAX-бот", "Токен валиден", Bot],
-    ["4", "Production", "HTTPS и webhook", Rocket],
-    ["5", "Запуск", "2 реальных юзера", Smartphone],
+    ["3", "MAX-доступ", "Подпись проверяется", Bot],
+    ["4", "Production", "HTTPS опубликован", Rocket],
+    ["5", "MAX Partner", "URL сохранён", Link2],
+    ["6", "Запуск", "2 реальных юзера", Smartphone],
   ] as const;
   return (
-    <div className="grid gap-3 md:grid-cols-5">
+    <div className="grid gap-3 md:grid-cols-6">
       {nodes.map(([number, title, copy, Icon], index) => (
         <div key={title} className="relative rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5">
           <div className="flex items-center justify-between"><span className="font-mono text-[9px] text-[#4f81f7]">{number}</span><Icon className="size-4 text-[#4f81f7]" /></div>

@@ -79,7 +79,7 @@ const integrations = [
 const faqs = [
   ["Это макет или настоящее приложение?", "Настоящее приложение: исходный код, backend, рабочая база данных, HTTPS-адрес и управляемый контейнер."],
   ["Нужно ли уметь программировать?", "Нет. Требования, правки и публикация выполняются через интерфейс студии и диалог с агентом."],
-  ["Что потребуется для запуска в MAX?", "Подтверждённый аккаунт владельца, MAX-бот от организации, ИП или самозанятого и его токен."],
+  ["Что потребуется для запуска в MAX?", "Для первого запуска нужны аккаунт Omnia, готовый production URL и бот в MAX Partner. Токен нужен только если отдельно включаете Bot API для сообщений и webhook."],
   ["Можно использовать свою VPS?", "Да. Укажите IP и доступ — студия проверит сервер, развернёт проект и покажет результат диагностики."],
 ] as const;
 
@@ -127,7 +127,7 @@ function ProductPreview() {
                 Создай приложение кофейни: каталог, программа лояльности и заказ к выдаче.
               </div>
               <div className="border-l-2 border-[#4f81f7] pl-3 text-white/55">
-                Собираю каталог и сценарий заказа. Затем подключу профиль MAX и проверю мобильную навигацию.
+                Собираю каталог и сценарий заказа. Затем проверю мобильную навигацию и подготовлю запуск в MAX.
               </div>
               <div className="space-y-2 pt-3 text-[11px] text-white/35">
                 <p className="flex items-center gap-2"><Check className="size-3.5 text-[#5ac77e]" /> Схема данных создана</p>
@@ -164,7 +164,7 @@ function ProductPreview() {
               <div className="h-full w-4/7 rounded-full bg-[#4f81f7]" />
             </div>
             <div className="mt-7 space-y-4 text-[12px] text-white/45">
-              {["Приложение собрано", "MAX-бот проверен", "Интеграции", "Публикация"].map((item, index) => (
+              {["Приложение собрано", "Путь в MAX подготовлен", "Интеграции", "Публикация"].map((item, index) => (
                 <p key={item} className="flex items-center gap-2">
                   <span className={`grid size-5 place-items-center rounded-full border ${index < 2 ? "border-[#5ac77e] text-[#5ac77e]" : "border-white/20"}`}>
                     {index < 2 && <Check className="size-3" />}

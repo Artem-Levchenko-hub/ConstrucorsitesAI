@@ -129,9 +129,9 @@ export function MaxRegisterForm() {
 
       <div className="grid gap-2 text-xs text-[#828491] sm:grid-cols-3">
         {[
-          [Building2, "ООО, ИП или самозанятый"],
-          [ShieldCheck, "Реквизиты проверяются"],
-          [Check, "Один бизнес — один лимит"],
+          [Building2, "Для первого старта нужен только email"],
+          [ShieldCheck, "Секреты не передаются агенту"],
+          [Check, "MAX и платежи подключаются позже"],
         ].map(([Icon, text]) => {
           const ItemIcon = Icon as typeof Building2;
           return (

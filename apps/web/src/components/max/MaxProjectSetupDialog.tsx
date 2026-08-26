@@ -509,7 +509,9 @@ export function MaxProjectSetupDialog({
                 <div>
                   <h3 className="text-sm font-semibold">Владелец и поддержка</h3>
                   <p className="mt-1 text-xs text-[#828491]">
-                    Эти сведения попадут в политику, условия и страницу поддержки.
+                    MAX проверяет бизнес в своём кабинете. Здесь сведения не
+                    проверяются повторно — они попадут в обязательные страницы
+                    приложения: политику, условия и поддержку.
                   </p>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">

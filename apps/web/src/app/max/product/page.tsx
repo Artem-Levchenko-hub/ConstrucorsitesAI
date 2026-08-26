@@ -52,7 +52,7 @@ function MiniAppPhone() {
 
 const automation = [
   [Code2, "Собирает приложение", "Создаёт интерфейс, backend, данные и проверки для мобильного MAX WebView."],
-  [Bot, "Подключает бота", "Проверяет токен, настраивает webhook и показывает реальные статусы API."],
+  [Bot, "Защищает вход из MAX", "Проверяет подписанный запуск, чтобы профили и данные разных пользователей не смешивались."],
   [PlugZap, "Встраивает сервисы", "Подключает платежи, CRM, учёт, доставку и аналитику из кабинета."],
   [Cloud, "Публикует", "Разворачивает контейнер, выдаёт HTTPS и проверяет доступность после релиза."],
 ] as const;
@@ -69,7 +69,7 @@ export default function MaxProductPage() {
           </div>
           <nav className="hidden items-center gap-7 text-[13px] text-white/55 lg:flex">
             <a href="#about">Возможности</a>
-            <a href="#bot">MAX-бот</a>
+            <a href="#bot">Запуск в MAX</a>
             <a href="#integrations">Интеграции</a>
             <a href="#launch">Запуск</a>
             <Link href="/max/start">Как проходит запуск</Link>
@@ -90,8 +90,9 @@ export default function MaxProductPage() {
               Готовое мини-приложение для бизнеса — от задачи до публикации.
             </p>
             <p className="mt-6 max-w-[620px] text-base leading-7 text-white/48">
-              Агент собирает приложение, подключает бота и сервисы, готовит юридические экраны,
-              публикует и продолжает обслуживать продукт после запуска.
+              Агент собирает приложение и готовит production URL. Перед публикацией
+              вы один раз подключаете безопасный вход MAX, а платежи и другие
+              сервисы — только когда они нужны продукту.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <Link href="/max/register" className="omnia-button omnia-button-primary min-h-12 px-6">Создать приложение <ArrowRight className="size-4" /></Link>
@@ -144,18 +145,19 @@ export default function MaxProductPage() {
           <div className="grid gap-12 lg:grid-cols-[.8fr_1.2fr]">
             <div>
               <p className="omnia-kicker text-[#4f81f7]">Связь с MAX</p>
-              <h2 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Зачем нужен MAX-бот</h2>
+              <h2 className="mt-4 text-[40px] font-semibold leading-[1.04] tracking-[-.045em] sm:text-[56px]">Как приложение попадает в MAX</h2>
               <p className="mt-6 text-base leading-7 text-white/48">
-                Бот — официальный владелец точки входа в MAX. Он показывает кнопку приложения,
-                получает события и отправляет пользователю сервисные сообщения.
+                Бот — официальный вход в MAX. Его секрет нужен серверу Omnia,
+                чтобы проверить подписанный запуск, определить пользователя и
+                не смешать данные разных клиентов.
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               {[
                 [Bot, "Открывает Mini App", "Кнопка бота ведёт на постоянный HTTPS-адрес приложения."],
-                [Webhook, "Получает события", "Backend принимает события MAX через защищённый webhook."],
-                [MessageSquareText, "Отправляет уведомления", "Статус заказа, напоминания и полезные сервисные сообщения."],
-                [ShieldCheck, "Подтверждает владельца", "Организация, ИП или самозанятый проходят проверку на стороне MAX."],
+                [Webhook, "Проверяет запуск", "Сервер принимает только подписанные MAX данные и безопасно определяет профиль."],
+                [MessageSquareText, "Включает Bot API", "Тот же секрет позволяет настроить webhook и сервисные сообщения без второго подключения."],
+                [ShieldCheck, "Проверка в MAX", "Организация, ИП или самозанятый проходят проверку на стороне MAX."],
               ].map(([Icon, title, text]) => {
                 const ItemIcon = Icon as typeof Bot;
                 return (
@@ -191,14 +193,14 @@ export default function MaxProductPage() {
       <section className="border-y border-[#2b2d32] bg-[#191b20] px-5 py-24 sm:px-8 lg:py-32">
         <div className="mx-auto max-w-[1120px]">
           <div className="text-center">
-            <p className="omnia-kicker text-[#4f81f7]">Один ручной шаг</p>
+            <p className="omnia-kicker text-[#4f81f7]">Три коротких шага</p>
             <h2 className="mt-4 text-[40px] font-semibold tracking-[-.045em] sm:text-[54px]">Что делается в кабинете MAX</h2>
-            <p className="mx-auto mt-5 max-w-[650px] text-base leading-7 text-[#9fa1b1]">MAX пока не предоставляет публичный API для создания бота и вставки URL. Студия даёт точную ссылку и проверяет результат.</p>
+            <p className="mx-auto mt-5 max-w-[650px] text-base leading-7 text-[#9fa1b1]">MAX пока не предоставляет публичный API для создания бота и вставки URL. Для генерации секрет не нужен; перед production он подключается один раз для безопасного входа, а Studio сама настраивает webhook.</p>
           </div>
           <div className="mt-14 grid gap-4 md:grid-cols-3">
             {[
-              ["01", "Создать бота", "Организация, ИП или самозанятый создаёт бота в платформе MAX для партнёров."],
-              ["02", "Скопировать токен", "Токен вставляется в Omnia один раз и хранится в зашифрованном виде."],
+              ["01", "Создать бота", "Организация, ИП или самозанятый создаёт и отправляет бота на модерацию в MAX Partner."],
+              ["02", "Подключить безопасный вход", "Секрет бота один раз проверяется и хранится в Omnia зашифрованно."],
               ["03", "Вставить URL", "После публикации готовый HTTPS-адрес добавляется к кнопке запуска Mini App."],
             ].map(([number, title, text]) => (
               <article key={number} className="omnia-card p-7">

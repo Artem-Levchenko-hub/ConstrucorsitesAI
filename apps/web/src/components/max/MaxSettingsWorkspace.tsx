@@ -21,6 +21,7 @@ import { ExternalDeployWizard } from "@/components/workspace/ExternalDeployWizar
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
+import { getLastDeploy } from "@/lib/api/runtime";
 import {
   getMaxProjectConfig,
   saveMaxUrlAttached,
@@ -47,14 +48,26 @@ export function MaxSettingsWorkspace({
     queryFn: () => getMaxIntegration(projectId),
     retry: false,
   });
+  const deploy = useQuery({
+    queryKey: ["deploy", projectId],
+    queryFn: () => getLastDeploy(projectId),
+    retry: false,
+    refetchInterval: (query) =>
+      ["building", "pushing", "swapping", "cancelling"].includes(
+        query.state.data?.phase ?? "",
+      )
+        ? 1_500
+        : false,
+  });
   const config = useQuery({
     queryKey: ["max-config", projectId],
     queryFn: () => getMaxProjectConfig(projectId),
     retry: false,
   });
+  const productionUrl = deploy.data?.prod_url ?? integration.data?.app_url ?? null;
   const confirmMaxUrl = useMutation({
     mutationFn: async () => {
-      const appUrl = integration.data?.app_url;
+      const appUrl = productionUrl;
       if (!appUrl) throw new Error("Сначала опубликуйте приложение и получите постоянный URL.");
 
       await fetch(appUrl, {
@@ -80,7 +93,7 @@ export function MaxSettingsWorkspace({
 
   function openMaxCabinet(event: React.MouseEvent<HTMLAnchorElement>) {
     event.preventDefault();
-    const appUrl = integration.data?.app_url;
+    const appUrl = productionUrl;
     if (appUrl) {
       void copyMaxLaunchUrl(appUrl).then((copied) => {
         if (copied) {
@@ -104,8 +117,8 @@ export function MaxSettingsWorkspace({
   const pageCopy = {
     bot: {
       eyebrow: "Этап 4 из 6",
-      title: "MAX-бот",
-      lead: "Подключите прошедшего модерацию бота, проверьте доступ к API и подготовьте webhook для production.",
+      title: "Безопасный доступ MAX",
+      lead: "Подключите промодерированного бота один раз перед production: его секрет подтверждает подпись MAX и разделяет данные пользователей.",
     },
     app: {
       eyebrow: "Этап 3 из 6",
@@ -135,7 +148,7 @@ export function MaxSettingsWorkspace({
     >
       <div className="mt-8 flex flex-wrap gap-2">
         {[
-          ["bot", Bot, "MAX-бот"],
+          ["bot", Bot, "MAX"],
           ["app", FileCheck2, "Данные приложения"],
           ["vps", Server, "Своя VPS"],
         ].map(([id, Icon, label]) => (
@@ -149,45 +162,112 @@ export function MaxSettingsWorkspace({
         <>
           <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
             <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 sm:p-8">
-            <div className="flex items-start justify-between gap-5">
-              <div>
-                <span className="grid size-11 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]"><Bot className="size-5" /></span>
-                <h2 className="mt-6 text-2xl font-semibold">Подключение MAX-бота</h2>
-                <p className="mt-3 max-w-[580px] text-sm leading-6 text-[#9fa1b1]">
-                  В само мини-приложение токен не попадает. Он нужен только
-                  backend Omnia для Bot API, webhook и сообщений от имени бота. Если
-                  это не нужно, можно просто вставить production URL в MAX Partner вручную.
-                </p>
+              <div className="flex items-start justify-between gap-5">
+                <div>
+                  <span className="grid size-11 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]">
+                    <Bot className="size-5" />
+                  </span>
+                  <h2 className="mt-6 text-2xl font-semibold">
+                    Безопасный запуск Mini App в MAX
+                  </h2>
+                  <p className="mt-3 max-w-[620px] text-sm leading-6 text-[#9fa1b1]">
+                    Для генерации и превью секрет не нужен. Перед production
+                    подключите его один раз: сервер проверит подписанный запуск,
+                    узнает MAX-пользователя и не смешает данные клиентов.
+                  </p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
+                    integration.data?.connected
+                      ? "bg-[#248a4b]/10 text-success-fg"
+                      : "bg-[#e8c547]/15 text-[#e8c547]"
+                  }`}
+                >
+                  {integration.data?.connected
+                    ? "Безопасный вход подключён"
+                    : "Нужен перед production"}
+                </span>
               </div>
-              <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${integration.data?.connected ? "bg-[#248a4b]/10 text-success-fg" : "bg-[#e8c547]/15 text-[#e8c547]"}`}>
-                {integration.data?.connected ? "Подключён" : "Не подключён"}
-              </span>
+
+              <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                {[
+                  "Создайте и промодерируйте бота в MAX Partner",
+                  "Скопируйте секрет и подключите его в защищённой форме Omnia",
+                  "После публикации вставьте production URL в настройки Mini App",
+                ].map((item, index) => (
+                  <div
+                    key={item}
+                    className="rounded-[10px] border border-[#2b2d32] bg-[#121519] px-4 py-4"
+                  >
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#828491]">
+                      Шаг {index + 1}
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-white">{item}</p>
+                  </div>
+                ))}
+              </div>
+
+              {productionUrl && (
+                <div className="mt-6 rounded-[10px] border border-[#2b2d32] bg-[#121519] px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#828491]">
+                    Production URL
+                  </p>
+                  <p className="mt-2 truncate font-mono text-xs text-[#9fa1b1]">
+                    {productionUrl}
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <MaxIntegrationButton
+                  projectId={projectId}
+                  initialTemplate="max_miniapp"
+                  display="panel"
+                  emphasized={!integration.data?.connected}
+                  label={
+                    integration.data?.connected
+                      ? "Проверить безопасный вход"
+                      : "Подключить безопасный вход"
+                  }
+                />
+                <Button asChild variant="outline" className="h-11 border-[#2b2d32]">
+                  <a
+                    href="https://business.max.ru/"
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={openMaxCabinet}
+                  >
+                    Скопировать URL и открыть MAX
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                </Button>
+              </div>
+              <p className="mt-4 flex items-center gap-2 text-xs text-[#828491]">
+                <ShieldCheck className="size-4 text-success-fg" />
+                Секрет хранится зашифрованно, не попадает в код и не показывается повторно.
+              </p>
             </div>
-            <div className="mt-7 max-w-[260px]">
-              <MaxIntegrationButton projectId={projectId} initialTemplate="max_miniapp" display="panel" emphasized={!integration.data?.connected} label={integration.data?.connected ? "Открыть настройки" : "Проверить и подключить"} />
-            </div>
-            <p className="mt-5 flex items-center gap-2 text-xs text-[#828491]"><ShieldCheck className="size-4 text-success-fg" />Секрет хранится зашифрованно и не отображается повторно.</p>
-            </div>
+
             <aside className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
-            <p className="omnia-kicker text-[#828491]">Что проверить</p>
-            <ol className="mt-5 space-y-4 text-sm">
-              {["Бот создан владельцем бизнеса", "Бот прошёл модерацию MAX", "Токен скопирован без пробелов", "Backend Bot API отвечает из production"].map((item, index) => (
-                <li key={item} className="flex gap-3"><span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#2b2d32] font-mono text-[9px] text-[#828491]">{index + 1}</span><span className="pt-0.5 text-[#9fa1b1]">{item}</span></li>
-              ))}
-            </ol>
-            <a
-              href="https://business.max.ru/"
-              target="_blank"
-              rel="noreferrer"
-              onClick={openMaxCabinet}
-              className="mt-6 inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-[#6a95fa]"
-            >
-              Открыть кабинет MAX
-              <ExternalLink className="size-3" />
-            </a>
-            <p className="mt-1 text-[10px] leading-4 text-[#828491]">
-              Если приложение опубликовано, его ссылка скопируется автоматически.
-            </p>
+              <p className="omnia-kicker text-[#828491]">Что даёт подключение</p>
+              <ol className="mt-5 space-y-4 text-sm">
+                {[
+                  "Проверка подписи initData на сервере",
+                  "Автоматические сообщения от имени бота",
+                  "Webhook и серверные события MAX",
+                  "Разделение профилей и истории по реальным MAX-пользователям",
+                ].map((item, index) => (
+                  <li key={item} className="flex gap-3">
+                    <span className="grid size-6 shrink-0 place-items-center rounded-full border border-[#2b2d32] font-mono text-[9px] text-[#828491]">
+                      {index + 1}
+                    </span>
+                    <span className="pt-0.5 text-[#9fa1b1]">{item}</span>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-4 text-[10px] leading-4 text-[#828491]">
+                ИНН и ОГРН в Omnia для этого не нужны: бизнес проверяется на стороне MAX.
+              </p>
             </aside>
           </section>
 
@@ -196,7 +276,11 @@ export function MaxSettingsWorkspace({
               <div className="max-w-[680px]">
                 <div className="flex items-center gap-2">
                   <span
-                    className={`size-2 rounded-full ${config.data?.config.max_url_attached ? "bg-[#248a4b]" : "bg-[#e8c547]"}`}
+                    className={`size-2 rounded-full ${
+                      config.data?.config.max_url_attached
+                        ? "bg-[#248a4b]"
+                        : "bg-[#e8c547]"
+                    }`}
                   />
                   <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#828491]">
                     URL приложения в MAX
@@ -208,13 +292,14 @@ export function MaxSettingsWorkspace({
                     : "Добавьте HTTPS-адрес в MAX Partner"}
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">
-                  Omnia скопирует постоянный адрес и откроет кабинет MAX. После вставки
-                  вернитесь сюда: мы проверим доступность приложения и сохраним ваше
-                  подтверждение. MAX пока не сообщает эту настройку через публичный API.
+                  Omnia скопирует постоянный адрес и откроет кабинет MAX. После
+                  вставки вернитесь сюда: мы проверим доступность приложения и
+                  сохраним ваше подтверждение. MAX пока не сообщает эту
+                  настройку через публичный API.
                 </p>
-                {integration.data?.app_url && (
+                {productionUrl && (
                   <p className="mt-3 truncate font-mono text-[11px] text-[#828491]">
-                    {integration.data.app_url}
+                    {productionUrl}
                   </p>
                 )}
               </div>
@@ -233,7 +318,7 @@ export function MaxSettingsWorkspace({
                 <Button
                   type="button"
                   className="h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]"
-                  disabled={!integration.data?.app_url || confirmMaxUrl.isPending}
+                  disabled={!productionUrl || confirmMaxUrl.isPending}
                   onClick={() => confirmMaxUrl.mutate()}
                 >
                   {confirmMaxUrl.isPending

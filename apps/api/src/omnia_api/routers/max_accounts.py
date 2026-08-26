@@ -88,10 +88,6 @@ async def get_access(
         reason = "registration_required"
     elif current_user.email_verified_at is None:
         reason = "email_verification_required"
-    elif business is None:
-        reason = "business_profile_required"
-    elif business.status != "verified":
-        reason = "business_verification_required"
     else:
         reason = None
     return MaxAccessPublic(

@@ -4,9 +4,9 @@ export type MaxJourneyStageId =
   | "project"
   | "build"
   | "app"
-  | "max"
+  | "bot"
   | "publish"
-  | "verify";
+  | "max";
 
 export type MaxJourneyStageStatus = "completed" | "current" | "upcoming";
 
@@ -61,13 +61,13 @@ const STAGE_DEFINITIONS: Array<{
     actionLabel: "Заполнить данные",
   },
   {
-    id: "max",
-    label: "MAX-бот",
-    shortLabel: "MAX-бот",
-    description: "Подключите прошедшего модерацию бота из MAX Partner.",
+    id: "bot",
+    label: "Безопасный вход MAX",
+    shortLabel: "MAX-доступ",
+    description: "Подключите промодерированного бота, чтобы сервер проверял пользователей MAX.",
     itemIds: ["bot"],
     suffix: "/settings?tab=bot",
-    actionLabel: "Подключить MAX-бота",
+    actionLabel: "Подключить безопасный вход",
   },
   {
     id: "publish",
@@ -79,13 +79,13 @@ const STAGE_DEFINITIONS: Array<{
     actionLabel: "Перейти к публикации",
   },
   {
-    id: "verify",
-    label: "Проверка в MAX",
-    shortLabel: "Проверка",
-    description: "Активируйте webhook, добавьте URL в MAX и проверьте запуск.",
-    itemIds: ["webhook", "max_url"],
+    id: "max",
+    label: "Подключение в MAX",
+    shortLabel: "MAX",
+    description: "Откройте MAX Partner, вставьте production URL и сохраните запуск mini app.",
+    itemIds: ["max_url"],
     suffix: "/settings?tab=bot",
-    actionLabel: "Завершить подключение",
+    actionLabel: "Подключить в MAX",
   },
 ];
 
@@ -93,10 +93,10 @@ const ITEM_STAGE: Record<string, MaxJourneyStageId> = {
   build: "build",
   business: "app",
   legal: "app",
-  bot: "max",
   publish: "publish",
-  webhook: "verify",
-  max_url: "verify",
+  bot: "bot",
+  webhook: "bot",
+  max_url: "max",
 };
 
 function stageIsDone(

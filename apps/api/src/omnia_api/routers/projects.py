@@ -47,7 +47,7 @@ from omnia_api.services import max_client, orchestrator_client, repo_import
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.fork_recap import build_fork_recap
-from omnia_api.services.max_access import require_max_business
+from omnia_api.services.max_access import require_max_studio_access
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.queue import enqueue_build_exe, enqueue_preview
 from omnia_api.services.run_bundle import build_launchers
@@ -100,7 +100,7 @@ async def create_project(
                 "Для MAX Studio нужна регистрация",
                 status.HTTP_403_FORBIDDEN,
             )
-        await require_max_business(session, current_user)
+        require_max_studio_access(current_user)
     owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
     short_id = uuid4().hex[:6]
     base_slug = slugify(payload.name)[:60] or "project"

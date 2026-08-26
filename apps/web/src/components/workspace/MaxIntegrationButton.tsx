@@ -75,7 +75,7 @@ export function MaxIntegrationButton({
       qc.setQueryData(queryKey, data);
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       setToken("");
-      toast.success("MAX-бот подключён");
+      toast.success("Безопасный вход MAX подключён");
     },
     onError: (error) =>
       toast.error("Не удалось подключить MAX", { description: message(error) }),
@@ -96,10 +96,10 @@ export function MaxIntegrationButton({
       qc.setQueryData(queryKey, data);
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["deploy", projectId] });
-      toast.success("Webhook MAX активирован");
+      toast.success("Связь с MAX обновлена");
     },
     onError: (error) =>
-      toast.error("Не удалось активировать", { description: message(error) }),
+      toast.error("Не удалось обновить связь", { description: message(error) }),
   });
   const disconnect = useMutation({
     mutationFn: () => disconnectMaxIntegration(projectId),
@@ -138,7 +138,7 @@ export function MaxIntegrationButton({
             ? "h-11 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]"
             : "h-11 gap-1.5 px-2.5 text-xs sm:h-7"
         }
-        title="Подключить MAX Mini App"
+        title="Подключить безопасный вход MAX"
         data-testid="max-integration-open"
       >
         <Bot className="h-3.5 w-3.5" />
@@ -147,7 +147,7 @@ export function MaxIntegrationButton({
             display === "panel" ? "min-w-0 truncate" : "hidden 2xl:inline"
           }
         >
-          {display === "panel" ? label ?? "Подключить бота" : "MAX"}
+          {display === "panel" ? label ?? "Подключить MAX" : "MAX"}
         </span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -155,11 +155,12 @@ export function MaxIntegrationButton({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Bot className="h-5 w-5 text-accent" />
-              MAX Mini App
+              Безопасный вход MAX
             </DialogTitle>
             <DialogDescription>
-              Это серверная интеграция Bot API. Для обычного запуска мини-приложения
-              достаточно вставить его production URL в MAX Partner.
+              Секрет бота нужен серверу для проверки подписанного запуска из MAX.
+              Без него нельзя безопасно восстановить профиль, историю и личные данные
+              пользователя. Для самой вставки production URL в MAX Partner секрет не нужен.
             </DialogDescription>
           </DialogHeader>
 
@@ -175,8 +176,12 @@ export function MaxIntegrationButton({
             <div className="space-y-4" data-testid="max-connect-form">
               <div className="rounded-lg border border-border-subtle bg-surface-raised p-3 text-xs leading-relaxed text-fg-secondary">
                 Бот создаётся и проходит модерацию на платформе MAX для
-                партнёров. Секрет хранится зашифрованно на backend, не встраивается в
-                приложение и не показывается повторно.
+                партнёров. Секрет хранится зашифрованно на backend, не
+                встраивается в приложение и не показывается повторно.
+              </div>
+              <div className="rounded-lg border border-border-subtle bg-surface-raised p-3 text-xs leading-relaxed text-fg-secondary">
+                Для генерации и превью это поле не нужно. Подключите его один раз
+                перед production-публикацией; webhook Omnia настроит автоматически.
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-bot-token">Секрет бота</Label>
@@ -186,7 +191,7 @@ export function MaxIntegrationButton({
                   autoComplete="off"
                   value={token}
                   onChange={(event) => setToken(event.target.value)}
-                  placeholder="Вставьте значение из кабинета MAX"
+                  placeholder="Вставьте значение из MAX Partner"
                   data-testid="max-token-input"
                 />
               </div>
@@ -197,7 +202,7 @@ export function MaxIntegrationButton({
                 data-testid="max-connect-submit"
               >
                 {connect.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Проверить и подключить
+                Проверить и подключить безопасный вход
               </Button>
               <a
                 href="https://business.max.ru/"
@@ -252,7 +257,7 @@ export function MaxIntegrationButton({
                   onClick={() => activate.mutate()}
                   title={
                     activationReady
-                      ? "Активировать защищённый webhook MAX"
+                      ? "Повторно подтвердить production URL и обновить связь с MAX"
                       : "Сначала опубликуйте приложение на стабильном HTTPS-адресе"
                   }
                   data-testid="max-activate"
@@ -262,7 +267,7 @@ export function MaxIntegrationButton({
                   ) : (
                     <Radio className="mr-1.5 h-3.5 w-3.5" />
                   )}
-                  {activationReady ? "Активировать" : "Сначала опубликуйте"}
+                  {activationReady ? "Обновить связь" : "Сначала опубликуйте"}
                 </Button>
               </div>
 
@@ -289,6 +294,11 @@ export function MaxIntegrationButton({
                     Расширенные настройки → Мини-приложение. MAX не предоставляет
                     публичного API для этого шага.
                   </p>
+                  <p className="text-xs leading-relaxed text-fg-secondary">
+                    Обычно webhook и серверная связь уже обновлены при публикации.
+                    Эта кнопка нужна только для повторной проверки или
+                    переподключения после смены адреса.
+                  </p>
                   {data.deep_link && (
                     <a
                       href={`${data.deep_link}?startapp`}
@@ -303,8 +313,9 @@ export function MaxIntegrationButton({
                 </div>
               ) : (
                 <p className="rounded-lg border border-border-subtle p-3 text-xs leading-relaxed text-fg-secondary">
-                  Сначала нажмите «Опубликовать», дождитесь стабильного HTTPS,
-                  затем вернитесь и нажмите «Активировать».
+                  Сначала опубликуйте проект и дождитесь стабильного HTTPS.
+                  После этого Omnia сама подготовит связь с MAX; этот экран нужен
+                  только для ручной перепроверки.
                 </p>
               )}
 
@@ -336,7 +347,7 @@ export function MaxIntegrationButton({
                 className="w-full text-danger hover:text-danger"
                 disabled={busy}
                 onClick={() => {
-                  if (window.confirm("Отключить webhook и удалить интеграцию MAX?")) {
+                  if (window.confirm("Отключить безопасный вход и удалить интеграцию MAX?")) {
                     disconnect.mutate();
                   }
                 }}

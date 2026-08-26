@@ -44,7 +44,7 @@ async def test_max_registration_requires_separate_legal_acceptances(
     assert response.json()["error"]["code"] == "legal_acceptance_required"
 
 
-async def test_max_project_requires_verified_email_and_business(
+async def test_max_project_requires_verified_email_only(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -72,12 +72,23 @@ async def test_max_project_requires_verified_email_and_business(
     )
     assert verified.status_code == 200
 
-    still_blocked = await client.post(
+    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
+    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
+
+    async def no_publish(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(projects_router, "publish_event", no_publish)
+    project = await client.post(
         "/api/projects",
         json={"name": "No business", "template": "max_miniapp"},
     )
-    assert still_blocked.status_code == 403
-    assert still_blocked.json()["error"]["code"] == "business_profile_required"
+    assert project.status_code == 201
+
+    access = await client.get("/api/max/account/access")
+    assert access.status_code == 200
+    assert access.json()["business"] is None
+    assert access.json()["can_create_project"] is True
 
 
 async def test_verified_self_employed_owner_can_create_max_project(
@@ -123,20 +134,27 @@ async def test_verified_self_employed_owner_can_create_max_project(
     assert project.status_code == 201
 
 
-async def test_general_registration_cannot_bypass_max_business_gate(
+async def test_registered_user_can_create_max_project_without_business_profile(
     client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
+    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
+
+    async def no_publish(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(projects_router, "publish_event", no_publish)
     registered = await client.post(
         "/api/auth/register",
         json={"email": "general@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
-    blocked = await client.post(
+    project = await client.post(
         "/api/projects",
-        json={"name": "Bypass", "template": "max_miniapp"},
+        json={"name": "No duplicate legal form", "template": "max_miniapp"},
     )
-    assert blocked.status_code == 403
-    assert blocked.json()["error"]["code"] == "business_profile_required"
+    assert project.status_code == 201
 
 
 async def test_max_free_generation_limit_belongs_to_business(

@@ -19,7 +19,8 @@ async def get_user_business(session: AsyncSession, user_id: object) -> BusinessP
     ).scalar_one_or_none()
 
 
-async def require_max_business(session: AsyncSession, user: User) -> BusinessProfile:
+def require_max_studio_access(user: User) -> None:
+    """Allow generation after account verification; MAX verifies the publisher later."""
     if user.is_anon or user.email is None:
         raise ApiError(
             "max_registration_required",
@@ -32,6 +33,11 @@ async def require_max_business(session: AsyncSession, user: User) -> BusinessPro
             "Подтвердите email перед созданием MAX Mini App",
             status.HTTP_403_FORBIDDEN,
         )
+
+
+async def require_max_business(session: AsyncSession, user: User) -> BusinessProfile:
+    """Require a verified business only for business-scoped integrations."""
+    require_max_studio_access(user)
     business = await get_user_business(session, user.id)
     if business is None:
         raise ApiError(

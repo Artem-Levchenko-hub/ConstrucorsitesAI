@@ -80,9 +80,10 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
       void qc.invalidateQueries({ queryKey: ["max-integration", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["deploy", projectId] });
-      toast.success("Приложение опубликовано и подключено к MAX", {
+      toast.success("Приложение опубликовано и подключено", {
         id: `max-launch-success:${projectId}`,
-        description: "Осталось вставить HTTPS-адрес в кабинете MAX и подтвердить шаг.",
+        description:
+          "Production URL готов, безопасный вход и webhook подключены. Осталось вставить адрес в MAX Partner.",
       });
     },
     onError: (error: unknown) => {
@@ -123,7 +124,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
     );
   }
 
-  const technicalReady = ["publish", "webhook"].every(
+  const technicalReady = ["bot", "publish"].every(
     (id) => readiness.data?.items.find((item) => item.id === id)?.done,
   );
   const maxUrlReady =
@@ -153,7 +154,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
       ) : (
         <Rocket className="h-4 w-4" />
       )}
-      {launch.isPending ? "Публикуем и подключаем…" : "Опубликовать новую версию"}
+      {launch.isPending ? "Публикуем…" : "Опубликовать новую версию"}
     </Button>
   );
 }

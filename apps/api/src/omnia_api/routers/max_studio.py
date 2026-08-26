@@ -400,7 +400,7 @@ async def get_max_readiness(
     items = [
         MaxReadinessItem(
             id="business",
-            label="Бизнес-профиль и поддержка заполнены",
+            label="Данные приложения и поддержка заполнены",
             done=configured,
             action="Заполнить настройки",
         ),
@@ -418,21 +418,15 @@ async def get_max_readiness(
         ),
         MaxReadinessItem(
             id="bot",
-            label="MAX-бот проверен",
+            label="Безопасный доступ MAX подключён",
             done=bool(integration and integration.verified_at),
-            action="Подключить бота",
+            action="Подключить безопасный вход",
         ),
         MaxReadinessItem(
             id="publish",
             label="Текущая версия доступна по HTTPS",
             done=published,
             action="Опубликовать",
-        ),
-        MaxReadinessItem(
-            id="webhook",
-            label="Webhook MAX активирован",
-            done=bool(integration and integration.status == "active"),
-            action="Активировать webhook",
         ),
         MaxReadinessItem(
             id="max_url",

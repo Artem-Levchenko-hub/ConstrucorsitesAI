@@ -201,6 +201,14 @@ def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
 
 
+def test_max_readiness_requires_token_for_init_data_but_not_webhook() -> None:
+    source = inspect.getsource(max_studio.get_max_readiness)
+
+    assert 'id="bot"' in source
+    assert 'id="webhook"' not in source
+    assert 'id="max_url"' in source
+
+
 async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) -> None:
     user = User(email=f"max-{uuid4()}@example.ru")
     db_session.add(user)

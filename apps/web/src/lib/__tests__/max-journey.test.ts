@@ -26,7 +26,7 @@ describe("getMaxJourney", () => {
     expect(journey.completedCount).toBe(3);
     expect(journey.progress).toBe(50);
     expect(journey.currentStage).toMatchObject({
-      id: "max",
+      id: "bot",
       href: "/max/project-1/settings?tab=bot",
       status: "current",
     });
@@ -43,8 +43,38 @@ describe("getMaxJourney", () => {
       item("max_url", true),
     ]);
 
+    expect(journey.total).toBe(6);
     expect(journey.currentStage).toBeUndefined();
     expect(journey.progress).toBe(100);
+  });
+
+  it("requires the bot token for secure initData but not webhook", () => {
+    const journey = getMaxJourney("project-1", [
+      item("business", true),
+      item("legal", true),
+      item("build", true),
+      item("publish", true),
+      item("bot", true),
+      item("webhook", false),
+      item("max_url", true),
+    ]);
+
+    expect(journey.currentStage).toBeUndefined();
+    expect(journey.progress).toBe(100);
+  });
+
+  it("stops at secure MAX access when the token is missing", () => {
+    const journey = getMaxJourney("project-1", [
+      item("business", true),
+      item("legal", true),
+      item("build", true),
+      item("bot", false),
+      item("publish", true),
+      item("max_url", true),
+    ]);
+
+    expect(journey.currentStage).toMatchObject({ id: "bot" });
+    expect(journey.progress).toBe(83);
   });
 });
 
@@ -55,6 +85,9 @@ describe("getMaxJourneyItemHref", () => {
     );
     expect(getMaxJourneyItemHref("project-1", "publish")).toBe(
       "/max/project-1/publish",
+    );
+    expect(getMaxJourneyItemHref("project-1", "bot")).toBe(
+      "/max/project-1/settings?tab=bot",
     );
   });
 });

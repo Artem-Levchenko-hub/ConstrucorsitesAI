@@ -16,14 +16,14 @@ export type MvpChecklistSection = {
   items: MvpChecklistItem[];
 };
 
-export const mvpChecklistUpdatedAt = "31 июля 2026";
+export const mvpChecklistUpdatedAt = "26 августа 2026";
 
 export const mvpChecklist: MvpChecklistSection[] = [
   {
     id: "access",
     number: "01",
-    title: "Вход и бизнес-профиль",
-    description: "Пользователь получает законный доступ к MAX Studio и не может обойти бизнес-лимиты новым аккаунтом.",
+    title: "Вход и доступ к MAX Studio",
+    description: "Пользователь начинает с подтверждённого email, а шаги MAX и реквизиты подключаются только там, где они реально нужны.",
     items: [
       {
         id: "registration",
@@ -40,10 +40,10 @@ export const mvpChecklist: MvpChecklistSection[] = [
       },
       {
         id: "business-profile",
-        title: "Профиль организации, ИП или самозанятого",
-        detail: "ИНН уникален, реквизиты проверяются, бесплатный лимит закреплён за бизнесом.",
+        title: "MAX Partner и данные приложения",
+        detail: "Бизнес-проверка проходит в MAX Partner; в Omnia до production собираются только сведения, которые увидит пользователь приложения.",
         status: "done",
-        completedAt: "30 июля 2026",
+        completedAt: "26 августа 2026",
       },
       {
         id: "legal-consents",
@@ -231,7 +231,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "golden-path",
         title: "Финальный путь нового пользователя",
-        detail: "Внутренний production-прогон доказал регистрацию, business onboarding, атомарную активацию Pro и ledger, real generation, safe preview, exact-commit deploy и отмену продления. Для финальной галочки остаются настоящие email, платёж ЮKassa и запуск двух пользователей через промодерированный MAX-бот.",
+        detail: "Внутренний production-прогон доказал регистрацию, атомарную активацию Pro и ledger, real generation, safe preview, exact-commit deploy и отмену продления. Следующий внешний этап: реальное письмо, платёж ЮKassa и запуск двух пользователей через промодерированный MAX-бот без повторной бизнес-анкеты в Omnia.",
         status: "in_progress",
       },
     ],

@@ -43,8 +43,8 @@ export function getMaxAccess(): Promise<MaxAccess> {
       email_verified: true,
       email_delivery_configured: true,
       business: mockBusiness,
-      can_create_project: mockBusiness?.status === "verified",
-      reason: mockBusiness ? null : "business_required",
+      can_create_project: true,
+      reason: null,
       legal_document_version: "dev",
       payments_configured: true,
     });

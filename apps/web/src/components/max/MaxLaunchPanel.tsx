@@ -64,10 +64,10 @@ export function MaxLaunchPanel({
       : 10_000,
   });
 
-  const webhookActive = integration.data?.status === "active";
   const busyDeploy = ["building", "pushing", "swapping", "cancelling"].includes(
     deploy.data?.phase ?? "",
   );
+  const productionUrl = deploy.data?.prod_url ?? integration.data?.app_url ?? null;
   const items = readiness.data?.items ?? [];
   const readinessAvailable = readiness.isSuccess && items.length > 0;
   const journey = getMaxJourney(project.id, items);
@@ -97,7 +97,7 @@ export function MaxLaunchPanel({
   const botEmphasis = nextItem?.id === "bot";
 
   async function copyAppUrl() {
-    const appUrl = integration.data?.app_url;
+    const appUrl = productionUrl;
     if (!appUrl) return;
 
     if (await copyMaxLaunchUrl(appUrl)) {
@@ -258,7 +258,7 @@ export function MaxLaunchPanel({
               initialTemplate={project.template}
               display="panel"
               emphasized={botEmphasis}
-              label="MAX-бот"
+              label="MAX"
             />
           </div>
           <Button
@@ -287,24 +287,24 @@ export function MaxLaunchPanel({
           </div>
         )}
 
-        {webhookActive && integration.data?.app_url && (
+        {productionUrl && (
           <div className="mt-5 border-t border-[#25272b] pt-4">
             <div className="flex items-center gap-2 text-xs font-medium text-success">
               <ShieldCheck className="h-4 w-4" />
-              Техническая часть готова
+              Production URL готов
             </div>
             <p className="mt-2 text-[11px] leading-4 text-[#9fa1b1]">
-              Добавьте URL приложения к кнопке «Открыть» в кабинете MAX.
+              Добавьте адрес приложения к кнопке «Открыть» в кабинете MAX.
             </p>
             <a
-              href={integration.data.app_url}
+              href={productionUrl}
               target="_blank"
               rel="noreferrer"
               data-testid="max-launch-app-url"
               className="mt-2 block truncate font-mono text-[10px] text-[#9fa1b1] hover:text-white hover:underline"
-              title={integration.data.app_url}
+              title={productionUrl}
             >
-              {integration.data.app_url}
+              {productionUrl}
             </a>
             <a
               href="https://business.max.ru/"
