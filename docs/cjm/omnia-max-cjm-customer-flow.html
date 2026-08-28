@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <title>Omnia MAX — клиентский путь от идеи до запуска</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23191b20'/%3E%3Ctext x='16' y='21' font-size='18' text-anchor='middle' fill='%23f15a38'%3E%C2%A7%3C/text%3E%3C/svg%3E">
   <style>
     :root {
       --page: #f4f1ea;
@@ -808,8 +809,24 @@
     .map-step strong { display: block; font-size: 13px; }
     .map-step small { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
     .map-step em { color: var(--muted); font-size: 18px; font-style: normal; }
-    .map-step-card { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
-    .map-step-card .map-step { width: 100%; border: 0; border-radius: 0; }
+    .map-step-card { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); }
+    .map-step-card .map-step { width: 100%; padding-right: 90px; border: 0; border-radius: 0; }
+    .map-legal-button {
+      position: absolute;
+      z-index: 2;
+      top: 17px;
+      right: 46px;
+      width: 44px;
+      height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      color: var(--coral);
+      background: var(--paper);
+      cursor: pointer;
+      font: 800 17px/1 Georgia, serif;
+    }
+    .map-legal-button:hover,
+    .map-legal-button:focus-visible { border-color: var(--coral); background: var(--coral-soft); }
     .map-step-detail { border-top: 1px solid var(--line); background: rgba(255,255,255,.02); }
     .map-step-detail summary { min-height: 44px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
     .map-step-detail summary::after { content: "+"; color: var(--coral); font-size: 18px; }
@@ -890,6 +907,84 @@
     .branch-card p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
     .branch-card code { display: block; margin-top: 10px; color: var(--ink); font: 11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space: normal; }
     .branch-card button { min-height: 36px; padding: 0 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--coral); background: transparent; cursor: pointer; font-size: 11px; font-weight: 800; }
+
+    .legal-trigger {
+      position: fixed;
+      z-index: 56;
+      right: 18px;
+      bottom: 78px;
+      width: 48px;
+      height: 48px;
+      border: 1px solid #414754;
+      border-radius: 50%;
+      color: #fff;
+      background: #1b1e24;
+      box-shadow: 0 16px 38px rgba(0,0,0,.28);
+      cursor: pointer;
+      font: 800 21px/1 Georgia, serif;
+    }
+    .legal-trigger::after {
+      content: "Вопрос юристу";
+      position: absolute;
+      right: 56px;
+      top: 50%;
+      width: max-content;
+      padding: 7px 9px;
+      transform: translateY(-50%) translateX(6px);
+      border: 1px solid #343944;
+      border-radius: 8px;
+      color: #f5f7fb;
+      background: #17191e;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .16s ease, transform .16s ease;
+      font: 700 11px/1.2 Inter, system-ui, sans-serif;
+      white-space: nowrap;
+    }
+    .legal-trigger:hover,
+    .legal-trigger:focus-visible { border-color: var(--coral); background: #20232a; }
+    .legal-trigger:hover::after,
+    .legal-trigger:focus-visible::after { opacity: 1; transform: translateY(-50%) translateX(0); }
+    .legal-overlay {
+      position: fixed;
+      z-index: 70;
+      inset: 0;
+      padding: 20px;
+      overflow: auto;
+      background: rgba(3,5,9,.8);
+      backdrop-filter: blur(12px);
+      display: grid;
+      place-items: center;
+    }
+    .legal-panel {
+      width: min(680px, 100%);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--paper);
+      box-shadow: 0 35px 90px rgba(0,0,0,.5);
+    }
+    .legal-head { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+    .legal-kicker { margin: 0 0 7px; color: var(--coral); font-size: 10px; font-weight: 850; letter-spacing: .16em; text-transform: uppercase; }
+    .legal-head h2 { margin: 0; font-size: 27px; letter-spacing: -.035em; }
+    .legal-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .legal-question {
+      margin-top: 20px;
+      padding: 20px;
+      border: 1px solid rgba(79,129,247,.36);
+      border-radius: 16px;
+      background: var(--coral-soft);
+    }
+    .legal-question span,
+    .legal-detail span { display: block; color: var(--muted); font-size: 10px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+    .legal-question strong { display: block; margin-top: 9px; font-size: 18px; line-height: 1.48; }
+    .legal-detail-grid { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .legal-detail { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+    .legal-detail p { margin: 8px 0 0; color: var(--ink); font-size: 13px; line-height: 1.55; }
+    .legal-actions { margin-top: 18px; display: flex; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+    .legal-actions .btn { min-height: 42px; }
 
     .toast {
       position: fixed;
@@ -984,6 +1079,15 @@
       .nav-center small span:last-child { display: none; }
       .map-overlay { padding: 10px; }
       .map-dialog { padding: 18px 14px; border-radius: 20px; }
+      .legal-trigger { right: 10px; bottom: 78px; width: 44px; height: 44px; }
+      .legal-trigger::after { display: none; }
+      .legal-overlay { padding: 8px; place-items: end center; }
+      .legal-panel { max-height: calc(100vh - 16px); padding: 18px 14px; border-radius: 20px; }
+      .legal-head h2 { font-size: 23px; }
+      .legal-question { padding: 16px; }
+      .legal-question strong { font-size: 16px; }
+      .legal-detail-grid { grid-template-columns: 1fr; }
+      .legal-actions .btn { flex: 1; }
       .map-head h2 { font-size: 24px; }
       .map-kpis, .branch-grid { grid-template-columns: 1fr; }
       .map-detail-row { grid-template-columns: 1fr; gap: 3px; }
@@ -1760,6 +1864,8 @@
     }
     @media (max-width: 900px) {
       .home-nav { display: none; }
+      .home-proof-grid,
+      .home-route-grid { grid-template-columns: repeat(2, 1fr); }
       .studio-grid { grid-template-columns: 1fr; }
       .studio-agent { display: none; }
       .auth-layout { grid-template-columns: 1fr; padding: 64px 0; }
@@ -1778,6 +1884,8 @@
     @media (max-width: 760px) {
       .home-header,
       .public-header { padding-left: 16px; padding-right: 16px; }
+      .home-proof-grid,
+      .home-route-grid { grid-template-columns: 1fr; }
       .home-login,
       .public-header nav { display: none; }
       .home-hero { padding: 64px 16px 84px; }
@@ -1978,6 +2086,7 @@
     .product-shell,
     .account-route-real,
     .map-dialog,
+    .legal-panel,
     .cjm-dock {
       --page: #0f1115;
       --paper: #191b20;
@@ -2191,6 +2300,36 @@
         { title: "Мои приложения", short: "Вернуться к сохранённому проекту", phase: 8, goal: "Продолжить работу без повторного онбординга", question: "Где мой прошлый результат?", trust: "Статус, версия и следующий шаг видны на карточке проекта", result: "Владелец вернулся в нужный проект" },
         { title: "Подключение URL в MAX Partner", short: "Вставить готовую ссылку и проверить кнопку", phase: 6, goal: "Открыть опубликованное приложение внутри MAX", question: "Что перенести в MAX после публикации?", trust: "Только production URL; токен повторно не нужен", result: "Кнопка в MAX открывает приложение" }
       ];
+      var legalQuestions = [
+        { question: "Какие обещания о готовом MAX-приложении, сроках и результате ООО «Кортэл» вправе показывать здесь, и какая маркировка демо обязательна?", risk: "Недоказанные обещания могут быть признаны вводящей в заблуждение рекламой или неверным описанием услуги.", deliverable: "Разрешённые и запрещённые формулировки, точный текст маркировки демо и перечень доказательств для каждого обещания." },
+        { question: "В какой момент при сохранении проекта возникает договор с ООО «Кортэл» и какие документы или согласия пользователь должен принять до создания аккаунта?", risk: "Проект и данные уже сохраняются, а договорное основание и полномочия представителя могут быть ещё не подтверждены.", deliverable: "Момент заключения договора, состав обязательных согласий, текст возле кнопки и набор clickwrap-доказательств backend." },
+        { question: "Достаточно ли подтверждения email для доступа к проекту и как доказать, кто именно принял условия от имени ИП или организации?", risk: "Email подтверждает канал связи, но не всегда личность, полномочия представителя или принятие конкретной версии документов.", deliverable: "Правила идентификации, проверки полномочий, архива документов и повторного принятия после изменения условий." },
+        { question: "Какие данные и материалы запрещено вводить в описание идеи и какое предупреждение нужно показать до отправки текста в AI?", risk: "Пользователь может передать персональные данные, коммерческую тайну, незаконный контент или чужие объекты интеллектуальных прав.", deliverable: "Список запретов, точный notice у поля, правила модерации и основание передачи данных AI-провайдерам." },
+        { question: "Кому принадлежат права на AI-концепт и что нужно сообщить о точности, уникальности и юридической проверке результата до его подтверждения?", risk: "Черновик может содержать ошибки или чужие элементы, а подтверждение пользователем может ошибочно восприниматься как гарантия законности.", deliverable: "Распределение прав, отказ от недопустимых гарантий, текст подтверждения и ответственность за проверку материалов." },
+        { question: "Как юридически определить Free, Pro и Business и какие различия между лицензией, услугами, подпиской и хостингом должны быть видны на карточках?", risk: "Неверное название тарифа или скрытые ограничения создают риск претензий о составе услуги и вводящих в заблуждение условиях.", deliverable: "Правовую модель каждого режима, обязательные раскрытия, допустимые названия и точный состав включённых услуг." },
+        { question: "Достаточно ли здесь раскрыты цена, период, автопродление, дата списания, отмена и возврат до нажатия кнопки оплаты?", risk: "Неочевидное продление или неполные условия оплаты могут сделать согласие спорным и увеличить риск возвратов и жалоб.", deliverable: "Точный текст заказа, отдельные согласия, расположение ссылок и события backend, доказывающие принятие условий." },
+        { question: "Как распределяется ответственность между ООО «Кортэл» и ЮKassa, кто выдаёт чек и какие платёжные данные вправе получать Платформа?", risk: "Ошибочная роль получателя денег или лишняя обработка платёжных данных создают фискальные, договорные и информационные риски.", deliverable: "Схему ролей, текст у кнопки оплаты, требования к чеку, политике данных и журналу платёжной операции." },
+        { question: "Какие статусы и сообщения обязательны при ожидании, отказе, отмене или повторе платежа, чтобы исключить двойное списание и спорный доступ?", risk: "Повторный платёж без надёжной привязки и reconciliation может привести к двойным списаниям, ошибочному доступу и неразрешимым претензиям.", deliverable: "Правила idempotency и reconciliation, тексты каждого состояния, сроки ожидания и доказательства результата платежа." },
+        { question: "Когда услуга ООО «Кортэл» считается начатой после оплаты и какие документы, чек, срок доступа и правила отказа нужно показать на этом экране?", risk: "Без фиксированного момента начала услуги спорны срок исполнения, возврат, доступ и объём уже оказанных услуг.", deliverable: "Юридический момент активации, обязательные документы и точный текст о сроке, отмене и следующем действии." },
+        { question: "Какие данные можно передавать LLM при первой генерации, кто получает права на код и результат и какие гарантии ООО «Кортэл» не должно давать?", risk: "AI-обработка затрагивает данные и интеллектуальные права, а обещание готового результата может превышать фактическую проверку.", deliverable: "Правила передачи и хранения данных, распределение прав, ограничения гарантий и необходимые backend-логи генерации." },
+        { question: "Как обозначить, что живое превью ещё не опубликовано, не прошло модерацию и не должно принимать реальные заказы или платежи?", risk: "Пользователь может принять тестовый экран за production и начать эксплуатацию без документов, проверки продавца и безопасных интеграций.", deliverable: "Точную маркировку preview, запрещённые действия, условия перехода в production и технические блокировки." },
+        { question: "Кто отвечает за AI- и ручные правки пользователя, чужой контент и ошибки, и какие подтверждения нужны перед сохранением новой версии?", risk: "После правок Платформа может хранить и публиковать незаконные материалы, хотя источник изменения и объём ответственности не зафиксированы.", deliverable: "Распределение ответственности, предупреждение перед правкой, правила модерации и состав version/audit-лога." },
+        { question: "Какие обязанности принимает ООО «Кортэл» при публикации: доступность, безопасность, резервное копирование, удаление незаконного контента и восстановление после ошибки?", risk: "Публикация превращает черновик в публичный сервис и создаёт hosting, security и notice-and-action обязательства.", deliverable: "Модель хостинга, SLA и ограничения, регламент блокировки/восстановления, тексты статусов и backend-доказательства." },
+        { question: "Какие сведения о продавце, операторе данных, поддержке и правилах использования должны быть доступны конечному пользователю в опубликованном приложении?", risk: "Публичное приложение без обязательных реквизитов и документов создаёт риски по потребителям, данным, контенту и претензиям.", deliverable: "Полный список публичных сведений и ссылок, места их показа и release-gate, блокирующий запуск без них." },
+        { question: "Какие действия владелец должен иметь в кабинете для отмены продления, возврата, экспорта, удаления, смены владельца и защиты критичных операций?", risk: "Отсутствие самообслуживания и усиленной защиты повышает риск незаконного списания, потери доступа, данных и секретов.", deliverable: "Обязательные функции кабинета, MFA/подтверждения, сроки исполнения и неизменяемый журнал критичных действий." },
+        { question: "Кто отвечает за создание и модерацию бота в MAX Partner и какие обещания о статусе «готов», «одобрено» или «официально» допустимы ООО «Кортэл»?", risk: "Платформа не контролирует решение MAX, поэтому обещание гарантированной модерации или официального статуса может быть недостоверным.", deliverable: "Распределение обязанностей, допустимые статусы и тексты, сценарий отказа/обжалования и границы ответственности." },
+        { question: "Кто является продавцом, исполнителем и оператором данных перед конечным пользователем ещё до открытия Mini App?", risk: "Пользователь может не понимать, вступает ли он в отношения с ООО «Кортэл», владельцем приложения, MAX или платёжным провайдером.", deliverable: "Карту ролей, обязательные сведения до входа, ссылки на документы и точную формулировку владельца приложения." },
+        { question: "Какие данные профиля MAX можно получить при входе, на каком основании и когда требуется отдельное согласие конечного пользователя?", risk: "Избыточный сбор или формальное согласие без реального управления обработкой создают риск незаконной обработки персональных данных.", deliverable: "Минимальный набор данных, основание обработки, текст согласия/уведомления, срок хранения и механизм отзыва." },
+        { question: "В какой момент действие клиента становится заказом и какие цена, состав, продавец, ограничения и условия исполнения должны быть видны до подтверждения?", risk: "Без ясной оферты и момента акцепта спорны наличие товара, цена, обязанности продавца и допустимость отдельных категорий товаров или услуг.", deliverable: "Момент заключения сделки, обязательные поля заказа, отраслевые ограничения и точный текст основной кнопки." },
+        { question: "Кто принимает деньги конечного клиента, нужна ли агентская модель и как должны работать чек, возврат и привязка платежа к конкретному заказу?", risk: "Платёж без server-side order intent и понятного получателя создаёт фискальные риски, подмену суммы и спор о принадлежности оплаты.", deliverable: "Платёжную модель, обязательные договоры, receipt/refund flow, проверку принадлежности payment и точные UI-тексты." },
+        { question: "Какие обязательства по исполнению, сроку, поддержке, отмене и возврату возникают после подтверждения заказа и кто отвечает перед клиентом?", risk: "Экран оплаты может обещать результат, который должен исполнить владелец приложения, но границы ответственности сторон не показаны.", deliverable: "Распределение ответственности, обязательные статусы и контакты, правила претензий/возврата и содержание чека/уведомления." },
+        { question: "На каком основании собирается аналитика пути клиента, кто контролирует эти данные и какие согласия, сроки хранения и обезличивание нужны?", risk: "События воронки могут содержать идентификаторы и поведение конечных пользователей без ясного распределения ролей и основания обработки.", deliverable: "Схему ролей, перечень событий, consent/cookie-механику, сроки хранения и правила доступа/выгрузки." },
+        { question: "Сколько хранить версии, промпты и материалы, кто вправе восстановить старую версию и что происходит после удаления проекта?", risk: "История может сохранять удалённые персональные данные, чужой контент и ранее отозванные материалы без понятного срока и доступа.", deliverable: "Retention/deletion-политику, права доступа, правила rollback, audit-лог и порядок очистки backup/копий." },
+        { question: "Как разделить роли ООО «Кортэл» и владельца приложения по персональным данным и какие сведения и документы обязательны до публикации?", risk: "Шаблонная политика может назначить неверного оператора и не отражать реальные цели, получателей, данные и каналы поддержки.", deliverable: "Матрицу ролей, обязательные поля, утверждённые шаблоны документов и технический legal-gate перед публикацией." },
+        { question: "Кто вправе передать bot token ООО «Кортэл», как оформить его использование, хранение, отзыв и действия при компрометации?", risk: "Токен даёт доступ к боту и пользовательским событиям; отсутствие полномочий и audit decrypt/use создаёт критичный риск безопасности.", deliverable: "Текст полномочий и согласия, требования к vault/audit, процедуру ротации/отзыва и уведомление об инциденте." },
+        { question: "Как регулируются срок хранения проектов, доступ сотрудников, передача другому владельцу, экспорт и окончательное удаление приложения?", risk: "Сохранённый проект содержит код, данные и права; без правил возможны несанкционированный доступ, потеря результата и спор о владении.", deliverable: "Роли доступа, transfer/export/deletion flow, сроки хранения и доказательства исполнения запросов владельца." },
+        { question: "Кто отвечает за ручное добавление production URL в MAX Partner и что обязана сделать ООО «Кортэл», если ссылка неверна или приложение не открывается?", risk: "Разделённый ручной шаг создаёт спор, где закончилась услуга Платформы и кто отвечает за недоступность Mini App.", deliverable: "Границу ответственности, инструкцию и подтверждение шага, тексты ошибок, сроки поддержки и критерий успешного запуска." }
+      ];
       var screenDetails = [
         { action: "Смотрит живой пример и нажимает «Собрать бесплатный черновик».", input: "Ничего — ценность видна до формы.", branch: "Открыть примеры или сразу описать идею." },
         { action: "Выбирает вход через MAX или короткий код на email.", input: "Имя, рабочий email, два обязательных согласия.", branch: "Можно изменить email; карта, ИНН, ОГРН и токен не нужны." },
@@ -2289,6 +2428,9 @@
       var state = loadState();
       var generationTimer = null;
       var mapFocusReturn = "dock";
+      var legalStep = null;
+      var legalReturnToMap = false;
+      var legalFocusStep = null;
       var app = document.getElementById("app");
 
       function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -2472,6 +2614,81 @@
           var opener = app.querySelector(selector) || app.querySelector('.cjm-dock [data-action="open-map"]');
           if (opener) opener.focus();
         }, 0);
+      }
+      function openLegal(step) {
+        var requested = Number(step);
+        if (!Number.isFinite(requested)) requested = state.step;
+        var index = Math.max(0, Math.min(legalQuestions.length - 1, requested));
+        legalFocusStep = index;
+        legalReturnToMap = state.mapOpen;
+        legalStep = index;
+        state.mapOpen = false;
+        render();
+        window.setTimeout(function () {
+          var closeButton = app.querySelector('[data-action="close-legal"]');
+          if (closeButton) closeButton.focus();
+        }, 0);
+      }
+      function closeLegal() {
+        var returnToMap = legalReturnToMap;
+        var focusStep = legalFocusStep;
+        legalStep = null;
+        legalReturnToMap = false;
+        state.mapOpen = returnToMap;
+        render();
+        window.setTimeout(function () {
+          var selector = returnToMap
+            ? '.map-legal-button[data-legal-step="' + focusStep + '"]'
+            : '.legal-trigger';
+          var opener = app.querySelector(selector);
+          if (opener) opener.focus();
+        }, 0);
+      }
+      function legalQuestionText(step) {
+        var screen = screens[step];
+        var legal = legalQuestions[step];
+        return "Экран: " + screen.title + "\n\nВопрос юристу:\n" + legal.question +
+          "\n\nУязвимость для ООО «Кортэл»:\n" + legal.risk +
+          "\n\nЧто просим получить:\n" + legal.deliverable;
+      }
+      function setLegalToast(message) {
+        function focusCopyButton() {
+          var copyButton = app.querySelector('[data-action="copy-legal"]');
+          if (copyButton) copyButton.focus();
+        }
+        state.toast = message;
+        render();
+        window.setTimeout(focusCopyButton, 0);
+        window.setTimeout(function () {
+          if (state.toast === message) {
+            state.toast = "";
+            render();
+            window.setTimeout(focusCopyButton, 0);
+          }
+        }, 2600);
+      }
+      function fallbackCopy(text) {
+        var area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        var copied = false;
+        try { copied = document.execCommand("copy"); } catch (error) {}
+        document.body.removeChild(area);
+        setLegalToast(copied ? "Вопрос юристу скопирован." : "Не удалось скопировать вопрос.");
+      }
+      function copyLegalQuestion() {
+        var text = legalQuestionText(legalStep);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text)
+            .then(function () { setLegalToast("Вопрос юристу скопирован."); })
+            .catch(function () { fallbackCopy(text); });
+          return;
+        }
+        fallbackCopy(text);
       }
 
       function brand(inverse) {
@@ -3025,11 +3242,25 @@
         var personaLabel = state.journeyPersona === "customer" ? "Клиент" : state.journeyPersona === "returning" ? "Возврат" : "Владелец";
         return '<nav class="cjm-dock" aria-label="Переключатель экранов CJM"><button data-action="reset" aria-label="Начать заново">↺</button><button data-action="prev" aria-label="Предыдущий экран"' + (position === 0 ? " disabled" : "") + '>←</button><div class="dock-progress"><div class="dock-copy"><strong>' + escapeHtml(screens[state.step].title) + '</strong><span>' + personaLabel + ' · ' + (position + 1) + ' из ' + journey.length + '</span></div><div class="progress-track"><span style="width:' + percent + '%"></span></div></div><button class="primary" data-action="next" aria-label="Следующий экран"' + (position === journey.length - 1 || paymentLocked || launchLocked ? " disabled" : "") + '>→</button><button data-action="open-map" aria-label="Открыть карту пути">⌘</button></nav>';
       }
+      function renderLegalTrigger() {
+        if (state.mapOpen || legalStep !== null) return "";
+        return '<button class="legal-trigger" data-action="open-legal" data-legal-step="' + state.step + '" aria-label="Открыть вопрос юристу для экрана «' + escapeHtml(screens[state.step].title) + '»" title="Вопрос юристу">§</button>';
+      }
+      function renderLegalDialog() {
+        if (legalStep === null) return "";
+        var screen = screens[legalStep];
+        var legal = legalQuestions[legalStep];
+        return '<div class="legal-overlay" role="dialog" aria-modal="true" aria-labelledby="legal-title" aria-describedby="legal-note">' +
+          '<section class="legal-panel"><header class="legal-head"><div><p class="legal-kicker">Legal overlay · экран ' + String(legalStep + 1).padStart(2, "0") + '</p><h2 id="legal-title">' + escapeHtml(screen.title) + '</h2><p class="legal-note" id="legal-note">Рабочий вопрос для созвона. Это не юридическое заключение.</p></div><button class="icon-btn" data-action="close-legal" aria-label="Закрыть вопрос юристу">×</button></header>' +
+          '<div class="legal-question"><span>Главный вопрос юристу</span><strong>' + escapeHtml(legal.question) + '</strong></div>' +
+          '<div class="legal-detail-grid"><div class="legal-detail"><span>Уязвимость для ООО «Кортэл»</span><p>' + escapeHtml(legal.risk) + '</p></div><div class="legal-detail"><span>Что получить в ответе</span><p>' + escapeHtml(legal.deliverable) + '</p></div></div>' +
+          '<footer class="legal-actions"><button class="btn ghost" data-action="close-legal">Вернуться к экрану</button><button class="btn primary" data-action="copy-legal">Скопировать вопрос</button></footer></section></div>';
+      }
       function renderMapSteps(steps) {
         return steps.map(function (screenIndex, position) {
           var screen = screens[screenIndex];
           var detail = screenDetails[screenIndex] || {};
-          return '<article class="map-step-card"><button class="map-step' + (screenIndex === state.step ? " current" : "") + '" data-action="go" data-step="' + screenIndex + '"><span>' + String(position + 1).padStart(2, "0") + '</span><span><strong>' + escapeHtml(screen.title) + '</strong><small>' + escapeHtml(phases[screen.phase].name) + ' · ' + escapeHtml(screen.short) + '</small></span><em>→</em></button><details class="map-step-detail"' + (screenIndex === state.step ? ' open' : '') + '><summary>Все детали шага</summary><div class="map-detail-grid"><div class="map-detail-row"><span>Вопрос</span><strong>' + escapeHtml(screen.question) + '</strong></div><div class="map-detail-row"><span>Зачем шаг</span><strong>' + escapeHtml(screen.goal) + '</strong></div><div class="map-detail-row"><span>Действие</span><strong>' + escapeHtml(detail.action || screen.goal) + '</strong></div><div class="map-detail-row"><span>Что вводит</span><strong>' + escapeHtml(detail.input || 'Ничего') + '</strong></div><div class="map-detail-row"><span>Что даёт доверие</span><strong>' + escapeHtml(screen.trust) + '</strong></div><div class="map-detail-row"><span>Если не так</span><strong>' + escapeHtml(detail.branch || 'Есть понятное следующее действие без потери контекста.') + '</strong></div><div class="map-detail-row"><span>Результат</span><strong>' + escapeHtml(screen.result) + '</strong></div></div></details></article>';
+          return '<article class="map-step-card"><button class="map-step' + (screenIndex === state.step ? " current" : "") + '" data-action="go" data-step="' + screenIndex + '"><span>' + String(position + 1).padStart(2, "0") + '</span><span><strong>' + escapeHtml(screen.title) + '</strong><small>' + escapeHtml(phases[screen.phase].name) + ' · ' + escapeHtml(screen.short) + '</small></span><em>→</em></button><button class="map-legal-button" data-action="open-legal" data-legal-step="' + screenIndex + '" aria-label="Вопрос юристу для экрана «' + escapeHtml(screen.title) + '»" title="Вопрос юристу">§</button><details class="map-step-detail"' + (screenIndex === state.step ? ' open' : '') + '><summary>Все детали шага</summary><div class="map-detail-grid"><div class="map-detail-row"><span>Вопрос</span><strong>' + escapeHtml(screen.question) + '</strong></div><div class="map-detail-row"><span>Зачем шаг</span><strong>' + escapeHtml(screen.goal) + '</strong></div><div class="map-detail-row"><span>Действие</span><strong>' + escapeHtml(detail.action || screen.goal) + '</strong></div><div class="map-detail-row"><span>Что вводит</span><strong>' + escapeHtml(detail.input || 'Ничего') + '</strong></div><div class="map-detail-row"><span>Что даёт доверие</span><strong>' + escapeHtml(screen.trust) + '</strong></div><div class="map-detail-row"><span>Если не так</span><strong>' + escapeHtml(detail.branch || 'Есть понятное следующее действие без потери контекста.') + '</strong></div><div class="map-detail-row"><span>Результат</span><strong>' + escapeHtml(screen.result) + '</strong></div></div></details></article>';
         }).join("");
       }
       function renderJourneyBranches() {
@@ -3046,7 +3277,7 @@
         var client = state.step >= 17 && state.step <= 21;
         var product = (state.step >= 10 && state.step < 15) || state.step === 16 || state.step === 22 || state.step === 23 || state.step === 24 || state.step === 25 || state.step === 27;
         app.innerHTML = (state.step === 15 ? renderAccountChrome(content) : client ? renderClientChrome(content) : product ? renderProductChrome(content) : renderPublicChrome(content)) +
-          renderDock() + renderMap() + (state.toast ? '<div class="toast" role="status">' + escapeHtml(state.toast) + '</div>' : "");
+          renderDock() + renderLegalTrigger() + renderMap() + renderLegalDialog() + (state.toast ? '<div class="toast" role="status">' + escapeHtml(state.toast) + '</div>' : "");
       }
 
       function updateField(path, element) {
@@ -3088,6 +3319,19 @@
         }
       });
       app.addEventListener("keydown", function (event) {
+        if (legalStep !== null && event.key === "Escape") {
+          event.preventDefault();
+          return closeLegal();
+        }
+        if (legalStep !== null && event.key === "Tab") {
+          var legalFocusable = Array.prototype.slice.call(app.querySelectorAll('.legal-panel button:not([disabled]), .legal-panel [href], .legal-panel [tabindex]:not([tabindex="-1"])'));
+          if (legalFocusable.length) {
+            var legalFirst = legalFocusable[0];
+            var legalLast = legalFocusable[legalFocusable.length - 1];
+            if (event.shiftKey && document.activeElement === legalFirst) { event.preventDefault(); legalLast.focus(); }
+            else if (!event.shiftKey && document.activeElement === legalLast) { event.preventDefault(); legalFirst.focus(); }
+          }
+        }
         if (state.mapOpen && event.key === "Escape") {
           event.preventDefault();
           return closeMap();
@@ -3111,6 +3355,9 @@
         var trigger = event.target.closest("[data-action]");
         if (!trigger || trigger.disabled) return;
         var action = trigger.getAttribute("data-action");
+        if (action === "open-legal") return openLegal(trigger.getAttribute("data-legal-step"));
+        if (action === "close-legal") return closeLegal();
+        if (action === "copy-legal") return copyLegalQuestion();
         if (action === "next") return moveJourney(1);
         if (action === "prev") return moveJourney(-1);
         if (action === "go") return go(trigger.getAttribute("data-step"));
