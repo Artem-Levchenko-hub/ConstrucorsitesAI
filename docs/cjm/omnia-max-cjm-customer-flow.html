@@ -3254,7 +3254,7 @@
           '<section class="legal-panel"><header class="legal-head"><div><p class="legal-kicker">Legal overlay · экран ' + String(legalStep + 1).padStart(2, "0") + '</p><h2 id="legal-title">' + escapeHtml(screen.title) + '</h2><p class="legal-note" id="legal-note">Рабочий вопрос для созвона. Это не юридическое заключение.</p></div><button class="icon-btn" data-action="close-legal" aria-label="Закрыть вопрос юристу">×</button></header>' +
           '<div class="legal-question"><span>Главный вопрос юристу</span><strong>' + escapeHtml(legal.question) + '</strong></div>' +
           '<div class="legal-detail-grid"><div class="legal-detail"><span>Уязвимость для ООО «Кортэл»</span><p>' + escapeHtml(legal.risk) + '</p></div><div class="legal-detail"><span>Что получить в ответе</span><p>' + escapeHtml(legal.deliverable) + '</p></div></div>' +
-          '<footer class="legal-actions"><button class="btn ghost" data-action="close-legal">Вернуться к экрану</button><button class="btn primary" data-action="copy-legal">Скопировать вопрос</button></footer></section></div>';
+          '<footer class="legal-actions"><button class="btn ghost" data-action="close-legal">' + (legalReturnToMap ? 'Вернуться к карте' : 'Вернуться к экрану') + '</button><button class="btn primary" data-action="copy-legal">Скопировать вопрос</button></footer></section></div>';
       }
       function renderMapSteps(steps) {
         return steps.map(function (screenIndex, position) {
