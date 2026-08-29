@@ -690,13 +690,14 @@
     .new-project-card { min-height: 100%; padding: 24px; border: 1px dashed var(--line-strong); border-radius: 16px; background: transparent; display: grid; align-content: center; text-align: center; }
     .new-project-card span { width: 54px; height: 54px; margin: 0 auto 14px; display: grid; place-items: center; border-radius: 16px; color: var(--coral); background: var(--coral-soft); font-size: 24px; }
 
-    .publish-grid { display: grid; grid-template-columns: 1fr 330px; gap: 18px; align-items: start; }
+    .publish-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 330px); gap: 18px; align-items: start; }
+    .publish-grid > * { min-width: 0; }
     .publish-summary { padding: 24px; border-radius: 22px; color: #fff; background: var(--navy); }
     .publish-summary h3 { margin: 8px 0 16px; font-size: 25px; }
     .publish-summary dl { margin: 0; display: grid; gap: 13px; }
     .publish-summary div { padding-top: 12px; border-top: 1px solid rgba(255,255,255,.15); }
     .publish-summary dt { color: #b9c9d9; font-size: 11px; }
-    .publish-summary dd { margin: 4px 0 0; font-size: 13px; font-weight: 750; }
+    .publish-summary dd { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 750; }
 
     .launch-card { text-align: center; }
     .launch-followup {
@@ -1815,7 +1816,10 @@
     .product-shell {
       height: calc(100vh - 78px);
       min-height: 620px;
-      grid-template-columns: 220px minmax(480px, 1fr) clamp(380px, 20.5vw, 420px);
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      grid-template-columns: 220px minmax(0, 1fr) minmax(320px, 380px);
       background: #fcfbf7;
       overflow: hidden;
     }
@@ -1833,7 +1837,7 @@
     .project-chip small { display: none; }
     .launch-path { margin: 10px 12px 0; padding: 13px 12px; border-radius: 8px; }
     .sidebar-account { margin-top: auto; padding: 12px; }
-    .product-main { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .product-main { height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     .product-header { position: static; height: 64px; min-height: 64px; padding: 0 20px; background: #fcfbf7; backdrop-filter: none; }
     .product-title strong { font-size: 14px; }
     .product-title span { margin-top: 3px; font-size: 9px; }
@@ -1853,12 +1857,15 @@
     .next-copy small { display: block; color: #8d887f; font-size: 9px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
     .next-copy strong { display: block; margin-top: 3px; overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
     .next-count { color: #8d887f; font-size: 10px; }
-    .product-content { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-    .product-scroll { min-height: 0; flex: 1; overflow-y: auto; }
+    .product-content { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .product-scroll { min-width: 0; min-height: 0; flex: 1; overflow-y: auto; }
     .product-content .screen,
     .product-content .screen-center,
     .product-content .welcome-grid,
     .product-content .preview-layout { min-height: 100%; }
+    .product-content .screen,
+    .product-content .screen-pad,
+    .product-content .screen-wide { min-width: 0; max-width: 100%; }
     .product-content .screen-pad { padding: clamp(26px, 3vw, 44px); }
     .product-composer { flex: none; padding: 12px 20px 16px; border-top: 1px solid var(--line); background: #fcfbf7; }
     .product-composer-inner {
@@ -1951,11 +1958,13 @@
     .account-mini-grid span { display: block; }
     .account-mini-grid span { margin-top: 7px; color: var(--muted); font-size: 11px; }
 
+    @media (max-width: 1480px) {
+      .product-shell { grid-template-columns: 220px minmax(0, 1fr); }
+      .live-preview-panel { display: none; }
+    }
     @media (max-width: 1180px) {
       .studio-grid { grid-template-columns: 280px 1fr; }
       .studio-ready { display: none; }
-      .product-shell { grid-template-columns: 220px minmax(460px, 1fr); }
-      .live-preview-panel { display: none; }
     }
     @media (max-width: 900px) {
       .home-nav { display: none; }
@@ -1975,6 +1984,19 @@
       .checkout-grid,
       .yookassa-body { grid-template-columns: 1fr; }
       .yookassa-summary { border-right: 0; border-bottom: 1px solid #e7e9ec; }
+      .product-shell,
+      .product-shell.no-preview { grid-template-columns: 78px minmax(0, 1fr); }
+      .product-sidebar-head { padding: 0 16px; }
+      .product-sidebar-head .brand > div,
+      .sidebar-label,
+      .project-chip > div,
+      .sidebar-item span:not(.side-icon),
+      .launch-path,
+      .sidebar-account > div { display: none; }
+      .product-sidebar-nav { padding: 10px; }
+      .sidebar-item { padding: 0; justify-content: center; }
+      .project-chip { padding: 0; justify-content: center; }
+      .sidebar-account { justify-content: center; }
     }
     @media (max-width: 760px) {
       .home-header,
@@ -2197,7 +2219,7 @@
     .public-route,
     .product-shell,
     .account-route-real { background: #0f1115; }
-    .real-site { background: #0f1115; }
+    .real-site { max-width: 100%; overflow-x: hidden; background: #0f1115; }
     .auth-header,
     .public-header,
     .product-header,
@@ -2305,6 +2327,7 @@
     .account-nav-dark { border-color: var(--line); background: #111318; }
     .account-work,
     .account-page { background: #0f1115; }
+    .account-route-real .account-control-center .current-plan,
     .account-control-center .account-box,
     .account-control-center .plan-metrics div,
     .account-control-center .account-actions .btn,
@@ -2314,6 +2337,61 @@
     button.account-detail-row:hover { background: #20232a; }
     .current-plan { background: #151821; }
     .plan-metrics { background: var(--line); }
+
+    .product-shell .launch-followup-card {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #191b20;
+    }
+    .product-shell .launch-followup-card span {
+      color: #aab1bd;
+      background: #20232a;
+    }
+    .public-route .plans-next-card,
+    .public-route .plans-next-card.active {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #191b20;
+    }
+    .public-route .plans-next-card span {
+      color: #aab1bd;
+      background: #20232a;
+    }
+
+    /* Checkout: перекрываем более специфичную старую светлую тему. */
+    .public-route .checkout-grid > .form-card,
+    .public-route .checkout-grid > .order-box {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #191b20;
+    }
+    .public-route .checkout-grid > .order-box {
+      position: sticky;
+      top: 24px;
+    }
+    .public-route .checkout-grid .account-detail-row { background: #111318; }
+    .public-route .checkout-grid .billing-facts div { background: #20232a; }
+
+    .activation-route .screen-center {
+      min-height: calc(100vh - 78px);
+      padding: 64px 20px 118px;
+    }
+    .activation-card {
+      width: min(720px, 100%);
+      padding: clamp(28px, 5vw, 48px);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--ink);
+      background: #191b20;
+      box-shadow: 0 24px 70px rgba(0,0,0,.24);
+    }
+    .activation-card h2 { color: var(--ink); }
+    .activation-card .success-facts div { background: #111318; }
+    .activation-card .version-note { background: #20232a; }
+
+    @media (max-width: 980px) {
+      .public-route .checkout-grid > .order-box { position: static; }
+    }
 
     .map-overlay { place-items: start center; background: rgba(3,5,9,.78); }
     .map-dialog { background: #15171c; box-shadow: 0 35px 90px rgba(0,0,0,.5); }
@@ -3015,15 +3093,15 @@
       function renderActivated() {
         var free = state.plan === "free";
         if (!free && state.paymentStatus !== "succeeded" && !state.paid) {
-          return '<section class="screen-center"><div class="success-card"><div class="success-mark">!</div><p class="kicker">Тариф ещё не активирован</p><h2>Нужно дождаться подтверждения оплаты</h2><p>Пока ЮKassa не подтвердила платёж, доступ к платному тарифу остаётся закрыт.</p><div class="inline"><button class="btn primary" data-action="go" data-step="8">Проверить статус</button><button class="btn ghost" data-action="payment-retry">Повторить оплату</button></div></div></section>';
+          return '<main class="public-route activation-route"><section class="screen-center"><div class="success-card activation-card"><div class="success-mark">!</div><p class="kicker">Тариф ещё не активирован</p><h2>Нужно дождаться подтверждения оплаты</h2><p>Пока ЮKassa не подтвердила платёж, доступ к платному тарифу остаётся закрыт.</p><div class="inline"><button class="btn primary" data-action="go" data-step="8">Проверить статус</button><button class="btn ghost" data-action="payment-retry">Повторить оплату</button></div></div></section></main>';
         }
-        return '<section class="screen-center"><div class="success-card">' +
+        return '<main class="public-route activation-route"><section class="screen-center"><div class="success-card activation-card">' +
           '<div class="success-mark">✓</div><p class="kicker">' + (free ? "Тестовый запуск открыт" : "Оплата подтверждена") + '</p><h2>' + planName() + ' подключён</h2>' +
           '<p>' + (free ? "Карта не привязана, списаний не будет. Готовую версию можно открыть по тестовой ссылке; production-публикация в MAX останется доступна после апгрейда." : "Production-запуск открыт. Теперь можно получить постоянный URL, добавить его в MAX Partner и принимать реальные платежи через ЮKassa.") + '</p>' +
           '<div class="success-facts"><div><span>Тариф</span><strong>' + planName() + '</strong></div><div><span>Сегодня</span><strong>' + planPrice() + '</strong></div><div><span>Дальше</span><strong>' + (free ? "Тестовая публикация" : nextChargeLabel()) + '</strong></div></div>' +
           (!free ? '<div class="version-note" style="margin-top:14px">ЮKassa · ' + paymentMethodName() + ' · ' + paymentRef() + (state.renewal ? ' · автопродление включено' : ' · без автопродления') + '</div>' : '') +
           '<button class="btn primary" data-action="next">Перейти к публикации →</button>' +
-        '</div></section>';
+        '</div></section></main>';
       }
       function choice(id, title, note) {
         return '<button class="choice' + (state.brief.type === id ? " selected" : "") + '" data-action="brief-type" data-value="' + id + '"><strong>' + title + '</strong><small>' + note + '</small></button>';
