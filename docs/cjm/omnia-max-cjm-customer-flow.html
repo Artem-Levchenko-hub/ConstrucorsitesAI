@@ -1651,6 +1651,87 @@
     .auth-back { display: block; width: fit-content; margin: 0 auto; border: 0; color: #8d887f; background: transparent; cursor: pointer; font-size: 12px; }
     .verify-card { max-width: 560px; justify-self: end; text-align: center; }
     .verify-card .mail-icon { border-radius: 12px; }
+    .email-onboarding { width: min(896px, 100%); margin: 0 auto; padding: 80px 0 32px; }
+    .email-onboarding-head { display: flex; align-items: end; justify-content: space-between; gap: 28px; }
+    .email-onboarding-head h1 { margin: 12px 0 0; font-size: clamp(30px, 4vw, 42px); letter-spacing: -.04em; }
+    .email-onboarding-head p:last-child { max-width: 620px; margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .email-onboarding-head > span { color: var(--muted); font-size: 14px; white-space: nowrap; }
+    .email-progress { margin-top: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .email-progress > div { min-height: 52px; padding: 0 16px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); display: flex; align-items: center; gap: 12px; font-size: 14px; }
+    .email-progress > div.active { color: var(--ink); border-color: rgba(79,129,247,.45); background: rgba(79,129,247,.08); }
+    .email-progress span { color: var(--coral); }
+    .email-card { margin-top: 28px; padding: 32px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+    .email-card .mail-icon { width: 42px; height: 42px; border-radius: 10px; background: rgba(79,129,247,.12); color: var(--coral); display: grid; place-items: center; }
+    .email-card h2 { margin: 20px 0 0; font-size: 25px; }
+    .email-card > p { max-width: 620px; margin: 10px 0 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .email-note { margin: 20px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: #111318; font-size: 12px; line-height: 1.55; }
+    .email-cjm-hint { margin-top: 14px; padding: 14px 16px; border: 1px dashed rgba(79,129,247,.45); border-radius: 10px; display: flex; gap: 12px; align-items: center; font-size: 12px; }
+    .email-cjm-hint span { flex: none; color: var(--coral); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+    .email-cjm-hint > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 1; }
+
+    /* Первый вход и форма проекта: структура реальных MaxStudio/MaxProjectSetupDialog. */
+    .first-studio-shell { position: relative; min-height: 100vh; padding-bottom: 78px; display: grid; grid-template-columns: 220px minmax(0,1fr); color: #f5f7fb; background: #121519; }
+    .first-studio-sidebar { min-height: calc(100vh - 78px); border-right: 1px solid #2b2d32; background: #191b20; display: flex; flex-direction: column; }
+    .first-studio-brand { min-height: 64px; padding: 0 20px; border-bottom: 1px solid #2b2d32; display: flex; align-items: center; }
+    .first-studio-sidebar nav { padding: 12px; display: grid; gap: 3px; }
+    .first-studio-sidebar nav button { min-height: 42px; padding: 0 12px; border: 0; border-radius: 8px; color: #9fa1b1; background: transparent; display: flex; align-items: center; gap: 11px; text-align: left; cursor: default; }
+    .first-studio-sidebar nav button.active { color: #fff; background: #2b2d32; }
+    .first-studio-user { margin-top: auto; padding: 16px; border-top: 1px solid #2b2d32; display: grid; gap: 5px; }
+    .first-studio-user strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; }
+    .first-studio-user small, .first-studio-user span { color: #828491; font-size: 10px; }
+    .first-studio-main { min-width: 0; }
+    .first-studio-main > header { min-height: 64px; padding: 0 28px; border-bottom: 1px solid #2b2d32; background: #191b20; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .first-studio-main > header .kicker { margin: 0; color: #828491; }
+    .first-studio-main > header > div { display: flex; gap: 8px; }
+    .first-studio-body { width: min(1120px, calc(100% - 64px)); margin: 0 auto; padding: 40px 0; }
+    .first-studio-title { padding-bottom: 30px; border-bottom: 1px solid #2b2d32; }
+    .first-studio-title h1 { margin: 12px 0 0; font-size: clamp(36px, 5vw, 44px); letter-spacing: -.045em; }
+    .first-studio-title p:last-child { margin: 8px 0 0; color: #9fa1b1; font-size: 14px; }
+    .first-empty-project { min-height: 430px; margin-top: 28px; padding: 36px; border: 1px dashed #2b2d32; border-radius: 12px; background: #191b20; display: grid; place-content: center; justify-items: center; text-align: center; }
+    .first-empty-project > span { width: 48px; height: 48px; border-radius: 10px; color: #4f81f7; background: #2b2d32; display: grid; place-items: center; }
+    .first-empty-project h2 { margin: 22px 0 0; font-size: 24px; }
+    .first-empty-project p { max-width: 440px; margin: 12px 0 24px; color: #9fa1b1; font-size: 14px; line-height: 1.65; }
+    .first-project-overlay { position: fixed; z-index: 68; inset: 0; padding: 8px; background: rgba(5,7,10,.76); backdrop-filter: blur(6px); display: grid; place-items: center; }
+    .first-project-dialog { width: min(720px, 100%); max-height: calc(100dvh - 16px); overflow: hidden; border: 1px solid #2b2d32; border-radius: 12px; background: #191b20; display: flex; flex-direction: column; box-shadow: 0 28px 90px rgba(0,0,0,.48); }
+    .first-project-dialog > header { flex: none; padding: 22px 56px 20px 24px; border-bottom: 1px solid #2b2d32; position: relative; }
+    .first-project-dialog > header h2 { margin: 8px 0 0; font-size: 25px; }
+    .first-project-dialog > header p:last-child { margin: 5px 0 0; color: #9fa1b1; font-size: 13px; }
+    .first-project-dialog > header .icon-btn { position: absolute; top: 14px; right: 14px; }
+    .first-project-fields { min-height: 0; flex: 1; padding: 22px 24px; overflow-y: auto; display: grid; gap: 20px; }
+    .first-project-fields input, .first-project-fields textarea { color: #f5f7fb; border-color: #2b2d32; background: #191b20; }
+    .first-project-fields textarea { min-height: 96px; }
+    .first-project-fields .choice, .first-project-fields .chip, .first-project-fields .brief-more { border-color: #2b2d32; background: #191b20; }
+    .first-project-fields .choice.selected, .first-project-fields .chip.selected { border-color: #4f81f7; background: rgba(79,129,247,.07); }
+    .actual-types { grid-template-columns: repeat(2,1fr); }
+    .actual-styles { grid-template-columns: repeat(3,1fr); }
+    .first-project-dialog > footer { flex: none; padding: 16px 20px; border-top: 1px solid #2b2d32; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .first-project-dialog > footer p { margin: 0; color: #828491; font-size: 11px; }
+    .first-project-dialog > footer > div { display: flex; gap: 8px; }
+    @media (max-width: 900px) {
+      .first-studio-shell { grid-template-columns: 1fr; }
+      .first-studio-sidebar { display: none; }
+      .first-studio-main > header { padding: 0 18px; }
+      .first-studio-body { width: min(100% - 36px, 1120px); }
+    }
+    @media (max-width: 760px) {
+      .email-onboarding { padding-top: 52px; }
+      .email-onboarding-head { align-items: start; flex-direction: column; gap: 14px; }
+      .email-progress { grid-template-columns: 1fr; }
+      .email-card { padding: 22px 18px; }
+      .email-cjm-hint { align-items: start; flex-direction: column; }
+      .email-cjm-hint > div { width: 100%; align-items: stretch; flex-direction: column; }
+      .first-studio-main > header > .kicker,
+      .first-studio-main > header .btn.ghost { display: none; }
+      .first-studio-main > header { justify-content: flex-end; }
+      .first-studio-body { width: calc(100% - 28px); padding: 28px 0; }
+      .first-empty-project { min-height: 400px; padding: 24px 18px; }
+      .first-project-overlay { place-items: end center; padding: 0; }
+      .first-project-dialog { max-height: 94dvh; border-radius: 18px 18px 0 0; }
+      .first-project-fields { padding: 18px 16px; }
+      .actual-types, .actual-styles { grid-template-columns: 1fr; }
+      .first-project-dialog > footer { align-items: stretch; flex-direction: column; }
+      .first-project-dialog > footer > div { display: grid; grid-template-columns: 1fr 1fr; }
+    }
 
     /* PublicPageShell + billing: настоящая публичная и платёжная оболочка. */
     .public-route { min-height: 100vh; padding-bottom: 96px; background: #f5f3ee; }
@@ -2258,11 +2339,11 @@
     (function () {
       "use strict";
 
-      var STORAGE_KEY = "omnia-max-cjm-customer-flow-v7";
+      var STORAGE_KEY = "omnia-max-cjm-customer-flow-v8";
       var phases = [
         { name: "Ценность", note: "Понять результат", steps: [0], promise: "Показать, что Omnia собирает реальное MAX-приложение, а не абстрактный макет.", outcome: "Человек понимает пользу до регистрации." },
-        { name: "Идея", note: "Собрать черновик", steps: [3, 4], promise: "Собрать задачу обычными словами и сразу проверить, что она понята правильно.", outcome: "Есть понятный концепт будущего продукта." },
-        { name: "Сохранение", note: "Создать доступ", steps: [1, 2], promise: "Закрепить идею за владельцем без длинной анкеты и без оплаты.", outcome: "Проект сохранён, почта подтверждена." },
+        { name: "Регистрация", note: "Создать аккаунт", steps: [1, 2], promise: "Создать доступ владельца по рабочему email без платёжных и технических данных.", outcome: "Аккаунт создан, почта подтверждена." },
+        { name: "Первый проект", note: "Описать приложение", steps: [3, 4], promise: "Открыть MAX Studio и создать проект по короткому описанию без технического задания.", outcome: "Проект создан, первая сборка запускается автоматически." },
         { name: "Первый результат", note: "Увидеть и попробовать", steps: [10, 11], promise: "Дать бесплатную первую рабочую версию с живым превью.", outcome: "Владелец видит ценность до выбора paid-режима." },
         { name: "Доработка", note: "Поправить и сохранить версии", steps: [12, 23], promise: "Сделать изменения безопасными: с ИИ, вручную, с откатом и историей.", outcome: "Выбрана рабочая версия для запуска." },
         { name: "Условия запуска", note: "Выбрать режим и оплатить", steps: [5, 6, 7, 8, 9], promise: "Показать тариф, оплату и подписку только после того, как результат уже увидели.", outcome: "Активирован Free или paid-режим без скрытых действий." },
@@ -2272,10 +2353,10 @@
       ];
       var screens = [
         { title: "Первое знакомство", short: "Сразу видно итог", phase: 0, goal: "Показать ценность до длинного онбординга", question: "Что я получу на выходе?", trust: "Живой пример приложения и путь до запуска", result: "Пользователь понимает, зачем идти дальше" },
-        { title: "Сохранение проекта", short: "Короткий вход после концепта", phase: 2, goal: "Не потерять идею и результат", question: "Зачем регистрироваться сейчас?", trust: "Задача уже сохранена; пароль и карта не нужны", result: "Проект закреплён за владельцем" },
-        { title: "Подтверждение почты", short: "Один короткий код", phase: 2, goal: "Защитить доступ к проекту", question: "Зачем подтверждать email?", trust: "После кода сразу открывается бесплатная сборка", result: "Аккаунт подтверждён, можно создавать версию" },
-        { title: "Идея приложения", short: "Один запрос вместо техзадания", phase: 1, goal: "Передать замысел обычными словами", question: "Нужно ли разбираться в разработке?", trust: "Шаблоны и необязательные уточнения", result: "Идея описана за минуту" },
-        { title: "Концепт приложения", short: "Результат понятен до регистрации", phase: 1, goal: "Снять риск неверной генерации", question: "Точно ли поняли, что я хочу?", trust: "Экраны и сценарий можно исправить", result: "Пользователь подтверждает результат" },
+        { title: "Регистрация владельца", short: "Email, пароль и юридические согласия", phase: 1, goal: "Создать аккаунт перед первым проектом", question: "Что нужно для регистрации?", trust: "Email, пароль и три обязательных согласия; без карты и реквизитов", result: "Аккаунт создан, письмо отправлено" },
+        { title: "Подтверждение email", short: "Ссылка из письма и автообновление", phase: 1, goal: "Подтвердить контроль рабочего email", question: "Что делать после регистрации?", trust: "Ссылка действует 24 часа; письмо можно отправить повторно", result: "Email подтверждён, доступ в MAX Studio открыт" },
+        { title: "Первый вход в MAX Studio", short: "Пустой список проектов и одно действие", phase: 2, goal: "Показать, где создаётся первое приложение", question: "Что делать в пустом кабинете?", trust: "Одна заметная кнопка «Создать приложение»", result: "Открыта форма нового MAX-проекта" },
+        { title: "Новый MAX-проект", short: "Название, сценарий, тип и стиль", phase: 2, goal: "Передать замысел обычными словами", question: "Что нужно описать для первой сборки?", trust: "Обязательны только название и основной сценарий; детали можно уточнить", result: "Проект создан, сборка начинается один раз" },
         { title: "Выбор режима запуска", short: "Free, Pro или Business после превью", phase: 5, goal: "Платить за понятный результат", question: "Что нужно для моего запуска?", trust: "Free без карты; production открывает Pro", result: "Выбран режим эксплуатации" },
         { title: "Подтверждение заказа", short: "Сумма, период и согласие", phase: 5, goal: "Показать условия до оплаты", question: "Что и когда спишется?", trust: "Сумма, дата и автопродление видны заранее", result: "Заказ готов к оплате" },
         { title: "Защищённая оплата ЮKassa", short: "Карта, СБП и банковские приложения", phase: 5, goal: "Безопасно завершить покупку", question: "Где вводить платёжные данные?", trust: "Данные остаются у платёжного провайдера", result: "Платёж подтверждается" },
@@ -2302,10 +2383,10 @@
       ];
       var legalQuestions = [
         { question: "Какие обещания о готовом MAX-приложении, сроках и результате ООО «Кортэл» вправе показывать здесь, и какая маркировка демо обязательна?", risk: "Недоказанные обещания могут быть признаны вводящей в заблуждение рекламой или неверным описанием услуги.", deliverable: "Разрешённые и запрещённые формулировки, точный текст маркировки демо и перечень доказательств для каждого обещания." },
-        { question: "В какой момент при сохранении проекта возникает договор с ООО «Кортэл» и какие документы или согласия пользователь должен принять до создания аккаунта?", risk: "Проект и данные уже сохраняются, а договорное основание и полномочия представителя могут быть ещё не подтверждены.", deliverable: "Момент заключения договора, состав обязательных согласий, текст возле кнопки и набор clickwrap-доказательств backend." },
+        { question: "Какие документы и согласия пользователь должен принять при регистрации аккаунта и в какой момент возникает договор с ООО «Кортэл»?", risk: "Аккаунт и персональные данные создаются до ясного подтверждения условий, основания обработки или полномочий представителя организации.", deliverable: "Момент заключения договора, состав обязательных согласий, текст возле кнопки и набор clickwrap-доказательств backend." },
         { question: "Достаточно ли подтверждения email для доступа к проекту и как доказать, кто именно принял условия от имени ИП или организации?", risk: "Email подтверждает канал связи, но не всегда личность, полномочия представителя или принятие конкретной версии документов.", deliverable: "Правила идентификации, проверки полномочий, архива документов и повторного принятия после изменения условий." },
-        { question: "Какие данные и материалы запрещено вводить в описание идеи и какое предупреждение нужно показать до отправки текста в AI?", risk: "Пользователь может передать персональные данные, коммерческую тайну, незаконный контент или чужие объекты интеллектуальных прав.", deliverable: "Список запретов, точный notice у поля, правила модерации и основание передачи данных AI-провайдерам." },
-        { question: "Кому принадлежат права на AI-концепт и что нужно сообщить о точности, уникальности и юридической проверке результата до его подтверждения?", risk: "Черновик может содержать ошибки или чужие элементы, а подтверждение пользователем может ошибочно восприниматься как гарантия законности.", deliverable: "Распределение прав, отказ от недопустимых гарантий, текст подтверждения и ответственность за проверку материалов." },
+        { question: "Какие условия хранения, удаления и доступа должны быть видны владельцу до создания первого проекта в MAX Studio?", risk: "Пустой кабинет приглашает создать проект, но пользователь может не знать сроки хранения, правила удаления, доступ сотрудников и судьбу исходного кода.", deliverable: "Обязательные ссылки и пояснения в кабинете, сроки хранения, правила удаления/экспорта и события audit-log." },
+        { question: "Какие данные и материалы запрещено вводить в описание нового MAX-проекта и что сообщить до отправки брифа в AI?", risk: "Пользователь может передать персональные данные, коммерческую тайну, незаконный контент или чужие объекты интеллектуальных прав.", deliverable: "Список запретов, notice у формы, правила модерации, права на результат и основание передачи данных AI-провайдерам." },
         { question: "Как юридически определить Free, Pro и Business и какие различия между лицензией, услугами, подпиской и хостингом должны быть видны на карточках?", risk: "Неверное название тарифа или скрытые ограничения создают риск претензий о составе услуги и вводящих в заблуждение условиях.", deliverable: "Правовую модель каждого режима, обязательные раскрытия, допустимые названия и точный состав включённых услуг." },
         { question: "Достаточно ли здесь раскрыты цена, период, автопродление, дата списания, отмена и возврат до нажатия кнопки оплаты?", risk: "Неочевидное продление или неполные условия оплаты могут сделать согласие спорным и увеличить риск возвратов и жалоб.", deliverable: "Точный текст заказа, отдельные согласия, расположение ссылок и события backend, доказывающие принятие условий." },
         { question: "Как распределяется ответственность между ООО «Кортэл» и ЮKassa, кто выдаёт чек и какие платёжные данные вправе получать Платформа?", risk: "Ошибочная роль получателя денег или лишняя обработка платёжных данных создают фискальные, договорные и информационные риски.", deliverable: "Схему ролей, текст у кнопки оплаты, требования к чеку, политике данных и журналу платёжной операции." },
@@ -2331,11 +2412,11 @@
         { question: "Кто отвечает за ручное добавление production URL в MAX Partner и что обязана сделать ООО «Кортэл», если ссылка неверна или приложение не открывается?", risk: "Разделённый ручной шаг создаёт спор, где закончилась услуга Платформы и кто отвечает за недоступность Mini App.", deliverable: "Границу ответственности, инструкцию и подтверждение шага, тексты ошибок, сроки поддержки и критерий успешного запуска." }
       ];
       var screenDetails = [
-        { action: "Смотрит живой пример и нажимает «Собрать бесплатный черновик».", input: "Ничего — ценность видна до формы.", branch: "Открыть примеры или сразу описать идею." },
-        { action: "Выбирает вход через MAX или короткий код на email.", input: "Имя, рабочий email, два обязательных согласия.", branch: "Можно изменить email; карта, ИНН, ОГРН и токен не нужны." },
-        { action: "Вводит 4 цифры из письма.", input: "Только код подтверждения.", branch: "Отправить код повторно или вернуться к email." },
-        { action: "Описывает приложение обычными словами и выбирает нужные функции.", input: "Идея, аудитория, главное действие, тип и функции.", branch: "Взять шаблон или оставить необязательные детали на потом." },
-        { action: "Проверяет, правильно ли Omnia поняла продукт.", input: "Новых данных не требуется.", branch: "Исправить ответы или запустить бесплатную сборку." },
+        { action: "Смотрит живой пример и нажимает «Начать с регистрации».", input: "Ничего — ценность видна до формы.", branch: "Открыть путь пользователя или перейти к регистрации владельца." },
+        { action: "Заполняет форму регистрации и нажимает «Продолжить».", input: "Рабочий email, пароль, повтор пароля и три обязательных согласия; маркетинг необязателен.", branch: "Исправить поле, войти в существующий аккаунт или вернуться на главную." },
+        { action: "Открывает ссылку из письма; onboarding автоматически обновляет статус.", input: "Ничего не вводит повторно.", branch: "Отправить письмо ещё раз; при недоступной доставке обратиться в поддержку." },
+        { action: "Видит пустой раздел «Мои приложения» и нажимает «Создать приложение».", input: "Ничего.", branch: "Открыть быстрый старт или выйти из аккаунта." },
+        { action: "Заполняет модальное окно «Новый MAX-проект».", input: "Название, что сможет делать пользователь, тип приложения; аудитория, функции, стиль и цвета необязательны.", branch: "Отменить, уточнить детали или создать проект и открыть Studio." },
         { action: "Сравнивает Free, Pro и Business после живого превью.", input: "Платёжных данных ещё нет.", branch: "Free без карты либо production на Pro/Business." },
         { action: "Проверяет сумму, период, чек и автопродление.", input: "Оферта; отдельное необязательное согласие на автопродление.", branch: "Вернуться к тарифам или перейти в ЮKassa." },
         { action: "Выбирает СБП, карту, SberPay или T-Pay на стороне ЮKassa.", input: "Платёжные данные вводятся только у провайдера/банка.", branch: "Подтвердить в банке или безопасно отменить." },
@@ -2371,7 +2452,7 @@
         { id: "client-payment-failed", title: "Ошибка оплаты клиента", path: "Заказ → ЮKassa → ошибка → повтор", note: "Заказ и сумма сохранены; доступна поддержка и другой способ оплаты." },
         { id: "subscription", title: "Жизнь подписки", path: "Оплата → чек → продление / отмена / возврат", note: "Каждое действие имеет явный статус, дату и последствия." }
       ];
-      var ownerJourney = [0, 3, 4, 1, 2, 10, 11, 12, 23, 5, 6, 7, 8, 9, 24, 16, 25, 13, 27, 14, 15, 22];
+      var ownerJourney = [0, 1, 2, 3, 4, 10, 11, 12, 23, 5, 6, 7, 8, 9, 24, 16, 25, 13, 27, 14, 15, 22];
       var customerJourney = [17, 18, 19, 20, 21];
       var returningJourney = [26, 11];
       var defaults = {
@@ -2379,7 +2460,7 @@
         mapOpen: false,
         toast: "",
         journeyPersona: "owner",
-        user: { name: "Алексей", email: "alexey@example.ru", password: "", consent: false, privacy: false, personal: false, marketing: false },
+        user: { name: "Алексей", email: "alexey@example.ru", password: "secret123", confirm: "secret123", consent: false, privacy: false, personal: false, marketing: false },
         verified: false,
         accountCreated: false,
         plan: "",
@@ -2398,9 +2479,10 @@
           idea: "Мини-приложение кофейни: меню, заказ к нужному времени и бонусная карта",
           audience: "Гости кофейни рядом с домом и офисом",
           action: "Выбрать напиток и оформить заказ",
-          type: "shop",
-          style: "calm",
-          features: ["Меню", "Заказ", "Бонусы"]
+          type: "loyalty",
+          style: "brand",
+          brandColors: "",
+          features: ["Профиль пользователя", "История действий"]
         },
         generation: 0,
         generated: false,
@@ -2700,15 +2782,15 @@
       function homeHeader() {
         return '<header class="home-header">' + maxBrand() +
           '<nav class="home-nav" aria-label="Основная навигация"><button data-action="go" data-step="0">Продукты</button><button data-action="open-map">Как работает</button><button data-action="go" data-step="11">Примеры</button><button data-action="go" data-step="5">Тарифы</button><button data-action="go" data-step="15">Кабинет</button></nav>' +
-          '<div class="home-actions"><button class="home-login" data-action="go" data-step="1">Войти</button><button class="btn primary" data-action="go" data-step="3">Создать приложение</button></div></header>';
+          '<div class="home-actions"><button class="home-login" data-action="go" data-step="26">Войти</button><button class="btn primary" data-action="go" data-step="1">Создать приложение</button></div></header>';
       }
       function authHeader() {
-        return '<header class="auth-header"><div class="auth-product">' + brand(false) + '<span class="auth-divider"></span><span>MAX Studio</span></div><button class="auth-login" data-action="go" data-step="1">Уже есть аккаунт</button></header>';
+        return '<header class="auth-header"><div class="auth-product">' + brand(false) + '<span class="auth-divider"></span><span>MAX Studio</span></div><button class="auth-login" data-action="go" data-step="26">Уже есть аккаунт</button></header>';
       }
       function publicHeader() {
         return '<header class="public-header"><div class="public-header-inner">' + maxBrand() +
           '<nav aria-label="Основная навигация"><button data-action="go" data-step="0">Продукты</button><button data-action="open-map">Как работает</button><button data-action="go" data-step="11">Примеры</button><button data-action="go" data-step="5">Тарифы</button></nav>' +
-          '<div class="public-head-actions"><button class="btn ghost" data-action="go" data-step="1">Войти</button><button class="btn primary" data-action="go" data-step="3">Создать приложение</button></div></div></header>';
+          '<div class="public-head-actions"><button class="btn ghost" data-action="go" data-step="26">Войти</button><button class="btn primary" data-action="go" data-step="1">Создать приложение</button></div></div></header>';
       }
       function studioProductPreview() {
         return '<div class="studio-demo">' +
@@ -2748,10 +2830,10 @@
       }
       function renderHomeJourneyCards() {
         return '<div class="home-route-grid">' +
-          '<article class="home-route-card"><em>01 · Идея</em><strong>Описать задачу обычными словами</strong><p>Без техзадания, длинной анкеты и ранней оплаты. Сначала смысл продукта.</p></article>' +
-          '<article class="home-route-card"><em>02 · Free</em><strong>Получить рабочую версию и попробовать её</strong><p>Omnia собирает первый результат бесплатно, а владелец видит реальный экран внутри телефона.</p></article>' +
-          '<article class="home-route-card"><em>03 · Запуск</em><strong>Выбрать путь: тестовая ссылка или production в MAX</strong><p>Платный шаг появляется только после превью. Там же включаются ЮKassa и публикация.</p></article>' +
-          '<article class="home-route-card"><em>04 · Рост</em><strong>Запустить путь клиента и затем улучшать конверсию</strong><p>После публикации видно, как человек входит, оплачивает, возвращается и где теряется.</p></article>' +
+          '<article class="home-route-card"><em>01 · Регистрация</em><strong>Создать аккаунт владельца</strong><p>Email, пароль, три обязательных согласия и ссылка из письма. Без карты и реквизитов.</p></article>' +
+          '<article class="home-route-card"><em>02 · Первый проект</em><strong>Описать задачу обычными словами</strong><p>После входа — название, основной сценарий и тип приложения. Остальные детали необязательны.</p></article>' +
+          '<article class="home-route-card"><em>03 · Free</em><strong>Получить рабочую версию и попробовать её</strong><p>Omnia собирает первый результат бесплатно, а владелец видит реальный экран внутри телефона.</p></article>' +
+          '<article class="home-route-card"><em>04 · Запуск</em><strong>Выбрать тестовую ссылку или production в MAX</strong><p>Тариф и ЮKassa появляются только после живого превью.</p></article>' +
         '</div><p class="home-route-tail">Полный маршрут теперь включает повторный вход владельца, историю версий, кабинет подписки, публикацию в MAX Partner и реальный клиентский сценарий внутри Mini App.</p>';
       }
       function renderPlanOutcomes() {
@@ -2783,7 +2865,7 @@
       }
       function renderMapQuickRoutes() {
         return '<div class="map-quick-grid">' +
-          '<article class="map-quick-card"><strong>Полный путь владельца</strong><p>От идеи и первой free-версии до публикации, MAX Partner, кабинета и аналитики.</p><button data-action="go" data-step="0">Открыть сначала</button></article>' +
+          '<article class="map-quick-card"><strong>Полный путь владельца</strong><p>От регистрации и идеи до free-версии, публикации, MAX Partner, кабинета и аналитики.</p><button data-action="go" data-step="0">Открыть сначала</button></article>' +
           '<article class="map-quick-card"><strong>Быстрый сценарий Free</strong><p>Показать путь без карты, без токена бота и без запуска в MAX.</p><button data-action="demo-scenario" data-scenario="free">Открыть Free</button></article>' +
           '<article class="map-quick-card"><strong>Платный запуск в MAX</strong><p>Сразу посмотреть блоки публикации, MAX Partner и запуск реального Mini App.</p><button data-action="demo-scenario" data-scenario="paid-launch">К этапу запуска</button></article>' +
           '<article class="map-quick-card"><strong>Путь конечного клиента</strong><p>Открытие Mini App, вход через MAX, выбор заказа, оплата и подтверждение.</p><button data-action="go" data-step="17">Открыть путь клиента</button></article>' +
@@ -2793,8 +2875,8 @@
       function renderWelcome() {
         return '<main class="home-route">' + homeHeader() + '<section class="home-hero">' +
           '<p class="home-kicker">Продуктовая AI-студия</p><h1 class="home-title">Приложение для MAX<span>без команды разработки</span></h1>' +
-          '<p class="home-lead">Опишите идею, получите рабочую первую версию бесплатно и попробуйте её как клиент. Тариф понадобится только когда вы решите запускаться в production.</p>' +
-          '<div class="home-cta"><button class="btn primary" data-action="next">Собрать бесплатный черновик →</button><button class="btn home-ghost" data-action="open-map">Посмотреть путь пользователя</button></div>' +
+          '<p class="home-lead">Создайте аккаунт, опишите идею и получите рабочую первую версию бесплатно. Тариф понадобится только когда вы решите запускаться в production.</p>' +
+          '<div class="home-cta"><button class="btn primary" data-action="next">Начать с регистрации →</button><button class="btn home-ghost" data-action="open-map">Посмотреть путь пользователя</button></div>' +
           renderHomeProof() +
           renderHomeJourneyCards() +
           studioProductPreview() + '</section></main>';
@@ -2802,28 +2884,29 @@
       function renderRegistration() {
         return '<main class="auth-route">' + authHeader() + '<div class="auth-layout"><section class="auth-copy">' +
           '<p class="auth-kicker">Регистрация владельца</p><h1>Сначала аккаунт. Затем приложение.</h1>' +
-          '<p>Для первого проекта нужен только рабочий email. Идея и концепт уже сохранены, поэтому после подтверждения сразу начнётся бесплатная сборка.</p>' +
-          '<div class="auth-benefits"><p><span>✓</span>Подтвердите email и сразу создавайте проект</p><p><span>◇</span>Без ИНН, ОГРН и токена до первого результата</p><p><span>▣</span>MAX и платежи подключаются только перед запуском</p></div></section>' +
-          '<section class="auth-card"><h2>Создать аккаунт</h2><p>Продолжите через MAX или получите короткий код на почту.</p>' +
-            '<button class="btn primary block" style="min-height:48px;margin:16px 0" data-action="max-signup">Продолжить через MAX</button>' +
-            '<div class="form-grid"><div class="field"><label for="reg-name">Как к вам обращаться</label><input id="reg-name" data-field="user.name" value="' + escapeHtml(state.user.name) + '" autocomplete="name" placeholder="Алексей"></div>' +
-            '<div class="field"><label for="reg-email">Рабочий email</label><input id="reg-email" data-field="user.email" value="' + escapeHtml(state.user.email) + '" autocomplete="email" inputmode="email" placeholder="name@company.ru"></div></div>' +
+          '<p>Для первого проекта нужен только рабочий email. Бизнес-профиль и модерация бота проходят в MAX Partner; Omnia не просит повторно ИНН и ОГРН.</p>' +
+          '<div class="auth-benefits"><p><span>✉</span>Подтвердите email и сразу создавайте проект</p><p><span>◇</span>Без ИНН, ОГРН и секрета до первого результата</p><p><span>✓</span>MAX и платежи подключаются только перед запуском</p></div></section>' +
+          '<section class="auth-card"><h2>Создать аккаунт</h2><p>После регистрации подтвердите email — и переходите к созданию проекта.</p>' +
+            '<div class="field"><label for="reg-email">Рабочий email</label><input id="reg-email" data-field="user.email" value="' + escapeHtml(state.user.email) + '" autocomplete="email" inputmode="email" placeholder="name@company.ru"></div>' +
+            '<div class="form-grid" style="margin-top:16px"><div class="field"><label for="reg-password">Пароль</label><input id="reg-password" type="password" data-field="user.password" value="' + escapeHtml(state.user.password) + '" autocomplete="new-password"></div>' +
+            '<div class="field"><label for="reg-confirm">Повторите пароль</label><input id="reg-confirm" type="password" data-field="user.confirm" value="' + escapeHtml(state.user.confirm) + '" autocomplete="new-password"></div></div>' +
             '<div class="auth-consents"><label class="check-row"><input type="checkbox" data-field="user.consent"' + (state.user.consent ? " checked" : "") + '><span>Продолжая, принимаю <a href="#" tabindex="-1">оферту</a> и <a href="#" tabindex="-1">политику</a>.</span></label>' +
-            '<label class="check-row"><input type="checkbox" data-field="user.personal"' + (state.user.personal ? " checked" : "") + '><span>Даю согласие на обработку данных для создания аккаунта.</span></label>' +
+            '<label class="check-row"><input type="checkbox" data-field="user.privacy"' + (state.user.privacy ? " checked" : "") + '><span>Ознакомлен с политикой конфиденциальности.</span></label>' +
+            '<label class="check-row"><input type="checkbox" data-field="user.personal"' + (state.user.personal ? " checked" : "") + '><span>Даю отдельное согласие на обработку персональных данных.</span></label>' +
             '<label class="check-row"><input type="checkbox" data-field="user.marketing"' + (state.user.marketing ? " checked" : "") + '><span>Получать апдейты продукта — необязательно</span></label></div>' +
-            '<button class="btn ghost block" style="margin-top:20px;min-height:48px" data-action="register">Получить код и создать бесплатно →</button>' +
-            '<div class="auth-trust"><div><span>0 ₽</span>Первая версия бесплатно</div><div><span>→</span>Один код подтверждения</div><div><span>✓</span>Все ответы сохранены</div></div>' +
-          '</section></div><button class="auth-back" data-action="go" data-step="4">← К концепту приложения</button></main>';
+            '<button class="btn primary block" style="margin-top:20px;min-height:48px" data-action="register">Продолжить →</button>' +
+            '<div class="auth-trust"><div><span>▣</span>Для старта только email</div><div><span>◇</span>Секреты не передаются агенту</div><div><span>✓</span>MAX и платежи позже</div></div>' +
+          '</section></div><button class="auth-back" data-action="go" data-step="0">← На главную</button></main>';
       }
       function renderVerify() {
         var email = escapeHtml(state.user.email || "alexey@example.ru");
-        return '<main class="auth-route">' + authHeader() + '<div class="auth-layout"><section class="auth-copy">' +
-          '<p class="auth-kicker">Короткое подтверждение</p><h1>Остался один код из письма.</h1><p>Он защищает доступ к проекту. После подтверждения бесплатная сборка откроется сразу.</p>' +
-          '<div class="auth-benefits"><p><span>✓</span>Проект уже привязан к аккаунту</p><p><span>✉</span>Код состоит из четырёх цифр</p><p><span>→</span>Первая версия создаётся бесплатно</p></div></section>' +
-          '<section class="auth-card verify-card"><div class="mail-icon">✉</div><p class="auth-kicker">Письмо отправлено</p><h2>Введите код из письма</h2><p>Мы отправили 4 цифры на <strong>' + email + '</strong>.</p>' +
-          '<div class="code-inputs" aria-label="Код подтверждения"><input value="2" aria-label="Первая цифра"><input value="4" aria-label="Вторая цифра"><input value="1" aria-label="Третья цифра"><input value="9" aria-label="Четвёртая цифра"></div>' +
-          '<button class="btn primary block" data-action="verify">Подтвердить и создать версию →</button><button class="btn ghost block" style="margin-top:10px" data-action="resend">Отправить код ещё раз</button></section>' +
-          '</div><button class="auth-back" data-action="go" data-step="1">← Изменить email</button></main>';
+        return '<main class="auth-route">' + authHeader() + '<section class="email-onboarding"><div class="email-onboarding-head"><div><p class="auth-kicker">Настройка владельца</p><h1>Подготовим доступ к MAX Studio</h1><p>Нужен только подтверждённый email. Остальное настроите уже внутри студии и MAX Partner.</p></div><span>Шаг 1 из 2</span></div>' +
+          '<div class="email-progress"><div class="active"><span>✉</span><strong>Email</strong></div><div><span>→</span><strong>MAX Studio</strong></div></div>' +
+          '<section class="email-card"><div class="mail-icon">✉</div><h2>Подтвердите рабочий email</h2><p>Мы отправили ссылку на <strong>' + email + '</strong>. После перехода вернитесь сюда — статус обновится автоматически.</p>' +
+          '<div class="email-note">Ссылка действует 24 часа. Если письмо не пришло, проверьте папку «Спам» и отправьте его повторно.</div>' +
+          '<button class="btn ghost" data-action="resend">↻ Отправить ещё раз</button></section>' +
+          '<div class="email-cjm-hint"><span>Для демонстрации CJM</span><div><strong>Эта кнопка моделирует переход по ссылке из письма.</strong><button class="btn primary" data-action="verify">Открыть MAX Studio →</button></div></div>' +
+          '</section><button class="auth-back" data-action="go" data-step="1">← Вернуться к регистрации</button></main>';
       }
       function planCard(id, title, price, description, features, recommended) {
         var selected = state.plan === id;
@@ -2931,31 +3014,25 @@
       function choice(id, title, note) {
         return '<button class="choice' + (state.brief.type === id ? " selected" : "") + '" data-action="brief-type" data-value="' + id + '"><strong>' + title + '</strong><small>' + note + '</small></button>';
       }
+      function styleChoice(id, title, note) {
+        return '<button class="choice' + (state.brief.style === id ? " selected" : "") + '" data-action="brief-style" data-value="' + id + '"><strong>' + title + '</strong><small>' + note + '</small></button>';
+      }
       function chip(label) {
         var selected = state.brief.features.indexOf(label) >= 0;
         return '<button class="chip' + (selected ? " selected" : "") + '" data-action="toggle-feature" data-value="' + label + '">' + label + (selected ? " ✓" : "") + '</button>';
       }
-      function renderBrief() {
-        return '<section class="screen-center"><div class="form-card screen-narrow">' +
-          '<p class="kicker">Один запрос до концепта</p><h2>Что вы хотите запустить в MAX?</h2><p>Опишите идею как коллеге. Omnia сама предложит экраны, главный сценарий и недостающие детали.</p>' +
-          '<div class="field full prompt-field"><label for="brief-idea">Идея приложения</label><textarea id="brief-idea" data-field="brief.idea" placeholder="Например: приложение кофейни с меню, заказом к нужному времени и бонусной картой">' + escapeHtml(state.brief.idea) + '</textarea><small>Не нужно писать техническое задание.</small></div>' +
-          '<fieldset><legend>Можно начать с шаблона</legend><div class="choice-grid">' + choice("shop", "Каталог и заказ", "Товары, меню, корзина") + choice("service", "Запись на услугу", "Слоты и напоминания") + choice("community", "Личный кабинет", "Профиль и прогресс") + '</div></fieldset>' +
-          '<details class="brief-more"><summary>Добавить точность — необязательно</summary><div class="form-grid"><div class="field"><label for="brief-product">Название</label><input id="brief-product" data-field="brief.product" value="' + escapeHtml(state.brief.product) + '"></div><div class="field"><label for="brief-audience">Для кого</label><input id="brief-audience" data-field="brief.audience" value="' + escapeHtml(state.brief.audience) + '"></div><div class="field full"><label for="brief-action">Главное действие клиента</label><input id="brief-action" data-field="brief.action" value="' + escapeHtml(state.brief.action) + '"></div></div><fieldset><legend>Что точно нужно</legend><div class="chip-grid">' + ["Главная", "Меню", "Заказ", "Бонусы", "Профиль", "История"].map(chip).join("") + '</div></fieldset></details>' +
-          '<div class="form-actions"><p>Концепт появится до регистрации и оплаты.</p><button class="btn primary" data-action="confirm-brief">Показать концепт →</button></div>' +
-        '</div></section>';
+      function renderFirstStudio(dialogOpen) {
+        var dialog = dialogOpen ? '<div class="first-project-overlay" role="dialog" aria-modal="true" aria-labelledby="first-project-title"><section class="first-project-dialog"><header><div><p class="kicker">Новый MAX-проект</p><h2 id="first-project-title">Что создаём?</h2><p>Короткого описания достаточно для первой сборки.</p></div><button class="icon-btn" data-action="go" data-step="3" aria-label="Закрыть форму">×</button></header>' +
+          '<div class="first-project-fields"><div class="field"><label for="brief-product">Название</label><input id="brief-product" data-field="brief.product" value="' + escapeHtml(state.brief.product) + '" maxlength="100" placeholder="Например, Кофе рядом"></div>' +
+          '<div class="field"><label for="brief-idea">Что пользователь сможет делать?</label><textarea id="brief-idea" data-field="brief.idea" maxlength="600" placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче">' + escapeHtml(state.brief.idea) + '</textarea></div>' +
+          '<fieldset><legend>Тип приложения</legend><div class="choice-grid actual-types">' + choice("loyalty", "Лояльность", "Баллы, уровни, акции и награды") + choice("catalog", "Каталог", "Товары, услуги, карточки и заказ") + choice("booking", "Запись", "Расписание, специалисты и бронь") + choice("event", "Событие", "Программа, билеты и участники") + choice("education", "Обучение", "Уроки, задания и прогресс") + choice("custom", "Своя идея", "Любой другой сценарий внутри MAX") + '</div></fieldset>' +
+          '<details class="brief-more"><summary>Уточнить функции и стиль</summary><div class="form-grid"><div class="field"><label for="brief-audience">Аудитория</label><input id="brief-audience" data-field="brief.audience" value="' + escapeHtml(state.brief.audience) + '"></div><div class="field"><label for="brief-action">Главное действие</label><input id="brief-action" data-field="brief.action" value="' + escapeHtml(state.brief.action) + '"></div></div><fieldset><legend>Функции</legend><div class="chip-grid">' + ["Профиль пользователя", "Каталог или лента", "Поиск и фильтры", "Избранное", "Баллы и награды", "Онлайн-запись", "Уведомления бота", "История действий"].map(chip).join("") + '</div></fieldset><fieldset><legend>Стиль</legend><div class="choice-grid actual-styles">' + styleChoice("brand", "В стиле бренда", "Ваши цвета и характер") + styleChoice("clean", "Чистый", "Спокойный и ясный") + styleChoice("bright", "Яркий", "Энергичные акценты") + '</div></fieldset><div class="field"><label for="brief-brand">Цвета бренда</label><input id="brief-brand" data-field="brief.brandColors" value="' + escapeHtml(state.brief.brandColors) + '" placeholder="#4f81f7, графит, молочный"></div></details></div>' +
+          '<footer><p>Генерация начнётся один раз после открытия проекта.</p><div><button class="btn ghost" data-action="go" data-step="3">Отмена</button><button class="btn primary" data-action="start-generation"' + (validBrief() ? '' : ' disabled') + '>✦ Создать проект</button></div></footer></section></div>' : '';
+        return '<main class="first-studio-shell"><aside class="first-studio-sidebar"><div class="first-studio-brand">' + brand() + '</div><nav><button class="active"><span>▦</span>Проекты</button><button><span>♙</span>Профиль</button><button><span>▤</span>Баланс</button><button><span>▰</span>Тариф</button></nav><div class="first-studio-user"><strong>' + escapeHtml(state.user.email) + '</strong><small>Владелец MAX Studio</small><span>↪ Выйти</span></div></aside>' +
+          '<section class="first-studio-main"><header><p class="kicker">MAX Studio</p><div><button class="btn ghost">? Быстрый старт</button><button class="btn primary" data-action="go" data-step="4">+ Новый проект</button></div></header><div class="first-studio-body"><div class="first-studio-title"><div><p class="kicker">Рабочее пространство</p><h1>Мои приложения</h1><p>Создание, публикация и управление MAX Mini Apps.</p></div></div><section class="first-empty-project"><span>▣</span><h2>Первого проекта ещё нет</h2><p>Опишите задачу — Omnia создаст рабочее приложение, а затем проведёт через интеграции, MAX-бота и публикацию.</p><button class="btn primary" data-action="go" data-step="4">+ Создать приложение</button></section></div></section>' + dialog + '</main>';
       }
-      function summaryRow(label, value) {
-        return '<div class="summary-row"><span>' + label + '</span><strong>' + escapeHtml(value) + '</strong></div>';
-      }
-      function renderBriefSummary() {
-        return '<section class="screen-pad"><div class="screen-wide">' +
-          '<div class="pricing-intro"><div><p class="kicker">Концепт до регистрации и оплаты</p><h2>Мы правильно поняли задачу?</h2><p>Сначала проверьте обещанный результат. Аккаунт понадобится только чтобы сохранить проект и начать бесплатную первую сборку.</p></div><button class="btn ghost" data-action="go" data-step="3">← Исправить ответы</button></div>' +
-          '<div class="summary-layout"><div class="summary-list">' +
-            summaryRow("Приложение", state.brief.product) + summaryRow("Для кого", state.brief.audience) + summaryRow("Что делает", state.brief.idea) + summaryRow("Главное действие", state.brief.action) + summaryRow("Первая версия", state.brief.features.join(", ")) +
-          '</div><aside class="result-promise"><p class="kicker">Что вы получите</p><h3>Рабочую первую версию</h3><p>Главный экран, понятную навигацию, выбранные функции, состояния без данных и живое превью.</p><div class="divider" style="background:rgba(255,255,255,.16)"></div><span class="tiny">Обычно первая версия занимает несколько минут. Экран можно закрыть — прогресс сохранится.</span></aside></div>' +
-          '<div class="form-actions"><p>Первая рабочая версия бесплатна. Карта не нужна.</p><button class="btn primary" data-action="start-generation">Сохранить и создать бесплатно →</button></div>' +
-        '</div></section>';
-      }
+      function renderBrief() { return renderFirstStudio(false); }
+      function renderBriefSummary() { return renderFirstStudio(true); }
       function renderGeneration() {
         var progress = state.generated ? 100 : state.generation;
         var active = Math.min(3, Math.floor(progress / 25));
@@ -3239,8 +3316,9 @@
           (state.step === 25 && paidLaunch && !state.maxAccessConnected) ||
           (state.step === 13 && !state.published) ||
           (state.step === 27 && !state.maxUrlConnected);
+        var verificationLocked = state.step === 2 && !state.verified;
         var personaLabel = state.journeyPersona === "customer" ? "Клиент" : state.journeyPersona === "returning" ? "Возврат" : "Владелец";
-        return '<nav class="cjm-dock" aria-label="Переключатель экранов CJM"><button data-action="reset" aria-label="Начать заново">↺</button><button data-action="prev" aria-label="Предыдущий экран"' + (position === 0 ? " disabled" : "") + '>←</button><div class="dock-progress"><div class="dock-copy"><strong>' + escapeHtml(screens[state.step].title) + '</strong><span>' + personaLabel + ' · ' + (position + 1) + ' из ' + journey.length + '</span></div><div class="progress-track"><span style="width:' + percent + '%"></span></div></div><button class="primary" data-action="next" aria-label="Следующий экран"' + (position === journey.length - 1 || paymentLocked || launchLocked ? " disabled" : "") + '>→</button><button data-action="open-map" aria-label="Открыть карту пути">⌘</button></nav>';
+        return '<nav class="cjm-dock" aria-label="Переключатель экранов CJM"><button data-action="reset" aria-label="Начать заново">↺</button><button data-action="prev" aria-label="Предыдущий экран"' + (position === 0 ? " disabled" : "") + '>←</button><div class="dock-progress"><div class="dock-copy"><strong>' + escapeHtml(screens[state.step].title) + '</strong><span>' + personaLabel + ' · ' + (position + 1) + ' из ' + journey.length + '</span></div><div class="progress-track"><span style="width:' + percent + '%"></span></div></div><button class="primary" data-action="next" aria-label="Следующий экран"' + (position === journey.length - 1 || verificationLocked || paymentLocked || launchLocked ? " disabled" : "") + '>→</button><button data-action="open-map" aria-label="Открыть карту пути">⌘</button></nav>';
       }
       function renderLegalTrigger() {
         if (state.mapOpen || legalStep !== null) return "";
@@ -3270,7 +3348,7 @@
       }
       function renderMap() {
         if (!state.mapOpen) return "";
-        return '<div class="map-overlay" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-dialog"><div class="map-head"><div><p class="eyebrow">Customer Journey Map · полный маршрут</p><h2 id="map-title">От идеи владельца до результата клиента</h2><p>Реальные экраны, обязательные действия, точки оплаты, публикация, повторный вход и жизнь подписки. Только пользовательский путь, без внутренней кухни.</p></div><button class="icon-btn" data-action="close-map" aria-label="Закрыть">×</button></div><div class="map-kpis"><div class="map-kpi"><strong>' + (ownerJourney.length + 1) + '</strong><span>экранов владельца</span></div><div class="map-kpi"><strong>' + customerJourney.length + '</strong><span>экранов клиента</span></div><div class="map-kpi"><strong>' + phases.length + '</strong><span>этапов полного пути</span></div><div class="map-kpi"><strong>' + journeyBranches.length + '</strong><span>важных развилок</span></div></div><div class="conversion-principle"><strong>Главный принцип</strong><span>Сначала бесплатная рабочая версия и живое превью. Тариф, ЮKassa и MAX подключаются только когда владелец уже увидел результат.</span></div><section class="map-phase-section"><header><h3>Полный маршрут по этапам</h3><p>Видно, что именно обещает каждый этап, чем он заканчивается и где пользователь принимает важные решения.</p></header><div class="map-phase-grid">' + renderMapPhaseCards() + '</div></section><section class="branch-section"><header><h3>Быстрые маршруты</h3><p>Можно открыть целый готовый сценарий: бесплатный старт, запуск в MAX, повторный вход или путь конечного клиента.</p></header>' + renderMapQuickRoutes() + '</section><section class="map-journey"><header><span>01</span><div><strong>Владелец продукта</strong><small>Идея → аккаунт → бесплатная версия → правки → тариф → запуск → рост</small></div></header><div class="map-grid">' + renderMapSteps(ownerJourney) + '</div></section><section class="map-journey"><header><span>02</span><div><strong>Возвращающийся владелец</strong><small>Вход → список сохранённых приложений → продолжение с текущей версии</small></div></header><div class="map-grid">' + renderMapSteps(returningJourney) + '</div></section><section class="map-journey"><header><span>03</span><div><strong>Клиент приложения</strong><small>Открытие в MAX → безопасный вход → действие → оплата → результат</small></div></header><div class="map-grid">' + renderMapSteps(customerJourney) + '</div></section><section class="branch-section"><header><h3>Развилки и проблемные состояния</h3><p>Каждая ветка сохраняет контекст и ведёт к понятному следующему действию — без тупиков и повторных списаний.</p></header><div class="branch-grid">' + renderJourneyBranches() + '</div></section></div></div>';
+        return '<div class="map-overlay" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-dialog"><div class="map-head"><div><p class="eyebrow">Customer Journey Map · полный маршрут</p><h2 id="map-title">От регистрации владельца до результата клиента</h2><p>Реальные экраны, обязательные действия, точки оплаты, публикация, повторный вход и жизнь подписки. Только пользовательский путь, без внутренней кухни.</p></div><button class="icon-btn" data-action="close-map" aria-label="Закрыть">×</button></div><div class="map-kpis"><div class="map-kpi"><strong>' + (ownerJourney.length + 1) + '</strong><span>экранов владельца</span></div><div class="map-kpi"><strong>' + customerJourney.length + '</strong><span>экранов клиента</span></div><div class="map-kpi"><strong>' + phases.length + '</strong><span>этапов полного пути</span></div><div class="map-kpi"><strong>' + journeyBranches.length + '</strong><span>важных развилок</span></div></div><div class="conversion-principle"><strong>Главный принцип</strong><span>Сначала регистрация, подтверждение email и бесплатная рабочая версия. Тариф, ЮKassa и MAX подключаются только когда владелец уже увидел результат.</span></div><section class="map-phase-section"><header><h3>Полный маршрут по этапам</h3><p>Видно, что именно обещает каждый этап, чем он заканчивается и где пользователь принимает важные решения.</p></header><div class="map-phase-grid">' + renderMapPhaseCards() + '</div></section><section class="branch-section"><header><h3>Быстрые маршруты</h3><p>Можно открыть целый готовый сценарий: бесплатный старт, запуск в MAX, повторный вход или путь конечного клиента.</p></header>' + renderMapQuickRoutes() + '</section><section class="map-journey"><header><span>01</span><div><strong>Владелец продукта</strong><small>Регистрация → email → первый проект → бесплатная версия → правки → тариф → запуск → рост</small></div></header><div class="map-grid">' + renderMapSteps(ownerJourney) + '</div></section><section class="map-journey"><header><span>02</span><div><strong>Возвращающийся владелец</strong><small>Вход → список сохранённых приложений → продолжение с текущей версии</small></div></header><div class="map-grid">' + renderMapSteps(returningJourney) + '</div></section><section class="map-journey"><header><span>03</span><div><strong>Клиент приложения</strong><small>Открытие в MAX → безопасный вход → действие → оплата → результат</small></div></header><div class="map-grid">' + renderMapSteps(customerJourney) + '</div></section><section class="branch-section"><header><h3>Развилки и проблемные состояния</h3><p>Каждая ветка сохраняет контекст и ведёт к понятному следующему действию — без тупиков и повторных списаний.</p></header><div class="branch-grid">' + renderJourneyBranches() + '</div></section></div></div>';
       }
       function render() {
         var content = renderers[state.step]();
@@ -3301,10 +3379,14 @@
         }, 650);
       }
       function validRegistration() {
-        return /.+@.+\..+/.test(state.user.email) && state.user.consent && state.user.personal;
+        return /.+@.+\..+/.test(state.user.email) &&
+          state.user.password.length >= 8 &&
+          /\d/.test(state.user.password) &&
+          state.user.password === state.user.confirm &&
+          state.user.consent && state.user.privacy && state.user.personal;
       }
       function validBrief() {
-        return state.brief.idea.trim().length > 12;
+        return state.brief.product.trim().length > 1 && state.brief.idea.trim().length > 9;
       }
 
       app.addEventListener("input", function (event) {
@@ -3500,29 +3582,16 @@
           return go(0);
         }
         if (action === "register") {
-          if (!validRegistration()) return setToast("Проверьте email и два обязательных согласия.");
+          if (!validRegistration()) return setToast("Проверьте email, пароль с цифрой, повтор пароля и три обязательных согласия.");
           state.accountCreated = true;
           saveState();
           return go(2);
         }
-        if (action === "max-signup") {
-          if (!state.user.consent || !state.user.personal) return setToast("Сначала подтвердите обязательные согласия.");
-          state.accountCreated = true;
-          state.verified = true;
-          state.generation = 4;
-          state.generated = false;
-          saveState();
-          go(10);
-          return startGeneration();
-        }
         if (action === "verify") {
           state.accountCreated = true;
           state.verified = true;
-          state.generation = 4;
-          state.generated = false;
           saveState();
-          go(10);
-          return startGeneration();
+          return go(3);
         }
         if (action === "continue-generation") {
           state.accountCreated = true;
@@ -3532,7 +3601,7 @@
           go(10);
           return startGeneration();
         }
-        if (action === "resend") return setToast("Новый код отправлен. В демонстрации подойдёт 2419.");
+        if (action === "resend") return setToast("Новая ссылка отправлена. Проверьте входящие и папку «Спам».");
         if (action === "composer") return setToast("Введите сообщение в рабочей версии MAX Studio.");
         if (action === "select-plan") {
           var nextPlan = trigger.getAttribute("data-plan");
@@ -3653,6 +3722,7 @@
           return go(7);
         }
         if (action === "brief-type") { state.brief.type = trigger.getAttribute("data-value"); saveState(); return render(); }
+        if (action === "brief-style") { state.brief.style = trigger.getAttribute("data-value"); saveState(); return render(); }
         if (action === "toggle-feature") {
           var value = trigger.getAttribute("data-value");
           var position = state.brief.features.indexOf(value);
