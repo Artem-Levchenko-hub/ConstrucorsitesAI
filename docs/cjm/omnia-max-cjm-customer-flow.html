@@ -1670,7 +1670,21 @@
     .email-cjm-hint > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 1; }
 
     /* Первый вход и форма проекта: структура реальных MaxStudio/MaxProjectSetupDialog. */
-    .first-studio-shell { position: relative; min-height: 100vh; padding-bottom: 78px; display: grid; grid-template-columns: 220px minmax(0,1fr); color: #f5f7fb; background: #121519; }
+    .first-studio-shell {
+      --paper: #191b20;
+      --surface: #20232a;
+      --ink: #f5f7fb;
+      --muted: #9fa1b1;
+      --line: #2b2d32;
+      --line-strong: #414754;
+      position: relative;
+      min-height: 100vh;
+      padding-bottom: 78px;
+      display: grid;
+      grid-template-columns: 220px minmax(0,1fr);
+      color: var(--ink);
+      background: #121519;
+    }
     .first-studio-sidebar { min-height: calc(100vh - 78px); border-right: 1px solid #2b2d32; background: #191b20; display: flex; flex-direction: column; }
     .first-studio-brand { min-height: 64px; padding: 0 20px; border-bottom: 1px solid #2b2d32; display: flex; align-items: center; }
     .first-studio-sidebar nav { padding: 12px; display: grid; gap: 3px; }

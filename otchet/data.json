@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-29",
-  "version": 33,
+  "version": 34,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2313,7 +2313,7 @@
    "category": "MAX / CJM / onboarding / UX / production-code",
    "period": "29.08",
    "description": "Если первые шаги CJM строятся по production-коду приложения, а регистрация, подтверждение email, пустая MAX Studio и форма первого проекта показаны отдельными экранами, путь становится понятным без выдуманного входа через MAX и несуществующего четырёхзначного кода.",
-   "evidence": "Сверены production-компоненты лендинга, MaxRegisterForm, maxRegisterAction, MaxOnboarding, VerifyMaxEmail, MaxStudio и MaxWorkspaceShell, а также API-тест email-only доступа. Канонический CJM перестроен в последовательность 0→1→2→3→4→10: рабочий email, пароль и три обязательных согласия; ссылка из письма с автоматическим обновлением; пустой раздел «Мои приложения»; реальное модальное окно «Новый MAX-проект». Удалены выдуманные регистрация через MAX и четырёхзначный код. Локальная проверка: интерактивный DOM-smoke 0→1→2→3→4→10 PASS, email-gate/project modal/legal overlay PASS, console errors 0; JavaScript syntax PASS, массивы screens/legalQuestions/screenDetails 28/28/28 и mobile rules PASS; целевые max-journey/signup-provenance/max-workspace-responsive/max-brief тесты 17/17 PASS; JSON отчёта валиден и git diff --check не нашёл ошибок.",
+   "evidence": "Сверены production-компоненты лендинга, MaxRegisterForm, maxRegisterAction, MaxOnboarding, VerifyMaxEmail, MaxStudio и MaxWorkspaceShell, а также API-тест email-only доступа. Канонический CJM перестроен в последовательность 0→1→2→3→4→10: рабочий email, пароль и три обязательных согласия; ссылка из письма с автоматическим обновлением; пустой раздел «Мои приложения»; реальное модальное окно «Новый MAX-проект». Удалены выдуманные регистрация через MAX и четырёхзначный код. После визуальной проверки исправлена область тёмных переменных темы: карточки типов, вторичная кнопка и крестик модального окна больше не наследуют светлую тему. Локальная проверка: интерактивный DOM-smoke 0→1→2→3→4→10 PASS, email-gate/project modal/legal overlay PASS, dark-scope tokens PASS, console errors 0; JavaScript syntax PASS, массивы screens/legalQuestions/screenDetails 28/28/28 и mobile rules PASS; целевые max-journey/signup-provenance/max-workspace-responsive/max-brief тесты 17/17 PASS; JSON отчёта валиден и git diff --check не нашёл ошибок.",
    "impact": "На созвоне сначала виден реальный путь нового владельца, а юридический вопрос привязан к фактическому экрану и действию. Влияние на понимание пользователей ещё не измерено, поэтому гипотеза остаётся в testing без оценки.",
    "next_vector": "V8"
   }
