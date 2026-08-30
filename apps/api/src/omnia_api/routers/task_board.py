@@ -337,10 +337,10 @@ async def upload_task_board_attachment(
         attachment.object_key = stored_object_key
         object_key = stored_object_key
         session.add(attachment)
-        await session.commit()
+        await session.flush()
         await session.refresh(attachment)
+        await session.commit()
     except attachment_storage.AttachmentUploadError as exc:
-        await session.rollback()
         try:
             _enqueue_attachment_cleanup(session, [(exc.object_key, len(raw))])
             await session.commit()
