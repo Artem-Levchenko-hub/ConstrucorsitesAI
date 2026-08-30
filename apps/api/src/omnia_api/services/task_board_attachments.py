@@ -20,6 +20,19 @@ class AttachmentStorageError(RuntimeError):
     """Raised when private attachment storage cannot complete an operation."""
 
 
+class AttachmentUploadError(AttachmentStorageError):
+    """A PUT was attempted and may have succeeded despite the raised error."""
+
+    def __init__(self, message: str, object_key: str) -> None:
+        super().__init__(message)
+        self.object_key = object_key
+
+
+def attachment_object_key(task_id: UUID, attachment_id: UUID, filename: str) -> str:
+    suffix = PurePath(filename).suffix.lower()[:16]
+    return f"tasks/{task_id}/{attachment_id}{suffix}"
+
+
 def _ensure_private_bucket() -> tuple[Any, str]:
     settings = get_settings()
     client = get_minio_client()
@@ -66,9 +79,8 @@ def store_attachment(
     content_type: str,
     raw: bytes,
 ) -> str:
+    object_key = attachment_object_key(task_id, attachment_id, filename)
     client, bucket = _ensure_private_bucket()
-    suffix = PurePath(filename).suffix.lower()[:16]
-    object_key = f"tasks/{task_id}/{attachment_id}{suffix}"
     try:
         client.put_object(
             bucket,
@@ -78,7 +90,7 @@ def store_attachment(
             content_type=content_type,
         )
     except Exception as exc:
-        raise AttachmentStorageError("attachment upload failed") from exc
+        raise AttachmentUploadError("attachment upload failed", object_key) from exc
     return object_key
 
 

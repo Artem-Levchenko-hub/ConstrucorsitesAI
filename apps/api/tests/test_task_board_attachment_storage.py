@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 import pytest
 from minio.error import S3Error
@@ -25,6 +26,7 @@ class FakeMinio:
     def __init__(self) -> None:
         self.policy_removed = False
         self.get_error: Exception = _s3_error("NoSuchKey")
+        self.put_error: Exception | None = None
 
     def bucket_exists(self, _bucket: str) -> bool:
         return True
@@ -34,6 +36,10 @@ class FakeMinio:
 
     def get_object(self, _bucket: str, _object_key: str) -> Any:
         raise self.get_error
+
+    def put_object(self, *_args: Any, **_kwargs: Any) -> None:
+        if self.put_error is not None:
+            raise self.put_error
 
 
 def test_attachment_bucket_is_forced_private(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,3 +77,27 @@ def test_download_only_maps_missing_object_to_none(monkeypatch: pytest.MonkeyPat
     client.get_error = RuntimeError("transport offline")
     with pytest.raises(storage.AttachmentStorageError, match="download failed"):
         storage.load_attachment("transport-failure")
+
+
+def test_ambiguous_put_error_carries_deterministic_object_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeMinio()
+    client.put_error = RuntimeError("connection closed after PUT")
+    monkeypatch.setattr(storage, "get_settings", _settings)
+    monkeypatch.setattr(storage, "get_minio_client", lambda: client)
+    task_id = UUID("00000000-0000-0000-0000-000000000001")
+    attachment_id = UUID("00000000-0000-0000-0000-000000000002")
+
+    with pytest.raises(storage.AttachmentUploadError) as raised:
+        storage.store_attachment(
+            task_id,
+            attachment_id,
+            "artifact.html",
+            "text/html",
+            b"<html></html>",
+        )
+
+    assert raised.value.object_key == (
+        "tasks/00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002.html"
+    )

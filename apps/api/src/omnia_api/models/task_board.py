@@ -93,11 +93,17 @@ class TaskBoardAttachmentCleanup(Base):
     id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True, default=uuid4)
     object_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     __table_args__ = (
         CheckConstraint("size > 0", name="positive_size"),
-        Index("ix_task_board_attachment_cleanup_created", "created_at"),
+        CheckConstraint("attempts >= 0", name="nonnegative_attempts"),
+        Index("ix_task_board_attachment_cleanup_due", "next_attempt_at", "created_at"),
     )

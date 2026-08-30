@@ -39,7 +39,7 @@ _BOARD_ATTACHMENT_BYTES_LIMIT = 1024 * 1024 * 1024
 
 _store_attachment = attachment_storage.store_attachment
 _load_attachment = attachment_storage.load_attachment
-_delete_attachment = attachment_storage.delete_attachment
+_attachment_object_key = attachment_storage.attachment_object_key
 
 _STATUS_ORDER = case(
     (TaskBoardTask.status == "backlog", 0),
@@ -116,27 +116,6 @@ def _enqueue_attachment_cleanup(
     session.add_all(
         TaskBoardAttachmentCleanup(object_key=object_key, size=size) for object_key, size in objects
     )
-
-
-async def _drain_pending_attachment_cleanup(session: SessionDep, limit: int = 20) -> None:
-    pending = list(
-        (
-            await session.execute(
-                select(TaskBoardAttachmentCleanup)
-                .order_by(TaskBoardAttachmentCleanup.created_at)
-                .limit(limit)
-                .with_for_update(skip_locked=True)
-            )
-        ).scalars()
-    )
-    for cleanup in pending:
-        try:
-            await asyncio.to_thread(_delete_attachment, cleanup.object_key)
-        except attachment_storage.AttachmentStorageError:
-            log.warning("task_board_attachment_cleanup_deferred key=%s", cleanup.object_key)
-        else:
-            await session.delete(cleanup)
-    await session.commit()
 
 
 def _attachment_filename(request: Request) -> str:
@@ -284,7 +263,6 @@ async def delete_task_board_task(
     )
     await session.delete(task)
     await session.commit()
-    await _drain_pending_attachment_cleanup(session)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -337,17 +315,18 @@ async def upload_task_board_attachment(
             status.HTTP_409_CONFLICT,
         )
 
+    attachment_id = uuid4()
+    object_key = _attachment_object_key(task_id, attachment_id, filename)
     attachment = TaskBoardAttachment(
-        id=uuid4(),
+        id=attachment_id,
         task_id=task_id,
         filename=filename,
         content_type=content_type,
         size=len(raw),
-        object_key="pending",
+        object_key=object_key,
     )
-    object_key: str | None = None
     try:
-        object_key = await asyncio.to_thread(
+        stored_object_key = await asyncio.to_thread(
             _store_attachment,
             task_id,
             attachment.id,
@@ -355,10 +334,27 @@ async def upload_task_board_attachment(
             content_type,
             raw,
         )
-        attachment.object_key = object_key
+        attachment.object_key = stored_object_key
+        object_key = stored_object_key
         session.add(attachment)
         await session.commit()
         await session.refresh(attachment)
+    except attachment_storage.AttachmentUploadError as exc:
+        await session.rollback()
+        try:
+            _enqueue_attachment_cleanup(session, [(exc.object_key, len(raw))])
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            log.exception(
+                "task_board_attachment_cleanup_enqueue_failed key=%s",
+                exc.object_key,
+            )
+        raise ApiError(
+            "upload_failed",
+            "Не удалось сохранить файл",
+            status.HTTP_502_BAD_GATEWAY,
+        ) from exc
     except attachment_storage.AttachmentStorageError as exc:
         await session.rollback()
         raise ApiError(
@@ -372,12 +368,10 @@ async def upload_task_board_attachment(
             try:
                 _enqueue_attachment_cleanup(session, [(object_key, len(raw))])
                 await session.commit()
-                await _drain_pending_attachment_cleanup(session)
             except Exception:
                 await session.rollback()
                 log.exception("task_board_attachment_cleanup_enqueue_failed key=%s", object_key)
         raise
-    await _drain_pending_attachment_cleanup(session)
     return attachment
 
 
@@ -434,5 +428,4 @@ async def delete_task_board_attachment(
     _enqueue_attachment_cleanup(session, [(attachment.object_key, attachment.size)])
     await session.delete(attachment)
     await session.commit()
-    await _drain_pending_attachment_cleanup(session)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from urllib.parse import quote
 from uuid import UUID
@@ -344,13 +345,12 @@ async def test_task_board_reports_storage_download_failures(
     assert response.json()["error"]["code"] == "upload_failed"
 
 
-async def test_task_board_keeps_failed_object_deletion_in_durable_cleanup_outbox(
+async def test_task_board_queues_object_deletion_in_durable_cleanup_outbox(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from omnia_api.routers import task_board
-    from omnia_api.services.task_board_attachments import AttachmentStorageError
 
     object_key = "tasks/task/attachment.html"
     monkeypatch.setattr(task_board, "_store_attachment", lambda *_args: object_key)
@@ -365,10 +365,6 @@ async def test_task_board_keeps_failed_object_deletion_in_durable_cleanup_outbox
         headers={"X-File-Name": "artifact.html", "Content-Type": "text/html"},
     )
 
-    def fail_delete(_object_key: str) -> None:
-        raise AttachmentStorageError("offline")
-
-    monkeypatch.setattr(task_board, "_delete_attachment", fail_delete)
     deleted = await client.delete(
         f"/api/task-board/tasks/{task_id}/attachments/{uploaded.json()['id']}"
     )
@@ -380,3 +376,97 @@ async def test_task_board_keeps_failed_object_deletion_in_durable_cleanup_outbox
     assert cleanup is not None
     assert cleanup.object_key == object_key
     assert cleanup.size == len(b"<html></html>")
+
+
+async def test_task_board_queues_ambiguous_upload_for_cleanup(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.routers import task_board
+    from omnia_api.services.task_board_attachments import AttachmentUploadError
+
+    object_key = "tasks/ambiguous/upload.html"
+
+    def ambiguous_upload(*_args) -> str:
+        raise AttachmentUploadError("connection closed after PUT", object_key)
+
+    monkeypatch.setattr(task_board, "_store_attachment", ambiguous_upload)
+    created = await client.post(
+        "/api/task-board/tasks",
+        json={"title": "Неоднозначная загрузка", "assignee": "roman"},
+    )
+    response = await client.post(
+        f"/api/task-board/tasks/{created.json()['id']}/attachments",
+        content=b"<html></html>",
+        headers={"X-File-Name": "artifact.html", "Content-Type": "text/html"},
+    )
+    cleanup = await db_session.scalar(select(TaskBoardAttachmentCleanup))
+
+    assert response.status_code == 502
+    assert cleanup is not None
+    assert cleanup.object_key == object_key
+    assert cleanup.size == len(b"<html></html>")
+
+
+async def test_attachment_cleanup_worker_retries_and_releases_pending_quota(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.routers import task_board
+    from omnia_api.services import task_board_attachment_cleanup as cleanup_service
+    from omnia_api.services.task_board_attachments import AttachmentStorageError
+
+    pending = TaskBoardAttachmentCleanup(object_key="tasks/pending.bin", size=5)
+    db_session.add(pending)
+    await db_session.commit()
+    await db_session.refresh(pending)
+
+    def fail_delete(_object_key: str) -> None:
+        raise AttachmentStorageError("offline")
+
+    monkeypatch.setattr(cleanup_service, "_delete_attachment", fail_delete)
+    processed = await cleanup_service.drain_attachment_cleanup_batch(
+        db_session,
+        delete_timeout_seconds=0.1,
+    )
+    await db_session.refresh(pending)
+
+    assert processed == 1
+    assert pending.attempts == 1
+    assert pending.last_error == "AttachmentStorageError"
+    assert pending.next_attempt_at > datetime.now(UTC)
+
+    monkeypatch.setattr(task_board, "_BOARD_ATTACHMENT_BYTES_LIMIT", 5)
+    created = await client.post(
+        "/api/task-board/tasks",
+        json={"title": "Освободить квоту", "assignee": "artem"},
+    )
+    blocked = await client.post(
+        f"/api/task-board/tasks/{created.json()['id']}/attachments",
+        content=b"x",
+        headers={"X-File-Name": "blocked.bin"},
+    )
+    assert blocked.status_code == 409
+    await db_session.rollback()
+
+    pending.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.commit()
+    monkeypatch.setattr(cleanup_service, "_delete_attachment", lambda _object_key: None)
+    assert await cleanup_service.drain_attachment_cleanup_batch(db_session) == 1
+    assert await db_session.get(TaskBoardAttachmentCleanup, pending.id) is None
+
+    monkeypatch.setattr(
+        task_board,
+        "_store_attachment",
+        lambda task_id, attachment_id, filename, content_type, raw: (
+            f"tasks/{task_id}/{attachment_id}"
+        ),
+    )
+    uploaded = await client.post(
+        f"/api/task-board/tasks/{created.json()['id']}/attachments",
+        content=b"x",
+        headers={"X-File-Name": "accepted.bin"},
+    )
+    assert uploaded.status_code == 201
