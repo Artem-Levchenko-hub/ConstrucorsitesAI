@@ -102,6 +102,12 @@ _PERSISTENCE_PROMPT_RE = re.compile(
     r"(?:сохран|истори|профил|трениров|питан|сон|уведом|заказ|запис|бронир|данн)",
     re.IGNORECASE,
 )
+_MUTATION_PROMPT_RE = re.compile(
+    r"(?:добав|созда|сохран|запис|отмет|измен|редакт|удал|внес|логир|трек|"
+    r"уч[её]т|вести|оформ|брони|заказ|оплат|отправ|зафикс|"
+    r"\b(?:add|create|save|edit|update|delete|track|log|record|submit|book|order|pay)\b)",
+    re.IGNORECASE,
+)
 _ASYNC_STATES_PROMPT_RE = re.compile(
     r"(?:loading|empty|error|retry|загрузк|пуст\w*|ошибк|повтор)",
     re.IGNORECASE,
@@ -127,6 +133,108 @@ _MANAGED_DB_PATHS = {
     "src/app/api/omnia/preview-session/route.ts",
 }
 
+_FAKE_USER_DATA_RE = re.compile(
+    r"(?:\b(?:demo|mock|fake|sample|fixture|placeholder|seed(?:ed)?)"
+    r"[-_\s]*(?:data|dataset|records?|state|profile|history|workouts?|meals?|metrics?)\b|"
+    r"\b(?:data|dataset|records?|state|profile|history|workouts?|meals?|metrics?)"
+    r"[-_\s]*(?:demo|mock|fake|sample|fixture|placeholder|seed(?:ed)?)\b|"
+    r"(?:демо|тестов|фиктивн|примерн|заглушк)\w*[-_\s]*"
+    r"(?:данн|набор|профил|истори|трениров|питан|метрик)\w*)",
+    re.IGNORECASE,
+)
+
+# Strongly user-owned state names. Immutable domain references (for example,
+# REFERENCE_EXERCISES) deliberately stay outside this list: a technique catalog
+# may be static, but the current user's meals/readiness/history may not be.
+_CONST_LITERAL_RE = re.compile(
+    r"\b(?:export\s+)?const\s+(?P<name>[A-Z_$][A-Z0-9_$]*)"
+    r"\b[^\n=]*=\s*(?!\[\s*\]|\{\s*\})(?:\[|\{|[-+]?\d|[\"'`])",
+    re.IGNORECASE,
+)
+_USER_STATE_NAMES = frozenset(
+    {
+        "workout",
+        "workouts",
+        "recentworkouts",
+        "workouthistory",
+        "meal",
+        "meals",
+        "mealtoday",
+        "mealstoday",
+        "readiness",
+        "readinesscurrent",
+        "weekload",
+        "userprofile",
+        "currentuser",
+        "personalstats",
+        "progressdata",
+        "sleepdata",
+        "nutritiondata",
+        "activitydata",
+        "dashboarddata",
+        "historydata",
+        "history",
+        "profile",
+        "progress",
+        "stats",
+        "metrics",
+        "sessions",
+        "activities",
+        "usermetrics",
+        "usersessions",
+    }
+)
+_REFERENCE_CATALOG_PATH_RE = re.compile(
+    r"(?:^|[/_.-])(?:reference|catalog|taxonomy|library)(?:[/_.-]|$)", re.IGNORECASE
+)
+_EXPLICIT_REFERENCE_PATH_RE = re.compile(
+    r"(?:^|[/_.-])(?:reference|taxonomy|library)(?:[/_.-]|$)", re.IGNORECASE
+)
+_REFERENCE_CATALOG_DECL_RE = re.compile(
+    r"\bconst\s+(?:REFERENCE_[A-Z0-9_]+|[A-Z0-9_]+_(?:CATALOG|TAXONOMY|LIBRARY))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_product_source(path: str) -> bool:
+    return (
+        path.startswith("src/")
+        and path.endswith(_PRODUCT_SUFFIXES)
+        and path not in _NON_PRODUCT_PATHS
+        and path not in _MANAGED_DB_PATHS
+        and not path.startswith("src/lib/max/")
+        and not path.startswith("src/lib/omnia/")
+        and not path.startswith("src/app/api/max/")
+        and not path.startswith("src/app/api/omnia/")
+        and "/legal/" not in path
+        and "/support/" not in path
+    )
+
+
+def _fake_user_data_paths(files: Mapping[str, str]) -> list[str]:
+    def has_hardcoded_user_state(content: str) -> bool:
+        return any(
+            match.group("name").replace("_", "").replace("$", "").lower() in _USER_STATE_NAMES
+            for match in _CONST_LITERAL_RE.finditer(content)
+        )
+
+    hits: list[str] = []
+    for path, content in files.items():
+        if not _is_product_source(path):
+            continue
+        is_reference_catalog = bool(
+            _EXPLICIT_REFERENCE_PATH_RE.search(path)
+            or (
+                _REFERENCE_CATALOG_PATH_RE.search(path)
+                and _REFERENCE_CATALOG_DECL_RE.search(content)
+            )
+        )
+        if not is_reference_catalog and (
+            has_hardcoded_user_state(content) or _FAKE_USER_DATA_RE.search(content)
+        ):
+            hits.append(path)
+    return sorted(hits)
+
 
 def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, ...]]]:
     """Return only explicitly named product capabilities, in stable order."""
@@ -150,8 +258,12 @@ def build_max_product_contract(prompt: str) -> str:
         "For a multi-feature brief, one giant page.tsx with decorative tabs is insufficient.",
         "- Every button must execute a real state change or persisted request. No decorative "
         "controls, fake timers, TODOs, simulated success or claimed integrations.",
-        "- Use createMaxAction for persisted MAX user activity. Never store a provider key "
-        "in source code or expose it to the browser.",
+        "- Never fabricate the current user's history, profile, progress, workouts, meals or "
+        "metrics with demo/mock/test constants. Load user-owned state with getMaxActions; when "
+        "it is empty, show an honest empty/onboarding state. Static immutable reference "
+        "catalogs are allowed only when they are not presented as the user's activity.",
+        "- Use createMaxAction for persisted MAX user activity and getMaxActions to read it. "
+        "Never store a provider key in source code or expose it to the browser.",
         "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "
         "/api/omnia routes. Use the managed integration client for tenant-safe reads, "
         "writes, AI, consent and events.",
@@ -249,11 +361,8 @@ def max_source_completion_gap(
         )
 
     capabilities = requested_max_capabilities(prompt)
-    corpus = "\n".join(
-        content.lower()
-        for path, content in files.items()
-        if path.startswith("src/") and path.endswith(_PRODUCT_SUFFIXES)
-    )
+    product_sources = {path: content for path, content in files.items() if _is_product_source(path)}
+    corpus = "\n".join(content.lower() for content in product_sources.values())
     unsafe_product_db_paths = [
         path
         for path, content in files.items()
@@ -267,6 +376,16 @@ def max_source_completion_gap(
             "Product files bypass the managed MAX persistence boundary: "
             + ", ".join(sorted(unsafe_product_db_paths))
             + ". Remove direct DB imports and use createMaxAction/getMaxActions."
+        )
+    fake_user_data_paths = _fake_user_data_paths(files)
+    if fake_user_data_paths:
+        return (
+            "Product ships demo/test or hardcoded personal user data in: "
+            + ", ".join(fake_user_data_paths)
+            + ". Remove fabricated history/profile/progress/workouts/meals/metrics, load "
+            "user-scoped state with getMaxActions and render an honest empty/onboarding "
+            "state. Immutable reference catalogs are allowed only when clearly separate "
+            "from the user's activity."
         )
     missing = [
         label
@@ -306,14 +425,24 @@ def max_source_completion_gap(
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
             return "A timer is still simulating AI work. Replace it with requestOmniaAI."
 
-    if _PERSISTENCE_PROMPT_RE.search(prompt) and not any(
-        marker in corpus
-        for marker in ("createmaxaction", "/api/omnia/actions", "maxbusinessactions")
-    ):
-        return (
-            "The brief requires user data/history, but no persisted MAX action flow exists. "
-            "Use createMaxAction (or a user-scoped API route) and render the saved result."
-        )
+    if _PERSISTENCE_PROMPT_RE.search(prompt):
+        required_persistence_calls = ["getMaxActions"]
+        if _MUTATION_PROMPT_RE.search(prompt):
+            required_persistence_calls.append("createMaxAction")
+        missing_persistence_calls = [
+            call
+            for call in required_persistence_calls
+            if not re.search(rf"\b{call.lower()}\s*\(", corpus)
+        ]
+        if missing_persistence_calls:
+            return (
+                "The brief requires user data/history, but the product does not complete "
+                "the managed persistence loop. Add real product calls to: "
+                + ", ".join(missing_persistence_calls)
+                + ". Persist with createMaxAction, load user-scoped state with getMaxActions, "
+                "and render loading/empty/error/success states. Managed scaffold definitions "
+                "do not count as product usage."
+            )
 
     if _ASYNC_STATES_PROMPT_RE.search(prompt):
         state_groups = (

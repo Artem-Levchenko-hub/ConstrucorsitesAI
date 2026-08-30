@@ -28,6 +28,11 @@
   `/api/omnia/actions`; never ship decorative buttons or fake success states.
   Product code calls `createMaxAction(actionType, payload)` and reads the scoped
   history with `getMaxActions()` from `@/lib/omnia/integration-client`.
+- Never fabricate the current user's history, profile, progress, workouts, meals
+  or metrics with demo/mock/test constants. Load user-owned state with
+  `getMaxActions()` and show an honest empty/onboarding state when no records
+  exist. Static immutable reference catalogs are allowed only when clearly
+  separated from the user's activity.
 - When the brief asks for AI, import `requestOmniaAI` from
   `@/lib/omnia/integration-client`. It invokes the managed Google model through a
   signed MAX server route and charges the owner's personal/team billing account.

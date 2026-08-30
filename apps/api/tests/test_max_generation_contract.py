@@ -17,8 +17,10 @@ COMPLEX_BRIEF = """
 def _complete_files() -> dict[str, str]:
     return {
         "src/app/page.tsx": (
-            'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n'
-            'import { createMaxAction } from "@/lib/omnia/client";\n'
+            "import { requestOmniaAI, createMaxAction, getMaxActions } "
+            'from "@/lib/omnia/integration-client";\n'
+            "async function load(){ return (await getMaxActions()).actions; }\n"
+            'async function save(){ return createMaxAction("health_saved", {}); }\n'
             "export default function Page(){ return <main>ИИ тренер: тренировки, сон, "
             "питание, статистика, график, профиль, история, уведомления, loading, empty, "
             "error, retry</main>; }"
@@ -50,6 +52,8 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "requestOmniaAI" in contract
     assert "fake timers" in contract
     assert "loading, empty, error/retry" in contract
+    assert "Never fabricate the current user's history" in contract
+    assert "honest empty/onboarding state" in contract
 
 
 def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
@@ -99,7 +103,7 @@ def test_safe_css_import_order_is_byte_stable() -> None:
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
-        'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n',
+        "requestOmniaAI, ",
         "",
     )
 
@@ -169,3 +173,164 @@ def test_completion_rejects_product_db_bypass_but_allows_managed_routes() -> Non
     assert "src/app/api/workouts/route.ts" in str(gap)
     assert "src/app/api/omnia/actions/route.ts" not in str(gap)
     assert "createMaxAction/getMaxActions" in str(gap)
+
+
+def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:
+    files = _complete_files()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "import { requestOmniaAI, createMaxAction, getMaxActions } "
+        'from "@/lib/omnia/integration-client";\n',
+        'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n',
+    )
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "async function load(){ return (await getMaxActions()).actions; }\n"
+        'async function save(){ return createMaxAction("health_saved", {}); }\n',
+        "",
+    )
+    files["src/lib/omnia/integration-client.ts"] = (
+        "export async function createMaxAction(){}\n"
+        "export async function getMaxActions(){ return {actions: []}; }"
+    )
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF + "\nСохранять результаты.", files)
+
+    assert "createMaxAction" in str(gap)
+    assert "getMaxActions" in str(gap)
+    assert "Managed scaffold definitions do not count" in str(gap)
+
+
+def test_managed_scaffold_does_not_fake_product_ai_usage() -> None:
+    files = _complete_files()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
+        "requestOmniaAI, ",
+        "",
+    )
+    files["src/lib/omnia/integration-client.ts"] = (
+        "export async function requestOmniaAI(){ return {answer: 'managed'}; }"
+    )
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert "requestOmniaAI" in str(gap)
+
+
+def test_completion_rejects_demo_or_hardcoded_personal_state() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/data.ts"] = """
+// Demo dataset for the fitness MAX mini app.
+export const WORKOUTS = [{ id: "w-1", date: "Сегодня", volumeKg: 8420 }];
+export const MEALS_TODAY = [{ title: "Овсянка", kcal: 520 }];
+export const READINESS_CURRENT = 76;
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert "src/lib/fitness/data.ts" in str(gap)
+    assert "demo/test or hardcoded personal user data" in str(gap)
+    assert "honest empty/onboarding" in str(gap)
+
+
+def test_completion_allows_static_immutable_reference_catalog() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/reference-exercises.ts"] = """
+export const REFERENCE_EXERCISES = [
+  { id: "squat", name: "Приседания со штангой", group: "Ноги" },
+  { id: "deadlift", name: "Становая тяга", group: "Спина / ноги" },
+];
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_completion_allows_labeled_sample_reference_catalog() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/reference-exercises.ts"] = """
+// Sample dataset for the immutable exercise taxonomy.
+export const REFERENCE_EXERCISES = [
+  { id: "squat", name: "Приседания со штангой", group: "Ноги" },
+];
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_completion_allows_generic_records_in_explicit_reference_file() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/reference-sessions.ts"] = """
+export const sessions = [{ id: "template-1", title: "Базовая силовая сессия" }];
+"""
+
+    assert max_source_completion_gap(COMPLEX_BRIEF, files) is None
+
+
+def test_completion_rejects_hardcoded_personal_state_without_demo_label() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/data.ts"] = """
+export const WEEK_LOAD = [{ day: "Пн", load: 95 }];
+export const READINESS_CURRENT = 76;
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert "hardcoded personal user data" in str(gap)
+
+
+def test_completion_rejects_lowercase_hardcoded_workouts() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/data.ts"] = """
+export const workouts = [{ id: "w-1", kg: 1200 }];
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert "hardcoded personal user data" in str(gap)
+
+
+def test_completion_rejects_generic_hardcoded_profile_and_history() -> None:
+    files = _complete_files()
+    files["src/lib/fitness/user-state.ts"] = """
+export const profile = { name: "Alex" };
+export const history = [{ id: "h-1", title: "Прошлая тренировка" }];
+"""
+
+    gap = max_source_completion_gap(COMPLEX_BRIEF, files)
+
+    assert "hardcoded personal user data" in str(gap)
+
+
+def test_read_only_user_data_requires_read_but_not_write() -> None:
+    prompt = "Покажи профиль пользователя, историю действий и статистику."
+    files = _complete_files()
+    files["src/app/page.tsx"] = (
+        files["src/app/page.tsx"]
+        .replace(
+            ", createMaxAction, getMaxActions",
+            ", getMaxActions",
+        )
+        .replace(
+            'async function save(){ return createMaxAction("health_saved", {}); }\n',
+            "",
+        )
+    )
+
+    assert max_source_completion_gap(prompt, files) is None
+
+
+def test_mutating_user_data_requires_write() -> None:
+    prompt = "Покажи историю тренировок и сохраняй новую тренировку."
+    files = _complete_files()
+    files["src/app/page.tsx"] = (
+        files["src/app/page.tsx"]
+        .replace(
+            ", createMaxAction, getMaxActions",
+            ", getMaxActions",
+        )
+        .replace(
+            'async function save(){ return createMaxAction("health_saved", {}); }\n',
+            "",
+        )
+    )
+
+    gap = max_source_completion_gap(prompt, files)
+
+    assert "createMaxAction" in str(gap)

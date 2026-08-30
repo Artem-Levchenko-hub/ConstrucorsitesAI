@@ -500,7 +500,11 @@ Create src/app/page.tsx, the product styling, domain screens, components and API
 behaviour required by the brief from scratch. A thin shell, decorative tabs,
 static demo response or fake timer is not a finished application. Persist user actions with
 `createMaxAction` and read them with `getMaxActions`, both from
-`@/lib/omnia/integration-client`. Never import `@/lib/db`/`drizzle-orm` or create
+`@/lib/omnia/integration-client`. Never fabricate the current user's history,
+profile, progress, workouts, meals or metrics with demo/mock/test constants.
+Load user-owned state from `getMaxActions`; if no records exist, show an honest
+empty/onboarding state. Static immutable reference catalogs are allowed only when
+they are clearly separate from user activity. Never import `@/lib/db`/`drizzle-orm` or create
 parallel API routes: MAX Studio owns auth, tenant filtering and persistence.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestOmniaAI({ message, instructions, context })`
