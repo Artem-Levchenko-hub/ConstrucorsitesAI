@@ -101,7 +101,7 @@ def tarball_to_files(tar_bytes: bytes) -> ImportResult:
     - Skip dirs listed in ``_SKIP_DIRS`` (git, node_modules, build artefacts…)
     - Skip files larger than ``repo_svc.MAX_FILE_BYTES``
     - Drop binary files (non-UTF-8); count them in ``skipped_binaries``
-    - If more than ``MAX_FILES`` text files survive, keep the first 100 by
+    - If more than the project ``MAX_FILES`` quota survive, keep that many by
       sorted path and set ``truncated = True``
     """
     files: dict[str, str] = {}

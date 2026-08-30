@@ -2,14 +2,18 @@ FROM node:22-slim AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9 --activate
 COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile --prod=false || pnpm install
+RUN pnpm install --frozen-lockfile --prod=false --ignore-scripts || \
+    pnpm install --ignore-scripts
 
 FROM node:22-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-RUN corepack enable && corepack prepare pnpm@9 --activate && pnpm build
+RUN corepack enable && corepack prepare pnpm@9 --activate
+RUN chown node:node /app
+COPY --chown=node:node . .
+USER node
+RUN --network=none pnpm exec next build
 
 FROM node:22-slim AS runtime
 WORKDIR /app

@@ -194,6 +194,40 @@ _REFERENCE_CATALOG_DECL_RE = re.compile(
     r"\bconst\s+(?:REFERENCE_[A-Z0-9_]+|[A-Z0-9_]+_(?:CATALOG|TAXONOMY|LIBRARY))\b",
     re.IGNORECASE,
 )
+_DIRECT_DB_RE = re.compile(r"(?:@/lib/db|drizzle-orm)", re.IGNORECASE)
+_DIRECT_DB_WRITE_RE = re.compile(
+    r"(?:\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\b(?:insert|update|delete)\s*\()",
+    re.IGNORECASE,
+)
+
+
+def _direct_db_product_paths(files: Mapping[str, str]) -> dict[str, str]:
+    return {
+        path: content
+        for path, content in files.items()
+        if path.startswith("src/")
+        and path.endswith((".ts", ".tsx"))
+        and path not in _MANAGED_DB_PATHS
+        and _DIRECT_DB_RE.search(content)
+    }
+
+
+def _unsafe_direct_db_paths(files: Mapping[str, str]) -> list[str]:
+    """Direct project DB is allowed only behind verified MAX identity scope."""
+    unsafe: list[str] = []
+    for path, content in _direct_db_product_paths(files).items():
+        has_verified_user = bool(re.search(r"\brequireMaxUser\s*\(", content))
+        has_user_scope = "maxUserId" in content and bool(
+            re.search(r"\buser\.id\b", content)
+        )
+        if not (has_verified_user and has_user_scope):
+            unsafe.append(path)
+    return sorted(unsafe)
+
+
+def unsafe_max_backend_paths(files: Mapping[str, str]) -> list[str]:
+    """Public, deterministic gate used by both native and text agent loops."""
+    return _unsafe_direct_db_paths(files)
 
 
 def _is_product_source(path: str) -> bool:
@@ -262,11 +296,14 @@ def build_max_product_contract(prompt: str) -> str:
         "metrics with demo/mock/test constants. Load user-owned state with getMaxActions; when "
         "it is empty, show an honest empty/onboarding state. Static immutable reference "
         "catalogs are allowed only when they are not presented as the user's activity.",
-        "- Use createMaxAction for persisted MAX user activity and getMaxActions to read it. "
-        "Never store a provider key in source code or expose it to the browser.",
-        "- Never import @/lib/db or drizzle-orm and never create parallel /api/max or "
-        "/api/omnia routes. Use the managed integration client for tenant-safe reads, "
-        "writes, AI, consent and events.",
+        "- Use createMaxAction for persisted MAX user activity and getMaxActions to read it "
+        "(page long histories with getMaxActions({ limit, cursor }) when needed). Never "
+        "store a provider key in source code or expose it to the browser.",
+        "- The reserved /api/max and /api/omnia routes remain platform-owned. In the "
+        "attested project sandbox you may extend src/lib/db/schema.ts and create product "
+        "APIs elsewhere. Every user-owned DB route must call requireMaxUser() and scope "
+        "every read/write with maxUserId: user.id; never accept identity from the body. "
+        "The managed integration client remains the simplest safe option.",
         "- If the brief asks for AI, call requestOmniaAI from "
         "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
@@ -363,19 +400,14 @@ def max_source_completion_gap(
     capabilities = requested_max_capabilities(prompt)
     product_sources = {path: content for path, content in files.items() if _is_product_source(path)}
     corpus = "\n".join(content.lower() for content in product_sources.values())
-    unsafe_product_db_paths = [
-        path
-        for path, content in files.items()
-        if path.startswith("src/")
-        and path.endswith((".ts", ".tsx"))
-        and path not in _MANAGED_DB_PATHS
-        and ("@/lib/db" in content or "drizzle-orm" in content)
-    ]
+    direct_db_paths = _direct_db_product_paths(files)
+    unsafe_product_db_paths = _unsafe_direct_db_paths(files)
     if unsafe_product_db_paths:
         return (
-            "Product files bypass the managed MAX persistence boundary: "
+            "Direct project DB access is missing verified MAX-user isolation in: "
             + ", ".join(sorted(unsafe_product_db_paths))
-            + ". Remove direct DB imports and use createMaxAction/getMaxActions."
+            + ". Call requireMaxUser(), derive identity server-side, and scope every "
+            "read/write with maxUserId: user.id (never a request-body user id)."
         )
     fake_user_data_paths = _fake_user_data_paths(files)
     if fake_user_data_paths:
@@ -426,22 +458,25 @@ def max_source_completion_gap(
             return "A timer is still simulating AI work. Replace it with requestOmniaAI."
 
     if _PERSISTENCE_PROMPT_RE.search(prompt):
-        required_persistence_calls = ["getMaxActions"]
-        if _MUTATION_PROMPT_RE.search(prompt):
-            required_persistence_calls.append("createMaxAction")
-        missing_persistence_calls = [
-            call
-            for call in required_persistence_calls
-            if not re.search(rf"\b{call.lower()}\s*\(", corpus)
-        ]
-        if missing_persistence_calls:
+        managed_read = bool(re.search(r"\bgetmaxactions\s*\(", corpus))
+        managed_write = bool(re.search(r"\bcreatemaxaction\s*\(", corpus))
+        direct_read = bool(direct_db_paths) and not unsafe_product_db_paths
+        direct_write = direct_read and any(
+            _DIRECT_DB_WRITE_RE.search(content) for content in direct_db_paths.values()
+        )
+        missing_persistence: list[str] = []
+        if not (managed_read or direct_read):
+            missing_persistence.append("authenticated read")
+        if _MUTATION_PROMPT_RE.search(prompt) and not (managed_write or direct_write):
+            missing_persistence.append("authenticated write")
+        if missing_persistence:
             return (
                 "The brief requires user data/history, but the product does not complete "
-                "the managed persistence loop. Add real product calls to: "
-                + ", ".join(missing_persistence_calls)
-                + ". Persist with createMaxAction, load user-scoped state with getMaxActions, "
-                "and render loading/empty/error/success states. Managed scaffold definitions "
-                "do not count as product usage."
+                "an authenticated persistence loop. Missing: "
+                + ", ".join(missing_persistence)
+                + ". Use createMaxAction/getMaxActions, or a project table/API that calls "
+                "requireMaxUser() and scopes every query by maxUserId: user.id. Render "
+                "loading/empty/error/success states; scaffold definitions do not count."
             )
 
     if _ASYNC_STATES_PROMPT_RE.search(prompt):
@@ -491,4 +526,5 @@ __all__ = [
     "max_source_completion_gap",
     "normalize_max_globals_css",
     "requested_max_capabilities",
+    "unsafe_max_backend_paths",
 ]

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+from omnia_api.services import repo as repo_svc
 from omnia_api.services.file_extractor import (
+    MAX_FILES,
     apply_edits,
     clean_chat_content,
     extract_edits,
@@ -24,6 +26,10 @@ from omnia_api.services.file_extractor import (
 def test_extract_files_basic() -> None:
     answer = '<file path="a.txt">hello</file>'
     assert extract_files(answer) == {"a.txt": "hello"}
+
+
+def test_extract_files_cap_matches_repo_quota() -> None:
+    assert MAX_FILES == repo_svc.MAX_FILES == 5_000
 
 
 def test_extract_files_skips_placeholder_stub() -> None:

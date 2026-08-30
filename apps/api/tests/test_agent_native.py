@@ -8,13 +8,27 @@ grinding the step budget — the 2026-07-08 hibernate-mid-build incident).
 
 from __future__ import annotations
 
-import inspect
+import ast
+from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
 from omnia_api.services import agent_native
 from omnia_api.services.agent_native import _module_not_found_hint
+
+
+@pytest.fixture(autouse=True)
+def _env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
+    )
+    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
+    from omnia_api.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def test_native_agent_uses_sonnet_while_autoheal_keeps_gemini() -> None:
@@ -44,6 +58,7 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
 def test_max_native_toolset_removes_incompatible_proof_and_landing_noise() -> None:
     names = [tool["name"] for tool in agent_native._MAX_TOOLS_CACHED]
 
+    assert "bash" not in names
     assert "probe" not in names
     assert "verify_isolation" not in names
     assert "runtime_check" in names
@@ -58,11 +73,27 @@ def test_max_native_toolset_removes_incompatible_proof_and_landing_noise() -> No
     assert "scroll-scrub" not in descriptions
 
 
+def test_max_native_toolset_can_opt_into_project_shell() -> None:
+    names = [tool["name"] for tool in agent_native._MAX_TOOLS_WITH_BASH_CACHED]
+
+    assert "bash" in names
+    assert "probe" not in names
+    assert "verify_isolation" not in names
+    bash_tool = next(
+        tool for tool in agent_native._MAX_TOOLS_WITH_BASH_CACHED if tool["name"] == "bash"
+    )
+    assert "isolated MAX project sandbox" in str(bash_tool["description"])
+
+
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
     """The verified core is a seed, never a replacement for the Google agent."""
-    from omnia_api.routers import messages
-
-    source = inspect.getsource(messages._process_prompt)
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "omnia_api"
+        / "routers"
+        / "messages.py"
+    ).read_text(encoding="utf-8")
 
     assert 'stop_reason="deterministic_template"' not in source
     assert "_merge_seeded_agent_files" in source
@@ -79,8 +110,11 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
     assert '_bounded_stop and project_template != "max_miniapp"' in source
-    assert "if path not in MAX_MODEL_LOCKED_FILES" in source
+    assert "MAX_SECURITY_LOCKED_FILES" in source
+    assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
+    assert "agent_sandbox_capabilities" in source
+    assert "unsafe_max_backend_paths" in source
     assert "max_model_write_rejection" in source
     assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
@@ -89,10 +123,45 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "normalize_max_globals_css" in source
     assert "seed_design_memory" in source
     assert "await asyncio.sleep(2)" in source
+    assert "max_project_shell_enabled" in source
+    assert "MAX project shell is locked" in source
+    assert "Shell mutation is disabled for MAX projects." not in source
+
+
+def _load_messages_helpers(*function_names: str) -> dict[str, Any]:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "omnia_api"
+        / "routers"
+        / "messages.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="messages.py")
+    body: list[ast.stmt] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_CONTINUE_KEYWORDS"
+            for target in node.targets
+        ):
+            body.append(node)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "_CONTINUE_KEYWORDS"
+        ):
+            body.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in function_names:
+            body.append(node)
+    namespace: dict[str, Any] = {"Sequence": Sequence, "Any": Any}
+    exec(compile(ast.Module(body=body, type_ignores=[]), "messages_resume_helpers", "exec"), namespace)
+    return namespace
 
 
 def test_failed_max_resume_recovers_the_original_brief() -> None:
-    from omnia_api.routers.messages import _recover_max_resume_prompt
+    _recover_max_resume_prompt = _load_messages_helpers(
+        "_is_continue_request",
+        "_recover_max_resume_prompt",
+    )["_recover_max_resume_prompt"]
 
     assert (
         _recover_max_resume_prompt(
@@ -104,8 +173,9 @@ def test_failed_max_resume_recovers_the_original_brief() -> None:
 
 
 def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
-    from omnia_api.routers.messages import _agent_result_message
     from omnia_api.services.agent_builder import AgentResult
+
+    _agent_result_message = _load_messages_helpers("_agent_result_message")["_agent_result_message"]
 
     result = AgentResult(
         done=False,
@@ -119,7 +189,9 @@ def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
 
 
 def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
-    from omnia_api.routers.messages import _merge_seeded_agent_files
+    _merge_seeded_agent_files = _load_messages_helpers(
+        "_merge_seeded_agent_files"
+    )["_merge_seeded_agent_files"]
 
     starter = {"src/app/page.tsx": "starter", "src/app/globals.css": "safe css"}
     generated = {"src/app/page.tsx": "google agent result", "src/components/Profile.tsx": "ui"}
@@ -305,6 +377,39 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
     assert executed_reads == agent_native._MAX_PREWRITE_DISCOVERY_TURNS
     assert calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 3
     assert agent_native._MAX_PREWRITE_LOCK_RESULT in str(res.transcript)
+
+
+@pytest.mark.asyncio
+async def test_first_max_build_can_expose_bash_when_project_shell_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions: list[str] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        assert kwargs["tools"] == agent_native._MAX_TOOLS_WITH_BASH_CACHED
+        assert any(tool["name"] == "bash" for tool in kwargs["tools"])
+        return _turn(("done", {"summary": "Готово"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        actions.append(action.name)
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="build product",
+        execute=execute,
+        completion_check=lambda files, evidence: None,
+        allow_max_bash=True,
+        max_steps=2,
+    )
+
+    assert res.done is True
+    assert res.stop_reason == "max_steps_green"
+    assert actions == ["build"]
 
 
 @pytest.mark.asyncio

@@ -723,8 +723,32 @@ def _is_continue_request(prompt: str) -> bool:
 
     Caller gates this on a non-first-build CONTAINER project so it only fires when
     there is actually a partial app to continue."""
+    keywords = globals().get("_CONTINUE_KEYWORDS")
+    if not isinstance(keywords, frozenset):
+        keywords = frozenset(
+            {
+                "продолж",
+                "доделай",
+                "доделать",
+                "доведи",
+                "довести",
+                "дособери",
+                "дособерите",
+                "достро",
+                "доработай",
+                "допиши",
+                "заверши сбор",
+                "закончи сбор",
+                "не доделал",
+                "не докончил",
+                "до конца",
+                "finish the build",
+                "continue building",
+                "keep building",
+            }
+        )
     t = (prompt or "").strip().lower()
-    return any(k in t for k in _CONTINUE_KEYWORDS)
+    return any(k in t for k in keywords)
 
 
 def _recover_max_resume_prompt(candidates: Sequence[str]) -> str | None:
@@ -3265,6 +3289,26 @@ async def _process_prompt(
                     print(f"[PP] design_plugin skipped: {_dp_exc!r}", flush=True)
 
             _vision_context = _design_contract.vision_context if _design_contract else prompt_text
+            _max_shell_requested = (
+                project_template == "max_miniapp"
+                and get_settings().max_project_shell_enabled
+            )
+            _max_sandbox_capabilities: dict[str, Any] = {}
+            if _max_shell_requested:
+                try:
+                    _max_sandbox_capabilities = (
+                        await orchestrator_client.agent_sandbox_capabilities(
+                            project_id, project_slug
+                        )
+                    )
+                except Exception as _sandbox_cap_exc:
+                    print(
+                        f"[PP] MAX sandbox attestation unavailable: {_sandbox_cap_exc!r}",
+                        flush=True,
+                    )
+            _max_shell_enabled = bool(
+                _max_shell_requested and _max_sandbox_capabilities.get("ready")
+            )
             _base_agent_executor = agent_builder.make_container_executor(
                 project_id=project_id,
                 slug=project_slug,
@@ -3272,9 +3316,19 @@ async def _process_prompt(
                 vision_context=_vision_context,
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
+            _active_max_locked_files: frozenset[str] = frozenset()
             if project_template == "max_miniapp":
-                from omnia_api.services.max_project_kit import MAX_MODEL_LOCKED_FILES
+                from omnia_api.services.max_project_kit import (
+                    MAX_MODEL_LOCKED_FILES,
+                    MAX_SECURITY_LOCKED_FILES,
+                )
                 from omnia_api.services.secret_safety import max_model_write_rejection
+
+                _active_max_locked_files = (
+                    MAX_SECURITY_LOCKED_FILES
+                    if _max_shell_enabled
+                    else MAX_MODEL_LOCKED_FILES
+                )
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
                     if action.name == "see":
@@ -3310,17 +3364,103 @@ async def _process_prompt(
                             }
                         return _visual
                     if action.name == "bash":
+                        if not _max_shell_enabled:
+                            return {
+                                "ok": False,
+                                "error": (
+                                    "MAX project shell is locked: the separate "
+                                    "secretless sandbox did not pass capability "
+                                    "attestation. Until it is ready use "
+                                    "read_file/edit_file/write_file/build."
+                                ),
+                            }
+                        _cmd = str(action.args.get("cmd") or "").strip()
+                        if not _cmd:
+                            return {"ok": False, "error": "bash needs a non-empty cmd string"}
+                        _sandbox = await orchestrator_client.agent_exec_sandbox(
+                            project_id, project_slug, _cmd
+                        )
+                        _shell_files: dict[str, str] = {}
+                        _shell_sync: dict[str, Any] = {}
+                        # A generator/test command may create valid source and then
+                        # exit non-zero. Keep its attributable diff so the next
+                        # agent turn can repair it instead of losing all progress.
+                        if isinstance(_sandbox.get("files"), dict):
+                            for _raw_path, _raw_content in _sandbox["files"].items():
+                                if not isinstance(_raw_path, str) or not isinstance(
+                                    _raw_content, str
+                                ):
+                                    continue
+                                _normalized_path = _raw_path.replace("\\", "/")
+                                while _normalized_path.startswith("./"):
+                                    _normalized_path = _normalized_path[2:]
+                                if _normalized_path in _active_max_locked_files:
+                                    return {
+                                        "ok": False,
+                                        "error": (
+                                            f"{_normalized_path} is managed by MAX Studio. "
+                                            "Shell changes must stay in product-owned files only."
+                                        ),
+                                    }
+                                if _normalized_path.startswith(
+                                    "src/app/api/max/"
+                                ) or _normalized_path.startswith("src/app/api/omnia/"):
+                                    return {
+                                        "ok": False,
+                                        "error": (
+                                            "MAX Studio owns /api/max and /api/omnia. "
+                                            "Shell changes there are blocked; use the "
+                                            "managed integration client instead."
+                                        ),
+                                    }
+                                if _raw_content:
+                                    _secret_rejection = max_model_write_rejection(
+                                        _normalized_path, _raw_content
+                                    )
+                                    if _secret_rejection:
+                                        return {"ok": False, "error": _secret_rejection}
+                                    if (
+                                        not _max_shell_enabled
+                                        and (
+                                            "@/lib/db" in _raw_content
+                                            or "drizzle-orm" in _raw_content
+                                        )
+                                    ):
+                                        return {
+                                            "ok": False,
+                                            "error": (
+                                                "Direct DB access is forbidden in MAX "
+                                                "product files. "
+                                                "Use createMaxAction/getMaxActions from "
+                                                "@/lib/omnia/integration-client."
+                                            ),
+                                        }
+                                _shell_files[_normalized_path] = _raw_content
+                            if _shell_files:
+                                _shell_sync = await orchestrator_client.hot_reload(
+                                    project_id, project_slug, _shell_files
+                                )
+                        _detail = str(_sandbox.get("detail") or "(no output)")
+                        if _shell_files:
+                            _listed = ", ".join(sorted(_shell_files)[:12])
+                            _suffix = "…" if len(_shell_files) > 12 else ""
+                            _detail += f"\n\nSandbox synced files: {_listed}{_suffix}"
+                        _sync_failures = [
+                            f"{name}={_shell_sync.get(name)}: "
+                            f"{_shell_sync.get(name.replace('_exit_code', '_stderr_tail'), '')}"
+                            for name in ("package_exit_code", "drizzle_exit_code")
+                            if _shell_sync.get(name) not in (None, "0", 0)
+                        ]
+                        if _sync_failures:
+                            _detail += "\n\nRuntime sync failed: " + "; ".join(_sync_failures)
                         return {
-                            "ok": False,
-                            "error": (
-                                "Shell mutation is disabled for MAX projects. "
-                                "Use read_file/edit_file/write_file and build so every "
-                                "change remains attributable and rollback-safe."
-                            ),
+                            "ok": bool(_sandbox.get("ok")) and not _sync_failures,
+                            "detail": _detail,
+                            "files": _shell_files,
                         }
                     if (
                         action.name in {"write_file", "edit_file"}
-                        and action.path in MAX_MODEL_LOCKED_FILES
+                        and action.path in _active_max_locked_files
                     ):
                         return {
                             "ok": False,
@@ -3337,7 +3477,10 @@ async def _process_prompt(
                         _secret_rejection = max_model_write_rejection(action.path, _candidate)
                         if _secret_rejection:
                             return {"ok": False, "error": _secret_rejection}
-                        if "@/lib/db" in _candidate or "drizzle-orm" in _candidate:
+                        if (
+                            not _max_shell_enabled
+                            and ("@/lib/db" in _candidate or "drizzle-orm" in _candidate)
+                        ):
                             return {
                                 "ok": False,
                                 "error": (
@@ -3770,6 +3913,7 @@ async def _process_prompt(
                     emit=_agent_emit,
                     completion_check=_completion_check,
                     max_steps=_agent_steps,
+                    allow_max_bash=_max_shell_enabled,
                 )
             elif _agent_res is None:
                 _agent_res = await agent_builder.run_agent_build(
@@ -4066,19 +4210,51 @@ async def _process_prompt(
             try:
                 from omnia_api.services import agent_gate_feedback as _agf
                 from omnia_api.services.backend_guardrail import (
+                    GuardrailVerdict,
+                    Violation,
+                )
+                from omnia_api.services.backend_guardrail import (
                     check_backend as _check_backend,
                 )
 
                 def _guard_view() -> dict[str, str]:
                     if project_template != "max_miniapp":
                         return files
-                    from omnia_api.services.max_project_kit import MAX_MODEL_LOCKED_FILES
 
                     return {
                         path: content
                         for path, content in files.items()
-                        if path not in MAX_MODEL_LOCKED_FILES
+                        if path not in _active_max_locked_files
                     }
+
+                def _backend_verdict() -> GuardrailVerdict:
+                    if project_template == "max_miniapp" and _max_shell_enabled:
+                        from omnia_api.services.max_generation_contract import (
+                            unsafe_max_backend_paths,
+                        )
+
+                        unsafe = unsafe_max_backend_paths(_guard_view())
+                        violations = [
+                            Violation(
+                                path=path,
+                                rule="missing verified MAX-user DB scope",
+                                detail=(
+                                    "call requireMaxUser() and filter every query by "
+                                    "maxUserId: user.id"
+                                ),
+                            )
+                            for path in unsafe
+                        ]
+                        return GuardrailVerdict(
+                            safe=not violations,
+                            violations=violations,
+                            summary=(
+                                "MAX project DB isolation OK"
+                                if not violations
+                                else "MAX project DB isolation failed"
+                            ),
+                        )
+                    return _check_backend(_guard_view())
 
                 _guard_attempt = 0
                 _guard_max = max(0, int(get_settings().agent_gate_max_attempts))
@@ -4087,7 +4263,7 @@ async def _process_prompt(
                     and not get_settings().use_native_agent
                     and not _is_edit
                 ):
-                    _gv = _check_backend(_guard_view())
+                    _gv = _backend_verdict()
                     _outcomes = [
                         _agf.GateOutcome(
                             name="backend_guardrail",
@@ -4131,7 +4307,7 @@ async def _process_prompt(
                     files.update(_heal.files)
                 # Advisory log regardless of the heal flag — operators SEE a raw-DB
                 # escape even when self-heal is off (the silent-failure guard).
-                _final_guard = _check_backend(_guard_view())
+                _final_guard = _backend_verdict()
                 if not _final_guard.safe:
                     print(
                         f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",

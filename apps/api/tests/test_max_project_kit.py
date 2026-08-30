@@ -23,6 +23,8 @@ from omnia_api.schemas.max_studio import (
 from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
+    MAX_MODEL_LOCKED_FILES,
+    MAX_SECURITY_LOCKED_FILES,
     _template_candidates,
     render_max_managed_files,
     render_max_starter_files,
@@ -182,17 +184,45 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     files = render_max_managed_files(_config(), uuid4())
     client = files["src/lib/omnia/integration-client.ts"]
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
+    actions_route = files["src/app/api/omnia/actions/route.ts"]
 
     assert "requestOmniaAI" in client
     assert "input.message || input.prompt" in client
     assert "text: result.answer" in client
     assert "createMaxAction" in client
     assert "getMaxActions" in client
+    assert "MaxActionHistoryPage" in client
+    assert "nextCursor: string | null" in client
+    assert 'params.set("limit"' in client
+    assert 'params.set("cursor"' in client
+    assert 'fetch(`/api/omnia/actions${query ? `?${query}` : ""}`' in client
     assert '"lucide-react": "^0.469.0"' in files["package.json"]
     assert '"tailwindcss": "^4.0.0"' in files["package.json"]
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
     assert "api_key" not in client.lower()
+    assert "MAX_ACTION_LIMIT = 1000" in actions_route
+    assert "MAX_ACTION_PAYLOAD_BYTES = 262_144" in actions_route
+    assert "nextCursor" in actions_route
+    assert "Invalid action cursor" in actions_route
+    assert "TextEncoder" in actions_route
+
+
+def test_max_lock_sets_expand_when_attested_shell_is_unavailable() -> None:
+    assert "src/lib/db/schema.ts" not in MAX_SECURITY_LOCKED_FILES
+    assert "package.json" not in MAX_SECURITY_LOCKED_FILES
+    assert "pnpm-lock.yaml" not in MAX_SECURITY_LOCKED_FILES
+    assert "postcss.config.mjs" in MAX_SECURITY_LOCKED_FILES
+    assert "next.config.ts" in MAX_SECURITY_LOCKED_FILES
+    assert "drizzle.config.ts" in MAX_SECURITY_LOCKED_FILES
+    assert "Dockerfile.dev" in MAX_SECURITY_LOCKED_FILES
+    assert "Dockerfile.prod" in MAX_SECURITY_LOCKED_FILES
+    assert "scripts/apply-migrations.mjs" in MAX_SECURITY_LOCKED_FILES
+
+    assert "src/lib/db/schema.ts" in MAX_MODEL_LOCKED_FILES
+    assert "package.json" in MAX_MODEL_LOCKED_FILES
+    assert "pnpm-lock.yaml" in MAX_MODEL_LOCKED_FILES
+    assert "postcss.config.mjs" in MAX_MODEL_LOCKED_FILES
 
 
 def test_max_readiness_ignores_empty_service_snapshot_prompts() -> None:

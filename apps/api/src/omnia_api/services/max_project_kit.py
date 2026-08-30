@@ -14,7 +14,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 13
+MAX_MANAGED_KIT_VERSION = 14
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 
@@ -240,12 +240,26 @@ export async function createMaxAction(
   return response.json() as Promise<Record<string, unknown>>;
 }
 
-export async function getMaxActions(): Promise<{
+export type MaxActionHistoryPage = {
   actions: Array<Record<string, unknown>>;
-}> {
-  const response = await fetch("/api/omnia/actions", { credentials: "include" });
+  nextCursor: string | null;
+};
+
+export async function getMaxActions(options: {
+  limit?: number;
+  cursor?: string | null;
+} = {}): Promise<MaxActionHistoryPage> {
+  const params = new URLSearchParams();
+  if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.cursor) params.set("cursor", options.cursor);
+  const query = params.toString();
+  const response = await fetch(`/api/omnia/actions${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
   if (!response.ok) throw new Error("История действий временно недоступна");
-  return response.json() as Promise<{ actions: Array<Record<string, unknown>> }>;
+  return response.json() as Promise<MaxActionHistoryPage>;
 }
 
 export const getActionHistory = getMaxActions;
@@ -457,16 +471,19 @@ export default function SupportPage() {
     return files
 
 
-MAX_MODEL_LOCKED_FILES = frozenset(
+MAX_SECURITY_LOCKED_FILES = frozenset(
     {
-        "package.json",
-        "pnpm-lock.yaml",
-        "postcss.config.mjs",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/app/layout.tsx",
+        "next.config.ts",
+        "drizzle.config.ts",
+        "postcss.config.mjs",
+        "docker-entrypoint.sh",
+        "Dockerfile.dev",
+        "Dockerfile.prod",
+        "scripts/apply-migrations.mjs",
         "src/lib/db/index.ts",
-        "src/lib/db/schema.ts",
         "src/lib/max/bot-api.ts",
         "src/lib/max/bridge.ts",
         "src/lib/max/validate-init-data.ts",
@@ -488,6 +505,19 @@ MAX_MODEL_LOCKED_FILES = frozenset(
     }
 )
 
+# Legacy fallback used when the disposable sandbox is disabled or cannot be
+# attested.  A ready project-owner sandbox narrows this to the security core
+# above, so the agent can choose dependencies and design real relational data.
+MAX_MODEL_LOCKED_FILES = frozenset(
+    {
+        *MAX_SECURITY_LOCKED_FILES,
+        "package.json",
+        "pnpm-lock.yaml",
+        "postcss.config.mjs",
+        "src/lib/db/schema.ts",
+    }
+)
+
 MAX_MODEL_DIRECTIVE = """
 MAX PLATFORM CORE CONTRACT
 The existing MAX files are a secure runtime substrate, not a product UI template.
@@ -499,13 +529,17 @@ On a FULL BUILD, there is deliberately no product home page or visual template.
 Create src/app/page.tsx, the product styling, domain screens, components and API
 behaviour required by the brief from scratch. A thin shell, decorative tabs,
 static demo response or fake timer is not a finished application. Persist user actions with
-`createMaxAction` and read them with `getMaxActions`, both from
-`@/lib/omnia/integration-client`. Never fabricate the current user's history,
+`createMaxAction` and read them with `getMaxActions` (optionally paginated with
+`{ limit, cursor }`), both from `@/lib/omnia/integration-client`. Never fabricate the current user's history,
 profile, progress, workouts, meals or metrics with demo/mock/test constants.
 Load user-owned state from `getMaxActions`; if no records exist, show an honest
 empty/onboarding state. Static immutable reference catalogs are allowed only when
-they are clearly separate from user activity. Never import `@/lib/db`/`drizzle-orm` or create
-parallel API routes: MAX Studio owns auth, tenant filtering and persistence.
+they are clearly separate from user activity. In an attested project-owner sandbox
+you may extend `src/lib/db/schema.ts`, use Drizzle in product routes, and create
+feature APIs outside the reserved `/api/max/*` and `/api/omnia/*` namespaces.
+Every user-owned query MUST call `requireMaxUser()` and scope reads/writes by
+`maxUserId: user.id`; never trust an id from the request body. Without the attested
+sandbox, fall back to the managed action client.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestOmniaAI({ message, instructions, context })`
 from `@/lib/omnia/integration-client`; the managed Google model runs server-side.
@@ -513,9 +547,13 @@ Never embed a provider key in source or expose one to the browser. If a user pas
 a credential into chat, do not write it or create an .env file: Omnia handles
 credentials only through the encrypted Studio Integration Hub.
 
-On a later surgical edit, preserve working behaviour and change only the relevant
-product files. The bash tool is disabled for MAX: all source changes must use
-edit_file/write_file so Omnia can attribute and safely roll them back.
+If the project sandbox shell is available, `bash` runs only inside the isolated
+project container without network: use it for offline generators, tests,
+migrations and data transforms, not as host/root access. Add dependencies by
+editing `package.json`; Omnia installs them separately with lifecycle scripts
+disabled. Managed MAX files stay locked even when shell is available. If shell
+is unavailable, fall back to read_file/edit_file/write_file. On a later surgical
+edit, preserve working behaviour and change only the relevant product files.
 """.strip()
 
 

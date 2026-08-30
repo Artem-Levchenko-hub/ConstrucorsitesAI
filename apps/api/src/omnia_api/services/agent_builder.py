@@ -485,6 +485,11 @@ async def run_agent_build(
                 continue
         if sig == last_sig:
             repeat_count += 1
+        elif bare_mode and action.name == "bash":
+            # A bare-project shell can scaffold/write the whole source tree.
+            # Treat it as productive before execution so the exploration guard
+            # cannot skip the command that would create the first files.
+            no_write_streak = 0
         else:
             repeat_count, last_sig = 0, sig
         if repeat_count >= 5:
@@ -580,14 +585,6 @@ async def run_agent_build(
                 )
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # build once before piling on more files
-        elif bare_mode and action.name == "bash":
-            # Bare / no-stack: bash IS the productive work — scaffold (pnpm create),
-            # install, write the dev-server start script, run/build. It is NOT
-            # "exploring"; the template-flow assumption "progress == write_file" does
-            # not hold when the agent builds a whole app from a blank box. Resetting
-            # the streak stops the explore-abort from killing a from-scratch build
-            # mid-scaffold (the live failure: aborted at 13 steps, 0 files).
-            no_write_streak = 0
         else:
             no_write_streak += 1
             if no_write_streak >= _NO_WRITE_ABORT_AT:
@@ -685,6 +682,21 @@ async def run_agent_build(
             if "content" in obs and isinstance(obs["content"], str):
                 written[action.path] = obs["content"]
             wrote_since_check = True  # a new write is unverified until re-checked
+        elif isinstance(obs.get("files"), dict) and obs["files"]:
+            changed_paths: list[str] = []
+            for raw_path, raw_content in obs["files"].items():
+                if not isinstance(raw_path, str) or not isinstance(raw_content, str):
+                    continue
+                path = raw_path.replace("\\", "/")
+                while path.startswith("./"):
+                    path = path[2:]
+                written[path] = raw_content
+                changed_paths.append(path)
+            if changed_paths:
+                no_write_streak = 0
+                wrote_since_check = True
+                writes_since_build += len(changed_paths)
+                paths_since_build.update(changed_paths)
         convo.append({"role": "user", "content": _format_observation(action, obs)})
 
     return _ship_green_or(
@@ -1366,6 +1378,36 @@ def make_container_executor(
     # (review 2026-07-17). Mutable box so the closure can bump it.
     _video_used = [0]
 
+    def _hot_reload_failure(
+        result: dict[str, Any], *, path: str, content: str, detail: str
+    ) -> dict[str, Any] | None:
+        """Turn package/schema apply failures into repairable agent observations.
+
+        The file is already durable at this point.  Returning it even on failure
+        keeps the loop's workspace snapshot honest while ``ok=False`` makes the
+        model fix the broken dependency or migration before it can claim done.
+        """
+        failures = [
+            (
+                name,
+                result.get(name),
+                result.get(name.replace("_exit_code", "_stderr_tail"), ""),
+            )
+            for name in ("package_exit_code", "drizzle_exit_code")
+            if result.get(name) not in (None, "0", 0)
+        ]
+        if not failures:
+            return None
+        error = "; ".join(
+            f"{name}={code}: {stderr}" for name, code, stderr in failures
+        )
+        return {
+            "ok": False,
+            "error": f"runtime apply failed after {detail}: {error}",
+            "content": content,
+            "files": {path: content},
+        }
+
     async def _execute(action: Action) -> dict[str, Any]:
         try:
             if action.name == "list_dir":
@@ -1433,8 +1475,16 @@ def make_container_executor(
                 # aborts the whole build.
                 content = _sanitize_nested_layout(action.path, content)
                 content = _sanitize_css_imports(action.path, content)
-                await orchestrator_client.hot_reload(
+                hot_reload_result = await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: content})
+                failure = _hot_reload_failure(
+                    hot_reload_result,
+                    path=action.path,
+                    content=content,
+                    detail=f"writing {action.path}",
+                )
+                if failure:
+                    return failure
                 return {"ok": True, "content": content,
                         "detail": f"wrote {action.path} ({len(content)} bytes)"}
 
@@ -1456,8 +1506,16 @@ def make_container_executor(
                 new_content = current.replace(search, str(replace), 1)
                 new_content = _sanitize_nested_layout(action.path, new_content)
                 new_content = _sanitize_css_imports(action.path, new_content)
-                await orchestrator_client.hot_reload(
+                hot_reload_result = await orchestrator_client.hot_reload(
                     project_id=project_id, slug=slug, files={action.path: new_content})
+                failure = _hot_reload_failure(
+                    hot_reload_result,
+                    path=action.path,
+                    content=new_content,
+                    detail=f"patching {action.path}",
+                )
+                if failure:
+                    return failure
                 return {"ok": True, "content": new_content,
                         "detail": f"patched {action.path}"}
 

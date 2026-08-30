@@ -108,7 +108,10 @@ def _is_max_product_surface(path: str) -> bool:
 
 
 def _normalize_agent_path(path: str) -> str:
-    return (path or "").replace("\\", "/").lstrip("./")
+    normalized = (path or "").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 # Infra circuit breaker: consecutive turns where EVERY executed tool op died on
@@ -265,6 +268,12 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
 # capabilities, but do not resend unavailable proof tools or landing-specific
 # examples in the tool schema on every model turn.
 _MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "bash": (
+        "Run a shell command INSIDE the isolated MAX project sandbox only. Use it "
+        "for offline generators, tests, migrations and data transforms in the "
+        "project container; it has no network and is never host/root access. To add "
+        "dependencies, edit package.json; Omnia syncs them with lifecycle scripts disabled."
+    ),
     "see": (
         "Inspect the rendered MAX miniapp at its mobile viewport and return a strict "
         "product-design critique: hierarchy, density, readability, touch targets, "
@@ -276,18 +285,28 @@ _MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
         "that does not improve the main mobile task."
     ),
 }
-_MAX_TOOLS: list[dict[str, Any]] = [
-    {
-        **tool,
-        "description": _MAX_TOOL_DESCRIPTIONS.get(tool["name"], tool["description"]),
-    }
-    for tool in _TOOLS
-    if tool["name"] not in {"probe", "verify_isolation"}
-]
-_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
-    *_MAX_TOOLS[:-1],
-    {**_MAX_TOOLS[-1], "cache_control": _CACHE},
-]
+
+
+def _build_max_tools(*, allow_bash: bool) -> list[dict[str, Any]]:
+    return [
+        {
+            **tool,
+            "description": _MAX_TOOL_DESCRIPTIONS.get(tool["name"], tool["description"]),
+        }
+        for tool in _TOOLS
+        if tool["name"] not in {"probe", "verify_isolation"}
+        and (allow_bash or tool["name"] != "bash")
+    ]
+
+
+def _cache_toolset(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [*tools[:-1], {**tools[-1], "cache_control": _CACHE}]
+
+
+_MAX_TOOLS: list[dict[str, Any]] = _build_max_tools(allow_bash=False)
+_MAX_TOOLS_WITH_BASH: list[dict[str, Any]] = _build_max_tools(allow_bash=True)
+_MAX_TOOLS_CACHED: list[dict[str, Any]] = _cache_toolset(_MAX_TOOLS)
+_MAX_TOOLS_WITH_BASH_CACHED: list[dict[str, Any]] = _cache_toolset(_MAX_TOOLS_WITH_BASH)
 
 # Once MAX discovery is exhausted, a warning alone is not a constraint: the
 # provider can keep selecting read/helper tools from the full schema and the
@@ -745,6 +764,7 @@ async def run_native_build(
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
     max_steps: int = 24,
+    allow_max_bash: bool = False,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -914,6 +934,8 @@ async def run_native_build(
                     tools=(
                         _MAX_ENTRY_WRITE_TOOLS
                         if force_max_entry_write
+                        else _MAX_TOOLS_WITH_BASH_CACHED
+                        if max_runtime and allow_max_bash
                         else _MAX_TOOLS_CACHED
                         if max_runtime
                         else None
@@ -1092,6 +1114,35 @@ async def run_native_build(
                         if content_changed and _is_max_product_surface(normalized_path):
                             product_progress_this_turn = True
                     elif content_changed:
+                        product_progress_this_turn = True
+                elif isinstance(obs.get("files"), dict) and obs.get("files"):
+                    proof_after_write.clear()
+                    wrote_since_build = True
+                    _shell_changed = False
+                    for _raw_path, _raw_content in obs["files"].items():
+                        if not isinstance(_raw_path, str) or not isinstance(_raw_content, str):
+                            continue
+                        normalized_path = _normalize_agent_path(_raw_path)
+                        tracked_path = normalized_path
+                        previous_content = written.get(tracked_path)
+                        written[tracked_path] = _raw_content
+                        content_changed = previous_content != _raw_content
+                        _shell_changed = _shell_changed or content_changed
+                        if _max_contract_active:
+                            if (
+                                _MAX_PRODUCT_ENTRY_PATH not in written
+                                and normalized_path != _MAX_PRODUCT_ENTRY_PATH
+                            ):
+                                non_entry_writes_before_entry += 1
+                            if content_changed and _is_max_product_surface(normalized_path):
+                                product_progress_this_turn = True
+                        elif content_changed:
+                            product_progress_this_turn = True
+                    if (
+                        not product_progress_this_turn
+                        and _shell_changed
+                        and not _max_contract_active
+                    ):
                         product_progress_this_turn = True
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))

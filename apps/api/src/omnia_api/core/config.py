@@ -1063,6 +1063,14 @@ class Settings(BaseSettings):
     # protocol stays the prod default until the native path is verified on real builds
     # and billing is wired. Env: USE_NATIVE_AGENT.
     use_native_agent: bool = Field(default=False)
+    # MAX shell capability. When ON, native MAX builds may use the `bash` tool
+    # INSIDE the per-project dev container for installs/tests/migrations, like a
+    # Claude-Code session — never host/root access. Keep OFF until the runtime
+    # project-sandbox hardening is enabled on the orchestrator host.
+    # Env: MAX_PROJECT_SHELL_ENABLED. Default ON is safe because messages.py
+    # still exposes the tool only after the orchestrator attests the separate,
+    # secretless disposable sandbox; the flag remains an instant kill switch.
+    max_project_shell_enabled: bool = Field(default=True)
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't

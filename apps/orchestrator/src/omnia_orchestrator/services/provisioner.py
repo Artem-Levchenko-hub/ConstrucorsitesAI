@@ -34,8 +34,12 @@ from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import (
     ContainerSpec,
+    copy_path_from_container,
     ensure_template_image_fresh,
+    find_project_container,
     start_container,
+    unpause_container,
+    write_files,
 )
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
@@ -52,9 +56,45 @@ from omnia_orchestrator.services.port_allocator import get_port_allocator
 # imports cleanly, the static landing page still renders, and the failure
 # surfaces only when AI-generated code actually queries the DB.
 _DB_FALLBACK = "postgresql://placeholder:placeholder@127.0.0.1:1/placeholder"
+_MAX_RUNTIME_OVERLAY_PATHS = (
+    "src",
+    "public",
+    "package.json",
+    "pnpm-lock.yaml",
+    "next.config.ts",
+    "tsconfig.json",
+    "drizzle.config.ts",
+    "drizzle",
+    "components.json",
+    "postcss.config.mjs",
+    "tailwind.config.ts",
+    "scripts",
+)
+_MAX_PLATFORM_CORE_DIRS = (
+    "src/app/api/max",
+    "src/app/api/omnia",
+    "src/lib/max",
+    "src/lib/omnia",
+    "src/app/legal",
+    "src/app/support",
+)
+_MAX_PLATFORM_CORE_FILES = (
+    "pnpm-lock.yaml",
+    "next.config.ts",
+    "drizzle.config.ts",
+    "postcss.config.mjs",
+    "docker-entrypoint.sh",
+    "Dockerfile.dev",
+    "Dockerfile.prod",
+    "scripts/apply-migrations.mjs",
+    "src/app/layout.tsx",
+    "src/components/MaxAppProvider.tsx",
+    "src/components/OmniaCompliance.tsx",
+    "src/lib/db/index.ts",
+)
 
 
-def _integration_env() -> dict[str, str]:
+def _integration_env(template: str | None = None) -> dict[str, str]:
     """Env for the Base44-style "Core" integrations injected into every user
     container. Containers reach MinIO + the LLM gateway CONTAINER-TO-CONTAINER
     over the runtime network (their host binds are 127.0.0.1-only, unreachable
@@ -64,6 +104,12 @@ def _integration_env() -> dict[str, str]:
     SendEmail stubs. LLM_GATEWAY_URL is injected now for the later InvokeLLM/
     GenerateImage pass.
     """
+    # MAX reaches providers/storage through the scoped platform integration
+    # broker. Injecting the shared MinIO/SMTP/Gateway credentials into its
+    # generated runtime made any custom API route a cross-tenant secret escape.
+    if template == "max-miniapp-nextjs":
+        return {}
+
     out: dict[str, str] = {
         "MINIO_ENDPOINT": os.getenv("OMNIA_MINIO_ENDPOINT", "omnia-prod-minio:9000"),
         "MINIO_ACCESS_KEY": os.getenv("OMNIA_MINIO_ACCESS_KEY", "omnia"),
@@ -166,11 +212,95 @@ def _template_source_dir(template: str) -> Path:
 
 
 def _copy_template(src: Path, dest: Path) -> None:
-    """Copy template tree, skipping node_modules / .next / .git / __pycache__."""
+    """Seed missing template files without overwriting the project workspace."""
     def _ignore(_dir: str, names: list[str]) -> list[str]:
         return [n for n in names if n in {"node_modules", ".next", ".git", "__pycache__"}]
 
-    shutil.copytree(src, dest, ignore=_ignore, dirs_exist_ok=True)
+    if not dest.exists():
+        shutil.copytree(src, dest, ignore=_ignore)
+        return
+    skipped = {"node_modules", ".next", ".git", "__pycache__"}
+    for source in src.rglob("*"):
+        rel = source.relative_to(src)
+        if any(part in skipped for part in rel.parts) or source.is_symlink():
+            continue
+        target = dest / rel
+        if source.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
+def _workspace_text_files(root: Path) -> dict[str, str]:
+    """Bounded source overlay used to restore a re-profiled MAX runtime."""
+    out: dict[str, str] = {}
+    total = 0
+    skipped = {"node_modules", ".next", ".git", "__pycache__", "dist", "build", ".venv"}
+    for path in root.rglob("*"):
+        if path.is_symlink() or not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if any(part in skipped for part in rel.parts):
+            continue
+        lowered = path.name.lower()
+        if lowered == ".env" or lowered.startswith(".env.") or lowered.startswith("secrets."):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        encoded = content.encode("utf-8")
+        if len(encoded) > 8 * 1024 * 1024:
+            continue
+        out[rel.as_posix()] = content
+        total += len(encoded)
+        if len(out) > 5_000 or total > 64 * 1024 * 1024:
+            raise OrchestratorError(
+                code="validation_failed",
+                message="project workspace exceeds MAX runtime restore quota",
+                status_code=413,
+            )
+    return out
+
+
+def _is_max_platform_core_path(rel: Path) -> bool:
+    posix = rel.as_posix()
+    return posix in _MAX_PLATFORM_CORE_FILES or any(
+        posix == prefix or posix.startswith(prefix + "/")
+        for prefix in _MAX_PLATFORM_CORE_DIRS
+    )
+
+
+def _collect_max_runtime_overlay(root: Path) -> dict[str, str]:
+    """Return only user-owned MAX files that should survive a reprovision."""
+    return {
+        path: content
+        for path, content in _workspace_text_files(root).items()
+        if not _is_max_platform_core_path(Path(path))
+    }
+
+
+def _restore_max_platform_core(workspace_root: Path, template_root: Path) -> None:
+    """Re-seed platform-owned MAX files from the current template version."""
+
+    def _restore(relative: str) -> None:
+        target = workspace_root / relative
+        source = template_root / relative
+        if target.is_symlink() or target.is_file():
+            target.unlink(missing_ok=True)
+        elif target.is_dir():
+            shutil.rmtree(target)
+        if source.is_dir():
+            shutil.copytree(source, target)
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+    for relative in _MAX_PLATFORM_CORE_DIRS:
+        _restore(relative)
+    for relative in _MAX_PLATFORM_CORE_FILES:
+        _restore(relative)
 
 
 async def provision(req: ProvisionRequest) -> ProvisionResponse:
@@ -249,7 +379,7 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": dev_origin,
         "AUTH_TRUST_HOST": "true",
-        **_integration_env(),
+        **_integration_env(stack.template_dir),
         **_egress_env(),
         **req.initial_env,
     }
@@ -275,9 +405,25 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     # daemon API stopped/paused, so an idle-sweep `stop` stays down until /wake.
     # Per-project network isolation (Phase 1) — own bridge net per project when
     # enabled, else None → docker_client uses the shared runtime net (current).
+    max_project_owner = bool(
+        settings.agent_sandbox_enabled
+        and stack.template_dir == "max-miniapp-nextjs"
+    )
+    if max_project_owner:
+        existing_runtime = await find_project_container(str(req.project_id), kind="dev")
+        if existing_runtime:
+            await unpause_container(existing_runtime)
+            for relative in _MAX_RUNTIME_OVERLAY_PATHS:
+                await copy_path_from_container(
+                    existing_runtime,
+                    f"/app/{relative}",
+                    str(project_dir),
+                    max_archive_bytes=80 * 1024 * 1024,
+                )
+        await asyncio.to_thread(_restore_max_platform_core, project_dir, src)
     network_name = (
         f"omnia-proj-{req.project_id}"
-        if settings.isolate_project_network
+        if max_project_owner or settings.isolate_project_network
         else None
     )
 
@@ -297,11 +443,29 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         # dev container, so it is the untrusted boundary. All knobs default to
         # OFF (current behaviour); enable per-env once the host is prepared.
         runtime=settings.container_runtime,
-        harden=settings.container_harden,
-        pids_limit=settings.container_pids_limit,
+        harden=max_project_owner or settings.container_harden,
+        pids_limit=(
+            max(64, settings.container_pids_limit)
+            if max_project_owner
+            else settings.container_pids_limit
+        ),
+        sandbox_profile="max-runtime-v1" if max_project_owner else "",
+        recreate_on_profile_change=max_project_owner,
+        include_host_gateway=not max_project_owner,
+        network_service_names=(
+            (settings.runtime_db_container_name,) if max_project_owner else ()
+        ),
     )
 
     container_id = await start_container(spec)
+    if max_project_owner:
+        # Re-profiling an existing MAX container removes the legacy instance so
+        # Docker can change its network/env/security flags.  The durable mirrored
+        # workspace is then overlaid onto the fresh image, preserving the user's
+        # product while dropping shared platform credentials.
+        workspace_files = await asyncio.to_thread(_collect_max_runtime_overlay, project_dir)
+        if workspace_files:
+            await write_files(container_name, workspace_files)
     log.info("provision.container_started", id=container_id[:12], name=container_name)
 
     # Expose the dev container at a browser-reachable host via nginx.

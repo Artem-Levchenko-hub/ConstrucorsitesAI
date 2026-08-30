@@ -41,12 +41,26 @@ export async function createMaxAction(
   return response.json() as Promise<Record<string, unknown>>;
 }
 
-export async function getMaxActions(): Promise<{
+export type MaxActionHistoryPage = {
   actions: Array<Record<string, unknown>>;
-}> {
-  const response = await fetch("/api/omnia/actions", { credentials: "include" });
+  nextCursor: string | null;
+};
+
+export async function getMaxActions(options: {
+  limit?: number;
+  cursor?: string | null;
+} = {}): Promise<MaxActionHistoryPage> {
+  const params = new URLSearchParams();
+  if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.cursor) params.set("cursor", options.cursor);
+  const query = params.toString();
+  const response = await fetch(`/api/omnia/actions${query ? `?${query}` : ""}`, {
+    credentials: "include",
+  });
   if (!response.ok) throw new Error("История действий временно недоступна");
-  return response.json() as Promise<{ actions: Array<Record<string, unknown>> }>;
+  return response.json() as Promise<MaxActionHistoryPage>;
 }
 
 // Compatibility alias for model-generated product code. Both names use the

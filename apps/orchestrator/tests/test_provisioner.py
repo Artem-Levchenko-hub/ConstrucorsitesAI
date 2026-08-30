@@ -39,6 +39,8 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
 async def _provision_capturing_spec(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    template: str = "nextjs-entities",
 ) -> ContainerSpec:
     """Run `provision` with every side-effecting collaborator stubbed; return
     the ContainerSpec that would have been handed to Docker."""
@@ -52,6 +54,7 @@ async def _provision_capturing_spec(
     monkeypatch.setattr(provisioner, "_template_source_dir", lambda _t: Path("."))
     monkeypatch.setattr(provisioner, "_copy_template", lambda _s, _d: None)
     monkeypatch.setattr(provisioner, "_load_or_create_auth_secret", lambda _p: "auth-secret")
+    monkeypatch.setattr(provisioner, "_restore_max_platform_core", lambda *_a: None)
 
     # Port allocator → fixed port.
     allocator = type("A", (), {"acquire": AsyncMock(return_value=3210)})()
@@ -71,12 +74,16 @@ async def _provision_capturing_spec(
     monkeypatch.setattr(provisioner.nginx_writer, "publish_tls_in_background", lambda *_a: None)
 
     monkeypatch.setattr(provisioner, "start_container", fake_start)
+    monkeypatch.setattr(provisioner, "find_project_container", AsyncMock(return_value=None))
+    monkeypatch.setattr(provisioner, "unpause_container", AsyncMock())
+    monkeypatch.setattr(provisioner, "copy_path_from_container", AsyncMock())
+    monkeypatch.setattr(provisioner, "write_files", AsyncMock())
     monkeypatch.setattr(provisioner, "publish_project_event", AsyncMock())
 
     req = ProvisionRequest(
         project_id=UUID("00000000-0000-0000-0000-000000000001"),
         slug="demo-app",
-        template="nextjs-entities",
+        template=template,
         tier="free",
     )
     await provisioner.provision(req)
@@ -190,3 +197,147 @@ async def test_provision_isolates_network_when_enabled(
 
     spec = await _provision_capturing_spec(monkeypatch)
     assert spec.network_name == "omnia-proj-00000000-0000-0000-0000-000000000001"
+
+
+def test_max_integration_env_never_injects_shared_platform_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIA_MINIO_ACCESS_KEY", "shared-access")
+    monkeypatch.setenv("OMNIA_MINIO_SECRET_KEY", "shared-secret")
+    monkeypatch.setenv("OMNIA_SMTP_PASS", "shared-smtp")
+    monkeypatch.setenv("OMNIA_LLM_GATEWAY_URL", "http://shared-gateway")
+
+    assert provisioner._integration_env("max-miniapp-nextjs") == {}
+
+
+async def test_max_provision_uses_isolated_secretless_runtime_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIA_MINIO_ACCESS_KEY", "shared-access")
+    monkeypatch.setenv("OMNIA_MINIO_SECRET_KEY", "shared-secret")
+    monkeypatch.setenv("OMNIA_SMTP_PASS", "shared-smtp")
+    monkeypatch.setenv("OMNIA_LLM_GATEWAY_URL", "http://shared-gateway")
+
+    spec = await _provision_capturing_spec(
+        monkeypatch,
+        template="max-miniapp-nextjs",
+    )
+
+    assert spec.network_name == "omnia-proj-00000000-0000-0000-0000-000000000001"
+    assert spec.network_service_names == ("omnia-postgres-users",)
+    assert spec.include_host_gateway is False
+    assert spec.sandbox_profile == "max-runtime-v1"
+    assert spec.recreate_on_profile_change is True
+    assert spec.harden is True
+    assert spec.pids_limit >= 64
+    assert spec.cpu_quota == 1.0
+    assert spec.memory_mb == 4096
+    forbidden = {
+        "MINIO_ACCESS_KEY",
+        "MINIO_SECRET_KEY",
+        "SMTP_PASS",
+        "SMTP_PASSWORD",
+        "LLM_GATEWAY_URL",
+        "ORCHESTRATOR_INTERNAL_TOKEN",
+        "DOCKER_HOST",
+    }
+    assert forbidden.isdisjoint(spec.env)
+    assert spec.env["DATABASE_URL"].startswith("postgresql://")
+    assert spec.env["AUTH_SECRET"] == "auth-secret"
+
+
+def test_copy_template_preserves_generated_files_and_seeds_missing_files(
+    tmp_path: Path,
+) -> None:
+    template = tmp_path / "template"
+    project = tmp_path / "project"
+    (template / "src" / "app").mkdir(parents=True)
+    (template / "src" / "app" / "page.tsx").write_text("template page", encoding="utf-8")
+    (template / "src" / "lib").mkdir(parents=True)
+    (template / "src" / "lib" / "client.ts").write_text("template client", encoding="utf-8")
+    (template / ".next").mkdir()
+    (template / ".next" / "cache").write_text("generated", encoding="utf-8")
+    (project / "src" / "app").mkdir(parents=True)
+    (project / "src" / "app" / "page.tsx").write_text("user generated page", encoding="utf-8")
+
+    provisioner._copy_template(template, project)
+
+    assert (project / "src" / "app" / "page.tsx").read_text(encoding="utf-8") == (
+        "user generated page"
+    )
+    assert (project / "src" / "lib" / "client.ts").read_text(encoding="utf-8") == (
+        "template client"
+    )
+    assert not (project / ".next").exists()
+
+
+def test_restore_max_platform_core_reseeds_managed_files_only(tmp_path: Path) -> None:
+    template = tmp_path / "template"
+    workspace = tmp_path / "workspace"
+    (template / "src" / "lib" / "omnia").mkdir(parents=True)
+    (template / "src" / "lib" / "omnia" / "client.ts").write_text(
+        "template omnia client",
+        encoding="utf-8",
+    )
+    (template / "src" / "app" / "api" / "omnia").mkdir(parents=True)
+    (template / "src" / "app" / "api" / "omnia" / "actions.ts").write_text(
+        "template actions",
+        encoding="utf-8",
+    )
+    (template / "src" / "components").mkdir(parents=True)
+    (template / "src" / "components" / "MaxAppProvider.tsx").write_text(
+        "template provider",
+        encoding="utf-8",
+    )
+    (workspace / "src" / "lib" / "omnia").mkdir(parents=True)
+    (workspace / "src" / "lib" / "omnia" / "client.ts").write_text(
+        "stale runtime client",
+        encoding="utf-8",
+    )
+    (workspace / "src" / "app").mkdir(parents=True)
+    (workspace / "src" / "app" / "page.tsx").write_text(
+        "user product page",
+        encoding="utf-8",
+    )
+
+    provisioner._restore_max_platform_core(workspace, template)
+
+    assert (workspace / "src" / "lib" / "omnia" / "client.ts").read_text(
+        encoding="utf-8"
+    ) == "template omnia client"
+    assert (workspace / "src" / "app" / "api" / "omnia" / "actions.ts").read_text(
+        encoding="utf-8"
+    ) == "template actions"
+    assert (workspace / "src" / "components" / "MaxAppProvider.tsx").read_text(
+        encoding="utf-8"
+    ) == "template provider"
+    assert (workspace / "src" / "app" / "page.tsx").read_text(encoding="utf-8") == (
+        "user product page"
+    )
+
+
+def test_collect_max_runtime_overlay_skips_platform_core_but_keeps_schema(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src" / "app").mkdir(parents=True)
+    (workspace / "src" / "app" / "page.tsx").write_text(
+        "user product page",
+        encoding="utf-8",
+    )
+    (workspace / "src" / "lib" / "omnia").mkdir(parents=True)
+    (workspace / "src" / "lib" / "omnia" / "client.ts").write_text(
+        "managed core",
+        encoding="utf-8",
+    )
+    (workspace / "src" / "lib" / "db").mkdir(parents=True)
+    (workspace / "src" / "lib" / "db" / "schema.ts").write_text(
+        "user schema extension",
+        encoding="utf-8",
+    )
+    (workspace / "package.json").write_text('{"name":"max-app"}', encoding="utf-8")
+
+    files = provisioner._collect_max_runtime_overlay(workspace)
+
+    assert files["src/app/page.tsx"] == "user product page"
+    assert files["src/lib/db/schema.ts"] == "user schema extension"
+    assert files["package.json"] == '{"name":"max-app"}'
+    assert "src/lib/omnia/client.ts" not in files

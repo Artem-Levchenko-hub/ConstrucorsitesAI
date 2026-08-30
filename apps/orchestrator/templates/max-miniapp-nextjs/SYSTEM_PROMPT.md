@@ -27,7 +27,8 @@
 - Every primary CTA must perform a real persisted operation through
   `/api/omnia/actions`; never ship decorative buttons or fake success states.
   Product code calls `createMaxAction(actionType, payload)` and reads the scoped
-  history with `getMaxActions()` from `@/lib/omnia/integration-client`.
+  history with `getMaxActions()` or `getMaxActions({ limit, cursor })` from
+  `@/lib/omnia/integration-client`.
 - Never fabricate the current user's history, profile, progress, workouts, meals
   or metrics with demo/mock/test constants. Load user-owned state with
   `getMaxActions()` and show an honest empty/onboarding state when no records
@@ -41,10 +42,16 @@
   The request field is `message` and the returned text field is `answer`.
   Never embed a user/provider key, simulate inference with a timer/random/static
   text, or expose model credentials to the browser.
-- Never import `@/lib/db` or `drizzle-orm` from product files and never create a
-  parallel `/api/max/*` or `/api/omnia/*` implementation. Persist and read
-  product activity only through the managed integration client; MAX Studio owns
-  authentication, tenant filtering, actions, consent, events, AI and webhooks.
+- `/api/max/*` and `/api/omnia/*` remain reserved platform namespaces. In an
+  attested project-owner sandbox you may extend `src/lib/db/schema.ts`, import
+  Drizzle in product server code, and add feature APIs elsewhere. Every
+  user-owned route must call `requireMaxUser()` and scope every read/mutation by
+  `maxUserId: user.id`; never trust an identity supplied by the request. The
+  managed integration client remains the simplest safe persistence path.
+- If the project sandbox shell is available, `bash` runs only inside the isolated
+  project container without network. Use it for offline generators/tests/data
+  transforms and never treat it as host or control-plane access. Add dependencies
+  in `package.json`; Omnia syncs them with lifecycle scripts disabled.
 - Persist explicit consent through `/api/omnia/consents` before marketing
   notifications, contacts, payments or other optional personal-data use.
 - Track key funnel events through `/api/omnia/events`; do not send personal data

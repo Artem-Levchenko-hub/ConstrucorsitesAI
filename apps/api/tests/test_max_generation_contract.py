@@ -6,6 +6,7 @@ from omnia_api.services.max_generation_contract import (
     max_source_completion_gap,
     normalize_max_globals_css,
     requested_max_capabilities,
+    unsafe_max_backend_paths,
 )
 
 COMPLEX_BRIEF = """
@@ -54,6 +55,7 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "loading, empty, error/retry" in contract
     assert "Never fabricate the current user's history" in contract
     assert "honest empty/onboarding state" in contract
+    assert "getMaxActions({ limit, cursor })" in contract
 
 
 def test_completion_rejects_untouched_canvas_and_thin_cosmetic_page() -> None:
@@ -155,7 +157,9 @@ def test_completion_rejects_product_db_bypass_but_allows_managed_routes() -> Non
     files["src/app/api/workouts/route.ts"] = (
         'import { db } from "@/lib/db";\n'
         'import { workouts } from "@/lib/db/schema";\n'
-        "export async function POST() { return db.insert(workouts).values({}); }"
+        "export async function POST() {\n"
+        "  return db.insert(workouts).values({ title: 'x' });\n"
+        "}"
     )
     files["src/app/api/omnia/actions/route.ts"] = (
         'import { db } from "@/lib/db";\nexport async function POST() { return db; }'
@@ -172,7 +176,52 @@ def test_completion_rejects_product_db_bypass_but_allows_managed_routes() -> Non
 
     assert "src/app/api/workouts/route.ts" in str(gap)
     assert "src/app/api/omnia/actions/route.ts" not in str(gap)
-    assert "createMaxAction/getMaxActions" in str(gap)
+    assert "requireMaxUser()" in str(gap)
+    assert "maxUserId: user.id" in str(gap)
+
+
+def test_completion_allows_direct_db_when_max_user_scope_is_verified() -> None:
+    files = _complete_files()
+    files["src/app/api/workouts/route.ts"] = (
+        'import { db } from "@/lib/db";\n'
+        'import { workouts } from "@/lib/db/schema";\n'
+        'import { requireMaxUser } from "@/lib/max/session";\n'
+        "export async function POST() {\n"
+        "  const user = await requireMaxUser();\n"
+        "  return db.insert(workouts).values({ maxUserId: user.id, title: 'x' });\n"
+        "}"
+    )
+
+    evidence = {
+        "build_after_write": 1,
+        "runtime_check_after_write": 1,
+        "see_after_write": 1,
+    }
+
+    assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
+
+
+def test_unsafe_backend_paths_only_flag_unscoped_direct_db() -> None:
+    files = {
+        "src/app/api/workouts/route.ts": (
+            'import { db } from "@/lib/db";\n'
+            'import { workouts } from "@/lib/db/schema";\n'
+            "export async function GET() {\n"
+            "  return db.select().from(workouts);\n"
+            "}"
+        ),
+        "src/app/api/safe/route.ts": (
+            'import { db } from "@/lib/db";\n'
+            'import { workouts } from "@/lib/db/schema";\n'
+            'import { requireMaxUser } from "@/lib/max/session";\n'
+            "export async function GET() {\n"
+            "  const user = await requireMaxUser();\n"
+            "  return db.select().from(workouts).where(eq(workouts.maxUserId, user.id));\n"
+            "}"
+        ),
+    }
+
+    assert unsafe_max_backend_paths(files) == ["src/app/api/workouts/route.ts"]
 
 
 def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:
@@ -196,7 +245,7 @@ def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:
 
     assert "createMaxAction" in str(gap)
     assert "getMaxActions" in str(gap)
-    assert "Managed scaffold definitions do not count" in str(gap)
+    assert "scaffold definitions do not count" in str(gap)
 
 
 def test_managed_scaffold_does_not_fake_product_ai_usage() -> None:

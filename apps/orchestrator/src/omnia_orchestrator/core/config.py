@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     # behaviour).
     isolate_project_network: bool = Field(default=False)
 
+    # Separate, disposable shell lane used by the coding agent.  Unlike the
+    # preview/runtime container it receives no DATABASE_URL, auth/provider
+    # credentials or shared-service network.  The implementation additionally
+    # enforces a read-only rootfs, tmpfs workspace, non-root uid, cap-drop ALL,
+    # no-new-privileges and CPU/RAM/PID/output quotas.  This is the global kill
+    # switch; API-side capability discovery fails closed when it is disabled.
+    agent_sandbox_enabled: bool = Field(default=True)
+    runtime_db_container_name: str = Field(default="omnia-postgres-users")
+
     # `use_dep_doctor` — before each agent typecheck, scan the dev container's
     # src/ imports vs package.json and `pnpm add` any MISSING package that is on
     # the curated allowlist (services/dep_doctor.py). Heals the "kit file / model

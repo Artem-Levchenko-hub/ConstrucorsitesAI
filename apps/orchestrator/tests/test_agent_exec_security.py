@@ -1,7 +1,29 @@
+from pathlib import Path
+from unittest.mock import AsyncMock
+from uuid import UUID
+
+import pytest
+
+from omnia_orchestrator.routers import runtime
 from omnia_orchestrator.routers.runtime import (
     _command_exposes_environment,
     _redact_exec_output,
 )
+from omnia_orchestrator.schemas.runtime import HotReloadRequest
+
+
+@pytest.fixture(autouse=True)
+def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
+    )
+    monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
+    monkeypatch.setenv("AGENT_SANDBOX_ENABLED", "true")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def test_blocks_environment_enumeration_commands() -> None:
@@ -30,3 +52,152 @@ def test_redacts_secret_assignments_and_dsn_passwords() -> None:
     assert "password" not in result
     assert "sk-example" not in result
     assert result.endswith("build clean")
+
+
+async def test_agent_sandbox_capabilities_attest_concrete_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    runtime_facts = {
+        "ready": True,
+        "missing": [],
+        "profile": "max-runtime-v1",
+        "runtime": "runsc",
+        "networks": ["omnia-proj-project-1"],
+    }
+    monkeypatch.setattr(runtime, "_project_workspace_dir", lambda _p: workspace)
+    image_name = AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev")
+    security_facts = AsyncMock(return_value=runtime_facts)
+    monkeypatch.setattr(runtime, "container_image_name", image_name)
+    monkeypatch.setattr(runtime, "container_security_facts", security_facts)
+
+    result = await runtime.agent_sandbox_capabilities(
+        "project-1",
+        "max-app",
+        "test-token-test-token-test-token",
+    )
+
+    assert result["ready"] is True
+    assert result["missing"] == []
+    assert result["profile"] == "ephemeral-secretless-v1"
+    assert result["capabilities"]["shell"] is True
+    assert result["isolation"]["runtime_network"] is False
+    assert result["isolation"]["host_workspace_writable"] is False
+    assert result["isolation"]["runtime_secrets"] is False
+    assert result["runtime_attestation"] == runtime_facts
+    image_name.assert_awaited_once_with("omnia-dev-max-app")
+    security_facts.assert_awaited_once_with("omnia-dev-max-app", "project-1")
+
+
+async def test_agent_sandbox_capabilities_fail_closed_on_runtime_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime, "_project_workspace_dir", lambda _p: workspace)
+    monkeypatch.setattr(
+        runtime,
+        "container_image_name",
+        AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "container_security_facts",
+        AsyncMock(
+            return_value={
+                "ready": False,
+                "missing": ["project_network", "platform_secrets_absent"],
+            }
+        ),
+    )
+
+    result = await runtime.agent_sandbox_capabilities(
+        "project-1",
+        "max-app",
+        "test-token-test-token-test-token",
+    )
+
+    assert result["ready"] is False
+    assert result["missing"] == [
+        "runtime:project_network",
+        "runtime:platform_secrets_absent",
+    ]
+
+
+async def test_hot_reload_installs_changed_dependencies_without_lifecycle_scripts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exec_mock = AsyncMock(return_value={"exit_code": "0", "stdout": "", "stderr": ""})
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "write_files",
+        AsyncMock(return_value={"written": "1", "total_bytes": "20", "dropped": ""}),
+    )
+    monkeypatch.setattr(
+        runtime.demo_seed_writer,
+        "seed_demo_data",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(runtime, "exec_cmd", exec_mock)
+    payload = HotReloadRequest(
+        project_id=UUID("00000000-0000-0000-0000-000000000001"),
+        files={"package.json": '{"dependencies":{"zod":"^4.0.0"}}'},
+    )
+
+    result = await runtime.hot_reload(
+        payload,
+        "max-app",
+        "test-token-test-token-test-token",
+    )
+
+    assert result["package_exit_code"] == "0"
+    exec_mock.assert_awaited_once_with(
+        "omnia-dev-max-app",
+        cmd=["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"],
+        workdir="/app",
+        timeout_sec=240,
+        max_output=runtime._AGENT_MAX_BUILD,
+    )
+
+
+async def test_hot_reload_never_forces_data_loss_migrations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exec_mock = AsyncMock(return_value={"exit_code": "0", "stdout": "", "stderr": ""})
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "write_files",
+        AsyncMock(return_value={"written": "1", "total_bytes": "20", "dropped": ""}),
+    )
+    monkeypatch.setattr(
+        runtime.demo_seed_writer,
+        "seed_demo_data",
+        AsyncMock(return_value={}),
+    )
+    monkeypatch.setattr(runtime, "exec_cmd", exec_mock)
+    payload = HotReloadRequest(
+        project_id=UUID("00000000-0000-0000-0000-000000000001"),
+        files={"src/lib/db/schema.ts": "export const userOwnedTable = {};"},
+    )
+
+    result = await runtime.hot_reload(
+        payload,
+        "max-app",
+        "test-token-test-token-test-token",
+    )
+
+    assert result["drizzle_exit_code"] == "0"
+    command = exec_mock.await_args.kwargs["cmd"]
+    assert command == [
+        "npx",
+        "--yes",
+        "drizzle-kit",
+        "push",
+        "--config=drizzle.config.ts",
+    ]
+    assert "--force" not in command

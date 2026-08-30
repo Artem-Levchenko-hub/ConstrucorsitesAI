@@ -12,12 +12,16 @@ contracts (request/response schemas) are stable and consumed by apps/api today.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import shutil
+import tempfile
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import new as hmac_new
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID
@@ -27,11 +31,14 @@ from fastapi import APIRouter, Header
 from omnia_orchestrator.core import postgres_admin
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.docker_client import (
+    container_image_name,
     container_image_template,
     container_logs,
+    container_security_facts,
     destroy_container,
     exec_cmd,
     find_project_container,
+    run_sandbox_command,
     stop_container,
     wake_container,
     write_files,
@@ -101,6 +108,12 @@ _AGENT_MAX_READ = 1_000_000
 _AGENT_MAX_LIST = 16_000
 _AGENT_MAX_GREP = 16_000
 _AGENT_MAX_BUILD = 24_000
+_SANDBOX_SYNC_MAX_FILES = 5_000
+_SANDBOX_SYNC_MAX_FILE_BYTES = 8 * 1024 * 1024
+_SANDBOX_SYNC_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+_SANDBOX_SKIP_NAMES = frozenset(
+    {"node_modules", ".next", ".git", "__pycache__", "dist", "build", ".venv", "vendor"}
+)
 
 _MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
 _MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
@@ -136,6 +149,161 @@ def _safe_app_path(path: str) -> str:
             status_code=403,
         )
     return p
+
+
+def _project_workspace_dir(project_id: str) -> Path:
+    return Path(get_settings().projects_root) / project_id
+
+
+def _sandbox_name_is_secret(name: str) -> bool:
+    lowered = name.lower()
+    return (
+        lowered == ".env"
+        or lowered.startswith(".env.")
+        or lowered in {"secrets.json", "secrets.yaml", "secrets.yml"}
+    )
+
+
+def _copy_workspace(src: Path, dest: Path) -> None:
+    def _ignore(directory: str, names: list[str]) -> list[str]:
+        base = Path(directory)
+        return [
+            name
+            for name in names
+            if name in _SANDBOX_SKIP_NAMES
+            or _sandbox_name_is_secret(name)
+            or (base / name).is_symlink()
+        ]
+
+    shutil.copytree(src, dest, ignore=_ignore, dirs_exist_ok=True)
+
+
+def _apply_workspace_files(project_id: str, files: dict[str, str]) -> None:
+    root = _project_workspace_dir(project_id)
+    root.mkdir(parents=True, exist_ok=True)
+    canonical_root = root.resolve()
+    for raw_path, content in files.items():
+        rel = _safe_app_path(raw_path)
+        if _sandbox_name_is_secret(Path(rel).name):
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"secret file is not allowed in the agent workspace: {rel}",
+                status_code=403,
+            )
+        target = root / rel
+        cursor = root
+        for part in Path(rel).parts[:-1]:
+            cursor /= part
+            if cursor.is_symlink():
+                raise OrchestratorError(
+                    code="validation_failed",
+                    message=f"workspace path crosses a symlink: {rel}",
+                    status_code=403,
+                )
+        try:
+            target.parent.resolve().relative_to(canonical_root)
+        except (OSError, ValueError) as exc:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"workspace path escapes project root: {rel}",
+                status_code=403,
+            ) from exc
+        if target.is_symlink():
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"workspace target is a symlink: {rel}",
+                status_code=403,
+            )
+        if content == "":
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+
+def _collect_workspace_text_files(root: Path) -> tuple[dict[str, str], set[str]]:
+    files: dict[str, str] = {}
+    dropped: set[str] = set()
+    total_bytes = 0
+    if not root.exists():
+        return files, dropped
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            try:
+                dropped.add(path.relative_to(root).as_posix())
+            except ValueError:
+                pass
+            continue
+        if not path.is_file():
+            continue
+        if any(part in _SANDBOX_SKIP_NAMES for part in path.parts):
+            continue
+        rel = path.relative_to(root).as_posix()
+        if _sandbox_name_is_secret(path.name):
+            dropped.add(rel)
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            dropped.add(rel)
+            continue
+        if size > _SANDBOX_SYNC_MAX_FILE_BYTES:
+            dropped.add(rel)
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            dropped.add(rel)
+            continue
+        files[rel] = content
+        total_bytes += len(content.encode("utf-8"))
+        if len(files) > _SANDBOX_SYNC_MAX_FILES:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=(
+                    f"sandbox workspace exceeds sync file budget: {len(files)} > "
+                    f"{_SANDBOX_SYNC_MAX_FILES}"
+                ),
+                status_code=413,
+            )
+        if total_bytes > _SANDBOX_SYNC_MAX_TOTAL_BYTES:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=(
+                    "sandbox workspace exceeds sync payload budget: "
+                    f"{total_bytes} > {_SANDBOX_SYNC_MAX_TOTAL_BYTES}"
+                ),
+                status_code=413,
+            )
+    return files, dropped
+
+
+def _diff_workspace_files(before: dict[str, str], after: dict[str, str]) -> dict[str, str]:
+    changed = {path: content for path, content in after.items() if before.get(path) != content}
+    for path in before.keys() - after.keys():
+        changed[path] = ""
+    if len(changed) > _SANDBOX_SYNC_MAX_FILES:
+        raise OrchestratorError(
+            code="validation_failed",
+            message=(
+                f"sandbox changed too many files: {len(changed)} > {_SANDBOX_SYNC_MAX_FILES}"
+            ),
+            status_code=413,
+        )
+    total_bytes = sum(len(content.encode("utf-8")) for content in changed.values() if content)
+    if total_bytes > _SANDBOX_SYNC_MAX_TOTAL_BYTES:
+        raise OrchestratorError(
+            code="validation_failed",
+            message=(
+                "sandbox changed files exceed sync payload budget: "
+                f"{total_bytes} > {_SANDBOX_SYNC_MAX_TOTAL_BYTES}"
+            ),
+            status_code=413,
+        )
+    return changed
 
 
 @router.post("/provision", response_model=ProvisionResponse)
@@ -392,11 +560,36 @@ async def hot_reload(
     container_name = f"omnia-dev-{slug}"
 
     write_result = await write_files(container_name, payload.files)
+    await asyncio.to_thread(_apply_workspace_files, str(payload.project_id), payload.files)
 
     # Seed PUBLIC entity catalogs with demo rows so the first browse screen
     # isn't an empty-state (NORTH STAR pillars 1 & 4). Idempotent (only fills
     # empty catalogs) and fail-soft (never raises) — see demo_seed_writer.
     seeded = await demo_seed_writer.seed_demo_data(payload.project_id, payload.files, niche=slug)
+
+    # Dependency selection belongs to the project now. Lifecycle scripts already
+    # ran (if needed) in the secretless disposable sandbox; the live preview only
+    # materialises the resolved tree with scripts disabled, so a package cannot
+    # read runtime DB/auth/bot credentials during install.
+    package_touched = any(
+        path in {"package.json", "pnpm-lock.yaml"} for path in payload.files
+    )
+    package_result: dict[str, str] | None = None
+    if package_touched:
+        try:
+            package_result = await exec_cmd(
+                container_name,
+                cmd=["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"],
+                workdir="/app",
+                timeout_sec=240,
+                max_output=_AGENT_MAX_BUILD,
+            )
+        except OrchestratorError as exc:
+            package_result = {
+                "exit_code": "-1",
+                "stdout": "",
+                "stderr": f"orchestrator: {exc.message}",
+            }
 
     # If the AI touched the DB schema or migrations, push it to Postgres now.
     schema_touched = any(
@@ -407,16 +600,15 @@ async def hot_reload(
         try:
             drizzle_result = await exec_cmd(
                 container_name,
-                # --force: non-interactive. Without it drizzle-kit prompts
-                # "Yes/No, abort" on any change it deems risky and the exec
-                # stalls/aborts, so the model's new tables never get created
-                # and its DB-backed pages 500 at runtime.
+                # Deliberately omit --force. Drizzle applies additive changes
+                # directly but asks before statements it classifies as data
+                # loss; the non-interactive exec then fails closed and the API
+                # returns that failure to the agent for a safe rewrite.
                 cmd=[
                     "npx",
                     "--yes",
                     "drizzle-kit",
                     "push",
-                    "--force",
                     "--config=drizzle.config.ts",
                 ],
                 workdir="/app",
@@ -440,7 +632,171 @@ async def hot_reload(
     if drizzle_result is not None:
         response["drizzle_exit_code"] = drizzle_result["exit_code"]
         response["drizzle_stderr_tail"] = drizzle_result["stderr"][-500:]
+    if package_result is not None:
+        response["package_exit_code"] = package_result["exit_code"]
+        response["package_stderr_tail"] = package_result["stderr"][-500:]
     return response
+
+
+@router.get("/{project_id}/agent/sandbox-capabilities")
+async def agent_sandbox_capabilities(
+    project_id: str,
+    slug: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Attest the concrete security contract behind the MAX shell tool.
+
+    The response contains facts and feature names only—never environment values
+    or credentials.  apps/api uses ``ready`` as a fail-closed gate before it
+    even advertises ``bash`` to the model.
+    """
+    _verify_token(x_internal_token)
+    settings = get_settings()
+    workspace = _project_workspace_dir(project_id)
+    runtime_name = f"omnia-dev-{slug}"
+    image = await container_image_name(runtime_name)
+    runtime_facts = await container_security_facts(runtime_name, project_id)
+    missing: list[str] = []
+    runtime_missing = runtime_facts.get("missing", [])
+    if not isinstance(runtime_missing, list):
+        runtime_missing = []
+    if not settings.agent_sandbox_enabled:
+        missing.append("agent_sandbox_disabled")
+    if not workspace.is_dir():
+        missing.append("workspace_missing")
+    if not image:
+        missing.append("template_image_missing")
+    if not runtime_facts.get("ready"):
+        missing.extend(f"runtime:{item}" for item in runtime_missing)
+    return {
+        "ready": not missing,
+        "profile": "ephemeral-secretless-v1",
+        "missing": missing,
+        "capabilities": {
+            "shell": True,
+            "dependency_manifest_edit": True,
+            "dependency_sync_without_lifecycle_scripts": True,
+            "source_generators": True,
+            "tests": True,
+            "workspace_diff": True,
+        },
+        "isolation": {
+            "ephemeral": True,
+            "non_root": True,
+            "read_only_rootfs": True,
+            "tmpfs_workspace": True,
+            "host_workspace_writable": False,
+            "network": False,
+            "runtime_network": False,
+            "host_gateway": False,
+            "docker_socket": False,
+            "runtime_secrets": False,
+            "cap_drop_all": True,
+            "no_new_privileges": True,
+            "pids_limit": max(1, settings.container_pids_limit or 256),
+            "runtime": settings.container_runtime or "runc",
+        },
+        "runtime_attestation": runtime_facts,
+    }
+
+
+@router.post("/{project_id}/agent/exec-sandbox")
+async def agent_exec_sandbox(
+    project_id: str,
+    slug: str,
+    cmd: str,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    """Run one shell command in an isolated project sandbox and return a diff.
+
+    The sandbox starts from the mirrored project workspace on disk, not the
+    live preview container, so the caller can inspect and vet shell-produced
+    file changes before syncing them into the running app.
+    """
+    _verify_token(x_internal_token)
+    await record_activity(project_id)
+    if not get_settings().agent_sandbox_enabled:
+        raise OrchestratorError(
+            code="container_failure",
+            message="agent sandbox is disabled by the operator",
+            status_code=503,
+        )
+    low = (cmd or "").strip()
+    if not low:
+        raise OrchestratorError(
+            code="validation_failed",
+            message="empty cmd",
+            status_code=400,
+        )
+    if any(bad in low for bad in _EXEC_DENY):
+        return {"ok": False, "detail": "command blocked by safety denylist"}
+    if _command_exposes_environment(low):
+        return {
+            "ok": False,
+            "detail": "command blocked: environment and secret enumeration is not allowed",
+        }
+
+    workspace = _project_workspace_dir(project_id)
+    if not workspace.is_dir():
+        raise OrchestratorError(
+            code="not_found",
+            message="project sandbox workspace not found",
+            status_code=404,
+        )
+    image = await container_image_name(f"omnia-dev-{slug}")
+    if not image:
+        raise OrchestratorError(
+            code="not_found",
+            message="project dev container image not found",
+            status_code=404,
+        )
+
+    before_files, before_dropped = await asyncio.to_thread(_collect_workspace_text_files, workspace)
+    settings = get_settings()
+    network_name = f"omnia-proj-{project_id}" if settings.isolate_project_network else None
+    with tempfile.TemporaryDirectory(prefix=f"omnia-sandbox-{project_id}-") as tmp:
+        sandbox_root = Path(tmp) / "workspace"
+        await asyncio.to_thread(_copy_workspace, workspace, sandbox_root)
+        try:
+            result = await run_sandbox_command(
+                image=image,
+                workspace_dir=sandbox_root,
+                project_id=project_id,
+                cmd=cmd,
+                network_name=network_name,
+                runtime=settings.container_runtime,
+                harden=settings.container_harden,
+                pids_limit=settings.container_pids_limit,
+                timeout_sec=180,
+                max_output=_AGENT_MAX_BUILD,
+            )
+        except OrchestratorError as exc:
+            if exc.code == "container_not_running":
+                raise
+            return {"ok": False, "detail": exc.message, "files": {}, "changed": "0", "dropped": ""}
+        after_files, after_dropped = await asyncio.to_thread(
+            _collect_workspace_text_files, sandbox_root
+        )
+
+    changed_files = _diff_workspace_files(before_files, after_files)
+    ok = result["exit_code"] == "0"
+    out = _redact_exec_output((result["stdout"] + "\n" + result["stderr"]).strip())
+    detail = out[:_AGENT_MAX_BUILD] or ("ok" if ok else "non-zero exit")
+    if changed_files:
+        detail += f"\n\nSandbox prepared {len(changed_files)} file change(s)."
+    new_dropped = sorted(after_dropped.difference(before_dropped))
+    if new_dropped:
+        preview = ", ".join(new_dropped[:10])
+        suffix = "…" if len(new_dropped) > 10 else ""
+        detail += f"\nDropped unsynced files: {preview}{suffix}"
+    return {
+        "ok": ok,
+        "exit_code": result["exit_code"],
+        "detail": detail,
+        "files": changed_files,
+        "changed": str(len(changed_files)),
+        "dropped": ",".join(new_dropped),
+    }
 
 
 @router.get("/{project_id}/read-file")

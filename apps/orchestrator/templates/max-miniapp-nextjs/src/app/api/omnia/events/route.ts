@@ -9,6 +9,8 @@ const Event = z.object({
   properties: z.record(z.unknown()).default({}),
 });
 
+const MAX_EVENT_PAYLOAD_BYTES = 131_072;
+
 export async function POST(request: Request) {
   const user = await getMaxUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,7 +20,8 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid event" }, { status: 400 });
   }
-  if (JSON.stringify(input.properties).length > 8_192) {
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(input.properties)).length;
+  if (payloadBytes > MAX_EVENT_PAYLOAD_BYTES) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
   await db.insert(schema.maxAnalyticsEvents).values({

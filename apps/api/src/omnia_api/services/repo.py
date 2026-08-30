@@ -14,7 +14,7 @@ import tarfile
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from uuid import UUID
 
@@ -25,8 +25,12 @@ from minio.error import S3Error
 from omnia_api.core.config import get_settings
 from omnia_api.core.minio import get_minio_client
 
-MAX_FILES = 100
+# Project complexity quota, not an LLM-response shape limit. Native agents write
+# incrementally, so a real application may contain thousands of source files;
+# dependency/build trees remain outside this text repository.
+MAX_FILES = 5_000
 MAX_FILE_BYTES = 2 * 1024 * 1024
+MAX_REPO_BYTES = 64 * 1024 * 1024
 SIGNATURE = ("Omnia AI", "ai@omnia.ai")
 
 
@@ -40,6 +44,52 @@ def _bucket() -> str:
 
 def _signature() -> pygit2.Signature:
     return pygit2.Signature(*SIGNATURE)
+
+
+def _validate_repo_path(path: str) -> None:
+    pure = PurePosixPath(path)
+    if (
+        not path
+        or "\\" in path
+        or pure.is_absolute()
+        or pure.as_posix() != path
+        or any(part in {"", ".", "..", ".git"} for part in pure.parts)
+    ):
+        raise ValueError(f"invalid repository path: {path!r}")
+
+
+def _validate_file_batch(files: dict[str, str]) -> None:
+    if len(files) > MAX_FILES:
+        raise ValueError(f"too many files: {len(files)} > {MAX_FILES}")
+    for path, content in files.items():
+        _validate_repo_path(path)
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            raise ValueError(f"file {path} exceeds {MAX_FILE_BYTES} bytes")
+
+
+def _validate_tree_budget(repo: pygit2.Repository, tree_oid: pygit2.Oid) -> None:
+    """Enforce project-wide quotas after applying an incremental commit."""
+    root = repo.get(tree_oid)
+    if not isinstance(root, pygit2.Tree):
+        raise ValueError("repository index did not produce a tree")
+    stack = [root]
+    file_count = 0
+    total_bytes = 0
+    while stack:
+        tree = stack.pop()
+        for entry in tree:
+            item = repo.get(entry.id)
+            if isinstance(item, pygit2.Tree):
+                stack.append(item)
+            elif isinstance(item, pygit2.Blob):
+                file_count += 1
+                total_bytes += item.size
+                if file_count > MAX_FILES:
+                    raise ValueError(f"too many files in commit: {file_count} > {MAX_FILES}")
+                if total_bytes > MAX_REPO_BYTES:
+                    raise ValueError(
+                        f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}"
+                    )
 
 
 def _try_download(project_id: UUID, dest: Path) -> bool:
@@ -115,6 +165,7 @@ def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> st
 
     Returns the hex SHA of the initial commit.
     """
+    _validate_file_batch(files)
     with tempfile.TemporaryDirectory(prefix=f"omnia-import-{project_id}-") as tmp:
         workdir = Path(tmp) / "repo"
         workdir.mkdir()
@@ -128,6 +179,7 @@ def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> st
             )
         index.write()
         tree_oid = index.write_tree()
+        _validate_tree_budget(repo, tree_oid)
         commit_oid = repo.create_commit(
             "HEAD", sig, sig, message, tree_oid, []
         )
@@ -177,11 +229,7 @@ def commit_files(
     message: str,
     parent_sha: str | None = None,
 ) -> str:
-    if len(files) > MAX_FILES:
-        raise ValueError(f"too many files: {len(files)} > {MAX_FILES}")
-    for path, content in files.items():
-        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
-            raise ValueError(f"file {path} exceeds {MAX_FILE_BYTES} bytes")
+    _validate_file_batch(files)
 
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
@@ -207,6 +255,7 @@ def commit_files(
             )
         index.write()
         tree_oid = index.write_tree()
+        _validate_tree_budget(repo, tree_oid)
         sig = _signature()
         if parent_sha:
             parents = [pygit2.Oid(hex=parent_sha)]
@@ -240,6 +289,11 @@ def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
         _walk(repo, commit.tree, "", out)
         if len(out) > MAX_FILES:
             raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
+        total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
+        if total_bytes > MAX_REPO_BYTES:
+            raise ValueError(
+                f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}"
+            )
         return out
 
 

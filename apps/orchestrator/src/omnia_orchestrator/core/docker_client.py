@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import time
+from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -37,6 +39,7 @@ log = structlog.get_logger("omnia_orchestrator.docker")
 # (the host bind is 127.0.0.1-only — unreachable from a container). Override via
 # env if the compose project/network is renamed.
 _RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
+_SANDBOX_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,13 @@ class ContainerSpec:
     runtime: str = ""        # docker --runtime, e.g. "runsc" (gVisor); "" = daemon default (runc)
     harden: bool = False     # add no-new-privileges + a PID ceiling (safe for non-root images)
     pids_limit: int = 0      # PID ceiling applied only when `harden` is on (0 = unset)
+    sandbox_profile: str = ""  # versioned security profile stamped into labels
+    recreate_on_profile_change: bool = False
+    include_host_gateway: bool = True
+    network_internal: bool = False
+    # Shared services explicitly attached to a per-project network. MAX uses
+    # only its schema-scoped Postgres service; no gateway/MinIO/control plane.
+    network_service_names: tuple[str, ...] = ()
 
 
 _client: docker.DockerClient | None = None
@@ -212,12 +222,25 @@ async def start_container(spec: ContainerSpec) -> str:
         # other than the shared runtime net, ensure it exists before the run.
         # Idempotent + suppressed so a concurrent provision can't race-fail here.
         # No-op on the default path (network_name None → shared net).
+        project_network = None
         if spec.network_name and spec.network_name != _RUNTIME_NETWORK:
             try:
-                client.networks.get(spec.network_name)
+                project_network = client.networks.get(spec.network_name)
             except docker.errors.NotFound:
                 with suppress(docker.errors.APIError):
-                    client.networks.create(spec.network_name, driver="bridge")
+                    project_network = client.networks.create(
+                        spec.network_name,
+                        driver="bridge",
+                        internal=spec.network_internal,
+                    )
+            if project_network is None:
+                project_network = client.networks.get(spec.network_name)
+            for service_name in spec.network_service_names:
+                try:
+                    project_network.connect(service_name, aliases=[service_name])
+                except docker.errors.APIError as exc:
+                    if "already exists" not in str(exc).lower():
+                        raise
         try:
             existing = client.containers.get(spec.name)
         except docker.errors.NotFound:
@@ -226,13 +249,22 @@ async def start_container(spec: ContainerSpec) -> str:
         if existing is not None:
             existing.reload()
             current_image = (existing.attrs.get("Config") or {}).get("Image")
-            if current_image and current_image != spec.image:
+            current_labels = (existing.attrs.get("Config") or {}).get("Labels") or {}
+            current_profile = str(current_labels.get("omnia.sandbox_profile") or "")
+            profile_changed = bool(
+                spec.recreate_on_profile_change
+                and spec.sandbox_profile
+                and current_profile != spec.sandbox_profile
+            )
+            if (current_image and current_image != spec.image) or profile_changed:
                 # Stack switched — drop the stale container and recreate below.
                 log.info(
                     "docker.recreate_on_image_change",
                     name=spec.name,
                     old_image=current_image,
                     new_image=spec.image,
+                    old_profile=current_profile,
+                    new_profile=spec.sandbox_profile,
                 )
                 with suppress(docker.errors.APIError, docker.errors.NotFound):
                     existing.remove(force=True)
@@ -256,6 +288,19 @@ async def start_container(spec: ContainerSpec) -> str:
             if spec.pids_limit and spec.pids_limit > 0:
                 security_kwargs["pids_limit"] = spec.pids_limit
 
+        labels = {
+            "omnia.project_id": spec.project_id,
+            "omnia.kind": spec.kind,
+            "omnia.tier": spec.tier,
+        }
+        if spec.sandbox_profile:
+            labels["omnia.sandbox_profile"] = spec.sandbox_profile
+        connectivity_kwargs: dict[str, object] = {}
+        if spec.include_host_gateway:
+            connectivity_kwargs["extra_hosts"] = {
+                "host.docker.internal": "host-gateway"
+            }
+
         try:
             container = client.containers.run(
                 image=spec.image,
@@ -274,17 +319,13 @@ async def start_container(spec: ContainerSpec) -> str:
                 # container is started with this extra_hosts entry; on Docker
                 # Desktop it already does. Matches the DSN built by
                 # `postgres_admin._user_facing_host`.
-                extra_hosts={"host.docker.internal": "host-gateway"},
+                **connectivity_kwargs,
                 # Join the runtime network so the container resolves and reaches
                 # `omnia-postgres-users` (and the DSN built by postgres_admin) by
                 # name. Without this the dev/prod app cannot reach its database.
                 network=spec.network_name or _RUNTIME_NETWORK,
                 restart_policy={"Name": spec.restart_policy_name},
-                labels={
-                    "omnia.project_id": spec.project_id,
-                    "omnia.kind": spec.kind,
-                    "omnia.tier": spec.tier,
-                },
+                labels=labels,
                 **security_kwargs,
             )
         except docker.errors.ImageNotFound as exc:
@@ -445,7 +486,352 @@ async def container_image_template(name: str) -> str | None:
     return await asyncio.to_thread(_do)
 
 
-async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/app") -> dict[str, str]:
+async def container_image_name(name: str) -> str | None:
+    """Return the concrete image reference a container was created from."""
+    log.info("docker.container_image_name", name=name)
+
+    def _do() -> str | None:
+        client = _get_client()
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return None
+        img_ref = (c.attrs.get("Config", {}) or {}).get("Image", "") or ""
+        return str(img_ref) or None
+
+    return await asyncio.to_thread(_do)
+
+
+async def container_security_facts(name: str, project_id: str) -> dict[str, object]:
+    """Return a value-free attestation of one project's runtime boundary."""
+    def _do() -> dict[str, object]:
+        client = _get_client()
+        try:
+            container = client.containers.get(name)
+        except docker.errors.NotFound:
+            return {"ready": False, "missing": ["runtime_missing"]}
+        container.reload()
+        attrs = container.attrs or {}
+        config = attrs.get("Config") or {}
+        host = attrs.get("HostConfig") or {}
+        labels = config.get("Labels") or {}
+        env_names = {
+            str(item).split("=", 1)[0]
+            for item in (config.get("Env") or [])
+            if isinstance(item, str)
+        }
+        forbidden_env = {
+            "MINIO_ACCESS_KEY",
+            "MINIO_SECRET_KEY",
+            "SMTP_PASS",
+            "SMTP_PASSWORD",
+            "LLM_GATEWAY_URL",
+            "ORCHESTRATOR_INTERNAL_TOKEN",
+            "DOCKER_HOST",
+        }
+        cap_drop = {str(item).upper() for item in (host.get("CapDrop") or [])}
+        security_opt = {str(item).lower() for item in (host.get("SecurityOpt") or [])}
+        networks = set(
+            ((attrs.get("NetworkSettings") or {}).get("Networks") or {}).keys()
+        )
+        mounts = attrs.get("Mounts") or []
+        mount_sources = {str(item.get("Source") or "") for item in mounts if isinstance(item, dict)}
+        extra_hosts = {str(item) for item in (host.get("ExtraHosts") or [])}
+        expected_network = f"omnia-proj-{project_id}"
+        checks = {
+            "profile": labels.get("omnia.sandbox_profile") == "max-runtime-v1",
+            "project_label": str(labels.get("omnia.project_id") or "") == project_id,
+            "non_root": str(config.get("User") or "") not in {"", "0", "0:0", "root"},
+            "not_privileged": not bool(host.get("Privileged")),
+            "cap_drop_all": "ALL" in cap_drop,
+            "no_new_privileges": "no-new-privileges:true" in security_opt,
+            "pids_limited": int(host.get("PidsLimit") or 0) > 0,
+            "memory_limited": int(host.get("Memory") or 0) > 0,
+            "cpu_limited": int(host.get("CpuQuota") or 0) > 0,
+            "project_network": networks == {expected_network},
+            "host_gateway_absent": not any(
+                item.startswith("host.docker.internal:") for item in extra_hosts
+            ),
+            "platform_secrets_absent": not bool(env_names & forbidden_env),
+            "docker_socket_absent": not any(
+                source.endswith("/docker.sock") for source in mount_sources
+            ),
+        }
+        missing = [key for key, passed in checks.items() if not passed]
+        return {
+            "ready": not missing,
+            "missing": missing,
+            "checks": checks,
+            "profile": str(labels.get("omnia.sandbox_profile") or "legacy"),
+            "runtime": str(host.get("Runtime") or "runc"),
+            "networks": sorted(networks),
+        }
+
+    return await asyncio.to_thread(_do)
+
+
+async def run_sandbox_command(
+    *,
+    image: str,
+    workspace_dir: Path,
+    project_id: str,
+    cmd: str,
+    network_name: str | None = None,
+    runtime: str = "",
+    harden: bool = False,
+    pids_limit: int = 0,
+    timeout_sec: int = 180,
+    max_output: int = 24_000,
+) -> dict[str, str]:
+    """Run one shell command inside an isolated project workspace sandbox.
+
+    The project source is mounted read-only at ``/seed`` and copied into a
+    size-capped tmpfs at ``/workspace`` before the user command starts.  The
+    finished workspace is copied back only after the container exits and the
+    archive has passed a regular-file-only validation.  This deliberately does
+    *not* give the shell a writable host bind mount: a symlink or disk-fill in a
+    generated package lifecycle script therefore stays inside the disposable
+    container instead of reaching the orchestrator host.
+
+    The sandbox has no network namespace access and never receives
+    ``host.docker.internal``. Dependency manifests may still change; the live
+    runtime performs the subsequent package materialisation with lifecycle
+    scripts disabled. The shell itself gets no project DB, preview container,
+    provider credential, Docker socket, control-plane token, or host path other
+    than the read-only source seed.
+    """
+    log.info(
+        "docker.run_sandbox_command",
+        image=image,
+        project_id=project_id,
+        workspace=str(workspace_dir),
+    )
+
+    def _do() -> dict[str, str]:
+        client = _get_client()
+        sandbox_name = f"omnia-sandbox-{project_id[:12]}-{time.time_ns()}"
+        security_kwargs: dict[str, object] = {}
+        if runtime:
+            security_kwargs["runtime"] = runtime
+        # This is an untrusted-code boundary, not an optional preview tuning.
+        # Enforce the host-independent controls even when the legacy global
+        # container_harden flag is still off.
+        security_kwargs["security_opt"] = ["no-new-privileges:true"]
+        security_kwargs["pids_limit"] = pids_limit if pids_limit > 0 else 256
+        bootstrap = "\n".join(
+            (
+                "cp -a /seed/. /workspace/ 2>/dev/null || true",
+                "if [ ! -e /workspace/node_modules ] && [ -d /app/node_modules ]; then",
+                "  cp -a /app/node_modules /workspace/node_modules 2>/dev/null || true",
+                "fi",
+                "cd /workspace",
+                cmd,
+            )
+        )
+        try:
+            container = client.containers.run(
+                image=image,
+                name=sandbox_name,
+                command=["sh", "-lc", bootstrap],
+                detach=True,
+                environment={
+                    "CI": "1",
+                    "HOME": "/tmp/agent-home",
+                    "NODE_ENV": "development",
+                    "OMNIA_PROJECT_ID": project_id,
+                    "npm_config_cache": "/tmp/npm-cache",
+                },
+                working_dir="/workspace",
+                volumes={str(workspace_dir): {"bind": "/seed", "mode": "ro"}},
+                read_only=True,
+                tmpfs={
+                    "/workspace": "rw,size=2147483648,mode=1777,uid=1000,gid=1000",
+                    "/tmp": "rw,size=268435456,mode=1777,uid=1000,gid=1000",
+                },
+                mem_limit=f"{get_settings().dev_container_memory_mb}m",
+                cpu_quota=100_000,
+                cpu_period=100_000,
+                cap_drop=["ALL"],
+                user="1000:1000",
+                init=True,
+                # No bridge/default route at all. Merely omitting the project
+                # network is insufficient: Docker's default bridge can still
+                # reach host-published control-plane ports by numeric gateway IP.
+                network="none",
+                restart_policy={"Name": "no"},
+                labels={
+                    "omnia.project_id": project_id,
+                    "omnia.kind": "sandbox",
+                    "omnia.tier": "system",
+                },
+                **security_kwargs,
+            )
+        except docker.errors.ImageNotFound as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"image not found: {image}",
+                status_code=409,
+            ) from exc
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"sandbox start failed: {exc}",
+                status_code=500,
+            ) from exc
+        try:
+            wait = container.wait(timeout=timeout_sec)
+            status_code = str(wait.get("StatusCode", 1))
+            logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
+            try:
+                archive, _stat = container.get_archive("/workspace")
+                raw_archive = _read_bounded_archive(
+                    archive,
+                    max_bytes=_SANDBOX_ARCHIVE_MAX_BYTES,
+                    label="sandbox workspace",
+                )
+                _replace_workspace_from_sandbox_archive(raw_archive, workspace_dir)
+            except docker.errors.NotFound as exc:
+                raise OrchestratorError(
+                    code="container_failure",
+                    message="sandbox workspace disappeared before collection",
+                    status_code=500,
+                ) from exc
+            return {
+                "exit_code": status_code,
+                "stdout": logs[:max_output],
+                "stderr": "",
+            }
+        except requests.exceptions.Timeout as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"sandbox command timed out after {timeout_sec}s",
+                status_code=504,
+            ) from exc
+        finally:
+            with suppress(docker.errors.APIError, docker.errors.NotFound):
+                container.remove(force=True)
+
+    return await asyncio.to_thread(_do)
+
+
+def _read_bounded_archive(
+    chunks: Iterable[bytes | bytearray], *, max_bytes: int, label: str
+) -> bytes:
+    """Collect a Docker archive without allowing an untrusted memory spike."""
+    parts: list[bytes] = []
+    total = 0
+    for chunk in chunks:
+        if not isinstance(chunk, (bytes, bytearray)):
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"{label} returned an invalid archive chunk",
+                status_code=500,
+            )
+        data = bytes(chunk)
+        total += len(data)
+        if total > max_bytes:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"{label} archive exceeds {max_bytes} bytes",
+                status_code=413,
+            )
+        parts.append(data)
+    return b"".join(parts)
+
+
+def _replace_workspace_from_sandbox_archive(raw: bytes, workspace_dir: Path) -> None:
+    """Replace a temporary host workspace from a validated Docker archive.
+
+    Only directories and regular UTF-8 candidates are materialised here;
+    symlinks, hardlinks, devices, FIFOs and traversal paths are rejected.  The
+    caller's later text collector applies the stricter UTF-8/file-count payload
+    contract.  A 64 MiB extraction ceiling is intentionally much smaller than
+    the tmpfs ceiling so dependency/cache output can never become an API diff.
+    """
+    import io
+    import posixpath
+    import tarfile
+
+    max_files = 5_000
+    max_bytes = 64 * 1024 * 1024
+    extracted_files = 0
+    extracted_bytes = 0
+    staging = workspace_dir.parent / f"{workspace_dir.name}-collected"
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as archive:
+            for member in archive:
+                normalized = posixpath.normpath(member.name).lstrip("/")
+                parts = [part for part in normalized.split("/") if part not in {"", "."}]
+                if parts and parts[0] == "workspace":
+                    parts = parts[1:]
+                if not parts:
+                    continue
+                if any(part == ".." for part in parts):
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message="sandbox archive contains a traversal path",
+                        status_code=400,
+                    )
+                # Generated dependency/build trees are disposable artifacts, not
+                # project source and can be hundreds of megabytes.
+                if any(
+                    part
+                    in {
+                        "node_modules",
+                        ".next",
+                        ".git",
+                        "__pycache__",
+                        "dist",
+                        "build",
+                        ".venv",
+                        "vendor",
+                    }
+                    for part in parts
+                ):
+                    continue
+                target = staging.joinpath(*parts)
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    # Most importantly: never materialise a symlink created by
+                    # untrusted code and later let host-side Path.read_text()
+                    # follow it into /opt/omnia or /proc.
+                    continue
+                extracted_files += 1
+                extracted_bytes += max(0, int(member.size))
+                if extracted_files > max_files or extracted_bytes > max_bytes:
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message="sandbox result exceeds the source collection quota",
+                        status_code=413,
+                    )
+                source = archive.extractfile(member)
+                if source is None:
+                    continue
+                data = source.read(max(0, int(member.size)) + 1)
+                if len(data) > member.size:
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message="sandbox archive member exceeds its declared size",
+                        status_code=400,
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+        staging.replace(workspace_dir)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+async def write_files(
+    name: str, files: dict[str, str], *, dest_root: str = "/app"
+) -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
     `docker cp` semantics (put_archive). Paths in `files` are container-relative
     to `dest_root` (default `/app`, matching Next.js workdir in the template).
@@ -463,9 +849,8 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
     Missing container = explicit OrchestratorError (caller should handle).
     """
     import io
-    import tarfile
-    import time
     import posixpath
+    import tarfile
 
     log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
 
@@ -485,7 +870,10 @@ async def write_files(name: str, files: dict[str, str], *, dest_root: str = "/ap
         if c.status not in ("running", "paused"):
             raise OrchestratorError(
                 code="container_failure",
-                message=f"container {name} state={c.status}; can't write files into a stopped container",
+                message=(
+                    f"container {name} state={c.status}; "
+                    "can't write files into a stopped container"
+                ),
                 status_code=409,
             )
 
@@ -695,7 +1083,9 @@ async def exec_cmd(
                 message=f"exec on {name} failed: {exc}",
                 status_code=409 if not_running else 500,
             ) from exc
-        out_bytes, err_bytes = result.output if isinstance(result.output, tuple) else (result.output, b"")
+        out_bytes, err_bytes = (
+            result.output if isinstance(result.output, tuple) else (result.output, b"")
+        )
         return {
             "exit_code": str(result.exit_code),
             "stdout": (out_bytes or b"").decode("utf-8", errors="replace")[:max_output],
@@ -705,7 +1095,7 @@ async def exec_cmd(
     # exec_run does not honor an explicit timeout; wrap in asyncio.wait_for.
     try:
         return await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise OrchestratorError(
             code="container_failure",
             message=f"exec {cmd[0]} on {name} timed out after {timeout_sec}s",
@@ -817,7 +1207,11 @@ async def unpause_container(name: str) -> None:
 
 
 async def copy_path_from_container(
-    name: str, container_path: str, dest_dir: str
+    name: str,
+    container_path: str,
+    dest_dir: str,
+    *,
+    max_archive_bytes: int | None = None,
 ) -> bool:
     """Extract `container_path` from a container into `dest_dir` on the host.
 
@@ -837,7 +1231,15 @@ async def copy_path_from_container(
             bits, _stat = c.get_archive(container_path)
         except docker.errors.NotFound:
             return False
-        raw = b"".join(bits)
+        raw = (
+            _read_bounded_archive(
+                bits,
+                max_bytes=max_archive_bytes,
+                label=f"container path {container_path}",
+            )
+            if max_archive_bytes is not None
+            else b"".join(bits)
+        )
         with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
             tar.extractall(dest_dir, filter="data")  # filter blocks path traversal
         return True
@@ -884,7 +1286,7 @@ async def build_image(
 
     try:
         await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise OrchestratorError(
             code="container_failure",
             message=f"prod build timed out after {timeout_sec}s",

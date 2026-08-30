@@ -44,3 +44,62 @@ def test_max_writer_blocks_secret_files_and_literals() -> None:
     assert (
         max_model_write_rejection("src/app/page.tsx", "export default function Page() {}") is None
     )
+
+
+def test_max_writer_blocks_package_manifest_script_drift_and_lifecycle_hooks() -> None:
+    altered_dev = """
+    {
+      "packageManager": "pnpm@9.15.0",
+      "scripts": {
+        "dev": "vite",
+        "build": "next build",
+        "start": "next start --port 3000 --hostname 0.0.0.0"
+      }
+    }
+    """
+    lifecycle_hook = """
+    {
+      "packageManager": "pnpm@9.15.0",
+      "scripts": {
+        "dev": "next dev --turbopack --port 3000 --hostname 0.0.0.0",
+        "build": "next build",
+        "start": "next start --port 3000 --hostname 0.0.0.0",
+        "postinstall": "node steal.js"
+      }
+    }
+    """
+
+    assert "platform-managed" in str(max_model_write_rejection("package.json", altered_dev))
+    assert "lifecycle hooks" in str(max_model_write_rejection("package.json", lifecycle_hook))
+
+
+def test_max_writer_blocks_non_registry_dependency_sources() -> None:
+    git_dep = """
+    {
+      "packageManager": "pnpm@9.15.0",
+      "scripts": {
+        "dev": "next dev --turbopack --port 3000 --hostname 0.0.0.0",
+        "build": "next build",
+        "start": "next start --port 3000 --hostname 0.0.0.0"
+      },
+      "dependencies": {
+        "left-pad": "git+ssh://example.com/private.git"
+      }
+    }
+    """
+    safe_manifest = """
+    {
+      "packageManager": "pnpm@9.15.0",
+      "scripts": {
+        "dev": "next dev --turbopack --port 3000 --hostname 0.0.0.0",
+        "build": "next build",
+        "start": "next start --port 3000 --hostname 0.0.0.0"
+      },
+      "dependencies": {
+        "zod": "^4.0.0"
+      }
+    }
+    """
+
+    assert "npm-registry version" in str(max_model_write_rejection("package.json", git_dep))
+    assert max_model_write_rejection("package.json", safe_manifest) is None

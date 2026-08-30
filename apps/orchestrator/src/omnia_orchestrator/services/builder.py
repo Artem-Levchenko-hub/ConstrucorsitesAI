@@ -523,6 +523,11 @@ async def _run(
         auth_secret = _load_or_create_auth_secret(project_id)
         prod_origin = nginx_writer.prod_url(slug)
 
+        _runtime_settings = get_settings()
+        _max_project_owner = bool(
+            _runtime_settings.agent_sandbox_enabled
+            and template == "max-miniapp-nextjs"
+        )
         spec = docker_client.ContainerSpec(
             name=prod_name,
             image=tag,
@@ -546,6 +551,23 @@ async def _run(
             memory_mb=1024,
             kind="prod",
             restart_policy_name="unless-stopped",
+            network_name=(
+                f"omnia-proj-{project_id}" if _max_project_owner else None
+            ),
+            runtime=_runtime_settings.container_runtime,
+            harden=_max_project_owner or _runtime_settings.container_harden,
+            pids_limit=(
+                max(64, _runtime_settings.container_pids_limit)
+                if _max_project_owner
+                else _runtime_settings.container_pids_limit
+            ),
+            sandbox_profile="max-runtime-v1" if _max_project_owner else "",
+            include_host_gateway=not _max_project_owner,
+            network_service_names=(
+                (_runtime_settings.runtime_db_container_name,)
+                if _max_project_owner
+                else ()
+            ),
         )
         await docker_client.start_container(spec)
 
