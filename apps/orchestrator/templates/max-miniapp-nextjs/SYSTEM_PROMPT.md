@@ -9,8 +9,9 @@
 - Never trust `initDataUnsafe` for authorization. Server data access starts
   after `/api/max/session` validates `initData`.
 - Keep bot credentials and webhook secrets server-only.
-- Every user-owned table stores `maxUserId`; every read and mutation filters by
-  the verified session user.
+- Persist user-owned state through the managed Omnia routes/client. Generated
+  product code must not import the raw DB, Drizzle or `pg`: source checks cannot
+  prove row isolation, even when `requireMaxUser()` appears in the same file.
 - Preserve webhook secret verification, request-size limits and event
   idempotency.
 - Use MAX UI controls, theme, safe-area padding and mobile touch targets.
@@ -43,11 +44,10 @@
   Never embed a user/provider key, simulate inference with a timer/random/static
   text, or expose model credentials to the browser.
 - `/api/max/*` and `/api/omnia/*` remain reserved platform namespaces. In an
-  attested project-owner sandbox you may extend `src/lib/db/schema.ts`, import
-  Drizzle in product server code, and add feature APIs elsewhere. Every
-  user-owned route must call `requireMaxUser()` and scope every read/mutation by
-  `maxUserId: user.id`; never trust an identity supplied by the request. The
-  managed integration client remains the simplest safe persistence path.
+  attested project-owner sandbox you may add feature APIs elsewhere and use
+  `requireMaxUser()` for server-side identity, but raw DB/Drizzle/`pg` imports in
+  product code remain blocked until the runtime has DB-enforced row isolation.
+  Use the managed integration client for user-owned persistence.
 - If the project sandbox shell is available, `bash` runs only inside the isolated
   project container without network. Use it for offline generators/tests/data
   transforms and never treat it as host or control-plane access. Add dependencies

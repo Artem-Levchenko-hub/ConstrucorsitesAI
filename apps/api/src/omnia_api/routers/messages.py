@@ -3419,24 +3419,23 @@ async def _process_prompt(
                                     )
                                     if _secret_rejection:
                                         return {"ok": False, "error": _secret_rejection}
-                                    if (
-                                        not _max_shell_enabled
-                                        and (
-                                            "@/lib/db" in _raw_content
-                                            or "drizzle-orm" in _raw_content
-                                        )
-                                    ):
-                                        return {
-                                            "ok": False,
-                                            "error": (
-                                                "Direct DB access is forbidden in MAX "
-                                                "product files. "
-                                                "Use createMaxAction/getMaxActions from "
-                                                "@/lib/omnia/integration-client."
-                                            ),
-                                        }
                                 _shell_files[_normalized_path] = _raw_content
                             if _shell_files:
+                                from omnia_api.services.max_generation_contract import (
+                                    unsafe_max_backend_paths as _unsafe_max_backend_paths,
+                                )
+
+                                _unsafe_shell_paths = _unsafe_max_backend_paths(_shell_files)
+                                if _unsafe_shell_paths:
+                                    return {
+                                        "ok": False,
+                                        "error": (
+                                            "Direct DB access is forbidden in MAX product "
+                                            "files until row isolation is DB-enforced. "
+                                            "Use createMaxAction/getMaxActions. Unsafe: "
+                                            + ", ".join(_unsafe_shell_paths)
+                                        ),
+                                    }
                                 _base_revision = str(
                                     _sandbox.get("base_workspace_revision") or ""
                                 )
@@ -3504,10 +3503,11 @@ async def _process_prompt(
                         _secret_rejection = max_model_write_rejection(action.path, _candidate)
                         if _secret_rejection:
                             return {"ok": False, "error": _secret_rejection}
-                        if (
-                            not _max_shell_enabled
-                            and ("@/lib/db" in _candidate or "drizzle-orm" in _candidate)
-                        ):
+                        from omnia_api.services.max_generation_contract import (
+                            unsafe_max_backend_paths as _unsafe_max_backend_paths,
+                        )
+
+                        if _unsafe_max_backend_paths({action.path: _candidate}):
                             return {
                                 "ok": False,
                                 "error": (
@@ -4223,15 +4223,9 @@ async def _process_prompt(
                     flush=True,
                 )
 
-            # Layer C — backend-guardrail self-heal. The ban on writing backend is
-            # lifted (the agent may author custom server logic), so STATICALLY
-            # verify the one unsafe thing it must never do — reach the DB raw
-            # (@/lib/db / drizzle / pg outside the engine), the only way to bypass
-            # auth+ownership+membership. A static scan over the written files (cheap,
-            # deterministic, no container). When USE_AGENT_GATE_FEEDBACK is on, any
-            # escape is fed back to the agent to fix (bounded), so the model writes
-            # freely and the GATE — not a template — guarantees safety. When off,
-            # it is advisory-only (logs) → prod generation is byte-unchanged.
+            # Layer C — backend-guardrail self-heal. Custom server logic is allowed,
+            # but raw DB access remains behind the managed boundary until isolation is
+            # enforced by Postgres rather than a forgeable source-code string check.
             try:
                 from omnia_api.services import agent_gate_feedback as _agf
                 from omnia_api.services.backend_guardrail import (
@@ -4262,10 +4256,10 @@ async def _process_prompt(
                         violations = [
                             Violation(
                                 path=path,
-                                rule="missing verified MAX-user DB scope",
+                                rule="raw product DB access is not isolated",
                                 detail=(
-                                    "call requireMaxUser() and filter every query by "
-                                    "maxUserId: user.id"
+                                    "use createMaxAction/getMaxActions from the managed "
+                                    "integration client"
                                 ),
                             )
                             for path in unsafe
@@ -4274,9 +4268,9 @@ async def _process_prompt(
                             safe=not violations,
                             violations=violations,
                             summary=(
-                                "MAX project DB isolation OK"
+                                "MAX managed persistence boundary OK"
                                 if not violations
-                                else "MAX project DB isolation failed"
+                                else "MAX managed persistence boundary failed"
                             ),
                         )
                     return _check_backend(_guard_view())

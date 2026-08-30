@@ -194,9 +194,8 @@ _REFERENCE_CATALOG_DECL_RE = re.compile(
     r"\bconst\s+(?:REFERENCE_[A-Z0-9_]+|[A-Z0-9_]+_(?:CATALOG|TAXONOMY|LIBRARY))\b",
     re.IGNORECASE,
 )
-_DIRECT_DB_RE = re.compile(r"(?:@/lib/db|drizzle-orm)", re.IGNORECASE)
-_DIRECT_DB_WRITE_RE = re.compile(
-    r"(?:\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\b(?:insert|update|delete)\s*\()",
+_DIRECT_DB_RE = re.compile(
+    r"(?:@/lib/db|drizzle-orm|(?:from\s+|import\s*\(|require\s*\()\s*[\"'](?:pg|postgres)[\"'])",
     re.IGNORECASE,
 )
 
@@ -213,16 +212,15 @@ def _direct_db_product_paths(files: Mapping[str, str]) -> dict[str, str]:
 
 
 def _unsafe_direct_db_paths(files: Mapping[str, str]) -> list[str]:
-    """Direct project DB is allowed only behind verified MAX identity scope."""
-    unsafe: list[str] = []
-    for path, content in _direct_db_product_paths(files).items():
-        has_verified_user = bool(re.search(r"\brequireMaxUser\s*\(", content))
-        has_user_scope = "maxUserId" in content and bool(
-            re.search(r"\buser\.id\b", content)
-        )
-        if not (has_verified_user and has_user_scope):
-            unsafe.append(path)
-    return sorted(unsafe)
+    """Reject raw product DB access until isolation is enforced below app code.
+
+    A source scan cannot prove that every query is tied to the authenticated MAX
+    user: unrelated ``requireMaxUser``/``user.id`` text can satisfy a regex while
+    a query remains unscoped.  Product persistence therefore stays on the managed
+    API boundary until the runtime provides DB-enforced row isolation.
+    """
+
+    return sorted(_direct_db_product_paths(files))
 
 
 def unsafe_max_backend_paths(files: Mapping[str, str]) -> list[str]:
@@ -299,11 +297,10 @@ def build_max_product_contract(prompt: str) -> str:
         "- Use createMaxAction for persisted MAX user activity and getMaxActions to read it "
         "(page long histories with getMaxActions({ limit, cursor }) when needed). Never "
         "store a provider key in source code or expose it to the browser.",
-        "- The reserved /api/max and /api/omnia routes remain platform-owned. In the "
-        "attested project sandbox you may extend src/lib/db/schema.ts and create product "
-        "APIs elsewhere. Every user-owned DB route must call requireMaxUser() and scope "
-        "every read/write with maxUserId: user.id; never accept identity from the body. "
-        "The managed integration client remains the simplest safe option.",
+        "- The reserved /api/max and /api/omnia routes remain platform-owned. Custom "
+        "product APIs may authenticate with requireMaxUser(), but must not import the raw "
+        "project DB/Drizzle/pg client. Persist user state only through the managed "
+        "integration client, which enforces MAX identity outside generated product code.",
         "- If the brief asks for AI, call requestOmniaAI from "
         "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
@@ -400,14 +397,14 @@ def max_source_completion_gap(
     capabilities = requested_max_capabilities(prompt)
     product_sources = {path: content for path, content in files.items() if _is_product_source(path)}
     corpus = "\n".join(content.lower() for content in product_sources.values())
-    direct_db_paths = _direct_db_product_paths(files)
     unsafe_product_db_paths = _unsafe_direct_db_paths(files)
     if unsafe_product_db_paths:
         return (
-            "Direct project DB access is missing verified MAX-user isolation in: "
+            "Direct project DB access is unavailable until DB-enforced MAX-user row "
+            "isolation exists. Unsafe files: "
             + ", ".join(sorted(unsafe_product_db_paths))
-            + ". Call requireMaxUser(), derive identity server-side, and scope every "
-            "read/write with maxUserId: user.id (never a request-body user id)."
+            + ". Use createMaxAction/getMaxActions from the managed integration client; "
+            "a requireMaxUser/user.id string check is not a security boundary."
         )
     fake_user_data_paths = _fake_user_data_paths(files)
     if fake_user_data_paths:
@@ -460,22 +457,17 @@ def max_source_completion_gap(
     if _PERSISTENCE_PROMPT_RE.search(prompt):
         managed_read = bool(re.search(r"\bgetmaxactions\s*\(", corpus))
         managed_write = bool(re.search(r"\bcreatemaxaction\s*\(", corpus))
-        direct_read = bool(direct_db_paths) and not unsafe_product_db_paths
-        direct_write = direct_read and any(
-            _DIRECT_DB_WRITE_RE.search(content) for content in direct_db_paths.values()
-        )
         missing_persistence: list[str] = []
-        if not (managed_read or direct_read):
+        if not managed_read:
             missing_persistence.append("authenticated read")
-        if _MUTATION_PROMPT_RE.search(prompt) and not (managed_write or direct_write):
+        if _MUTATION_PROMPT_RE.search(prompt) and not managed_write:
             missing_persistence.append("authenticated write")
         if missing_persistence:
             return (
                 "The brief requires user data/history, but the product does not complete "
                 "an authenticated persistence loop. Missing: "
                 + ", ".join(missing_persistence)
-                + ". Use createMaxAction/getMaxActions, or a project table/API that calls "
-                "requireMaxUser() and scopes every query by maxUserId: user.id. Render "
+                + ". Use createMaxAction/getMaxActions. Render "
                 "loading/empty/error/success states; scaffold definitions do not count."
             )
 

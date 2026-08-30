@@ -2047,7 +2047,7 @@ _SPA_STACK = """\
 
 _MAX_MINIAPP_STACK = """\
 СТЕК — MINI APP ДЛЯ МЕССЕНДЖЕРА MAX. Next.js 15 App Router + React 18.3 +
-TypeScript + Postgres/Drizzle + официальный MAX UI и MAX Bridge.
+TypeScript + управляемое хранилище + официальный MAX UI и MAX Bridge.
 
 ШАБЛОН УЖЕ СОДЕРЖИТ критическую платформенную обвязку — используй её, не
 переписывай: `src/lib/max/bridge.ts`, `validate-init-data.ts`, `session.ts`,
@@ -2061,8 +2061,11 @@ TypeScript + Postgres/Drizzle + официальный MAX UI и MAX Bridge.
   нужна настоящая MAX-сессия; запросы к защищённым данным разрешены только при
   `mode === "max"`. Preview не должен показывать пользователю `Unauthorized`.
 • Авторизация конечного пользователя — проверенный на СЕРВЕРЕ MAX `initData`.
-  Для owner-scoped данных вызывай `requireMaxUser()` и фильтруй КАЖДЫЙ select /
-  update / delete по `maxUserId`. Не доверяй `user_id` из JSON/body клиента.
+  Пользовательские данные сохраняй только через managed integration client:
+  прямые импорты `@/lib/db`, Drizzle и `pg` в product-коде запрещены, потому что
+  наличие `requireMaxUser()` в файле само по себе не доказывает изоляцию строк.
+  В custom API можно вызвать `requireMaxUser()` для личности, но нельзя доверять
+  `user_id` из JSON/body клиента.
 • Токен бота доступен только серверу как `MAX_BOT_TOKEN`. Секрет webhook —
   `MAX_WEBHOOK_SECRET`. Не выводи их в HTML, client bundle, логи или ответы API.
 • Не ослабляй HMAC-проверку initData, constant-time проверку webhook secret,
