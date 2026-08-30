@@ -54,6 +54,21 @@ def test_max_prod_dockerfile_requires_frozen_lockfile_without_script_fallback() 
     assert "--frozen-lockfile --prod=false --ignore-scripts ||" not in dockerfile
 
 
+def test_max_prod_build_caches_exact_pnpm_before_network_is_disabled() -> None:
+    template = Path(__file__).resolve().parents[1] / "templates" / "max-miniapp-nextjs"
+    dockerfile = (template / "Dockerfile.prod").read_text(encoding="utf-8")
+
+    assert "corepack prepare pnpm@9.15.0 --activate" in dockerfile
+    assert "corepack prepare pnpm@9 --activate" not in dockerfile
+    assert (
+        "COPY --from=deps --chown=node:node /root/.cache/node/corepack "
+        "/home/node/.cache/node/corepack"
+    ) in dockerfile
+    assert dockerfile.index("/home/node/.cache/node/corepack") < dockerfile.index(
+        "RUN --network=none pnpm exec next build"
+    )
+
+
 async def test_max_production_container_uses_same_isolated_runtime_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
