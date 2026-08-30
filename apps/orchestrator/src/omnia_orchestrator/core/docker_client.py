@@ -40,6 +40,7 @@ log = structlog.get_logger("omnia_orchestrator.docker")
 # env if the compose project/network is renamed.
 _RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
 _SANDBOX_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
+_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE = "190"
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,6 +611,9 @@ async def run_sandbox_command(
     def _do() -> dict[str, str]:
         client = _get_client()
         sandbox_name = f"omnia-sandbox-{project_id[:12]}-{time.time_ns()}"
+        seed_marker_name = f".omnia-sandbox-seed-{time.time_ns()}"
+        seed_marker = workspace_dir / seed_marker_name
+        seed_marker.write_text("ready\n", encoding="ascii")
         security_kwargs: dict[str, object] = {}
         if runtime:
             security_kwargs["runtime"] = runtime
@@ -620,7 +624,18 @@ async def run_sandbox_command(
         security_kwargs["pids_limit"] = pids_limit if pids_limit > 0 else 256
         bootstrap = "\n".join(
             (
-                "cp -a /seed/. /workspace/ 2>/dev/null || true",
+                f"if [ ! -f /seed/{seed_marker_name} ]; then",
+                "  echo 'sandbox bootstrap failed: seed mount unavailable' >&2",
+                f"  exit {_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE}",
+                "fi",
+                "if ! cp -R /seed/. /workspace/; then",
+                "  echo 'sandbox bootstrap failed: seed copy failed' >&2",
+                f"  exit {_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE}",
+                "fi",
+                f"if ! rm -f /workspace/{seed_marker_name}; then",
+                "  echo 'sandbox bootstrap failed: marker cleanup failed' >&2",
+                f"  exit {_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE}",
+                "fi",
                 "if [ ! -e /workspace/node_modules ] && [ -d /app/node_modules ]; then",
                 "  cp -a /app/node_modules /workspace/node_modules 2>/dev/null || true",
                 "fi",
@@ -629,87 +644,98 @@ async def run_sandbox_command(
             )
         )
         try:
-            container = client.containers.run(
-                image=image,
-                name=sandbox_name,
-                command=["sh", "-lc", bootstrap],
-                detach=True,
-                environment={
-                    "CI": "1",
-                    "HOME": "/tmp/agent-home",
-                    "NODE_ENV": "development",
-                    "OMNIA_PROJECT_ID": project_id,
-                    "npm_config_cache": "/tmp/npm-cache",
-                },
-                working_dir="/workspace",
-                volumes={str(workspace_dir): {"bind": "/seed", "mode": "ro"}},
-                read_only=True,
-                tmpfs={
-                    "/workspace": "rw,size=2147483648,mode=1777,uid=1000,gid=1000",
-                    "/tmp": "rw,size=268435456,mode=1777,uid=1000,gid=1000",
-                },
-                mem_limit=f"{get_settings().dev_container_memory_mb}m",
-                cpu_quota=100_000,
-                cpu_period=100_000,
-                cap_drop=["ALL"],
-                user="1000:1000",
-                init=True,
-                # No bridge/default route at all. Merely omitting the project
-                # network is insufficient: Docker's default bridge can still
-                # reach host-published control-plane ports by numeric gateway IP.
-                network="none",
-                restart_policy={"Name": "no"},
-                labels={
-                    "omnia.project_id": project_id,
-                    "omnia.kind": "sandbox",
-                    "omnia.tier": "system",
-                },
-                **security_kwargs,
-            )
-        except docker.errors.ImageNotFound as exc:
-            raise OrchestratorError(
-                code="container_failure",
-                message=f"image not found: {image}",
-                status_code=409,
-            ) from exc
-        except docker.errors.APIError as exc:
-            raise OrchestratorError(
-                code="container_failure",
-                message=f"sandbox start failed: {exc}",
-                status_code=500,
-            ) from exc
-        try:
-            wait = container.wait(timeout=timeout_sec)
-            status_code = str(wait.get("StatusCode", 1))
-            logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="replace")
             try:
-                archive, _stat = container.get_archive("/workspace")
-                raw_archive = _read_bounded_archive(
-                    archive,
-                    max_bytes=_SANDBOX_ARCHIVE_MAX_BYTES,
-                    label="sandbox workspace",
+                container = client.containers.run(
+                    image=image,
+                    name=sandbox_name,
+                    command=["sh", "-lc", bootstrap],
+                    detach=True,
+                    environment={
+                        "CI": "1",
+                        "HOME": "/tmp/agent-home",
+                        "NODE_ENV": "development",
+                        "OMNIA_PROJECT_ID": project_id,
+                        "npm_config_cache": "/tmp/npm-cache",
+                    },
+                    working_dir="/workspace",
+                    volumes={str(workspace_dir): {"bind": "/seed", "mode": "ro"}},
+                    read_only=True,
+                    tmpfs={
+                        "/workspace": "rw,size=2147483648,mode=1777,uid=1000,gid=1000",
+                        "/tmp": "rw,size=268435456,mode=1777,uid=1000,gid=1000",
+                    },
+                    mem_limit=f"{get_settings().dev_container_memory_mb}m",
+                    cpu_quota=100_000,
+                    cpu_period=100_000,
+                    cap_drop=["ALL"],
+                    user="1000:1000",
+                    init=True,
+                    # No bridge/default route at all. Merely omitting the project
+                    # network is insufficient: Docker's default bridge can still
+                    # reach host-published control-plane ports by numeric gateway IP.
+                    network="none",
+                    restart_policy={"Name": "no"},
+                    labels={
+                        "omnia.project_id": project_id,
+                        "omnia.kind": "sandbox",
+                        "omnia.tier": "system",
+                    },
+                    **security_kwargs,
                 )
-                _replace_workspace_from_sandbox_archive(raw_archive, workspace_dir)
-            except docker.errors.NotFound as exc:
+            except docker.errors.ImageNotFound as exc:
                 raise OrchestratorError(
                     code="container_failure",
-                    message="sandbox workspace disappeared before collection",
+                    message=f"image not found: {image}",
+                    status_code=409,
+                ) from exc
+            except docker.errors.APIError as exc:
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"sandbox start failed: {exc}",
                     status_code=500,
                 ) from exc
-            return {
-                "exit_code": status_code,
-                "stdout": logs[:max_output],
-                "stderr": "",
-            }
-        except requests.exceptions.Timeout as exc:
-            raise OrchestratorError(
-                code="container_failure",
-                message=f"sandbox command timed out after {timeout_sec}s",
-                status_code=504,
-            ) from exc
+            try:
+                wait = container.wait(timeout=timeout_sec)
+                status_code = str(wait.get("StatusCode", 1))
+                logs = container.logs(stdout=True, stderr=True).decode(
+                    "utf-8", errors="replace"
+                )
+                if status_code == _SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE:
+                    raise OrchestratorError(
+                        code="container_failure",
+                        message="sandbox seed bootstrap failed",
+                        status_code=500,
+                    )
+                try:
+                    archive, _stat = container.get_archive("/workspace")
+                    raw_archive = _read_bounded_archive(
+                        archive,
+                        max_bytes=_SANDBOX_ARCHIVE_MAX_BYTES,
+                        label="sandbox workspace",
+                    )
+                    _replace_workspace_from_sandbox_archive(raw_archive, workspace_dir)
+                except docker.errors.NotFound as exc:
+                    raise OrchestratorError(
+                        code="container_failure",
+                        message="sandbox workspace disappeared before collection",
+                        status_code=500,
+                    ) from exc
+                return {
+                    "exit_code": status_code,
+                    "stdout": logs[:max_output],
+                    "stderr": "",
+                }
+            except requests.exceptions.Timeout as exc:
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"sandbox command timed out after {timeout_sec}s",
+                    status_code=504,
+                ) from exc
+            finally:
+                with suppress(docker.errors.APIError, docker.errors.NotFound):
+                    container.remove(force=True)
         finally:
-            with suppress(docker.errors.APIError, docker.errors.NotFound):
-                container.remove(force=True)
+            seed_marker.unlink(missing_ok=True)
 
     return await asyncio.to_thread(_do)
 

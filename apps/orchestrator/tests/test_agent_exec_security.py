@@ -169,6 +169,46 @@ async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
     assert not sandbox_tmp.exists()
 
 
+async def test_agent_exec_sandbox_returns_empty_diff_on_bootstrap_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_id = "00000000-0000-0000-0000-000000000112"
+    workspace = tmp_path / "projects" / project_id
+    workspace.mkdir(parents=True)
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+
+    async def _run_sandbox_command(**kwargs):
+        raise OrchestratorError(
+            code="container_failure",
+            message="sandbox seed bootstrap failed",
+            status_code=500,
+        )
+
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "container_image_name",
+        AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
+    )
+    monkeypatch.setattr(runtime, "run_sandbox_command", _run_sandbox_command)
+
+    result = await runtime.agent_exec_sandbox(
+        project_id,
+        AgentSandboxExecRequest(slug="max-app", cmd="true"),
+        "test-token-test-token-test-token",
+    )
+
+    assert result == {
+        "ok": False,
+        "detail": "sandbox seed bootstrap failed",
+        "files": {},
+        "changed": "0",
+        "dropped": "",
+    }
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
 async def test_hot_reload_installs_changed_dependencies_without_lifecycle_scripts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

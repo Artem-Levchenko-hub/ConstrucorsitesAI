@@ -434,7 +434,10 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
     assert kw["command"][0:2] == ["sh", "-lc"]
     assert "cd /workspace" in kw["command"][2]
     assert "pnpm typecheck" in kw["command"][2]
+    assert "sandbox bootstrap failed: seed mount unavailable" in kw["command"][2]
+    assert "if ! cp -R /seed/. /workspace/" in kw["command"][2]
     assert "cp -a /app/node_modules /workspace/node_modules" in kw["command"][2]
+    assert "cp -a /seed/. /workspace/ 2>/dev/null || true" not in kw["command"][2]
     assert "ln -s" not in kw["command"][2]
     assert kw["working_dir"] == "/workspace"
     assert kw["volumes"] == {str(workspace): {"bind": "/seed", "mode": "ro"}}
@@ -466,6 +469,57 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
     assert (workspace / "src" / "result.ts").read_text(encoding="utf-8") == (
         "export const ok = true;\n"
     )
+    assert not list(workspace.glob(".omnia-sandbox-seed-*"))
+
+
+async def test_run_sandbox_command_fails_closed_when_seed_bootstrap_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+
+    class _BootstrapFailureContainer:
+        def __init__(self) -> None:
+            self.archive_requested = False
+            self.removed_force: bool | None = None
+
+        def wait(self, timeout: int) -> dict[str, int]:
+            return {"StatusCode": int(docker_client._SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE)}
+
+        def logs(self, stdout: bool = True, stderr: bool = True) -> bytes:
+            return b"sandbox bootstrap failed: seed mount unavailable"
+
+        def get_archive(self, path: str) -> tuple[list[bytes], dict[str, object]]:
+            self.archive_requested = True
+            raise AssertionError("bootstrap failures must not collect or replace the workspace")
+
+        def remove(self, force: bool = False) -> None:
+            self.removed_force = force
+
+    class _BootstrapFailureContainers:
+        def __init__(self) -> None:
+            self.container = _BootstrapFailureContainer()
+
+        def run(self, *, image: str, **kwargs: Any) -> _BootstrapFailureContainer:
+            return self.container
+
+    containers = _BootstrapFailureContainers()
+    client = type("C", (), {"containers": containers})()
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    with pytest.raises(OrchestratorError, match="sandbox seed bootstrap failed"):
+        await docker_client.run_sandbox_command(
+            image="omnia-template-max-miniapp-nextjs:dev",
+            workspace_dir=workspace,
+            project_id="00000000-0000-0000-0000-000000000001",
+            cmd="true",
+        )
+
+    assert containers.container.archive_requested is False
+    assert containers.container.removed_force is True
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not list(workspace.glob(".omnia-sandbox-seed-*"))
 
 
 def test_read_bounded_archive_rejects_oversized_stream() -> None:
