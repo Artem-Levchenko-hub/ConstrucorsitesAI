@@ -396,10 +396,6 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
             assert stderr is True
             return b"pnpm typecheck clean"
 
-        def get_archive(self, path: str) -> tuple[list[bytes], dict[str, object]]:
-            assert path == "/workspace"
-            return [archive_bytes], {"name": "workspace"}
-
         def remove(self, force: bool = False) -> None:
             self.removed_force = force
 
@@ -410,6 +406,11 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
 
         def run(self, *, image: str, **kwargs: Any) -> _SandboxContainer:
             self.run_kwargs = {"image": image, **kwargs}
+            output_dir = Path(kwargs["volumes"][str(workspace.parent / "sandbox-output")]["bind"])
+            assert output_dir == Path("/sandbox-output")
+            result_dir = workspace.parent / "sandbox-output"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            (result_dir / "workspace.tar").write_bytes(archive_bytes)
             return self.container
 
     client = type("C", (), {"containers": _SandboxContainers()})()
@@ -436,11 +437,15 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
     assert "pnpm typecheck" in kw["command"][2]
     assert "sandbox bootstrap failed: seed mount unavailable" in kw["command"][2]
     assert "if ! cp -R /seed/. /workspace/" in kw["command"][2]
+    assert "tar -C /workspace -cf /sandbox-output/workspace.tar ." in kw["command"][2]
     assert "cp -a /app/node_modules /workspace/node_modules" in kw["command"][2]
     assert "cp -a /seed/. /workspace/ 2>/dev/null || true" not in kw["command"][2]
     assert "ln -s" not in kw["command"][2]
     assert kw["working_dir"] == "/workspace"
-    assert kw["volumes"] == {str(workspace): {"bind": "/seed", "mode": "ro"}}
+    assert kw["volumes"] == {
+        str(workspace): {"bind": "/seed", "mode": "ro"},
+        str(workspace.parent / "sandbox-output"): {"bind": "/sandbox-output", "mode": "rw"},
+    }
     assert kw["read_only"] is True
     assert kw["tmpfs"] == {
         "/workspace": "rw,size=2147483648,mode=1777,uid=1000,gid=1000",
@@ -520,6 +525,52 @@ async def test_run_sandbox_command_fails_closed_when_seed_bootstrap_fails(
     assert containers.container.removed_force is True
     assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
     assert not list(workspace.glob(".omnia-sandbox-seed-*"))
+    assert not (workspace.parent / "sandbox-output").exists()
+
+
+async def test_run_sandbox_command_fails_closed_when_workspace_export_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+
+    class _ExportFailureContainer:
+        def __init__(self) -> None:
+            self.removed_force: bool | None = None
+
+        def wait(self, timeout: int) -> dict[str, int]:
+            return {"StatusCode": int(docker_client._SANDBOX_EXPORT_FAILURE_EXIT_CODE)}
+
+        def logs(self, stdout: bool = True, stderr: bool = True) -> bytes:
+            return b"sandbox export failed: workspace tar failed"
+
+        def remove(self, force: bool = False) -> None:
+            self.removed_force = force
+
+    class _ExportFailureContainers:
+        def __init__(self) -> None:
+            self.container = _ExportFailureContainer()
+
+        def run(self, *, image: str, **kwargs: Any) -> _ExportFailureContainer:
+            return self.container
+
+    containers = _ExportFailureContainers()
+    client = type("C", (), {"containers": containers})()
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    with pytest.raises(OrchestratorError, match="sandbox result export failed"):
+        await docker_client.run_sandbox_command(
+            image="omnia-template-max-miniapp-nextjs:dev",
+            workspace_dir=workspace,
+            project_id="00000000-0000-0000-0000-000000000001",
+            cmd="true",
+        )
+
+    assert containers.container.removed_force is True
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not list(workspace.glob(".omnia-sandbox-seed-*"))
+    assert not (workspace.parent / "sandbox-output").exists()
 
 
 def test_read_bounded_archive_rejects_oversized_stream() -> None:

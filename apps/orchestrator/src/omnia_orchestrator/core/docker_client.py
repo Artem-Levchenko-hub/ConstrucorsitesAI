@@ -41,6 +41,7 @@ log = structlog.get_logger("omnia_orchestrator.docker")
 _RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
 _SANDBOX_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 _SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE = "190"
+_SANDBOX_EXPORT_FAILURE_EXIT_CODE = "191"
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,6 +615,13 @@ async def run_sandbox_command(
         seed_marker_name = f".omnia-sandbox-seed-{time.time_ns()}"
         seed_marker = workspace_dir / seed_marker_name
         seed_marker.write_text("ready\n", encoding="ascii")
+        # On this Docker daemon, `get_archive("/workspace")` for a tmpfs mount
+        # can collapse to a bare directory entry. Export a tarball into a
+        # separate writable host mount instead of trusting the archive API.
+        result_dir = workspace_dir.parent / "sandbox-output"
+        result_archive = result_dir / "workspace.tar"
+        shutil.rmtree(result_dir, ignore_errors=True)
+        result_dir.mkdir(parents=True, exist_ok=True)
         security_kwargs: dict[str, object] = {}
         if runtime:
             security_kwargs["runtime"] = runtime
@@ -640,7 +648,18 @@ async def run_sandbox_command(
                 "  cp -a /app/node_modules /workspace/node_modules 2>/dev/null || true",
                 "fi",
                 "cd /workspace",
+                "set +e",
+                "(",
                 cmd,
+                ")",
+                "cmd_status=$?",
+                (
+                    "if ! tar -C /workspace -cf /sandbox-output/workspace.tar .; then"
+                ),
+                "  echo 'sandbox export failed: workspace tar failed' >&2",
+                f"  exit {_SANDBOX_EXPORT_FAILURE_EXIT_CODE}",
+                "fi",
+                "exit $cmd_status",
             )
         )
         try:
@@ -658,7 +677,10 @@ async def run_sandbox_command(
                         "npm_config_cache": "/tmp/npm-cache",
                     },
                     working_dir="/workspace",
-                    volumes={str(workspace_dir): {"bind": "/seed", "mode": "ro"}},
+                    volumes={
+                        str(workspace_dir): {"bind": "/seed", "mode": "ro"},
+                        str(result_dir): {"bind": "/sandbox-output", "mode": "rw"},
+                    },
                     read_only=True,
                     tmpfs={
                         "/workspace": "rw,size=2147483648,mode=1777,uid=1000,gid=1000",
@@ -706,18 +728,29 @@ async def run_sandbox_command(
                         message="sandbox seed bootstrap failed",
                         status_code=500,
                     )
-                try:
-                    archive, _stat = container.get_archive("/workspace")
-                    raw_archive = _read_bounded_archive(
-                        archive,
-                        max_bytes=_SANDBOX_ARCHIVE_MAX_BYTES,
-                        label="sandbox workspace",
-                    )
-                    _replace_workspace_from_sandbox_archive(raw_archive, workspace_dir)
-                except docker.errors.NotFound as exc:
+                if status_code == _SANDBOX_EXPORT_FAILURE_EXIT_CODE:
                     raise OrchestratorError(
                         code="container_failure",
-                        message="sandbox workspace disappeared before collection",
+                        message="sandbox result export failed",
+                        status_code=500,
+                    )
+                try:
+                    archive_size = result_archive.stat().st_size
+                    if archive_size > _SANDBOX_ARCHIVE_MAX_BYTES:
+                        raise OrchestratorError(
+                            code="validation_failed",
+                            message=(
+                                "sandbox workspace archive exceeds "
+                                f"{_SANDBOX_ARCHIVE_MAX_BYTES} bytes"
+                            ),
+                            status_code=413,
+                        )
+                    raw_archive = result_archive.read_bytes()
+                    _replace_workspace_from_sandbox_archive(raw_archive, workspace_dir)
+                except FileNotFoundError as exc:
+                    raise OrchestratorError(
+                        code="container_failure",
+                        message="sandbox workspace export missing",
                         status_code=500,
                     ) from exc
                 return {
@@ -735,6 +768,7 @@ async def run_sandbox_command(
                 with suppress(docker.errors.APIError, docker.errors.NotFound):
                     container.remove(force=True)
         finally:
+            shutil.rmtree(result_dir, ignore_errors=True)
             seed_marker.unlink(missing_ok=True)
 
     return await asyncio.to_thread(_do)
