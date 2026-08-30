@@ -392,7 +392,7 @@
       background: #fff;
     }
     .field textarea { min-height: 104px; resize: vertical; line-height: 1.45; }
-    .field small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .field small { min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
     .check-row {
       display: grid;
       grid-template-columns: 22px 1fr;
@@ -692,6 +692,7 @@
 
     .publish-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 330px); gap: 18px; align-items: start; }
     .publish-grid > * { min-width: 0; }
+    .publish-grid .form-grid + .status-timeline { margin-top: 18px; }
     .publish-summary { padding: 24px; border-radius: 22px; color: #fff; background: var(--navy); }
     .publish-summary h3 { margin: 8px 0 16px; font-size: 25px; }
     .publish-summary dl { margin: 0; display: grid; gap: 13px; }
@@ -924,6 +925,7 @@
       cursor: pointer;
       font: 800 21px/1 Georgia, serif;
     }
+    .legal-trigger.preview-safe { bottom: 128px; }
     .legal-trigger::after {
       content: "Вопрос юристу";
       position: absolute;
@@ -1964,6 +1966,7 @@
       .studio-ready { display: none; }
       .product-shell { grid-template-columns: 220px minmax(0, 1fr); }
       .live-preview-panel { display: none; }
+      .legal-trigger.preview-safe { bottom: 78px; }
     }
     @media (max-width: 900px) {
       .home-nav { display: none; }
@@ -3539,7 +3542,8 @@
       }
       function renderLegalTrigger() {
         if (state.mapOpen || legalStep !== null) return "";
-        return '<button class="legal-trigger" data-action="open-legal" data-legal-step="' + state.step + '" aria-label="Открыть вопрос юристу для экрана «' + escapeHtml(screens[state.step].title) + '»" title="Вопрос юристу">§</button>';
+        var previewSafe = [10, 11, 12, 13, 14, 23, 24, 25].indexOf(state.step) >= 0;
+        return '<button class="legal-trigger' + (previewSafe ? ' preview-safe' : '') + '" data-action="open-legal" data-legal-step="' + state.step + '" aria-label="Открыть вопрос юристу для экрана «' + escapeHtml(screens[state.step].title) + '»" title="Вопрос юристу">§</button>';
       }
       function renderLegalDialog() {
         if (legalStep === null) return "";
