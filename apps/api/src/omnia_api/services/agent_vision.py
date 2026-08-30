@@ -18,6 +18,7 @@ that could kill the loop.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -82,13 +83,6 @@ async def see_page(
     verdict = await vision_audit.audit_screenshots(
         shots, prompt_context=prompt_context, project_id=str(pid)
     )
-    if verdict.skipped:
-        return {
-            "ok": True,
-            "detail": f"saw {rel}, but the vision judge was unavailable (skipped)",
-        }
-    issues = "\n".join(f"- {i}" for i in verdict.issues) or "(no concrete issues)"
-
     # Browser-side signals a screenshot can't show: failed (>=400) fetches and JS
     # console/page errors on load. A failed request is a REAL runtime failure, so it
     # flips the observation to not-ok (the agent must not `done` over a broken fetch).
@@ -112,6 +106,15 @@ async def see_page(
     except Exception:
         pass
 
+    if verdict.skipped:
+        return {
+            "ok": not has_failed,
+            "detail": (
+                f"saw {rel}, but the vision judge was unavailable (skipped){diag_text}"
+            ),
+        }
+
+    issues = "\n".join(f"- {i}" for i in verdict.issues) or "(no concrete issues)"
     return {
         "ok": not has_failed,
         "detail": (
@@ -121,4 +124,17 @@ async def see_page(
     }
 
 
-__all__ = ["see_page"]
+def normalize_max_see_observation(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep real browser failures blocking; soften only missing QA infrastructure."""
+
+    observation = dict(result)
+    if observation.get("ok") or observation.get("detail"):
+        return observation
+    return {
+        "ok": True,
+        "detail": str(observation.get("error") or "MAX visual QA unavailable"),
+        "proof_unavailable": True,
+    }
+
+
+__all__ = ["normalize_max_see_observation", "see_page"]

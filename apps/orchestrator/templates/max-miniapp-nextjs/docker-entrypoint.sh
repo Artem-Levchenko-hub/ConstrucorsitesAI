@@ -1,9 +1,9 @@
 #!/bin/sh
 set -e
 
-echo "[entrypoint] syncing MAX Mini App schema"
-if ! pnpm exec drizzle-kit push; then
-  echo "[entrypoint] schema sync failed; refusing to start against a stale schema" >&2
+echo "[entrypoint] applying deterministic MAX Mini App migrations"
+if ! timeout 45 node scripts/apply-migrations.mjs; then
+  echo "[entrypoint] migration apply failed; refusing to start against a stale schema" >&2
   exit 1
 fi
 exec pnpm dev

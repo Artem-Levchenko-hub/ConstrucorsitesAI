@@ -9,7 +9,12 @@ from omnia_api.services import orchestrator_client
 from omnia_api.services.functional_gate import Check, FunctionalVerdict, summarize
 
 
-async def run_release_proof(project_id: UUID, project_slug: str) -> FunctionalVerdict:
+async def run_release_proof(
+    project_id: UUID,
+    project_slug: str,
+    *,
+    require_max_data: bool = False,
+) -> FunctionalVerdict:
     """Prove that the live project typechecks, serves HTTP and has safe transport.
 
     Every failure becomes a failed check instead of escaping. Callers can therefore
@@ -49,6 +54,19 @@ async def run_release_proof(project_id: UUID, project_slug: str) -> FunctionalVe
         base_url = str(raw_base_url) if raw_base_url else None
     except Exception as exc:
         checks.append(Check("runtime", False, f"probe failed: {exc!r}"))
+
+    if require_max_data:
+        try:
+            from omnia_api.services.max_runtime_probe import probe_max_runtime
+
+            max_probe = await probe_max_runtime(
+                project_id,
+                project_slug,
+                base_url=base_url,
+            )
+            checks.append(Check("max_data_plane", max_probe.ok, max_probe.detail[:240]))
+        except Exception as exc:
+            checks.append(Check("max_data_plane", False, f"probe failed: {exc!r}"))
 
     if get_settings().use_security_gate:
         try:

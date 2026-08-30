@@ -140,7 +140,11 @@ async def ensure_current_release_proof(
         files=files,
     )
 
-    verdict = await run_release_proof(project.id, project.slug)
+    verdict = await run_release_proof(
+        project.id,
+        project.slug,
+        require_max_data=project.template == "max_miniapp",
+    )
     issued_at = now_iso()
     stack = orchestrator_template(project.template) or project.template
     record = build_attestation(

@@ -3409,16 +3409,38 @@ async def _process_prompt(
                                 "ok": False,
                                 "error": f"MAX visual QA unavailable: {type(_see_exc).__name__}",
                             }
-                        if not _visual.get("ok"):
-                            # A QA-infrastructure miss is advisory. The independent
-                            # build/runtime gates still block real product failures,
-                            # and the model must not loop or roll back green code.
+                        return agent_vision.normalize_max_see_observation(_visual)
+                    if action.name == "runtime_check":
+                        _runtime = await _base_agent_executor(action)
+                        if not _runtime.get("ok"):
+                            return _runtime
+                        from omnia_api.services.max_runtime_probe import (
+                            probe_max_runtime as _probe_max_runtime,
+                        )
+
+                        try:
+                            _runtime_status = await orchestrator_client.get_status(project_id)
+                            _base_url = str(_runtime_status.get("dev_url") or "") or None
+                            _max_probe = await _probe_max_runtime(
+                                project_id,
+                                project_slug,
+                                base_url=_base_url,
+                            )
+                        except Exception as _probe_exc:
                             return {
-                                "ok": True,
-                                "detail": str(_visual.get("error") or "MAX visual QA unavailable"),
-                                "proof_unavailable": True,
+                                "ok": False,
+                                "detail": (
+                                    "MAX data-plane proof crashed: "
+                                    f"{type(_probe_exc).__name__}"
+                                ),
                             }
-                        return _visual
+                        return {
+                            "ok": _max_probe.ok,
+                            "detail": (
+                                f"{_runtime.get('detail') or 'runtime route passed'}; "
+                                f"{_max_probe.detail}"
+                            ),
+                        }
                     if action.name == "bash":
                         if not _max_shell_enabled:
                             return {
@@ -5179,7 +5201,11 @@ async def _process_prompt(
             if files and get_settings().use_build_attestation:
                 from omnia_api.services.release_proof import run_release_proof
 
-                _release_verdict = await run_release_proof(project_id, project_slug)
+                _release_verdict = await run_release_proof(
+                    project_id,
+                    project_slug,
+                    require_max_data=project_template == "max_miniapp",
+                )
                 if _att_capture is None:
                     _att_capture = []
                 _att_capture.append(("release", _release_verdict))

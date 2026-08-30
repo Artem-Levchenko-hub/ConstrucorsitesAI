@@ -98,6 +98,8 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, project, snapshot = await _project_with_snapshot(db_session)
+    project.template = "max_miniapp"
+    await db_session.commit()
     synced: list[tuple[uuid.UUID, str, dict[str, str]]] = []
 
     def read_files(project_id: uuid.UUID, commit_sha: str) -> dict[str, str]:
@@ -120,7 +122,10 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     async def release_proof(
         _project_id: uuid.UUID,
         _slug: str,
+        *,
+        require_max_data: bool = False,
     ) -> FunctionalVerdict:
+        assert require_max_data is True
         return FunctionalVerdict(
             passed=True,
             checks=[Check("typecheck", True, "clean")],

@@ -36,12 +36,12 @@ def test_max_template_gets_next_production_build_guards() -> None:
     assert _is_next_template("vite-react-spa") is False
 
 
-def test_max_dev_entrypoint_refuses_forced_or_failed_schema_sync() -> None:
+def test_max_dev_entrypoint_uses_deterministic_fail_closed_migrations() -> None:
     template = Path(__file__).resolve().parents[1] / "templates" / "max-miniapp-nextjs"
     entrypoint = (template / "docker-entrypoint.sh").read_text(encoding="utf-8")
 
-    assert "drizzle-kit push --force" not in entrypoint
-    assert "if ! pnpm exec drizzle-kit push" in entrypoint
+    assert "drizzle-kit push" not in entrypoint
+    assert "if ! timeout 45 node scripts/apply-migrations.mjs" in entrypoint
     assert "exit 1" in entrypoint
 
 
