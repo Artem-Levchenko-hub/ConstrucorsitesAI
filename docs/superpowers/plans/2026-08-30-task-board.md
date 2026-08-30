@@ -142,7 +142,7 @@ Expected: tests and all checks pass.
 - Consumes: verified API and UI from Tasks 1–2.
 - Produces: pushed production revision and live `/doska` board.
 
-- [ ] **Step 1: Update the live report**
+- [x] **Step 1: Update the live report**
 
 Add an owner action describing the four-person shared board, add or update the relevant hypothesis with its actual verification status, and advance the matching vector only after live verification.
 
@@ -151,7 +151,7 @@ Add an owner action describing the four-person shared board, add or update the r
 Run targeted API and web tests, API Ruff, web typecheck/lint/build, `python -m json.tool otchet/data.json`, `git diff --check`, and inspect `git diff --stat` plus `git status --short`.
 Expected: every command exits 0 and only intended files are changed.
 
-- [ ] **Step 3: Commit and push**
+- [x] **Step 3: Commit and push**
 
 ```bash
 git add apps/api apps/web docs/superpowers otchet/data.json
@@ -161,10 +161,10 @@ git rebase origin/main
 git push origin HEAD:main
 ```
 
-- [ ] **Step 4: Deploy the pushed revision**
+- [x] **Step 4: Deploy the pushed revision**
 
 On the VPS, run `git fetch origin && git merge --ff-only origin/main`, then from `apps/llm-gateway/deploy/full` run `docker compose -p full up -d --build api web`.
 
-- [ ] **Step 5: Verify production**
+- [x] **Step 5: Verify production**
 
 Check Compose service health, API and web health endpoints, `GET /api/task-board/tasks`, `GET /doska`, and release SHA. Open `/doska` in the browser, create and move a disposable verification task, delete it, and confirm the final board state remains clean.
