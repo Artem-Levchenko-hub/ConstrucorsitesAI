@@ -93,6 +93,7 @@ ErrorCode = Literal[
     "integration_configuration_invalid",
     "integration_response_invalid",
     "max_init_data_invalid",
+    "unsafe_generated_backend",
     "payment_integration_required",
     "ai_integration_required",
     "crm_integration_required",

@@ -205,7 +205,7 @@ def _direct_db_product_paths(files: Mapping[str, str]) -> dict[str, str]:
         path: content
         for path, content in files.items()
         if path.startswith("src/")
-        and path.endswith((".ts", ".tsx"))
+        and path.endswith((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"))
         and path not in _MANAGED_DB_PATHS
         and _DIRECT_DB_RE.search(content)
     }

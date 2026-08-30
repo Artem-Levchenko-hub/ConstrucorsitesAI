@@ -241,6 +241,17 @@ def test_unsafe_backend_paths_detect_direct_pg_import() -> None:
     assert unsafe_max_backend_paths(files) == ["src/app/api/report/route.ts"]
 
 
+def test_unsafe_backend_paths_detect_javascript_route() -> None:
+    files = {
+        "src/app/api/report/route.js": (
+            'const { db } = require("@/lib/db");\n'
+            "export async function GET() { return db.query.users.findMany(); }"
+        )
+    }
+
+    assert unsafe_max_backend_paths(files) == ["src/app/api/report/route.js"]
+
+
 def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(

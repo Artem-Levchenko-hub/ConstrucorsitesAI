@@ -689,6 +689,55 @@ def _agent_step_budget(project_template: str, *, configured_steps: int) -> int:
     return steps
 
 
+async def _abort_unsafe_max_backend(
+    *,
+    project_id: UUID,
+    project_slug: str,
+    current_files: Mapping[str, str],
+    files: dict[str, str],
+    unsafe_paths: Sequence[str],
+) -> None:
+    """Fail closed on unsafe MAX backend writes.
+
+    The text/native MAX agents write directly into the live dev runtime, so a
+    rejected backend change must also restore the preview tree. A rollback
+    transport failure must not downgrade this to an advisory-only warning: the
+    generation still aborts with a hard 422 and the in-memory file map is reset
+    to the last known-safe state.
+    """
+
+    normalized_paths = sorted({path for path in unsafe_paths if path})
+    rollback_files = {
+        path: current_files.get(path, "") for path in normalized_paths
+    }
+    files.update(rollback_files)
+    rollback_failed = False
+    if rollback_files:
+        try:
+            await orchestrator_client.hot_reload(project_id, project_slug, rollback_files)
+        except Exception as exc:
+            rollback_failed = True
+            logging.getLogger(__name__).warning(
+                "MAX unsafe backend rollback hot_reload failed for project %s",
+                project_id,
+                exc_info=exc,
+            )
+    message = (
+        "MAX generation was stopped before publication because product code "
+        "bypassed managed data isolation: " + ", ".join(normalized_paths)
+    )
+    if rollback_failed:
+        message += (
+            ". Live preview rollback also failed; the runtime may still show "
+            "the unsafe draft until the next successful reload."
+        )
+    raise ApiError(
+        "unsafe_generated_backend",
+        message,
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+    )
+
+
 # A follow-up that means «finish the partially-built app», not a fresh surgical
 # edit. The agentic builder operates on the LIVE dev container, which still holds
 # the partial build from the prior turn — so «продолжи» re-enters the BUILD loop
@@ -4242,7 +4291,7 @@ async def _process_prompt(
 
                     return {
                         path: content
-                        for path, content in files.items()
+                        for path, content in {**current_files, **files}.items()
                         if path not in _active_max_locked_files
                     }
 
@@ -4332,6 +4381,17 @@ async def _process_prompt(
                         f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
                         flush=True,
                     )
+                    if project_template == "max_miniapp":
+                        await _abort_unsafe_max_backend(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            current_files=current_files,
+                            files=files,
+                            unsafe_paths=[
+                                violation.path
+                                for violation in _final_guard.violations
+                            ],
+                        )
                 # SAST advisory log — operators SEE injection/secret findings even
                 # when blocking/heal is off (runs regardless of the feedback loop).
                 if get_settings().use_sast_gate:
@@ -4343,7 +4403,9 @@ async def _process_prompt(
                             f"[PP] sast_gate FINDINGS: {_final_sast.summary}",
                             flush=True,
                         )
-            except Exception as _guard_exc:  # never let the guardrail break a build
+            except ApiError:
+                raise
+            except Exception as _guard_exc:  # never let advisory checks break a build
                 print(f"[PP] agent_gate_feedback skipped: {_guard_exc!r}", flush=True)
 
             # Tailwind expands its @import into hundreds of CSS rules. A model
