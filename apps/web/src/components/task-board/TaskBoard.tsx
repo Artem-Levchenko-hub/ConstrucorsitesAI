@@ -7,9 +7,12 @@ import {
   CheckCircle2,
   Circle,
   Clock3,
+  Download,
   Edit3,
+  FileText,
   GripVertical,
   Loader2,
+  Paperclip,
   Plus,
   Trash2,
   X,
@@ -28,6 +31,7 @@ import {
   taskBoardApi,
   type TaskBoardApi,
   type TaskBoardAssignee,
+  type TaskBoardAttachment,
   type TaskBoardPriority,
   type TaskBoardStatus,
   type TaskBoardTask,
@@ -142,6 +146,14 @@ function errorMessage(error: unknown) {
   return error instanceof Error
     ? error.message
     : "Не удалось связаться с сервером. Повторите действие.";
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) {
+    return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(bytes / 1024)} КБ`;
+  }
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(bytes / (1024 * 1024))} МБ`;
 }
 
 function getStoredMember(): TaskBoardAssignee {
@@ -372,6 +384,56 @@ export function TaskBoard({
     }
   };
 
+  const uploadAttachments = async (task: TaskBoardTask, files: File[]) => {
+    if (files.length === 0 || !beginTaskMutation(task.id)) return;
+    setRequestError(null);
+    try {
+      for (const file of files.slice(0, Math.max(0, 10 - task.attachments.length))) {
+        const attachment = await api.uploadAttachment(task.id, file);
+        setTasks((current) =>
+          current.map((item) =>
+            item.id === task.id
+              ? { ...item, attachments: [...item.attachments, attachment] }
+              : item,
+          ),
+        );
+      }
+    } catch (error) {
+      setRequestError(errorMessage(error));
+    } finally {
+      endTaskMutation(task.id);
+    }
+  };
+
+  const deleteAttachment = async (
+    task: TaskBoardTask,
+    attachment: TaskBoardAttachment,
+  ) => {
+    if (pendingTaskIdsRef.current.has(task.id)) return;
+    if (!window.confirm(`Удалить файл «${attachment.filename}»?`)) return;
+    if (!beginTaskMutation(task.id)) return;
+    setRequestError(null);
+    try {
+      await api.deleteAttachment(task.id, attachment.id);
+      setTasks((current) =>
+        current.map((item) =>
+          item.id === task.id
+            ? {
+                ...item,
+                attachments: item.attachments.filter(
+                  (currentAttachment) => currentAttachment.id !== attachment.id,
+                ),
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      setRequestError(errorMessage(error));
+    } finally {
+      endTaskMutation(task.id);
+    }
+  };
+
   const onDrop = async (
     event: React.DragEvent<HTMLElement>,
     status: TaskBoardStatus,
@@ -530,6 +592,13 @@ export function TaskBoard({
                         pending={pendingTaskIds.has(task.id)}
                         onEdit={() => openEdit(task)}
                         onDelete={() => void deleteTask(task)}
+                        onUpload={(files) => void uploadAttachments(task, files)}
+                        onDeleteAttachment={(attachment) =>
+                          void deleteAttachment(task, attachment)
+                        }
+                        attachmentDownloadUrl={(attachmentId) =>
+                          api.attachmentDownloadUrl(task.id, attachmentId)
+                        }
                         onDragStart={(event) => {
                           if (pendingTaskIdsRef.current.has(task.id)) {
                             event.preventDefault();
@@ -673,6 +742,9 @@ function TaskCard({
   pending,
   onEdit,
   onDelete,
+  onUpload,
+  onDeleteAttachment,
+  attachmentDownloadUrl,
   onDragStart,
   onDragEnd,
 }: {
@@ -681,6 +753,9 @@ function TaskCard({
   pending: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onUpload: (files: File[]) => void;
+  onDeleteAttachment: (attachment: TaskBoardAttachment) => void;
+  attachmentDownloadUrl: (attachmentId: string) => string;
   onDragStart: (event: React.DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
 }) {
@@ -700,6 +775,25 @@ function TaskCard({
           {priority.label}
         </span>
         <div className="flex items-center gap-0.5 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+          <label
+            title="Добавить файл"
+            className={`grid size-8 place-items-center rounded-lg text-[#7d828e] hover:bg-[#30343c] hover:text-white ${pending || task.attachments.length >= 10 ? "pointer-events-none opacity-40" : "cursor-pointer"}`}
+          >
+            <Paperclip className="size-3.5" />
+            <input
+              type="file"
+              multiple
+              disabled={pending || task.attachments.length >= 10}
+              data-attachment-input={task.id}
+              aria-label={`Добавить файл: ${task.title}`}
+              className="sr-only"
+              onChange={(event) => {
+                const files = Array.from(event.currentTarget.files ?? []);
+                event.currentTarget.value = "";
+                onUpload(files);
+              }}
+            />
+          </label>
           <button type="button" disabled={pending} onClick={onEdit} aria-label={`Редактировать: ${task.title}`} className="grid size-8 place-items-center rounded-lg text-[#7d828e] hover:bg-[#30343c] hover:text-white disabled:pointer-events-none disabled:opacity-40">
             <Edit3 className="size-3.5" />
           </button>
@@ -712,6 +806,46 @@ function TaskCard({
       <h3 className="mt-3 text-[15px] font-semibold leading-5 tracking-[-0.01em]">{task.title}</h3>
       {task.description ? (
         <p className="mt-2 line-clamp-3 text-xs leading-5 text-[#8e939e]">{task.description}</p>
+      ) : null}
+      {task.attachments.length > 0 ? (
+        <div className="mt-3 space-y-1.5" aria-label="Вложения">
+          {task.attachments.map((attachment) => (
+            <div
+              key={attachment.id}
+              className="flex min-w-0 items-center gap-1 rounded-lg border border-[#303640] bg-[#191c21] p-1"
+            >
+              <a
+                data-attachment-id={attachment.id}
+                href={attachmentDownloadUrl(attachment.id)}
+                download={attachment.filename}
+                draggable={false}
+                onClick={(event) => event.stopPropagation()}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-[#aeb7c7] transition hover:bg-[#252a32] hover:text-white"
+              >
+                <FileText className="size-3.5 shrink-0 text-[#7599ef]" />
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
+                  {attachment.filename}
+                </span>
+                <span className="shrink-0 font-mono text-[9px] text-[#666d79]">
+                  {formatFileSize(attachment.size)}
+                </span>
+                <Download className="size-3 shrink-0 text-[#666d79]" />
+              </a>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDeleteAttachment(attachment);
+                }}
+                aria-label={`Удалить вложение: ${attachment.filename}`}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-[#656b76] hover:bg-[#3b242d] hover:text-[#ff8faa] disabled:pointer-events-none disabled:opacity-40"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
       ) : null}
       <div className="mt-4 flex items-center justify-between gap-3 border-t border-[#2c3037] pt-3">
         <div className="flex min-w-0 items-center gap-2">

@@ -6,6 +6,7 @@ import { TaskBoard } from "@/components/task-board/TaskBoard";
 import type {
   CreateTaskPayload,
   TaskBoardApi,
+  TaskBoardAttachment,
   TaskBoardTask,
   UpdateTaskPayload,
 } from "@/lib/api/task-board";
@@ -19,6 +20,7 @@ function task(overrides: Partial<TaskBoardTask> = {}): TaskBoardTask {
     assignee: "roman",
     priority: "high",
     position: 0,
+    attachments: [],
     created_at: "2026-08-30T08:00:00Z",
     updated_at: "2026-08-30T08:00:00Z",
     ...overrides,
@@ -58,6 +60,36 @@ function memoryApi(initial: TaskBoardTask[] = []): TaskBoardApi {
     },
     async deleteTask(id: string) {
       tasks = tasks.filter((item) => item.id !== id);
+    },
+    async uploadAttachment(id: string, file: File) {
+      const attachment: TaskBoardAttachment = {
+        id: `attachment-${file.name}`,
+        filename: file.name,
+        content_type: file.type || "application/octet-stream",
+        size: file.size,
+        created_at: "2026-08-30T10:00:00Z",
+      };
+      tasks = tasks.map((item) =>
+        item.id === id
+          ? { ...item, attachments: [...item.attachments, attachment] }
+          : item,
+      );
+      return attachment;
+    },
+    async deleteAttachment(taskId: string, attachmentId: string) {
+      tasks = tasks.map((item) =>
+        item.id === taskId
+          ? {
+              ...item,
+              attachments: item.attachments.filter(
+                (attachment) => attachment.id !== attachmentId,
+              ),
+            }
+          : item,
+      );
+    },
+    attachmentDownloadUrl(taskId: string, attachmentId: string) {
+      return `/api/task-board/tasks/${taskId}/attachments/${attachmentId}`;
     },
   };
 }
@@ -292,5 +324,57 @@ describe("team task board", () => {
       resolveUpdate?.(task({ status: "review", position: 0 })),
     );
     await settle();
+  });
+
+  it("shows an HTML attachment as a downloadable file", async () => {
+    const attachment: TaskBoardAttachment = {
+      id: "attachment-html",
+      filename: "landing.html",
+      content_type: "text/html",
+      size: 1536,
+      created_at: "2026-08-30T10:00:00Z",
+    };
+    await act(async () => {
+      root.render(
+        <TaskBoard
+          api={memoryApi([task({ attachments: [attachment] })])}
+          refreshIntervalMs={0}
+        />,
+      );
+    });
+    await settle();
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      "[data-attachment-id='attachment-html']",
+    );
+    expect(link?.textContent).toContain("landing.html");
+    expect(link?.textContent).toContain("1,5 КБ");
+    expect(link?.getAttribute("download")).toBe("landing.html");
+    expect(link?.getAttribute("href")).toContain("attachment-html");
+  });
+
+  it("uploads an HTML file from the task card", async () => {
+    const api = memoryApi([task()]);
+    await act(async () => {
+      root.render(<TaskBoard api={api} refreshIntervalMs={0} />);
+    });
+    await settle();
+
+    const input = container.querySelector<HTMLInputElement>(
+      "input[data-attachment-input='task-1']",
+    );
+    const file = new File(["<!doctype html><title>Demo</title>"], "demo.html", {
+      type: "text/html",
+    });
+    Object.defineProperty(input, "files", { value: [file], configurable: true });
+    await act(async () => {
+      input?.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+
+    const attachment = container.querySelector<HTMLAnchorElement>(
+      "[data-attachment-id='attachment-demo.html']",
+    );
+    expect(attachment?.textContent).toContain("demo.html");
   });
 });

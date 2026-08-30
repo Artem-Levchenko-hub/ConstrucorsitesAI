@@ -87,21 +87,30 @@ services:
       MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
+      MINIO_BUCKET_TASK_BOARD: ${MINIO_BUCKET_TASK_BOARD:-task-board}
     entrypoint:
       - /bin/sh
       - -c
       - |
         set -e
         mc alias set m http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        case "$$MINIO_BUCKET_TASK_BOARD" in
+          "$$MINIO_BUCKET_PROJECTS"|"$$MINIO_BUCKET_PREVIEWS"|"$$MINIO_BUCKET_PHOTOS"|omnia-images|omnia-videos)
+            echo "MINIO_BUCKET_TASK_BOARD must be a dedicated private bucket" >&2
+            exit 1
+            ;;
+        esac
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PROJECTS"
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PREVIEWS"
         mc mb --ignore-existing "m/$$MINIO_BUCKET_PHOTOS"
+        mc mb --ignore-existing "m/$$MINIO_BUCKET_TASK_BOARD"
         mc mb --ignore-existing "m/omnia-images"
         mc mb --ignore-existing "m/omnia-videos"
         mc anonymous set download "m/$$MINIO_BUCKET_PREVIEWS"
         mc anonymous set download "m/$$MINIO_BUCKET_PHOTOS"
         mc anonymous set download "m/omnia-images"
         mc anonymous set download "m/omnia-videos"
+        mc anonymous set none "m/$$MINIO_BUCKET_TASK_BOARD"
         echo "MinIO buckets ready"
     restart: "no"
     networks:
@@ -203,6 +212,7 @@ services:
       MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
+      MINIO_BUCKET_TASK_BOARD: ${MINIO_BUCKET_TASK_BOARD:-task-board}
       BACKUP_EXPORT_ROOT: /opt/omnia-runtime/backups
       # Pexels stock-photo backgrounds (data-omnia-photo / hero.v6). PHOTO_SOURCE
       # =pexels + PEXELS_API_KEY in .env turn it on; off => tags stripped to mesh.
@@ -425,6 +435,7 @@ services:
       MINIO_BUCKET_PROJECTS: ${MINIO_BUCKET_PROJECTS:-projects}
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
+      MINIO_BUCKET_TASK_BOARD: ${MINIO_BUCKET_TASK_BOARD:-task-board}
       PHOTO_SOURCE: ${PHOTO_SOURCE:-off}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       PEXELS_PROXY: ${PEXELS_PROXY:-}

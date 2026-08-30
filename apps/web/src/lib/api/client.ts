@@ -2,6 +2,10 @@ import type { ApiErrorBody, ApiErrorCode } from "./types";
 
 const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+export function apiUrl(path: string): string {
+  return `${baseUrl}${path}`;
+}
+
 /**
  * Typed error mirroring docs/01-api-contract.md error envelope. Throw site is
  * `apiFetch`; consumers `instanceof ApiError` to discriminate from network errors.
@@ -131,14 +135,20 @@ export async function apiFetch<T>(
 export async function postBlob<T>(
   path: string,
   blob: Blob,
-  { timeoutMs }: { timeoutMs?: number } = {},
+  {
+    timeoutMs,
+    headers,
+  }: { timeoutMs?: number; headers?: HeadersInit } = {},
 ): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": blob.type || "application/octet-stream" },
+      headers: {
+        "Content-Type": blob.type || "application/octet-stream",
+        ...headers,
+      },
       body: blob,
       signal: timeoutMs !== undefined ? AbortSignal.timeout(timeoutMs) : undefined,
     });

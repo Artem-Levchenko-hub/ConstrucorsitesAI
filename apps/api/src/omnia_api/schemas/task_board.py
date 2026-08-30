@@ -9,6 +9,16 @@ TaskBoardAssignee = Literal["alexey", "alexey_jr", "artem", "roman"]
 TaskBoardPriority = Literal["low", "medium", "high"]
 
 
+class TaskBoardAttachmentPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    filename: str
+    content_type: str
+    size: int
+    created_at: datetime
+
+
 class TaskBoardTaskCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -39,5 +49,6 @@ class TaskBoardTaskPublic(BaseModel):
     assignee: TaskBoardAssignee
     priority: TaskBoardPriority
     position: int
+    attachments: list[TaskBoardAttachmentPublic] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

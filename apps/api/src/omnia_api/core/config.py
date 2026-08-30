@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Bucket for AI-generated images (gpt-image-1 via gateway). Created lazily
     # on first image upload — see services/image_resolver.py:_ensure_bucket().
     minio_bucket_images: str = Field(default="omnia-images")
+    # Private bucket for shared task-board attachments. Objects are only
+    # streamed through the API with Content-Disposition: attachment, so active
+    # formats such as HTML/SVG never execute under the application's origin.
+    minio_bucket_task_board: str = Field(default="task-board")
     minio_public_url: str = Field(default="http://localhost:9000")
     # Read-only directory containing encrypted backup exports. Production mounts
     # the host backup root here; the public API never exposes raw dumps.
