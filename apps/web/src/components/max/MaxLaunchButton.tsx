@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { activateMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxReadiness } from "@/lib/api/max-studio";
+import { getMaxLaunchErrorDescription } from "@/lib/max-launch-error";
+import { shouldStartMaxDeploy } from "@/lib/max-launch-state";
 import {
   deployProject,
   getLastDeploy,
@@ -15,8 +17,6 @@ import {
   startRuntime,
 } from "@/lib/api/runtime";
 import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
-
-const ACTIVE_PHASES = new Set(["building", "pushing", "swapping", "cancelling"]);
 
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -29,29 +29,17 @@ async function finishLaunch(projectId: string) {
   if (runtime.state !== "running") await startRuntime(projectId);
 
   let deployment = await getLastDeploy(projectId);
-  if (
-    savedPhase === "new" &&
-    !ACTIVE_PHASES.has(deployment.phase)
-  ) {
-    deployment = await deployProject(projectId);
-    window.localStorage.setItem(launchKey, "deploying");
-  } else if (
-    deployment.phase !== "done" &&
-    !ACTIVE_PHASES.has(deployment.phase)
-  ) {
+  if (shouldStartMaxDeploy(savedPhase, deployment.phase)) {
     deployment = await deployProject(projectId);
     window.localStorage.setItem(launchKey, "deploying");
   }
 
-  for (let attempt = 0; attempt < 450 && deployment.phase !== "done"; attempt += 1) {
-    if (deployment.phase === "failed") {
+  while (deployment.phase !== "done") {
+    if (deployment.phase === "failed" || deployment.phase === "cancelled") {
       throw new Error(deployment.error || "Публикация не завершилась");
     }
     await delay(2_000);
     deployment = await getLastDeploy(projectId);
-  }
-  if (deployment.phase !== "done") {
-    throw new Error("Публикация занимает слишком много времени. Студия продолжит её в фоне.");
   }
   window.localStorage.setItem(launchKey, "activating");
   return activateMaxIntegration(projectId);
@@ -90,7 +78,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
       window.localStorage.removeItem(`omnia:max:launch:${projectId}`);
       toast.error("Автозапуск не завершён", {
         id: `max-launch-error:${projectId}`,
-        description: error instanceof Error ? error.message : "Повторите запуск",
+        description: getMaxLaunchErrorDescription(error),
       });
     },
     onSettled: () => {

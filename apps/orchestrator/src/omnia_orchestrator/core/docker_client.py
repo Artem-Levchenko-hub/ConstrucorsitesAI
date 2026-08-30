@@ -43,6 +43,7 @@ _RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
 _SANDBOX_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 _SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE = "190"
 _SANDBOX_EXPORT_FAILURE_EXIT_CODE = "191"
+_BUILD_ERROR_DETAIL_CHARS = 3_000
 _SANDBOX_EXPORT_EXCLUDES = (
     "./node_modules",
     "*/node_modules",
@@ -1382,50 +1383,116 @@ async def copy_path_from_container(
 
 
 async def build_image(
-    context_dir: str, dockerfile: str, tag: str, *, timeout_sec: int = 900
+    context_dir: str,
+    dockerfile: str,
+    tag: str,
+    *,
+    timeout_sec: float = 840,
+    max_attempts: int = 2,
+    retry_delay_sec: float = 2.0,
 ) -> None:
-    """`docker build` a prod image. Raises OrchestratorError (with a log tail)
-    on failure. Blocking — call from a background task, not a request handler.
+    """Build a prod image with a cancellable Docker CLI subprocess.
+
+    One retry absorbs transient daemon/resource failures. A single total deadline
+    covers both attempts, and timeout/cancellation terminates the CLI process before
+    control returns, so a later publish cannot overlap an orphaned build.
     """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+    if timeout_sec <= 0:
+        raise ValueError("timeout_sec must be positive")
     log.info("docker.build_image", tag=tag, context=context_dir, dockerfile=dockerfile)
 
-    def _do() -> None:
-        client = _get_client()
+    docker_config_dir = Path(get_settings().docker_cli_config_dir)
+    await asyncio.to_thread(docker_config_dir.mkdir, parents=True, exist_ok=True)
+    build_env = os.environ.copy()
+    build_env["DOCKER_CONFIG"] = str(docker_config_dir)
+    dockerfile_path = str(Path(context_dir) / dockerfile)
+
+    async def _start_build() -> asyncio.subprocess.Process:
         try:
-            client.images.build(
-                path=context_dir,
-                dockerfile=dockerfile,
-                tag=tag,
-                rm=True,
-                forcerm=True,
-                pull=False,
+            return await asyncio.create_subprocess_exec(
+                "docker",
+                "build",
+                "--force-rm",
+                "--file",
+                dockerfile_path,
+                "--tag",
+                tag,
+                context_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=build_env,
             )
-        except docker.errors.BuildError as exc:
-            tail: list[str] = []
-            for chunk in getattr(exc, "build_log", None) or []:
-                if isinstance(chunk, dict) and chunk.get("stream"):
-                    tail.append(str(chunk["stream"]))
-            detail = ("".join(tail))[-1500:] or str(exc)
+        except OSError as exc:
             raise OrchestratorError(
                 code="container_failure",
-                message=f"prod build failed: {detail}",
-                status_code=500,
-            ) from exc
-        except docker.errors.APIError as exc:
-            raise OrchestratorError(
-                code="container_failure",
-                message=f"docker build error: {exc}",
+                message=f"prod build failed: could not start docker CLI: {exc}",
                 status_code=500,
             ) from exc
 
-    try:
-        await asyncio.wait_for(asyncio.to_thread(_do), timeout=timeout_sec)
-    except TimeoutError as exc:
-        raise OrchestratorError(
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_sec
+
+    def _timeout_error() -> OrchestratorError:
+        return OrchestratorError(
             code="container_failure",
-            message=f"prod build timed out after {timeout_sec}s",
+            message=f"prod build timed out after {timeout_sec:g}s total",
             status_code=504,
-        ) from exc
+        )
+
+    for attempt in range(1, max_attempts + 1):
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _timeout_error()
+        try:
+            process = await _start_build()
+        except OrchestratorError as exc:
+            failure = exc
+        else:
+            try:
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=remaining)
+            except (TimeoutError, asyncio.CancelledError) as exc:
+                with suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise _timeout_error() from exc
+            if process.returncode == 0:
+                return
+            detail = (output or b"").decode("utf-8", errors="replace").strip()
+            detail = detail[-_BUILD_ERROR_DETAIL_CHARS:]
+            failure = OrchestratorError(
+                code="container_failure",
+                message=(
+                    f"prod build failed: {detail}"
+                    if detail
+                    else f"prod build failed: docker exited with code {process.returncode}"
+                ),
+                status_code=500,
+            )
+
+        if attempt >= max_attempts:
+            raise failure
+        log.warning(
+            "docker.build_image_retry",
+            tag=tag,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            err=failure.message[:500],
+        )
+        if retry_delay_sec > 0:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise _timeout_error() from failure
+            try:
+                await asyncio.wait_for(
+                    asyncio.sleep(retry_delay_sec),
+                    timeout=remaining,
+                )
+            except TimeoutError as timeout_exc:
+                raise _timeout_error() from timeout_exc
 
 
 async def container_logs(

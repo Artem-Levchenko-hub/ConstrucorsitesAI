@@ -9,6 +9,7 @@ the label-set we stamp onto containers.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import tarfile
 from pathlib import Path
@@ -256,6 +257,187 @@ def test_module_exposes_expected_public_api() -> None:
     }
     for name in expected:
         assert hasattr(docker_client, name), f"missing public symbol: {name}"
+
+
+async def test_build_image_retries_one_transient_build_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    class Process:
+        def __init__(self, returncode: int, output: bytes) -> None:
+            self.returncode = returncode
+            self.output = output
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return self.output, None
+
+    async def start(*_args: object, **_kwargs: object) -> Process:
+        nonlocal calls
+        calls += 1
+        return Process(137, b"command returned code 137") if calls == 1 else Process(0, b"")
+
+    settings = type("Settings", (), {"docker_cli_config_dir": str(tmp_path)})()
+    monkeypatch.setattr(docker_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+
+    await docker_client.build_image(
+        ".",
+        "Dockerfile.prod",
+        "omnia-app-test:1",
+        timeout_sec=2,
+        retry_delay_sec=0,
+    )
+
+    assert calls == 2
+
+
+async def test_build_image_reports_terminal_error_after_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    class Process:
+        returncode = 1
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"next build exited with code 1", None
+
+    async def start(*_args: object, **_kwargs: object) -> Process:
+        nonlocal calls
+        calls += 1
+        return Process()
+
+    settings = type("Settings", (), {"docker_cli_config_dir": str(tmp_path)})()
+    monkeypatch.setattr(docker_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+
+    with pytest.raises(OrchestratorError, match="next build exited with code 1"):
+        await docker_client.build_image(
+            ".",
+            "Dockerfile.prod",
+            "omnia-app-test:1",
+            timeout_sec=2,
+            retry_delay_sec=0,
+        )
+
+    assert calls == 2
+
+
+async def test_build_image_uses_one_total_deadline_across_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    class Process:
+        returncode = 1
+
+        async def communicate(self) -> tuple[bytes, None]:
+            return b"transient daemon failure", None
+
+    async def start(*_args: object, **_kwargs: object) -> Process:
+        nonlocal calls
+        calls += 1
+        return Process()
+
+    settings = type("Settings", (), {"docker_cli_config_dir": str(tmp_path)})()
+    monkeypatch.setattr(docker_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+
+    with pytest.raises(OrchestratorError, match=r"timed out after 0\.05s total"):
+        await docker_client.build_image(
+            ".",
+            "Dockerfile.prod",
+            "omnia-app-test:1",
+            timeout_sec=0.05,
+            retry_delay_sec=0.1,
+        )
+
+    assert calls == 1
+
+
+async def test_build_image_kills_cli_process_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class Process:
+        returncode = None
+        killed = False
+
+        async def communicate(self) -> tuple[bytes, None]:
+            await asyncio.sleep(1)
+            return b"", None
+
+        def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.returncode = -9
+            return self.returncode
+
+    process = Process()
+
+    async def start(*_args: object, **_kwargs: object) -> Process:
+        return process
+
+    settings = type("Settings", (), {"docker_cli_config_dir": str(tmp_path)})()
+    monkeypatch.setattr(docker_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+
+    with pytest.raises(OrchestratorError, match=r"timed out after 0\.05s total"):
+        await docker_client.build_image(
+            ".",
+            "Dockerfile.prod",
+            "omnia-app-test:1",
+            timeout_sec=0.05,
+        )
+
+    assert process.killed is True
+
+
+async def test_build_image_kills_cli_process_on_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+
+    class Process:
+        returncode = None
+        killed = False
+
+        async def communicate(self) -> tuple[bytes, None]:
+            started.set()
+            await asyncio.sleep(10)
+            return b"", None
+
+        def kill(self) -> None:
+            self.killed = True
+
+        async def wait(self) -> int:
+            self.returncode = -9
+            return self.returncode
+
+    process = Process()
+
+    async def start(*_args: object, **_kwargs: object) -> Process:
+        return process
+
+    settings = type("Settings", (), {"docker_cli_config_dir": str(tmp_path)})()
+    monkeypatch.setattr(docker_client, "get_settings", lambda: settings)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+
+    task = asyncio.create_task(
+        docker_client.build_image(".", "Dockerfile.prod", "omnia-app-test:1")
+    )
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert process.killed is True
 
 
 # ── Sandbox hardening (Phase 1) ─────────────────────────────────────────────
