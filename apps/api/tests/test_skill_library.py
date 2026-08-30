@@ -77,6 +77,27 @@ def test_lookup_font_pairing_matches_tech_keyword() -> None:
     assert "tech" in (fp["name"] + " " + fp["keywords"] + " " + fp["best_for"]).lower()
 
 
+def test_font_pairing_candidates_keep_semantic_variety() -> None:
+    pairs = skill_library.font_pairing_candidates("fitness", "sports", "energetic", "bold", limit=6)
+    assert len(pairs) >= 3
+    assert pairs[0]["name"] == "Sports/Fitness"
+    assert len({(p["heading"], p["body"]) for p in pairs}) == len(pairs)
+
+
+def test_font_pairing_candidates_can_require_cyrillic() -> None:
+    pairs = skill_library.font_pairing_candidates(
+        "fitness", "bold", "dark", limit=8, require_cyrillic=True
+    )
+    assert pairs
+    assert all(skill_library.font_supports_cyrillic(p["heading"]) for p in pairs)
+    assert all(skill_library.font_supports_cyrillic(p["body"]) for p in pairs)
+    assert skill_library.font_supports_cyrillic("Inter") is True
+    assert skill_library.font_supports_cyrillic("Barlow") is False
+    assert skill_library.font_weights("Russo One") == (400,)
+    assert 700 in skill_library.font_weights("Manrope")
+    assert skill_library.font_category("Lora") == "Serif"
+
+
 def test_random_ux_guidelines_respects_limit() -> None:
     rules = skill_library.random_ux_guidelines(limit=3, severity="High", seed=42)
     assert len(rules) == 3

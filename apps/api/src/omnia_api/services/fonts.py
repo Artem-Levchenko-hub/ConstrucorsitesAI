@@ -14,6 +14,7 @@ from functools import lru_cache
 
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.design_tokens import _FONT_PAIRINGS, _google_fonts_url
+from omnia_api.services.skill_library import font_category, font_supports_cyrillic
 
 # Family → category. Anything not listed defaults to "sans". Categories drive the
 # CSS fallback stack so a swapped font degrades sensibly if the webfont is slow.
@@ -28,6 +29,13 @@ _MONO: frozenset[str] = frozenset({"JetBrains Mono"})
 
 
 def _category(family: str) -> str:
+    catalog_category = (font_category(family) or "").lower()
+    if catalog_category == "serif":
+        return "serif"
+    if catalog_category == "monospace":
+        return "mono"
+    if catalog_category in {"display", "handwriting"}:
+        return "display"
     if family in _SERIF:
         return "serif"
     if family in _MONO:
@@ -59,7 +67,7 @@ def _collect_families() -> list[str]:
 
     def _add(name: str | None) -> None:
         n = (name or "").strip()
-        if n and n not in seen:
+        if n and n not in seen and font_supports_cyrillic(n):
             seen.add(n)
             families.append(n)
 

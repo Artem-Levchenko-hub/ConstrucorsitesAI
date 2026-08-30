@@ -79,6 +79,16 @@ class FontPairing(TypedDict):
     notes: str
 
 
+class GoogleFont(TypedDict):
+    """Subset metadata for one family from the vendored Google Fonts index."""
+
+    family: str
+    category: str
+    keywords: str
+    styles: str
+    subsets: str
+
+
 class UxGuideline(TypedDict):
     """One row from `ux-guidelines.csv` — a do/don't rule with severity."""
 
@@ -230,6 +240,28 @@ def _font_pairings() -> tuple[FontPairing, ...]:
                 )
             )
     return tuple(rows)
+
+
+@lru_cache(maxsize=1)
+def _google_fonts() -> dict[str, GoogleFont]:
+    """Load font coverage metadata keyed by exact family name.
+
+    The snapshot is vendored with the design skill, so generation never calls
+    Google Fonts or a Figma plugin at runtime.
+    """
+    path = _SKILL_DATA / "google-fonts.csv"
+    rows: dict[str, GoogleFont] = {}
+    with path.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            family = r["Family"]
+            rows[family] = GoogleFont(
+                family=family,
+                category=r["Category"],
+                keywords=r["Keywords"],
+                styles=r["Styles"],
+                subsets=r["Subsets"],
+            )
+    return rows
 
 
 @lru_cache(maxsize=1)
@@ -464,6 +496,111 @@ def lookup_font_pairing(*keywords: str) -> FontPairing | None:
     ]
     best_score, best_row = max(scored, key=lambda t: t[0])
     return best_row if best_score > 0 else None
+
+
+def all_font_pairings() -> tuple[FontPairing, ...]:
+    """Return the version-pinned typography catalogue."""
+    return _font_pairings()
+
+
+def font_supports_cyrillic(family: str) -> bool:
+    """Return whether the vendored Google Fonts metadata lists Cyrillic."""
+    row = _google_fonts().get(family)
+    if row is None:
+        return False
+    subsets = {part.strip().lower() for part in row["subsets"].split("|")}
+    return bool({"cyrillic", "cyrillic-ext"} & subsets)
+
+
+def font_category(family: str) -> str | None:
+    """Return the Google Fonts catalogue category for a family."""
+    row = _google_fonts().get(family)
+    return row["category"] if row is not None else None
+
+
+def font_weights(family: str) -> tuple[int, ...]:
+    """Return non-italic static weights advertised by the local snapshot."""
+    row = _google_fonts().get(family)
+    if row is None:
+        return ()
+    weights = {
+        int(part) for part in (item.strip() for item in row["styles"].split("|")) if part.isdigit()
+    }
+    return tuple(sorted(weights))
+
+
+def font_pairing_candidates(
+    *keywords: str,
+    limit: int = 8,
+    require_cyrillic: bool = False,
+) -> tuple[FontPairing, ...]:
+    """Return a ranked, deterministic cohort of semantically fitting pairs.
+
+    Unlike :func:`lookup_font_pairing`, this intentionally keeps several good
+    candidates. Callers can apply a stable project seed inside that cohort,
+    preserving variety without selecting typography from unrelated industries.
+    """
+    if limit <= 0:
+        return ()
+
+    terms = tuple(kw.strip().lower() for kw in keywords if kw.strip())
+    script_terms = (
+        "arabic",
+        "chinese",
+        "hebrew",
+        "japanese",
+        "korean",
+        "thai",
+        "vietnamese",
+    )
+    requested_script = {term for term in script_terms if term in terms}
+
+    def is_unrequested_script_pair(fp: FontPairing) -> bool:
+        haystack = f"{fp['name']} {fp['keywords']} {fp['best_for']}".lower()
+        return any(term in haystack for term in script_terms if term not in requested_script)
+
+    pool = [
+        fp
+        for fp in _font_pairings()
+        if not is_unrequested_script_pair(fp)
+        and (
+            not require_cyrillic
+            or (font_supports_cyrillic(fp["heading"]) and font_supports_cyrillic(fp["body"]))
+        )
+    ]
+    if not pool:
+        return ()
+
+    def score(fp: FontPairing) -> int:
+        name = fp["name"].lower()
+        mood = fp["keywords"].lower()
+        use = fp["best_for"].lower()
+        category = fp["category"].lower()
+        # Earlier terms express the industry/archetype; later ones are broad
+        # mood adjectives. Weighting position prevents generic words such as
+        # "clean" from outranking an exact "medical" or "fitness" match.
+        return sum(
+            (len(terms) - index)
+            * (
+                (4 if term in name else 0)
+                + (3 if term in mood else 0)
+                + (2 if term in use else 0)
+                + (1 if term in category else 0)
+            )
+            for index, term in enumerate(terms)
+        )
+
+    ranked = sorted(pool, key=lambda fp: (-score(fp), fp["name"]))
+    positive = [fp for fp in ranked if score(fp) > 0]
+    if not positive:
+        return tuple(ranked[:limit])
+
+    # Keep a little variety, but stop before weakly related rows. This is what
+    # prevents "random but technically matched on clean" typography drift.
+    best_score = score(positive[0])
+    strong = [fp for fp in positive if score(fp) * 4 >= best_score]
+    cohort_size = min(limit, max(3, len(strong)))
+    return tuple(positive[:cohort_size])
 
 
 def lookup_landing_pattern(
