@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from omnia_api.services.max_generation_contract import (
     build_max_product_contract,
     max_completion_gap,
@@ -250,6 +252,28 @@ def test_unsafe_backend_paths_detect_javascript_route() -> None:
     }
 
     assert unsafe_max_backend_paths(files) == ["src/app/api/report/route.js"]
+
+
+@pytest.mark.parametrize("suffix", ["js", "jsx", "mjs", "cjs", "ts", "tsx"])
+def test_unsafe_backend_paths_detect_all_product_script_variants(suffix: str) -> None:
+    path = f"src/app/api/report/route.{suffix}"
+    files = {path: 'const db = require("@/lib/db");'}
+
+    assert unsafe_max_backend_paths(files) == [path]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/app/api/omnia/actions/route.js",
+        "src/app/api/omnia/events/route.mjs",
+        "src/app/api/max/session/route.jsx",
+    ],
+)
+def test_unsafe_backend_paths_ignore_managed_route_script_variants(path: str) -> None:
+    files = {path: 'const db = require("@/lib/db");'}
+
+    assert unsafe_max_backend_paths(files) == []
 
 
 def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:

@@ -133,6 +133,16 @@ _MANAGED_DB_PATHS = {
     "src/app/api/omnia/preview-session/route.ts",
 }
 
+
+def _is_managed_max_backend_path(path: str) -> bool:
+    """Return whether MAX Studio, rather than generated product code, owns a path."""
+
+    return (
+        path in _MANAGED_DB_PATHS
+        or path.startswith("src/app/api/max/")
+        or path.startswith("src/app/api/omnia/")
+    )
+
 _FAKE_USER_DATA_RE = re.compile(
     r"(?:\b(?:demo|mock|fake|sample|fixture|placeholder|seed(?:ed)?)"
     r"[-_\s]*(?:data|dataset|records?|state|profile|history|workouts?|meals?|metrics?)\b|"
@@ -206,7 +216,7 @@ def _direct_db_product_paths(files: Mapping[str, str]) -> dict[str, str]:
         for path, content in files.items()
         if path.startswith("src/")
         and path.endswith((".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"))
-        and path not in _MANAGED_DB_PATHS
+        and not _is_managed_max_backend_path(path)
         and _DIRECT_DB_RE.search(content)
     }
 

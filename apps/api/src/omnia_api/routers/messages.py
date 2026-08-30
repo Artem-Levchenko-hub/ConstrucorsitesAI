@@ -707,9 +707,16 @@ async def _abort_unsafe_max_backend(
     """
 
     normalized_paths = sorted({path for path in unsafe_paths if path})
+    # Agent writes are applied to the live preview as they happen.  Rejecting
+    # only the violating route would leave the rest of the same generation
+    # visible without a snapshot (for example a page calling the deleted API).
+    # Restore every touched path atomically from the last known-safe tree;
+    # empty content is the orchestrator's explicit delete intent for new files.
+    rollback_paths = sorted({path for path in files if path})
     rollback_files = {
-        path: current_files.get(path, "") for path in normalized_paths
+        path: current_files.get(path, "") for path in rollback_paths
     }
+    files.clear()
     files.update(rollback_files)
     rollback_failed = False
     if rollback_files:
@@ -4296,7 +4303,7 @@ async def _process_prompt(
                     }
 
                 def _backend_verdict() -> GuardrailVerdict:
-                    if project_template == "max_miniapp" and _max_shell_enabled:
+                    if project_template == "max_miniapp":
                         from omnia_api.services.max_generation_contract import (
                             unsafe_max_backend_paths,
                         )
@@ -4385,7 +4392,11 @@ async def _process_prompt(
                         await _abort_unsafe_max_backend(
                             project_id=project_id,
                             project_slug=project_slug,
-                            current_files=current_files,
+                            # A first MAX build seeds a verified platform core
+                            # before model writes begin.  Treat that core as part
+                            # of the safe baseline so a rejected product draft
+                            # restores the core instead of deleting it.
+                            current_files={**current_files, **_max_seed_files},
                             files=files,
                             unsafe_paths=[
                                 violation.path

@@ -143,12 +143,18 @@ def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None
     ).read_text(encoding="utf-8")
 
     assert "for path, content in {**current_files, **files}.items()" in source
-    assert "path: current_files.get(path, \"\") for path in normalized_paths" in source
+    assert "path: current_files.get(path, \"\") for path in rollback_paths" in source
     assert "await orchestrator_client.hot_reload(" in source
+    assert "files.clear()" in source
     assert "files.update(rollback_files)" in source
     assert '"unsafe_generated_backend"' in source
     assert "except ApiError:" in source
     assert "except Exception as _guard_exc" in source
+    verdict_source = source[
+        source.index("def _backend_verdict()") : source.index("_guard_attempt = 0")
+    ]
+    assert 'if project_template == "max_miniapp":' in verdict_source
+    assert "and _max_shell_enabled" not in verdict_source
 
 
 def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
@@ -170,14 +176,17 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
         return {"state": "hot_reloaded"}
 
     monkeypatch.setattr(messages.orchestrator_client, "hot_reload", _hot_reload)
-    generated = {"src/app/api/report/route.js": "unsafe"}
+    generated = {
+        "src/app/page.tsx": "partial UI",
+        "src/app/api/report/route.js": "unsafe",
+    }
 
     with pytest.raises(ApiError) as exc:
         asyncio.run(
             messages._abort_unsafe_max_backend(
                 project_id=UUID(int=1),
                 project_slug="max-app",
-                current_files={},
+                current_files={"src/app/page.tsx": "safe UI"},
                 files=generated,
                 unsafe_paths=["src/app/api/report/route.js"],
             )
@@ -185,12 +194,18 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
 
     assert exc.value.code == "unsafe_generated_backend"
     assert exc.value.status_code == 422
-    assert generated["src/app/api/report/route.js"] == ""
+    assert generated == {
+        "src/app/page.tsx": "safe UI",
+        "src/app/api/report/route.js": "",
+    }
     assert calls == [
         {
             "project_id": UUID(int=1),
             "slug": "max-app",
-            "files": {"src/app/api/report/route.js": ""},
+            "files": {
+                "src/app/api/report/route.js": "",
+                "src/app/page.tsx": "safe UI",
+            },
         }
     ]
 
@@ -205,14 +220,17 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
         raise RuntimeError("orchestrator down")
 
     monkeypatch.setattr(messages.orchestrator_client, "hot_reload", _hot_reload)
-    generated = {"src/app/api/report/route.js": "unsafe"}
+    generated = {
+        "src/app/page.tsx": "partial UI",
+        "src/app/api/report/route.js": "unsafe",
+    }
 
     with pytest.raises(ApiError) as exc:
         asyncio.run(
             messages._abort_unsafe_max_backend(
                 project_id=UUID(int=2),
                 project_slug="max-app",
-                current_files={},
+                current_files={"src/app/page.tsx": "safe UI"},
                 files=generated,
                 unsafe_paths=["src/app/api/report/route.js"],
             )
@@ -220,7 +238,10 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
 
     assert exc.value.code == "unsafe_generated_backend"
     assert "Live preview rollback also failed" in exc.value.message
-    assert generated["src/app/api/report/route.js"] == ""
+    assert generated == {
+        "src/app/page.tsx": "safe UI",
+        "src/app/api/report/route.js": "",
+    }
 
 
 def _load_messages_helpers(*function_names: str) -> dict[str, Any]:
