@@ -126,4 +126,25 @@ async def rate_limit_email(request: Request) -> None:
         )
 
 
-__all__ = ["rate_limit_auth", "rate_limit_email", "rate_limit_prompt"]
+async def rate_limit_task_board(request: Request) -> None:
+    """Keep the intentionally public team board usable under abusive traffic."""
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    if not _limiter.hit(
+        parse("30/minute"),
+        f"task-board-ip:{_client_ip(request)}",
+    ):
+        raise ApiError(
+            "rate_limited",
+            "Слишком много изменений. Подождите и попробуйте снова",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+
+__all__ = [
+    "rate_limit_auth",
+    "rate_limit_email",
+    "rate_limit_prompt",
+    "rate_limit_task_board",
+]

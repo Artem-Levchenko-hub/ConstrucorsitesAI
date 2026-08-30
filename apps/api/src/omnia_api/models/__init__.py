@@ -35,6 +35,7 @@ from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.task_board import TaskBoardTask
 from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
@@ -72,6 +73,7 @@ __all__ = [
     "ProjectMemoryRevision",
     "Snapshot",
     "Subscription",
+    "TaskBoardTask",
     "Usage",
     "User",
     "Wallet",
