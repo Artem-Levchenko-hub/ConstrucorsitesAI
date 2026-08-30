@@ -31,6 +31,31 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "Do NOT call or retry probe/verify_isolation" in prompt
     assert "run runtime_check after the final write" in prompt
     assert "signed MAX preview session" in prompt
+    assert "DESIGN.md" in prompt
+    assert "утилитарный mobile product" in prompt
+    assert "НЕ landing page" in prompt
+    assert "Awwwards-риторику" in prompt
+    assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in prompt
+    assert "МЕДИА (картинки + КИНО-ВИДЕО)" not in prompt
+    assert "ЖИВЫЕ МИКРО-ВЗАИМОДЕЙСТВИЯ" not in prompt
+    assert "картинка «летит» при прокрутке" not in prompt
+
+
+def test_max_native_toolset_removes_incompatible_proof_and_landing_noise() -> None:
+    names = [tool["name"] for tool in agent_native._MAX_TOOLS_CACHED]
+
+    assert "probe" not in names
+    assert "verify_isolation" not in names
+    assert "runtime_check" in names
+    assert "see" in names
+    assert "generate_media" in names
+    assert "done" in names
+    assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
+
+    descriptions = "\n".join(str(tool["description"]) for tool in agent_native._MAX_TOOLS_CACHED)
+    assert "hero too small" not in descriptions
+    assert "KEYFRAME" not in descriptions
+    assert "scroll-scrub" not in descriptions
 
 
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
@@ -233,7 +258,7 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
     ) -> dict[str, Any]:
         calls["n"] += 1
         if calls["n"] <= agent_native._MAX_PREWRITE_DISCOVERY_TURNS:
-            assert kwargs["tools"] is None
+            assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
             assert kwargs["tool_choice"] is None
             return _turn(("read_file", {"path": "src/app/layout.tsx"}))
         if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 1:
@@ -251,7 +276,7 @@ async def test_first_max_build_locks_discovery_tools_until_first_write(
                 ("write_file", {"path": "src/app/page.tsx", "content": "export default 1"})
             )
         if calls["n"] == agent_native._MAX_PREWRITE_DISCOVERY_TURNS + 2:
-            assert kwargs["tools"] is None
+            assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
             assert kwargs["tool_choice"] is None
             return _turn(("build", {}))
         return _turn(("done", {"summary": "Готово"}))
@@ -304,7 +329,7 @@ async def test_max_auxiliary_write_does_not_unlock_product_entry_gate(
     ) -> dict[str, Any]:
         calls["n"] += 1
         if calls["n"] == 1:
-            assert kwargs["tools"] is None
+            assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
             assert kwargs["tool_choice"] is None
         elif calls["n"] == 2:
             assert [tool["name"] for tool in kwargs["tools"]] == ["write_file"]
@@ -767,6 +792,9 @@ def test_native_agent_can_generate_media() -> None:
     # Scroll-scrub jank is a real defect (measured 2026-07-17) — the preamble must
     # carry the 60fps smoothness contract (rAF-only currentTime, GPU compositing).
     assert "ПЛАВНОСТЬ" in agent_native._NATIVE_PREAMBLE
+    assert "ОРКЕСТРАЦИЯ МОДЕЛЕЙ" not in agent_native._MAX_NATIVE_PREAMBLE
+    assert "МЕДИА" not in agent_native._MAX_NATIVE_PREAMBLE
+    assert "ЖИВЫЕ МИКРО-ВЗАИМОДЕЙСТВИЯ" not in agent_native._MAX_NATIVE_PREAMBLE
 
 
 def test_generate_media_returns_url_in_model_visible_field() -> None:

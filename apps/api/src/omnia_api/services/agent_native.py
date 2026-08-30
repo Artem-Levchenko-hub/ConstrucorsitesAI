@@ -261,6 +261,34 @@ _TOOLS_CACHED: list[dict[str, Any]] = [
     {**_TOOLS[-1], "cache_control": _CACHE},
 ]
 
+# MAX is a compact mobile product, not a cinematic landing page. Keep useful
+# capabilities, but do not resend unavailable proof tools or landing-specific
+# examples in the tool schema on every model turn.
+_MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "see": (
+        "Inspect the rendered MAX miniapp at its mobile viewport and return a strict "
+        "product-design critique: hierarchy, density, readability, touch targets, "
+        "safe areas, navigation, states, and generic repeated surfaces."
+    ),
+    "generate_media": (
+        "Generate a product-relevant visual asset only when the brief requires real "
+        "imagery; return a hosted URL to embed in src. Do not add decorative media "
+        "that does not improve the main mobile task."
+    ),
+}
+_MAX_TOOLS: list[dict[str, Any]] = [
+    {
+        **tool,
+        "description": _MAX_TOOL_DESCRIPTIONS.get(tool["name"], tool["description"]),
+    }
+    for tool in _TOOLS
+    if tool["name"] not in {"probe", "verify_isolation"}
+]
+_MAX_TOOLS_CACHED: list[dict[str, Any]] = [
+    *_MAX_TOOLS[:-1],
+    {**_MAX_TOOLS[-1], "cache_control": _CACHE},
+]
+
 # Once MAX discovery is exhausted, a warning alone is not a constraint: the
 # provider can keep selecting read/helper tools from the full schema and the
 # executor can only reject them after another paid turn. For exactly one
@@ -438,7 +466,7 @@ def _step_detail(name: str, action: Action, obs: dict[str, Any]) -> str:
     return _cap(obs.get("detail") or obs.get("content") or "")
 
 
-_NATIVE_PREAMBLE = (
+_NATIVE_COMMON_PREAMBLE = (
     "Ты — автономный инженер: строишь РАБОЧЕЕ приложение в этом проекте, как Claude "
     "Code. Инструменты вызывай напрямую: read_file/list_dir/grep — понять код, "
     "write_file/edit_file — писать, build — компиляция, bash/read_logs — рантайм, "
@@ -461,6 +489,9 @@ _NATIVE_PREAMBLE = (
     "И НИКОГДА не делай fetch() к СВОЕМУ ЖЕ API из серверного кода (server component / "
     "server action / route handler) — cookie сессии не передаётся (будет 401) и это "
     "лишний круг; вызывай `db`/данные напрямую в самой функции.\n\n"
+)
+
+_NATIVE_WEB_DESIGN_PREAMBLE = (
     "ВКУС В ДИЗАЙНЕ — чистый build ≠ красиво. Перед done ОБЯЗАТЕЛЬНО `see` главный "
     "экран (и ещё 1 ключевой, если есть) — vision-судья вернёт КОНКРЕТНЫЕ фиксы; "
     "примени их и повтори `see`, пока не станет чисто. `see` дорог — 1–2 ключевых "
@@ -471,6 +502,9 @@ _NATIVE_PREAMBLE = (
     "дефолт (сине-серый, одинаковые карточки) — один бренд-акцент дозой; "
     "(6) mobile-first (адаптив — жёсткое условие). Не «сделай красивее» вслепую — "
     "`see` → конкретный дефект → точечный фикс.\n\n"
+)
+
+_NATIVE_WEB_MEDIA_PREAMBLE = (
     "ОРКЕСТРАЦИЯ МОДЕЛЕЙ ИЗ ОБЫЧНОГО ПРОМПТА — пользователь пишет ЖИВЫМ языком "
     "(«сайт про остров, чтобы при скролле будто летишь над ним», «оживи», «вау», "
     "«кинематографично», «3D»), НЕ называя моделей. ТЫ дирижёр: сам прочитай "
@@ -524,12 +558,33 @@ _NATIVE_PREAMBLE = (
     "контент до JS — стартовое состояние видимо, анимация усиливает). Тонко и "
     "целенаправленно (`transition`, `will-change`, `duration-300..700`, `ease-out`), "
     "не мигать всем сразу; уважай `prefers-reduced-motion`.\n\n"
+)
+
+_MAX_NATIVE_DESIGN_PREAMBLE = (
+    "ВКУС В ДИЗАЙНЕ — MAX = утилитарный mobile product на 360–390px, НЕ landing page. "
+    "Перед done ОБЯЗАТЕЛЬНО `see` главный экран MAX-продукта (и ещё 1 ключевой, если "
+    "есть) — исправляй КОНКРЕТНЫЕ замечания, не гадай вслепую. Источники правды по "
+    "визуалу: `DESIGN.md`, `SYSTEM_PROMPT.md` стека и `max-ui-design.md`; они важнее "
+    "общих вкусовых эвристик. Приоритет: (1) один главный пользовательский сценарий "
+    "и один доминантный CTA на экран; (2) ясная иерархия, реальные loading/empty/error/"
+    "success states; (3) safe-area, touch-target ≥44px, без горизонтального и "
+    "вложенного scroll; (4) ритм 4/8, читаемая тип-шкала, контраст ≥4.5:1; (5) не "
+    "заворачивай всё в одинаковые карточки, строй композицию размером, отступами и "
+    "акцентом; (6) НЕ тащи hero-секции, Awwwards-риторику, фоновые видео, scroll-scrub "
+    "и hover-first приёмы, если пользователь прямо не просил промо/immersive экран "
+    "внутри mini app. `see` → конкретный дефект → точечный фикс.\n\n"
+)
+
+_NATIVE_EXECUTION_PREAMBLE = (
     "МЕНЬШЕ БАГОВ, БЫСТРЕЕ: перед нетривиальным фиксом ДУМАЙ root-cause (не патч "
     "наугад — это плодит новые баги). Не изобретай API/SDK — `docs` (Context7) даёт "
     "РЕАЛЬНУЮ текущую сигнатуру (галлюцинация API = главный источник цикла build↔fix). "
     "Пойми минимально (read/grep) → пиши ПОЛНЫМИ файлами → build → чини реальные "
     "ошибки → ДОКАЖИ (runtime_check/probe/verify) → `see` дизайн → done. Не крути "
     "лишние read, когда контекста хватает.\n\n"
+)
+
+_NATIVE_DONE_SUMMARY_PREAMBLE = (
     "ФИНАЛЬНЫЙ ОТВЕТ (аргумент summary в done) — это markdown, его показывают "
     "пользователю С ФОРМАТИРОВАНИЕМ. Оформи СТРУКТУРНО по СМЫСЛУ, не сплошным текстом:\n"
     "• Первая строка — ИТОГ одним предложением, ключевой результат выдели "
@@ -541,6 +596,21 @@ _NATIVE_PREAMBLE = (
     "• Списки «- » — для перечислений (что изменилось, шаги, проверки).\n"
     "• Простыми словами, без канцелярита и без «я выполнил задачу»; технический термин — "
     "с коротким пояснением в скобках. По делу и развёрнуто (что сделал → зачем → эффект), без воды."
+)
+
+_NATIVE_PREAMBLE = (
+    _NATIVE_COMMON_PREAMBLE
+    + _NATIVE_WEB_DESIGN_PREAMBLE
+    + _NATIVE_WEB_MEDIA_PREAMBLE
+    + _NATIVE_EXECUTION_PREAMBLE
+    + _NATIVE_DONE_SUMMARY_PREAMBLE
+)
+
+_MAX_NATIVE_PREAMBLE = (
+    _NATIVE_COMMON_PREAMBLE
+    + _MAX_NATIVE_DESIGN_PREAMBLE
+    + _NATIVE_EXECUTION_PREAMBLE
+    + _NATIVE_DONE_SUMMARY_PREAMBLE
 )
 
 
@@ -579,10 +649,11 @@ def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     skills). Deliberately DROPS the text-``<omnia:action>`` LOOP_PROTOCOL — the tool
     schemas ARE the protocol now, so keeping it would only confuse a native model."""
     guide = (stack_guide or "").strip()
-    parts = [_NATIVE_PREAMBLE, guide]
+    is_max_prompt = "MAX PLATFORM CORE CONTRACT" in guide
+    parts = [_MAX_NATIVE_PREAMBLE if is_max_prompt else _NATIVE_PREAMBLE, guide]
     if skills and skills.strip():
         parts.append(skills.strip())
-    if "MAX PLATFORM CORE CONTRACT" in guide:
+    if is_max_prompt:
         parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
     return "\n\n".join(p for p in parts if p)
 
@@ -840,7 +911,13 @@ async def run_native_build(
                     message_id=str(message_id) if message_id else None,
                     free=free,
                     stage=call_stage,
-                    tools=_MAX_ENTRY_WRITE_TOOLS if force_max_entry_write else None,
+                    tools=(
+                        _MAX_ENTRY_WRITE_TOOLS
+                        if force_max_entry_write
+                        else _MAX_TOOLS_CACHED
+                        if max_runtime
+                        else None
+                    ),
                     tool_choice=(_MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None),
                 )
             except Exception as exc:
