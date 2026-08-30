@@ -1318,7 +1318,7 @@
       z-index: 55;
       left: 50%;
       bottom: 12px;
-      width: min(680px, calc(100% - 24px));
+      width: min(730px, calc(100% - 24px));
       min-height: 56px;
       padding: 6px;
       transform: translateX(-50%);
@@ -1328,7 +1328,7 @@
       box-shadow: 0 18px 48px rgba(23, 23, 22, .16);
       backdrop-filter: blur(18px);
       display: grid;
-      grid-template-columns: 46px 46px minmax(0, 1fr) 46px 46px;
+      grid-template-columns: 46px 46px minmax(0, 1fr) 46px 46px 46px;
       gap: 6px;
       align-items: center;
     }
@@ -1342,6 +1342,7 @@
       font-weight: 850;
     }
     .cjm-dock button.primary { color: #fff; border-color: var(--coral); background: var(--coral); }
+    .cjm-dock button.theme-switch { color: var(--coral); }
     .dock-progress { padding: 0 10px; min-width: 0; }
     .dock-copy { margin-bottom: 6px; display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; }
     .dock-copy strong { color: var(--ink); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -1381,7 +1382,7 @@
       .product-content .preview-layout { min-height: calc(100vh - 146px); }
       .public-site-header { height: 68px; padding: 0 14px; }
       .public-site-actions .login-action { display: none; }
-      .cjm-dock { grid-template-columns: 44px 44px minmax(0, 1fr) 44px 44px; min-height: 54px; }
+      .cjm-dock { grid-template-columns: 44px 44px minmax(0, 1fr) 44px 44px 44px; min-height: 54px; }
       .dock-copy span { display: none; }
       .map-overlay { padding: 8px; }
       .home-proof-grid,
@@ -1812,7 +1813,7 @@
     .free-activate { border-radius: 12px; background: #fcfbf7; }
 
     /* MAX Studio: те же размеры и панели, что в MaxWorkspaceShell. */
-    .real-site { padding-bottom: 78px; background: #fcfbf7; }
+    .real-site { max-width: 100%; padding-bottom: 78px; overflow-x: hidden; background: #fcfbf7; }
     .product-shell {
       height: calc(100vh - 78px);
       min-height: 620px;
@@ -2188,21 +2189,22 @@
       --green-soft: rgba(66,207,122,.12);
       --danger: #ff7168;
     }
-    body { background: radial-gradient(circle at 78% -20%, rgba(79,129,247,.12), transparent 34rem), #0f1115; }
-    .home-route { background: #0f1115; }
-    .home-header { border-color: #292d35; background: rgba(23,25,30,.94); }
-    .home-title span, .home-lead { color: #9ba1ad; }
-    .studio-demo { border-color: #2b2f37; background: #17191e; }
-    .studio-browser { border-color: #2b2f37; background: #1b1e24; }
-    .studio-canvas { background: #111318; }
+    body.theme-dark { background: radial-gradient(circle at 78% -20%, rgba(79,129,247,.12), transparent 34rem), #0f1115; }
+    .theme-dark .home-route { background: #0f1115; }
+    .theme-dark .home-header { border-color: #292d35; background: rgba(23,25,30,.94); }
+    .theme-dark .home-title span,
+    .theme-dark .home-lead { color: #9ba1ad; }
+    .theme-dark .studio-demo { border-color: #2b2f37; background: #17191e; }
+    .theme-dark .studio-browser { border-color: #2b2f37; background: #1b1e24; }
+    .theme-dark .studio-canvas { background: #111318; }
 
-    .auth-route,
-    .public-route,
-    .product-shell,
-    .account-route-real,
-    .map-dialog,
-    .legal-panel,
-    .cjm-dock {
+    .theme-dark .auth-route,
+    .theme-dark .public-route,
+    .theme-dark .product-shell,
+    .theme-dark .account-route-real,
+    .theme-dark .map-dialog,
+    .theme-dark .legal-panel,
+    .theme-dark .cjm-dock {
       --page: #0f1115;
       --paper: #191b20;
       --surface: #20232a;
@@ -2213,107 +2215,107 @@
       --gold-soft: rgba(245,192,74,.13);
       color: var(--ink);
     }
-    .auth-route,
-    .public-route,
-    .product-shell,
-    .account-route-real { background: #0f1115; }
-    .real-site { max-width: 100%; overflow-x: hidden; background: #0f1115; }
-    .auth-header,
-    .public-header,
-    .product-header,
-    .product-composer,
-    .live-preview-panel,
-    .account-top,
-    .account-mobile-tabs { border-color: var(--line); background: #17191e; }
-    .auth-copy h1,
-    .public-hero h1,
-    .billing-title h1,
-    .account-page-head h1,
-    .screen-title { color: #f7f8fb; }
-    .auth-card,
-    .form-card,
-    .order-box,
-    .public-body .plan-card,
-    .free-activate,
-    .status-panel,
-    .edit-card,
-    .edit-workspace,
-    .account-box,
-    .account-section-card,
-    .receipt-paper,
-    .analytics-metrics > div,
-    .moderation-status,
-    .launch-url,
-    .summary-list,
-    .choice,
-    .chip,
-    .billing-facts div,
-    .payment-method-card {
+    .theme-dark .auth-route,
+    .theme-dark .public-route,
+    .theme-dark .product-shell,
+    .theme-dark .account-route-real { background: #0f1115; }
+    .theme-dark .real-site { background: #0f1115; }
+    .theme-dark .auth-header,
+    .theme-dark .public-header,
+    .theme-dark .product-header,
+    .theme-dark .product-composer,
+    .theme-dark .live-preview-panel,
+    .theme-dark .account-top,
+    .theme-dark .account-mobile-tabs { border-color: var(--line); background: #17191e; }
+    .theme-dark .auth-copy h1,
+    .theme-dark .public-hero h1,
+    .theme-dark .billing-title h1,
+    .theme-dark .account-page-head h1,
+    .theme-dark .screen-title { color: #f7f8fb; }
+    .theme-dark .auth-card,
+    .theme-dark .form-card,
+    .theme-dark .order-box,
+    .theme-dark .public-body .plan-card,
+    .theme-dark .free-activate,
+    .theme-dark .status-panel,
+    .theme-dark .edit-card,
+    .theme-dark .edit-workspace,
+    .theme-dark .account-box,
+    .theme-dark .account-section-card,
+    .theme-dark .receipt-paper,
+    .theme-dark .analytics-metrics > div,
+    .theme-dark .moderation-status,
+    .theme-dark .launch-url,
+    .theme-dark .summary-list,
+    .theme-dark .choice,
+    .theme-dark .chip,
+    .theme-dark .billing-facts div,
+    .theme-dark .payment-method-card {
       color: var(--ink);
       border-color: var(--line);
       background: #191b20;
       box-shadow: none;
     }
-    .auth-card input,
-    .auth-card textarea,
-    .auth-card select,
-    .form-card input,
-    .form-card textarea,
-    .form-card select,
-    .edit-workspace input,
-    .edit-workspace textarea,
-    .edit-workspace select {
+    .theme-dark .auth-card input,
+    .theme-dark .auth-card textarea,
+    .theme-dark .auth-card select,
+    .theme-dark .form-card input,
+    .theme-dark .form-card textarea,
+    .theme-dark .form-card select,
+    .theme-dark .edit-workspace input,
+    .theme-dark .edit-workspace textarea,
+    .theme-dark .edit-workspace select {
       color: var(--ink);
       border-color: var(--line);
       background: #111318;
     }
-    .auth-consents,
-    .safe-payment,
-    .version-note,
-    .status-node,
-    .success-facts div,
-    .human-step,
-    .preview-checks > div { border-color: var(--line); background: #20232a; }
-    .safe-payment { color: #85e3aa; }
-    .public-hero { background: #111318; }
-    .public-body .plan-card.selected,
-    .payment-method-card.active,
-    .edit-card:hover,
-    .edit-card.selected,
-    .choice.selected,
-    .chip.selected { border-color: var(--coral); background: rgba(79,129,247,.1); }
-    .status-shell { background: #0f1115; }
-    .status-panel.status-good { border-color: rgba(66,207,122,.38); background: #171d1a; }
-    .status-panel.status-bad { border-color: rgba(255,113,104,.38); background: #201719; }
-    .status-node span { color: var(--ink); background: #111318; }
-    .status-node.done { color: #78df9f; background: rgba(66,207,122,.1); }
-    .status-node.active { color: #8eb0ff; background: rgba(79,129,247,.12); }
-    .status-node.bad { color: #ff9a93; background: rgba(255,113,104,.12); }
-    .btn { color: var(--ink); border-color: var(--line); background: #1b1e24; }
-    .btn.ghost { background: transparent; }
-    .btn.primary { color: #fff; border-color: var(--coral); background: var(--coral); box-shadow: 0 10px 28px rgba(79,129,247,.2); }
-    .brand-mark,
-    .brand.inverse .brand-mark { color: #fff; background: var(--coral); box-shadow: 0 8px 22px rgba(79,129,247,.22); }
+    .theme-dark .auth-consents,
+    .theme-dark .safe-payment,
+    .theme-dark .version-note,
+    .theme-dark .status-node,
+    .theme-dark .success-facts div,
+    .theme-dark .human-step,
+    .theme-dark .preview-checks > div { border-color: var(--line); background: #20232a; }
+    .theme-dark .safe-payment { color: #85e3aa; }
+    .theme-dark .public-hero { background: #111318; }
+    .theme-dark .public-body .plan-card.selected,
+    .theme-dark .payment-method-card.active,
+    .theme-dark .edit-card:hover,
+    .theme-dark .edit-card.selected,
+    .theme-dark .choice.selected,
+    .theme-dark .chip.selected { border-color: var(--coral); background: rgba(79,129,247,.1); }
+    .theme-dark .status-shell { background: #0f1115; }
+    .theme-dark .status-panel.status-good { border-color: rgba(66,207,122,.38); background: #171d1a; }
+    .theme-dark .status-panel.status-bad { border-color: rgba(255,113,104,.38); background: #201719; }
+    .theme-dark .status-node span { color: var(--ink); background: #111318; }
+    .theme-dark .status-node.done { color: #78df9f; background: rgba(66,207,122,.1); }
+    .theme-dark .status-node.active { color: #8eb0ff; background: rgba(79,129,247,.12); }
+    .theme-dark .status-node.bad { color: #ff9a93; background: rgba(255,113,104,.12); }
+    .theme-dark .btn { color: var(--ink); border-color: var(--line); background: #1b1e24; }
+    .theme-dark .btn.ghost { background: transparent; }
+    .theme-dark .btn.primary { color: #fff; border-color: var(--coral); background: var(--coral); box-shadow: 0 10px 28px rgba(79,129,247,.2); }
+    .theme-dark .brand-mark,
+    .theme-dark .brand.inverse .brand-mark { color: #fff; background: var(--coral); box-shadow: 0 8px 22px rgba(79,129,247,.22); }
 
-    .product-sidebar { color: #f5f7fb; border-color: var(--line); background: #111318; }
-    .product-sidebar-head,
-    .product-header,
-    .live-preview-head,
-    .live-preview-foot { border-color: var(--line); }
-    .sidebar-item { color: #8f96a3; }
-    .sidebar-item:hover,
-    .sidebar-item.active,
-    .project-chip { color: #fff; background: #20232a; }
-    .launch-path { border-color: var(--line); background: #17191e; }
-    .product-main,
-    .product-content,
-    .product-scroll { background: #0f1115; }
-    .next-action-bar { color: #f5f7fb; border-color: var(--line); background: #17191e; }
-    .product-composer-inner { color: #8f96a3; border-color: var(--line); background: #111318; }
-    .live-preview-canvas { background: #101216; }
-    .preview-placeholder { color: #8f96a3; }
-    .version-item::before { background: #17191e; }
-    .version-item.current::before { box-shadow: 0 0 0 4px rgba(79,129,247,.14); }
+    .theme-dark .product-sidebar { color: #f5f7fb; border-color: var(--line); background: #111318; }
+    .theme-dark .product-sidebar-head,
+    .theme-dark .product-header,
+    .theme-dark .live-preview-head,
+    .theme-dark .live-preview-foot { border-color: var(--line); }
+    .theme-dark .sidebar-item { color: #8f96a3; }
+    .theme-dark .sidebar-item:hover,
+    .theme-dark .sidebar-item.active,
+    .theme-dark .project-chip { color: #fff; background: #20232a; }
+    .theme-dark .launch-path { border-color: var(--line); background: #17191e; }
+    .theme-dark .product-main,
+    .theme-dark .product-content,
+    .theme-dark .product-scroll { background: #0f1115; }
+    .theme-dark .next-action-bar { color: #f5f7fb; border-color: var(--line); background: #17191e; }
+    .theme-dark .product-composer-inner { color: #8f96a3; border-color: var(--line); background: #111318; }
+    .theme-dark .live-preview-canvas { background: #101216; }
+    .theme-dark .preview-placeholder { color: #8f96a3; }
+    .theme-dark .version-item::before { background: #17191e; }
+    .theme-dark .version-item.current::before { box-shadow: 0 0 0 4px rgba(79,129,247,.14); }
     .product-shell .phone {
       --ink: #171716;
       --muted: #77736b;
@@ -2322,53 +2324,53 @@
       --surface: #f8f5ef;
     }
 
-    .account-nav-dark { border-color: var(--line); background: #111318; }
-    .account-work,
-    .account-page { background: #0f1115; }
-    .account-route-real .account-control-center .current-plan,
-    .account-control-center .account-box,
-    .account-control-center .plan-metrics div,
-    .account-control-center .account-actions .btn,
-    .account-detail-row,
-    .account-mini-grid button,
-    .account-mobile-tabs button { color: var(--ink); border-color: var(--line); background: #191b20; }
-    button.account-detail-row:hover { background: #20232a; }
-    .current-plan { background: #151821; }
-    .plan-metrics { background: var(--line); }
+    .theme-dark .account-nav-dark { border-color: var(--line); background: #111318; }
+    .theme-dark .account-work,
+    .theme-dark .account-page { background: #0f1115; }
+    .theme-dark .account-route-real .account-control-center .current-plan,
+    .theme-dark .account-control-center .account-box,
+    .theme-dark .account-control-center .plan-metrics div,
+    .theme-dark .account-control-center .account-actions .btn,
+    .theme-dark .account-detail-row,
+    .theme-dark .account-mini-grid button,
+    .theme-dark .account-mobile-tabs button { color: var(--ink); border-color: var(--line); background: #191b20; }
+    .theme-dark button.account-detail-row:hover { background: #20232a; }
+    .theme-dark .current-plan { background: #151821; }
+    .theme-dark .plan-metrics { background: var(--line); }
 
-    .product-shell .launch-followup-card {
+    .theme-dark .product-shell .launch-followup-card {
       color: var(--ink);
       border-color: var(--line);
       background: #191b20;
     }
-    .product-shell .launch-followup-card span {
+    .theme-dark .product-shell .launch-followup-card span {
       color: #aab1bd;
       background: #20232a;
     }
-    .public-route .plans-next-card,
-    .public-route .plans-next-card.active {
+    .theme-dark .public-route .plans-next-card,
+    .theme-dark .public-route .plans-next-card.active {
       color: var(--ink);
       border-color: var(--line);
       background: #191b20;
     }
-    .public-route .plans-next-card span {
+    .theme-dark .public-route .plans-next-card span {
       color: #aab1bd;
       background: #20232a;
     }
 
     /* Checkout: перекрываем более специфичную старую светлую тему. */
-    .public-route .checkout-grid > .form-card,
-    .public-route .checkout-grid > .order-box {
+    .theme-dark .public-route .checkout-grid > .form-card,
+    .theme-dark .public-route .checkout-grid > .order-box {
       color: var(--ink);
       border-color: var(--line);
       background: #191b20;
     }
-    .public-route .checkout-grid > .order-box {
+    .theme-dark .public-route .checkout-grid > .order-box {
       position: sticky;
       top: 24px;
     }
-    .public-route .checkout-grid .account-detail-row { background: #111318; }
-    .public-route .checkout-grid .billing-facts div { background: #20232a; }
+    .theme-dark .public-route .checkout-grid .account-detail-row { background: #111318; }
+    .theme-dark .public-route .checkout-grid .billing-facts div { background: #20232a; }
 
     .activation-route .screen-center {
       min-height: calc(100vh - 78px);
@@ -2379,37 +2381,137 @@
       padding: clamp(28px, 5vw, 48px);
       border: 1px solid var(--line);
       border-radius: 12px;
+    }
+    .theme-dark .activation-card {
       color: var(--ink);
       background: #191b20;
       box-shadow: 0 24px 70px rgba(0,0,0,.24);
     }
-    .activation-card h2 { color: var(--ink); }
-    .activation-card .success-facts div { background: #111318; }
-    .activation-card .version-note { background: #20232a; }
+    .theme-dark .activation-card h2 { color: var(--ink); }
+    .theme-dark .activation-card .success-facts div { background: #111318; }
+    .theme-dark .activation-card .version-note { background: #20232a; }
 
     @media (max-width: 980px) {
-      .public-route .checkout-grid > .order-box { position: static; }
+      .theme-dark .public-route .checkout-grid > .order-box { position: static; }
     }
 
-    .map-overlay { place-items: start center; background: rgba(3,5,9,.78); }
-    .map-dialog { background: #15171c; box-shadow: 0 35px 90px rgba(0,0,0,.5); }
-    .map-step-card,
-    .map-step,
-    .map-kpi,
-    .map-phase-card,
-    .map-quick-card,
-    .branch-card { border-color: var(--line); background: #1b1e24; }
-    .map-step.current { background: rgba(79,129,247,.12); }
-    .conversion-principle { border-color: rgba(79,129,247,.35); background: rgba(79,129,247,.1); }
-    .map-journey > header > span { background: var(--coral); }
-    .cjm-dock { border-color: #2b2f37; background: rgba(23,25,30,.96); box-shadow: 0 18px 48px rgba(0,0,0,.34); }
-    .cjm-dock button { color: #f5f7fb; border-color: #343944; background: #1b1e24; }
+    .theme-dark .map-overlay { place-items: start center; background: rgba(3,5,9,.78); }
+    .theme-dark .map-dialog { background: #15171c; box-shadow: 0 35px 90px rgba(0,0,0,.5); }
+    .theme-dark .map-step-card,
+    .theme-dark .map-step,
+    .theme-dark .map-kpi,
+    .theme-dark .map-phase-card,
+    .theme-dark .map-quick-card,
+    .theme-dark .branch-card { border-color: var(--line); background: #1b1e24; }
+    .theme-dark .map-step.current { background: rgba(79,129,247,.12); }
+    .theme-dark .conversion-principle { border-color: rgba(79,129,247,.35); background: rgba(79,129,247,.1); }
+    .theme-dark .map-journey > header > span { background: var(--coral); }
+    .theme-dark .cjm-dock { border-color: #2b2f37; background: rgba(23,25,30,.96); box-shadow: 0 18px 48px rgba(0,0,0,.34); }
+    .theme-dark .cjm-dock button { color: #f5f7fb; border-color: #343944; background: #1b1e24; }
+    .theme-dark .cjm-dock button.theme-switch { color: #8eb0ff; }
+
+    /* Светлая тема: production-палитра + полностью светлые панели навигации. */
+    .theme-light .account-nav-dark {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #fcfbf7;
+    }
+    .theme-light .account-nav-head,
+    .theme-light .account-nav-user { border-color: var(--line); }
+    .theme-light .account-nav-dark .brand.inverse strong { color: var(--ink); }
+    .theme-light .account-nav-links .omnia-kicker { color: var(--muted); }
+    .theme-light .account-nav-item { color: var(--muted); }
+    .theme-light .account-nav-item:hover,
+    .theme-light .account-nav-item.active { color: var(--ink); background: #eceff6; }
+    .theme-light .account-nav-user button { color: var(--muted); }
+
+    /* Светлая главная: та же структура hero без графитового фона и белого текста. */
+    .theme-light .home-route {
+      color: var(--ink);
+      background: radial-gradient(circle at 78% -20%, rgba(79,129,247,.12), transparent 34rem), var(--page);
+    }
+    .theme-light .home-header { border-bottom: 1px solid var(--line); background: rgba(255,253,248,.88); }
+    .theme-light .home-route .brand.inverse strong { color: var(--ink); }
+    .theme-light .home-nav button,
+    .theme-light .home-login,
+    .theme-light .home-title span,
+    .theme-light .home-lead,
+    .theme-light .home-proof-card span,
+    .theme-light .home-route-card em,
+    .theme-light .home-route-card p,
+    .theme-light .home-route-tail { color: var(--muted); }
+    .theme-light .home-nav button:hover,
+    .theme-light .home-login:hover { color: var(--ink); }
+    .theme-light .home-cta .home-ghost { color: var(--ink); border-color: var(--line-strong); }
+    .theme-light .home-proof-card,
+    .theme-light .home-route-card { border-color: var(--line); background: rgba(255,253,248,.72); }
+
+    /* Первый вход в MAX Studio тоже следует общей теме, а не остаётся отдельным тёмным островом. */
+    .theme-light .email-note { background: #f1ede4; }
+    .theme-light .first-studio-shell {
+      --paper: #fffdf8;
+      --surface: #f8f5ef;
+      --ink: #171716;
+      --muted: #77736b;
+      --line: #d8d3c9;
+      --line-strong: #aaa399;
+      color: var(--ink);
+      background: #f5f3ee;
+    }
+    .theme-light .first-studio-sidebar,
+    .theme-light .first-studio-main > header,
+    .theme-light .first-empty-project,
+    .theme-light .first-project-dialog,
+    .theme-light .first-project-fields input,
+    .theme-light .first-project-fields textarea,
+    .theme-light .first-project-fields .choice,
+    .theme-light .first-project-fields .chip,
+    .theme-light .first-project-fields .brief-more {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #fcfbf7;
+    }
+    .theme-light .first-studio-brand,
+    .theme-light .first-studio-user,
+    .theme-light .first-studio-title,
+    .theme-light .first-project-dialog > header,
+    .theme-light .first-project-dialog > footer { border-color: var(--line); }
+    .theme-light .first-studio-brand .brand.inverse strong { color: var(--ink); }
+    .theme-light .first-studio-sidebar nav button,
+    .theme-light .first-studio-user small,
+    .theme-light .first-studio-user span,
+    .theme-light .first-studio-main > header .kicker,
+    .theme-light .first-studio-title p:last-child,
+    .theme-light .first-empty-project p,
+    .theme-light .first-project-dialog > header p:last-child,
+    .theme-light .first-project-dialog > footer p { color: var(--muted); }
+    .theme-light .first-studio-sidebar nav button.active { color: var(--ink); background: #eceff6; }
+    .theme-light .first-empty-project > span { background: var(--coral-soft); }
+    .theme-light .first-project-dialog { box-shadow: 0 28px 90px rgba(23,23,22,.18); }
+
+    .theme-light .legal-trigger {
+      color: var(--coral);
+      border-color: var(--line-strong);
+      background: rgba(252,251,247,.96);
+      box-shadow: 0 16px 38px rgba(23,23,22,.16);
+    }
+    .theme-light .legal-trigger::after {
+      color: var(--ink);
+      border-color: var(--line);
+      background: #fcfbf7;
+    }
+    .theme-light .legal-trigger:hover,
+    .theme-light .legal-trigger:focus-visible { border-color: var(--coral); background: var(--coral-soft); }
 
     /* Внешняя платёжная страница и само mini app сохраняют собственную светлую тему. */
-    .provider-route,
-    .yookassa-window,
-    .client-route,
-    .max-device {
+    .theme-dark .provider-route,
+    .theme-light .provider-route,
+    .theme-dark .yookassa-window,
+    .theme-light .yookassa-window,
+    .theme-dark .client-route,
+    .theme-light .client-route,
+    .theme-dark .max-device,
+    .theme-light .max-device {
       --paper: #fffdf8;
       --surface: #f8f5ef;
       --ink: #171716;
@@ -2436,7 +2538,7 @@
         { name: "Первый проект", note: "Описать приложение", steps: [3, 4], promise: "Открыть MAX Studio и создать проект по короткому описанию без технического задания.", outcome: "Проект создан, первая сборка запускается автоматически." },
         { name: "Первый результат", note: "Увидеть и попробовать", steps: [10, 11], promise: "Дать бесплатную первую рабочую версию с живым превью.", outcome: "Владелец видит ценность до выбора paid-режима." },
         { name: "Доработка", note: "Поправить и сохранить версии", steps: [12, 23], promise: "Сделать изменения безопасными: с ИИ, вручную, с откатом и историей.", outcome: "Выбрана рабочая версия для запуска." },
-        { name: "Условия запуска", note: "Выбрать режим и оплатить", steps: [5, 6, 7, 8, 9], promise: "Показать тариф, оплату и подписку только после того, как результат уже увидели.", outcome: "Активирован Free или paid-режим без скрытых действий." },
+        { name: "Условия запуска", note: "Выбрать Free или production", steps: [5, 6, 7, 8, 9], promise: "После выбора Free сразу выдать тестовую ссылку; оплату и подписку показывать только для production.", outcome: "Free ведёт к тестовому URL без оплаты, Pro и Business — к оформлению запуска." },
         { name: "Запуск в MAX", note: "Данные → MAX Partner → вход → публикация", steps: [24, 16, 25, 13, 27, 14], promise: "Сначала подготовить и промодерировать бота в MAX, затем один раз подключить безопасный вход и готовую ссылку.", outcome: "Готовая ссылка работает и открывается из MAX." },
         { name: "Путь клиента", note: "Открыть, выбрать и оплатить", steps: [17, 18, 19, 20, 21], promise: "Показать уже не конструктор, а реальный путь конечного клиента внутри Mini App.", outcome: "Клиент быстро доходит до результата и оплаты." },
         { name: "Рост", note: "Управлять и улучшать", steps: [15, 22, 26], promise: "После запуска дать владельцу контроль над проектом, подпиской и конверсией.", outcome: "Продукт можно масштабировать без нового онбординга." }
@@ -2543,10 +2645,14 @@
         { id: "subscription", title: "Жизнь подписки", path: "Оплата → чек → продление / отмена / возврат", note: "Каждое действие имеет явный статус, дату и последствия." }
       ];
       var ownerJourney = [0, 1, 2, 3, 4, 10, 11, 12, 23, 5, 6, 7, 8, 9, 24, 16, 25, 13, 27, 14, 15, 22];
+      var freeJourney = [0, 1, 2, 3, 4, 10, 11, 5, 14];
+      var freeEditJourney = [11, 12, 23, 5, 14];
+      var freeAfterJourney = [14, 15, 22];
       var customerJourney = [17, 18, 19, 20, 21];
       var returningJourney = [26, 11];
       var defaults = {
         step: 0,
+        theme: "dark",
         mapOpen: false,
         toast: "",
         journeyPersona: "owner",
@@ -2738,9 +2844,16 @@
       }
       function currentPhase() { return screens[state.step].phase; }
       function journeyForStep(step) {
+        var numericStep = Number(step);
         if (state.journeyPersona === "returning" && returningJourney.indexOf(Number(step)) >= 0) return returningJourney;
-        if (Number(step) === 26) return returningJourney;
-        return customerJourney.indexOf(Number(step)) >= 0 ? customerJourney : ownerJourney;
+        if (numericStep === 26) return returningJourney;
+        if (customerJourney.indexOf(numericStep) >= 0) return customerJourney;
+        if (state.plan === "free") {
+          if (freeEditJourney.indexOf(numericStep) >= 0 && freeJourney.indexOf(numericStep) < 0) return freeEditJourney;
+          if (freeAfterJourney.indexOf(numericStep) >= 0 && freeJourney.indexOf(numericStep) < 0) return freeAfterJourney;
+          return freeJourney;
+        }
+        return ownerJourney;
       }
       function journeyPosition(step) {
         return journeyForStep(step).indexOf(Number(step));
@@ -2956,7 +3069,7 @@
       function renderMapQuickRoutes() {
         return '<div class="map-quick-grid">' +
           '<article class="map-quick-card"><strong>Полный путь владельца</strong><p>От регистрации и идеи до free-версии, публикации, MAX Partner, кабинета и аналитики.</p><button data-action="go" data-step="0">Открыть сначала</button></article>' +
-          '<article class="map-quick-card"><strong>Быстрый сценарий Free</strong><p>Показать путь без карты, без токена бота и без запуска в MAX.</p><button data-action="demo-scenario" data-scenario="free">Открыть Free</button></article>' +
+          '<article class="map-quick-card"><strong>Быстрый сценарий Free</strong><p>Выбрать Free → получить тестовый URL → отправить друзьям. Без оплаты, политик, токена и MAX Partner.</p><button data-action="demo-scenario" data-scenario="free">Открыть Free</button></article>' +
           '<article class="map-quick-card"><strong>Платный запуск в MAX</strong><p>Сразу посмотреть блоки публикации, MAX Partner и запуск реального Mini App.</p><button data-action="demo-scenario" data-scenario="paid-launch">К этапу запуска</button></article>' +
           '<article class="map-quick-card"><strong>Путь конечного клиента</strong><p>Открытие Mini App, вход через MAX, выбор заказа, оплата и подтверждение.</p><button data-action="go" data-step="17">Открыть путь клиента</button></article>' +
           '<article class="map-quick-card"><strong>Повторный вход владельца</strong><p>Возврат в проект без новой генерации, со статусом версии и понятным следующим шагом.</p><button data-action="go" data-step="26">Мои приложения</button></article>' +
@@ -3014,7 +3127,7 @@
             planCard("pro", "Pro", "1 490 ₽", "Запустить приложение для реальных клиентов в MAX.", ["Production-публикация и постоянный HTTPS URL", "Быстрое подключение к MAX Partner", "Платежи клиента через ЮKassa", "Чеки, версии и управление подпиской"], true) +
             planCard("business", "Business", "4 990 ₽", "Для нескольких проектов, ролей и общего контроля.", ["20 проектов", "Командный доступ и роли", "Приоритетная помощь", "Общие настройки и лимиты"], false) +
           '</div>' +
-          '<div class="form-actions"><p>' + (state.plan ? "Выбран " + planName() + ". Его можно сменить позже." : "Сначала выберите один тариф") + '</p><button class="btn primary" data-action="confirm-plan"' + (state.plan ? "" : " disabled") + '>Продолжить с ' + (state.plan ? planName() : "тарифом") + ' →</button></div>' +
+          '<div class="form-actions"><p>' + (state.plan ? "Выбран " + planName() + ". Его можно сменить позже." : "Сначала выберите один тариф") + '</p><button class="btn primary" data-action="confirm-plan"' + (state.plan ? "" : " disabled") + '>' + (state.plan === "free" ? "Получить тестовую ссылку →" : "Продолжить с " + (state.plan ? planName() : "тарифом") + " →") + '</button></div>' +
           renderPlanOutcomes() +
           '<div class="plans-note">Free остаётся полноценным бесплатным тарифом без карты. Платный экран появляется только после рабочего превью и перед production-запуском.</div></section></main>';
       }
@@ -3185,9 +3298,9 @@
       function renderPublish() {
         var free = !state.plan || state.plan === "free";
         if (state.deployStatus === "building") {
-          return '<section class="screen-center"><div class="generation-wrap"><div class="generation-visual"><div class="generation-orbit">↗</div><p class="kicker">05 / 06 · Публикация</p><h2>Публикуем версию v' + state.version + '</h2><p>Omnia готовит постоянный HTTPS-адрес и показывает только понятные проверки.</p></div><div class="generation-percent"><span>Проверяем доступность</span><span>4 из 5 проверок</span></div><div class="generation-track"><span style="width:82%"></span></div><div class="human-steps"><div class="human-step done"><span>✓</span>Версия выбрана</div><div class="human-step done"><span>✓</span>Данные сохранены</div><div class="human-step done"><span>✓</span>' + (free ? 'Тестовый доступ' : 'Вход MAX') + '</div><div class="human-step active"><span>4</span>Проверяем ссылку</div></div><div style="margin-top:24px;text-align:center"><button class="btn primary" data-action="finish-publish">Показать готовый URL →</button></div></div></section>';
+          return '<section class="screen-center"><div class="generation-wrap"><div class="generation-visual"><div class="generation-orbit">↗</div><p class="kicker">' + (free ? 'Free · тестовая публикация' : '05 / 06 · Публикация') + '</p><h2>Публикуем версию v' + state.version + '</h2><p>Omnia готовит постоянный HTTPS-адрес и показывает только понятные проверки.</p></div><div class="generation-percent"><span>Проверяем доступность</span><span>' + (free ? '2 из 3 проверок' : '4 из 5 проверок') + '</span></div><div class="generation-track"><span style="width:82%"></span></div><div class="human-steps"><div class="human-step done"><span>✓</span>Версия выбрана</div><div class="human-step done"><span>✓</span>' + (free ? 'Free без оплаты' : 'Данные сохранены') + '</div>' + (free ? '' : '<div class="human-step done"><span>✓</span>Вход MAX</div>') + '<div class="human-step active"><span>' + (free ? '3' : '4') + '</span>Проверяем ссылку</div></div><div style="margin-top:24px;text-align:center"><button class="btn primary" data-action="finish-publish">Показать готовый URL →</button></div></div></section>';
         }
-        return '<section class="screen-pad"><div class="screen-wide"><div class="pricing-intro"><div><p class="kicker">05 / 06 · ' + (free ? 'Тестовая публикация' : 'Production-публикация') + '</p><h2>Опубликуйте выбранную версию</h2><p>' + (free ? 'Ссылка откроется без оплаты и подойдёт для команды и первых тестов.' : 'Данные и безопасный вход уже готовы. После проверки Omnia выдаст production URL для MAX Partner.') + '</p></div><span class="pill green">Версия v' + state.version + ' готова</span></div><div class="publish-grid"><section class="form-card"><div class="form-grid"><div class="field"><label for="publish-slug">Адрес приложения</label><input id="publish-slug" data-field="publishSlug" value="' + escapeHtml(state.publishSlug) + '"><small>' + escapeHtml(publishedUrl().replace('https://', '')) + '</small></div><div class="field"><label for="visibility">Кто сможет открыть</label><select id="visibility" data-field="visibility"><option value="link"' + (state.visibility === 'link' ? ' selected' : '') + '>Все, у кого есть ссылка</option><option value="team"' + (state.visibility === 'team' ? ' selected' : '') + '>Только тестовая команда</option></select></div></div><div class="status-timeline"><div class="status-node done"><span>✓</span><strong>Данные и политики</strong></div><div class="status-node done"><span>✓</span><strong>' + (free ? 'Free без токена' : 'Безопасный вход MAX') + '</strong></div><div class="status-node active"><span>5</span><strong>Production URL</strong></div></div><div class="form-actions"><p>' + (free ? 'Ссылка заработает после проверки.' : 'Настройки связи с MAX Omnia подготовит автоматически.') + '</p><button class="btn primary" data-action="publish">Начать публикацию →</button></div></section><aside class="publish-summary"><p class="kicker">Будет опубликовано</p><h3>' + escapeHtml(state.publishName) + '</h3><dl><div><dt>Текущая версия</dt><dd>v' + state.version + '</dd></div><div><dt>Адрес</dt><dd>' + escapeHtml(publishedUrl().replace('https://', '')) + '</dd></div><div><dt>Доступ</dt><dd>' + (state.visibility === 'team' ? 'Тестовая команда' : 'По ссылке') + '</dd></div><div><dt>Тариф</dt><dd>' + planName() + '</dd></div></dl></aside></div></div></section>';
+        return '<section class="screen-pad"><div class="screen-wide"><div class="pricing-intro"><div><p class="kicker">' + (free ? 'Free · тестовая ссылка' : '05 / 06 · Production-публикация') + '</p><h2>' + (free ? 'Получите ссылку на готовое приложение' : 'Опубликуйте выбранную версию') + '</h2><p>' + (free ? 'Ссылка откроется без оплаты. Её можно сразу отправить друзьям, команде или первым тестировщикам.' : 'Данные и безопасный вход уже готовы. После проверки Omnia выдаст production URL для MAX Partner.') + '</p></div><span class="pill green">Версия v' + state.version + ' готова</span></div><div class="publish-grid"><section class="form-card"><div class="form-grid"><div class="field"><label for="publish-slug">Адрес приложения</label><input id="publish-slug" data-field="publishSlug" value="' + escapeHtml(state.publishSlug) + '"><small>' + escapeHtml(publishedUrl().replace('https://', '')) + '</small></div><div class="field"><label for="visibility">Кто сможет открыть</label><select id="visibility" data-field="visibility"><option value="link"' + (state.visibility === 'link' ? ' selected' : '') + '>Все, у кого есть ссылка</option><option value="team"' + (state.visibility === 'team' ? ' selected' : '') + '>Только тестовая команда</option></select></div></div><div class="status-timeline">' + (free ? '<div class="status-node done"><span>✓</span><strong>Версия готова</strong></div><div class="status-node done"><span>✓</span><strong>Free без оплаты</strong></div><div class="status-node active"><span>2</span><strong>Тестовый URL</strong></div>' : '<div class="status-node done"><span>✓</span><strong>Данные и политики</strong></div><div class="status-node done"><span>✓</span><strong>Безопасный вход MAX</strong></div><div class="status-node active"><span>5</span><strong>Production URL</strong></div>') + '</div><div class="form-actions"><p>' + (free ? 'Ссылка заработает после короткой проверки.' : 'Настройки связи с MAX Omnia подготовит автоматически.') + '</p><button class="btn primary" data-action="publish">' + (free ? 'Получить тестовую ссылку →' : 'Начать публикацию →') + '</button></div></section><aside class="publish-summary"><p class="kicker">Будет опубликовано</p><h3>' + escapeHtml(state.publishName) + '</h3><dl><div><dt>Текущая версия</dt><dd>v' + state.version + '</dd></div><div><dt>Адрес</dt><dd>' + escapeHtml(publishedUrl().replace('https://', '')) + '</dd></div><div><dt>Доступ</dt><dd>' + (state.visibility === 'team' ? 'Тестовая команда' : 'По ссылке') + '</dd></div><div><dt>Тариф</dt><dd>' + planName() + '</dd></div></dl></aside></div></div></section>';
       }
       function renderPublished() {
         var free = !state.plan || state.plan === "free";
@@ -3195,7 +3308,7 @@
           '<div class="launch-url"><code>' + escapeHtml(publishedUrl()) + '</code><button class="btn ghost" data-action="copy-link">Копировать</button></div>' +
           '<div class="launch-steps"><div><span>✓</span><strong>Приложение открывается</strong></div><div><span>✓</span><strong>Версия v' + state.version + ' сохранена</strong></div><div><span>✓</span><strong>' + (free ? "Тестовая ссылка готова" : "Доступно пользователям MAX") + '</strong></div></div>' +
           renderLaunchFollowup(free) +
-          '<div class="inline" style="justify-content:center">' + (free ? '<button class="btn primary" data-action="upgrade-launch">Запустить в MAX</button><button class="btn ghost" data-action="open-map">Путь клиента после запуска →</button>' : '<button class="btn primary" data-action="open-result">Открыть в MAX</button><button class="btn ghost" data-action="open-customer-path">Путь клиента →</button>') + '<button class="btn ghost" data-action="next">Кабинет владельца</button></div>' +
+          '<div class="inline" style="justify-content:center">' + (free ? '<button class="btn primary" data-action="upgrade-launch">Запустить в MAX</button><button class="btn ghost" data-action="open-map">Путь клиента после запуска →</button>' : '<button class="btn primary" data-action="open-result">Открыть в MAX</button><button class="btn ghost" data-action="open-customer-path">Путь клиента →</button>') + '<button class="btn ghost" data-action="go" data-step="15">Кабинет владельца</button></div>' +
         '</div></section>';
       }
       function renderModeration() {
@@ -3236,7 +3349,12 @@
       }
       function renderProjects() {
         var live = isLaunchLive();
-        return '<main class="public-route">' + publicHeader() + '<section class="public-hero"><p class="public-kicker">Рабочее пространство</p><h1>Мои приложения</h1><p>Все проекты сохраняют текущую версию, статус запуска и одно понятное следующее действие.</p></section><section class="public-body"><div class="pricing-intro"><div><p class="kicker">1 приложение</p><h2>Продолжите с места остановки</h2><p>Повторный вход не запускает новую генерацию и не сбрасывает прошлый результат.</p></div><button class="btn primary" data-action="go" data-step="3">Создать приложение</button></div><div class="project-library"><article class="project-card-real"><div class="project-card-preview">' + phone() + '</div><div class="project-card-body"><div class="project-card-head"><div><span class="pill coral">MAX Mini App</span><h3>' + escapeHtml(state.brief.product) + '</h3><p>Версия v' + state.version + ' · состояние сохранено</p></div><span class="pill ' + (live ? 'green' : 'gold') + '">' + (live ? 'Работает' : 'Черновик сохранён') + '</span></div><div class="project-progress"><div><span>Путь до запуска</span><strong>' + (live ? '6 из 6' : '2 из 6') + '</strong></div><div class="progress-track"><span style="width:' + (live ? '100' : '34') + '%"></span></div></div><div class="form-actions"><p>' + (live ? 'Приложение опубликовано.' : 'Следующий шаг: проверить живое превью.') + '</p><button class="btn primary" data-action="go" data-step="11">Открыть проект →</button></div></div></article><aside class="new-project-card"><span>+</span><h3>Новое приложение</h3><p class="muted">Опишите следующую идею обычными словами. Первый рабочий результат снова появится до выбора тарифа.</p><button class="btn ghost" data-action="go" data-step="3">Создать новый проект</button></aside></div></section></main>';
+        var free = state.plan === "free";
+        var progressLabel = free ? (live ? "2 из 2" : "1 из 2") : (live ? "6 из 6" : "2 из 6");
+        var progressWidth = free ? (live ? "100" : "50") : (live ? "100" : "34");
+        var progressTitle = free ? "До тестовой ссылки" : "Путь до запуска";
+        var nextAction = free ? (live ? "Тестовая ссылка уже готова." : "Следующий шаг: получить тестовую ссылку.") : (live ? "Приложение опубликовано." : "Следующий шаг: проверить живое превью.");
+        return '<main class="public-route">' + publicHeader() + '<section class="public-hero"><p class="public-kicker">Рабочее пространство</p><h1>Мои приложения</h1><p>Все проекты сохраняют текущую версию, статус запуска и одно понятное следующее действие.</p></section><section class="public-body"><div class="pricing-intro"><div><p class="kicker">1 приложение</p><h2>Продолжите с места остановки</h2><p>Повторный вход не запускает новую генерацию и не сбрасывает прошлый результат.</p></div><button class="btn primary" data-action="go" data-step="3">Создать приложение</button></div><div class="project-library"><article class="project-card-real"><div class="project-card-preview">' + phone() + '</div><div class="project-card-body"><div class="project-card-head"><div><span class="pill coral">MAX Mini App</span><h3>' + escapeHtml(state.brief.product) + '</h3><p>Версия v' + state.version + ' · состояние сохранено</p></div><span class="pill ' + (live ? 'green' : 'gold') + '">' + (live ? 'Работает' : 'Черновик сохранён') + '</span></div><div class="project-progress"><div><span>' + progressTitle + '</span><strong>' + progressLabel + '</strong></div><div class="progress-track"><span style="width:' + progressWidth + '%"></span></div></div><div class="form-actions"><p>' + nextAction + '</p><button class="btn primary" data-action="go" data-step="11">Открыть проект →</button></div></div></article><aside class="new-project-card"><span>+</span><h3>Новое приложение</h3><p class="muted">Опишите следующую идею обычными словами. Первый рабочий результат снова появится до выбора тарифа.</p><button class="btn ghost" data-action="go" data-step="3">Создать новый проект</button></aside></div></section></main>';
       }
       function renderAccount() {
         var free = !state.plan || state.plan === "free";
@@ -3318,22 +3436,28 @@
         return '<div class="real-site"><main class="client-route"><aside class="client-story">' + brand(false) + '<div><p class="eyebrow">Путь конечного клиента · ' + (position + 1) + '/5</p><h1>' + escapeHtml(screens[state.step].title) + '</h1><p>' + escapeHtml(screens[state.step].short) + '. Здесь показано только то, что действительно видит человек внутри MAX.</p><div class="client-story-steps"><span class="' + (position >= 0 ? "done" : "") + '">Открыл</span><span class="' + (position >= 1 ? "done" : "") + '">Вошёл</span><span class="' + (position >= 2 ? "done" : "") + '">Выбрал</span><span class="' + (position >= 3 ? "done" : "") + '">Оплатил</span><span class="' + (position >= 4 ? "done" : "") + '">Получил</span></div></div><button class="btn ghost" data-action="open-owner-path">← Путь владельца</button></aside><section class="client-device-stage"><div class="max-device"><div class="max-device-top"><strong>09:41</strong><span></span><small>▮ ◉ ▰</small></div><div class="max-device-body">' + content + '</div></div><p class="client-caption">Реалистичный экран приложения внутри MAX · 390 × 844</p></section></main></div>';
       }
       function renderProductSidebar() {
-        var active = state.step === 22 ? "after" : state.step === 24 ? "data" : [16, 25].indexOf(state.step) >= 0 ? "max" : [13, 14, 27].indexOf(state.step) >= 0 ? "publish" : "editor";
+        var free = state.plan === "free";
+        var active = free
+          ? state.step === 14 ? "publish" : "editor"
+          : state.step === 22 ? "after" : state.step === 24 ? "data" : [16, 25].indexOf(state.step) >= 0 ? "max" : [13, 14, 27].indexOf(state.step) >= 0 ? "publish" : "editor";
         var progressMap = { 10: 2, 11: 2, 12: 2, 23: 2, 24: 3, 16: 4, 25: 4, 13: 5, 27: 6, 14: 6, 22: 6 };
-        var progress = progressMap[state.step] || 1;
-        var items = [
-          ["editor", "▣", "Редактор", 11],
-          ["data", "▤", "Данные приложения", 24],
-          ["integrations", "⌁", "Интеграции", 25],
-          ["max", "⌘", "MAX", 16],
-          ["publish", "↗", "Публикация", 13],
-          ["after", "▥", "После запуска", 22]
-        ];
+        var progress = free ? (state.step === 14 ? 2 : 1) : progressMap[state.step] || 1;
+        var total = free ? 2 : 6;
+        var items = free
+          ? [["editor", "▣", "Редактор", 11], ["publish", "↗", "Тестовая ссылка", 14]]
+          : [
+            ["editor", "▣", "Редактор", 11],
+            ["data", "▤", "Данные приложения", 24],
+            ["integrations", "⌁", "Интеграции", 25],
+            ["max", "⌘", "MAX", 16],
+            ["publish", "↗", "Публикация", 13],
+            ["after", "▥", "После запуска", 22]
+          ];
         return '<aside class="product-sidebar"><div class="product-sidebar-head">' + brand() + '</div><nav class="product-sidebar-nav" aria-label="Разделы проекта">' +
           '<button class="sidebar-item" data-action="go" data-step="26"><span class="side-icon">▦</span><span>Все проекты</span></button><div class="sidebar-label">Ваши mini apps</div>' +
           '<div class="project-chip"><span>К</span><div><strong>' + escapeHtml(state.brief.product) + '</strong><small>MAX Mini App</small></div></div><div class="sidebar-label">Проект</div>' +
           items.map(function (item) { return '<button class="sidebar-item' + (active === item[0] ? " active" : "") + '" data-action="go" data-step="' + item[3] + '"><span class="side-icon">' + item[1] + '</span><span>' + item[2] + '</span></button>'; }).join("") +
-          '</nav><div class="launch-path"><div><span>Путь до запуска</span><strong>' + progress + ' из 6</strong></div><div class="progress-track"><span style="width:' + Math.round((progress / 6) * 100) + '%"></span></div></div>' +
+          '</nav><div class="launch-path"><div><span>' + (free ? 'До тестовой ссылки' : 'Путь до запуска') + '</span><strong>' + progress + ' из ' + total + '</strong></div><div class="progress-track"><span style="width:' + Math.round((progress / total) * 100) + '%"></span></div></div>' +
           '<div class="sidebar-account"><span class="sidebar-avatar">А</span><div><strong>' + escapeHtml(state.user.name || "Алексей") + '</strong><small>' + escapeHtml(state.user.email || "alexey@example.ru") + '</small></div></div></aside>';
       }
       function renderLivePreview() {
@@ -3348,10 +3472,12 @@
         return '<aside class="live-preview-panel"><header class="live-preview-head"><div><span>Mobile webview</span><strong>Живое превью</strong></div><small class="connected">' + (state.generated || state.step > 10 ? "Подключено" : "Ожидание") + '</small></header><div class="live-preview-canvas"><div class="version-rail" aria-label="История версий"><div class="version-item current">v' + state.version + '<br><small>Текущая</small></div>' + (state.version > 1 ? '<div class="version-item">v1<br><small>Создана</small></div>' : '') + '</div><div>' + content + '</div></div><footer class="live-preview-foot"><span>390 × 844</span><button class="btn ghost" data-action="open-result">Открыть отдельно ↗</button></footer></aside>';
       }
       function renderProductChrome(content) {
+        var free = state.plan === "free";
         var hasPreview = [10, 11, 12, 13, 14, 23, 24, 25].indexOf(state.step) >= 0;
         var ready = state.generated || state.step > 10;
         var progressMap = { 10: 2, 11: 2, 12: 2, 23: 2, 24: 3, 16: 4, 25: 4, 13: 5, 27: 6, 14: 6, 22: 6 };
-        var progress = progressMap[state.step] || 1;
+        var progress = free ? (state.step === 14 ? 2 : 1) : progressMap[state.step] || 1;
+        var total = free ? 2 : 6;
         var journey = journeyForStep(state.step);
         var position = journey.indexOf(state.step);
         var nextScreen = position >= 0 && position < journey.length - 1 ? screens[journey[position + 1]] : null;
@@ -3367,8 +3493,8 @@
         var composer = [10, 11, 12, 23].indexOf(state.step) >= 0 ? '<footer class="product-composer"><div class="product-composer-inner"><span>' + composerLabel + '</span><button data-action="composer" aria-label="Отправить сообщение">↗</button></div><div class="composer-hint">Ctrl + Enter · история и версии сохраняются</div></footer>' : "";
         return '<div class="real-site"><div class="product-shell' + (hasPreview ? "" : " no-preview") + '">' +
           renderProductSidebar() +
-          '<section class="product-main"><header class="product-header"><div class="product-title"><strong>' + escapeHtml(state.brief.product) + '</strong><span>' + (ready ? "Изменения сохранены" : "Подготовка первого результата") + '</span></div><div class="product-header-actions"><button class="btn ghost cost-action" data-action="go" data-step="15">Тариф · ' + planName() + '</button><button class="btn ghost secondary-action" data-action="documents">Скачать</button><button class="btn ghost secondary-action" data-action="go" data-step="25">Интеграции</button><button class="btn primary" data-action="next"' + (nextBlocked ? " disabled" : "") + '>Продолжить · ' + progress + '/6 ⌄</button></div></header>' +
-          '<button class="next-action-bar" data-action="next"' + (nextBlocked ? " disabled" : "") + '><span class="next-number">' + progress + '</span><span class="next-copy"><small>Следующий шаг</small><strong>' + nextLabel + '</strong></span><span class="next-count">' + progress + ' из 6</span><span>›</span></button>' +
+          '<section class="product-main"><header class="product-header"><div class="product-title"><strong>' + escapeHtml(state.brief.product) + '</strong><span>' + (ready ? "Изменения сохранены" : "Подготовка первого результата") + '</span></div><div class="product-header-actions"><button class="btn ghost cost-action" data-action="go" data-step="15">Тариф · ' + planName() + '</button><button class="btn ghost secondary-action" data-action="documents">Скачать</button>' + (free ? '' : '<button class="btn ghost secondary-action" data-action="go" data-step="25">Интеграции</button>') + '<button class="btn primary" data-action="next"' + (nextBlocked ? " disabled" : "") + '>' + (free ? (state.step === 14 ? 'Ссылка готова' : 'К тестовой ссылке') : 'Продолжить') + ' · ' + progress + '/' + total + ' ⌄</button></div></header>' +
+          '<button class="next-action-bar" data-action="next"' + (nextBlocked ? " disabled" : "") + '><span class="next-number">' + progress + '</span><span class="next-copy"><small>Следующий шаг</small><strong>' + nextLabel + '</strong></span><span class="next-count">' + progress + ' из ' + total + '</span><span>›</span></button>' +
           '<main class="product-content"><div class="product-scroll"><div class="screen">' + content + '</div></div>' + composer + '</main></section>' +
           (hasPreview ? renderLivePreview() : "") + '</div></div>';
       }
@@ -3408,7 +3534,8 @@
           (state.step === 27 && !state.maxUrlConnected);
         var verificationLocked = state.step === 2 && !state.verified;
         var personaLabel = state.journeyPersona === "customer" ? "Клиент" : state.journeyPersona === "returning" ? "Возврат" : "Владелец";
-        return '<nav class="cjm-dock" aria-label="Переключатель экранов CJM"><button data-action="reset" aria-label="Начать заново">↺</button><button data-action="prev" aria-label="Предыдущий экран"' + (position === 0 ? " disabled" : "") + '>←</button><div class="dock-progress"><div class="dock-copy"><strong>' + escapeHtml(screens[state.step].title) + '</strong><span>' + personaLabel + ' · ' + (position + 1) + ' из ' + journey.length + '</span></div><div class="progress-track"><span style="width:' + percent + '%"></span></div></div><button class="primary" data-action="next" aria-label="Следующий экран"' + (position === journey.length - 1 || verificationLocked || paymentLocked || launchLocked ? " disabled" : "") + '>→</button><button data-action="open-map" aria-label="Открыть карту пути">⌘</button></nav>';
+        var light = state.theme === "light";
+        return '<nav class="cjm-dock" aria-label="Переключатель экранов CJM"><button data-action="reset" aria-label="Начать заново">↺</button><button data-action="prev" aria-label="Предыдущий экран"' + (position === 0 ? " disabled" : "") + '>←</button><div class="dock-progress"><div class="dock-copy"><strong>' + escapeHtml(screens[state.step].title) + '</strong><span>' + personaLabel + ' · ' + (position + 1) + ' из ' + journey.length + '</span></div><div class="progress-track"><span style="width:' + percent + '%"></span></div></div><button class="primary" data-action="next" aria-label="Следующий экран"' + (position === journey.length - 1 || verificationLocked || paymentLocked || launchLocked ? " disabled" : "") + '>→</button><button data-action="open-map" aria-label="Открыть карту пути">⌘</button><button class="theme-switch" data-action="toggle-theme" aria-label="' + (light ? "Включить тёмную тему" : "Включить светлую тему") + '" aria-pressed="' + light + '" title="' + (light ? "Тёмная тема" : "Светлая тема") + '">' + (light ? "☾" : "☀") + '</button></nav>';
       }
       function renderLegalTrigger() {
         if (state.mapOpen || legalStep !== null) return "";
@@ -3440,7 +3567,22 @@
         if (!state.mapOpen) return "";
         return '<div class="map-overlay" role="dialog" aria-modal="true" aria-labelledby="map-title"><div class="map-dialog"><div class="map-head"><div><p class="eyebrow">Customer Journey Map · полный маршрут</p><h2 id="map-title">От регистрации владельца до результата клиента</h2><p>Реальные экраны, обязательные действия, точки оплаты, публикация, повторный вход и жизнь подписки. Только пользовательский путь, без внутренней кухни.</p></div><button class="icon-btn" data-action="close-map" aria-label="Закрыть">×</button></div><div class="map-kpis"><div class="map-kpi"><strong>' + (ownerJourney.length + 1) + '</strong><span>экранов владельца</span></div><div class="map-kpi"><strong>' + customerJourney.length + '</strong><span>экранов клиента</span></div><div class="map-kpi"><strong>' + phases.length + '</strong><span>этапов полного пути</span></div><div class="map-kpi"><strong>' + journeyBranches.length + '</strong><span>важных развилок</span></div></div><div class="conversion-principle"><strong>Главный принцип</strong><span>Сначала регистрация, подтверждение email и бесплатная рабочая версия. Тариф, ЮKassa и MAX подключаются только когда владелец уже увидел результат.</span></div><section class="map-phase-section"><header><h3>Полный маршрут по этапам</h3><p>Видно, что именно обещает каждый этап, чем он заканчивается и где пользователь принимает важные решения.</p></header><div class="map-phase-grid">' + renderMapPhaseCards() + '</div></section><section class="branch-section"><header><h3>Быстрые маршруты</h3><p>Можно открыть целый готовый сценарий: бесплатный старт, запуск в MAX, повторный вход или путь конечного клиента.</p></header>' + renderMapQuickRoutes() + '</section><section class="map-journey"><header><span>01</span><div><strong>Владелец продукта</strong><small>Регистрация → email → первый проект → бесплатная версия → правки → тариф → запуск → рост</small></div></header><div class="map-grid">' + renderMapSteps(ownerJourney) + '</div></section><section class="map-journey"><header><span>02</span><div><strong>Возвращающийся владелец</strong><small>Вход → список сохранённых приложений → продолжение с текущей версии</small></div></header><div class="map-grid">' + renderMapSteps(returningJourney) + '</div></section><section class="map-journey"><header><span>03</span><div><strong>Клиент приложения</strong><small>Открытие в MAX → безопасный вход → действие → оплата → результат</small></div></header><div class="map-grid">' + renderMapSteps(customerJourney) + '</div></section><section class="branch-section"><header><h3>Развилки и проблемные состояния</h3><p>Каждая ветка сохраняет контекст и ведёт к понятному следующему действию — без тупиков и повторных списаний.</p></header><div class="branch-grid">' + renderJourneyBranches() + '</div></section></div></div>';
       }
+      function normalizeFreeRoute() {
+        var paidOnlySteps = [6, 7, 8, 9, 13, 14, 16, 24, 25, 27];
+        var numericStep = Number(state.step);
+        if (state.plan !== "free" || paidOnlySteps.indexOf(numericStep) < 0) return false;
+        if (numericStep === 14 && state.published && state.deployStatus === "succeeded") return false;
+        state.deployStatus = "succeeded";
+        state.published = true;
+        state.step = 14;
+        state.journeyPersona = "owner";
+        return true;
+      }
       function render() {
+        if (normalizeFreeRoute()) saveState();
+        state.theme = state.theme === "light" ? "light" : "dark";
+        document.body.className = "theme-" + state.theme;
+        document.documentElement.style.colorScheme = state.theme;
         var content = renderers[state.step]();
         var client = state.step >= 17 && state.step <= 21;
         var product = (state.step >= 10 && state.step < 15) || state.step === 16 || state.step === 22 || state.step === 23 || state.step === 24 || state.step === 25 || state.step === 27;
@@ -3527,6 +3669,11 @@
         var trigger = event.target.closest("[data-action]");
         if (!trigger || trigger.disabled) return;
         var action = trigger.getAttribute("data-action");
+        if (action === "toggle-theme") {
+          state.theme = state.theme === "light" ? "dark" : "light";
+          saveState();
+          return render();
+        }
         if (action === "open-legal") return openLegal(trigger.getAttribute("data-legal-step"));
         if (action === "close-legal") return closeLegal();
         if (action === "copy-legal") return copyLegalQuestion();
@@ -3558,10 +3705,17 @@
           }
           if (scenario === "free") {
             state.plan = "free";
-            state.paid = true;
-            state.paymentStatus = "succeeded";
+            state.paid = false;
+            state.paymentStatus = "idle";
             state.renewal = false;
             state.methodSaved = false;
+            state.cancelled = false;
+            state.deployStatus = "idle";
+            state.published = false;
+            state.appDataReady = false;
+            state.moderationStatus = "draft";
+            state.maxAccessConnected = false;
+            state.maxUrlConnected = false;
             saveState();
             return go(5);
           }
@@ -3657,17 +3811,22 @@
           return render();
         }
         if (action === "logout") {
+          var logoutTheme = state.theme;
           window.clearInterval(generationTimer);
           localStorage.removeItem(STORAGE_KEY);
           state = clone(defaults);
+          state.theme = logoutTheme;
+          saveState();
           render();
           window.scrollTo({ top: 0, behavior: "smooth" });
           return;
         }
         if (action === "reset") {
           if (!window.confirm("Начать демонстрацию сначала? Выбор тарифа и введённые ответы будут сброшены.")) return;
+          var resetTheme = state.theme;
           window.clearInterval(generationTimer);
           state = clone(defaults);
+          state.theme = resetTheme;
           saveState();
           return go(0);
         }
@@ -3707,15 +3866,36 @@
             state.paymentMode = "sbp";
             state.providerStage = "method";
             state.refundStatus = "none";
+            if (state.plan === "free" && nextPlan !== "free") {
+              state.deployStatus = "idle";
+              state.published = false;
+              state.appDataReady = false;
+              state.moderationStatus = "draft";
+              state.maxAccessConnected = false;
+              state.maxUrlConnected = false;
+            }
           }
           state.plan = nextPlan;
           saveState();
           return render();
         }
-        if (action === "confirm-plan") return go(6);
+        if (action === "confirm-plan") {
+          if (state.plan === "free") {
+            state.paid = true;
+            state.paymentStatus = "succeeded";
+            state.renewal = false;
+            state.methodSaved = false;
+            state.cancelled = false;
+            state.deployStatus = "succeeded";
+            state.published = true;
+            saveState();
+            return go(14);
+          }
+          return go(6);
+        }
         if (action === "back-plans" || action === "change-plan") return go(5);
         if (action === "payment-mode") { state.paymentMode = trigger.getAttribute("data-mode"); saveState(); return render(); }
-        if (action === "activate-free") { state.plan = "free"; state.paid = true; state.paymentStatus = "succeeded"; state.renewal = false; state.methodSaved = false; state.cancelled = false; saveState(); return go(9); }
+        if (action === "activate-free") { state.plan = "free"; state.paid = true; state.paymentStatus = "succeeded"; state.renewal = false; state.methodSaved = false; state.cancelled = false; state.deployStatus = "succeeded"; state.published = true; saveState(); return go(14); }
         if (action === "pay") {
           if (!state.offer) return setToast("Для оформления нужно принять условия тарифа.");
           state.paid = false;
@@ -3900,7 +4080,7 @@
         if (action === "skip-max-partner") return go(13);
         if (action === "skip-max-access") return moveJourney(1);
         if (action === "publish") {
-          if (!state.appDataReady) { state.toast = "Сначала заполните данные и политики приложения."; return go(24); }
+          if (state.plan !== "free" && !state.appDataReady) { state.toast = "Сначала заполните данные и политики приложения."; return go(24); }
           if (state.plan && state.plan !== "free" && !state.maxAccessConnected) { state.toast = "Сначала подключите безопасный вход MAX."; return go(25); }
           if (!state.publishSlug.trim()) return setToast("Проверьте адрес приложения.");
           state.deployStatus = "building";
