@@ -54,7 +54,11 @@ def credentials(provider: str) -> OAuthCredentials | None:
     pair = pairs.get(provider)
     if pair is None or pair[0] is None or pair[1] is None:
         return None
-    return OAuthCredentials(pair[0], pair[1].get_secret_value())
+    client_id = pair[0].strip()
+    client_secret = pair[1].get_secret_value().strip()
+    if not client_id or not client_secret:
+        return None
+    return OAuthCredentials(client_id, client_secret)
 
 
 def callback_url(provider: str) -> str:

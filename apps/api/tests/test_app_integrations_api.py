@@ -4,10 +4,12 @@ import hashlib
 import hmac
 import json
 import time
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from omnia_api.core.config import get_settings
@@ -19,7 +21,7 @@ from omnia_api.models.app_integration import (
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import projects as projects_router
-from omnia_api.services import integration_providers
+from omnia_api.services import integration_oauth, integration_providers
 from omnia_api.services import repo as repo_svc
 
 
@@ -238,6 +240,57 @@ def test_provider_values_are_split_and_unknown_fields_rejected() -> None:
             provider,
             {"shop_id": "100", "secret_key": "secret", "unexpected": "value"},
         )
+
+
+@pytest.mark.parametrize(
+    ("client_id", "client_secret"),
+    [
+        (None, None),
+        ("", ""),
+        ("   ", "configured-secret"),
+        ("configured-client", "   "),
+    ],
+)
+def test_oauth_credentials_require_nonempty_platform_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    client_id: str | None,
+    client_secret: str | None,
+) -> None:
+    settings = SimpleNamespace(
+        integration_yookassa_client_id=client_id,
+        integration_yookassa_client_secret=(
+            SecretStr(client_secret) if client_secret is not None else None
+        ),
+        integration_yandex_client_id=None,
+        integration_yandex_client_secret=None,
+        integration_bitrix24_client_id=None,
+        integration_bitrix24_client_secret=None,
+        integration_amocrm_client_id=None,
+        integration_amocrm_client_secret=None,
+    )
+    monkeypatch.setattr(integration_oauth, "get_settings", lambda: settings)
+
+    assert integration_oauth.credentials("yookassa") is None
+
+
+def test_oauth_credentials_strip_platform_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = SimpleNamespace(
+        integration_yookassa_client_id="  configured-client  ",
+        integration_yookassa_client_secret=SecretStr("  configured-secret  "),
+        integration_yandex_client_id=None,
+        integration_yandex_client_secret=None,
+        integration_bitrix24_client_id=None,
+        integration_bitrix24_client_secret=None,
+        integration_amocrm_client_id=None,
+        integration_amocrm_client_secret=None,
+    )
+    monkeypatch.setattr(integration_oauth, "get_settings", lambda: settings)
+
+    assert integration_oauth.credentials("yookassa") == integration_oauth.OAuthCredentials(
+        "configured-client", "configured-secret"
+    )
 
 
 def _max_init_data(token: str, user_id: int | str = 42) -> str:
