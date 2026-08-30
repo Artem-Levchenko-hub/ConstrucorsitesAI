@@ -353,6 +353,7 @@ def _tar_bytes(
     files: dict[str, bytes],
     *,
     symlinks: dict[str, str] | None = None,
+    directories: list[str] | None = None,
 ) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as archive:
@@ -365,6 +366,11 @@ def _tar_bytes(
             info = tarfile.TarInfo(name=name)
             info.type = tarfile.SYMTYPE
             info.linkname = target
+            archive.addfile(info)
+        for name in directories or []:
+            info = tarfile.TarInfo(name=name)
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
             archive.addfile(info)
     return buf.getvalue()
 
@@ -406,11 +412,10 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
 
         def run(self, *, image: str, **kwargs: Any) -> _SandboxContainer:
             self.run_kwargs = {"image": image, **kwargs}
-            output_dir = Path(kwargs["volumes"][str(workspace.parent / "sandbox-output")]["bind"])
-            assert output_dir == Path("/sandbox-output")
-            result_dir = workspace.parent / "sandbox-output"
-            result_dir.mkdir(parents=True, exist_ok=True)
-            (result_dir / "workspace.tar").write_bytes(archive_bytes)
+            result_archive = workspace.parent / "sandbox-output" / "workspace.tar"
+            output_file = Path(kwargs["volumes"][str(result_archive)]["bind"])
+            assert output_file == Path("/sandbox-output.tar")
+            result_archive.write_bytes(archive_bytes)
             return self.container
 
     client = type("C", (), {"containers": _SandboxContainers()})()
@@ -434,17 +439,25 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
     assert kw["image"] == "omnia-template-max-miniapp-nextjs:dev"
     assert kw["command"][0:2] == ["sh", "-lc"]
     assert "cd /workspace" in kw["command"][2]
-    assert "pnpm typecheck" in kw["command"][2]
+    assert 'sh -lc "$OMNIA_SANDBOX_COMMAND"' in kw["command"][2]
+    assert "pnpm typecheck" not in kw["command"][2]
     assert "sandbox bootstrap failed: seed mount unavailable" in kw["command"][2]
     assert "if ! cp -R /seed/. /workspace/" in kw["command"][2]
-    assert "tar -C /workspace -cf /sandbox-output/workspace.tar ." in kw["command"][2]
+    assert "ulimit -Sf 163840" in kw["command"][2]
+    assert "kill -KILL $survivor_pids" in kw["command"][2]
+    assert "background cleanup failed" in kw["command"][2]
+    assert "tar --exclude='./node_modules'" in kw["command"][2]
+    assert "--exclude='*/node_modules'" in kw["command"][2]
+    assert "--exclude='./.next'" in kw["command"][2]
+    assert " -C /workspace -cf /sandbox-output.tar ." in kw["command"][2]
     assert "cp -a /app/node_modules /workspace/node_modules" in kw["command"][2]
     assert "cp -a /seed/. /workspace/ 2>/dev/null || true" not in kw["command"][2]
     assert "ln -s" not in kw["command"][2]
     assert kw["working_dir"] == "/workspace"
+    result_archive = workspace.parent / "sandbox-output" / "workspace.tar"
     assert kw["volumes"] == {
         str(workspace): {"bind": "/seed", "mode": "ro"},
-        str(workspace.parent / "sandbox-output"): {"bind": "/sandbox-output", "mode": "rw"},
+        str(result_archive): {"bind": "/sandbox-output.tar", "mode": "rw"},
     }
     assert kw["read_only"] is True
     assert kw["tmpfs"] == {
@@ -461,11 +474,13 @@ async def test_run_sandbox_command_uses_read_only_workspace_and_cleans_up(
     assert kw["user"] == "1000:1000"
     assert kw["init"] is True
     assert kw["environment"]["OMNIA_PROJECT_ID"] == "00000000-0000-0000-0000-000000000001"
+    assert kw["environment"]["OMNIA_SANDBOX_COMMAND"] == "pnpm typecheck"
     assert set(kw["environment"]) == {
         "CI",
         "HOME",
         "NODE_ENV",
         "OMNIA_PROJECT_ID",
+        "OMNIA_SANDBOX_COMMAND",
         "npm_config_cache",
     }
     assert kw["labels"]["omnia.kind"] == "sandbox"
@@ -571,6 +586,67 @@ async def test_run_sandbox_command_fails_closed_when_workspace_export_fails(
     assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
     assert not list(workspace.glob(".omnia-sandbox-seed-*"))
     assert not (workspace.parent / "sandbox-output").exists()
+
+
+async def test_run_sandbox_command_rejects_signal_exit_before_reading_export(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+
+    class _SignalledContainer:
+        def __init__(self) -> None:
+            self.removed_force: bool | None = None
+
+        def wait(self, timeout: int) -> dict[str, int]:
+            return {"StatusCode": 137}
+
+        def logs(self, stdout: bool = True, stderr: bool = True) -> bytes:
+            return b""
+
+        def remove(self, force: bool = False) -> None:
+            self.removed_force = force
+
+    class _SignalledContainers:
+        def __init__(self) -> None:
+            self.container = _SignalledContainer()
+
+        def run(self, *, image: str, **kwargs: Any) -> _SignalledContainer:
+            result_archive = workspace.parent / "sandbox-output" / "workspace.tar"
+            result_archive.write_bytes(_tar_bytes({"workspace/pwned.txt": b"crafted"}))
+            return self.container
+
+    containers = _SignalledContainers()
+    client = type("C", (), {"containers": containers})()
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    with pytest.raises(OrchestratorError, match="terminated before a trusted export"):
+        await docker_client.run_sandbox_command(
+            image="omnia-template-max-miniapp-nextjs:dev",
+            workspace_dir=workspace,
+            project_id="00000000-0000-0000-0000-000000000001",
+            cmd="kill -9 $PPID",
+        )
+
+    assert containers.container.removed_force is True
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert not (workspace / "pwned.txt").exists()
+    assert not (workspace.parent / "sandbox-output").exists()
+
+
+def test_sandbox_archive_counts_directories_and_excluded_members(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    raw = _tar_bytes(
+        {},
+        directories=[f"workspace/node_modules/pkg-{index}/" for index in range(10_001)],
+    )
+
+    with pytest.raises(OrchestratorError, match="too many members"):
+        docker_client._replace_workspace_from_sandbox_archive(raw, workspace)
+
+    assert workspace.is_dir()
 
 
 def test_read_bounded_archive_rejects_oversized_stream() -> None:

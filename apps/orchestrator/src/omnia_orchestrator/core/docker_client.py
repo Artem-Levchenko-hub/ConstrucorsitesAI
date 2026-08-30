@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import stat
 import subprocess
 import time
 from collections.abc import Iterable
@@ -42,6 +43,24 @@ _RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
 _SANDBOX_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 _SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE = "190"
 _SANDBOX_EXPORT_FAILURE_EXIT_CODE = "191"
+_SANDBOX_EXPORT_EXCLUDES = (
+    "./node_modules",
+    "*/node_modules",
+    "./.next",
+    "*/.next",
+    "./.git",
+    "*/.git",
+    "./__pycache__",
+    "*/__pycache__",
+    "./dist",
+    "*/dist",
+    "./build",
+    "*/build",
+    "./.venv",
+    "*/.venv",
+    "./vendor",
+    "*/vendor",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -591,9 +610,10 @@ async def run_sandbox_command(
     size-capped tmpfs at ``/workspace`` before the user command starts.  The
     finished workspace is copied back only after the container exits and the
     archive has passed a regular-file-only validation.  This deliberately does
-    *not* give the shell a writable host bind mount: a symlink or disk-fill in a
+    *not* give the shell a writable host directory: only one pre-created,
+    file-size-limited result archive is writable. A symlink or disk-fill in a
     generated package lifecycle script therefore stays inside the disposable
-    container instead of reaching the orchestrator host.
+    container instead of reaching the orchestrator host filesystem.
 
     The sandbox has no network namespace access and never receives
     ``host.docker.internal``. Dependency manifests may still change; the live
@@ -622,6 +642,11 @@ async def run_sandbox_command(
         result_archive = result_dir / "workspace.tar"
         shutil.rmtree(result_dir, ignore_errors=True)
         result_dir.mkdir(parents=True, exist_ok=True)
+        result_archive.touch(mode=0o600)
+        # The sandbox always runs as uid 1000, while the documented systemd
+        # service user may have another uid. Expose write-only access to this
+        # one size-limited inode, never to its parent directory.
+        result_archive.chmod(0o622)
         security_kwargs: dict[str, object] = {}
         if runtime:
             security_kwargs["runtime"] = runtime
@@ -648,13 +673,40 @@ async def run_sandbox_command(
                 "  cp -a /app/node_modules /workspace/node_modules 2>/dev/null || true",
                 "fi",
                 "cd /workspace",
+                (
+                    "if ! ulimit -Sf 163840 || ! ulimit -Hf 163840; then "
+                    "echo 'sandbox bootstrap failed: file limit unavailable' >&2; "
+                    f"exit {_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE}; fi"
+                ),
                 "set +e",
-                "(",
-                cmd,
-                ")",
+                'sh -lc "$OMNIA_SANDBOX_COMMAND"',
                 "cmd_status=$?",
                 (
-                    "if ! tar -C /workspace -cf /sandbox-output/workspace.tar .; then"
+                    f'if [ "$cmd_status" -eq {_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE} ] '
+                    f'|| [ "$cmd_status" -eq {_SANDBOX_EXPORT_FAILURE_EXIT_CODE} ]; then '
+                    "cmd_status=192; fi"
+                ),
+                "cleanup_ok=0",
+                "for cleanup_attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
+                "  survivor_pids=",
+                "  for proc_path in /proc/[0-9]*; do",
+                '    proc_pid="${proc_path##*/}"',
+                '    if [ "$proc_pid" != "1" ] && [ "$proc_pid" != "$$" ]; then',
+                '      survivor_pids="$survivor_pids $proc_pid"',
+                "    fi",
+                "  done",
+                '  if [ -z "$survivor_pids" ]; then cleanup_ok=1; break; fi',
+                "  kill -KILL $survivor_pids 2>/dev/null || true",
+                "  sleep 0.05",
+                "done",
+                'if [ "$cleanup_ok" != "1" ]; then',
+                "  echo 'sandbox bootstrap failed: background cleanup failed' >&2",
+                f"  exit {_SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE}",
+                "fi",
+                (
+                    "if ! tar"
+                    + "".join(f" --exclude='{item}'" for item in _SANDBOX_EXPORT_EXCLUDES)
+                    + " -C /workspace -cf /sandbox-output.tar .; then"
                 ),
                 "  echo 'sandbox export failed: workspace tar failed' >&2",
                 f"  exit {_SANDBOX_EXPORT_FAILURE_EXIT_CODE}",
@@ -674,12 +726,13 @@ async def run_sandbox_command(
                         "HOME": "/tmp/agent-home",
                         "NODE_ENV": "development",
                         "OMNIA_PROJECT_ID": project_id,
+                        "OMNIA_SANDBOX_COMMAND": cmd,
                         "npm_config_cache": "/tmp/npm-cache",
                     },
                     working_dir="/workspace",
                     volumes={
                         str(workspace_dir): {"bind": "/seed", "mode": "ro"},
-                        str(result_dir): {"bind": "/sandbox-output", "mode": "rw"},
+                        str(result_archive): {"bind": "/sandbox-output.tar", "mode": "rw"},
                     },
                     read_only=True,
                     tmpfs={
@@ -734,13 +787,25 @@ async def run_sandbox_command(
                         message="sandbox result export failed",
                         status_code=500,
                     )
+                if status_code.isdigit() and int(status_code) >= 128:
+                    raise OrchestratorError(
+                        code="container_failure",
+                        message="sandbox command terminated before a trusted export",
+                        status_code=500,
+                    )
                 try:
-                    archive_size = result_archive.stat().st_size
-                    if archive_size > _SANDBOX_ARCHIVE_MAX_BYTES:
+                    archive_stat = result_archive.lstat()
+                    if not stat.S_ISREG(archive_stat.st_mode) or archive_stat.st_nlink != 1:
+                        raise OrchestratorError(
+                            code="container_failure",
+                            message="sandbox workspace export is not a regular file",
+                            status_code=500,
+                        )
+                    if not 0 < archive_stat.st_size <= _SANDBOX_ARCHIVE_MAX_BYTES:
                         raise OrchestratorError(
                             code="validation_failed",
                             message=(
-                                "sandbox workspace archive exceeds "
+                                "sandbox workspace archive must be between 1 and "
                                 f"{_SANDBOX_ARCHIVE_MAX_BYTES} bytes"
                             ),
                             status_code=413,
@@ -813,7 +878,9 @@ def _replace_workspace_from_sandbox_archive(raw: bytes, workspace_dir: Path) -> 
     import tarfile
 
     max_files = 5_000
+    max_members = 10_000
     max_bytes = 64 * 1024 * 1024
+    seen_members = 0
     extracted_files = 0
     extracted_bytes = 0
     staging = workspace_dir.parent / f"{workspace_dir.name}-collected"
@@ -821,8 +888,15 @@ def _replace_workspace_from_sandbox_archive(raw: bytes, workspace_dir: Path) -> 
     staging.mkdir(parents=True, exist_ok=True)
 
     try:
-        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as archive:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
             for member in archive:
+                seen_members += 1
+                if seen_members > max_members:
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message="sandbox archive contains too many members",
+                        status_code=413,
+                    )
                 normalized = posixpath.normpath(member.name).lstrip("/")
                 parts = [part for part in normalized.split("/") if part not in {"", "."}]
                 if parts and parts[0] == "workspace":
