@@ -10,7 +10,7 @@ from omnia_orchestrator.routers.runtime import (
     _command_exposes_environment,
     _redact_exec_output,
 )
-from omnia_orchestrator.schemas.runtime import HotReloadRequest
+from omnia_orchestrator.schemas.runtime import AgentSandboxExecRequest, HotReloadRequest
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +126,47 @@ async def test_agent_sandbox_capabilities_fail_closed_on_runtime_drift(
         "runtime:project_network",
         "runtime:platform_secrets_absent",
     ]
+
+
+async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_id = "00000000-0000-0000-0000-000000000111"
+    workspace = tmp_path / "projects" / project_id
+    workspace.mkdir(parents=True)
+    (workspace / "seed.txt").write_text("seed", encoding="utf-8")
+    seen: dict[str, Path | str] = {}
+
+    async def _run_sandbox_command(**kwargs):
+        sandbox_root = kwargs["workspace_dir"]
+        seen["sandbox_root"] = sandbox_root
+        seen["sandbox_tmp"] = sandbox_root.parent
+        seen["seed"] = (sandbox_root / "seed.txt").read_text(encoding="utf-8")
+        return {"exit_code": "0", "stdout": "sandbox ok", "stderr": ""}
+
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "container_image_name",
+        AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
+    )
+    monkeypatch.setattr(runtime, "run_sandbox_command", _run_sandbox_command)
+
+    result = await runtime.agent_exec_sandbox(
+        project_id,
+        AgentSandboxExecRequest(slug="max-app", cmd="true"),
+        "test-token-test-token-test-token",
+    )
+
+    sandbox_tmp = seen["sandbox_tmp"]
+    assert result["ok"] is True
+    assert result["files"] == {}
+    assert result["changed"] == "0"
+    assert seen["seed"] == "seed"
+    assert isinstance(sandbox_tmp, Path)
+    assert sandbox_tmp.parent == tmp_path / "agent-sandboxes"
+    assert not sandbox_tmp.exists()
 
 
 async def test_hot_reload_installs_changed_dependencies_without_lifecycle_scripts(

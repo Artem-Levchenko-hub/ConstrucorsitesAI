@@ -157,6 +157,18 @@ def _project_workspace_dir(project_id: str) -> Path:
     return Path(get_settings().projects_root) / project_id
 
 
+def _sandbox_work_base() -> Path:
+    """Host-visible root for temporary sandbox workspaces.
+
+    The orchestrator runs under systemd with ``PrivateTmp=yes``, so paths under
+    the process-local ``/tmp`` namespace are invisible to the Docker daemon and
+    bind-mount as empty directories. Stage the sandbox copy next to
+    ``projects_root`` under the shared runtime root instead.
+    """
+
+    return Path(get_settings().projects_root).parent / "agent-sandboxes"
+
+
 def _project_workspace_lock(project_id: str) -> asyncio.Lock:
     return _PROJECT_WORKSPACE_LOCKS.setdefault(project_id, asyncio.Lock())
 
@@ -822,8 +834,13 @@ async def agent_exec_sandbox(
 
     settings = get_settings()
     network_name = f"omnia-proj-{project_id}" if settings.isolate_project_network else None
-    with tempfile.TemporaryDirectory(prefix=f"omnia-sandbox-{project_id}-") as tmp:
-        sandbox_root = Path(tmp) / "workspace"
+    sandbox_base = _sandbox_work_base()
+    sandbox_base.mkdir(parents=True, exist_ok=True)
+    sandbox_tmp = Path(
+        tempfile.mkdtemp(prefix=f"omnia-sandbox-{project_id}-", dir=str(sandbox_base))
+    )
+    try:
+        sandbox_root = sandbox_tmp / "workspace"
         async with _project_workspace_lock(project_id):
             before_files, before_dropped = await asyncio.to_thread(
                 _collect_workspace_text_files, workspace
@@ -850,6 +867,8 @@ async def agent_exec_sandbox(
         after_files, after_dropped = await asyncio.to_thread(
             _collect_workspace_text_files, sandbox_root
         )
+    finally:
+        shutil.rmtree(sandbox_tmp, ignore_errors=True)
 
     changed_files = _diff_workspace_files(before_files, after_files)
     ok = result["exit_code"] == "0"
