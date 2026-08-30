@@ -4,6 +4,7 @@ import tarfile
 
 import pytest
 
+from omnia_api.services import repo as repo_svc
 from omnia_api.services.repo_import import detect_template, parse_github_url, tarball_to_files
 
 
@@ -125,8 +126,27 @@ def test_detect_code_for_empty():
 # ---------------------------------------------------------------------------
 
 
-def test_truncation():
+def test_truncation(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(repo_svc, "MAX_FILES", 100)
     files = {f"f{i}.txt": b"x" for i in range(150)}
     r = tarball_to_files(_make_tar(files))
     assert r.truncated is True
     assert len(r.files) == 100
+
+
+def test_total_text_budget_truncates_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(repo_svc, "MAX_REPO_BYTES", 5)
+
+    result = tarball_to_files(_make_tar({"b.txt": b"def", "a.txt": b"abc"}))
+
+    assert result.truncated is True
+    assert result.files == {"a.txt": "abc"}
+
+
+def test_import_drops_unsafe_repository_paths() -> None:
+    result = tarball_to_files(_make_tar({"../escape.txt": b"bad", "src/a.ts": b"ok"}))
+
+    assert result.truncated is True
+    assert result.files == {"src/a.ts": "ok"}

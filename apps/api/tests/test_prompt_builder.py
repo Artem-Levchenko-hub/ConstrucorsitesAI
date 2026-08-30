@@ -418,6 +418,8 @@ def test_max_miniapp_prompt_routes_to_platform_stack() -> None:
     assert _MAX_MARKER in sp
     assert "MAX_BOT_TOKEN" in sp
     assert "requireMaxUser()" in sp
+    assert "Один ответ может изменить до 100 файлов" in sp
+    assert "до 5000 файлов" in sp
     assert "Telegram WebApp API" in sp
     assert _TGBOT_MARKER not in sp
     assert _SPA_MARKER not in sp

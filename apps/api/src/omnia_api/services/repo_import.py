@@ -106,8 +106,11 @@ def tarball_to_files(tar_bytes: bytes) -> ImportResult:
     """
     files: dict[str, str] = {}
     skipped_bin = 0
+    truncated = False
+    total_bytes = 0
 
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tf:
+        members: list[tuple[str, tarfile.TarInfo]] = []
         for member in tf.getmembers():
             if not member.isfile():
                 continue
@@ -123,9 +126,25 @@ def tarball_to_files(tar_bytes: bytes) -> ImportResult:
             low = "/" + rel.lower()
             if any(seg in low for seg in _SKIP_DIRS):
                 continue
+            try:
+                repo_svc._validate_repo_path(rel)
+            except ValueError:
+                truncated = True
+                continue
+
+            members.append((rel, member))
+
+        for rel, member in sorted(members, key=lambda item: item[0]):
+            if len(files) >= repo_svc.MAX_FILES:
+                truncated = True
+                break
 
             # Size limit
             if member.size > repo_svc.MAX_FILE_BYTES:
+                truncated = True
+                continue
+            if total_bytes + member.size > repo_svc.MAX_REPO_BYTES:
+                truncated = True
                 continue
 
             f = tf.extractfile(member)
@@ -139,10 +158,7 @@ def tarball_to_files(tar_bytes: bytes) -> ImportResult:
                 continue
 
             files[rel] = content
-
-    truncated = len(files) > repo_svc.MAX_FILES
-    if truncated:
-        files = {k: files[k] for k in sorted(files)[: repo_svc.MAX_FILES]}
+            total_bytes += len(raw)
 
     return ImportResult(
         files=files,

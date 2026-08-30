@@ -45,6 +45,15 @@ def test_max_dev_entrypoint_refuses_forced_or_failed_schema_sync() -> None:
     assert "exit 1" in entrypoint
 
 
+def test_max_prod_dockerfile_requires_frozen_lockfile_without_script_fallback() -> None:
+    template = Path(__file__).resolve().parents[1] / "templates" / "max-miniapp-nextjs"
+    dockerfile = (template / "Dockerfile.prod").read_text(encoding="utf-8")
+
+    assert "pnpm install --frozen-lockfile --prod=false --ignore-scripts" in dockerfile
+    assert "pnpm install --ignore-scripts\n" not in dockerfile
+    assert "--frozen-lockfile --prod=false --ignore-scripts ||" not in dockerfile
+
+
 async def test_max_production_container_uses_same_isolated_runtime_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

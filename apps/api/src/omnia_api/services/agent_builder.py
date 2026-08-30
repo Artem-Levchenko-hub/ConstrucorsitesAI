@@ -682,7 +682,7 @@ async def run_agent_build(
             if "content" in obs and isinstance(obs["content"], str):
                 written[action.path] = obs["content"]
             wrote_since_check = True  # a new write is unverified until re-checked
-        elif isinstance(obs.get("files"), dict) and obs["files"]:
+        if isinstance(obs.get("files"), dict) and obs["files"]:
             changed_paths: list[str] = []
             for raw_path, raw_content in obs["files"].items():
                 if not isinstance(raw_path, str) or not isinstance(raw_content, str):
@@ -1401,12 +1401,17 @@ def make_container_executor(
         error = "; ".join(
             f"{name}={code}: {stderr}" for name, code, stderr in failures
         )
+        generated_files = _hot_reload_generated_files(result)
         return {
             "ok": False,
             "error": f"runtime apply failed after {detail}: {error}",
             "content": content,
-            "files": {path: content},
+            "files": {path: content, **generated_files},
         }
+
+    def _hot_reload_generated_files(result: dict[str, Any]) -> dict[str, str]:
+        lockfile = result.get("pnpm_lockfile")
+        return {"pnpm-lock.yaml": lockfile} if isinstance(lockfile, str) else {}
 
     async def _execute(action: Action) -> dict[str, Any]:
         try:
@@ -1485,8 +1490,12 @@ def make_container_executor(
                 )
                 if failure:
                     return failure
-                return {"ok": True, "content": content,
-                        "detail": f"wrote {action.path} ({len(content)} bytes)"}
+                return {
+                    "ok": True,
+                    "content": content,
+                    "files": _hot_reload_generated_files(hot_reload_result),
+                    "detail": f"wrote {action.path} ({len(content)} bytes)",
+                }
 
             if action.name == "edit_file":
                 search = action.args.get("search")
@@ -1516,8 +1525,12 @@ def make_container_executor(
                 )
                 if failure:
                     return failure
-                return {"ok": True, "content": new_content,
-                        "detail": f"patched {action.path}"}
+                return {
+                    "ok": True,
+                    "content": new_content,
+                    "files": _hot_reload_generated_files(hot_reload_result),
+                    "detail": f"patched {action.path}",
+                }
 
             if action.name == "build":
                 res = await orchestrator_client.agent_build(project_id, slug)

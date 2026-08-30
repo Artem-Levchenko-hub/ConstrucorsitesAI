@@ -109,14 +109,11 @@ def render_max_managed_files(
         '"__OMNIA_PROJECT_ID__"', project_literal, 1
     )
     files = {
-        "package.json": _template_file("package.json"),
-        "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
         "src/lib/db/index.ts": _template_file("src/lib/db/index.ts"),
-        "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
         "src/lib/max/bot-api.ts": _template_file("src/lib/max/bot-api.ts"),
         "src/lib/max/bridge.ts": _template_file("src/lib/max/bridge.ts"),
         "src/lib/max/validate-init-data.ts": _template_file("src/lib/max/validate-init-data.ts"),
@@ -567,6 +564,12 @@ def render_max_starter_files(
     product styling from scratch instead of inheriting a deceptively finished UI.
     """
     return {
+        # Seed-only project-owned files. Config saves and managed-kit upgrades
+        # must never overwrite dependencies or a relational schema the agent
+        # has evolved after the first build.
+        "package.json": _template_file("package.json"),
+        "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
+        "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
         **render_max_managed_files(config, project_id),
         "src/app/globals.css": _template_file("src/app/globals.css"),
     }

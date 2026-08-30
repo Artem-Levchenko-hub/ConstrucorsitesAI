@@ -25,5 +25,31 @@ async def test_provision_waits_for_a_cold_template_rebuild(
     )
 
     assert result == {"state": "running"}
-    assert observed["timeout"] == 180.0
+    assert observed["timeout"] == 1320.0
     assert observed["path"] == "/internal/projects/provision"
+
+
+async def test_project_shell_and_dependency_sync_use_long_deadlines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[dict[str, object]] = []
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.append({"method": method, "path": path, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    project_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    await orchestrator_client.agent_build(project_id, "max-preview")
+    await orchestrator_client.agent_exec(project_id, "max-preview", "pnpm test")
+    await orchestrator_client.agent_exec_sandbox(project_id, "max-preview", "pnpm test")
+    await orchestrator_client.hot_reload(
+        project_id,
+        "max-preview",
+        {"package.json": '{"name":"app"}'},
+    )
+
+    assert [call["timeout"] for call in observed] == [600.0, 210.0, 1500.0, 1800.0]
+    assert observed[2]["json"] == {"slug": "max-preview", "cmd": "pnpm test"}
+    assert "params" not in observed[2]

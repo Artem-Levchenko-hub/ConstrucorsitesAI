@@ -20,6 +20,7 @@ from uuid import UUID
 import pytest
 
 from omnia_orchestrator.core.docker_client import ContainerSpec
+from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.schemas.runtime import ProvisionRequest, ProvisionResponse
 from omnia_orchestrator.services import provisioner
 
@@ -334,10 +335,68 @@ def test_collect_max_runtime_overlay_skips_platform_core_but_keeps_schema(tmp_pa
         encoding="utf-8",
     )
     (workspace / "package.json").write_text('{"name":"max-app"}', encoding="utf-8")
+    (workspace / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'", encoding="utf-8")
 
     files = provisioner._collect_max_runtime_overlay(workspace)
 
     assert files["src/app/page.tsx"] == "user product page"
     assert files["src/lib/db/schema.ts"] == "user schema extension"
     assert files["package.json"] == '{"name":"max-app"}'
+    assert files["pnpm-lock.yaml"] == "lockfileVersion: '9.0'"
     assert "src/lib/omnia/client.ts" not in files
+
+
+async def test_sync_max_runtime_applies_core_and_installs_user_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    files = {
+        "package.json": '{"name":"max-app"}',
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'",
+        "src/lib/omnia/client.ts": "current managed core",
+        "src/lib/db/schema.ts": "user schema",
+    }
+    write = AsyncMock()
+    execute = AsyncMock(
+        side_effect=[
+            {"exit_code": "0", "stdout": "", "stderr": ""},
+            {
+                "exit_code": "0",
+                "stdout": "lockfileVersion: '9.0'\npackages: {}\n",
+                "stderr": "",
+            },
+        ]
+    )
+    monkeypatch.setattr(provisioner, "_workspace_text_files", lambda _root: files)
+    monkeypatch.setattr(provisioner, "write_files", write)
+    monkeypatch.setattr(provisioner, "exec_cmd", execute)
+
+    await provisioner._sync_max_runtime_workspace("omnia-dev-max", tmp_path)
+
+    write.assert_awaited_once_with("omnia-dev-max", files)
+    assert execute.await_count == 2
+    command = execute.await_args_list[0].kwargs["cmd"]
+    assert command == ["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"]
+    assert (tmp_path / "pnpm-lock.yaml").read_text(encoding="utf-8") == (
+        "lockfileVersion: '9.0'\npackages: {}\n"
+    )
+
+
+async def test_sync_max_runtime_fails_closed_on_dependency_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        provisioner,
+        "_workspace_text_files",
+        lambda _root: {"package.json": '{"name":"broken"}'},
+    )
+    monkeypatch.setattr(provisioner, "write_files", AsyncMock())
+    monkeypatch.setattr(
+        provisioner,
+        "exec_cmd",
+        AsyncMock(return_value={"exit_code": "1", "stdout": "", "stderr": "bad lock"}),
+    )
+
+    with pytest.raises(OrchestratorError, match="MAX dependency sync failed"):
+        await provisioner._sync_max_runtime_workspace("omnia-dev-max", tmp_path)

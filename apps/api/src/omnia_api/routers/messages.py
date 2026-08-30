@@ -3437,9 +3437,36 @@ async def _process_prompt(
                                         }
                                 _shell_files[_normalized_path] = _raw_content
                             if _shell_files:
-                                _shell_sync = await orchestrator_client.hot_reload(
-                                    project_id, project_slug, _shell_files
+                                _base_revision = str(
+                                    _sandbox.get("base_workspace_revision") or ""
                                 )
+                                if not _base_revision:
+                                    return {
+                                        "ok": False,
+                                        "error": (
+                                            "Sandbox did not return a workspace revision; "
+                                            "stale changes were not applied. Rerun the command."
+                                        ),
+                                    }
+                                try:
+                                    _shell_sync = await orchestrator_client.hot_reload(
+                                        project_id,
+                                        project_slug,
+                                        _shell_files,
+                                        base_workspace_revision=_base_revision,
+                                    )
+                                except Exception:
+                                    return {
+                                        "ok": False,
+                                        "error": (
+                                            "Project files changed while the sandbox command "
+                                            "was running; its stale diff was discarded. "
+                                            "Rerun the command on the current workspace."
+                                        ),
+                                    }
+                                _resolved_lock = _shell_sync.get("pnpm_lockfile")
+                                if isinstance(_resolved_lock, str):
+                                    _shell_files["pnpm-lock.yaml"] = _resolved_lock
                         _detail = str(_sandbox.get("detail") or "(no output)")
                         if _shell_files:
                             _listed = ", ".join(sorted(_shell_files)[:12])
@@ -3803,13 +3830,9 @@ async def _process_prompt(
                     # Kit v12 and older left a real root page in the container.
                     # Remove it before seeding v13 so a legacy canvas can neither
                     # enter model context nor survive a failed first generation.
-                    _legacy_page_removal = await orchestrator_client.agent_exec(
-                        project_id, project_slug, "rm -f -- src/app/page.tsx"
+                    await orchestrator_client.hot_reload(
+                        project_id, project_slug, {"src/app/page.tsx": ""}
                     )
-                    if not _legacy_page_removal.get("ok"):
-                        raise RuntimeError(
-                            "legacy MAX product page could not be removed before generation"
-                        )
                     await orchestrator_client.hot_reload(project_id, project_slug, _starter_files)
                     _max_seed_files = _starter_files
                     _starter_build = await orchestrator_client.agent_build(project_id, project_slug)
@@ -3995,8 +4018,6 @@ async def _process_prompt(
             )
             if _must_restore_previous and current_sha and not _first_max_without_product:
                 try:
-                    import shlex as _shlex
-
                     _unsafe_stop_reason = _agent_res.stop_reason
                     _baseline_files = await asyncio.to_thread(
                         repo_svc.read_files, project_id, current_sha
@@ -4012,8 +4033,11 @@ async def _process_prompt(
                             project_id, project_slug, _restore_files
                         )
                     if _new_paths:
-                        _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)
-                        await orchestrator_client.agent_exec(project_id, project_slug, _rm)
+                        await orchestrator_client.hot_reload(
+                            project_id,
+                            project_slug,
+                            {path: "" for path in _new_paths},
+                        )
                     _rollback_build = await orchestrator_client.agent_build(
                         project_id, project_slug
                     )
@@ -4060,8 +4084,6 @@ async def _process_prompt(
                 # buildable platform core, remove every generated product path,
                 # and do not publish the core as a successful application.
                 try:
-                    import shlex as _shlex
-
                     from omnia_api.models.max_project_config import MaxProjectConfig
                     from omnia_api.schemas.max_studio import MaxProjectConfigPayload
                     from omnia_api.services.max_project_kit import render_max_starter_files
@@ -4084,8 +4106,11 @@ async def _process_prompt(
                     )
                     await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
                     if _new_paths:
-                        _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)
-                        await orchestrator_client.agent_exec(project_id, project_slug, _rm)
+                        await orchestrator_client.hot_reload(
+                            project_id,
+                            project_slug,
+                            {path: "" for path in _new_paths},
+                        )
                     _rollback_build = await orchestrator_client.agent_build(
                         project_id, project_slug
                     )
@@ -4564,8 +4589,6 @@ async def _process_prompt(
                 _verification_error = _tc_error or _rt_error or "final verification failed"
                 _verification_rolled_back = False
                 try:
-                    import shlex as _shlex
-
                     if current_sha and not _first_max_without_product:
                         _baseline_files = await asyncio.to_thread(
                             repo_svc.read_files, project_id, current_sha
@@ -4579,8 +4602,11 @@ async def _process_prompt(
                                 project_id, project_slug, _restore_files
                             )
                         if _new_paths:
-                            _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)
-                            await orchestrator_client.agent_exec(project_id, project_slug, _rm)
+                            await orchestrator_client.hot_reload(
+                                project_id,
+                                project_slug,
+                                {path: "" for path in _new_paths},
+                            )
                         _rollback_build = await orchestrator_client.agent_build(
                             project_id, project_slug
                         )
@@ -4610,8 +4636,11 @@ async def _process_prompt(
                         )
                         await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
                         if _new_paths:
-                            _rm = "rm -f -- " + " ".join(_shlex.quote(path) for path in _new_paths)
-                            await orchestrator_client.agent_exec(project_id, project_slug, _rm)
+                            await orchestrator_client.hot_reload(
+                                project_id,
+                                project_slug,
+                                {path: "" for path in _new_paths},
+                            )
                         _rollback_build = await orchestrator_client.agent_build(
                             project_id, project_slug
                         )

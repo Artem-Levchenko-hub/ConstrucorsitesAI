@@ -36,6 +36,7 @@ from omnia_orchestrator.core.docker_client import (
     ContainerSpec,
     copy_path_from_container,
     ensure_template_image_fresh,
+    exec_cmd,
     find_project_container,
     start_container,
     unpause_container,
@@ -79,7 +80,6 @@ _MAX_PLATFORM_CORE_DIRS = (
     "src/app/support",
 )
 _MAX_PLATFORM_CORE_FILES = (
-    "pnpm-lock.yaml",
     "next.config.ts",
     "drizzle.config.ts",
     "postcss.config.mjs",
@@ -303,6 +303,50 @@ def _restore_max_platform_core(workspace_root: Path, template_root: Path) -> Non
         _restore(relative)
 
 
+async def _sync_max_runtime_workspace(container_name: str, project_dir: Path) -> None:
+    """Overlay current core + user source and materialise project dependencies."""
+    workspace_files = await asyncio.to_thread(_workspace_text_files, project_dir)
+    if workspace_files:
+        await write_files(container_name, workspace_files)
+    if "package.json" not in workspace_files:
+        return
+    install = await exec_cmd(
+        container_name,
+        cmd=["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"],
+        workdir="/app",
+        timeout_sec=240,
+        max_output=24_000,
+    )
+    if install["exit_code"] != "0":
+        detail = (install["stderr"] or install["stdout"])[-1_500:]
+        raise OrchestratorError(
+            code="container_failure",
+            message=f"MAX dependency sync failed: {detail}",
+            status_code=409,
+        )
+    lock_result = await exec_cmd(
+        container_name,
+        cmd=["cat", "--", "pnpm-lock.yaml"],
+        workdir="/app",
+        max_output=2 * 1024 * 1024 + 1,
+    )
+    lock_content = lock_result["stdout"]
+    if (
+        lock_result["exit_code"] != "0"
+        or len(lock_content.encode("utf-8")) > 2 * 1024 * 1024
+    ):
+        raise OrchestratorError(
+            code="container_failure",
+            message="MAX generated pnpm-lock.yaml is missing or exceeds the file quota",
+            status_code=409,
+        )
+    await asyncio.to_thread(
+        (project_dir / "pnpm-lock.yaml").write_text,
+        lock_content,
+        encoding="utf-8",
+    )
+
+
 async def provision(req: ProvisionRequest) -> ProvisionResponse:
     lock = _PROVISION_LOCKS.setdefault(str(req.project_id), asyncio.Lock())
     async with lock:
@@ -463,9 +507,10 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         # Docker can change its network/env/security flags.  The durable mirrored
         # workspace is then overlaid onto the fresh image, preserving the user's
         # product while dropping shared platform credentials.
-        workspace_files = await asyncio.to_thread(_collect_max_runtime_overlay, project_dir)
-        if workspace_files:
-            await write_files(container_name, workspace_files)
+        # Apply the complete mirrored source, not just user files: same-tag
+        # containers are intentionally reused, so this is also how a managed
+        # core upgrade reaches an already-running runtime.
+        await _sync_max_runtime_workspace(container_name, project_dir)
     log.info("provision.container_started", id=container_id[:12], name=container_name)
 
     # Expose the dev container at a browser-reachable host via nginx.

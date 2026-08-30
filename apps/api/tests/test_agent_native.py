@@ -9,8 +9,8 @@ grinding the step budget — the 2026-07-08 hibernate-mid-build incident).
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -114,11 +114,14 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
     assert "agent_sandbox_capabilities" in source
+    assert "base_workspace_revision" in source
+    assert "pnpm_lockfile" in source
     assert "unsafe_max_backend_paths" in source
     assert "max_model_write_rejection" in source
     assert "create_max_preview_session" in source
     assert "_recover_max_resume_prompt" in source
-    assert '"rm -f -- src/app/page.tsx"' in source
+    assert '{"src/app/page.tsx": ""}' in source
+    assert '"rm -f -- src/app/page.tsx"' not in source
     assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
     assert "normalize_max_globals_css" in source
     assert "seed_design_memory" in source
@@ -153,7 +156,12 @@ def _load_messages_helpers(*function_names: str) -> dict[str, Any]:
         elif isinstance(node, ast.FunctionDef) and node.name in function_names:
             body.append(node)
     namespace: dict[str, Any] = {"Sequence": Sequence, "Any": Any}
-    exec(compile(ast.Module(body=body, type_ignores=[]), "messages_resume_helpers", "exec"), namespace)
+    code = compile(
+        ast.Module(body=body, type_ignores=[]),
+        "messages_resume_helpers",
+        "exec",
+    )
+    exec(code, namespace)
     return namespace
 
 

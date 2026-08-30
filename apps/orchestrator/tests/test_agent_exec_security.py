@@ -4,6 +4,7 @@ from uuid import UUID
 
 import pytest
 
+from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.routers import runtime
 from omnia_orchestrator.routers.runtime import (
     _command_exposes_environment,
@@ -130,7 +131,13 @@ async def test_agent_sandbox_capabilities_fail_closed_on_runtime_drift(
 async def test_hot_reload_installs_changed_dependencies_without_lifecycle_scripts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exec_mock = AsyncMock(return_value={"exit_code": "0", "stdout": "", "stderr": ""})
+    lockfile = "lockfileVersion: '9.0'\npackages: {}\n"
+    exec_mock = AsyncMock(
+        side_effect=[
+            {"exit_code": "0", "stdout": "", "stderr": ""},
+            {"exit_code": "0", "stdout": lockfile, "stderr": ""},
+        ]
+    )
     monkeypatch.setattr(runtime, "record_activity", AsyncMock())
     monkeypatch.setattr(
         runtime,
@@ -155,13 +162,45 @@ async def test_hot_reload_installs_changed_dependencies_without_lifecycle_script
     )
 
     assert result["package_exit_code"] == "0"
-    exec_mock.assert_awaited_once_with(
+    assert result["pnpm_lockfile"] == lockfile
+    assert exec_mock.await_count == 2
+    exec_mock.assert_any_await(
         "omnia-dev-max-app",
         cmd=["pnpm", "install", "--no-frozen-lockfile", "--ignore-scripts"],
         workdir="/app",
         timeout_sec=240,
         max_output=runtime._AGENT_MAX_BUILD,
     )
+    exec_mock.assert_any_await(
+        "omnia-dev-max-app",
+        cmd=["cat", "--", "pnpm-lock.yaml"],
+        workdir="/app",
+        max_output=runtime._SANDBOX_SYNC_MAX_FILE_BYTES + 1,
+    )
+
+
+async def test_hot_reload_rejects_a_stale_sandbox_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_id = UUID("00000000-0000-0000-0000-000000000002")
+    workspace = tmp_path / "projects" / str(project_id)
+    workspace.mkdir(parents=True)
+    (workspace / "page.tsx").write_text("current", encoding="utf-8")
+    stale_revision = runtime._workspace_revision({"page.tsx": "older"})
+    write = AsyncMock(return_value={"written": "1", "total_bytes": "3", "dropped": ""})
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(runtime, "write_files", write)
+
+    payload = HotReloadRequest(
+        project_id=project_id,
+        files={"page.tsx": "stale change"},
+        base_workspace_revision=stale_revision,
+    )
+
+    with pytest.raises(OrchestratorError, match="workspace changed"):
+        await runtime.hot_reload(payload, "max-app", "test-token-test-token-test-token")
+    write.assert_not_awaited()
 
 
 async def test_hot_reload_never_forces_data_loss_migrations(

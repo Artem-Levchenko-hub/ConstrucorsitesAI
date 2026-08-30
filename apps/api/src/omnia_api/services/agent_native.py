@@ -1115,7 +1115,7 @@ async def run_native_build(
                             product_progress_this_turn = True
                     elif content_changed:
                         product_progress_this_turn = True
-                elif isinstance(obs.get("files"), dict) and obs.get("files"):
+                if isinstance(obs.get("files"), dict) and obs.get("files"):
                     proof_after_write.clear()
                     wrote_since_build = True
                     _shell_changed = False

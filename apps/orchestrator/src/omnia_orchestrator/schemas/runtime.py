@@ -77,6 +77,16 @@ class HotReloadRequest(BaseModel):
     # files: dict path → content. Same shape as `<file path="...">...</file>` extraction
     # from apps/api/src/omnia_api/services/file_extractor.py.
     files: dict[str, str]
+    # Optional compare-and-swap token returned by exec-sandbox. When present,
+    # the orchestrator refuses to apply a stale shell diff over newer edits.
+    base_workspace_revision: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+class AgentSandboxExecRequest(BaseModel):
+    slug: str = Field(min_length=1, max_length=128)
+    cmd: str = Field(min_length=1, max_length=262_144)
 
 
 class StatusResponse(BaseModel):

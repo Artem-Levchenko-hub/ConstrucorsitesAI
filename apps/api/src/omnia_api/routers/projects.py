@@ -246,12 +246,19 @@ async def import_project(
     session.add(project)
     await session.flush()
 
-    commit_sha = await asyncio.to_thread(
-        repo_svc.init_from_files,
-        project.id,
-        result.files,
-        f"Import {gh_owner}/{gh_repo}",
-    )
+    try:
+        commit_sha = await asyncio.to_thread(
+            repo_svc.init_from_files,
+            project.id,
+            result.files,
+            f"Import {gh_owner}/{gh_repo}",
+        )
+    except ValueError as exc:
+        raise ApiError(
+            "too_large",
+            "репозиторий превышает лимит текстового проекта",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        ) from exc
 
     # prompt_text='' (EMPTY STRING, not None): this makes is_first_build=False
     # so the first chat prompt is treated as an EDIT, not a from-scratch rebuild

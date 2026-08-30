@@ -159,7 +159,7 @@ async def provision(
     template: str,
     tier: str = "free",
     initial_env: dict[str, str] | None = None,
-    timeout: float = 180.0,  # noqa: ASYNC109 - cold template rebuilds can take >60s
+    timeout: float = 1320.0,  # noqa: ASYNC109 - cold rebuild + dependency sync can take minutes
 ) -> dict[str, Any]:
     """POST /internal/projects/provision — first-time scaffold + start.
 
@@ -446,6 +446,7 @@ async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
         "POST",
         f"/internal/projects/{project_id}/agent/build",
         params={"slug": slug},
+        timeout=600.0,
     )
 
 
@@ -455,6 +456,7 @@ async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
         "POST",
         f"/internal/projects/{project_id}/agent/exec",
         params={"slug": slug, "cmd": cmd},
+        timeout=210.0,
     )
 
 
@@ -463,7 +465,8 @@ async def agent_exec_sandbox(project_id: UUID, slug: str, cmd: str) -> dict[str,
     return await _request(
         "POST",
         f"/internal/projects/{project_id}/agent/exec-sandbox",
-        params={"slug": slug, "cmd": cmd},
+        json={"slug": slug, "cmd": cmd},
+        timeout=1500.0,
     )
 
 
@@ -487,7 +490,13 @@ async def warm_routes(project_id: UUID, slug: str) -> dict[str, Any]:
     )
 
 
-async def hot_reload(project_id: UUID, slug: str, files: dict[str, str]) -> dict[str, Any]:
+async def hot_reload(
+    project_id: UUID,
+    slug: str,
+    files: dict[str, str],
+    *,
+    base_workspace_revision: str | None = None,
+) -> dict[str, Any]:
     """POST /internal/projects/hot-reload — write AI-generated files into the
     dev container; orchestrator additionally runs `drizzle-kit push` if the
     diff touches `src/lib/db/schema.ts` or `src/lib/db/migrations/*`.
@@ -496,11 +505,15 @@ async def hot_reload(project_id: UUID, slug: str, files: dict[str, str]) -> dict
     lookup is `omnia-dev-<slug>` (no project_id ↔ container_name registry
     yet, PoC). apps/api always has the slug at hand from its own Project row.
     """
+    payload: dict[str, Any] = {"project_id": str(project_id), "files": files}
+    if base_workspace_revision:
+        payload["base_workspace_revision"] = base_workspace_revision
     return await _request(
         "POST",
         "/internal/projects/hot-reload",
-        json={"project_id": str(project_id), "files": files},
+        json=payload,
         params={"slug": slug},
+        timeout=1800.0,
     )
 
 

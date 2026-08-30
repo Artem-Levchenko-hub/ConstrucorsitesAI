@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from omnia_api.services import agent_builder as ab
 
 # ── parse_action ────────────────────────────────────────────────────────────
@@ -424,6 +426,59 @@ def test_consecutive_green_build_ships():
     )
     assert res.stop_reason == "done_on_green"
     assert res.steps < 30
+
+
+def test_agent_tracks_package_manager_generated_lockfile() -> None:
+    async def execute(action: ab.Action):
+        return {
+            "ok": True,
+            "content": str(action.args.get("content") or ""),
+            "files": {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"},
+        }
+
+    result = asyncio.run(
+        ab.run_agent_build(
+            system_prompt="s",
+            user_prompt="x",
+            model="m",
+            execute=execute,
+            complete=_scripted(
+                [
+                    '<omnia:action name="write_file">'
+                    '{"path":"package.json","content":"{}"}</omnia:action>',
+                    '<omnia:action name="done">{"summary":"done"}</omnia:action>',
+                ]
+            ),
+            max_steps=4,
+        )
+    )
+
+    assert result.files["package.json"] == "{}"
+    assert result.files["pnpm-lock.yaml"] == "lockfileVersion: '9.0'\n"
+
+
+def test_container_write_surfaces_resolved_lockfile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    async def hot_reload(*args, **kwargs):
+        return {"state": "hot_reloaded", "pnpm_lockfile": "lockfileVersion: '9.0'\n"}
+
+    monkeypatch.setattr(orchestrator_client, "hot_reload", hot_reload)
+    execute = ab.make_container_executor(project_id="project-1", slug="max-app")
+
+    observation = asyncio.run(
+        execute(
+            ab.Action(
+                name="write_file",
+                args={"path": "package.json", "content": '{"name":"app"}'},
+            )
+        )
+    )
+
+    assert observation["ok"] is True
+    assert observation["files"] == {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}
 
 
 # ── vision tool: see ─────────────────────────────────────────────────────────

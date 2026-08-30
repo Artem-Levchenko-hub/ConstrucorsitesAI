@@ -52,6 +52,7 @@ from omnia_orchestrator.core.internal_auth import (
     verify_internal_token as _verify_token,
 )
 from omnia_orchestrator.schemas.runtime import (
+    AgentSandboxExecRequest,
     CompileStatusResponse,
     DeployRequest,
     DeployResponse,
@@ -109,11 +110,12 @@ _AGENT_MAX_LIST = 16_000
 _AGENT_MAX_GREP = 16_000
 _AGENT_MAX_BUILD = 24_000
 _SANDBOX_SYNC_MAX_FILES = 5_000
-_SANDBOX_SYNC_MAX_FILE_BYTES = 8 * 1024 * 1024
+_SANDBOX_SYNC_MAX_FILE_BYTES = 2 * 1024 * 1024
 _SANDBOX_SYNC_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 _SANDBOX_SKIP_NAMES = frozenset(
     {"node_modules", ".next", ".git", "__pycache__", "dist", "build", ".venv", "vendor"}
 )
+_PROJECT_WORKSPACE_LOCKS: dict[str, asyncio.Lock] = {}
 
 _MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
 _MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
@@ -153,6 +155,22 @@ def _safe_app_path(path: str) -> str:
 
 def _project_workspace_dir(project_id: str) -> Path:
     return Path(get_settings().projects_root) / project_id
+
+
+def _project_workspace_lock(project_id: str) -> asyncio.Lock:
+    return _PROJECT_WORKSPACE_LOCKS.setdefault(project_id, asyncio.Lock())
+
+
+def _workspace_revision(files: dict[str, str]) -> str:
+    digest = sha256()
+    for path, content in sorted(files.items()):
+        path_bytes = path.encode("utf-8")
+        content_bytes = content.encode("utf-8")
+        digest.update(len(path_bytes).to_bytes(8, "big"))
+        digest.update(path_bytes)
+        digest.update(len(content_bytes).to_bytes(8, "big"))
+        digest.update(content_bytes)
+    return digest.hexdigest()
 
 
 def _sandbox_name_is_secret(name: str) -> bool:
@@ -317,7 +335,8 @@ async def provision(
     extend with Postgres schema, nginx site, per-project network, health-poll.
     """
     _verify_token(x_internal_token)
-    return await provision_svc(payload)
+    async with _project_workspace_lock(str(payload.project_id)):
+        return await provision_svc(payload)
 
 
 @router.post("/{project_id}/max-preview-session", response_model=MaxPreviewSessionResponse)
@@ -557,6 +576,23 @@ async def hot_reload(
     _verify_token(x_internal_token)
     # A build writing files is activity too — keep hibernate off its back.
     await record_activity(str(payload.project_id))
+    project_id = str(payload.project_id)
+    async with _project_workspace_lock(project_id):
+        if payload.base_workspace_revision:
+            current_files, _dropped = await asyncio.to_thread(
+                _collect_workspace_text_files,
+                _project_workspace_dir(project_id),
+            )
+            if _workspace_revision(current_files) != payload.base_workspace_revision:
+                raise OrchestratorError(
+                    code="conflict",
+                    message="project workspace changed after the sandbox command; rerun it",
+                    status_code=409,
+                )
+        return await _hot_reload_locked(payload, slug)
+
+
+async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, str]:
     container_name = f"omnia-dev-{slug}"
 
     write_result = await write_files(container_name, payload.files)
@@ -584,6 +620,38 @@ async def hot_reload(
                 timeout_sec=240,
                 max_output=_AGENT_MAX_BUILD,
             )
+        except OrchestratorError as exc:
+            package_result = {
+                "exit_code": "-1",
+                "stdout": "",
+                "stderr": f"orchestrator: {exc.message}",
+            }
+    pnpm_lockfile: str | None = None
+    if package_result is not None and package_result["exit_code"] == "0":
+        try:
+            lock_result = await exec_cmd(
+                container_name,
+                cmd=["cat", "--", "pnpm-lock.yaml"],
+                workdir="/app",
+                max_output=_SANDBOX_SYNC_MAX_FILE_BYTES + 1,
+            )
+            lock_content = lock_result["stdout"]
+            if (
+                lock_result["exit_code"] != "0"
+                or len(lock_content.encode("utf-8")) > _SANDBOX_SYNC_MAX_FILE_BYTES
+            ):
+                package_result = {
+                    "exit_code": "1",
+                    "stdout": "",
+                    "stderr": "generated pnpm-lock.yaml is missing or exceeds the file quota",
+                }
+            else:
+                pnpm_lockfile = lock_content
+                await asyncio.to_thread(
+                    _apply_workspace_files,
+                    str(payload.project_id),
+                    {"pnpm-lock.yaml": lock_content},
+                )
         except OrchestratorError as exc:
             package_result = {
                 "exit_code": "-1",
@@ -635,6 +703,8 @@ async def hot_reload(
     if package_result is not None:
         response["package_exit_code"] = package_result["exit_code"]
         response["package_stderr_tail"] = package_result["stderr"][-500:]
+    if pnpm_lockfile is not None:
+        response["pnpm_lockfile"] = pnpm_lockfile
     return response
 
 
@@ -703,8 +773,7 @@ async def agent_sandbox_capabilities(
 @router.post("/{project_id}/agent/exec-sandbox")
 async def agent_exec_sandbox(
     project_id: str,
-    slug: str,
-    cmd: str,
+    payload: AgentSandboxExecRequest,
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
     """Run one shell command in an isolated project sandbox and return a diff.
@@ -721,7 +790,7 @@ async def agent_exec_sandbox(
             message="agent sandbox is disabled by the operator",
             status_code=503,
         )
-    low = (cmd or "").strip()
+    low = payload.cmd.strip()
     if not low:
         raise OrchestratorError(
             code="validation_failed",
@@ -743,7 +812,7 @@ async def agent_exec_sandbox(
             message="project sandbox workspace not found",
             status_code=404,
         )
-    image = await container_image_name(f"omnia-dev-{slug}")
+    image = await container_image_name(f"omnia-dev-{payload.slug}")
     if not image:
         raise OrchestratorError(
             code="not_found",
@@ -751,18 +820,22 @@ async def agent_exec_sandbox(
             status_code=404,
         )
 
-    before_files, before_dropped = await asyncio.to_thread(_collect_workspace_text_files, workspace)
     settings = get_settings()
     network_name = f"omnia-proj-{project_id}" if settings.isolate_project_network else None
     with tempfile.TemporaryDirectory(prefix=f"omnia-sandbox-{project_id}-") as tmp:
         sandbox_root = Path(tmp) / "workspace"
-        await asyncio.to_thread(_copy_workspace, workspace, sandbox_root)
+        async with _project_workspace_lock(project_id):
+            before_files, before_dropped = await asyncio.to_thread(
+                _collect_workspace_text_files, workspace
+            )
+            await asyncio.to_thread(_copy_workspace, workspace, sandbox_root)
+            base_revision = _workspace_revision(before_files)
         try:
             result = await run_sandbox_command(
                 image=image,
                 workspace_dir=sandbox_root,
                 project_id=project_id,
-                cmd=cmd,
+                cmd=payload.cmd,
                 network_name=network_name,
                 runtime=settings.container_runtime,
                 harden=settings.container_harden,
@@ -794,6 +867,7 @@ async def agent_exec_sandbox(
         "exit_code": result["exit_code"],
         "detail": detail,
         "files": changed_files,
+        "base_workspace_revision": base_revision,
         "changed": str(len(changed_files)),
         "dropped": ",".join(new_dropped),
     }

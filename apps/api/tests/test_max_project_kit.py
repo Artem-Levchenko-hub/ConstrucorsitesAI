@@ -62,14 +62,11 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
-        "package.json",
-        "pnpm-lock.yaml",
         "postcss.config.mjs",
         "src/app/layout.tsx",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/lib/db/index.ts",
-        "src/lib/db/schema.ts",
         "src/lib/max/bot-api.ts",
         "src/lib/max/bridge.ts",
         "src/lib/max/validate-init-data.ts",
@@ -131,6 +128,14 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert 'sameSite: "none"' not in session_route
 
 
+def test_managed_config_sync_never_overwrites_project_dependencies_or_schema() -> None:
+    files = render_max_managed_files(_config(), uuid4())
+
+    assert "package.json" not in files
+    assert "pnpm-lock.yaml" not in files
+    assert "src/lib/db/schema.ts" not in files
+
+
 def test_managed_kit_refuses_a_missing_platform_component(monkeypatch) -> None:
     original = max_project_kit_svc._template_file
 
@@ -172,6 +177,9 @@ def test_starter_kit_has_no_product_page_or_visual_template() -> None:
     assert "src/app/page.tsx" not in files
     assert "src/app/globals.css" in files
     assert "src/app/layout.tsx" in files
+    assert "package.json" in files
+    assert "pnpm-lock.yaml" in files
+    assert "src/lib/db/schema.ts" in files
     css = files["src/app/globals.css"]
     assert '@import "tailwindcss"' in css
     assert "generation-canvas" not in css
@@ -182,6 +190,7 @@ def test_starter_kit_has_no_product_page_or_visual_template() -> None:
 
 def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     files = render_max_managed_files(_config(), uuid4())
+    starter = render_max_starter_files(_config(), uuid4())
     client = files["src/lib/omnia/integration-client.ts"]
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
     actions_route = files["src/app/api/omnia/actions/route.ts"]
@@ -196,8 +205,8 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     assert 'params.set("limit"' in client
     assert 'params.set("cursor"' in client
     assert 'fetch(`/api/omnia/actions${query ? `?${query}` : ""}`' in client
-    assert '"lucide-react": "^0.469.0"' in files["package.json"]
-    assert '"tailwindcss": "^4.0.0"' in files["package.json"]
+    assert '"lucide-react": "^0.469.0"' in starter["package.json"]
+    assert '"tailwindcss": "^4.0.0"' in starter["package.json"]
     assert '"catalog", "ai"' in proxy
     assert "/api/runtime/projects/${PROJECT_ID}/ai" in proxy
     assert "api_key" not in client.lower()

@@ -48,10 +48,7 @@ _SR_BLOCK = re.compile(
 
 _FORBIDDEN_PREFIXES = ("/", "~", ".git/", ".git\\")
 _FORBIDDEN_SUBSTRINGS = ("..",)
-# Keep the parser's file cap aligned with the repository text quota so MAX can
-# emit/patch larger real projects without the reply parser silently restoring
-# the old 100-file ceiling.
-MAX_FILES = 5_000
+MAX_FILES = 100
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
 # The app writer reliably invents a marketing palette of CSS custom properties
