@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import new as hmac_new
 from pathlib import Path
+from time import time
 from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID
@@ -112,6 +113,7 @@ _AGENT_MAX_BUILD = 24_000
 _SANDBOX_SYNC_MAX_FILES = 5_000
 _SANDBOX_SYNC_MAX_FILE_BYTES = 2 * 1024 * 1024
 _SANDBOX_SYNC_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+_SANDBOX_STALE_AFTER_SECONDS = 60 * 60
 _SANDBOX_SKIP_NAMES = frozenset(
     {"node_modules", ".next", ".git", "__pycache__", "dist", "build", ".venv", "vendor"}
 )
@@ -167,6 +169,27 @@ def _sandbox_work_base() -> Path:
     """
 
     return Path(get_settings().projects_root).parent / "agent-sandboxes"
+
+
+def _remove_stale_sandbox_workspaces(base: Path, *, now: float | None = None) -> None:
+    """Remove only abandoned sandbox staging directories older than one hour."""
+
+    cutoff = (time() if now is None else now) - _SANDBOX_STALE_AFTER_SECONDS
+    try:
+        candidates = list(base.iterdir())
+    except OSError:
+        return
+    for candidate in candidates:
+        if not candidate.name.startswith("omnia-sandbox-"):
+            continue
+        try:
+            if candidate.is_symlink() or not candidate.is_dir():
+                continue
+            if candidate.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(candidate, ignore_errors=True)
 
 
 def _project_workspace_lock(project_id: str) -> asyncio.Lock:
@@ -836,6 +859,7 @@ async def agent_exec_sandbox(
     network_name = f"omnia-proj-{project_id}" if settings.isolate_project_network else None
     sandbox_base = _sandbox_work_base()
     sandbox_base.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(_remove_stale_sandbox_workspaces, sandbox_base)
     sandbox_tmp = Path(
         tempfile.mkdtemp(prefix=f"omnia-sandbox-{project_id}-", dir=str(sandbox_base))
     )

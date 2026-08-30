@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -53,6 +54,28 @@ def test_redacts_secret_assignments_and_dsn_passwords() -> None:
     assert "password" not in result
     assert "sk-example" not in result
     assert result.endswith("build clean")
+
+
+def test_stale_sandbox_cleanup_is_old_and_prefix_scoped(tmp_path: Path) -> None:
+    base = tmp_path / "agent-sandboxes"
+    stale = base / "omnia-sandbox-old"
+    fresh = base / "omnia-sandbox-active"
+    unrelated = base / "project-source"
+    matching_file = base / "omnia-sandbox-not-a-directory"
+    for directory in (stale, fresh, unrelated):
+        directory.mkdir(parents=True)
+        (directory / "source.txt").write_text("source", encoding="utf-8")
+    matching_file.write_text("keep", encoding="utf-8")
+    os.utime(stale, (1_000, 1_000))
+    os.utime(unrelated, (1_000, 1_000))
+    os.utime(fresh, (5_000, 5_000))
+
+    runtime._remove_stale_sandbox_workspaces(base, now=6_000)
+
+    assert not stale.exists()
+    assert fresh.is_dir()
+    assert unrelated.is_dir()
+    assert matching_file.is_file()
 
 
 async def test_agent_sandbox_capabilities_attest_concrete_runtime(
