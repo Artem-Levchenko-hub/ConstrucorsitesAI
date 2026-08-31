@@ -5,7 +5,7 @@ need a docker daemon and a redis server, neither of which we spin up in
 unit tests. We cover the deterministic pieces that regress under refactors:
 
 - tier → threshold mapping (free 15 min, pro/business 60 min)
-- pause-vs-stop decision per tier
+- scalable stop-by-default policy and explicit warm-pause opt-in
 - `_sweep_once` bootstrap, threshold respect, action dispatch, error isolation
 - `record_activity` mutates the shared map
 - start/stop idempotency
@@ -38,6 +38,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("HIBERNATE_FREE_TIER_MINUTES", "15")
     monkeypatch.setenv("HIBERNATE_PRO_TIER_MINUTES", "60")
+    monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "false")
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
     from omnia_orchestrator.core.config import get_settings
@@ -74,9 +75,22 @@ def test_tier_threshold_unknown_defaults_to_free() -> None:
     assert hibernate._tier_threshold_seconds("") == 15 * 60
 
 
-def test_should_pause_pro_true() -> None:
+def test_should_pause_paid_false_by_default() -> None:
+    assert hibernate._should_pause("pro") is False
+    assert hibernate._should_pause("business") is False
+
+
+def test_should_pause_paid_only_after_explicit_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "true")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
     assert hibernate._should_pause("pro") is True
     assert hibernate._should_pause("business") is True
+    assert hibernate._should_pause("free") is False
 
 
 def test_should_pause_free_false() -> None:
@@ -305,10 +319,31 @@ async def test_sweep_stops_free_tier_past_threshold(
     stop_mock.assert_awaited_once_with("omnia-dev-y", pause=False)
 
 
-async def test_sweep_pauses_pro_tier_past_threshold(
+async def test_sweep_stops_pro_tier_past_threshold_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Idle 61 min on pro tier → pause (keep memory)."""
+    """Idle paid preview releases RAM while preserving its container state."""
+    hibernate._last_activity[PID_PRO_IDLE] = time.time() - 61 * 60
+    monkeypatch.setattr(
+        hibernate,
+        "_list_dev_containers",
+        lambda: [("omnia-dev-z", "running", PID_PRO_IDLE, "pro")],
+    )
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(hibernate.docker_client, "stop_container", stop_mock)
+
+    await hibernate._sweep_once()
+
+    stop_mock.assert_awaited_once_with("omnia-dev-z", pause=False)
+
+
+async def test_sweep_pauses_pro_tier_when_warm_pause_is_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "true")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
     hibernate._last_activity[PID_PRO_IDLE] = time.time() - 61 * 60
     monkeypatch.setattr(
         hibernate,
@@ -341,17 +376,36 @@ async def test_sweep_skips_when_idle_under_threshold(
     stop_mock.assert_not_called()
 
 
-async def test_sweep_ignores_already_hibernated_container(
+async def test_sweep_converts_legacy_paused_container_to_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A paused container, however ancient, is not re-paused. Idempotency
-    protection — without this, every sweep would re-call pause on a
-    long-paused container and burn API calls for nothing."""
+    """A legacy warm-paused preview is reconciled to memory-free hibernation."""
     hibernate._last_activity[PID_PAUSED] = time.time() - 24 * 60 * 60
     monkeypatch.setattr(
         hibernate,
         "_list_dev_containers",
         lambda: [("omnia-dev-q", "paused", PID_PAUSED, "free")],
+    )
+    stop_mock = AsyncMock()
+    monkeypatch.setattr(hibernate.docker_client, "stop_container", stop_mock)
+
+    await hibernate._sweep_once()
+
+    stop_mock.assert_awaited_once_with("omnia-dev-q", pause=False)
+
+
+async def test_sweep_keeps_paused_paid_container_when_warm_pause_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "true")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    hibernate._last_activity[PID_PAUSED] = time.time() - 24 * 60 * 60
+    monkeypatch.setattr(
+        hibernate,
+        "_list_dev_containers",
+        lambda: [("omnia-dev-q", "paused", PID_PAUSED, "pro")],
     )
     stop_mock = AsyncMock()
     monkeypatch.setattr(hibernate.docker_client, "stop_container", stop_mock)

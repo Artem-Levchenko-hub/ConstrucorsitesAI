@@ -164,9 +164,13 @@ class Settings(BaseSettings):
     prod_port_range_min: int = Field(default=4000)
     prod_port_range_max: int = Field(default=4999)
 
-    # Hibernate policy (minutes of inactivity before pause/stop).
+    # Hibernate policy. Stopping an idle container preserves its writable
+    # layer and bind-mounted workspace while releasing RAM. Warm pause is an
+    # explicit single-node compatibility option: it retains the whole memory
+    # footprint and therefore must stay off on shared/scaling hosts.
     hibernate_free_tier_minutes: int = Field(default=15)
     hibernate_pro_tier_minutes: int = Field(default=60)
+    hibernate_warm_pause_paid: bool = Field(default=False)
     wake_timeout_seconds: int = Field(default=60)
 
     # Memory ceiling for dev preview containers. Heavy entity/fullstack apps

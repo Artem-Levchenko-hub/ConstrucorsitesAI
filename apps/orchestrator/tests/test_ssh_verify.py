@@ -2,12 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 from omnia_orchestrator.core import ssh
 from omnia_orchestrator.core.shell import CmdResult
 
 HOST_KEY = "203.0.113.9 ssh-ed25519 QUJDREVGR0g="
+
+
+@pytest.fixture(autouse=True)
+def _settings_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep security tests independent from collection/execution order.
+
+    resolve_public_host reads the production SSRF denylist through Settings.
+    A previous test file happened to leave valid settings in the process cache,
+    so this file passed locally but failed in a clean CI order before reaching
+    the public-address assertion.
+    """
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
+    )
+    monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    yield
+    get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

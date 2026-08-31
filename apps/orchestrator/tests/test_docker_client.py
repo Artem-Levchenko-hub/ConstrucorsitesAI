@@ -119,6 +119,8 @@ class _FakeContainer:
         }
         self.removed = False
         self.started = False
+        self.unpause_calls = 0
+        self.stop_timeouts: list[int] = []
 
     def reload(self) -> None:
         pass
@@ -128,7 +130,15 @@ class _FakeContainer:
         self.status = "running"
 
     def unpause(self) -> None:
+        self.unpause_calls += 1
         self.status = "running"
+
+    def pause(self) -> None:
+        self.status = "paused"
+
+    def stop(self, timeout: int) -> None:
+        self.stop_timeouts.append(timeout)
+        self.status = "exited"
 
     def remove(self, force: bool = False) -> None:
         self.removed = True
@@ -232,6 +242,42 @@ async def test_start_container_reuses_when_image_matches(
     assert same.removed is False
     assert client.containers.run_called is False
     assert cid == "live-id"
+
+
+async def test_stop_container_releases_memory_from_legacy_paused_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paused = _FakeContainer(
+        "paused-id",
+        "omnia-template-nextjs-entities:dev",
+        status="paused",
+    )
+    client = _FakeClient(paused)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    await docker_client.stop_container("omnia-dev-x", pause=False)
+
+    assert paused.unpause_calls == 1
+    assert paused.stop_timeouts == [10]
+    assert paused.status == "exited"
+
+
+async def test_stop_container_is_idempotent_when_already_exited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exited = _FakeContainer(
+        "exited-id",
+        "omnia-template-nextjs-entities:dev",
+        status="exited",
+    )
+    client = _FakeClient(exited)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    await docker_client.stop_container("omnia-dev-x", pause=False)
+
+    assert exited.unpause_calls == 0
+    assert exited.stop_timeouts == []
+    assert exited.status == "exited"
 
 
 def test_module_exposes_expected_public_api() -> None:
