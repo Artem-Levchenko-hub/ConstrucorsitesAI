@@ -453,6 +453,56 @@ def test_container_spec_hardening_defaults_off() -> None:
     assert spec.pids_limit == 0
 
 
+async def test_docker_runtime_facts_attests_requested_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = type(
+        "Client",
+        (),
+        {
+            "info": lambda self: {
+                "DefaultRuntime": "runc",
+                "Runtimes": {"runc": {}, "runsc": {}},
+            }
+        },
+    )()
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    result = await docker_client.docker_runtime_facts("runsc")
+
+    assert result == {
+        "ready": True,
+        "missing": [],
+        "checks": {"registered": True},
+        "configured": True,
+        "runtime": "runsc",
+        "default_runtime": "runc",
+    }
+
+
+async def test_docker_runtime_facts_fails_closed_when_runtime_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = type(
+        "Client",
+        (),
+        {
+            "info": lambda self: {
+                "DefaultRuntime": "runc",
+                "Runtimes": {"runc": {}},
+            }
+        },
+    )()
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    result = await docker_client.docker_runtime_facts("runsc")
+
+    assert result["ready"] is False
+    assert result["missing"] == ["runtime_unavailable"]
+    assert result["runtime"] == "runsc"
+    assert result["default_runtime"] == "runc"
+
+
 async def test_start_container_default_adds_no_security_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -28,6 +28,24 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
+def test_settings_accept_legacy_runtime_env_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("CONTAINER_RUNTIME", raising=False)
+    monkeypatch.delenv("AGENT_SANDBOX_RUNTIME", raising=False)
+    monkeypatch.setenv("OMNIA_CONTAINER_RUNTIME", "runsc")
+    monkeypatch.setenv("OMNIA_AGENT_SANDBOX_RUNTIME", "runsc")
+    monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    settings = get_settings()
+
+    assert settings.container_runtime == "runsc"
+    assert settings.agent_sandbox_runtime == "runsc"
+
+
 def test_blocks_environment_enumeration_commands() -> None:
     assert _command_exposes_environment("env")
     assert _command_exposes_environment("printenv | sort")
@@ -82,6 +100,10 @@ async def test_agent_sandbox_capabilities_attest_concrete_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     runtime_facts = {
@@ -94,8 +116,18 @@ async def test_agent_sandbox_capabilities_attest_concrete_runtime(
     monkeypatch.setattr(runtime, "_project_workspace_dir", lambda _p: workspace)
     image_name = AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev")
     security_facts = AsyncMock(return_value=runtime_facts)
+    sandbox_runtime_facts = {
+        "ready": True,
+        "missing": [],
+        "checks": {"registered": True},
+        "configured": True,
+        "runtime": "runsc",
+        "default_runtime": "runc",
+    }
     monkeypatch.setattr(runtime, "container_image_name", image_name)
     monkeypatch.setattr(runtime, "container_security_facts", security_facts)
+    runtime_facts_mock = AsyncMock(return_value=sandbox_runtime_facts)
+    monkeypatch.setattr(runtime, "docker_runtime_facts", runtime_facts_mock)
 
     result = await runtime.agent_sandbox_capabilities(
         "project-1",
@@ -105,14 +137,17 @@ async def test_agent_sandbox_capabilities_attest_concrete_runtime(
 
     assert result["ready"] is True
     assert result["missing"] == []
-    assert result["profile"] == "ephemeral-secretless-v1"
+    assert result["profile"] == "ephemeral-secretless-v2"
     assert result["capabilities"]["shell"] is True
     assert result["isolation"]["runtime_network"] is False
     assert result["isolation"]["host_workspace_writable"] is False
     assert result["isolation"]["runtime_secrets"] is False
+    assert result["isolation"]["runtime"] == "runsc"
     assert result["runtime_attestation"] == runtime_facts
+    assert result["sandbox_runtime_attestation"] == sandbox_runtime_facts
     image_name.assert_awaited_once_with("omnia-dev-max-app")
     security_facts.assert_awaited_once_with("omnia-dev-max-app", "project-1")
+    runtime_facts_mock.assert_awaited_once_with("runsc")
 
 
 async def test_agent_sandbox_capabilities_fail_closed_on_runtime_drift(
@@ -137,6 +172,17 @@ async def test_agent_sandbox_capabilities_fail_closed_on_runtime_drift(
             }
         ),
     )
+    monkeypatch.setattr(
+        runtime,
+        "docker_runtime_facts",
+        AsyncMock(
+            return_value={
+                "ready": True,
+                "missing": [],
+                "runtime": "runc",
+            }
+        ),
+    )
 
     result = await runtime.agent_sandbox_capabilities(
         "project-1",
@@ -151,10 +197,58 @@ async def test_agent_sandbox_capabilities_fail_closed_on_runtime_drift(
     ]
 
 
+async def test_agent_sandbox_capabilities_fail_closed_on_missing_gvisor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(runtime, "_project_workspace_dir", lambda _p: workspace)
+    monkeypatch.setattr(
+        runtime,
+        "container_image_name",
+        AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "container_security_facts",
+        AsyncMock(return_value={"ready": True, "missing": []}),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "docker_runtime_facts",
+        AsyncMock(
+            return_value={
+                "ready": False,
+                "missing": ["runtime_unavailable"],
+                "runtime": "runsc",
+            }
+        ),
+    )
+
+    result = await runtime.agent_sandbox_capabilities(
+        "project-1",
+        "max-app",
+        "test-token-test-token-test-token",
+    )
+
+    assert result["ready"] is False
+    assert result["missing"] == ["sandbox_runtime:runtime_unavailable"]
+    assert result["isolation"]["runtime"] == "runsc"
+
+
 async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
     project_id = "00000000-0000-0000-0000-000000000111"
     workspace = tmp_path / "projects" / project_id
     workspace.mkdir(parents=True)
@@ -166,6 +260,7 @@ async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
         seen["sandbox_root"] = sandbox_root
         seen["sandbox_tmp"] = sandbox_root.parent
         seen["seed"] = (sandbox_root / "seed.txt").read_text(encoding="utf-8")
+        seen["runtime"] = kwargs["runtime"]
         return {"exit_code": "0", "stdout": "sandbox ok", "stderr": ""}
 
     monkeypatch.setattr(runtime, "record_activity", AsyncMock())
@@ -173,6 +268,17 @@ async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
         runtime,
         "container_image_name",
         AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "docker_runtime_facts",
+        AsyncMock(
+            return_value={
+                "ready": True,
+                "missing": [],
+                "runtime": "runsc",
+            }
+        ),
     )
     monkeypatch.setattr(runtime, "run_sandbox_command", _run_sandbox_command)
 
@@ -187,6 +293,7 @@ async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
     assert result["files"] == {}
     assert result["changed"] == "0"
     assert seen["seed"] == "seed"
+    assert seen["runtime"] == "runsc"
     assert isinstance(sandbox_tmp, Path)
     assert sandbox_tmp.parent == tmp_path / "agent-sandboxes"
     assert not sandbox_tmp.exists()
@@ -214,6 +321,17 @@ async def test_agent_exec_sandbox_returns_empty_diff_on_bootstrap_failure(
         "container_image_name",
         AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
     )
+    monkeypatch.setattr(
+        runtime,
+        "docker_runtime_facts",
+        AsyncMock(
+            return_value={
+                "ready": True,
+                "missing": [],
+                "runtime": "runc",
+            }
+        ),
+    )
     monkeypatch.setattr(runtime, "run_sandbox_command", _run_sandbox_command)
 
     result = await runtime.agent_exec_sandbox(
@@ -229,6 +347,56 @@ async def test_agent_exec_sandbox_returns_empty_diff_on_bootstrap_failure(
         "changed": "0",
         "dropped": "",
     }
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+async def test_agent_exec_sandbox_fails_closed_on_missing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    project_id = "00000000-0000-0000-0000-000000000113"
+    workspace = tmp_path / "projects" / project_id
+    workspace.mkdir(parents=True)
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "container_image_name",
+        AsyncMock(return_value="omnia-template-max-miniapp-nextjs:dev"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "docker_runtime_facts",
+        AsyncMock(
+            return_value={
+                "ready": False,
+                "missing": ["runtime_unavailable"],
+                "runtime": "runsc",
+            }
+        ),
+    )
+    run_sandbox = AsyncMock()
+    monkeypatch.setattr(runtime, "run_sandbox_command", run_sandbox)
+
+    result = await runtime.agent_exec_sandbox(
+        project_id,
+        AgentSandboxExecRequest(slug="max-app", cmd="true"),
+        "test-token-test-token-test-token",
+    )
+
+    assert result == {
+        "ok": False,
+        "detail": "sandbox runtime unavailable: runsc (runtime_unavailable)",
+        "files": {},
+        "changed": "0",
+        "dropped": "",
+    }
+    run_sandbox.assert_not_awaited()
     assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep"
 
 

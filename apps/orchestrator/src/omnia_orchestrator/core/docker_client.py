@@ -592,6 +592,38 @@ async def container_security_facts(name: str, project_id: str) -> dict[str, obje
     return await asyncio.to_thread(_do)
 
 
+async def docker_runtime_facts(requested_runtime: str = "") -> dict[str, object]:
+    """Attest that Docker can start the requested container runtime.
+
+    Runtime names are operator configuration, not secrets. The response keeps
+    capability discovery narrow: effective/default name plus registration
+    status, without returning the daemon's complete runtime configuration.
+    """
+
+    def _do() -> dict[str, object]:
+        info = _get_client().info()
+        raw_runtimes = info.get("Runtimes") or {}
+        runtime_names = (
+            {str(name) for name in raw_runtimes}
+            if isinstance(raw_runtimes, dict)
+            else set()
+        )
+        default_runtime = str(info.get("DefaultRuntime") or "runc")
+        configured_runtime = requested_runtime.strip()
+        effective_runtime = configured_runtime or default_runtime
+        registered = effective_runtime in runtime_names
+        return {
+            "ready": registered,
+            "missing": [] if registered else ["runtime_unavailable"],
+            "checks": {"registered": registered},
+            "configured": bool(configured_runtime),
+            "runtime": effective_runtime,
+            "default_runtime": default_runtime,
+        }
+
+    return await asyncio.to_thread(_do)
+
+
 async def run_sandbox_command(
     *,
     image: str,
