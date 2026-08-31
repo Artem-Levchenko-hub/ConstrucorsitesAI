@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-08-30",
-  "version": 42,
+  "updated": "2026-08-31",
+  "version": 43,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -202,6 +202,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "31.08",
+   "what": "Попросил поднять на текущем сервере enterprise-систему, где для каждого проекта запускается полноценный автономный агент в отдельном изолированном пространстве через LLMGW.",
+   "impact": "Зафиксирован исполнимый контракт Project Cell: постоянный проектный диск, резидентный runner с полным shell, K3s + Kata как обязательная граница, durable pause/cancel/resume, draft preview и атомарная публикация. До изменений сервера локальный main, origin/main и production повторно сверены на d0433aba; запуск разбит на проверяемые фазы с откатом и MAX end-to-end canary. Реализация ещё не запущена, поэтому результат не оценён как production-ready."
+  },
   {
    "date": "30.08",
    "what": "Попросил добавить к задачам файлы, отдельно уточнив поддержку HTML.",
@@ -2401,6 +2406,18 @@
    "evidence": "Для общего компонента .field задан align-content:start: поле адреса и select «Кто сможет открыть» теперь начинаются на одной высоте, а подсказка URL занимает место только под своим input. Целевой computed-style regression подтвердил верхнее выравнивание; общий DOM-smoke отрендерил 28/28 экранов, расширенный прогон — 28/28 экранов в светлой и тёмной теме плюс 28 Free-состояний. Канонический Git-файл 356 371 байт, SHA-256 791F57D9E39553F02F255FDF0B53B42BC1FF015603719CAEAB23CDCB3B07811E.",
    "impact": "Выбор доступа больше не выглядит съехавшим относительно адреса приложения. Влияние на понимание пользователей ещё не измерено, поэтому гипотеза остаётся в testing.",
    "next_vector": "V8"
+  },
+  {
+   "id": "H127",
+   "title": "Project Cell даст агенту свободу Codex внутри сильной границы проекта",
+   "status": "open",
+   "score": null,
+   "category": "автономность / инфра / безопасность / MAX / LLMGW",
+   "period": "31.08",
+   "description": "Если агентный цикл перенести из центрального API в постоянную Project Cell с полным shell, durable checkpoint и обязательной Kata-изоляцией, агент сможет собирать сложные полноценные продукты без доступа к хосту и чужим проектам.",
+   "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Локальный main, origin/main и production совпали; сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s. Архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и после трёх циклов исправлений получил APPROVE от независимых architecture и security/operations gate. Живой Project Cell и MAX canary ещё не запускались.",
+   "impact": "У команды появился единый проверяемый путь от безопасной очистки текущего сервера до горизонтально масштабируемого агента. Гипотеза остаётся открытой до реального K3s + Kata smoke, восстановления сессии после рестартов и сборки сложного MAX-приложения через LLMGW.",
+   "next_vector": "V4"
   }
  ],
  "vectors": [
@@ -2559,6 +2576,14 @@
     [
      "Явный LLMGW-контур с сохранением Opus 4.8 и адаптацией native tool-use (30.07)",
      true
+    ],
+    [
+     "Enterprise Project Cell: утверждён контракт K3s + Kata, durable runner, draft и атомарная публикация (31.08)",
+     true
+    ],
+    [
+     "Поднять Project Cell на текущем сервере и пройти MAX end-to-end canary с restart/cancel/isolation-проверками",
+     false
     ]
    ],
    "hyp_ids": [
@@ -2567,7 +2592,8 @@
     "H77",
     "H78",
     "H79",
-    "H87"
+    "H87",
+    "H127"
    ]
   },
   {
