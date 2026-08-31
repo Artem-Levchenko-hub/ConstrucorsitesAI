@@ -1,8 +1,11 @@
 # Enterprise Project Cell Agent Runtime
 
-**Status:** approved direction; written contract prepared for owner review on 2026-08-31  
-**Target:** a Codex/Claude-class autonomous development agent for Omnia projects, including full MAX applications  
-**Provider path:** Omnia LLM Gateway (`LLMGW`) remains the only model-provider boundary  
+**Status:** approved direction; written contract prepared for owner review on 2026-08-31
+
+**Target:** a Codex/Claude-class autonomous development agent for Omnia projects, including full MAX applications
+
+**Provider path:** Omnia LLM Gateway (`LLMGW`) remains the only model-provider boundary
+
 **First environment:** the current production server, as an isolated single-node pilot beside the existing Docker production stack
 
 ## 1. Outcome
