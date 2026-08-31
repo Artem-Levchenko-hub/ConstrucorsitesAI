@@ -37,6 +37,7 @@ from omnia_orchestrator.core.docker_client import (
     container_logs,
     container_security_facts,
     destroy_container,
+    docker_runtime_facts,
     exec_cmd,
     find_project_container,
     run_sandbox_command,
@@ -761,6 +762,10 @@ async def agent_sandbox_capabilities(
     runtime_name = f"omnia-dev-{slug}"
     image = await container_image_name(runtime_name)
     runtime_facts = await container_security_facts(runtime_name, project_id)
+    sandbox_runtime = (
+        settings.agent_sandbox_runtime.strip() or settings.container_runtime.strip()
+    )
+    sandbox_runtime_facts = await docker_runtime_facts(sandbox_runtime)
     missing: list[str] = []
     runtime_missing = runtime_facts.get("missing", [])
     if not isinstance(runtime_missing, list):
@@ -773,9 +778,16 @@ async def agent_sandbox_capabilities(
         missing.append("template_image_missing")
     if not runtime_facts.get("ready"):
         missing.extend(f"runtime:{item}" for item in runtime_missing)
+    sandbox_runtime_missing = sandbox_runtime_facts.get("missing", [])
+    if not isinstance(sandbox_runtime_missing, list):
+        sandbox_runtime_missing = []
+    if not sandbox_runtime_facts.get("ready"):
+        missing.extend(
+            f"sandbox_runtime:{item}" for item in sandbox_runtime_missing
+        )
     return {
         "ready": not missing,
-        "profile": "ephemeral-secretless-v1",
+        "profile": "ephemeral-secretless-v2",
         "missing": missing,
         "capabilities": {
             "shell": True,
@@ -799,9 +811,10 @@ async def agent_sandbox_capabilities(
             "cap_drop_all": True,
             "no_new_privileges": True,
             "pids_limit": max(1, settings.container_pids_limit or 256),
-            "runtime": settings.container_runtime or "runc",
+            "runtime": sandbox_runtime_facts.get("runtime", "unavailable"),
         },
         "runtime_attestation": runtime_facts,
+        "sandbox_runtime_attestation": sandbox_runtime_facts,
     }
 
 
@@ -856,6 +869,21 @@ async def agent_exec_sandbox(
         )
 
     settings = get_settings()
+    sandbox_runtime = (
+        settings.agent_sandbox_runtime.strip() or settings.container_runtime.strip()
+    )
+    sandbox_runtime_facts = await docker_runtime_facts(sandbox_runtime)
+    sandbox_runtime_missing = sandbox_runtime_facts.get("missing", [])
+    if not isinstance(sandbox_runtime_missing, list):
+        sandbox_runtime_missing = []
+    if not sandbox_runtime_facts.get("ready"):
+        runtime_name = str(sandbox_runtime_facts.get("runtime") or "unavailable")
+        reason = ",".join(str(item) for item in sandbox_runtime_missing if str(item))
+        detail = f"sandbox runtime unavailable: {runtime_name}"
+        if reason:
+            detail += f" ({reason})"
+        return {"ok": False, "detail": detail, "files": {}, "changed": "0", "dropped": ""}
+
     network_name = f"omnia-proj-{project_id}" if settings.isolate_project_network else None
     sandbox_base = _sandbox_work_base()
     sandbox_base.mkdir(parents=True, exist_ok=True)
@@ -878,7 +906,7 @@ async def agent_exec_sandbox(
                 project_id=project_id,
                 cmd=payload.cmd,
                 network_name=network_name,
-                runtime=settings.container_runtime,
+                runtime=sandbox_runtime,
                 harden=settings.container_harden,
                 pids_limit=settings.container_pids_limit,
                 timeout_sec=180,

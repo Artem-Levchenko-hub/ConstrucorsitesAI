@@ -11,7 +11,9 @@
 
 Что включаем (по нарастанию деликатности):
 1. **kernel hardening** (`container_harden`) — безопасно, без host-изменений.
-2. **gVisor runtime** (`container_runtime=runsc`) — нужен install + docker restart.
+2. **gVisor runtime** — сначала только disposable agent-shell
+   (`AGENT_SANDBOX_RUNTIME=runsc`), потом при желании весь dev-runtime
+   (`CONTAINER_RUNTIME=runsc`). Нужен install + docker restart.
 3. **egress allowlist** (`container_egress_proxy`) — нужен proxy-контейнер.
 4. **per-project network** (`isolate_project_network`) — самое деликатное, в конце.
 
@@ -87,25 +89,47 @@ docker info | grep -i runtimes       # ждём: runsc в списке
 После рестарта docker оркестратор/прод-аппы поднимутся сами (restart-policy
 `unless-stopped`). Проверь, что число контейнеров вернулось к запомненному.
 
-### 2.3 Включить в оркестраторе
+### 2.3 Включить ТОЛЬКО для disposable agent-shell
 ```bash
 # env оркестратора:
-OMNIA_CONTAINER_RUNTIME=runsc
+AGENT_SANDBOX_RUNTIME=runsc
 sudo systemctl restart omnia-orchestrator.service
 ```
 Проверка:
 ```bash
-# новый тестовый проект, затем:
-docker inspect omnia-dev-<slug> --format '{{.HostConfig.Runtime}}'   # ждём: runsc
-docker exec omnia-dev-<slug> dmesg 2>&1 | head -1                    # gVisor отдаёт свой fake-dmesg
+# capability gate для shell lane должен стать зелёным, при этом live preview
+# контейнер остаётся на daemon default runtime:
+curl -fsS -H "x-internal-token: $ORCHESTRATOR_INTERNAL_TOKEN" \
+  "http://127.0.0.1:8003/internal/projects/<project_id>/agent/sandbox-capabilities?slug=<slug>" \
+  | jq '{ready, profile, isolation: .isolation.runtime, sandbox_runtime_attestation}'
+docker inspect omnia-dev-<slug> --format '{{.HostConfig.Runtime}}'   # ждём: runc / daemon default
 ```
-Откат runtime: убрать `OMNIA_CONTAINER_RUNTIME`, restart orchestrator (новые
-контейнеры снова на runc; старые runsc-контейнеры пересоздадутся при следующем
-provision). Полный откат gVisor: вернуть `daemon.json.bak` + restart docker.
+Откат shell-lane runtime: убрать `AGENT_SANDBOX_RUNTIME`, restart orchestrator.
+Полный откат gVisor: вернуть `daemon.json.bak` + restart docker.
 
-⚠️ Совместимость: некоторые Node/Next-сборки чувствительны к gVisor (io_uring,
-определённые syscalls). Сначала прогнать ОДИН тестовый билд (entities + realtime)
-под runsc и убедиться, что dev-сервер стартует и HMR живой, ПЕРЕД флипом для всех.
+Эта стадия специально не трогает long-lived preview/dev-контейнеры. Мы сначала
+закрываем самый опасный путь — одноразовый shell с произвольными bash-командами —
+и только потом решаем, нужен ли rollout `runsc` шире.
+
+### 2.4 Опционально: перевести и long-lived preview/dev-контейнеры
+```bash
+# только после отдельной проверки совместимости templates/build/HMR:
+CONTAINER_RUNTIME=runsc
+sudo systemctl restart omnia-orchestrator.service
+```
+Проверка:
+```bash
+docker inspect omnia-dev-<slug> --format '{{.HostConfig.Runtime}}'   # ждём: runsc
+docker exec omnia-dev-<slug> dmesg 2>&1 | head -1                    # gVisor fake-dmesg
+```
+Откат runtime для long-lived контейнеров: убрать `CONTAINER_RUNTIME`, restart
+orchestrator (новые контейнеры снова на daemon default; старые runsc-контейнеры
+пересоздадутся при следующем provision).
+
+⚠️ Совместимость: некоторые Node/Next-сборки чувствительны к gVisor (`io_uring`,
+определённые syscalls). Поэтому long-lived rollout делать только ПОСЛЕ того, как
+agent-shell lane стабильно работает и хотя бы один тестовый билд (entities +
+realtime) под `runsc` подтвердил dev-server/HMR.
 
 ---
 
@@ -194,20 +218,27 @@ orchestrator; вернуться к топологии shared-net + egress-proxy
 ## Итоговая проверка Phase 1
 
 ```bash
+curl -fsS -H "x-internal-token: $ORCHESTRATOR_INTERNAL_TOKEN" \
+  "http://127.0.0.1:8003/internal/projects/<project_id>/agent/sandbox-capabilities?slug=<slug>" \
+  | jq '{ready, profile, runtime: .isolation.runtime, sandbox_runtime_attestation}'
 docker inspect omnia-dev-<slug> --format \
  'runtime={{.HostConfig.Runtime}} secopt={{.HostConfig.SecurityOpt}} pids={{.HostConfig.PidsLimit}} net={{json .NetworkSettings.Networks}}'
-# ждём: runtime=runsc secopt=[no-new-privileges:true] pids=512 net=omnia-proj-<id>
+# shell lane: capability attestation → runtime=runsc
+# long-lived preview: runtime=runsc только если включён шаг 2.4
 docker exec omnia-dev-<slug> sh -c 'curl -m5 -s -o /dev/null -w "%{http_code}" https://example.com'  # блок
 ```
 
-Phase 1 закрыта, когда: runsc активен и тестовый билд (entities+realtime) под ним
-живой; egress в произвольный хост заблокирован, в allowlist — открыт; (опц.)
-проекты сетево изолированы, при этом DB/gateway/minio достижимы. После этого
-безопасно широко включать `USE_AGENTIC_BUILDER` (агент гоняет произвольный bash).
+Phase 1 закрыта, когда: `AGENT_SANDBOX_RUNTIME=runsc` активен и capability gate
+для shell lane зелёный; egress в произвольный хост заблокирован, в allowlist —
+открыт; (опц.) проекты сетево изолированы, при этом DB/gateway/minio достижимы.
+Long-lived preview/dev-контейнеры переводим на `runsc` только после отдельной
+совместимости templates/build/HMR. После этого безопасно широко включать
+`USE_AGENTIC_BUILDER` (агент гоняет произвольный bash).
 
 ## Полный откат Phase 1
 ```bash
-# env оркестратора: убрать CONTAINER_HARDEN, OMNIA_CONTAINER_RUNTIME,
+# env оркестратора: убрать CONTAINER_HARDEN, AGENT_SANDBOX_RUNTIME,
+# CONTAINER_RUNTIME,
 # CONTAINER_EGRESS_PROXY, ISOLATE_PROJECT_NETWORK
 sudo systemctl restart omnia-orchestrator.service     # код снова инертен
 docker rm -f omnia-egress                             # снять прокси

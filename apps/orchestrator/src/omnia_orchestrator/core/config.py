@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,7 +47,12 @@ class Settings(BaseSettings):
     # syscalls, so a container escape never reaches the host kernel. The daemon
     # must have the runtime registered (/etc/docker/daemon.json) FIRST; until
     # then leave empty = the daemon default (runc, current behaviour).
-    container_runtime: str = Field(default="")
+    # `OMNIA_CONTAINER_RUNTIME` stays accepted as a legacy alias because older
+    # server runbooks already mention it.
+    container_runtime: str = Field(
+        default="",
+        validation_alias=AliasChoices("CONTAINER_RUNTIME", "OMNIA_CONTAINER_RUNTIME"),
+    )
     # `container_harden` — host-free, in-container hardening safe for our
     # non-root Node/Python images: `no-new-privileges` (a setuid binary cannot
     # re-grant the caps we dropped) + a PID ceiling (fork-bomb guard). Off by
@@ -89,6 +94,18 @@ class Settings(BaseSettings):
     # no-new-privileges and CPU/RAM/PID/output quotas.  This is the global kill
     # switch; API-side capability discovery fails closed when it is disabled.
     agent_sandbox_enabled: bool = Field(default=True)
+    # Dedicated runtime override for the disposable shell lane. Set to "runsc"
+    # to harden `/agent/exec-sandbox` FIRST without flipping preview/prod user
+    # containers. Empty = inherit `container_runtime`; if that too is empty the
+    # shell keeps the daemon default (today's behavior). Accept the older
+    # `OMNIA_AGENT_SANDBOX_RUNTIME` spelling for rollout docs already in flight.
+    agent_sandbox_runtime: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "AGENT_SANDBOX_RUNTIME",
+            "OMNIA_AGENT_SANDBOX_RUNTIME",
+        ),
+    )
     runtime_db_container_name: str = Field(default="omnia-postgres-users")
 
     # `use_dep_doctor` — before each agent typecheck, scan the dev container's
