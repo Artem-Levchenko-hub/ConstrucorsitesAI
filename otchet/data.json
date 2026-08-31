@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-08-31",
-  "version": 43,
+  "version": 44,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -202,6 +202,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "31.08",
+   "what": "Попросил максимально освободить RAM на текущем сервере, чтобы перейти от спецификации к запуску Project Cell.",
+   "impact": "Через штатный orchestrator остановлены восемь idle dev-preview без удаления контейнеров, образов, volume, БД, workspace или маршрутов; MemAvailable вырос с 3 121 152 до 8 702 464 KiB и прошёл порог Project Cell ≥6 GiB. Первый cold-wake выявил старый дефект mode 0644 у docker-entrypoint.sh; содержимое восьми файлов сохранено по SHA-256, mode восстановлен, а повторный smoke разбудил тот же контейнер 762882940dc9 до HTTP 200 и снова штатно остановил его с 8 500 264 KiB available. API, gateway, orchestrator и web остались HTTP 200. K3s/Kata и сама живая Project Cell ещё не установлены — закрыт только обязательный capacity/lifecycle gate Phase 1."
+  },
   {
    "date": "31.08",
    "what": "Попросил поднять на текущем сервере enterprise-систему, где для каждого проекта запускается полноценный автономный агент в отдельном изолированном пространстве через LLMGW.",
@@ -1408,13 +1413,13 @@
    "title": "Безопасность платформы: self-credit, бэкапы, sandbox",
    "description": "Закрытие дыр самой платформы: бесплатная накрутка кошелька, ночные pg_dump с restore-тестом, gVisor/egress-allowlist для агентских контейнеров.",
    "status": "partial",
-   "evidence": "/wallet/topup загейчен (901d123). Ночные бэкапы и restore-тест работают, но off-host копия всё ещё не включена. По sandbox-контурy добавлен отдельный `AGENT_SANDBOX_RUNTIME`/`OMNIA_AGENT_SANDBOX_RUNTIME` для disposable agent-shell, `/internal/projects/<id>/agent/sandbox-capabilities` теперь отдаёт `sandbox_runtime_attestation`, а `/agent/exec-sandbox` fail-closed отказывается стартовать shell, если запрошенный runtime не зарегистрирован. `apps/orchestrator/.env.example` и runbook Phase 1 переведены на shell-first rollout `AGENT_SANDBOX_RUNTIME=runsc` → опциональный широкий `CONTAINER_RUNTIME=runsc`. Локальная проверка: полный `apps/orchestrator` pytest = 507 passed, 15 xfailed; strict mypy зелёный; Ruff на изменённых файлах зелёный. Host-enablement gVisor/egress на production пока не включён, поэтому long-lived preview-контейнеры ещё не изолированы через runsc.",
+   "evidence": "/wallet/topup загейчен (901d123). Ночные бэкапы, checksum и scratch-restore работают; encrypted off-host artifact уже доставляется через GitHub Actions. На 31.08 endpoint подтвердил свежий bundle 2026-08-31 00:15:54 UTC размером 426 550 131 байт с валидным SHA-256. По sandbox-контуру добавлен отдельный `AGENT_SANDBOX_RUNTIME`/`OMNIA_AGENT_SANDBOX_RUNTIME` для disposable agent-shell, `/internal/projects/<id>/agent/sandbox-capabilities` отдаёт `sandbox_runtime_attestation`, а `/agent/exec-sandbox` fail-closed отказывается стартовать shell, если запрошенный runtime не зарегистрирован. `apps/orchestrator/.env.example` и runbook Phase 1 поддерживают узкий rollout `AGENT_SANDBOX_RUNTIME=runsc`; host-enablement gVisor/egress на production пока не включён и не заменяет целевую Kata-границу Project Cell.",
    "category": "безопасность",
    "period": "05.07 → частично open",
    "id": "H43",
    "score": 5,
-   "impact": "Появился узкий и обратимый rollout для самого опасного пути: одноразового shell с произвольными bash-командами. Теперь отсутствие gVisor может детектироваться и блокироваться fail-closed, а не молча скатываться в daemon default; при этом длинноживущие preview-контейнеры можно не трогать до отдельной проверки совместимости. Открыто: off-host бэкапы, host-enablement gVisor/egress и полная ротация всех засвеченных ключей.",
-   "next_vector": "Offhost-копия бэкапов + ротация всех засвеченных PAT/ключей."
+   "impact": "Off-host DR больше не бумажный: свежий зашифрованный bundle проверяется по checksum вне production VPS. Для опасного одноразового shell появился узкий fail-closed runtime rollout без принудительного перевода long-lived preview. Открыто: host-enablement egress/runtime isolation, целевая Kata-граница Project Cell и полная ротация всех засвеченных ключей.",
+   "next_vector": "Включить проверенную host-isolation/egress политику и завершить ротацию всех засвеченных PAT/ключей."
   },
   {
    "title": "RESOURCE-GUARD: рутины не должны ронять VPS",
@@ -2420,8 +2425,8 @@
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "31.08",
    "description": "Если агентный цикл перенести из центрального API в постоянную Project Cell с полным shell, durable checkpoint и обязательной Kata-изоляцией, агент сможет собирать сложные полноценные продукты без доступа к хосту и чужим проектам.",
-   "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Локальный main, origin/main и production совпали; сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s. Архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и после трёх циклов исправлений получил APPROVE от независимых architecture и security/operations gate. Живой Project Cell и MAX canary ещё не запускались.",
-   "impact": "У команды появился единый проверяемый путь от безопасной очистки текущего сервера до горизонтально масштабируемого агента. Гипотеза остаётся открытой до реального K3s + Kata smoke, восстановления сессии после рестартов и сборки сложного MAX-приложения через LLMGW.",
+   "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s; архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и получил APPROVE от независимых architecture и security/operations gate. Phase 1 исполнялся без удаления данных: штатно остановлены восемь idle dev-preview, MemAvailable вырос с 3 121 152 до 8 702 464 KiB. Cold-wake canary сохранил container ID 762882940dc9, достиг HTTP 200 и снова остановился; после proof доступны 8 500 264 KiB, все четыре production health endpoint вернули 200. Регресс mode 0644 у hot-reload entrypoint закрыт permanent runtime-фиксом. Живой K3s + Kata Project Cell и MAX canary ещё не запускались.",
+   "impact": "Безопасная capacity-фаза стала измеренным production-фактом: памяти достаточно для следующего K3s/Kata smoke, а остановленные проекты доказанно восстанавливаются без пересоздания. Гипотеза остаётся открытой до реального K3s + Kata smoke, восстановления сессии после рестартов и сборки сложного MAX-приложения через LLMGW.",
    "next_vector": "V4"
   }
  ],
@@ -2588,6 +2593,10 @@
     ],
     [
      "Enterprise Project Cell: утверждён контракт K3s + Kata, durable runner, draft и атомарная публикация (31.08)",
+     true
+    ],
+    [
+     "Project Cell Phase 1: без удаления данных освобождено >8 GiB RAM, cold wake/stop того же container ID доказан на production (31.08)",
      true
     ],
     [

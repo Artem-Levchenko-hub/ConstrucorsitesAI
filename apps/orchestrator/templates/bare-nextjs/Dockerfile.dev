@@ -31,4 +31,4 @@ EXPOSE 3000
 # Keep the container alive; the AGENT starts its own dev server (see
 # SYSTEM_PROMPT). Container envs (DATABASE_URL, REDIS_URL, AUTH_SECRET, ...) come
 # from the orchestrator.
-CMD ["./docker-entrypoint.sh"]
+CMD ["sh", "./docker-entrypoint.sh"]

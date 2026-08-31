@@ -1,6 +1,7 @@
 # Project Cell Phase 1: safe pilot capacity
 
-**Status:** executable rollout prepared from a read-only production baseline on 2026-08-31
+**Status:** memory admission gate and cold-wake proof passed on production on
+2026-08-31; the later K3s/Kata phases remain separate gates
 
 **Scope:** release enough memory for the single-cell pilot without deleting a
 container, image, volume, database, workspace, route, or rollback artifact
@@ -34,6 +35,35 @@ changing the host:
 The disk and virtualization gates pass. The memory gate fails because the
 Project Cell contract requires at least 6 GiB available before K3s installation
 and one worst-case pilot-cell soak.
+
+### 1.1 Executed production evidence
+
+The owner explicitly authorized the maximum safe RAM release. The normal
+orchestrator stop endpoint stopped the seven paused previews and the one running
+idle preview identified in the baseline. No container, image, volume, database,
+workspace, route or rollback artifact was removed. `MemAvailable` rose from
+3,121,152 KiB to 8,702,464 KiB.
+
+The first cold-wake probe exposed a pre-existing lifecycle defect rather than a
+capacity failure. Hot reload had archived every text file as mode `0644`, so a
+generated root `docker-entrypoint.sh` lost its executable bit. The Node base
+image then tried to parse the shell source as JavaScript and the canary entered
+`restarting`. The exact canary was stopped; none of its data or configuration
+was recreated.
+
+The bounded repair preserved the SHA-256 content of all eight stopped runtime
+entrypoints while restoring mode `0755` where missing. A second proof woke
+project `bfb03bc8-290d-454e-ae5a-3a3c06e00161` through the normal endpoint:
+container `762882940dc9...` retained the same identity and port, reached HTTP
+200 on port 3227 on poll attempt 8, then returned to `exited` through the normal
+stop endpoint. Post-proof `MemAvailable` was 8,500,264 KiB. API, LLM gateway,
+orchestrator and web health all returned HTTP 200.
+
+The permanent regression fix invokes each supported development entrypoint via
+`sh`, preserves `0755` only for the root `docker-entrypoint.sh` during hot
+reload, and lets an explicit stop terminate a `restarting` container. This
+proof passes the Phase 1 memory/lifecycle prerequisite; it does not claim that
+K3s, Kata or a live Project Cell has already been installed.
 
 ## 2. Root cause and bounded change
 

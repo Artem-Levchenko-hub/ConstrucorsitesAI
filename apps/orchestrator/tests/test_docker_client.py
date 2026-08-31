@@ -121,6 +121,7 @@ class _FakeContainer:
         self.started = False
         self.unpause_calls = 0
         self.stop_timeouts: list[int] = []
+        self.archives: list[tuple[str, bytes]] = []
 
     def reload(self) -> None:
         pass
@@ -142,6 +143,10 @@ class _FakeContainer:
 
     def remove(self, force: bool = False) -> None:
         self.removed = True
+
+    def put_archive(self, *, path: str, data: bytes) -> bool:
+        self.archives.append((path, data))
+        return True
 
 
 class _FakeContainers:
@@ -262,6 +267,23 @@ async def test_stop_container_releases_memory_from_legacy_paused_state(
     assert paused.status == "exited"
 
 
+async def test_stop_container_releases_memory_from_restarting_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    restarting = _FakeContainer(
+        "restarting-id",
+        "omnia-template-nextjs-entities:dev",
+        status="restarting",
+    )
+    client = _FakeClient(restarting)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    await docker_client.stop_container("omnia-dev-x", pause=False)
+
+    assert restarting.stop_timeouts == [10]
+    assert restarting.status == "exited"
+
+
 async def test_stop_container_is_idempotent_when_already_exited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -278,6 +300,49 @@ async def test_stop_container_is_idempotent_when_already_exited(
     assert exited.unpause_calls == 0
     assert exited.stop_timeouts == []
     assert exited.status == "exited"
+
+
+async def test_write_files_preserves_only_root_runtime_entrypoint_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = _FakeContainer(
+        "running-id",
+        "omnia-template-nextjs-entities:dev",
+        status="running",
+    )
+    client = _FakeClient(running)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    result = await docker_client.write_files(
+        "omnia-dev-x",
+        {
+            "docker-entrypoint.sh": "#!/bin/sh\nexec npm run dev\n",
+            "src/app.ts": "export const ok = true;\n",
+            "nested/docker-entrypoint.sh": "#!/bin/sh\nexit 0\n",
+        },
+    )
+
+    assert result["written"] == "3"
+    assert len(running.archives) == 1
+    archive_root, archive_bytes = running.archives[0]
+    assert archive_root == "/app"
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+        assert archive.getmember("docker-entrypoint.sh").mode == 0o755
+        assert archive.getmember("src/app.ts").mode == 0o644
+        assert archive.getmember("nested/docker-entrypoint.sh").mode == 0o644
+
+
+def test_dev_templates_invoke_entrypoint_through_shell() -> None:
+    templates = Path(__file__).resolve().parents[1] / "templates"
+    for template in (
+        "bare-nextjs",
+        "max-miniapp-nextjs",
+        "nextjs-entities",
+        "nextjs-postgres-drizzle",
+        "nextjs-realtime",
+    ):
+        dockerfile = (templates / template / "Dockerfile.dev").read_text(encoding="utf-8")
+        assert 'CMD ["sh", "./docker-entrypoint.sh"]' in dockerfile
 
 
 def test_module_exposes_expected_public_api() -> None:
