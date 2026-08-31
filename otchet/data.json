@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-08-30",
-  "version": 42,
+  "updated": "2026-08-31",
+  "version": 43,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -202,6 +202,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "31.08",
+   "what": "Попросил подтянуть свежую версию и продолжить контур изолированных серверных пространств для Claude-кодов, отдельно потребовав максимально подробный последний коммит.",
+   "impact": "Оркестратор получил отдельный `AGENT_SANDBOX_RUNTIME` для disposable shell-контейнеров агента, fail-closed attestation зарегистрированного runtime и обновлённый shell-first runbook: `runsc` теперь можно включать сначала только для `/agent/exec-sandbox`, не переводя сразу long-lived preview-контейнеры. Локально подтверждены 507 passed и 15 xfailed в полном `apps/orchestrator` pytest, зелёный strict mypy и зелёный Ruff на изменённых файлах; host-enablement gVisor/egress остаётся отдельным следующим шагом на production-сервере."
+  },
   {
    "date": "30.08",
    "what": "Попросил добавить к задачам файлы, отдельно уточнив поддержку HTML.",
@@ -1398,12 +1403,12 @@
    "title": "Безопасность платформы: self-credit, бэкапы, sandbox",
    "description": "Закрытие дыр самой платформы: бесплатная накрутка кошелька, ночные pg_dump с restore-тестом, gVisor/egress-allowlist для агентских контейнеров.",
    "status": "partial",
-   "evidence": "/wallet/topup загейчен (901d123); бэкапы работают, но только локальные (BACKUP_OFFHOST_DEST не задан); PAT и ключи светились в чате открытым текстом — ротация не подтверждена; health-endpoint на проде отсутствует.",
+   "evidence": "/wallet/topup загейчен (901d123). Ночные бэкапы и restore-тест работают, но off-host копия всё ещё не включена. По sandbox-контурy добавлен отдельный `AGENT_SANDBOX_RUNTIME`/`OMNIA_AGENT_SANDBOX_RUNTIME` для disposable agent-shell, `/internal/projects/<id>/agent/sandbox-capabilities` теперь отдаёт `sandbox_runtime_attestation`, а `/agent/exec-sandbox` fail-closed отказывается стартовать shell, если запрошенный runtime не зарегистрирован. `apps/orchestrator/.env.example` и runbook Phase 1 переведены на shell-first rollout `AGENT_SANDBOX_RUNTIME=runsc` → опциональный широкий `CONTAINER_RUNTIME=runsc`. Локальная проверка: полный `apps/orchestrator` pytest = 507 passed, 15 xfailed; strict mypy зелёный; Ruff на изменённых файлах зелёный. Host-enablement gVisor/egress на production пока не включён, поэтому long-lived preview-контейнеры ещё не изолированы через runsc.",
    "category": "безопасность",
    "period": "05.07 → частично open",
    "id": "H43",
    "score": 5,
-   "impact": "Дыра self-credit закрыта, ночные бэкапы с restore-тестом работают. Открыто: бэкапы только локальные, засвеченные ключи не ротированы.",
+   "impact": "Появился узкий и обратимый rollout для самого опасного пути: одноразового shell с произвольными bash-командами. Теперь отсутствие gVisor может детектироваться и блокироваться fail-closed, а не молча скатываться в daemon default; при этом длинноживущие preview-контейнеры можно не трогать до отдельной проверки совместимости. Открыто: off-host бэкапы, host-enablement gVisor/egress и полная ротация всех засвеченных ключей.",
    "next_vector": "Offhost-копия бэкапов + ротация всех засвеченных PAT/ключей."
   },
   {
@@ -2457,6 +2462,10 @@
    "status": "стратегический ров",
    "goal": "Доказуемо гарантировать: сгенерированное приложение работает И не течёт между пользователями. Этого не делает ни один конкурент.",
    "steps": [
+    [
+     "Shell-only runtime enforcement для /agent/exec-sandbox: отдельный env, attestation и fail-closed rollout под runsc",
+     true
+    ],
     [
      "Воскресить isolation-гейт (сделано 07.07 — живо доказан non-vacuous)",
      true
