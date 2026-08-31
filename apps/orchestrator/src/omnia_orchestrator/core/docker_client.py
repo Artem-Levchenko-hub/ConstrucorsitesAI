@@ -399,7 +399,7 @@ async def stop_container(name: str, *, pause: bool = False) -> None:
                 if status == "paused":
                     c.unpause()  # can't stop a frozen container — thaw first
                     c.stop(timeout=10)
-                elif status == "running":
+                elif status in ("running", "restarting"):
                     c.stop(timeout=10)
                 # exited / created → already stopped, no-op
         except docker.errors.APIError as exc:
@@ -1092,7 +1092,13 @@ async def write_files(
                 data = content.encode("utf-8")
                 info = tarfile.TarInfo(name=norm)
                 info.size = len(data)
-                info.mode = 0o644
+                # Runtime entrypoints must survive a source hot-reload and a
+                # later cold wake. Repository snapshots store text, not Unix
+                # executable bits; writing this file as the old blanket 0644
+                # made Node's base-image entrypoint treat the shell script as
+                # JavaScript after docker stop/start. Other generated files
+                # remain non-executable by default.
+                info.mode = 0o755 if norm == "docker-entrypoint.sh" else 0o644
                 info.uid = 1000
                 info.gid = 1000
                 info.mtime = ts

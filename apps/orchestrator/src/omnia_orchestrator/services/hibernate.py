@@ -19,9 +19,9 @@ Design (sprint A1 — fills in for the prior scaffold):
 
 - **Sweep** — every 60 s walk every container with label `omnia.kind=dev`,
   read `omnia.tier` (defaulting to "free"), compare idle vs tier threshold,
-  and call `docker_client.stop_container(pause=<tier∈{pro,business}>)`. Free
-  tier frees RAM (cold-start ~30-60 s on wake); Pro keeps the process state
-  (warm wake ~1-3 s).
+  and stop it so its workspace/container layer survives while RAM is released.
+  A dedicated single-node host may explicitly opt paid tiers into warm pause;
+  shared/scaling hosts fail to the memory-releasing policy by default.
 
 - **Bootstrap** — a container the sweeper sees for the first time (no
   `_last_activity` entry, e.g. after orchestrator restart) is recorded as
@@ -115,8 +115,14 @@ def _tier_threshold_seconds(tier: str) -> int:
 
 
 def _should_pause(tier: str) -> bool:
-    """Pro / business → pause (keep memory). Free → stop (free RAM)."""
-    return tier in ("pro", "business")
+    """Return the explicit warm-pause exception for a paid tier.
+
+    Docker pause freezes a process but retains all resident memory. Treating it
+    as hibernation exhausted the pilot host while seven apparently sleeping
+    previews held several GiB. The scalable default is therefore stop for every
+    tier; operators can restore the old latency trade-off only deliberately.
+    """
+    return get_settings().hibernate_warm_pause_paid and tier in ("pro", "business")
 
 
 async def record_activity(project_id: str) -> None:
@@ -241,8 +247,31 @@ async def _sweep_once() -> None:
                 _last_activity[project_id] = now
             continue
 
+        pause = _should_pause(tier)
+        if status == "paused" and not pause:
+            # Reconcile containers created under the former paid-tier policy.
+            # stop_container safely thaws then stops the container, preserving
+            # its writable layer and bind mounts while finally releasing RAM.
+            log.info(
+                "hibernate.reconcile_paused",
+                project_id=project_id,
+                container=name,
+                tier=tier,
+                action="stop",
+            )
+            try:
+                await docker_client.stop_container(name, pause=False)
+            except OrchestratorError as exc:
+                log.warning(
+                    "hibernate.action_failed",
+                    project_id=project_id,
+                    container=name,
+                    err=exc.message,
+                )
+            continue
+
         if status != "running":
-            continue  # already paused / stopped / exited — nothing to do
+            continue  # already stopped / exited — nothing to do
 
         threshold = _tier_threshold_seconds(tier)
         last = _last_activity.get(project_id)
@@ -257,7 +286,6 @@ async def _sweep_once() -> None:
         if idle < threshold:
             continue
 
-        pause = _should_pause(tier)
         log.info(
             "hibernate.idle_detected",
             project_id=project_id,

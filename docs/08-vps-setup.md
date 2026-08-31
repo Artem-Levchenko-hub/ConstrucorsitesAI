@@ -2,7 +2,10 @@
 
 Конкретные команды для подготовки `170.168.72.200` (Serverum VPS, hostname `inquisitive-head`) к запуску orchestrator + dev-контейнеров пользователей.
 
-**Перед началом** — прочитать `docs/07-v2-architecture.md` для контекста. Любые операции из этого файла **запускает Артём вручную через SSH** — Claude Code не модифицирует прод напрямую.
+**Перед началом** — прочитать `docs/07-v2-architecture.md` для legacy-контекста и
+`docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md`
+для актуальной границы Project Cell. Любая серверная операция выполняется только
+через проверяемую фазу с baseline, откатом и повторной health-проверкой.
 
 ## Текущее состояние сервера (snapshot на 2026-05-18)
 
@@ -12,7 +15,7 @@
 |---|---|---|
 | OS | Debian 12 + kernel 6.1.170 | Rootless Docker поддерживается (kernel >= 4.18). |
 | CPU / RAM | 8 cores / 15 GB (10 GB free) | На 10-15 dev-контейнеров по 512 MB хватит с запасом. |
-| Disk | 516 GB total, 280 GB free | **HO 380 GB занято Docker мусором** — см. шаг 1 cleanup ниже. |
+| Disk | 516 GB total, 280 GB free | Исторический замер. Перед изменением снять новый inventory; reclaimable не означает безопасный для удаления. |
 | Docker | 29.2.1 + Compose v5.1.0 | Свежий, OK. |
 | User | `i48ptgvnis` в группах `docker`, `admin` | Sudo без пароля. orchestrator-user добавим отдельно. |
 | Ingress | **системный nginx** на :80/443 (master PID — реальный, не контейнер) | Не Caddy — будем дописывать sites-enabled через orchestrator. |
@@ -23,19 +26,34 @@
 | Параллельные проекты | endless-war (3 контейнера), messenger (4 контейнера), cs-stream | V2 контейнеры с префиксом `proj-<id>` — конфликтов имён не будет. |
 | Soft warning V1 | `omnia-prod-web` помечен unhealthy, но логи показывают `Ready in 161ms`. Healthcheck `wget` ловит `Connection refused` — настоящий downtime отсутствует. | Фикс — отдельный V1 commit, не блокирует V2. |
 
-## Шаг 0. Cleanup Docker мусора (обязательно ДО V2)
+## Шаг 0. Безопасная подготовка ёмкости для Project Cell
 
-Docker накопил 177 GB образов (98% reclaimable) и 212 GB build cache. После cleanup освободится ~250 GB — необходимо для хранения per-project images.
+> Этот раздел заменяет прежнюю рекомендацию `docker system prune -af --volumes`.
+> На общем production-хосте запрещены глобальные `docker system/image/builder
+> prune`, любой volume prune и glob-удаление runtime-каталогов. «Unused» по
+> мнению Docker не доказывает, что объект не нужен для rollback, остановленного
+> проекта, backup или другого compose-стека.
 
-```bash
-ssh kanavto-vps
-docker system df               # текущее состояние
-docker system prune -af --volumes  # ВНИМАНИЕ: грохнет все unused images, builds, volumes
-                                   # Запущенные контейнеры (V1 omnia, messenger, endless-war) НЕ трогаются.
-docker system df               # должно показать <30 GB
-```
+1. Зафиксировать Git revision, compose projects, health всех production-сервисов,
+   active generation count, backup status, CPU/RAM/disk/inodes и полный inventory
+   containers/images/volumes/networks.
+2. Для каждого контейнера записать одно решение: `preserve`, `hibernate`,
+   `remove_envelope` или `investigate`. По умолчанию — `investigate`.
+3. До любого удаления подтвердить: нет активного deploy/build/backup/restore/
+   hibernate/delete/promotion; свежий зашифрованный backup прошёл checksum и
+   restore-test; exact image/source/data для восстановления записаны.
+4. Сначала остановить через orchestrator только реконструируемые idle dev-preview.
+   Остановка сохраняет container writable layer и bind-mounted workspace, но
+   освобождает RAM. `Paused` не является hibernation: память остаётся занятой.
+5. Удалять разрешено только точные immutable container/image/cache IDs из
+   отдельно проверенного manifest. Named volumes не удаляются.
+6. После каждого bounded batch повторить baseline и остановиться при любой
+   деградации.
 
-После этого `df -h /` должен показать ~500 GB free.
+Минимальный admission gate пилота: ≥6 GiB available RAM, ≥60 GiB free disk,
+достаточно inodes/IOPS, `/dev/kvm`, cgroup v2, отсутствие active generations,
+валидный off-host backup и зелёные API/gateway/orchestrator/web health. Полная
+процедура и запреты находятся в разделах 5, 13 и 16 Project Cell-спецификации.
 
 ## Шаг 1. Создание директорий и orchestrator-пользователя
 
@@ -54,15 +72,16 @@ sudo touch /var/log/omnia-orchestrator.log
 sudo chown omnia-orchestrator:omnia-orchestrator /var/log/omnia-orchestrator.log
 ```
 
-## Шаг 2. Docker rootless (рекомендуется, но необязательно для бета)
+## Шаг 2. Legacy Docker boundary (не Project Cell)
 
-Rootless Docker — defense in depth: если юзерский контейнер escape-нет sandbox, он попадёт в namespace юзера `omnia-orchestrator`, а не root.
-
-Для бета (первые 10-20 проектов) — допустимо пропустить и оставить системный Docker. Контейнеры всё равно стартуют с `--user 1000:1000 --cap-drop=ALL` (см. `core/docker_client.py`).
+Rootless Docker и `--user 1000:1000 --cap-drop=ALL` остаются защитой legacy
+preview-контейнеров, но не считаются границей для автономного агента. Project
+Cell допускает untrusted shell/root только внутри обязательной Kata microVM;
+если `kata` RuntimeClass или admission policy не готовы, backend `cell` должен
+отказать и не переключаться на `runc`.
 
 ```bash
-# Альтернатива для бета: НИКАКОЙ rootless setup, но строгие defaults в orchestrator.
-# Полный rootless — позже, отдельным sprint'ом.
+# Эти команды относятся только к legacy preview path. Они не включают Project Cell.
 ```
 
 ## Шаг 3. Local Docker registry
@@ -391,11 +410,18 @@ curl https://test.preview.omniadevelop.ru
 
 ## Откат
 
-Если что-то пошло не так — `sudo systemctl stop omnia-orchestrator`. V1 продолжает работать (его контейнеры `omnia-prod-*` независимы). V2 артефакты в `/opt/omnia-runtime` можно удалить (`docker compose down -v` + `rm -rf`).
+Если legacy orchestrator сломан — `sudo systemctl stop omnia-orchestrator`; основной
+compose `full` продолжает работать независимо. Не выполнять `docker compose down
+-v` и не удалять `/opt/omnia-runtime`: там находятся пользовательские БД,
+workspace, registry и recovery-артефакты. Откат удаляет только точные ресурсы,
+созданные текущей фазой и перечисленные в её rollback manifest.
 
 ## Что не покрыто (Phase A.5+)
 
 - **Backup пользовательских БД** — добавится в sprint A4.
 - **Loki/Grafana** для аггрегации логов dev-контейнеров — sprint A5.
-- **Multi-VPS scaling** — когда упрёмся в 1 VPS (≈30 active проектов на 15 GB RAM с учётом V1 + other tenants). План: worker-ноды + orchestrator round-robin.
+- **Project Cell scaling** — не round-robin по локальным Docker paths. Актуальный
+  путь: K3s scheduler, Kata execution pool, durable workspaces/checkpoints,
+  database-backed queue, renewable leases и fencing; worker-нода добавляется
+  без изменения product protocol.
 - **Wildcard cert renewal automation** — certbot renew по cron, но reload nginx после renew.

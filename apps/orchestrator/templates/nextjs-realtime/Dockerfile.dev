@@ -36,4 +36,4 @@ EXPOSE 3000
 # Default: hot-reload dev server with a one-shot schema sync first.
 # Container envs (DATABASE_URL, AUTH_SECRET, AUTH_URL, etc.) come from
 # the orchestrator at run time.
-CMD ["./docker-entrypoint.sh"]
+CMD ["sh", "./docker-entrypoint.sh"]
