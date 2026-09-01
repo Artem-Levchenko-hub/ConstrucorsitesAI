@@ -212,6 +212,20 @@ class Settings(BaseSettings):
         default="disabled"
     )
     docker_owner_canary_enabled: bool = Field(default=False)
+    cell_profile_version: str = Field(default="docker-owner-cell-resources-v1")
+    cell_postgres_image: str = Field(default="")
+    cell_redis_image: str = Field(default="")
+    cell_backup_image: str = Field(default="")
+    cell_max_active_bundles: int = Field(default=1, ge=1, le=1)
+    cell_bundle_cpu_cores: float = Field(default=2.0, gt=0)
+    cell_bundle_memory_bytes: int = Field(default=4 * 1024**3, gt=0)
+    cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
+    cell_host_memory_reserve_bytes: int = Field(default=4 * 1024**3, ge=0)
+    cell_required_free_disk_bytes: int = Field(default=20 * 1024**3, gt=0)
+    cell_host_disk_reserve_bytes: int = Field(default=10 * 1024**3, ge=0)
+    cell_required_free_inodes: int = Field(default=100_000, gt=0)
+    cell_host_inode_reserve: int = Field(default=50_000, ge=0)
+    cell_state_path: str = Field(default="/opt/omnia-runtime/state/project-cells.json")
 
     # Sentry — leave empty to disable.
     sentry_dsn: SecretStr | None = None

@@ -9,6 +9,7 @@ ApiError taxonomy so the public response shape stays consistent.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from uuid import UUID
@@ -60,6 +61,11 @@ class OrchestratorBadRequest(ApiError):
 def _validate_request_digest(request_digest: str) -> None:
     if not _REQUEST_DIGEST_RE.fullmatch(request_digest):
         raise ValueError("request_digest must be a 64-character lowercase hex string")
+
+
+def _validate_workspace_revision(workspace_revision: str) -> None:
+    if not _REQUEST_DIGEST_RE.fullmatch(workspace_revision):
+        raise ValueError("workspace_revision must be a 64-character lowercase hex string")
 
 
 def _validate_fencing_epoch(fencing_epoch: int) -> None:
@@ -292,6 +298,158 @@ class ProjectCellResourceResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectCellAgentWorkspaceSnapshot:
+    files: dict[str, str]
+    seeded_from_project: bool
+    generation_run_id: UUID | None
+    fencing_epoch: int
+    workspace_revision: str
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentWorkspaceSnapshot:
+        expected = {
+            "files",
+            "seeded_from_project",
+            "generation_run_id",
+            "fencing_epoch",
+            "workspace_revision",
+        }
+        unexpected = set(payload) - expected
+        if unexpected:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell workspace snapshot"
+            )
+        raw_files = payload.get("files")
+        seeded_from_project = payload.get("seeded_from_project")
+        generation_run_id = payload.get("generation_run_id")
+        fencing_epoch = payload.get("fencing_epoch")
+        workspace_revision = payload.get("workspace_revision")
+        if (
+            type(raw_files) is not dict
+            or type(seeded_from_project) is not bool
+            or (generation_run_id is not None and type(generation_run_id) is not str)
+            or type(fencing_epoch) is not int
+            or type(workspace_revision) is not str
+        ):
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell workspace snapshot"
+            )
+        files: dict[str, str] = {}
+        for raw_path, raw_content in raw_files.items():
+            if type(raw_path) is not str or type(raw_content) is not str:
+                raise OrchestratorUnavailable(
+                    "Orchestrator returned an invalid Project Cell workspace snapshot"
+                )
+            files[raw_path] = raw_content
+        try:
+            _validate_fencing_epoch(fencing_epoch)
+            _validate_workspace_revision(workspace_revision)
+            return cls(
+                files=files,
+                seeded_from_project=seeded_from_project,
+                generation_run_id=(
+                    UUID(generation_run_id) if generation_run_id is not None else None
+                ),
+                fencing_epoch=fencing_epoch,
+                workspace_revision=workspace_revision,
+            )
+        except ValueError as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell workspace snapshot"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellAgentWriteResponse:
+    written: int
+    deleted: int
+    workspace_revision: str
+
+    def __post_init__(self) -> None:
+        if self.written < 0 or self.deleted < 0:
+            raise ValueError("written and deleted must be zero or positive")
+        _validate_workspace_revision(self.workspace_revision)
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentWriteResponse:
+        expected = {"written", "deleted", "workspace_revision"}
+        unexpected = set(payload) - expected
+        if unexpected:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell write response"
+            )
+        written = payload.get("written")
+        deleted = payload.get("deleted")
+        workspace_revision = payload.get("workspace_revision")
+        if (
+            type(written) is not int
+            or type(deleted) is not int
+            or type(workspace_revision) is not str
+        ):
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell write response"
+            )
+        try:
+            return cls(
+                written=written,
+                deleted=deleted,
+                workspace_revision=workspace_revision,
+            )
+        except ValueError as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell write response"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellAgentExecResponse:
+    ok: bool
+    exit_code: int
+    detail: str
+    timed_out: bool
+    workspace_revision: str
+
+    def __post_init__(self) -> None:
+        _validate_workspace_revision(self.workspace_revision)
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentExecResponse:
+        expected = {"ok", "exit_code", "detail", "timed_out", "workspace_revision"}
+        unexpected = set(payload) - expected
+        if unexpected:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell exec response"
+            )
+        ok = payload.get("ok")
+        exit_code = payload.get("exit_code")
+        detail = payload.get("detail")
+        timed_out = payload.get("timed_out")
+        workspace_revision = payload.get("workspace_revision")
+        if (
+            type(ok) is not bool
+            or type(exit_code) is not int
+            or type(detail) is not str
+            or type(timed_out) is not bool
+            or type(workspace_revision) is not str
+        ):
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell exec response"
+            )
+        try:
+            return cls(
+                ok=ok,
+                exit_code=exit_code,
+                detail=detail,
+                timed_out=timed_out,
+                workspace_revision=workspace_revision,
+            )
+        except ValueError as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell exec response"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectCellPreEffectRejection:
     operation_id: UUID
     fencing_epoch: int
@@ -488,6 +646,97 @@ async def get_project_cell_capabilities(project_id: UUID) -> dict[str, Any]:
         "GET",
         f"/internal/projects/{project_id}/workspace/capabilities",
     )
+
+
+async def project_cell_agent_bootstrap(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID | None,
+    fencing_epoch: int,
+) -> ProjectCellAgentWorkspaceSnapshot:
+    _validate_fencing_epoch(fencing_epoch)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/agent/bootstrap",
+        json={
+            "generation_run_id": (
+                str(generation_run_id) if generation_run_id is not None else None
+            ),
+            "fencing_epoch": fencing_epoch,
+        },
+    )
+    return ProjectCellAgentWorkspaceSnapshot.from_json(payload)
+
+
+async def project_cell_agent_write_files(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID | None,
+    fencing_epoch: int,
+    expected_revision: str,
+    files: dict[str, str],
+    deletes: Sequence[str] = (),
+) -> ProjectCellAgentWriteResponse:
+    if type(files) is not dict:
+        raise ValueError("files must be an object")
+    for raw_path, raw_content in files.items():
+        if type(raw_path) is not str or type(raw_content) is not str:
+            raise ValueError("files must be a string-to-string mapping")
+    normalized_deletes: list[str] = []
+    for raw_path in deletes:
+        if type(raw_path) is not str:
+            raise ValueError("deletes must contain only strings")
+        normalized_deletes.append(raw_path)
+    if set(files).intersection(normalized_deletes):
+        raise ValueError("the same path cannot be written and deleted")
+    _validate_fencing_epoch(fencing_epoch)
+    _validate_workspace_revision(expected_revision)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/agent/write-files",
+        json={
+            "generation_run_id": (
+                str(generation_run_id) if generation_run_id is not None else None
+            ),
+            "fencing_epoch": fencing_epoch,
+            "expected_revision": expected_revision,
+            "files": files,
+            "deletes": normalized_deletes,
+        },
+    )
+    return ProjectCellAgentWriteResponse.from_json(payload)
+
+
+async def project_cell_agent_exec(
+    workspace_id: UUID,
+    cmd: str,
+    *,
+    generation_run_id: UUID | None,
+    fencing_epoch: int,
+    expected_revision: str,
+    timeout_seconds: int = 180,
+) -> ProjectCellAgentExecResponse:
+    if not isinstance(cmd, str) or not cmd.strip():
+        raise ValueError("cmd must be a non-empty string")
+    if timeout_seconds <= 0 or timeout_seconds > 900:
+        raise ValueError("timeout_seconds must be between 1 and 900")
+    _validate_fencing_epoch(fencing_epoch)
+    _validate_workspace_revision(expected_revision)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/agent/exec",
+        json={
+            "generation_run_id": (
+                str(generation_run_id) if generation_run_id is not None else None
+            ),
+            "fencing_epoch": fencing_epoch,
+            "expected_revision": expected_revision,
+            "cmd": cmd,
+            "timeout_seconds": timeout_seconds,
+        },
+        timeout=float(timeout_seconds + 30),
+    )
+    return ProjectCellAgentExecResponse.from_json(payload)
 
 
 async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:

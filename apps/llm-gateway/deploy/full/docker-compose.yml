@@ -138,6 +138,12 @@ services:
       PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
       PROXYAPI_OPENAI_BASE_URL: ${PROXYAPI_OPENAI_BASE_URL:-https://api.proxyapi.ru/openai/v1}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Trusted Project Cell runner authentication. Empty secret remains
+      # fail-closed; issuer/audience are validated on every native request.
+      RUNNER_AUTH_SECRET: ${RUNNER_AUTH_SECRET:-}
+      RUNNER_AUTH_ISSUER: ${RUNNER_AUTH_ISSUER:-omnia-agent-runner}
+      RUNNER_AUTH_AUDIENCE: ${RUNNER_AUTH_AUDIENCE:-omnia-project-cell-runner}
+      RUNNER_AUTH_MAX_TTL_SECONDS: ${RUNNER_AUTH_MAX_TTL_SECONDS:-300}
       # --- Gemini-only outbound HTTP proxy (geo-bypass) ---
       # When GEMINI_HTTPS_PROXY is empty these vars are also empty, so they
       # have no effect — httpx ignores empty proxy env. Whitelist domains
@@ -239,6 +245,8 @@ services:
       INITIAL_WALLET_BALANCE_RUB: ${INITIAL_WALLET_BALANCE_RUB:-100.0}
       ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://172.21.0.1:8003}
       ORCHESTRATOR_INTERNAL_TOKEN: ${ORCHESTRATOR_INTERNAL_TOKEN:?set ORCHESTRATOR_INTERNAL_TOKEN in .env}
+      PROJECT_CELL_DOCKER_CANARY_ENABLED: ${PROJECT_CELL_DOCKER_CANARY_ENABLED:-false}
+      PROJECT_CELL_CANARY_EMAILS: ${PROJECT_CELL_CANARY_EMAILS:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:-}
@@ -451,6 +459,8 @@ services:
       # orchestrator and container apps silently get no timeline thumbnail.
       ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://172.21.0.1:8003}
       ORCHESTRATOR_INTERNAL_TOKEN: ${ORCHESTRATOR_INTERNAL_TOKEN:?set ORCHESTRATOR_INTERNAL_TOKEN in .env}
+      PROJECT_CELL_DOCKER_CANARY_ENABLED: ${PROJECT_CELL_DOCKER_CANARY_ENABLED:-false}
+      PROJECT_CELL_CANARY_EMAILS: ${PROJECT_CELL_CANARY_EMAILS:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}

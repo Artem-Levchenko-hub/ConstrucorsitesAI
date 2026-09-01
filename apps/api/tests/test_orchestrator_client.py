@@ -14,6 +14,9 @@ from omnia_api.services.orchestrator_client import (
     ObserveProjectCellResourcesRequest,
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellAgentExecResponse,
+    ProjectCellAgentWorkspaceSnapshot,
+    ProjectCellAgentWriteResponse,
     ProjectCellPreEffectRejection,
     ProjectCellResourceResponse,
 )
@@ -46,6 +49,170 @@ async def test_project_cell_capability_client_calls_exact_internal_path(
         "method": "GET",
         "path": f"/internal/projects/{project_id}/workspace/capabilities",
     }
+
+
+async def test_project_cell_agent_bootstrap_calls_exact_internal_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    workspace_id = UUID("00000000-0000-0000-0000-000000000006")
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {
+            "files": {
+                "src/app/page.tsx": "export default function Page(){return null}\n",
+            },
+            "seeded_from_project": True,
+            "generation_run_id": "00000000-0000-0000-0000-000000000099",
+            "fencing_epoch": 4,
+            "workspace_revision": "a" * 64,
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.project_cell_agent_bootstrap(
+        workspace_id,
+        generation_run_id=UUID("00000000-0000-0000-0000-000000000099"),
+        fencing_epoch=4,
+    )
+
+    assert result == ProjectCellAgentWorkspaceSnapshot(
+        files={"src/app/page.tsx": "export default function Page(){return null}\n"},
+        seeded_from_project=True,
+        generation_run_id=UUID("00000000-0000-0000-0000-000000000099"),
+        fencing_epoch=4,
+        workspace_revision="a" * 64,
+    )
+    assert observed == {
+        "method": "POST",
+        "path": f"/internal/workspaces/{workspace_id}/agent/bootstrap",
+        "json": {
+            "generation_run_id": "00000000-0000-0000-0000-000000000099",
+            "fencing_epoch": 4,
+        },
+    }
+
+
+async def test_project_cell_agent_write_files_validates_and_calls_exact_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    workspace_id = UUID("00000000-0000-0000-0000-000000000007")
+    run_id = UUID("00000000-0000-0000-0000-000000000008")
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {"written": 1, "deleted": 1, "workspace_revision": "b" * 64}
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.project_cell_agent_write_files(
+        workspace_id,
+        generation_run_id=run_id,
+        fencing_epoch=5,
+        expected_revision="a" * 64,
+        files={
+            "src/app/page.tsx": "updated\n",
+        },
+        deletes=("obsolete.txt",),
+    )
+
+    assert result == ProjectCellAgentWriteResponse(
+        written=1,
+        deleted=1,
+        workspace_revision="b" * 64,
+    )
+    assert observed == {
+        "method": "POST",
+        "path": f"/internal/workspaces/{workspace_id}/agent/write-files",
+        "json": {
+            "generation_run_id": str(run_id),
+            "fencing_epoch": 5,
+            "expected_revision": "a" * 64,
+            "files": {
+                "src/app/page.tsx": "updated\n",
+            },
+            "deletes": ["obsolete.txt"],
+        },
+    }
+
+    with pytest.raises(ValueError):
+        await orchestrator_client.project_cell_agent_write_files(
+            workspace_id,
+            generation_run_id=run_id,
+            fencing_epoch=5,
+            expected_revision="a" * 64,
+            files={"broken.txt": 7},  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError):
+        await orchestrator_client.project_cell_agent_write_files(
+            workspace_id,
+            generation_run_id=run_id,
+            fencing_epoch=5,
+            expected_revision="a" * 64,
+            files={"same.txt": "x"},
+            deletes=("same.txt",),
+        )
+
+
+async def test_project_cell_agent_exec_validates_and_calls_exact_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    workspace_id = UUID("00000000-0000-0000-0000-000000000008")
+    run_id = UUID("00000000-0000-0000-0000-000000000009")
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "detail": "build clean",
+            "timed_out": False,
+            "workspace_revision": "c" * 64,
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.project_cell_agent_exec(
+        workspace_id,
+        "pnpm typecheck",
+        generation_run_id=run_id,
+        fencing_epoch=6,
+        expected_revision="b" * 64,
+        timeout_seconds=321,
+    )
+
+    assert result == ProjectCellAgentExecResponse(
+        ok=True,
+        exit_code=0,
+        detail="build clean",
+        timed_out=False,
+        workspace_revision="c" * 64,
+    )
+    assert observed == {
+        "method": "POST",
+        "path": f"/internal/workspaces/{workspace_id}/agent/exec",
+        "json": {
+            "generation_run_id": str(run_id),
+            "fencing_epoch": 6,
+            "expected_revision": "b" * 64,
+            "cmd": "pnpm typecheck",
+            "timeout_seconds": 321,
+        },
+        "timeout": 351.0,
+    }
+
+    with pytest.raises(ValueError):
+        await orchestrator_client.project_cell_agent_exec(
+            workspace_id,
+            "",
+            generation_run_id=run_id,
+            fencing_epoch=6,
+            expected_revision="b" * 64,
+        )
 
 
 async def test_provision_waits_for_a_cold_template_rebuild(
@@ -342,4 +509,38 @@ async def test_resource_response_rejects_invalid_shape(
                 fencing_epoch=2,
                 request_digest="d" * 64,
             )
+        )
+
+
+def test_agent_workspace_snapshot_requires_exact_typed_shape() -> None:
+    payload = {
+        "files": {"src/app/page.tsx": "ok\n"},
+        "seeded_from_project": False,
+        "generation_run_id": None,
+        "fencing_epoch": 2,
+        "workspace_revision": "f" * 64,
+    }
+
+    snapshot = ProjectCellAgentWorkspaceSnapshot.from_json(payload)
+
+    assert snapshot == ProjectCellAgentWorkspaceSnapshot(
+        files={"src/app/page.tsx": "ok\n"},
+        seeded_from_project=False,
+        generation_run_id=None,
+        fencing_epoch=2,
+        workspace_revision="f" * 64,
+    )
+
+    with pytest.raises(OrchestratorUnavailable):
+        ProjectCellAgentWorkspaceSnapshot.from_json(payload | {"detail": "extra"})
+
+    with pytest.raises(OrchestratorUnavailable):
+        ProjectCellAgentWorkspaceSnapshot.from_json(
+            {
+                "files": {"src/app/page.tsx": 7},
+                "seeded_from_project": False,
+                "generation_run_id": None,
+                "fencing_epoch": 2,
+                "workspace_revision": "f" * 64,
+            }
         )

@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -139,6 +139,10 @@ from omnia_api.services.prompt_builder import (
     build_messages,
 )
 from omnia_api.services.queue import enqueue_entity_gate, enqueue_preview
+
+if TYPE_CHECKING:
+    from omnia_api.services.agent_builder import Action as AgentBuilderAction
+    from omnia_api.services.project_cell_executor import ProjectCellExecutorHandle
 from omnia_api.services.ui_audit import (
     AuditReport,
     format_failures_for_retry,
@@ -696,6 +700,7 @@ async def _abort_unsafe_max_backend(
     current_files: Mapping[str, str],
     files: dict[str, str],
     unsafe_paths: Sequence[str],
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
 ) -> None:
     """Fail closed on unsafe MAX backend writes.
 
@@ -721,7 +726,12 @@ async def _abort_unsafe_max_backend(
     rollback_failed = False
     if rollback_files:
         try:
-            await orchestrator_client.hot_reload(project_id, project_slug, rollback_files)
+            await _apply_project_cell_preview_files(
+                project_id=project_id,
+                project_slug=project_slug,
+                files=rollback_files,
+                project_cell_handle=project_cell_handle,
+            )
         except Exception as exc:
             rollback_failed = True
             logging.getLogger(__name__).warning(
@@ -743,6 +753,260 @@ async def _abort_unsafe_max_backend(
         message,
         status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
+
+
+async def _apply_project_cell_preview_files(
+    *,
+    project_id: UUID,
+    project_slug: str,
+    files: Mapping[str, str],
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
+) -> None:
+    payload = {path: content for path, content in files.items() if path}
+    if not payload:
+        return
+    if project_cell_handle is not None:
+        await project_cell_handle.stage_files(payload)
+        sync_result = await project_cell_handle.sync_preview()
+        if sync_result.failure is not None:
+            raise RuntimeError(sync_result.failure)
+        return
+    await orchestrator_client.hot_reload(project_id, project_slug, payload)
+
+
+def _extract_max_shell_files(raw_files: Any) -> dict[str, str]:
+    shell_files: dict[str, str] = {}
+    if not isinstance(raw_files, dict):
+        return shell_files
+    for raw_path, raw_content in raw_files.items():
+        if not isinstance(raw_path, str) or not isinstance(raw_content, str):
+            continue
+        normalized_path = raw_path.replace("\\", "/")
+        while normalized_path.startswith("./"):
+            normalized_path = normalized_path[2:]
+        if normalized_path:
+            shell_files[normalized_path] = raw_content
+    return shell_files
+
+
+async def _rollback_project_cell_shell_files(
+    *,
+    project_id: UUID,
+    project_slug: str,
+    snapshot_files: Mapping[str, str],
+    touched_paths: Sequence[str],
+    project_cell_handle: ProjectCellExecutorHandle,
+) -> bool:
+    normalized_paths = sorted({path for path in touched_paths if path})
+    rollback_files = {
+        path: snapshot_files.get(path, "") for path in normalized_paths
+    }
+    if not rollback_files:
+        return False
+    try:
+        await _apply_project_cell_preview_files(
+            project_id=project_id,
+            project_slug=project_slug,
+            files=rollback_files,
+            project_cell_handle=project_cell_handle,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "MAX Project Cell shell rollback failed for project %s",
+            project_id,
+            exc_info=exc,
+        )
+        return True
+    return False
+
+
+async def _run_max_shell_action(
+    *,
+    action: AgentBuilderAction,
+    project_id: UUID,
+    project_slug: str,
+    max_shell_enabled: bool,
+    base_agent_executor: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
+    project_cell_handle: ProjectCellExecutorHandle | None,
+    active_max_locked_files: frozenset[str],
+    max_model_write_rejection: Callable[[str, str], str | None],
+) -> dict[str, Any]:
+    if not max_shell_enabled:
+        return {
+            "ok": False,
+            "error": (
+                "MAX project shell is locked: the separate "
+                "secretless sandbox did not pass capability "
+                "attestation. Until it is ready use "
+                "read_file/edit_file/write_file/build."
+            ),
+        }
+    cmd = str(action.args.get("cmd") or "").strip()
+    if not cmd:
+        return {"ok": False, "error": "bash needs a non-empty cmd string"}
+
+    if project_cell_handle is not None:
+        from omnia_api.services.max_generation_contract import (
+            unsafe_max_backend_paths as _unsafe_max_backend_paths,
+        )
+
+        current_files = await project_cell_handle.snapshot_files()
+        shell_result = await base_agent_executor(action)
+        shell_files = _extract_max_shell_files(shell_result.get("files"))
+
+        async def _reject(error: str) -> dict[str, Any]:
+            rollback_failed = await _rollback_project_cell_shell_files(
+                project_id=project_id,
+                project_slug=project_slug,
+                snapshot_files=current_files,
+                touched_paths=tuple(shell_files),
+                project_cell_handle=project_cell_handle,
+            )
+            if rollback_failed:
+                error += (
+                    " Project Cell rollback also failed; preview may still show "
+                    "the rejected draft until the next successful sync."
+                )
+            return {"ok": False, "error": error}
+
+        for path, content in shell_files.items():
+            if path in active_max_locked_files:
+                return await _reject(
+                    f"{path} is managed by MAX Studio. "
+                    "Shell changes must stay in product-owned files only."
+                )
+            if path.startswith("src/app/api/max/") or path.startswith("src/app/api/omnia/"):
+                return await _reject(
+                    "MAX Studio owns /api/max and /api/omnia. "
+                    "Shell changes there are blocked; use the "
+                    "managed integration client instead."
+                )
+            if content:
+                secret_rejection = max_model_write_rejection(path, content)
+                if secret_rejection:
+                    return await _reject(secret_rejection)
+
+        unsafe_shell_paths = _unsafe_max_backend_paths(shell_files)
+        if unsafe_shell_paths:
+            return await _reject(
+                "Direct DB access is forbidden in MAX product "
+                "files until row isolation is DB-enforced. "
+                "Use createMaxAction/getMaxActions. Unsafe: "
+                + ", ".join(unsafe_shell_paths)
+            )
+
+        cell_shell_sync = await project_cell_handle.sync_preview()
+        result_files = dict(shell_files)
+        result_files.update(cell_shell_sync.generated_files)
+        if cell_shell_sync.failure is not None:
+            return {
+                "ok": False,
+                "error": cell_shell_sync.failure,
+                **({"files": result_files} if result_files else {}),
+            }
+
+        detail = str(
+            shell_result.get("detail") or shell_result.get("error") or "(no output)"
+        )
+        if result_files:
+            listed = ", ".join(sorted(result_files)[:12])
+            suffix = "…" if len(result_files) > 12 else ""
+            detail += f"\n\nProject Cell synced files: {listed}{suffix}"
+        return {
+            "ok": bool(shell_result.get("ok")),
+            "detail": detail,
+            **({"files": result_files} if result_files else {}),
+        }
+
+    sandbox = await orchestrator_client.agent_exec_sandbox(project_id, project_slug, cmd)
+    shell_files = _extract_max_shell_files(sandbox.get("files"))
+    legacy_shell_sync: dict[str, Any] = {}
+    for path, content in shell_files.items():
+        if path in active_max_locked_files:
+            return {
+                "ok": False,
+                "error": (
+                    f"{path} is managed by MAX Studio. "
+                    "Shell changes must stay in product-owned files only."
+                ),
+            }
+        if path.startswith("src/app/api/max/") or path.startswith("src/app/api/omnia/"):
+            return {
+                "ok": False,
+                "error": (
+                    "MAX Studio owns /api/max and /api/omnia. "
+                    "Shell changes there are blocked; use the "
+                    "managed integration client instead."
+                ),
+            }
+        if content:
+            secret_rejection = max_model_write_rejection(path, content)
+            if secret_rejection:
+                return {"ok": False, "error": secret_rejection}
+    if shell_files:
+        from omnia_api.services.max_generation_contract import (
+            unsafe_max_backend_paths as _unsafe_max_backend_paths,
+        )
+
+        unsafe_shell_paths = _unsafe_max_backend_paths(shell_files)
+        if unsafe_shell_paths:
+            return {
+                "ok": False,
+                "error": (
+                    "Direct DB access is forbidden in MAX product "
+                    "files until row isolation is DB-enforced. "
+                    "Use createMaxAction/getMaxActions. Unsafe: "
+                    + ", ".join(unsafe_shell_paths)
+                ),
+            }
+        base_revision = str(sandbox.get("base_workspace_revision") or "")
+        if not base_revision:
+            return {
+                "ok": False,
+                "error": (
+                    "Sandbox did not return a workspace revision; "
+                    "stale changes were not applied. Rerun the command."
+                ),
+            }
+        try:
+            legacy_shell_sync = await orchestrator_client.hot_reload(
+                project_id,
+                project_slug,
+                shell_files,
+                base_workspace_revision=base_revision,
+            )
+        except Exception:
+            return {
+                "ok": False,
+                "error": (
+                    "Project files changed while the sandbox command "
+                    "was running; its stale diff was discarded. "
+                    "Rerun the command on the current workspace."
+                ),
+            }
+        resolved_lock = legacy_shell_sync.get("pnpm_lockfile")
+        if isinstance(resolved_lock, str):
+            shell_files["pnpm-lock.yaml"] = resolved_lock
+        if project_cell_handle is not None:
+            await project_cell_handle.apply_external_files(shell_files)
+    detail = str(sandbox.get("detail") or "(no output)")
+    if shell_files:
+        listed = ", ".join(sorted(shell_files)[:12])
+        suffix = "…" if len(shell_files) > 12 else ""
+        detail += f"\n\nSandbox synced files: {listed}{suffix}"
+    sync_failures = [
+        f"{name}={legacy_shell_sync.get(name)}: "
+        f"{legacy_shell_sync.get(name.replace('_exit_code', '_stderr_tail'), '')}"
+        for name in ("package_exit_code", "drizzle_exit_code")
+        if legacy_shell_sync.get(name) not in (None, "0", 0)
+    ]
+    if sync_failures:
+        detail += "\n\nRuntime sync failed: " + "; ".join(sync_failures)
+    return {
+        "ok": bool(sandbox.get("ok")) and not sync_failures,
+        "detail": detail,
+        **({"files": shell_files} if shell_files else {}),
+    }
 
 
 # A follow-up that means «finish the partially-built app», not a fresh surgical
@@ -3211,7 +3475,7 @@ async def _process_prompt(
         # uses it — referencing agent_builder in the `if` while the import sat
         # inside the block made it an UnboundLocalError for every build (the
         # canary gate). Bind it first.
-        from omnia_api.services import agent_builder
+        from omnia_api.services import agent_builder, project_cell_executor
 
         if (
             agent_builder.is_agentic_enabled(
@@ -3371,6 +3635,9 @@ async def _process_prompt(
                 emit=_agent_emit,
                 vision_context=_vision_context,
             )
+            _project_cell_executor_handle: (
+                project_cell_executor.ProjectCellExecutorHandle | None
+            ) = None
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             _active_max_locked_files: frozenset[str] = frozenset()
             if project_template == "max_miniapp":
@@ -3394,6 +3661,18 @@ async def _process_prompt(
                         from omnia_api.services import agent_vision
 
                         try:
+                            if _project_cell_executor_handle is not None:
+                                _sync = await _project_cell_executor_handle.sync_preview()
+                                if _sync.failure is not None:
+                                    return {
+                                        "ok": False,
+                                        "error": _sync.failure,
+                                        **(
+                                            {"files": _sync.generated_files}
+                                            if _sync.generated_files
+                                            else {}
+                                        ),
+                                    }
                             _preview_session = await orchestrator_client.create_max_preview_session(
                                 project_id
                             )
@@ -3442,126 +3721,16 @@ async def _process_prompt(
                             ),
                         }
                     if action.name == "bash":
-                        if not _max_shell_enabled:
-                            return {
-                                "ok": False,
-                                "error": (
-                                    "MAX project shell is locked: the separate "
-                                    "secretless sandbox did not pass capability "
-                                    "attestation. Until it is ready use "
-                                    "read_file/edit_file/write_file/build."
-                                ),
-                            }
-                        _cmd = str(action.args.get("cmd") or "").strip()
-                        if not _cmd:
-                            return {"ok": False, "error": "bash needs a non-empty cmd string"}
-                        _sandbox = await orchestrator_client.agent_exec_sandbox(
-                            project_id, project_slug, _cmd
+                        return await _run_max_shell_action(
+                            action=action,
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            max_shell_enabled=_max_shell_enabled,
+                            base_agent_executor=_base_agent_executor,
+                            project_cell_handle=_project_cell_executor_handle,
+                            active_max_locked_files=_active_max_locked_files,
+                            max_model_write_rejection=max_model_write_rejection,
                         )
-                        _shell_files: dict[str, str] = {}
-                        _shell_sync: dict[str, Any] = {}
-                        # A generator/test command may create valid source and then
-                        # exit non-zero. Keep its attributable diff so the next
-                        # agent turn can repair it instead of losing all progress.
-                        if isinstance(_sandbox.get("files"), dict):
-                            for _raw_path, _raw_content in _sandbox["files"].items():
-                                if not isinstance(_raw_path, str) or not isinstance(
-                                    _raw_content, str
-                                ):
-                                    continue
-                                _normalized_path = _raw_path.replace("\\", "/")
-                                while _normalized_path.startswith("./"):
-                                    _normalized_path = _normalized_path[2:]
-                                if _normalized_path in _active_max_locked_files:
-                                    return {
-                                        "ok": False,
-                                        "error": (
-                                            f"{_normalized_path} is managed by MAX Studio. "
-                                            "Shell changes must stay in product-owned files only."
-                                        ),
-                                    }
-                                if _normalized_path.startswith(
-                                    "src/app/api/max/"
-                                ) or _normalized_path.startswith("src/app/api/omnia/"):
-                                    return {
-                                        "ok": False,
-                                        "error": (
-                                            "MAX Studio owns /api/max and /api/omnia. "
-                                            "Shell changes there are blocked; use the "
-                                            "managed integration client instead."
-                                        ),
-                                    }
-                                if _raw_content:
-                                    _secret_rejection = max_model_write_rejection(
-                                        _normalized_path, _raw_content
-                                    )
-                                    if _secret_rejection:
-                                        return {"ok": False, "error": _secret_rejection}
-                                _shell_files[_normalized_path] = _raw_content
-                            if _shell_files:
-                                from omnia_api.services.max_generation_contract import (
-                                    unsafe_max_backend_paths as _unsafe_max_backend_paths,
-                                )
-
-                                _unsafe_shell_paths = _unsafe_max_backend_paths(_shell_files)
-                                if _unsafe_shell_paths:
-                                    return {
-                                        "ok": False,
-                                        "error": (
-                                            "Direct DB access is forbidden in MAX product "
-                                            "files until row isolation is DB-enforced. "
-                                            "Use createMaxAction/getMaxActions. Unsafe: "
-                                            + ", ".join(_unsafe_shell_paths)
-                                        ),
-                                    }
-                                _base_revision = str(
-                                    _sandbox.get("base_workspace_revision") or ""
-                                )
-                                if not _base_revision:
-                                    return {
-                                        "ok": False,
-                                        "error": (
-                                            "Sandbox did not return a workspace revision; "
-                                            "stale changes were not applied. Rerun the command."
-                                        ),
-                                    }
-                                try:
-                                    _shell_sync = await orchestrator_client.hot_reload(
-                                        project_id,
-                                        project_slug,
-                                        _shell_files,
-                                        base_workspace_revision=_base_revision,
-                                    )
-                                except Exception:
-                                    return {
-                                        "ok": False,
-                                        "error": (
-                                            "Project files changed while the sandbox command "
-                                            "was running; its stale diff was discarded. "
-                                            "Rerun the command on the current workspace."
-                                        ),
-                                    }
-                                _resolved_lock = _shell_sync.get("pnpm_lockfile")
-                                if isinstance(_resolved_lock, str):
-                                    _shell_files["pnpm-lock.yaml"] = _resolved_lock
-                        _detail = str(_sandbox.get("detail") or "(no output)")
-                        if _shell_files:
-                            _listed = ", ".join(sorted(_shell_files)[:12])
-                            _suffix = "…" if len(_shell_files) > 12 else ""
-                            _detail += f"\n\nSandbox synced files: {_listed}{_suffix}"
-                        _sync_failures = [
-                            f"{name}={_shell_sync.get(name)}: "
-                            f"{_shell_sync.get(name.replace('_exit_code', '_stderr_tail'), '')}"
-                            for name in ("package_exit_code", "drizzle_exit_code")
-                            if _shell_sync.get(name) not in (None, "0", 0)
-                        ]
-                        if _sync_failures:
-                            _detail += "\n\nRuntime sync failed: " + "; ".join(_sync_failures)
-                        return {
-                            "ok": bool(_sandbox.get("ok")) and not _sync_failures,
-                            "detail": _detail,
-                            "files": _shell_files,
-                        }
                     if (
                         action.name in {"write_file", "edit_file"}
                         and action.path in _active_max_locked_files
@@ -3964,6 +4133,60 @@ async def _process_prompt(
                         },
                     )
 
+            if _agent_res is None:
+                try:
+                    _project_cell_executor_handle = (
+                        await project_cell_executor.maybe_create_project_cell_executor(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            project_template=project_template,
+                            user_id=user_id,
+                            generation_run_id=run_id,
+                            legacy_execute=_base_agent_executor,
+                        )
+                    )
+                except project_cell_executor.ProjectCellExecutorUnavailable as _cell_exc:
+                    await _agent_emit(
+                        "agent.step",
+                        {
+                            "step": 0,
+                            "action": "project_cell",
+                            "human": "Project Cell не подготовился",
+                            "path": "",
+                            "detail": str(_cell_exc),
+                            "ok": False,
+                        },
+                    )
+                    _agent_res = agent_builder.AgentResult(
+                        done=False,
+                        summary=(
+                            "Генерация не запускалась: owner-only Project Cell "
+                            f"недоступен ({_cell_exc})."
+                        ),
+                        files={},
+                        steps=0,
+                        stop_reason="project_cell_unavailable",
+                    )
+                else:
+                    if _project_cell_executor_handle is not None:
+                        _base_agent_executor = _project_cell_executor_handle.execute
+                        _max_shell_enabled = True
+                        _active_max_locked_files = MAX_SECURITY_LOCKED_FILES
+                        await _agent_emit(
+                            "agent.step",
+                            {
+                                "step": 0,
+                                "action": "project_cell",
+                                "human": "Подключаю owner-only Project Cell",
+                                "path": "",
+                                "detail": (
+                                    "Кодовая генерация идёт в изолированном workspace; "
+                                    "preview/runtime синхронизируются только для проверки."
+                                ),
+                                "ok": True,
+                            },
+                        )
+
             if _agent_res is None and get_settings().use_native_agent:
                 # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
                 # model end-to-end via native Anthropic tools + preserved thinking;
@@ -4034,6 +4257,8 @@ async def _process_prompt(
                     edit_mode=_is_edit,
                     bare_mode=_bare_stack,
                 )
+            if _project_cell_executor_handle is not None:
+                _agent_res.files = await _project_cell_executor_handle.export_files()
             # A green starter is not proof that the user's request was generated.
             # Native `done` may otherwise succeed after only reading/building the
             # template. Require at least one attributable model write on a seeded
@@ -4107,14 +4332,18 @@ async def _process_prompt(
                     }
                     _new_paths = [path for path in _agent_res.files if path not in _baseline_files]
                     if _restore_files:
-                        await orchestrator_client.hot_reload(
-                            project_id, project_slug, _restore_files
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            files=_restore_files,
+                            project_cell_handle=_project_cell_executor_handle,
                         )
                     if _new_paths:
-                        await orchestrator_client.hot_reload(
-                            project_id,
-                            project_slug,
-                            {path: "" for path in _new_paths},
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            files={path: "" for path in _new_paths},
+                            project_cell_handle=_project_cell_executor_handle,
                         )
                     _rollback_build = await orchestrator_client.agent_build(
                         project_id, project_slug
@@ -4182,12 +4411,18 @@ async def _process_prompt(
                         {path for path in _agent_res.files if path not in _safe_files}
                         | {"src/app/page.tsx"}
                     )
-                    await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
+                    await _apply_project_cell_preview_files(
+                        project_id=project_id,
+                        project_slug=project_slug,
+                        files=_safe_files,
+                        project_cell_handle=_project_cell_executor_handle,
+                    )
                     if _new_paths:
-                        await orchestrator_client.hot_reload(
-                            project_id,
-                            project_slug,
-                            {path: "" for path in _new_paths},
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            files={path: "" for path in _new_paths},
+                            project_cell_handle=_project_cell_executor_handle,
                         )
                     _rollback_build = await orchestrator_client.agent_build(
                         project_id, project_slug
@@ -4300,6 +4535,10 @@ async def _process_prompt(
                     f"[PP] write-floor retry done files={len(files)} stop={_floor_res.stop_reason}",
                     flush=True,
                 )
+                if _project_cell_executor_handle is not None:
+                    _agent_res.files = await _project_cell_executor_handle.export_files()
+                    _all_files = _merge_seeded_agent_files(_max_seed_files, _agent_res.files)
+                    files = _all_files
 
             # Layer C — backend-guardrail self-heal. Custom server logic is allowed,
             # but raw DB access remains behind the managed boundary until isolation is
@@ -4424,6 +4663,7 @@ async def _process_prompt(
                                 violation.path
                                 for violation in _final_guard.violations
                             ],
+                            project_cell_handle=_project_cell_executor_handle,
                         )
                 # SAST advisory log — operators SEE injection/secret findings even
                 # when blocking/heal is off (runs regardless of the feedback loop).
@@ -4456,10 +4696,11 @@ async def _process_prompt(
                     _normalized_max_css = normalize_max_globals_css(_original_max_css)
                     if _normalized_max_css != _original_max_css:
                         files["src/app/globals.css"] = _normalized_max_css
-                        await orchestrator_client.hot_reload(
-                            project_id,
-                            project_slug,
-                            {"src/app/globals.css": _normalized_max_css},
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            files={"src/app/globals.css": _normalized_max_css},
+                            project_cell_handle=_project_cell_executor_handle,
                         )
                         await _agent_emit(
                             "agent.step",
@@ -4687,14 +4928,18 @@ async def _process_prompt(
                         }
                         _new_paths = [path for path in files if path not in _baseline_files]
                         if _restore_files:
-                            await orchestrator_client.hot_reload(
-                                project_id, project_slug, _restore_files
+                            await _apply_project_cell_preview_files(
+                                project_id=project_id,
+                                project_slug=project_slug,
+                                files=_restore_files,
+                                project_cell_handle=_project_cell_executor_handle,
                             )
                         if _new_paths:
-                            await orchestrator_client.hot_reload(
-                                project_id,
-                                project_slug,
-                                {path: "" for path in _new_paths},
+                            await _apply_project_cell_preview_files(
+                                project_id=project_id,
+                                project_slug=project_slug,
+                                files={path: "" for path in _new_paths},
+                                project_cell_handle=_project_cell_executor_handle,
                             )
                         _rollback_build = await orchestrator_client.agent_build(
                             project_id, project_slug
@@ -4723,12 +4968,18 @@ async def _process_prompt(
                             {path for path in files if path not in _safe_files}
                             | {"src/app/page.tsx"}
                         )
-                        await orchestrator_client.hot_reload(project_id, project_slug, _safe_files)
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            files=_safe_files,
+                            project_cell_handle=_project_cell_executor_handle,
+                        )
                         if _new_paths:
-                            await orchestrator_client.hot_reload(
-                                project_id,
-                                project_slug,
-                                {path: "" for path in _new_paths},
+                            await _apply_project_cell_preview_files(
+                                project_id=project_id,
+                                project_slug=project_slug,
+                                files={path: "" for path in _new_paths},
+                                project_cell_handle=_project_cell_executor_handle,
                             )
                         _rollback_build = await orchestrator_client.agent_build(
                             project_id, project_slug

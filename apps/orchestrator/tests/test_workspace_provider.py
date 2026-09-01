@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import ast
-import importlib
 import inspect
 from dataclasses import FrozenInstanceError, fields
+from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 
 from omnia_orchestrator.core import workspace_provider as workspace_provider_contract
+from omnia_orchestrator.core.cell_resources import LifecycleMutation
 from omnia_orchestrator.core.config import Settings, get_settings
 from omnia_orchestrator.core.workspace_provider import (
     ControlAction,
-    ControlResult,
     WorkspaceHandle,
     WorkspaceProviderUnavailable,
+    WorkspaceResourceStatus,
     WorkspaceSpec,
 )
 from omnia_orchestrator.routers import workspace as workspace_router
@@ -28,7 +30,9 @@ from omnia_orchestrator.services.disabled_workspace_provider import DisabledWork
 from omnia_orchestrator.services.docker_owner_canary_provider import (
     DockerOwnerCanaryProvider,
 )
+from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
+from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
 
 _FORBIDDEN_FOUNDATION_IMPORT_FRAGMENTS = (
     "docker_client",
@@ -42,7 +46,6 @@ _FORBIDDEN_FOUNDATION_IMPORT_FRAGMENTS = (
     "urllib",
     "socket",
     "aiohttp",
-    "lifecycle",
 )
 _FORBIDDEN_FOUNDATION_CALLS = frozenset({"exec_cmd", "run_sandbox_command"})
 
@@ -177,11 +180,21 @@ async def test_default_provider_is_disabled_and_project_scoped() -> None:
     assert status.detail == "workspace provider is disabled"
 
 
-async def test_selected_enabled_docker_owner_provider_remains_unsupported() -> None:
+async def test_selected_enabled_docker_owner_provider_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workspace_provider_factory,
+        "_host_supports_live_docker_provider",
+        lambda: True,
+    )
     provider = build_workspace_provider(
         _settings(
             workspace_provider="docker_owner_canary",
             docker_owner_canary_enabled=True,
+            cell_postgres_image="postgres@sha256:" + "1" * 64,
+            cell_redis_image="redis@sha256:" + "2" * 64,
+            cell_backup_image="alpine@sha256:" + "3" * 64,
         )
     )
     project_id = uuid4()
@@ -192,6 +205,75 @@ async def test_selected_enabled_docker_owner_provider_remains_unsupported() -> N
     assert status.project_id == project_id
     assert status.provider == "docker_owner_canary"
     assert status.enabled is True
+    assert status.ready is True
+    assert status.state == "ready"
+    assert status.detail == "docker owner canary is ready"
+
+
+def test_enabled_factory_builds_live_resource_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        workspace_provider_factory,
+        "_host_supports_live_docker_provider",
+        lambda: True,
+    )
+    state_path = tmp_path / "runtime-state" / "project-cells.json"
+    provider = build_workspace_provider(
+        _settings(
+            workspace_provider="docker_owner_canary",
+            docker_owner_canary_enabled=True,
+            cell_state_path=str(state_path),
+            cell_postgres_image="postgres@sha256:" + "1" * 64,
+            cell_redis_image="redis@sha256:" + "2" * 64,
+            cell_backup_image="alpine@sha256:" + "3" * 64,
+        )
+    )
+
+    assert isinstance(provider, DockerOwnerCanaryProvider)
+    assert provider.resource_manager is not None
+    assert provider.checkpoint_manager is not None
+    assert isinstance(provider.resource_manager.docker, DockerPyCellBackend)
+    assert provider.resource_manager.docker is provider.checkpoint_manager.docker
+    assert (
+        provider.resource_manager.state_store
+        is provider.checkpoint_manager.state_store
+    )
+    assert (
+        provider.resource_manager.credential_store
+        is provider.checkpoint_manager.credential_store
+    )
+    assert provider.resource_manager.state_store.path == state_path
+    assert provider.resource_manager.credential_store.root == (
+        tmp_path / "runtime-state" / "project-cells-credentials"
+    )
+    assert provider.resource_manager.operation_lock.root == tmp_path / "runtime-state"
+
+
+async def test_enabled_factory_fails_closed_on_windows_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workspace_provider_factory,
+        "_host_supports_live_docker_provider",
+        lambda: False,
+    )
+    provider = build_workspace_provider(
+        _settings(
+            workspace_provider="docker_owner_canary",
+            docker_owner_canary_enabled=True,
+            cell_postgres_image="postgres@sha256:" + "1" * 64,
+            cell_redis_image="redis@sha256:" + "2" * 64,
+            cell_backup_image="alpine@sha256:" + "3" * 64,
+        )
+    )
+
+    status = await provider.status(uuid4())
+
+    assert isinstance(provider, DockerOwnerCanaryProvider)
+    assert provider.resource_manager is None
+    assert provider.checkpoint_manager is None
     assert status.ready is False
     assert status.state == "unsupported"
     assert status.detail == "docker owner canary is unsupported in the foundation"
@@ -211,10 +293,18 @@ def test_factory_requires_explicit_selection_and_enablement(
     docker_owner_canary_enabled: bool,
     expected_type: type[DisabledWorkspaceProvider] | type[DockerOwnerCanaryProvider],
 ) -> None:
+    overrides: dict[str, object] = {}
+    if docker_owner_canary_enabled:
+        overrides = {
+            "cell_postgres_image": "postgres@sha256:" + "1" * 64,
+            "cell_redis_image": "redis@sha256:" + "2" * 64,
+            "cell_backup_image": "alpine@sha256:" + "3" * 64,
+        }
     provider = build_workspace_provider(
         _settings(
             workspace_provider=workspace_provider,
             docker_owner_canary_enabled=docker_owner_canary_enabled,
+            **overrides,
         )
     )
 
@@ -230,6 +320,7 @@ async def test_every_provider_mutator_is_unavailable(
     provider: DisabledWorkspaceProvider | DockerOwnerCanaryProvider,
 ) -> None:
     workspace_id = uuid4()
+    mutation = LifecycleMutation(uuid4(), 1, "a" * 64)
     spec = WorkspaceSpec(
         workspace_id=workspace_id,
         project_id=uuid4(),
@@ -237,16 +328,18 @@ async def test_every_provider_mutator_is_unavailable(
         profile_version="foundation-v1",
     )
     mutators = (
-        provider.ensure(spec),
-        provider.wake(workspace_id),
-        provider.pause(workspace_id, "checkpoint-dummy"),
-        provider.destroy(workspace_id),
-        provider.execute_control(workspace_id, ControlAction(kind="wake")),
+        provider.ensure(spec, mutation),
+        provider.wake(workspace_id, mutation),
+        provider.pause(workspace_id, "checkpoint-dummy", mutation),
+        provider.destroy(workspace_id, mutation),
+        provider.inspect_resources(workspace_id),
+        provider.observe_resources(workspace_id, mutation),
+        provider.execute_control(workspace_id, ControlAction(kind="wake"), mutation),
     )
 
-    for mutation in mutators:
+    for call in mutators:
         with pytest.raises(WorkspaceProviderUnavailable):
-            await mutation
+            await call
 
 
 def test_provider_dtos_are_immutable_and_control_dtos_are_minimal() -> None:
@@ -256,17 +349,141 @@ def test_provider_dtos_are_immutable_and_control_dtos_are_minimal() -> None:
         provider="disabled",
         provider_ref="none",
     )
-    action = ControlAction(kind="status")
-    result = ControlResult(ok=False, detail="not executed")
+    action = ControlAction(kind="wake")
+    result = WorkspaceResourceStatus(
+        workspace_id=workspace_id,
+        state="retained",
+        provider_ref=None,
+        fencing_epoch=None,
+        checkpoint_ref=None,
+        has_workspace=False,
+        has_agent_home=False,
+        has_postgres=False,
+        has_redis=False,
+    )
 
     with pytest.raises(FrozenInstanceError):
         handle.provider_ref = "changed"  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         action.kind = "wake"  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
-        result.ok = True  # type: ignore[misc]
-    assert [field.name for field in fields(ControlAction)] == ["kind"]
-    assert [field.name for field in fields(ControlResult)] == ["ok", "detail"]
+        result.state = "resources_ready"  # type: ignore[misc]
+    assert [field.name for field in fields(ControlAction)] == ["kind", "checkpoint_ref"]
+    assert [field.name for field in fields(WorkspaceResourceStatus)] == [
+        "workspace_id",
+        "state",
+        "provider_ref",
+        "fencing_epoch",
+        "checkpoint_ref",
+        "has_workspace",
+        "has_agent_home",
+        "has_postgres",
+        "has_redis",
+    ]
+
+
+async def test_resource_provider_delegates_without_legacy_provisioner(tmp_path: Path) -> None:
+    manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=checkpoints,
+    )
+    workspace_id = UUID("00000000-0000-0000-0000-000000000001")
+    spec = WorkspaceSpec(
+        workspace_id=workspace_id,
+        project_id=UUID("00000000-0000-0000-0000-000000000002"),
+        owner_id=UUID("00000000-0000-0000-0000-000000000003"),
+        profile_version="docker-owner-cell-resources-v1",
+    )
+    ensure_mutation = LifecycleMutation(uuid4(), 1, "a" * 64)
+    control_mutation = LifecycleMutation(uuid4(), 2, "b" * 64)
+
+    handle = await provider.ensure(spec, ensure_mutation)
+    status = await provider.execute_control(
+        workspace_id,
+        ControlAction(kind="pause", checkpoint_ref="accepted-1"),
+        control_mutation,
+    )
+
+    assert handle.provider == "docker_owner_canary"
+    assert status.state == "resources_paused"
+    assert status.checkpoint_ref == "accepted-1"
+    assert docker.begin_operation_calls == 1
+
+
+async def test_composite_pause_records_single_outer_action_journal(tmp_path: Path) -> None:
+    manager, checkpoints, _docker = _make_checkpoint_fixture(tmp_path)
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=checkpoints,
+    )
+    workspace_id = UUID("00000000-0000-0000-0000-000000000001")
+    spec = WorkspaceSpec(
+        workspace_id=workspace_id,
+        project_id=UUID("00000000-0000-0000-0000-000000000002"),
+        owner_id=UUID("00000000-0000-0000-0000-000000000003"),
+        profile_version="docker-owner-cell-resources-v1",
+    )
+    await provider.ensure(spec, LifecycleMutation(uuid4(), 1, "a" * 64))
+
+    await provider.execute_control(
+        workspace_id,
+        ControlAction(kind="pause", checkpoint_ref="accepted-1"),
+        LifecycleMutation(uuid4(), 2, "b" * 64),
+    )
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.last_operation_id is not None
+    operation = state.operation(state.last_operation_id)
+    assert operation is not None
+    assert operation.kind == "pause"
+    assert operation.checkpoint_ref == "accepted-1"
+    assert [item.kind for item in state.operations] == ["ensure", "pause"]
+
+
+async def test_observe_resources_surfaces_conflict_state(tmp_path: Path) -> None:
+    manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=checkpoints,
+    )
+    workspace_id = UUID("00000000-0000-0000-0000-000000000001")
+    spec = WorkspaceSpec(
+        workspace_id=workspace_id,
+        project_id=UUID("00000000-0000-0000-0000-000000000002"),
+        owner_id=UUID("00000000-0000-0000-0000-000000000003"),
+        profile_version="docker-owner-cell-resources-v1",
+    )
+    await provider.ensure(spec, LifecycleMutation(uuid4(), 1, "a" * 64))
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    docker.seed_volume(
+        state.resource_names.workspace_volume,
+        {
+            "omnia.managed": "true",
+            "omnia.project_cell": "true",
+            "omnia.workspace_id": str(workspace_id),
+            "omnia.project_id": str(spec.project_id),
+            "omnia.owner_id": str(spec.owner_id),
+            "omnia.provider": "docker_owner_canary",
+            "omnia.profile_version": spec.profile_version,
+            "omnia.resource_kind": "workspace",
+        },
+    )
+    docker.volumes[state.resource_names.workspace_volume] = SimpleNamespace(
+        resource_id="seed-volume-conflict",
+        name=state.resource_names.workspace_volume,
+        labels={"omnia.workspace_id": "different"},
+        files={},
+    )
+
+    status = await provider.observe_resources(
+        workspace_id,
+        LifecycleMutation(uuid4(), 2, "b" * 64),
+    )
+
+    assert status.state == "conflict"
 
 
 def test_foundation_ast_guard_detects_function_local_lifecycle_imports_and_calls() -> None:
@@ -311,8 +528,13 @@ def test_main_registers_workspace_router_without_importing_provider_implementati
     monkeypatch.setenv("INTERNAL_TOKEN", "test-internal-token-not-a-real-secret")
     get_settings.cache_clear()
     try:
-        orchestrator_main = importlib.import_module("omnia_orchestrator.main")
-        tree = ast.parse(inspect.getsource(orchestrator_main))
+        main_path = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "omnia_orchestrator"
+            / "main.py"
+        )
+        tree = ast.parse(main_path.read_text(encoding="utf-8"))
 
         assert _workspace_registration_count(tree) == 1
         assert _main_provider_implementation_imports(tree) == []
