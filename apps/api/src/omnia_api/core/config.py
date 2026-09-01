@@ -1044,6 +1044,10 @@ class Settings(BaseSettings):
     project_cell_docker_canary_enabled: bool = Field(default=False)
     project_cell_canary_emails: str = Field(default="")
     project_cell_operation_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+    project_cell_preview_host_suffix: str = Field(
+        default="preview.lead-generator.ru",
+        pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
+    )
 
     @property
     def project_cell_canary_email_set(self) -> frozenset[str]:

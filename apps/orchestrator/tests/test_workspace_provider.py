@@ -4,13 +4,13 @@ import ast
 import inspect
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 
 from omnia_orchestrator.core import workspace_provider as workspace_provider_contract
-from omnia_orchestrator.core.cell_resources import LifecycleMutation
+from omnia_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
 from omnia_orchestrator.core.config import Settings, get_settings
 from omnia_orchestrator.core.workspace_provider import (
     ControlAction,
@@ -26,7 +26,12 @@ from omnia_orchestrator.services import (
     docker_owner_canary_provider,
     workspace_provider_factory,
 )
+from omnia_orchestrator.services.cell_checkpoint import (
+    CellCheckpointManager,
+    CheckpointManifest,
+)
 from omnia_orchestrator.services.disabled_workspace_provider import DisabledWorkspaceProvider
+from omnia_orchestrator.services.docker_cell_resources import DockerVolumeRecord
 from omnia_orchestrator.services.docker_owner_canary_provider import (
     DockerOwnerCanaryProvider,
 )
@@ -48,6 +53,31 @@ _FORBIDDEN_FOUNDATION_IMPORT_FRAGMENTS = (
     "aiohttp",
 )
 _FORBIDDEN_FOUNDATION_CALLS = frozenset({"exec_cmd", "run_sandbox_command"})
+
+
+class FailingCompositeCheckpointManager(CellCheckpointManager):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.create_calls = 0
+
+    async def create(
+        self,
+        workspace_id: UUID,
+        checkpoint_ref: str,
+        mutation: LifecycleMutation,
+        *,
+        record_operation: bool = True,
+    ) -> CheckpointManifest:
+        manifest = await super().create(
+            workspace_id,
+            checkpoint_ref,
+            mutation,
+            record_operation=record_operation,
+        )
+        self.create_calls += 1
+        if self.create_calls == 1:
+            raise RuntimeError("checkpoint sealed before control mutation")
+        return manifest
 
 
 def _node_dotted_name(expression: ast.expr) -> str:
@@ -161,7 +191,7 @@ def _settings(**overrides: object) -> Settings:
         _env_file=None,
         database_url="postgresql://test:test@127.0.0.1:5432/test",
         internal_token="test-internal-token-not-a-real-secret",
-        **overrides,
+        **cast(dict[str, Any], overrides),
     )
 
 
@@ -442,6 +472,72 @@ async def test_composite_pause_records_single_outer_action_journal(tmp_path: Pat
     assert [item.kind for item in state.operations] == ["ensure", "pause"]
 
 
+@pytest.mark.parametrize(
+    ("action", "checkpoint_ref"),
+    [
+        (ControlAction(kind="pause", checkpoint_ref="accepted-1"), "accepted-1"),
+        (ControlAction(kind="destroy"), None),
+    ],
+    ids=["pause", "destroy"],
+)
+async def test_composite_control_replays_recorded_checkpoint_failure_without_resealing(
+    tmp_path: Path,
+    action: ControlAction,
+    checkpoint_ref: str | None,
+) -> None:
+    manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
+    failing_checkpoints = FailingCompositeCheckpointManager(
+        profile_version=checkpoints.profile_version,
+        postgres_image=checkpoints.postgres_image,
+        docker=checkpoints.docker,
+        credential_store=checkpoints.credential_store,
+        state_store=checkpoints.state_store,
+    )
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=failing_checkpoints,
+    )
+    workspace_id = UUID("00000000-0000-0000-0000-000000000001")
+    spec = WorkspaceSpec(
+        workspace_id=workspace_id,
+        project_id=UUID("00000000-0000-0000-0000-000000000002"),
+        owner_id=UUID("00000000-0000-0000-0000-000000000003"),
+        profile_version="docker-owner-cell-resources-v1",
+    )
+    await provider.ensure(spec, LifecycleMutation(uuid4(), 1, "a" * 64))
+    mutation = LifecycleMutation(uuid4(), 2, "b" * 64)
+    effective_checkpoint_ref = (
+        checkpoint_ref
+        if checkpoint_ref is not None
+        else f"final-{mutation.fencing_epoch}-{mutation.operation_id.hex}"
+    )
+
+    with pytest.raises(RuntimeError, match="checkpoint sealed before control mutation"):
+        await provider.execute_control(workspace_id, action, mutation)
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.bundle_state == "resources_ready"
+    assert state.phase == "failed"
+    assert state.last_operation_id == mutation.operation_id
+    operation = state.operation(mutation.operation_id)
+    assert operation is not None
+    assert operation.kind == action.kind
+    assert operation.status == "failed"
+    assert operation.checkpoint_ref == effective_checkpoint_ref
+    assert operation.detail == "checkpoint sealed before control mutation"
+    names = state.resource_names
+    assert names is not None
+    checkpoint_files = await docker.read_volume_files(names.checkpoint_volume)
+    assert f"{effective_checkpoint_ref}/manifest.json" in checkpoint_files
+    create_calls_before_replay = failing_checkpoints.create_calls
+
+    with pytest.raises(CellResourceError, match="checkpoint sealed before control mutation"):
+        await provider.execute_control(workspace_id, action, mutation)
+
+    assert failing_checkpoints.create_calls == create_calls_before_replay
+
+
 async def test_observe_resources_surfaces_conflict_state(tmp_path: Path) -> None:
     manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
     provider = DockerOwnerCanaryProvider(
@@ -471,7 +567,7 @@ async def test_observe_resources_surfaces_conflict_state(tmp_path: Path) -> None
             "omnia.resource_kind": "workspace",
         },
     )
-    docker.volumes[state.resource_names.workspace_volume] = SimpleNamespace(
+    docker.volumes[state.resource_names.workspace_volume] = DockerVolumeRecord(
         resource_id="seed-volume-conflict",
         name=state.resource_names.workspace_volume,
         labels={"omnia.workspace_id": "different"},

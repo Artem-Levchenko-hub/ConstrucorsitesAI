@@ -35,6 +35,19 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
     docker_backend = DockerPyCellBackend(
         docker_host=settings.docker_host,
         helper_image=profile.backup_image,
+        # PostgreSQL reserves half the bundle, Redis one quarter. The agent
+        # gets only the remainder; compilation must not use the 256 MiB
+        # filesystem-helper limit or exceed admission's bundle reservation.
+        exec_memory_limit_bytes=(
+            profile.bundle_memory_bytes
+            - profile.bundle_memory_bytes // 2
+            - profile.bundle_memory_bytes // 4
+        ),
+        exec_cpu_cores=(
+            profile.bundle_cpu_cores
+            - max(profile.bundle_cpu_cores / 2.0, 0.5)
+            - max(profile.bundle_cpu_cores / 4.0, 0.25)
+        ),
     )
     resource_manager = DockerCellResourceManager(
         profile=profile,

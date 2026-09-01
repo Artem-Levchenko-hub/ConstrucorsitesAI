@@ -26,6 +26,8 @@ import json
 from typing import Any
 from uuid import UUID
 
+from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+
 # Fixed throwaway identity so multi-step probes (create → act) share DB state.
 _PROBE_EMAIL = "agent-probe@omnia.local"
 _PROBE_PASSWORD = "agent-probe-1234"
@@ -39,6 +41,7 @@ async def run_probe(
     method: str,
     path: str,
     body: Any = None,
+    cell_preview: ProjectCellPreviewSession | None = None,
 ) -> dict[str, Any]:
     """Make one authenticated request against the live preview and return the
     executor observation ``{ok, detail|error}``.
@@ -49,7 +52,10 @@ async def run_probe(
     m = (method or "GET").upper().strip()
     if m not in _METHODS:
         return {"ok": False, "error": f"probe: bad method {method!r} (use {sorted(_METHODS)})"}
-    if not isinstance(path, str) or not path.startswith("/"):
+    if (
+        not isinstance(path, str) or not path.startswith("/")
+        or path.startswith("//") or "\\" in path
+    ):
         return {"ok": False, "error": "probe: path must be a same-origin path like /api/..."}
 
     try:
@@ -59,8 +65,12 @@ async def run_probe(
 
     from omnia_api.services import orchestrator_client
 
-    st = await orchestrator_client.get_status(pid)
-    base = st.get("dev_url") if isinstance(st, dict) else None
+    base: str | None
+    if cell_preview is not None:
+        base = cell_preview.preview_url
+    else:
+        st = await orchestrator_client.get_status(pid)
+        base = st.get("dev_url") if isinstance(st, dict) else None
     if not base:
         return {"ok": False, "error": "probe: preview not running — build/start the app first"}
     base = base.rstrip("/")
@@ -77,29 +87,44 @@ async def run_probe(
             try:
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
-                await page.goto(f"{base}/signin", wait_until="domcontentloaded")
-                # Register (idempotent: 409 = already exists) then log in.
-                await fg._api(
-                    page,
-                    "POST",
-                    "/api/auth/register",
-                    {"email": _PROBE_EMAIL, "password": _PROBE_PASSWORD},
-                )
-                try:
-                    await fg._login(page, base, _PROBE_EMAIL, _PROBE_PASSWORD)
-                except Exception as exc:
-                    return {
-                        "ok": False,
-                        "error": (
-                            "probe: could not log in as the test user "
-                            f"({type(exc).__name__}: {exc})"
-                        ),
-                    }
+                if cell_preview is not None:
+                    bootstrap_response = await page.goto(
+                        cell_preview.bootstrap_url, wait_until="domcontentloaded",
+                    )
+                    # Do not send a mutation if a bootstrap redirect escaped the cell origin.
+                    from urllib.parse import urlsplit
+
+                    current, expected = urlsplit(page.url), urlsplit(base)
+                    if (current.scheme, current.netloc) != (expected.scheme, expected.netloc):
+                        return {"ok": False, "error": "probe: cell bootstrap left preview origin"}
+                    cookies = await ctx.cookies([base])
+                    if (
+                        bootstrap_response is None or not bootstrap_response.ok
+                        or not any(cookie.get("name") == "__Host-max_session" for cookie in cookies)
+                    ):
+                        return {
+                            "ok": False,
+                            "error": "probe: signed cell session was not established",
+                        }
+                else:
+                    await page.goto(f"{base}/signin", wait_until="domcontentloaded")
+                    # Register (idempotent: 409 = already exists) then log in.
+                    await fg._api(
+                        page, "POST", "/api/auth/register",
+                        {"email": _PROBE_EMAIL, "password": _PROBE_PASSWORD},
+                    )
+                    try:
+                        await fg._login(page, base, _PROBE_EMAIL, _PROBE_PASSWORD)
+                    except Exception as exc:
+                        return {
+                            "ok": False,
+                            "error": f"probe: could not log in ({type(exc).__name__})",
+                        }
                 res = await fg._api(page, m, path, body)
             finally:
                 await browser.close()
     except Exception as exc:
-        return {"ok": False, "error": f"probe failed: {type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"probe failed: {type(exc).__name__}"}
 
     status = int(res.get("status", 0))
     payload = res.get("json")

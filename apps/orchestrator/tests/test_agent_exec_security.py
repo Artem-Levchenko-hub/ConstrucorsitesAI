@@ -475,6 +475,46 @@ async def test_hot_reload_rejects_a_stale_sandbox_revision(
     write.assert_not_awaited()
 
 
+async def test_hot_reload_preserves_explicit_empty_files_while_deleting_legacy_empty_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_id = UUID("00000000-0000-0000-0000-000000000003")
+    workspace = tmp_path / "projects" / str(project_id)
+    workspace.mkdir(parents=True)
+    (workspace / "removed.txt").write_text("remove me", encoding="utf-8")
+    write = AsyncMock(
+        return_value={"written": "1", "total_bytes": "0", "dropped": "", "deleted": "1"}
+    )
+    monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(runtime, "write_files", write)
+    monkeypatch.setattr(
+        runtime.demo_seed_writer,
+        "seed_demo_data",
+        AsyncMock(return_value={}),
+    )
+    payload = HotReloadRequest(
+        project_id=project_id,
+        files={"blank.txt": "", "removed.txt": ""},
+        empty_files=["blank.txt"],
+    )
+
+    result = await runtime.hot_reload(
+        payload,
+        "max-app",
+        "test-token-test-token-test-token",
+    )
+
+    assert result["state"] == "hot_reloaded"
+    write.assert_awaited_once_with(
+        "omnia-dev-max-app",
+        {"blank.txt": "", "removed.txt": ""},
+        empty_files=["blank.txt"],
+    )
+    assert (workspace / "blank.txt").read_text(encoding="utf-8") == ""
+    assert not (workspace / "removed.txt").exists()
+
+
 async def test_hot_reload_never_forces_data_loss_migrations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

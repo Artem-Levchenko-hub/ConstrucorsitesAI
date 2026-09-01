@@ -159,3 +159,60 @@ async def test_probe_max_runtime_requires_the_orchestrator_runtime_origin(
 
     assert result.ok is False
     assert result.detail == "preview session returned an invalid signed URL"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_status", "location"),
+    [(200, "/"), (500, "/"), (200, "https://attacker.example/")],
+)
+async def test_cell_runtime_uses_cell_cookie_and_route_without_legacy(
+    monkeypatch, route_status, location,
+):
+    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("cell runtime must not resolve legacy preview")
+
+    monkeypatch.setattr(
+        max_runtime_probe.orchestrator_client, "create_max_preview_session", forbidden,
+    )
+    observed: list[str] = []
+
+    def handler(request):
+        observed.append(request.url.path)
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(307, headers={
+                "Location": location,
+                "Set-Cookie": "__Host-max_session=cell; Path=/; Secure",
+            })
+        assert request.headers.get("cookie") == "__Host-max_session=cell"
+        if request.url.path == "/product":
+            return httpx.Response(route_status)
+        assert request.url.path == "/api/omnia/actions"
+        return httpx.Response(200, json={"actions": []})
+
+    _install_transport(monkeypatch, handler)
+    workspace_id = UUID("00000000-0000-0000-0000-000000000002")
+    cell_origin = f"https://cell-{workspace_id.hex[:12]}-dev.preview.lead-generator.ru"
+    cell_bootstrap = (
+        f"{cell_origin}/api/omnia/preview-session?expires=1893456000&signature=" + "a" * 43
+    )
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        ProjectCellPreviewSession(
+            workspace_id, cell_origin, cell_bootstrap, "2030-01-01T00:00:00Z",
+        ),
+        path="/product",
+    )
+    escaped = location.startswith("https://attacker")
+    assert result.ok is (route_status == 200 and not escaped)
+    assert observed == (
+        ["/api/omnia/preview-session"]
+        if escaped
+        else (
+            ["/api/omnia/preview-session", "/product", "/api/omnia/actions"]
+            if route_status == 200
+            else ["/api/omnia/preview-session", "/product"]
+        )
+    )
+    assert cell_bootstrap not in result.detail

@@ -191,6 +191,12 @@ class CellResourceNames:
         validate_checkpoint_ref(checkpoint_ref)
         return checkpoint_ref
 
+    def draft_container_name(self) -> str:
+        return f"{self._stem}-draft"
+
+    def draft_preview_slug(self) -> str:
+        return f"cell-{self.workspace_id.hex[:12]}"
+
     @property
     def _stem(self) -> str:
         return self.postgres_container.rsplit("-postgres", 1)[0]

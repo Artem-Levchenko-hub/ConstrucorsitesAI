@@ -52,11 +52,13 @@ from omnia_api.schemas.message import (
 )
 from omnia_api.schemas.project import is_fullstack, orchestrator_template
 from omnia_api.services import (
+    agent_builder,
     app_doctor,
     app_errors,
     image_edit,
     orchestrator_client,
     pipeline_debug,
+    project_cell_executor,
     stack_routing,
     zone_edit,
 )
@@ -356,11 +358,379 @@ def _failed_build_body(accumulated: str, stream_error: object) -> str:
     return accumulated if accumulated.strip() else f"[Ошибка генерации: {str(stream_error)[:300]}]"
 
 
+def _capture_hard_coverage_attestation(
+    capture: list[tuple[str, Any]] | None,
+    verdict: Any,
+    *,
+    enabled: bool,
+) -> list[tuple[str, Any]] | None:
+    """Make a definitive hard coverage failure part of the durable release proof."""
+    if verdict is None or not enabled or not verdict.hard_missing():
+        return capture
+    if capture is None:
+        capture = []
+    capture.append(("coverage", verdict))
+    return capture
+
+
+def _agent_builder_action(
+    name: str,
+    args: Mapping[str, Any] | None = None,
+) -> AgentBuilderAction:
+    from omnia_api.services.agent_builder import Action
+
+    return Action(name=name, args=dict(args or {}))
+
+
+async def _project_cell_action(
+    project_cell_handle: ProjectCellExecutorHandle,
+    name: str,
+    *,
+    args: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return await project_cell_handle.execute(_agent_builder_action(name, args))
+
+
+async def _project_cell_build(
+    project_cell_handle: ProjectCellExecutorHandle,
+) -> dict[str, Any]:
+    return await _project_cell_action(project_cell_handle, "build")
+
+
+async def _project_cell_runtime_check(
+    project_cell_handle: ProjectCellExecutorHandle,
+    *,
+    path: str = "/",
+) -> dict[str, Any]:
+    return await _project_cell_action(
+        project_cell_handle,
+        "runtime_check",
+        args={"path": path},
+    )
+
+
+async def _project_cell_list_dir(
+    project_cell_handle: ProjectCellExecutorHandle,
+    path: str,
+) -> str:
+    result = await _project_cell_action(
+        project_cell_handle,
+        "list_dir",
+        args={"path": path},
+    )
+    return str(result.get("detail") or "") if result.get("ok") else ""
+
+
+async def _project_cell_read_file(
+    project_cell_handle: ProjectCellExecutorHandle,
+    path: str,
+) -> str | None:
+    result = await _project_cell_action(
+        project_cell_handle,
+        "read_file",
+        args={"path": path},
+    )
+    if not result.get("ok"):
+        return None
+    content = result.get("content")
+    return content if isinstance(content, str) else None
+
+
+async def _build_agent_seed_parts(
+    project_id: UUID,
+    project_slug: str,
+    *,
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
+) -> list[str]:
+    seed_parts: list[str] = []
+    try:
+        if project_cell_handle is not None:
+            ents = await _project_cell_list_dir(project_cell_handle, "entities")
+            dash = await _project_cell_list_dir(
+                project_cell_handle,
+                "src/app/(app)/dashboard",
+            )
+            crud = await _project_cell_read_file(
+                project_cell_handle,
+                "src/components/omnia/crud-resource.tsx",
+            )
+        else:
+            ents = await orchestrator_client.agent_list_dir(
+                project_id,
+                project_slug,
+                "entities",
+            )
+            dash = await orchestrator_client.agent_list_dir(
+                project_id,
+                project_slug,
+                "src/app/(app)/dashboard",
+            )
+            crud = await orchestrator_client.agent_read_file(
+                project_id,
+                project_slug,
+                "src/components/omnia/crud-resource.tsx",
+            )
+        seed_parts.append(f"entities/ contains:\n{ents}")
+        seed_parts.append(f"src/app/(app)/dashboard/ contains:\n{dash}")
+        if crud:
+            seed_parts.append(
+                "src/components/omnia/crud-resource.tsx (the entity-page "
+                'component — render <CrudResource entity="Name"/> in each '
+                "page):\n" + crud[:4000]
+            )
+    except Exception as seed_exc:
+        print(f"[PP] agent seed-context skipped: {seed_exc!r}", flush=True)
+    return seed_parts
+
+
+async def _prepare_max_runtime_context(
+    *,
+    project_id: UUID,
+    project_slug: str,
+    user_id: UUID,
+    generation_run_id: UUID,
+    vision_context: str,
+    legacy_execute: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
+    max_shell_requested: bool,
+    ensure_legacy_runtime_ready: Callable[[], Awaitable[None]],
+    agent_emit: Callable[[str, dict[str, Any]], Awaitable[None]],
+    max_model_locked_files: frozenset[str],
+    max_security_locked_files: frozenset[str],
+) -> dict[str, Any]:
+    project_cell_handle: ProjectCellExecutorHandle | None = None
+    max_sandbox_capabilities: dict[str, Any] = {}
+    max_sandbox_attested = False
+    max_shell_enabled = _resolve_max_shell_enabled(
+        max_shell_requested=max_shell_requested,
+        sandbox_attested=False,
+        project_cell_handle=None,
+    )
+    active_max_locked_files = max_model_locked_files
+    agent_result = None
+    base_agent_executor = legacy_execute
+    try:
+        project_cell_handle = await project_cell_executor.maybe_create_project_cell_executor(
+            project_id=project_id,
+            project_slug=project_slug,
+            project_template="max_miniapp",
+            user_id=user_id,
+            generation_run_id=generation_run_id,
+            legacy_execute=legacy_execute,
+            vision_context=vision_context,
+        )
+    except project_cell_executor.ProjectCellExecutorUnavailable as cell_exc:
+        await agent_emit(
+            "agent.step",
+            {
+                "step": 0,
+                "action": "project_cell",
+                "human": "Project Cell не подготовился",
+                "path": "",
+                "detail": str(cell_exc),
+                "ok": False,
+            },
+        )
+        agent_result = agent_builder.AgentResult(
+            done=False,
+            summary=(
+                "Генерация не запускалась: owner-only Project Cell "
+                f"недоступен ({cell_exc})."
+            ),
+            files={},
+            steps=0,
+            stop_reason="project_cell_unavailable",
+        )
+    else:
+        if project_cell_handle is not None:
+            base_agent_executor = project_cell_handle.execute
+            max_shell_enabled = _resolve_max_shell_enabled(
+                max_shell_requested=max_shell_requested,
+                sandbox_attested=False,
+                project_cell_handle=project_cell_handle,
+            )
+            active_max_locked_files = max_security_locked_files
+            await agent_emit(
+                "agent.step",
+                {
+                    "step": 0,
+                    "action": "project_cell",
+                    "human": "Подключаю owner-only Project Cell",
+                    "path": "",
+                    "detail": (
+                        "Кодовая генерация идёт в изолированном workspace; "
+                        "preview/runtime синхронизируются только для проверки."
+                    ),
+                    "ok": True,
+                },
+            )
+        else:
+            await ensure_legacy_runtime_ready()
+            if max_shell_requested:
+                try:
+                    max_sandbox_capabilities = (
+                        await orchestrator_client.agent_sandbox_capabilities(
+                            project_id,
+                            project_slug,
+                        )
+                    )
+                except Exception as sandbox_cap_exc:
+                    print(
+                        "[PP] MAX sandbox attestation unavailable: "
+                        f"{sandbox_cap_exc!r}",
+                        flush=True,
+                    )
+            max_sandbox_attested = bool(max_sandbox_capabilities.get("ready"))
+            max_shell_enabled = _resolve_max_shell_enabled(
+                max_shell_requested=max_shell_requested,
+                sandbox_attested=max_sandbox_attested,
+                project_cell_handle=None,
+            )
+            active_max_locked_files = (
+                max_security_locked_files
+                if max_shell_enabled
+                else max_model_locked_files
+            )
+    return {
+        "project_cell_handle": project_cell_handle,
+        "base_agent_executor": base_agent_executor,
+        "max_sandbox_capabilities": max_sandbox_capabilities,
+        "max_sandbox_attested": max_sandbox_attested,
+        "max_shell_enabled": max_shell_enabled,
+        "active_max_locked_files": active_max_locked_files,
+        "agent_result": agent_result,
+    }
+
+
+async def _execute_max_agent_action(
+    action: AgentBuilderAction,
+    *,
+    project_id: UUID,
+    project_slug: str,
+    vision_context: str,
+    base_agent_executor: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
+    max_shell_enabled: bool,
+    project_cell_handle: ProjectCellExecutorHandle | None,
+    active_max_locked_files: frozenset[str],
+    max_model_write_rejection: Callable[[str, str], str | None],
+) -> dict[str, Any]:
+    if project_cell_handle is not None and action.name in {
+        "see",
+        "runtime_check",
+        "read_logs",
+        "probe",
+        "verify_isolation",
+    }:
+        return await project_cell_handle.execute(action)
+    if action.name == "see":
+        # MAX previews authenticate through signed initData/session,
+        # not the generic email login. Bootstrap a short-lived
+        # preview identity before Playwright captures the product.
+        from omnia_api.services import agent_vision
+
+        try:
+            preview_session = await orchestrator_client.create_max_preview_session(project_id)
+            bootstrap_url = str(preview_session.get("bootstrap_url") or "")
+            visual = await agent_vision.see_page(
+                project_id,
+                path=action.path or "/",
+                prompt_context=vision_context,
+                bootstrap_url=bootstrap_url,
+            )
+        except Exception as see_exc:
+            visual = {
+                "ok": False,
+                "error": f"MAX visual QA unavailable: {type(see_exc).__name__}",
+            }
+        return agent_vision.normalize_max_see_observation(visual)
+    if action.name == "runtime_check":
+        runtime = await base_agent_executor(action)
+        if not runtime.get("ok"):
+            return runtime
+        from omnia_api.services.max_runtime_probe import (
+            probe_max_runtime as probe_max_runtime_legacy,
+        )
+
+        try:
+            runtime_status = await orchestrator_client.get_status(project_id)
+            base_url = str(runtime_status.get("dev_url") or "") or None
+            max_probe = await probe_max_runtime_legacy(
+                project_id,
+                project_slug,
+                base_url=base_url,
+            )
+        except Exception as probe_exc:
+            return {
+                "ok": False,
+                "detail": (
+                    "MAX data-plane proof crashed: "
+                    f"{type(probe_exc).__name__}"
+                ),
+            }
+        return {
+            "ok": max_probe.ok,
+            "detail": (
+                f"{runtime.get('detail') or 'runtime route passed'}; "
+                f"{max_probe.detail}"
+            ),
+        }
+    if action.name == "bash":
+        return await _run_max_shell_action(
+            action=action,
+            project_id=project_id,
+            project_slug=project_slug,
+            max_shell_enabled=max_shell_enabled,
+            base_agent_executor=base_agent_executor,
+            project_cell_handle=project_cell_handle,
+            active_max_locked_files=active_max_locked_files,
+            max_model_write_rejection=max_model_write_rejection,
+        )
+    if action.name in {"write_file", "edit_file"} and action.path in active_max_locked_files:
+        return {
+            "ok": False,
+            "error": (
+                f"{action.path} is managed by MAX Studio. "
+                "Edit src/app/page.tsx, src/app/globals.css or a "
+                "new feature-specific component instead."
+            ),
+        }
+    if action.name in {"write_file", "edit_file"}:
+        candidate = str(action.args.get("content") or action.args.get("replace") or "")
+        secret_rejection = max_model_write_rejection(action.path, candidate)
+        if secret_rejection:
+            return {"ok": False, "error": secret_rejection}
+        from omnia_api.services.max_generation_contract import (
+            unsafe_max_backend_paths as unsafe_max_backend_paths_fn,
+        )
+
+        if unsafe_max_backend_paths_fn({action.path: candidate}):
+            return {
+                "ok": False,
+                "error": (
+                    "Direct DB access is forbidden in MAX product files. "
+                    "Use createMaxAction/getMaxActions from "
+                    "@/lib/omnia/integration-client."
+                ),
+            }
+        if action.path.startswith("src/app/api/max/") or action.path.startswith(
+            "src/app/api/omnia/"
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "MAX Studio owns /api/max and /api/omnia. "
+                    "Call the managed integration client instead of "
+                    "creating a parallel route."
+                ),
+            }
+    return await base_agent_executor(action)
+
+
 async def _probe_compile_errors(
     factory: async_sessionmaker[AsyncSession],
     project_id: UUID,
     assistant_message_id: UUID,
     slug: str,
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
 ) -> None:
     """After a clean hot-reload, poll the dev server for a Next.js compile error,
     then probe the live route for a server-side 5xx, and surface either as a card.
@@ -374,6 +744,28 @@ async def _probe_compile_errors(
     orchestrator hiccup is swallowed — a missing card is acceptable, a crashed
     build is not.
     """
+    if project_cell_handle is not None:
+        status, category = await _probe_app_error(
+            project_id,
+            slug,
+            project_cell_handle=project_cell_handle,
+        )
+        if status is None:
+            return
+        await app_errors.publish(
+            factory,
+            project_id,
+            assistant_message_id,
+            category=cast(app_errors.ErrorCategory, category or "runtime"),
+            detail=str(
+                status.get("error")
+                or status.get("detail")
+                or "Project Cell draft runtime returned an error."
+            ),
+            file=status.get("file"),
+        )
+        return
+
     for _ in range(3):
         await asyncio.sleep(3)
         try:
@@ -424,18 +816,30 @@ def _spawn_compile_probe(
     project_id: UUID,
     assistant_message_id: UUID,
     slug: str,
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
 ) -> None:
     """Fire-and-forget the compile probe with a strong reference (see
     ``_BACKGROUND_TASKS``)."""
     task = asyncio.create_task(
-        _probe_compile_errors(factory, project_id, assistant_message_id, slug)
+        _probe_compile_errors(
+            factory,
+            project_id,
+            assistant_message_id,
+            slug,
+            project_cell_handle=project_cell_handle,
+        )
     )
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 async def _probe_app_error(
-    project_id: UUID, slug: str, *, compile_tries: int = 3, sleep: float = 3.0
+    project_id: UUID,
+    slug: str,
+    *,
+    compile_tries: int = 3,
+    sleep: float = 3.0,
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     """Probe the live dev container for a REAL error → ``(status, category)``.
 
@@ -444,6 +848,25 @@ async def _probe_app_error(
     as "broken"). Otherwise ``(status_dict, "compile"|"runtime")`` where status
     carries ``error`` / ``file``. Mirrors ``_probe_compile_errors`` but RETURNS the
     verdict instead of publishing a card — the self-repair loop drives it."""
+    if project_cell_handle is not None:
+        build = await _project_cell_build(project_cell_handle)
+        if not build.get("ok", True):
+            return {
+                "error": str(build.get("error") or build.get("detail") or "build failed"),
+                "file": build.get("file"),
+            }, "compile"
+        runtime = await _project_cell_runtime_check(project_cell_handle)
+        if runtime.get("ok", True):
+            return None, ""
+        return {
+            "error": str(
+                runtime.get("error")
+                or runtime.get("detail")
+                or "runtime failed"
+            ),
+            "file": runtime.get("file"),
+        }, "runtime"
+
     for _ in range(max(1, compile_tries)):
         await asyncio.sleep(sleep)
         try:
@@ -471,6 +894,7 @@ async def _run_app_self_repair(
     *,
     passes: int,
     on_notice: Callable[[str], Awaitable[None]] | None = None,
+    project_cell_handle: ProjectCellExecutorHandle | None = None,
 ) -> tuple[dict[str, str], dict[str, Any] | None, str]:
     """Bounded «probe → fix → hot-reload → re-probe» loop (Claude-Code verify→fix).
 
@@ -500,7 +924,11 @@ async def _run_app_self_repair(
         )
 
     for i in range(max(0, passes)):
-        status, category = await _probe_app_error(project_id, slug)
+        status, category = await _probe_app_error(
+            project_id,
+            slug,
+            project_cell_handle=project_cell_handle,
+        )
         if status is None:
             # green (or probe inconclusive → don't claim broken). On pass 0 with no
             # fix yet that's a clean build; if we already applied a fix, it healed.
@@ -518,7 +946,15 @@ async def _run_app_self_repair(
         work.update(fix)
         changed.update(fix)
         try:
-            await orchestrator_client.hot_reload(project_id=project_id, slug=slug, files=fix)
+            if project_cell_handle is not None:
+                await _apply_project_cell_preview_files(
+                    project_id=project_id,
+                    project_slug=slug,
+                    files=fix,
+                    project_cell_handle=project_cell_handle,
+                )
+            else:
+                await orchestrator_client.hot_reload(project_id=project_id, slug=slug, files=fix)
         except Exception as exc:
             print(f"[PP] self_repair hot_reload failed: {exc!r}", flush=True)
             break
@@ -529,7 +965,11 @@ async def _run_app_self_repair(
                 f"\n\n*Нашёл ошибку ({category}) — чиню и пересобираю ({i + 1}/{passes})…*\n\n"
             )
     # Final verdict after the last fix recompiled.
-    status, category = await _probe_app_error(project_id, slug)
+    status, category = await _probe_app_error(
+        project_id,
+        slug,
+        project_cell_handle=project_cell_handle,
+    )
     if status is None:
         _metric("healed" if applied else "clean", last_category or "none")
         return changed, None, ""
@@ -755,23 +1195,63 @@ async def _abort_unsafe_max_backend(
     )
 
 
+def _resolve_max_shell_enabled(
+    *,
+    max_shell_requested: bool,
+    sandbox_attested: bool,
+    project_cell_handle: ProjectCellExecutorHandle | None,
+) -> bool:
+    return max_shell_requested and (sandbox_attested or project_cell_handle is not None)
+
+
+def _split_project_cell_preview_patch(
+    files: Mapping[str, str],
+    *,
+    empty_files: Sequence[str] = (),
+) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...]]:
+    payload = {path: content for path, content in files.items() if path}
+    explicit_empty = tuple(
+        sorted({path for path in empty_files if path in payload and payload[path] == ""})
+    )
+    writes: dict[str, str] = {}
+    deletes: list[str] = []
+    explicit_empty_set = set(explicit_empty)
+    for path, content in payload.items():
+        if content == "" and path not in explicit_empty_set:
+            deletes.append(path)
+            continue
+        writes[path] = content
+    return writes, tuple(sorted(set(deletes))), explicit_empty
+
+
 async def _apply_project_cell_preview_files(
     *,
     project_id: UUID,
     project_slug: str,
     files: Mapping[str, str],
     project_cell_handle: ProjectCellExecutorHandle | None = None,
+    empty_files: Sequence[str] = (),
 ) -> None:
-    payload = {path: content for path, content in files.items() if path}
-    if not payload:
+    writes, deletes, explicit_empty = _split_project_cell_preview_patch(
+        files,
+        empty_files=empty_files,
+    )
+    if not writes and not deletes:
         return
     if project_cell_handle is not None:
-        await project_cell_handle.stage_files(payload)
+        await project_cell_handle.stage_patch(writes, deletes)
         sync_result = await project_cell_handle.sync_preview()
         if sync_result.failure is not None:
             raise RuntimeError(sync_result.failure)
         return
-    await orchestrator_client.hot_reload(project_id, project_slug, payload)
+    payload = dict(writes)
+    payload.update({path: "" for path in deletes})
+    await orchestrator_client.hot_reload(
+        project_id,
+        project_slug,
+        payload,
+        empty_files=explicit_empty,
+    )
 
 
 def _extract_max_shell_files(raw_files: Any) -> dict[str, str]:
@@ -798,9 +1278,15 @@ async def _rollback_project_cell_shell_files(
     project_cell_handle: ProjectCellExecutorHandle,
 ) -> bool:
     normalized_paths = sorted({path for path in touched_paths if path})
-    rollback_files = {
-        path: snapshot_files.get(path, "") for path in normalized_paths
-    }
+    rollback_files: dict[str, str] = {}
+    explicit_empty: list[str] = []
+    for path in normalized_paths:
+        if path in snapshot_files:
+            rollback_files[path] = snapshot_files[path]
+            if snapshot_files[path] == "":
+                explicit_empty.append(path)
+        else:
+            rollback_files[path] = ""
     if not rollback_files:
         return False
     try:
@@ -809,6 +1295,7 @@ async def _rollback_project_cell_shell_files(
             project_slug=project_slug,
             files=rollback_files,
             project_cell_handle=project_cell_handle,
+            empty_files=tuple(explicit_empty),
         )
     except Exception as exc:
         logging.getLogger(__name__).warning(
@@ -835,8 +1322,8 @@ async def _run_max_shell_action(
         return {
             "ok": False,
             "error": (
-                "MAX project shell is locked: the separate "
-                "secretless sandbox did not pass capability "
+                "MAX project shell is locked: the operator disabled it "
+                "or the isolated sandbox did not pass capability "
                 "attestation. Until it is ready use "
                 "read_file/edit_file/write_file/build."
             ),
@@ -3384,6 +3871,21 @@ async def _process_prompt(
             surgical = True
         print(f"[PP] imported={project_is_imported} surgical_final={surgical}", flush=True)
 
+        _agentic_container_turn = (
+            agent_builder.is_agentic_enabled(
+                get_settings().use_agentic_builder,
+                get_settings().agentic_builder_canary_users,
+                str(user_id),
+            )
+            and project_template in CONTAINER_NEXT
+            and bool(project_slug)
+            and not project_is_imported
+            and (orchestrate or surgical)
+        )
+        _defer_max_runtime_provision = (
+            _agentic_container_turn and project_template == "max_miniapp"
+        )
+
         # Auto stack-routing, part 2: container-backed stacks need a live dev
         # container for the post-build hot_reload to land in. Provision it now —
         # at the START of the worker — so it warms up in parallel with the
@@ -3392,7 +3894,12 @@ async def _process_prompt(
         # the build still ships the snapshot and hot_reload/«Запустить» retries.
         # Imported repos are never container-backed (detect_template returns
         # "blank"/"code", neither is in CONTAINER_NEXT), but gate defensively.
-        if project_template in CONTAINER_NEXT and project_slug and not project_is_imported:
+        if (
+            project_template in CONTAINER_NEXT
+            and project_slug
+            and not project_is_imported
+            and not _defer_max_runtime_provision
+        ):
             await _record_agent_step(
                 {
                     "step": None,
@@ -3471,23 +3978,7 @@ async def _process_prompt(
         # early-return path that reuses the standard commit/snapshot/finalise
         # helpers. When the flag is OFF this block is skipped and generation runs
         # exactly as before (byte-identical).
-        # Imported here (function-local, as before) but BEFORE the gate that
-        # uses it — referencing agent_builder in the `if` while the import sat
-        # inside the block made it an UnboundLocalError for every build (the
-        # canary gate). Bind it first.
-        from omnia_api.services import agent_builder, project_cell_executor
-
-        if (
-            agent_builder.is_agentic_enabled(
-                get_settings().use_agentic_builder,
-                get_settings().agentic_builder_canary_users,
-                str(user_id),
-            )
-            and project_template in CONTAINER_NEXT
-            and project_slug
-            and not project_is_imported
-            and (orchestrate or surgical)
-        ):
+        if _agentic_container_turn:
             # Phase 2: container EDITS go through the agent too (read→edit→build→
             # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
             # First-build/rebuild = full build prompt; a surgical follow-up = a
@@ -3502,6 +3993,7 @@ async def _process_prompt(
             _has_prior_build = current_snapshot_id is not None
             _is_continue = _has_prior_build and _is_continue_request(prompt_text)
             _is_edit = (not orchestrate) and not _is_continue
+            _agent_res: agent_builder.AgentResult | None = None
             _max_has_generated_snapshot = False
             if project_template == "max_miniapp":
                 async with factory() as _max_history_session:
@@ -3609,26 +4101,6 @@ async def _process_prompt(
                     print(f"[PP] design_plugin skipped: {_dp_exc!r}", flush=True)
 
             _vision_context = _design_contract.vision_context if _design_contract else prompt_text
-            _max_shell_requested = (
-                project_template == "max_miniapp"
-                and get_settings().max_project_shell_enabled
-            )
-            _max_sandbox_capabilities: dict[str, Any] = {}
-            if _max_shell_requested:
-                try:
-                    _max_sandbox_capabilities = (
-                        await orchestrator_client.agent_sandbox_capabilities(
-                            project_id, project_slug
-                        )
-                    )
-                except Exception as _sandbox_cap_exc:
-                    print(
-                        f"[PP] MAX sandbox attestation unavailable: {_sandbox_cap_exc!r}",
-                        flush=True,
-                    )
-            _max_shell_enabled = bool(
-                _max_shell_requested and _max_sandbox_capabilities.get("ready")
-            )
             _base_agent_executor = agent_builder.make_container_executor(
                 project_id=project_id,
                 slug=project_slug,
@@ -3639,7 +4111,83 @@ async def _process_prompt(
                 project_cell_executor.ProjectCellExecutorHandle | None
             ) = None
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
+            _max_shell_requested = (
+                project_template == "max_miniapp"
+                and get_settings().max_project_shell_enabled
+            )
+            _max_sandbox_capabilities: dict[str, Any] = {}
+            _max_sandbox_attested = False
+            _max_shell_enabled = _resolve_max_shell_enabled(
+                max_shell_requested=_max_shell_requested,
+                sandbox_attested=False,
+                project_cell_handle=None,
+            )
             _active_max_locked_files: frozenset[str] = frozenset()
+            _legacy_runtime_ready = not _defer_max_runtime_provision
+
+            async def _ensure_legacy_runtime_ready() -> None:
+                nonlocal _legacy_runtime_ready
+                if _legacy_runtime_ready:
+                    return
+                await _record_agent_step(
+                    {
+                        "step": None,
+                        "kind": "step",
+                        "action": "Подготавливаю среду проекта",
+                        "tool": "runtime",
+                        "path": "",
+                        "detail": "Запускаю контейнер и жду готовности перед сборкой.",
+                        "ok": True,
+                    }
+                )
+                await stack_routing.ensure_provisioned(
+                    project_id,
+                    project_slug,
+                    project_template,
+                    require_ready=True,
+                )
+                await _record_agent_step(
+                    {
+                        "step": None,
+                        "kind": "step",
+                        "action": "Среда готова",
+                        "tool": "runtime",
+                        "path": "",
+                        "detail": "Контейнер запущен, начинаю сборку приложения.",
+                        "ok": True,
+                    }
+                )
+                _legacy_runtime_ready = True
+
+            async def _probe_runtime_status(path: str = "/") -> dict[str, Any]:
+                if _project_cell_executor_handle is not None:
+                    return await _project_cell_runtime_check(
+                        _project_cell_executor_handle,
+                        path=path,
+                    )
+                return await orchestrator_client.runtime_status(
+                    project_id,
+                    slug=project_slug,
+                    path=path,
+                )
+
+            async def _probe_build_status() -> dict[str, Any]:
+                if _project_cell_executor_handle is not None:
+                    return await _project_cell_build(_project_cell_executor_handle)
+                return await orchestrator_client.agent_build(project_id, project_slug)
+
+            async def _preview_base_url() -> str | None:
+                if _project_cell_executor_handle is not None:
+                    _preview = await _project_cell_executor_handle.create_preview_session()
+                    return _preview.preview_url
+                _status_payload = await orchestrator_client.get_status(project_id)
+                _raw_base = (
+                    _status_payload.get("dev_url")
+                    if isinstance(_status_payload, dict)
+                    else None
+                )
+                return str(_raw_base) if _raw_base else None
+
             if project_template == "max_miniapp":
                 from omnia_api.services.max_project_kit import (
                     MAX_MODEL_LOCKED_FILES,
@@ -3647,160 +4195,54 @@ async def _process_prompt(
                 )
                 from omnia_api.services.secret_safety import max_model_write_rejection
 
-                _active_max_locked_files = (
-                    MAX_SECURITY_LOCKED_FILES
-                    if _max_shell_enabled
-                    else MAX_MODEL_LOCKED_FILES
-                )
+                _active_max_locked_files = MAX_MODEL_LOCKED_FILES
 
                 async def _agent_executor(action: agent_builder.Action) -> dict[str, Any]:
-                    if action.name == "see":
-                        # MAX previews authenticate through signed initData/session,
-                        # not the generic email login. Bootstrap a short-lived
-                        # preview identity before Playwright captures the product.
-                        from omnia_api.services import agent_vision
-
-                        try:
-                            if _project_cell_executor_handle is not None:
-                                _sync = await _project_cell_executor_handle.sync_preview()
-                                if _sync.failure is not None:
-                                    return {
-                                        "ok": False,
-                                        "error": _sync.failure,
-                                        **(
-                                            {"files": _sync.generated_files}
-                                            if _sync.generated_files
-                                            else {}
-                                        ),
-                                    }
-                            _preview_session = await orchestrator_client.create_max_preview_session(
-                                project_id
-                            )
-                            _bootstrap_url = str(_preview_session.get("bootstrap_url") or "")
-                            _visual = await agent_vision.see_page(
-                                project_id,
-                                path=action.path or "/",
-                                prompt_context=_vision_context,
-                                bootstrap_url=_bootstrap_url,
-                            )
-                        except Exception as _see_exc:
-                            _visual = {
-                                "ok": False,
-                                "error": f"MAX visual QA unavailable: {type(_see_exc).__name__}",
-                            }
-                        return agent_vision.normalize_max_see_observation(_visual)
-                    if action.name == "runtime_check":
-                        _runtime = await _base_agent_executor(action)
-                        if not _runtime.get("ok"):
-                            return _runtime
-                        from omnia_api.services.max_runtime_probe import (
-                            probe_max_runtime as _probe_max_runtime,
-                        )
-
-                        try:
-                            _runtime_status = await orchestrator_client.get_status(project_id)
-                            _base_url = str(_runtime_status.get("dev_url") or "") or None
-                            _max_probe = await _probe_max_runtime(
-                                project_id,
-                                project_slug,
-                                base_url=_base_url,
-                            )
-                        except Exception as _probe_exc:
-                            return {
-                                "ok": False,
-                                "detail": (
-                                    "MAX data-plane proof crashed: "
-                                    f"{type(_probe_exc).__name__}"
-                                ),
-                            }
-                        return {
-                            "ok": _max_probe.ok,
-                            "detail": (
-                                f"{_runtime.get('detail') or 'runtime route passed'}; "
-                                f"{_max_probe.detail}"
-                            ),
-                        }
-                    if action.name == "bash":
-                        return await _run_max_shell_action(
-                            action=action,
-                            project_id=project_id,
-                            project_slug=project_slug,
-                            max_shell_enabled=_max_shell_enabled,
-                            base_agent_executor=_base_agent_executor,
-                            project_cell_handle=_project_cell_executor_handle,
-                            active_max_locked_files=_active_max_locked_files,
-                            max_model_write_rejection=max_model_write_rejection,
-                        )
-                    if (
-                        action.name in {"write_file", "edit_file"}
-                        and action.path in _active_max_locked_files
-                    ):
-                        return {
-                            "ok": False,
-                            "error": (
-                                f"{action.path} is managed by MAX Studio. "
-                                "Edit src/app/page.tsx, src/app/globals.css or a "
-                                "new feature-specific component instead."
-                            ),
-                        }
-                    if action.name in {"write_file", "edit_file"}:
-                        _candidate = str(
-                            action.args.get("content") or action.args.get("replace") or ""
-                        )
-                        _secret_rejection = max_model_write_rejection(action.path, _candidate)
-                        if _secret_rejection:
-                            return {"ok": False, "error": _secret_rejection}
-                        from omnia_api.services.max_generation_contract import (
-                            unsafe_max_backend_paths as _unsafe_max_backend_paths,
-                        )
-
-                        if _unsafe_max_backend_paths({action.path: _candidate}):
-                            return {
-                                "ok": False,
-                                "error": (
-                                    "Direct DB access is forbidden in MAX product files. "
-                                    "Use createMaxAction/getMaxActions from "
-                                    "@/lib/omnia/integration-client."
-                                ),
-                            }
-                        if action.path.startswith("src/app/api/max/") or action.path.startswith(
-                            "src/app/api/omnia/"
-                        ):
-                            return {
-                                "ok": False,
-                                "error": (
-                                    "MAX Studio owns /api/max and /api/omnia. "
-                                    "Call the managed integration client instead of "
-                                    "creating a parallel route."
-                                ),
-                            }
-                    return await _base_agent_executor(action)
+                    return await _execute_max_agent_action(
+                        action,
+                        project_id=project_id,
+                        project_slug=project_slug,
+                        vision_context=_vision_context,
+                        base_agent_executor=_base_agent_executor,
+                        max_shell_enabled=_max_shell_enabled,
+                        project_cell_handle=_project_cell_executor_handle,
+                        active_max_locked_files=_active_max_locked_files,
+                        max_model_write_rejection=max_model_write_rejection,
+                    )
             else:
                 _agent_executor = _base_agent_executor
+
+            if _agent_res is None and project_template == "max_miniapp":
+                _max_runtime = await _prepare_max_runtime_context(
+                    project_id=project_id,
+                    project_slug=project_slug,
+                    user_id=user_id,
+                    generation_run_id=run_id,
+                    vision_context=_vision_context,
+                    legacy_execute=_base_agent_executor,
+                    max_shell_requested=_max_shell_requested,
+                    ensure_legacy_runtime_ready=_ensure_legacy_runtime_ready,
+                    agent_emit=_agent_emit,
+                    max_model_locked_files=MAX_MODEL_LOCKED_FILES,
+                    max_security_locked_files=MAX_SECURITY_LOCKED_FILES,
+                )
+                _project_cell_executor_handle = _max_runtime["project_cell_handle"]
+                _base_agent_executor = _max_runtime["base_agent_executor"]
+                _max_sandbox_capabilities = _max_runtime["max_sandbox_capabilities"]
+                _max_sandbox_attested = _max_runtime["max_sandbox_attested"]
+                _max_shell_enabled = _max_runtime["max_shell_enabled"]
+                _active_max_locked_files = _max_runtime["active_max_locked_files"]
+                _agent_res = _max_runtime["agent_result"]
             # Seed the agent with the project layout + the CrudResource component
             # up-front so it does NOT burn steps re-discovering the fixed template
             # (the #1 latency sink observed in the first live runs). Fail-soft.
-            _seed_parts: list[str] = []
-            try:
-                _ents = await orchestrator_client.agent_list_dir(
-                    project_id, project_slug, "entities"
-                )
-                _seed_parts.append(f"entities/ contains:\n{_ents}")
-                _dash = await orchestrator_client.agent_list_dir(
-                    project_id, project_slug, "src/app/(app)/dashboard"
-                )
-                _seed_parts.append(f"src/app/(app)/dashboard/ contains:\n{_dash}")
-                _crud = await orchestrator_client.agent_read_file(
-                    project_id, project_slug, "src/components/omnia/crud-resource.tsx"
-                )
-                if _crud:
-                    _seed_parts.append(
-                        "src/components/omnia/crud-resource.tsx (the entity-page "
-                        'component — render <CrudResource entity="Name"/> in each '
-                        "page):\n" + _crud[:4000]
-                    )
-            except Exception as _seed_exc:
-                print(f"[PP] agent seed-context skipped: {_seed_exc!r}", flush=True)
+            if project_template == "max_miniapp" and _project_cell_executor_handle is None:
+                await _ensure_legacy_runtime_ready()
+            _seed_parts = await _build_agent_seed_parts(
+                project_id,
+                project_slug,
+                project_cell_handle=_project_cell_executor_handle,
+            )
             _seed_block = (
                 (
                     "\n\nPROJECT CONTEXT (already gathered — do NOT re-explore these):\n"
@@ -4026,7 +4468,6 @@ async def _process_prompt(
             _agent_model = model_for_role("agent", override=force_model)
             # Stall recovery resolves through the same role registry.
             _escalate_model = model_for_role("agent_escalation", override=force_model)
-            _agent_res = None
             _max_seed_files: dict[str, str] = {}
             # A new MAX project starts from the verified platform CORE with no
             # product page, then ALWAYS continues through the bounded native Google
@@ -4077,12 +4518,20 @@ async def _process_prompt(
                     # Kit v12 and older left a real root page in the container.
                     # Remove it before seeding v13 so a legacy canvas can neither
                     # enter model context nor survive a failed first generation.
-                    await orchestrator_client.hot_reload(
-                        project_id, project_slug, {"src/app/page.tsx": ""}
+                    await _apply_project_cell_preview_files(
+                        project_id=project_id,
+                        project_slug=project_slug,
+                        files={"src/app/page.tsx": ""},
+                        project_cell_handle=_project_cell_executor_handle,
                     )
-                    await orchestrator_client.hot_reload(project_id, project_slug, _starter_files)
+                    await _apply_project_cell_preview_files(
+                        project_id=project_id,
+                        project_slug=project_slug,
+                        files=_starter_files,
+                        project_cell_handle=_project_cell_executor_handle,
+                    )
                     _max_seed_files = _starter_files
-                    _starter_build = await orchestrator_client.agent_build(project_id, project_slug)
+                    _starter_build = await _probe_build_status()
                     if _starter_build.get("ok"):
                         await _agent_emit(
                             "agent.step",
@@ -4133,7 +4582,7 @@ async def _process_prompt(
                         },
                     )
 
-            if _agent_res is None:
+            if _agent_res is None and project_template != "max_miniapp":
                 try:
                     _project_cell_executor_handle = (
                         await project_cell_executor.maybe_create_project_cell_executor(
@@ -4143,6 +4592,7 @@ async def _process_prompt(
                             user_id=user_id,
                             generation_run_id=run_id,
                             legacy_execute=_base_agent_executor,
+                            vision_context=_vision_context,
                         )
                     )
                 except project_cell_executor.ProjectCellExecutorUnavailable as _cell_exc:
@@ -4170,7 +4620,11 @@ async def _process_prompt(
                 else:
                     if _project_cell_executor_handle is not None:
                         _base_agent_executor = _project_cell_executor_handle.execute
-                        _max_shell_enabled = True
+                        _max_shell_enabled = _resolve_max_shell_enabled(
+                            max_shell_requested=_max_shell_requested,
+                            sandbox_attested=_max_sandbox_attested,
+                            project_cell_handle=_project_cell_executor_handle,
+                        )
                         _active_max_locked_files = MAX_SECURITY_LOCKED_FILES
                         await _agent_emit(
                             "agent.step",
@@ -4345,9 +4799,7 @@ async def _process_prompt(
                             files={path: "" for path in _new_paths},
                             project_cell_handle=_project_cell_executor_handle,
                         )
-                    _rollback_build = await orchestrator_client.agent_build(
-                        project_id, project_slug
-                    )
+                    _rollback_build = await _probe_build_status()
                     if _rollback_build.get("ok"):
                         _max_seed_files = {}
                         _agent_res = agent_builder.AgentResult(
@@ -4424,9 +4876,7 @@ async def _process_prompt(
                             files={path: "" for path in _new_paths},
                             project_cell_handle=_project_cell_executor_handle,
                         )
-                    _rollback_build = await orchestrator_client.agent_build(
-                        project_id, project_slug
-                    )
+                    _rollback_build = await _probe_build_status()
                     if _rollback_build.get("ok"):
                         _max_seed_files = {}
                         _agent_res = agent_builder.AgentResult(
@@ -4736,17 +5186,13 @@ async def _process_prompt(
             _runtime_ok = True  # fail-soft default: a probe error ≠ a broken app
             _rt_error = ""
             try:
-                _rt = await orchestrator_client.runtime_status(
-                    project_id, slug=project_slug, path="/"
-                )
+                _rt = await _probe_runtime_status("/")
                 if project_template == "max_miniapp" and _rt.get("ok"):
                     # A first request can still hit the previous Turbopack graph
                     # while HMR notices the last write. Require a second green
                     # response after a short settle window before publishing.
                     await asyncio.sleep(2)
-                    _rt = await orchestrator_client.runtime_status(
-                        project_id, slug=project_slug, path="/"
-                    )
+                    _rt = await _probe_runtime_status("/")
                 _runtime_ok = bool(_rt.get("ok"))
                 if not _runtime_ok:
                     _rt_err = _rt.get("error") or _rt.get("status_code") or "5xx"
@@ -4764,16 +5210,17 @@ async def _process_prompt(
                     # that per page on a demo. Force those first hits now, in the
                     # background, so the pages are WARM when they land. Best-effort
                     # — never blocks the response, never fails the build.
-                    async def _warm_bg() -> None:
-                        try:
-                            _w = await orchestrator_client.warm_routes(project_id, project_slug)
-                            print(f"[PP] warm routes {_w}", flush=True)
-                        except Exception as _w_exc:
-                            print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
+                    if _project_cell_executor_handle is None:
+                        async def _warm_bg() -> None:
+                            try:
+                                _w = await orchestrator_client.warm_routes(project_id, project_slug)
+                                print(f"[PP] warm routes {_w}", flush=True)
+                            except Exception as _w_exc:
+                                print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
 
-                    _warm_task = asyncio.create_task(_warm_bg())
-                    # Hold a ref so the task isn't GC'd mid-flight; discard on done.
-                    _warm_task.add_done_callback(lambda _t: None)
+                        _warm_task = asyncio.create_task(_warm_bg())
+                        # Hold a ref so the task isn't GC'd mid-flight; discard on done.
+                        _warm_task.add_done_callback(lambda _t: None)
             except Exception as _sm_exc:
                 print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
 
@@ -4787,7 +5234,7 @@ async def _process_prompt(
             _typecheck_ok = True
             _tc_error = ""
             try:
-                _tc = await orchestrator_client.agent_build(project_id, project_slug)
+                _tc = await _probe_build_status()
                 _typecheck_ok = bool(_tc.get("ok", True))
                 if not _typecheck_ok:
                     _tc_detail = str(_tc.get("detail") or "").strip()
@@ -4876,9 +5323,7 @@ async def _process_prompt(
                         files.update(_rep.files)
                     # Re-probe green after this repair attempt.
                     try:
-                        _rt2 = await orchestrator_client.runtime_status(
-                            project_id, slug=project_slug, path="/"
-                        )
+                        _rt2 = await _probe_runtime_status("/")
                         _runtime_ok = bool(_rt2.get("ok"))
                         _rt_error = (
                             ""
@@ -4888,7 +5333,7 @@ async def _process_prompt(
                     except Exception:
                         _runtime_ok = True
                     try:
-                        _tc2 = await orchestrator_client.agent_build(project_id, project_slug)
+                        _tc2 = await _probe_build_status()
                         _typecheck_ok = bool(_tc2.get("ok", True))
                         _tc_error = (
                             ""
@@ -4941,9 +5386,7 @@ async def _process_prompt(
                                 files={path: "" for path in _new_paths},
                                 project_cell_handle=_project_cell_executor_handle,
                             )
-                        _rollback_build = await orchestrator_client.agent_build(
-                            project_id, project_slug
-                        )
+                        _rollback_build = await _probe_build_status()
                         _verification_rolled_back = bool(_rollback_build.get("ok"))
                     elif project_template == "max_miniapp":
                         # A brand-new MAX project has no product snapshot yet. Its
@@ -4981,9 +5424,7 @@ async def _process_prompt(
                                 files={path: "" for path in _new_paths},
                                 project_cell_handle=_project_cell_executor_handle,
                             )
-                        _rollback_build = await orchestrator_client.agent_build(
-                            project_id, project_slug
-                        )
+                        _rollback_build = await _probe_build_status()
                         _verification_rolled_back = bool(_rollback_build.get("ok"))
                         if _verification_rolled_back:
                             files = _safe_files
@@ -5170,8 +5611,7 @@ async def _process_prompt(
                     _rg_attempt = 0
                     _rg_max = max(0, int(get_settings().agent_gate_max_attempts))
                     while True:
-                        _st = await orchestrator_client.get_status(project_id)
-                        _base = _st.get("dev_url") if isinstance(_st, dict) else None
+                        _base = await _preview_base_url()
                         if not _base:
                             print("[PP] runtime_gate: no dev_url — skip", flush=True)
                             break
@@ -5279,7 +5719,7 @@ async def _process_prompt(
                         # check): only an explicit ok=True earns the merge.
                         _heal_green = False
                         try:
-                            _hc = await orchestrator_client.agent_build(project_id, project_slug)
+                            _hc = await _probe_build_status()
                             _heal_green = bool(_hc.get("ok", False))
                         except Exception as _hc_exc:
                             print(
@@ -5307,6 +5747,7 @@ async def _process_prompt(
             # instead of a silent thin app. Fully fail-soft: a SKIPPED verdict
             # (no preview / nothing provable) or any error → no heal, no card →
             # today's behaviour. A gate must never crash the build.
+            _coverage_verdict = None
             try:
                 # A2: also run on EDITS that touch a capability surface (api route
                 # handler / lib / page), so an edit that 4xx-breaks a working action
@@ -5337,12 +5778,19 @@ async def _process_prompt(
                     _cov_max = max(0, int(get_settings().coverage_max_attempts))
                     while True:
                         _known = _covg.api_routes_from_files(files)
+                        _cell_preview = (
+                            await _project_cell_executor_handle.create_preview_session()
+                            if _project_cell_executor_handle is not None
+                            else None
+                        )
                         _cv = await _covg.run_coverage_gate(
                             project_id,
                             _build_plan,
                             stack=_orch_name or project_template,
                             known_routes=_known or None,
+                            cell_preview=_cell_preview,
                         )
+                        _coverage_verdict = _cv
                         # A1: heal HARD gaps (route exists, wrong status) ALWAYS; a
                         # missing route (planner over-specified) is healed once then
                         # dropped to advisory — never a hard block / heal-storm on a
@@ -5427,7 +5875,7 @@ async def _process_prompt(
                         # gate). A non-green / unverifiable heal is discarded.
                         _cov_green = False
                         try:
-                            _cc = await orchestrator_client.agent_build(project_id, project_slug)
+                            _cc = await _probe_build_status()
                             _cov_green = bool(_cc.get("ok", False))
                         except Exception as _cc_exc:
                             print(
@@ -5445,17 +5893,32 @@ async def _process_prompt(
             except Exception as _cov_exc:  # a gate must never crash the build
                 print(f"[PP] coverage_gate skipped: {_cov_exc!r}", flush=True)
 
+            if (
+                _coverage_verdict is not None
+                and _coverage_verdict.hard_missing()
+                and get_settings().use_build_attestation
+            ):
+                _att_capture = _capture_hard_coverage_attestation(
+                    _att_capture,
+                    _coverage_verdict,
+                    enabled=True,
+                )
+
             # Universal release proof. The specialised realtime/isolation gates
             # above cover only two stacks; every container build (including MAX)
             # must still prove that its FINAL live tree typechecks, serves and has
             # safe transport headers before its exact commit can be deployed.
-            if files and get_settings().use_build_attestation:
+            if (
+                files
+                and get_settings().use_build_attestation
+            ):
                 from omnia_api.services.release_proof import run_release_proof
 
                 _release_verdict = await run_release_proof(
                     project_id,
                     project_slug,
                     require_max_data=project_template == "max_miniapp",
+                    project_cell_handle=_project_cell_executor_handle,
                 )
                 if _att_capture is None:
                     _att_capture = []
@@ -5464,7 +5927,6 @@ async def _process_prompt(
                     f"[ATTEST] universal release proof passed={_release_verdict.passed}",
                     flush=True,
                 )
-
             if files:
                 new_sha = await asyncio.to_thread(
                     repo_svc.commit_files,
@@ -7832,17 +8294,27 @@ async def _process_prompt(
                 # riskier compile probe (extra orchestrator call) is flag-gated.
                 probe_compile = get_settings().use_error_cards
                 try:
-                    hot = await orchestrator_client.hot_reload(
-                        project_id=project_id,
-                        slug=project.slug,
-                        files=files,
-                    )
-                    print(
-                        f"[PP] hot_reload OK written={hot.get('written')} "
-                        f"drizzle={hot.get('drizzle_exit_code', 'n/a')}",
-                        flush=True,
-                    )
-                    drizzle_exit = hot.get("drizzle_exit_code")
+                    drizzle_exit = None
+                    if _project_cell_executor_handle is not None:
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project.slug,
+                            files=files,
+                            project_cell_handle=_project_cell_executor_handle,
+                        )
+                        print("[PP] project_cell preview sync OK", flush=True)
+                    else:
+                        hot = await orchestrator_client.hot_reload(
+                            project_id=project_id,
+                            slug=project.slug,
+                            files=files,
+                        )
+                        print(
+                            f"[PP] hot_reload OK written={hot.get('written')} "
+                            f"drizzle={hot.get('drizzle_exit_code', 'n/a')}",
+                            flush=True,
+                        )
+                        drizzle_exit = hot.get("drizzle_exit_code")
                     if drizzle_exit and drizzle_exit not in ("0", "n/a"):
                         # Drizzle push failed — surface it, don't fail the prompt.
                         await app_errors.publish(
@@ -7879,6 +8351,7 @@ async def _process_prompt(
                                 files,
                                 passes=_sr_passes,
                                 on_notice=_sr_notice,
+                                project_cell_handle=_project_cell_executor_handle,
                             )
                         except Exception as _sr_exc:
                             print(f"[PP] self_repair loop failed: {_sr_exc!r}", flush=True)
@@ -7958,7 +8431,11 @@ async def _process_prompt(
                         # Probe for a compile error in the background so the card
                         # arrives without holding up llm.done.
                         _spawn_compile_probe(
-                            factory, project_id, assistant_message_id, project.slug
+                            factory,
+                            project_id,
+                            assistant_message_id,
+                            project.slug,
+                            project_cell_handle=_project_cell_executor_handle,
                         )
                     # V1.6 16/5 — assert the awwwards COMPOSITION floor (taste +
                     # hierarchy) on the LIVE container. Entity apps skip
@@ -7985,11 +8462,22 @@ async def _process_prompt(
                         project_id,
                         assistant_message_id,
                         category="runtime",
-                        title="Синхронизация с контейнером не удалась",
+                        title=(
+                            "Синхронизация с Project Cell не удалась"
+                            if _project_cell_executor_handle is not None
+                            else "Синхронизация с контейнером не удалась"
+                        ),
                         detail=(
-                            f"Снапшот сохранён, но файлы не доехали до dev-контейнера: "
-                            f"{hot_exc}. Нажми «Запустить» в верхней панели, чтобы поднять "
-                            f"среду выполнения."
+                            (
+                                "Снапшот сохранён, но preview не синхронизировался с "
+                                f"Project Cell draft runtime: {hot_exc}."
+                            )
+                            if _project_cell_executor_handle is not None
+                            else (
+                                "Снапшот сохранён, но файлы не доехали до dev-контейнера: "
+                                f"{hot_exc}. Нажми «Запустить» в верхней панели, чтобы поднять "
+                                "среду выполнения."
+                            )
                         ),
                         file=None,
                         fixable=False,

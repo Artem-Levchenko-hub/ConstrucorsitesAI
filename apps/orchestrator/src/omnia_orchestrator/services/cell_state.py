@@ -417,6 +417,59 @@ class CellStateStore:
         self._persist_state(next_state)
         return next_state
 
+    def mark_failed(
+        self,
+        workspace_id: UUID,
+        mutation: LifecycleMutation,
+        *,
+        bundle_state: str,
+        detail: str | None = None,
+        provider_ref: str | None = None,
+        phase: str = "failed",
+    ) -> CellWorkspaceState:
+        workspace = self._require_state(workspace_id)
+        operations = []
+        failed_operation: CellOperationRecord | None = None
+        for item in workspace.operations:
+            if item.operation_id == mutation.operation_id:
+                failed_operation = CellOperationRecord(
+                    operation_id=item.operation_id,
+                    kind=item.kind,
+                    status="failed",
+                    phase=phase,
+                    request_digest=item.request_digest,
+                    fencing_epoch=item.fencing_epoch,
+                    generation_run_id=item.generation_run_id,
+                    checkpoint_ref=item.checkpoint_ref,
+                    provider_ref=provider_ref or item.provider_ref,
+                    bundle_state=bundle_state,
+                    detail=detail if detail is not None else item.detail,
+                    expected_resources=item.expected_resources,
+                    observed_resources=item.observed_resources,
+                )
+                operations.append(failed_operation)
+            else:
+                operations.append(item)
+        if failed_operation is None:
+            raise RuntimeError("workspace operation missing for failed mark")
+        next_state = CellWorkspaceState(
+            workspace_id=workspace.workspace_id,
+            project_id=workspace.project_id,
+            owner_id=workspace.owner_id,
+            profile_version=workspace.profile_version,
+            phase=phase,
+            bundle_state=bundle_state,
+            fencing_epoch=mutation.fencing_epoch,
+            active_generation_run_id=workspace.active_generation_run_id,
+            active_generation_fencing_epoch=workspace.active_generation_fencing_epoch,
+            last_operation_id=mutation.operation_id,
+            provider_ref=provider_ref or workspace.provider_ref,
+            resource_names=workspace.resource_names,
+            operations=tuple(operations),
+        )
+        self._persist_state(next_state)
+        return next_state
+
     def set_bundle_state(
         self,
         workspace_id: UUID,

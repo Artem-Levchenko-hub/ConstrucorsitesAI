@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header
@@ -32,8 +34,11 @@ from omnia_orchestrator.core.workspace_provider import (
 )
 from omnia_orchestrator.routers.runtime import (
     _EXEC_DENY,
+    _MAX_PREVIEW_BOOTSTRAP_PATH,
+    _MAX_PREVIEW_BOOTSTRAP_TTL,
     _collect_workspace_text_files,
     _command_exposes_environment,
+    _max_preview_bootstrap_signature,
     _project_workspace_dir,
     _redact_exec_output,
     _safe_app_path,
@@ -49,9 +54,18 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceAgentWriteResponse,
     WorkspaceCapabilityResponse,
     WorkspaceControlRequest,
+    WorkspaceDraftApplyRequest,
+    WorkspaceDraftApplyResponse,
+    WorkspaceDraftPreviewSessionRequest,
+    WorkspaceDraftPreviewSessionResponse,
     WorkspaceEnsureRequest,
     WorkspaceObserveRequest,
     WorkspaceResourceResponse,
+)
+from omnia_orchestrator.services import nginx_writer
+from omnia_orchestrator.services.cell_draft_support import (
+    signed_preview_session_url,
+    trusted_template_source,
 )
 from omnia_orchestrator.services.cell_state import CellWorkspaceState
 from omnia_orchestrator.services.docker_cell_resources import DockerCellResourceManager
@@ -63,7 +77,9 @@ _MAX_AGENT_FILES = 5_000
 _MAX_AGENT_FILE_BYTES = 2 * 1024 * 1024
 _MAX_AGENT_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_AGENT_EXEC_OUTPUT = 24_000
+_MAX_DRAFT_LOG_TAIL = 8_000
 _PROJECT_CELL_EXEC_IMAGE = get_stack("max-miniapp-nextjs").image_tag
+_PROJECT_CELL_TEMPLATE_DIR = get_stack("max-miniapp-nextjs").template_dir
 
 
 @router.get(
@@ -174,7 +190,9 @@ async def control_workspace(
             message=str(exc),
             status_code=500,
         ) from exc
-    return _resource_response(status)
+    if request.kind == "destroy":
+        await nginx_writer.unpublish(_draft_preview_host(workspace_id))
+    return await _resource_response(status, provider=provider)
 
 
 @router.post(
@@ -210,7 +228,7 @@ async def observe_workspace_resources(
             message=str(exc),
             status_code=500,
         ) from exc
-    return _resource_response(status)
+    return await _resource_response(status, provider=provider)
 
 
 @router.get(
@@ -231,7 +249,7 @@ async def get_workspace_resources(
             message=str(exc),
             status_code=503,
         ) from exc
-    return _resource_response(status)
+    return await _resource_response(status, provider=provider)
 
 
 @router.post(
@@ -253,25 +271,11 @@ async def bootstrap_workspace_agent(
             generation_run_id=request.generation_run_id,
             fencing_epoch=request.fencing_epoch,
         )
-        files = await _read_agent_workspace_files(manager, volume_name)
-        seeded_from_project = False
-        if not files:
-            project_id = state.project_id
-            if project_id is None:
-                raise OrchestratorError(
-                    code="not_found",
-                    message="workspace project identity is missing",
-                    status_code=404,
-                )
-            project_root = _project_workspace_dir(str(project_id))
-            files, _dropped = await _collect_project_workspace_files(project_root)
-            await manager.docker.clear_volume(volume_name)
-            if files:
-                await manager.docker.write_volume_files(
-                    volume_name,
-                    {path: content.encode("utf-8") for path, content in files.items()},
-                )
-            seeded_from_project = True
+        files, seeded_from_project = await _ensure_seed_workspace_files(
+            manager,
+            state,
+            volume_name,
+        )
         workspace_revision = _workspace_revision(files)
     return WorkspaceAgentBootstrapResponse(
         files=files,
@@ -390,22 +394,33 @@ async def exec_workspace_agent_command(
         exec_spec = _workspace_exec_spec(state)
         names = exec_spec.resource_names
         credentials = manager.credential_store.load_or_create(workspace_id)
+        had_draft_runtime = await manager.inspect_draft_runtime(workspace_id) is not None
+        restore_failure: CellResourceError | None = None
         try:
-            result = await manager.docker.run_workspace_command(
-                workspace_volume_name=volume_name,
-                agent_home_volume_name=names.agent_home_volume,
-                labels=identity_labels(exec_spec.spec, "agent-exec"),
-                image=_PROJECT_CELL_EXEC_IMAGE,
-                command=low,
-                internal_network_name=names.internal_network,
-                egress_network_name=names.egress_network,
-                environment=_workspace_agent_exec_env(
-                    postgres_container=names.postgres_container,
-                    redis_container=names.redis_container,
-                    postgres_password=credentials.postgres_password,
-                ),
-                timeout_seconds=request.timeout_seconds,
-            )
+            if had_draft_runtime:
+                await manager.docker.remove_container(names.draft_container_name())
+            try:
+                result = await manager.docker.run_workspace_command(
+                    workspace_volume_name=volume_name,
+                    agent_home_volume_name=names.agent_home_volume,
+                    labels=identity_labels(exec_spec.spec, "agent-exec"),
+                    image=_PROJECT_CELL_EXEC_IMAGE,
+                    command=low,
+                    internal_network_name=names.internal_network,
+                    egress_network_name=names.egress_network,
+                    environment=_workspace_agent_exec_env(
+                        postgres_container=names.postgres_container,
+                        redis_container=names.redis_container,
+                        postgres_password=credentials.postgres_password,
+                    ),
+                    timeout_seconds=request.timeout_seconds,
+                )
+            finally:
+                if had_draft_runtime:
+                    try:
+                        await manager.ensure_draft_runtime(workspace_id)
+                    except CellResourceError as exc:
+                        restore_failure = exc
         except CellResourceError as exc:
             raise OrchestratorError(
                 code="container_failure",
@@ -415,6 +430,12 @@ async def exec_workspace_agent_command(
         updated_files = await _read_agent_workspace_files(manager, volume_name)
     detail = _redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT]
     ok = result.exit_code == 0 and result.timed_out is False
+    if restore_failure is not None:
+        ok = False
+        restart_detail = _bounded_redacted_text(str(restore_failure))
+        detail = (
+            f"{detail}\n\n" if detail else ""
+        ) + "Command effects were saved, but the draft runtime restart failed: " + restart_detail
     return WorkspaceAgentExecResponse(
         ok=ok,
         exit_code=result.exit_code,
@@ -424,7 +445,192 @@ async def exec_workspace_agent_command(
     )
 
 
-def _resource_response(status: WorkspaceResourceStatus) -> WorkspaceResourceResponse:
+@router.post(
+    "/workspaces/{workspace_id}/draft/apply",
+    response_model=WorkspaceDraftApplyResponse,
+)
+async def apply_workspace_draft(
+    workspace_id: UUID,
+    request: WorkspaceDraftApplyRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceDraftApplyResponse:
+    verify_internal_token(x_internal_token)
+    writes = _normalize_agent_write_files(request.files)
+    deletes = _normalize_agent_delete_paths(request.deletes, writes)
+    _require_agent_patch_budget(writes, deletes)
+    provider = build_workspace_provider(get_settings())
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
+        _require_generation_lease_match(
+            state,
+            generation_run_id=request.generation_run_id,
+            fencing_epoch=request.fencing_epoch,
+        )
+        current_files, _seeded_from_project = await _ensure_seed_workspace_files(
+            manager,
+            state,
+            volume_name,
+        )
+        current_revision = _workspace_revision(current_files)
+        desired_files = _apply_agent_workspace_patch(current_files, writes, deletes)
+        _require_agent_workspace_budget(desired_files)
+        desired_revision = _workspace_revision(desired_files)
+        if (
+            current_revision != request.expected_revision
+            and desired_revision != current_revision
+        ):
+            _raise_agent_stale_conflict(
+                expected_revision=request.expected_revision,
+                current_revision=current_revision,
+            )
+        if current_revision == request.expected_revision:
+            deletes_to_apply = tuple(
+                path for path in deletes if path in current_files and path not in writes
+            )
+            writes_to_apply = {
+                path: content.encode("utf-8")
+                for path, content in writes.items()
+                if current_files.get(path) != content
+            }
+            if deletes_to_apply:
+                await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
+            if writes_to_apply:
+                await manager.docker.write_volume_files(volume_name, writes_to_apply)
+        exec_spec = _workspace_exec_spec(state)
+        names = exec_spec.resource_names
+        credentials = manager.credential_store.load_or_create(workspace_id)
+        await manager.docker.remove_container(names.draft_container_name())
+        try:
+            migration = await manager.docker.run_workspace_command(
+                workspace_volume_name=volume_name,
+                agent_home_volume_name=names.agent_home_volume,
+                labels=identity_labels(exec_spec.spec, "agent-exec"),
+                image=_PROJECT_CELL_EXEC_IMAGE,
+                command="node scripts/apply-migrations.mjs",
+                internal_network_name=names.internal_network,
+                egress_network_name=names.egress_network,
+                environment=_workspace_agent_exec_env(
+                    postgres_container=names.postgres_container,
+                    redis_container=names.redis_container,
+                    postgres_password=credentials.postgres_password,
+                ),
+                timeout_seconds=60,
+            )
+            if migration.exit_code == 0 and migration.timed_out is False:
+                await manager.ensure_draft_runtime(workspace_id)
+        except CellResourceError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=str(exc),
+                status_code=500,
+            ) from exc
+        migration_ok = migration.exit_code == 0 and migration.timed_out is False
+        preview_url = (
+            await _publish_draft_preview(manager, workspace_id)
+            if migration_ok
+            else _draft_preview_url(workspace_id)
+        )
+        updated_files = await _read_agent_workspace_files(manager, volume_name)
+        runtime_log_tail = await _draft_runtime_log_tail(manager, workspace_id)
+    return WorkspaceDraftApplyResponse(
+        state="draft_running" if migration_ok else "draft_failed",
+        workspace_revision=_workspace_revision(updated_files),
+        preview_url=preview_url,
+        migration_exit_code=migration.exit_code,
+        migration_stderr_tail=_bounded_redacted_text(migration.output),
+        runtime_log_tail=runtime_log_tail,
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/draft/preview-session",
+    response_model=WorkspaceDraftPreviewSessionResponse,
+)
+async def create_workspace_draft_preview_session(
+    workspace_id: UUID,
+    request: WorkspaceDraftPreviewSessionRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceDraftPreviewSessionResponse:
+    verify_internal_token(x_internal_token)
+    provider = build_workspace_provider(get_settings())
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
+        _require_generation_lease_match(
+            state,
+            generation_run_id=request.generation_run_id,
+            fencing_epoch=request.fencing_epoch,
+        )
+        exec_spec = _workspace_exec_spec(state)
+        draft = await manager.inspect_draft_runtime(workspace_id)
+        if draft is None or draft.state != "running":
+            raise OrchestratorError(
+                code="conflict",
+                message="draft runtime is not running",
+                status_code=409,
+            )
+        try:
+            manager._verify_draft_container_record(draft, state)
+        except CellIdentityConflict as exc:
+            raise OrchestratorError(
+                code="conflict",
+                message=str(exc),
+                status_code=409,
+            ) from exc
+        preview_url = _draft_preview_url(workspace_id)
+        if not preview_url.startswith("https://"):
+            raise OrchestratorError(
+                code="container_failure",
+                message="draft preview requires an HTTPS development origin",
+                status_code=503,
+            )
+        now = datetime.now(UTC)
+        expires_at = now + _MAX_PREVIEW_BOOTSTRAP_TTL
+        expires = int(expires_at.timestamp())
+        signature = _max_preview_bootstrap_signature(
+            manager._draft_auth_secret(
+                manager.credential_store.load_or_create(workspace_id).postgres_password
+            ),
+            str(exec_spec.spec.project_id),
+            expires,
+        )
+        bootstrap_url = signed_preview_session_url(
+            preview_url,
+            _MAX_PREVIEW_BOOTSTRAP_PATH,
+            expires=expires,
+            signature=signature,
+        )
+    return WorkspaceDraftPreviewSessionResponse(
+        workspace_id=workspace_id,
+        state="draft_running",
+        preview_url=preview_url,
+        bootstrap_url=bootstrap_url,
+        expires_at=expires_at.isoformat().replace("+00:00", "Z"),
+    )
+
+
+async def _resource_response(
+    status: WorkspaceResourceStatus,
+    *,
+    provider: object | None = None,
+) -> WorkspaceResourceResponse:
+    has_draft_runtime = False
+    draft_state: Literal["running", "stopped", "failed"] | None = None
+    preview_url: str | None = None
+    manager = _maybe_docker_resource_manager(provider)
+    if manager is not None:
+        state = manager.state_store.load(status.workspace_id)
+        if state is not None and state.resource_names is not None:
+            draft = await manager.docker.get_container(state.resource_names.draft_container_name())
+            if draft is not None:
+                has_draft_runtime = True
+                preview_url = _draft_preview_url(status.workspace_id)
+                try:
+                    manager._verify_draft_container_record(draft, state)
+                    draft_state = _draft_state_name(draft.state)
+                except CellIdentityConflict:
+                    draft_state = "failed"
     return WorkspaceResourceResponse(
         workspace_id=status.workspace_id,
         state=status.state,
@@ -435,7 +641,116 @@ def _resource_response(status: WorkspaceResourceStatus) -> WorkspaceResourceResp
         has_agent_home=status.has_agent_home,
         has_postgres=status.has_postgres,
         has_redis=status.has_redis,
+        has_draft_runtime=has_draft_runtime,
+        draft_state=draft_state,
+        preview_url=preview_url,
     )
+
+
+def _maybe_docker_resource_manager(provider: object | None) -> DockerCellResourceManager | None:
+    if (
+        isinstance(provider, DockerOwnerCanaryProvider)
+        and provider.resource_manager is not None
+    ):
+        return provider.resource_manager
+    return None
+
+
+def _draft_preview_host(workspace_id: UUID) -> str:
+    return nginx_writer.dev_host(_draft_preview_slug(workspace_id))
+
+
+def _draft_preview_slug(workspace_id: UUID) -> str:
+    return CellResourceNames.for_workspace(workspace_id).draft_preview_slug()
+
+
+def _draft_preview_url(workspace_id: UUID) -> str:
+    return nginx_writer.dev_url(_draft_preview_slug(workspace_id))
+
+
+def _draft_state_name(raw_state: str) -> Literal["running", "stopped", "failed"]:
+    if raw_state == "running":
+        return "running"
+    if raw_state in {"created", "paused", "exited"}:
+        return "stopped"
+    return "failed"
+
+
+def _bounded_redacted_text(text: str) -> str:
+    return _redact_exec_output(text)[:_MAX_DRAFT_LOG_TAIL]
+
+
+async def _draft_runtime_log_tail(
+    manager: DockerCellResourceManager,
+    workspace_id: UUID,
+) -> str:
+    draft = await manager.inspect_draft_runtime(workspace_id)
+    if draft is None:
+        return ""
+    return _bounded_redacted_text(
+        await manager.docker.read_container_logs(draft.name, tail=200)
+    )
+
+
+async def _publish_draft_preview(
+    manager: DockerCellResourceManager,
+    workspace_id: UUID,
+) -> str:
+    port = await manager.acquire_draft_preview_port(workspace_id)
+    host = _draft_preview_host(workspace_id)
+    await nginx_writer.publish_http(host, port)
+    if await nginx_writer.ensure_tls(host, port) is False:
+        await nginx_writer.unpublish(host)
+        raise OrchestratorError(
+            code="container_failure",
+            message="draft preview TLS provisioning failed",
+            status_code=503,
+        )
+    preview_url = _draft_preview_url(workspace_id)
+    if not preview_url.startswith("https://"):
+        raise OrchestratorError(
+            code="container_failure",
+            message="draft preview requires an HTTPS development origin",
+            status_code=503,
+        )
+    return preview_url
+
+
+async def _ensure_seed_workspace_files(
+    manager: DockerCellResourceManager,
+    state: CellWorkspaceState,
+    volume_name: str,
+) -> tuple[dict[str, str], bool]:
+    files = await _read_agent_workspace_files(manager, volume_name)
+    if files:
+        return files, False
+    if await manager.docker.read_volume_files(volume_name):
+        raise OrchestratorError(
+            code="validation_failed",
+            message="workspace contains unsupported binary or oversized files; refusing to reseed",
+            status_code=409,
+        )
+    seeded_from_project = False
+    seeded_files: dict[str, str] = {}
+    if state.project_id is not None:
+        project_root = _project_workspace_dir(str(state.project_id))
+        if await asyncio.to_thread(project_root.is_dir):
+            seeded_files, _dropped = await _collect_project_workspace_files(project_root)
+            seeded_from_project = bool(seeded_files)
+    if not seeded_files:
+        template_root = trusted_template_source(_PROJECT_CELL_TEMPLATE_DIR)
+        seeded_files, _dropped = await asyncio.to_thread(
+            _collect_workspace_text_files,
+            template_root,
+        )
+        seeded_from_project = False
+    await manager.docker.clear_volume(volume_name)
+    if seeded_files:
+        await manager.docker.write_volume_files(
+            volume_name,
+            {path: content.encode("utf-8") for path, content in seeded_files.items()},
+        )
+    return seeded_files, seeded_from_project
 
 
 def _raise_pre_effect_conflict(message: str, mutation: LifecycleMutation) -> None:
@@ -493,6 +808,10 @@ def _workspace_agent_exec_env(
         "HOME": "/root",
         "CI": "1",
         "NODE_ENV": "development",
+        # The persistent agent home masks /root's image cache. MAX's pinned
+        # package manager is bundled at this path and needs no public egress.
+        "COREPACK_HOME": "/home/node/.cache/node/corepack",
+        "COREPACK_ENABLE_NETWORK": "0",
         "DATABASE_URL": database_url,
         "PGHOST": postgres_container,
         "PGPORT": "5432",

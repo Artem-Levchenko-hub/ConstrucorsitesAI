@@ -32,6 +32,7 @@ _VOLUME_ROOT = "/volume"
 _POSTGRES_ROOT = "/var/lib/postgresql"
 _POSTGRES_DATA = "/var/lib/postgresql/PGDATA"
 _POSTGRES_PASSWORD_FILE = "/run/secrets/postgres-password.txt"
+_POSTGRES_CELL_HBA_RULE = "host all all samenet scram-sha-256"
 _REDIS_DATA = "/data"
 _WORKSPACE_SOURCE = "/workspace-src"
 _WORKSPACE_RUN_ROOT = "/work"
@@ -165,11 +166,15 @@ class DockerPyCellBackend:
     helper_image: str
     client_factory: Callable[[str], Any] | None = None
     archive_limit_bytes: int = _ARCHIVE_LIMIT_BYTES
+    exec_memory_limit_bytes: int = 1024 * 1024 * 1024
+    exec_cpu_cores: float = 0.5
     base_url: str = field(init=False)
     api: Any = field(init=False, repr=False)
     _client: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.exec_memory_limit_bytes <= 0 or self.exec_cpu_cores < 0.01:
+            raise ValueError("project cell executor requires a positive reserved resource budget")
         self.base_url = self.docker_host
         self.api = SimpleNamespace(base_url=self.docker_host)
 
@@ -415,6 +420,17 @@ class DockerPyCellBackend:
             return None
         return self._container_record(container)
 
+    async def read_container_logs(self, name: str, *, tail: int = 200) -> str:
+        container = await self._get_container_obj(name)
+        if container is None:
+            return ""
+        logs = await asyncio.to_thread(container.logs, tail=tail)
+        if isinstance(logs, (bytes, bytearray)):
+            return bytes(logs).decode("utf-8", "ignore")
+        if logs is None:
+            return ""
+        return str(logs)
+
     async def create_container(self, spec: DockerContainerSpec) -> DockerContainerRecord:
         self._validate_container_spec(spec)
         labels = dict(spec.labels)
@@ -435,7 +451,7 @@ class DockerPyCellBackend:
             "read_only": spec.read_only,
             "privileged": spec.privileged,
             "security_opt": list(spec.security_opt),
-            "ports": {},
+            "ports": self._container_ports(spec),
             "environment": environment,
             "volumes": volumes,
             "tmpfs": tmpfs,
@@ -677,7 +693,10 @@ class DockerPyCellBackend:
             },
             tmpfs=dict(_DEFAULT_TMPFS),
             pids_limit=_HELPER_PIDS_LIMIT,
-            mem_limit=_HELPER_MEMORY_LIMIT_BYTES,
+            mem_limit=self.exec_memory_limit_bytes,
+            memswap_limit=self.exec_memory_limit_bytes,
+            cpu_period=_CPU_PERIOD,
+            cpu_quota=int(self.exec_cpu_cores * _CPU_PERIOD),
             network=internal_network_name,
         )
         timed_out = False
@@ -817,7 +836,7 @@ class DockerPyCellBackend:
             read_only=bool(host_config.get("ReadonlyRootfs", False)),
             privileged=bool(host_config.get("Privileged", False)),
             security_opt=[str(item) for item in host_config.get("SecurityOpt") or []],
-            ports={str(key): str(value) for key, value in port_bindings.items()},
+            ports=self._normalize_port_bindings(port_bindings),
             env=self._env_dict(env_items),
             volumes=tuple(
                 str(item.get("Name"))
@@ -858,8 +877,17 @@ class DockerPyCellBackend:
             raise CellResourceError("container name is required")
         if spec.privileged:
             raise CellResourceError("privileged containers are forbidden")
-        if spec.ports:
+        if spec.ports and kind != "draft-runtime":
             raise CellResourceError("host port publication is forbidden")
+        if kind == "draft-runtime":
+            if set(spec.ports) != {"3000/tcp"}:
+                raise CellResourceError("draft runtime requires only 3000/tcp loopback publish")
+            binding = spec.ports["3000/tcp"]
+            if (
+                binding.startswith("127.0.0.1:") is False
+                or binding.removeprefix("127.0.0.1:").isdigit() is False
+            ):
+                raise CellResourceError("draft runtime requires 127.0.0.1 host binding")
         if "no-new-privileges:true" not in spec.security_opt:
             raise CellResourceError("no-new-privileges is required")
         if spec.helper is False and spec.read_only is False:
@@ -929,11 +957,87 @@ class DockerPyCellBackend:
                         f"--pwfile={shlex.quote(_POSTGRES_PASSWORD_FILE)}",
                         f"-D {shlex.quote(_POSTGRES_DATA)}",
                         "; fi",
+                        "&&",
+                        "if ! grep -Fqx",
+                        shlex.quote(_POSTGRES_CELL_HBA_RULE),
+                        shlex.quote(_POSTGRES_DATA + "/pg_hba.conf"),
+                        "; then printf '%s\\n'",
+                        shlex.quote(_POSTGRES_CELL_HBA_RULE),
+                        ">>",
+                        shlex.quote(_POSTGRES_DATA + "/pg_hba.conf"),
+                        "; fi",
                     ]
                 ),
             ]
         if kind == "postgres-maintenance":
             return ["postgres", "-c", "listen_addresses="]
+        if kind == "draft-runtime":
+            return [
+                "sh",
+                "-eu",
+                "-c",
+                "\n".join(
+                    [
+                        'env_file="${OMNIA_DRAFT_ENV_FILE:-/root/.omnia/draft-env.sh}"',
+                        '[ -f "$env_file" ]',
+                        '. "$env_file"',
+                        "sync_lockfile() {",
+                        f"  mkdir -p {_WORKSPACE_SOURCE}",
+                        (
+                            f"  if [ -f {_WORKSPACE_RUN_ROOT}/pnpm-lock.yaml ]; then "
+                            f"cp {_WORKSPACE_RUN_ROOT}/pnpm-lock.yaml "
+                            f"{_WORKSPACE_SOURCE}/pnpm-lock.yaml; fi"
+                        ),
+                        "}",
+                        "term_handler() {",
+                        "  set +e",
+                        "  sync_lockfile",
+                        (
+                            '  if [ -n "${draft_pid:-}" ]; then '
+                            'kill -TERM "$draft_pid" 2>/dev/null || true; fi'
+                        ),
+                        (
+                            '  if [ -n "${draft_pid:-}" ]; then '
+                            'wait "$draft_pid" 2>/dev/null || true; fi'
+                        ),
+                        (
+                            '  if [ -n "${sync_pid:-}" ]; then '
+                            'kill -TERM "$sync_pid" 2>/dev/null || true; fi'
+                        ),
+                        (
+                            '  if [ -n "${sync_pid:-}" ]; then '
+                            'wait "$sync_pid" 2>/dev/null || true; fi'
+                        ),
+                        "  exit 0",
+                        "}",
+                        "trap 'term_handler' TERM INT",
+                        f"mkdir -p {_WORKSPACE_RUN_ROOT} {_WORKSPACE_SOURCE}",
+                        f"cp -a {_WORKSPACE_SOURCE}/. {_WORKSPACE_RUN_ROOT}/ 2>/dev/null || true",
+                        (
+                            f"if [ ! -e {_WORKSPACE_RUN_ROOT}/node_modules ] "
+                            f"&& [ -e /app/node_modules ]; then "
+                            f"ln -s /app/node_modules {_WORKSPACE_RUN_ROOT}/node_modules; fi"
+                        ),
+                        "lock_sync_loop() {",
+                        "  while :; do",
+                        "    sleep 2",
+                        "    sync_lockfile",
+                        "  done",
+                        "}",
+                        "lock_sync_loop &",
+                        "sync_pid=$!",
+                        f"cd {_WORKSPACE_RUN_ROOT}",
+                        "pnpm dev &",
+                        "draft_pid=$!",
+                        'wait "$draft_pid"',
+                        "status=$?",
+                        'kill -TERM "$sync_pid" 2>/dev/null || true',
+                        'wait "$sync_pid" 2>/dev/null || true',
+                        "sync_lockfile",
+                        'exit "$status"',
+                    ]
+                ),
+            ]
         return None
 
     def _container_volumes(self, spec: DockerContainerSpec) -> dict[str, dict[str, str]]:
@@ -959,6 +1063,13 @@ class DockerPyCellBackend:
             if len(volume_names) != 1:
                 raise CellResourceError("redis requires exactly one retained volume")
             return {volume_names[0]: {"bind": _REDIS_DATA, "mode": "rw"}}
+        if kind == "draft-runtime":
+            if len(volume_names) != 2:
+                raise CellResourceError("draft runtime requires workspace and agent-home volumes")
+            return {
+                volume_names[0]: {"bind": _WORKSPACE_SOURCE, "mode": "rw"},
+                volume_names[1]: {"bind": _AGENT_HOME_ROOT, "mode": "rw"},
+            }
         if volume_names:
             raise CellResourceError(f"unexpected volume attachment for {kind}")
         return {}
@@ -972,7 +1083,41 @@ class DockerPyCellBackend:
     def _container_tmpfs(self, spec: DockerContainerSpec) -> dict[str, str]:
         if spec.labels["omnia.resource_kind"].startswith("postgres"):
             return dict(_POSTGRES_TMPFS)
+        if spec.labels["omnia.resource_kind"] == "draft-runtime":
+            tmpfs = dict(_DEFAULT_TMPFS)
+            tmpfs[_WORKSPACE_RUN_ROOT] = "rw,nosuid,nodev,size=256m"
+            return tmpfs
         return dict(_HELPER_TMPFS if spec.helper else _DEFAULT_TMPFS)
+
+    def _container_ports(self, spec: DockerContainerSpec) -> dict[str, object]:
+        kind = spec.labels["omnia.resource_kind"]
+        if kind != "draft-runtime":
+            return {}
+        binding = spec.ports["3000/tcp"]
+        host_ip, host_port = binding.rsplit(":", 1)
+        return {"3000/tcp": (host_ip, int(host_port))}
+
+    def _normalize_port_bindings(self, port_bindings: dict[str, Any]) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, raw_value in port_bindings.items():
+            normalized[str(key)] = self._normalize_port_binding_value(raw_value)
+        return normalized
+
+    def _normalize_port_binding_value(self, value: Any) -> str:
+        if isinstance(value, tuple) and len(value) == 2:
+            return f"{value[0]}:{value[1]}"
+        if isinstance(value, list) and value:
+            first = value[0]
+            if isinstance(first, dict):
+                host_ip = str(first.get("HostIp") or "")
+                host_port = str(first.get("HostPort") or "")
+                return f"{host_ip}:{host_port}".strip(":")
+            return self._normalize_port_binding_value(first)
+        if isinstance(value, dict):
+            host_ip = str(value.get("HostIp") or "")
+            host_port = str(value.get("HostPort") or "")
+            return f"{host_ip}:{host_port}".strip(":")
+        return str(value)
 
     def _helper_labels(self, labels: dict[str, str], resource_kind: str) -> dict[str, str]:
         merged = dict(labels)

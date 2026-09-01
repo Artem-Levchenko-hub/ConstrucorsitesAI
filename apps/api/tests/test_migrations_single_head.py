@@ -150,12 +150,43 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_project_cell_fencing_is_the_only_head() -> None:
-    # Mutation caught: placing 0053 on the wrong parent or introducing another branch.
+def test_project_cell_candidates_are_the_only_head() -> None:
+    # Mutation caught: placing 0054 on the wrong parent or introducing another branch.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0053_project_cell_operation_fencing"]
+    assert heads == ["0054_project_cell_candidates"]
+    assert chain["0054_project_cell_candidates"] == "0053_project_cell_operation_fencing"
+
+
+def test_project_cell_candidates_migration_upgrade_and_rollback(
+    project_cell_migration_database: ProjectCellMigrationDatabase,
+) -> None:
+    database = project_cell_migration_database
+    database.upgrade("head")
+    assert database.fetchval("SELECT version_num FROM alembic_version") == (
+        "0054_project_cell_candidates"
+    )
+    checks = [str(row["definition"]) for row in database.fetch("""
+        SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
+        WHERE conrelid = 'project_cell_candidates'::regclass AND contype = 'c'
+    """)]
+    assert len(checks) == 8
+    for prefix in ("database-backup", "build", "verification"):
+        assert any(f"{prefix}/sha256/[0-9a-f]{{64}}" in check for check in checks)
+    assert database.fetchval("""
+        SELECT count(*) FROM pg_constraint
+        WHERE conrelid = 'project_cell_candidates'::regclass AND contype = 'u'
+    """) == 0  # Retrying the same source after rejection/cancellation is allowed.
+    assert database.fetchval("""
+        SELECT count(*) FROM pg_indexes
+        WHERE tablename = 'project_cell_candidates'
+          AND indexname = 'uq_project_cell_candidates_one_accepted'
+          AND indexdef LIKE '%UNIQUE%WHERE%accepted%'
+    """) == 1
+    command.downgrade(database.config, "0053_project_cell_operation_fencing")
+    assert database.fetchval("SELECT to_regclass('project_cell_candidates')") is None
+    assert database.fetchval("SELECT to_regclass('project_cell_workspaces')") is not None
 
 
 def test_project_cell_migrated_schema_matches_durable_contract(

@@ -67,12 +67,13 @@ class MsvcrtFileLockBackend:
 
     def try_acquire(self, fd: int) -> FileLockOwnerToken | None:
         try:
-            import msvcrt
+            import msvcrt as msvcrt_module
         except ImportError as exc:
             raise WorkspaceLockUnavailable("workspace_lock_unavailable") from exc
+        msvcrt_any = cast(Any, msvcrt_module)
         os.lseek(fd, 0, os.SEEK_SET)
         try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            msvcrt_any.locking(fd, msvcrt_any.LK_NBLCK, 1)
         except OSError as exc:
             if exc.errno in {errno.EACCES, errno.EDEADLOCK} or getattr(exc, "winerror", None) in {
                 33,
@@ -86,10 +87,11 @@ class MsvcrtFileLockBackend:
     def release(self, owner: FileLockOwnerToken) -> None:
         if owner.backend != "msvcrt" or owner.fd not in self._owners:
             raise ValueError("foreign file lock owner token")
-        import msvcrt
+        import msvcrt as msvcrt_module
 
+        msvcrt_any = cast(Any, msvcrt_module)
         os.lseek(owner.fd, 0, os.SEEK_SET)
-        msvcrt.locking(owner.fd, msvcrt.LK_UNLCK, 1)
+        msvcrt_any.locking(owner.fd, msvcrt_any.LK_UNLCK, 1)
         self._owners.remove(owner.fd)
 
 

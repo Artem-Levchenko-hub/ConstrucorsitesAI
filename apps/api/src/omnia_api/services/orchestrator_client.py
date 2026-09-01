@@ -11,7 +11,9 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol, cast
+from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
 
 import httpx
@@ -197,6 +199,9 @@ class ProjectCellResourceResponse:
     has_agent_home: bool
     has_postgres: bool
     has_redis: bool
+    has_draft_runtime: bool = False
+    draft_state: str | None = None
+    preview_url: str | None = None
 
     def __post_init__(self) -> None:
         if not self.state:
@@ -218,6 +223,9 @@ class ProjectCellResourceResponse:
             "has_agent_home": self.has_agent_home,
             "has_postgres": self.has_postgres,
             "has_redis": self.has_redis,
+            "has_draft_runtime": self.has_draft_runtime,
+            "draft_state": self.draft_state,
+            "preview_url": self.preview_url,
         }
 
     @classmethod
@@ -237,6 +245,9 @@ class ProjectCellResourceResponse:
             "has_agent_home",
             "has_postgres",
             "has_redis",
+            "has_draft_runtime",
+            "draft_state",
+            "preview_url",
         }
         if not allow_extra:
             unexpected = set(payload) - expected
@@ -254,6 +265,9 @@ class ProjectCellResourceResponse:
         has_agent_home = payload.get("has_agent_home")
         has_postgres = payload.get("has_postgres")
         has_redis = payload.get("has_redis")
+        has_draft_runtime = payload.get("has_draft_runtime", False)
+        draft_state = payload.get("draft_state")
+        preview_url = payload.get("preview_url")
         invalid_shape = (
             type(workspace_id) is not str
             or type(state) is not str
@@ -264,6 +278,11 @@ class ProjectCellResourceResponse:
             or type(has_agent_home) is not bool
             or type(has_postgres) is not bool
             or type(has_redis) is not bool
+            or type(has_draft_runtime) is not bool
+            or (draft_state is not None and (
+                type(draft_state) is not str or draft_state not in {"running", "stopped", "failed"}
+            ))
+            or (preview_url is not None and type(preview_url) is not str)
         )
         if invalid_shape:
             raise OrchestratorUnavailable(
@@ -290,6 +309,9 @@ class ProjectCellResourceResponse:
                 has_agent_home=has_agent_home,
                 has_postgres=has_postgres,
                 has_redis=has_redis,
+                has_draft_runtime=cast(bool, has_draft_runtime),
+                draft_state=cast(str | None, draft_state),
+                preview_url=cast(str | None, preview_url),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(
@@ -447,6 +469,96 @@ class ProjectCellAgentExecResponse:
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell exec response"
             ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellDraftApplyResponse:
+    workspace_revision: str
+    preview_url: str
+    package_exit_code: int | None = None
+    package_stderr_tail: str = ""
+    migration_exit_code: int | None = None
+    migration_stderr_tail: str = ""
+    runtime_log_tail: str = ""
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> ProjectCellDraftApplyResponse:
+        expected = {"state", "workspace_revision", "preview_url", "package_exit_code",
+                    "package_stderr_tail", "migration_exit_code", "migration_stderr_tail",
+                    "runtime_log_tail"}
+        try:
+            state = payload.get("state")
+            if set(payload) - expected or state not in {"draft_running", "draft_failed"}:
+                raise ValueError("invalid draft state")
+            for key in ("workspace_revision", "preview_url"):
+                if type(payload.get(key)) is not str or not payload[key]:
+                    raise ValueError("missing draft identity")
+            for key in ("package_exit_code", "migration_exit_code"):
+                if payload.get(key) is not None and type(payload[key]) is not int:
+                    raise ValueError("invalid exit code")
+            migration_exit_code = payload.get("migration_exit_code")
+            if (
+                (state == "draft_running" and migration_exit_code not in {None, 0})
+                or (state == "draft_failed" and migration_exit_code in {None, 0})
+            ):
+                raise ValueError("draft state does not match migration result")
+            for key in ("package_stderr_tail", "migration_stderr_tail", "runtime_log_tail"):
+                if type(payload.get(key, "")) is not str:
+                    raise ValueError("invalid draft logs")
+            _validate_workspace_revision(payload["workspace_revision"])
+            return cls(**{key: value for key, value in payload.items() if key != "state"})
+        except (TypeError, ValueError) as exc:
+            raise OrchestratorUnavailable("Orchestrator returned an invalid cell draft") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellPreviewSession:
+    workspace_id: UUID
+    preview_url: str
+    bootstrap_url: str
+    expires_at: str
+
+    def __post_init__(self) -> None:
+        _validate_project_cell_preview_session(self)
+
+    @classmethod
+    def from_json(cls, payload: dict[str, Any]) -> ProjectCellPreviewSession:
+        expected = {"workspace_id", "state", "preview_url", "bootstrap_url", "expires_at"}
+        try:
+            if set(payload) != expected or payload.get("state") != "draft_running":
+                raise ValueError("invalid preview state")
+            if any(type(payload[key]) is not str for key in expected):
+                raise ValueError("invalid preview fields")
+            return cls(
+                workspace_id=UUID(payload["workspace_id"]),
+                preview_url=payload["preview_url"],
+                bootstrap_url=payload["bootstrap_url"],
+                expires_at=payload["expires_at"],
+            )
+        except (TypeError, ValueError) as exc:
+            # Never include the signed URL in diagnostics.
+            raise OrchestratorUnavailable("Orchestrator returned an invalid cell preview") from exc
+
+
+def _validate_project_cell_preview_session(session: ProjectCellPreviewSession) -> None:
+    preview = urlsplit(session.preview_url)
+    bootstrap = urlsplit(session.bootstrap_url)
+    query = parse_qsl(bootstrap.query, keep_blank_values=True)
+    suffix = get_settings().project_cell_preview_host_suffix
+    expected_host = f"cell-{session.workspace_id.hex[:12]}-dev.{suffix}"
+    if (
+        preview.scheme != "https" or preview.hostname != expected_host
+        or preview.username is not None or preview.password is not None
+        or preview.port is not None or preview.path not in {"", "/"}
+        or preview.query or preview.fragment
+        or (bootstrap.scheme, bootstrap.netloc) != (preview.scheme, preview.netloc)
+        or bootstrap.path != "/api/omnia/preview-session" or bootstrap.fragment
+        or [key for key, _ in query] != ["expires", "signature"]
+        or not query[0][1].isdigit()
+        or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", query[1][1]) is None
+        or datetime.fromisoformat(session.expires_at).tzinfo is None
+    ):
+        raise ValueError("invalid Project Cell preview session")
 
 
 @dataclass(frozen=True, slots=True)
@@ -742,6 +854,47 @@ async def project_cell_agent_exec(
 async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
     """POST a short-lived, signed bootstrap session for a MAX preview."""
     return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")
+
+
+async def project_cell_apply_draft(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+    expected_revision: str,
+    files: dict[str, str],
+    deletes: Sequence[str] = (),
+) -> ProjectCellDraftApplyResponse:
+    _validate_fencing_epoch(fencing_epoch)
+    _validate_workspace_revision(expected_revision)
+    if any(type(k) is not str or type(v) is not str for k, v in files.items()):
+        raise ValueError("files must be a string-to-string mapping")
+    if any(type(path) is not str for path in deletes) or set(files).intersection(deletes):
+        raise ValueError("invalid draft deletes")
+    payload = await _request(
+        "POST", f"/internal/workspaces/{workspace_id}/draft/apply",
+        json={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch,
+              "expected_revision": expected_revision, "files": files, "deletes": list(deletes)},
+        timeout=660.0,
+    )
+    return ProjectCellDraftApplyResponse.from_json(payload)
+
+
+async def project_cell_create_preview_session(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+) -> ProjectCellPreviewSession:
+    _validate_fencing_epoch(fencing_epoch)
+    payload = await _request(
+        "POST", f"/internal/workspaces/{workspace_id}/draft/preview-session",
+        json={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch},
+    )
+    response = ProjectCellPreviewSession.from_json(payload)
+    if response.workspace_id != workspace_id:
+        raise OrchestratorUnavailable("Orchestrator returned a different cell preview")
+    return response
 
 
 async def wake(project_id: UUID) -> dict[str, Any]:
@@ -1093,6 +1246,7 @@ async def hot_reload(
     files: dict[str, str],
     *,
     base_workspace_revision: str | None = None,
+    empty_files: Sequence[str] = (),
 ) -> dict[str, Any]:
     """POST /internal/projects/hot-reload — write AI-generated files into the
     dev container; orchestrator additionally runs `drizzle-kit push` if the
@@ -1103,8 +1257,15 @@ async def hot_reload(
     yet, PoC). apps/api always has the slug at hand from its own Project row.
     """
     payload: dict[str, Any] = {"project_id": str(project_id), "files": files}
+    normalized_empty_files: list[str] = []
+    for raw_path in empty_files:
+        if type(raw_path) is not str:
+            raise ValueError("empty_files must contain only strings")
+        normalized_empty_files.append(raw_path)
     if base_workspace_revision:
         payload["base_workspace_revision"] = base_workspace_revision
+    if normalized_empty_files:
+        payload["empty_files"] = normalized_empty_files
     return await _request(
         "POST",
         "/internal/projects/hot-reload",

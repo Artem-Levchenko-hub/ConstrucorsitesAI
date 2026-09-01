@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Acceptance-lock for BS-35 (dogfood run #35, 2026-06-17): the entity engine's
 `required` / `default` semantics are weaker than they look — two facets:
 

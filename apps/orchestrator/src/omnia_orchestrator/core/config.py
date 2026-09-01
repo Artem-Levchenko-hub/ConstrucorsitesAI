@@ -8,9 +8,9 @@ editing this module only.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,29 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_project_cell_cpu_budget(self) -> Self:
+        if (
+            self.workspace_provider == "docker_owner_canary"
+            and self.docker_owner_canary_enabled
+            and self.cell_bundle_cpu_cores < 1.0
+        ):
+            raise ValueError(
+                "enabled Project Cell requires cell_bundle_cpu_cores >= 1.0 "
+                "for PostgreSQL, Redis and the executor"
+            )
+        draft_min = self.cell_draft_port_range_min
+        draft_max = self.cell_draft_port_range_max
+        if draft_min > draft_max:
+            raise ValueError("cell draft port range minimum must not exceed maximum")
+        if max(draft_min, self.port_range_min) <= min(draft_max, self.port_range_max):
+            raise ValueError("cell draft port range must not overlap the dev port range")
+        if max(draft_min, self.prod_port_range_min) <= min(
+            draft_max, self.prod_port_range_max
+        ):
+            raise ValueError("cell draft port range must not overlap the prod port range")
+        return self
 
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
@@ -181,6 +204,10 @@ class Settings(BaseSettings):
     # dev and prod containers never collide on a host port.
     prod_port_range_min: int = Field(default=4000)
     prod_port_range_max: int = Field(default=4999)
+    # Project Cell draft ports are loopback-only and must not collide with the
+    # legacy dev/prod allocators, which have separate persistent registries.
+    cell_draft_port_range_min: int = Field(default=5200, ge=1024, le=65535)
+    cell_draft_port_range_max: int = Field(default=5999, ge=1024, le=65535)
 
     # Hibernate policy. Stopping an idle container preserves its writable
     # layer and bind-mounted workspace while releasing RAM. Warm pause is an

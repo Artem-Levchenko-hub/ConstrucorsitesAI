@@ -67,17 +67,17 @@ class CellCheckpointManager:
         validate_checkpoint_ref(checkpoint_ref)
         state = self._require_state(workspace_id)
         names = self._require_names(state)
-        replay = await self._replay_completed_manifest_or_reject(
-            workspace_id=workspace_id,
-            state=state,
-            names=names,
-            mutation=mutation,
-            kind="checkpoint",
-            checkpoint_ref=checkpoint_ref,
-        )
-        if replay is not None:
-            return replay
         if record_operation:
+            replay = await self._replay_completed_manifest_or_reject(
+                workspace_id=workspace_id,
+                state=state,
+                names=names,
+                mutation=mutation,
+                kind="checkpoint",
+                checkpoint_ref=checkpoint_ref,
+            )
+            if replay is not None:
+                return replay
             self._begin_if_missing(
                 state,
                 mutation,
@@ -156,6 +156,12 @@ class CellCheckpointManager:
         artifacts = await self._load_artifacts(
             names.checkpoint_volume, checkpoint_ref, manifest
         )
+        self._begin_if_missing(
+            state,
+            mutation,
+            kind="restore",
+            checkpoint_ref=checkpoint_ref,
+        )
 
         pre_restore_ref = f"pre-restore-{mutation.operation_id}"
         helper_name = names.helper_container_name("postgres-maintenance", mutation.operation_id)
@@ -186,12 +192,6 @@ class CellCheckpointManager:
                 manifest=pre_restore,
                 artifacts=pre_restore_artifacts,
             )
-            self._begin_if_missing(
-                state,
-                mutation,
-                kind="restore",
-                checkpoint_ref=checkpoint_ref,
-            )
             live_restore_started = True
             await self._apply_restore(
                 workspace_id=workspace_id,
@@ -209,6 +209,14 @@ class CellCheckpointManager:
             return manifest
         except Exception as exc:
             if live_restore_started is False or pre_restore_artifacts is None:
+                self.state_store.mark_failed(
+                    workspace_id,
+                    mutation,
+                    phase="failed",
+                    provider_ref=state.provider_ref,
+                    bundle_state="resources_paused",
+                    detail=str(exc),
+                )
                 raise CellRestoreFailed(str(exc)) from exc
             try:
                 await self._apply_restore(
@@ -217,12 +225,13 @@ class CellCheckpointManager:
                     postgres_container_name=helper_name,
                     artifacts=pre_restore_artifacts,
                 )
-                self.state_store.complete(
+                self.state_store.mark_failed(
                     workspace_id,
                     mutation,
-                    phase="completed",
+                    phase="failed",
                     provider_ref=state.provider_ref,
                     bundle_state="resources_paused",
+                    detail=str(exc),
                 )
             except Exception as rollback_exc:
                 self.state_store.mark_degraded(
@@ -492,6 +501,8 @@ class CellCheckpointManager:
             checkpoint_ref=checkpoint_ref,
         ) is False:
             raise CellFenceRejected("replay envelope mismatch")
+        if operation.status == "failed":
+            raise CellRestoreFailed(operation.detail or "restore failed")
         if operation.status != "completed":
             raise CellFenceRejected("operation replay unavailable")
         manifest = await self._load_manifest(names.checkpoint_volume, checkpoint_ref)

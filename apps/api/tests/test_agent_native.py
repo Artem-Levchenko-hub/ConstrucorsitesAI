@@ -190,7 +190,8 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
 
     calls: list[dict[str, Any]] = []
 
-    async def _hot_reload(project_id, slug, files):
+    async def _hot_reload(project_id, slug, files, *, empty_files=()):
+        assert empty_files == ()
         calls.append(
             {
                 "project_id": project_id,
@@ -241,7 +242,8 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
     from omnia_api.core.errors import ApiError
     from omnia_api.routers import messages
 
-    async def _hot_reload(project_id, slug, files):
+    async def _hot_reload(project_id, slug, files, *, empty_files=()):
+        assert empty_files == ()
         raise RuntimeError("orchestrator down")
 
     monkeypatch.setattr(messages.orchestrator_client, "hot_reload", _hot_reload)

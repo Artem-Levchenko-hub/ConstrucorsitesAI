@@ -33,10 +33,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from omnia_api.services.build_plan import BuildPlan
 from omnia_api.services.render_settle import goto_and_settle
+
+if TYPE_CHECKING:
+    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +166,7 @@ async def run_coverage_gate(
     stack: str | None = None,
     known_routes: set[str] | None = None,
     max_probes: int = _MAX_PROBES,
+    cell_preview: ProjectCellPreviewSession | None = None,
 ) -> CoverageVerdict:
     """Replay the plan's blocking capabilities against the live preview.
 
@@ -192,8 +198,11 @@ async def run_coverage_gate(
 
     from omnia_api.services import orchestrator_client
 
-    st = await orchestrator_client.get_status(pid)
-    base = st.get("dev_url") if isinstance(st, dict) else None
+    if cell_preview is None:
+        st = await orchestrator_client.get_status(pid)
+        base = st.get("dev_url") if isinstance(st, dict) else None
+    else:
+        base = cell_preview.preview_url
     if not base:
         log.info("coverage_gate: no dev_url — skip (cannot verify, do not block)")
         return CoverageVerdict(passed=True, covered=0, total=0, skipped=True)
@@ -219,16 +228,41 @@ async def run_coverage_gate(
             try:
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
-                await goto_and_settle(page, f"{base}/signin", timeout_ms=30_000)
-                await fg._api(
-                    page, "POST", "/api/auth/register",
-                    {"email": _email, "password": _password},
-                )
-                try:
-                    await fg._login(page, base, _email, _password)
-                except Exception as exc:
-                    log.info("coverage_gate: login failed — skip (%r)", exc)
-                    return CoverageVerdict(passed=True, covered=0, total=0, skipped=True)
+                if cell_preview is None:
+                    await goto_and_settle(page, f"{base}/signin", timeout_ms=30_000)
+                    await fg._api(
+                        page, "POST", "/api/auth/register",
+                        {"email": _email, "password": _password},
+                    )
+                    try:
+                        await fg._login(page, base, _email, _password)
+                    except Exception as exc:
+                        log.info("coverage_gate: login failed — skip (%r)", exc)
+                        return CoverageVerdict(
+                            passed=True, covered=0, total=0, skipped=True
+                        )
+                else:
+                    bootstrap_response = await page.goto(
+                        cell_preview.bootstrap_url,
+                        wait_until="domcontentloaded",
+                    )
+                    cookies = await ctx.cookies([base])
+                    expected_origin = urlsplit(base)
+                    landed_origin = urlsplit(page.url)
+                    if (
+                        bootstrap_response is None
+                        or not bootstrap_response.ok
+                        or (landed_origin.scheme, landed_origin.netloc)
+                        != (expected_origin.scheme, expected_origin.netloc)
+                        or not any(
+                            cookie.get("name") == "__Host-max_session"
+                            for cookie in cookies
+                        )
+                    ):
+                        log.info("coverage_gate: signed cell session unavailable — skip")
+                        return CoverageVerdict(
+                            passed=True, covered=0, total=0, skipped=True
+                        )
                 for c in probed:
                     # Reconcile against the app's REAL routes first: a planner-
                     # guessed /api path the app never built is NOT a misbehaving
