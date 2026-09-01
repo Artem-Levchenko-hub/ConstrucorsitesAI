@@ -1,0 +1,18 @@
+# Render this file only through phase2ctl.py render-config.
+# Bind/advertise/node addresses are deliberately not committed because the
+# production private administration address must be proven on the live host.
+write-kubeconfig-mode: "0600"
+bind-address: "__PRIVATE_ADMIN_ADDRESS__"
+advertise-address: "__PRIVATE_ADMIN_ADDRESS__"
+node-ip: "__PRIVATE_ADMIN_ADDRESS__"
+tls-san:
+  - "__PRIVATE_ADMIN_ADDRESS__"
+tls-san-security: true
+cluster-cidr: "10.42.0.0/16"
+service-cidr: "10.43.0.0/16"
+cluster-dns: "10.43.0.10"
+flannel-backend: "vxlan"
+secrets-encryption: true
+disable:
+  - traefik
+  - servicelb

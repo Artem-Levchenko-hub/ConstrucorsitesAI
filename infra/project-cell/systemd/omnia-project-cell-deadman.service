@@ -1,0 +1,23 @@
+[Unit]
+Description=Omnia Project Cell Phase 2 dead-man rollback
+Documentation=file:///usr/local/libexec/omnia-project-cell/README.md
+After=local-fs.target
+ConditionPathExists=/var/lib/omnia-project-cell-phase2/armed.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/libexec/omnia-project-cell/rollback-phase2.sh apply --acknowledge BYTE_COMPARE_REQUIRED
+ExecStartPre=/usr/bin/sha256sum --check --strict /var/lib/omnia-project-cell-phase2/runtime-tools.sha256
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc /run /usr/local/bin /var/lib /var/log /opt/omnia-runtime/maintenance.lock
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_KILL CAP_NET_ADMIN CAP_SETGID CAP_SETUID CAP_SYS_ADMIN CAP_SYS_CHROOT
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+SystemCallArchitectures=native

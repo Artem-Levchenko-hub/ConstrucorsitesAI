@@ -1,0 +1,12 @@
+[Unit]
+Description=Arm Omnia Project Cell Phase 2 rollback deadline
+
+[Timer]
+OnActiveSec=20min
+OnUnitInactiveSec=2min
+AccuracySec=1s
+Persistent=true
+Unit=omnia-project-cell-deadman.service
+
+[Install]
+WantedBy=timers.target

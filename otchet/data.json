@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-08-31",
-  "version": 44,
+  "updated": "2026-09-01",
+  "version": 48,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -202,6 +202,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "01.09",
+   "what": "Одобрил переход к Phase 2 Project Cell и поручил подготовить безопасную установку изолированного K3s на текущем сервере.",
+   "impact": "Подготовлен локальный read-only контур валидации: content-addressed restore contract, pinned verifier/certificate, подписанные off-host/rescue receipts, pinned K3s config и trusted-hello manifest. Финальное упрощение удалило orchestrator runtime seam; install, rollback, dead-man arm/disarm и Kubernetes apply немедленно hard-disabled до запуска зависимостей. Сервер не изменялся: K3s/Kata не установлены, шаг V4 остаётся незакрытым."
+  },
   {
    "date": "31.08",
    "what": "Попросил максимально освободить RAM на текущем сервере, чтобы перейти от спецификации к запуску Project Cell.",
@@ -2420,13 +2425,13 @@
   {
    "id": "H127",
    "title": "Project Cell даст агенту свободу Codex внутри сильной границы проекта",
-   "status": "open",
+   "status": "testing",
    "score": null,
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "31.08",
    "description": "Если агентный цикл перенести из центрального API в постоянную Project Cell с полным shell, durable checkpoint и обязательной Kata-изоляцией, агент сможет собирать сложные полноценные продукты без доступа к хосту и чужим проектам.",
-   "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s; архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и получил APPROVE от независимых architecture и security/operations gate. Phase 1 исполнялся без удаления данных: штатно остановлены восемь idle dev-preview, MemAvailable вырос с 3 121 152 до 8 702 464 KiB. Cold-wake canary сохранил container ID 762882940dc9, достиг HTTP 200 и снова остановился; после proof доступны 8 500 264 KiB, все четыре production health endpoint вернули 200. Регресс mode 0644 у hot-reload entrypoint закрыт permanent runtime-фиксом. Живой K3s + Kata Project Cell и MAX canary ещё не запускались.",
-   "impact": "Безопасная capacity-фаза стала измеренным production-фактом: памяти достаточно для следующего K3s/Kata smoke, а остановленные проекты доказанно восстанавливаются без пересоздания. Гипотеза остаётся открытой до реального K3s + Kata smoke, восстановления сессии после рестартов и сборки сложного MAX-приложения через LLMGW.",
+    "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s; архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и получил APPROVE от независимых architecture и security/operations gate. Phase 1 исполнялся без удаления данных: штатно остановлены восемь idle dev-preview, MemAvailable вырос с 3 121 152 до 8 702 464 KiB. Cold-wake canary сохранил container ID 762882940dc9, достиг HTTP 200 и снова остановился; после proof доступны 8 500 264 KiB, все четыре production health endpoint вернули 200. Для Phase 2 добавлены план и read-only validation scaffolding в infra/project-cell. Первый TDD RED: contract test завершился exit 1 на отсутствующем phase2ctl.py. Security RED воспроизвели forged/failed/noncanonical receipt и unsafe early dependency execution. Финальный zero-dependency RED показал, что rollback, dead-man arm и smoke apply обращались к PATH до отказа; после hard-disable полный Git Bash suite завершился сообщением phase2 contract tests passed (all). Read-only server audit на ebb7bcc3 подтвердил containerd 2.2.1, runc 1.3.4, KVM/VMX/cgroup v2, около 7,7 GiB доступной RAM, no swap, 55% диска, 12% inode и HTTP 200 API/gateway/orchestrator/web; K3s, kubectl и Kata отсутствуют. Изменения apps/orchestrator полностью удалены. Живые install, dead-man, rollback, Kubernetes hello и soak не выполнялись и недоступны через эти entrypoints.",
+    "impact": "Phase 2 дал локально проверяемые read-only контракты evidence, подписей, pinned config и trusted-hello manifest, но не открыл путь к production mutation. Финальное упрощение полностью удалило изменения apps/orchestrator. Install apply, rollback, dead-man arm/disarm и Kubernetes apply останавливаются первым shell-действием; PATH/PYTHONPATH sentinels подтверждают ноль dependency calls и ноль state writes. Preflight не открывает lock; CNI включён в restore contract, неизвестные systemd/sysctl/modules запрещены. Статус остаётся testing, score=null и шаг V4=false: любая live mutation требует нового review и внешних доказательств; Kata остаётся следующей обязательной фазой перед model-visible shell.",
    "next_vector": "V4"
   }
  ],
@@ -2595,13 +2600,17 @@
      "Enterprise Project Cell: утверждён контракт K3s + Kata, durable runner, draft и атомарная публикация (31.08)",
      true
     ],
-    [
-     "Project Cell Phase 1: без удаления данных освобождено >8 GiB RAM, cold wake/stop того же container ID доказан на production (31.08)",
-     true
-    ],
-    [
-     "Поднять Project Cell на текущем сервере и пройти MAX end-to-end canary с restart/cancel/isolation-проверками",
-     false
+      [
+       "Project Cell Phase 1: без удаления данных освобождено >8 GiB RAM, cold wake/stop того же container ID доказан на production (31.08)",
+       true
+      ],
+      [
+       "Project Cell Phase 2: pinned K3s automation локально прошла RED→GREEN; live install/hello/rollback proof ожидается (01.09)",
+       false
+      ],
+      [
+       "Поднять Project Cell на текущем сервере и пройти MAX end-to-end canary с restart/cancel/isolation-проверками",
+       false
     ]
    ],
    "hyp_ids": [
