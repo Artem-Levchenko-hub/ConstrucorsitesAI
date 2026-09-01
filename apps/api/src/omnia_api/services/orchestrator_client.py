@@ -142,6 +142,14 @@ async def get_status(project_id: UUID) -> dict[str, Any]:
     return await _request("GET", f"/internal/projects/{project_id}/status")
 
 
+async def get_project_cell_capabilities(project_id: UUID) -> dict[str, Any]:
+    """Read the dark Project Cell capability status for one project."""
+    return await _request(
+        "GET",
+        f"/internal/projects/{project_id}/workspace/capabilities",
+    )
+
+
 async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
     """POST a short-lived, signed bootstrap session for a MAX preview."""
     return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")

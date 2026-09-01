@@ -7,6 +7,35 @@ import pytest
 from omnia_api.services import orchestrator_client
 
 
+async def test_project_cell_capability_client_calls_exact_internal_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    project_id = UUID("00000000-0000-0000-0000-000000000005")
+    expected = {
+        "project_id": str(project_id),
+        "provider": "disabled",
+        "enabled": False,
+        "ready": False,
+        "state": "disabled",
+        "detail": "workspace provider is disabled",
+    }
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return expected
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.get_project_cell_capabilities(project_id)
+
+    assert result is expected
+    assert observed == {
+        "method": "GET",
+        "path": f"/internal/projects/{project_id}/workspace/capabilities",
+    }
+
+
 async def test_provision_waits_for_a_cold_template_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

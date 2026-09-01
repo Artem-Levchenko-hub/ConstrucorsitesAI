@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-01",
-  "version": 51,
+  "version": 53,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2447,13 +2447,13 @@
   {
    "id": "H128",
    "title": "Owner-only Docker Project Cell даст ранний полный MAX canary без тупиковой инфраструктурной ветки",
-   "status": "open",
+   "status": "testing",
    "score": null,
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "01.09",
    "description": "Если подключить постоянный Docker Project Cell только подтверждённому владельцу через заменяемый WorkspaceProvider, Claude Sonnet сможет уже сейчас собирать реальные full-stack MAX-приложения, а последующий переход на Kata заменит только исполнительную среду.",
-   "evidence": "Владелец утвердил внешний доступ через обычный production-интерфейс только для своего подтверждённого аккаунта и потребовал полноценный результат: frontend, backend, PostgreSQL, Redis, MAX-интеграция, браузер и самостоятельный цикл исправления. Спецификация доставлена ревизией d8ec761e, план — ревизией 965bdab7. В первой контрольной части реализованы fail-closed owner policy, durable модели workspace/operation с миграцией 0052, конкурентно-безопасные reservation/idempotency/transition операции и заменяемый WorkspaceProvider. Новый orchestrator-контур остаётся полностью тёмным: default disabled, Docker выбирается только двумя явными переключателями, даже тогда возвращает ready=false/unsupported, все mutator-методы запрещены, доступен только внутренний authenticated GET статуса. Проверки: Task 1 — 7 tests; Task 2 — 25 tests плюс Alembic upgrade/downgrade/upgrade и live PostgreSQL catalog parity; Task 3 — 43 tests плюс GenerationRun regressions; Task 4 — 15 focused и 31 compatibility tests, Ruff и mypy. Реальный Docker, shell, browser, LLMGW-runner и публичный prompt path ещё не подключены.",
-   "impact": "Появился проверяемый управляющий фундамент без риска случайно запустить контейнер из пользовательского запроса: система уже умеет решить, кому разрешён canary, надёжно сохранить будущий lifecycle и показать внутреннюю готовность провайдера, но пока физически ничего не создаёт. H128 переведена в testing, score остаётся null, а шаг V4 остаётся false до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
+    "evidence": "Tasks 1–6 собрали тёмный Control Foundation: fail-closed owner policy; durable workspace/operation модели и миграция 0052; безопасные конкурентные reservation/idempotency/transition операции; заменяемый WorkspaceProvider; внутренний authenticated capability GET; side-effect-free API readiness coordinator. Проверки по этапам: Task 1 — 7 focused; Task 2 — 25 focused плюс Alembic upgrade/downgrade/upgrade и live PostgreSQL catalog parity; Task 3 — 43 focused/GenerationRun regressions; Task 4 — 15 provider/router и 31 compatibility; Task 5 — 21 focused и 3 отдельные client regressions; Task 6 — AST mutation RED→GREEN для function-local imports/calls, 98 API focused и 48 orchestrator focused. Полный orchestrator suite: 532 passed, 15 xfailed; полный API suite остановлен на воспроизводимом чужом regression test_async_onboarding.py::test_run_async_onboarding_streams_and_stashes (SurveyQuestion ошибочно используется как dict), при этом весь foundation focused suite зелёный. API full Ruff и mypy чисты; orchestrator scoped Ruff и full mypy чисты, full Ruff сохраняет только прежние unrelated нарушения. Контрольная ревизия Tasks 1–4 и миграция 0052 развёрнуты на production SHA 1b8a86e контролируемым rollout: API, worker, web и orchestrator показывают одну ревизию, все compose-сервисы healthy, внешний web-health и api/health вернули HTTP 200. Маршрутизация Project Cell по умолчанию отключена; публичный prompt path ничего из control foundation не импортирует и не вызывает. Реальный Docker, shell, browser, LLMGW-runner и model-visible cell ещё не подключены.",
+   "impact": "Появился проверяемый управляющий фундамент без риска случайно запустить контейнер из пользовательского запроса: система решает допуск owner-canary, надёжно хранит будущий lifecycle и строго fail-closed проверяет готовность провайдера, но пока физически ничего не создаёт. H128 остаётся testing, score остаётся null, default routing disabled, а шаг V4 Owner-only Docker Project Cell остаётся false до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
    "next_vector": "V4"
   }
  ],
