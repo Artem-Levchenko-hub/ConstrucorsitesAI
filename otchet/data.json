@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-01",
-  "version": 50,
+  "version": 51,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -1415,7 +1415,7 @@
   {
    "title": "Монетизация: REG.RU-ресселл доменов + ЮKassa-маркетплейс",
    "description": "«Универсальное окно»: сайт + домен + SSL + приём платежей за 15 минут; домены с маржой 47%, ЮKassa sub-merchants.",
-   "status": "open",
+   "status": "testing",
    "evidence": "Только план (docs/04) и план кабинета от 05.07; в коде ни следа REG.RU/ЮKassa — пополнение осталось MVP-заглушкой (и до 06.07 было дырой self-credit); блокеры вне кода: юрлицо, договоры ~6–8 недель.",
    "category": "продукт",
    "period": "май → не начато",
@@ -2452,8 +2452,8 @@
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "01.09",
    "description": "Если подключить постоянный Docker Project Cell только подтверждённому владельцу через заменяемый WorkspaceProvider, Claude Sonnet сможет уже сейчас собирать реальные full-stack MAX-приложения, а последующий переход на Kata заменит только исполнительную среду.",
-   "evidence": "Владелец утвердил внешний доступ через обычный production-интерфейс только для своего подтверждённого аккаунта и потребовал полноценный результат: frontend, backend, PostgreSQL, Redis, MAX-интеграция, браузер и самостоятельный цикл исправления. Спецификация доставлена в origin/main ревизией d8ec761e27785c6470a374f45aa06c5669c3a5e4. После повторной сверки local/origin на d8ec761e и production на b2fb7b4 создан точный первый план docs/superpowers/plans/2026-09-01-project-cell-control-foundation.md: семь задач от owner policy и durable state до dark production deploy; runtime-код и серверная конфигурация на момент записи плана не менялись.",
-   "impact": "Появился точный промежуточный путь: владелец сможет проверить свободу агента на реальном продукте без ожидания K3s, при этом общий multi-tenant запуск не получает слабую Docker-границу. Гипотеза остаётся open и без оценки до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
+   "evidence": "Владелец утвердил внешний доступ через обычный production-интерфейс только для своего подтверждённого аккаунта и потребовал полноценный результат: frontend, backend, PostgreSQL, Redis, MAX-интеграция, браузер и самостоятельный цикл исправления. Спецификация доставлена ревизией d8ec761e, план — ревизией 965bdab7. В первой контрольной части реализованы fail-closed owner policy, durable модели workspace/operation с миграцией 0052, конкурентно-безопасные reservation/idempotency/transition операции и заменяемый WorkspaceProvider. Новый orchestrator-контур остаётся полностью тёмным: default disabled, Docker выбирается только двумя явными переключателями, даже тогда возвращает ready=false/unsupported, все mutator-методы запрещены, доступен только внутренний authenticated GET статуса. Проверки: Task 1 — 7 tests; Task 2 — 25 tests плюс Alembic upgrade/downgrade/upgrade и live PostgreSQL catalog parity; Task 3 — 43 tests плюс GenerationRun regressions; Task 4 — 15 focused и 31 compatibility tests, Ruff и mypy. Реальный Docker, shell, browser, LLMGW-runner и публичный prompt path ещё не подключены.",
+   "impact": "Появился проверяемый управляющий фундамент без риска случайно запустить контейнер из пользовательского запроса: система уже умеет решить, кому разрешён canary, надёжно сохранить будущий lifecycle и показать внутреннюю готовность провайдера, но пока физически ничего не создаёт. H128 переведена в testing, score остаётся null, а шаг V4 остаётся false до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
    "next_vector": "V4"
   }
  ],

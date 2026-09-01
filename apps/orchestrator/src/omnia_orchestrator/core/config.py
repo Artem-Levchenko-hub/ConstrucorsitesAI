@@ -8,6 +8,7 @@ editing this module only.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -205,6 +206,12 @@ class Settings(BaseSettings):
 
     # Shared secret with apps/api. Validated against X-Internal-Token header.
     internal_token: SecretStr
+
+    # Project Cell provider selection stays dark until both switches opt in.
+    workspace_provider: Literal["disabled", "docker_owner_canary"] = Field(
+        default="disabled"
+    )
+    docker_owner_canary_enabled: bool = Field(default=False)
 
     # Sentry — leave empty to disable.
     sentry_dsn: SecretStr | None = None

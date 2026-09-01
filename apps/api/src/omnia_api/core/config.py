@@ -1041,6 +1041,18 @@ class Settings(BaseSettings):
     # for everyone (the flag is global; there's no per-project canary). Empty =
     # nobody (today's behaviour). Env: AGENTIC_BUILDER_CANARY_USERS.
     agentic_builder_canary_users: str = Field(default="")
+    project_cell_docker_canary_enabled: bool = Field(default=False)
+    project_cell_canary_emails: str = Field(default="")
+    project_cell_operation_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+
+    @property
+    def project_cell_canary_email_set(self) -> frozenset[str]:
+        return frozenset(
+            item.strip().casefold()
+            for item in self.project_cell_canary_emails.split(",")
+            if item.strip()
+        )
+
     # Auto-continue: a single run is capped at agent_builder_max_steps, but a full
     # first build often needs more than one segment. Rather than stop at that cap and
     # make the user keep clicking «Продолжить» against an arbitrary low limit, the

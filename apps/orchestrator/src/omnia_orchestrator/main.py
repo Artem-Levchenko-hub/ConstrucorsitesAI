@@ -19,7 +19,7 @@ from omnia_orchestrator.core.errors import (
     unhandled_error_handler,
 )
 from omnia_orchestrator.core.sentry import init_sentry
-from omnia_orchestrator.routers import build_exe, byo, health, ingress, runtime
+from omnia_orchestrator.routers import build_exe, byo, health, ingress, runtime, workspace
 from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.hibernate import (
     start_hibernate_loop,
@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(ingress.router)
     app.include_router(build_exe.router)
     app.include_router(byo.router)
+    app.include_router(workspace.router)
 
     return app
 
