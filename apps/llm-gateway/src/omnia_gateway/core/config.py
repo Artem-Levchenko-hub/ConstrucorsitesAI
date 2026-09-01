@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # Env: REQUEST_TIMEOUT_SECONDS.
     request_timeout_seconds: int = 240
 
+    # Trusted Project Cell runner auth for /v1/project-cell/messages. Legacy
+    # /v1/messages stays public to the API service and does not require this.
+    runner_auth_secret: SecretStr | None = None
+    runner_auth_issuer: str | None = None
+    runner_auth_audience: str = "omnia-project-cell-runner"
+    runner_auth_max_ttl_seconds: int = 300
+
     log_level: str = "INFO"
 
 

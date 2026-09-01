@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -12,9 +17,19 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from omnia_gateway.core import runner_auth
 from omnia_gateway.core.errors import WalletEmptyError
 from omnia_gateway.main import create_app
 from omnia_gateway.routers import messages_native
+
+_RUNNER_SECRET = "runner-secret"
+_RUNNER_ISSUER = "omnia-agent-runner"
+_RUNNER_AUDIENCE = "omnia-project-cell-runner"
+_RUNNER_PROJECT_ID = "22222222-2222-2222-2222-222222222222"
+_RUNNER_RUN_ID = "33333333-3333-3333-3333-333333333333"
+_RUNNER_SESSION_ID = "66666666-6666-6666-6666-666666666666"
+_RUNNER_WORKSPACE_ID = "77777777-7777-7777-7777-777777777777"
+_RUNNER_MESSAGE_ID = "88888888-8888-4888-8888-888888888888"
 
 
 @pytest.fixture
@@ -26,6 +41,90 @@ def app(neutralize_lifespan: None) -> FastAPI:
 def client(app: FastAPI) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
+
+
+def _b64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _runner_token(
+    *,
+    now: int | None = None,
+    alg: str = "HS256",
+    overrides: dict[str, Any] | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else now
+    header = {"alg": alg, "typ": "JWT"}
+    payload: dict[str, Any] = {
+        "iss": _RUNNER_ISSUER,
+        "aud": _RUNNER_AUDIENCE,
+        "jti": _RUNNER_MESSAGE_ID,
+        "project_id": _RUNNER_PROJECT_ID,
+        "run_id": _RUNNER_RUN_ID,
+        "session_id": _RUNNER_SESSION_ID,
+        "workspace_id": _RUNNER_WORKSPACE_ID,
+        "fencing_epoch": 4,
+        "cancel_epoch": 0,
+        "nbf": issued_at - 1,
+        "exp": issued_at + 60,
+    }
+    if overrides:
+        payload.update(overrides)
+    header_segment = _b64url(json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    payload_segment = _b64url(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    )
+    signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
+    digest_name = {"HS256": "sha256", "HS512": "sha512"}.get(alg)
+    signature = _b64url(
+        hmac.new(
+            _RUNNER_SECRET.encode("utf-8"),
+            signing_input,
+            getattr(hashlib, digest_name or "sha256"),
+        ).digest()
+    )
+    return f"{header_segment}.{payload_segment}.{signature}"
+
+
+class _FakeRunnerRedis:
+    def __init__(
+        self,
+        *,
+        results: list[bool] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._results = list(results) if results is not None else [True]
+        self._error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def set(
+        self,
+        name: str,
+        value: bytes,
+        *,
+        ex: int | None = None,
+        nx: bool = False,
+    ) -> bool:
+        self.calls.append({"name": name, "value": value, "ex": ex, "nx": nx})
+        if self._error is not None:
+            raise self._error
+        if self._results:
+            return self._results.pop(0)
+        return False
+
+
+def _install_runner_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    redis_results: list[bool] | None = None,
+    redis_error: Exception | None = None,
+) -> _FakeRunnerRedis:
+    monkeypatch.setenv("RUNNER_AUTH_SECRET", _RUNNER_SECRET)
+    monkeypatch.setenv("RUNNER_AUTH_ISSUER", _RUNNER_ISSUER)
+    monkeypatch.setenv("RUNNER_AUTH_AUDIENCE", _RUNNER_AUDIENCE)
+    fake_redis = _FakeRunnerRedis(results=redis_results, error=redis_error)
+    monkeypatch.setattr(runner_auth, "get_redis", lambda: fake_redis)
+    return fake_redis
 
 
 def test_openai_messages_preserve_tool_turns() -> None:
@@ -351,3 +450,446 @@ def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     assert response.status_code == 402
     assert response.json()["error"]["type"] == "wallet_empty"
     precheck.assert_awaited_once()
+
+
+def test_project_cell_endpoint_rejects_missing_bearer_before_json_or_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+    precheck = AsyncMock(return_value=None)
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", precheck)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        content="{not-json",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["type"] == "authentication_error"
+    precheck.assert_not_awaited()
+
+
+def test_project_cell_endpoint_fails_closed_without_issuer_config(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RUNNER_AUTH_SECRET", _RUNNER_SECRET)
+    monkeypatch.setenv("RUNNER_AUTH_ISSUER", "")
+    monkeypatch.setenv("RUNNER_AUTH_AUDIENCE", _RUNNER_AUDIENCE)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "check"}]},
+    )
+
+    assert response.status_code == 503
+    assert "issuer is not configured" in response.json()["error"]["message"]
+
+
+def test_project_cell_endpoint_rejects_metadata_mismatch_before_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock(return_value=None))
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+                "message_id": _RUNNER_MESSAGE_ID,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 401
+    assert "project_id" in response.json()["error"]["message"]
+
+
+def test_project_cell_endpoint_requires_message_id_equal_to_jti(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    missing = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+    wrong = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+                "message_id": "99999999-9999-4999-8999-999999999999",
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert missing.status_code == 401
+    assert "message_id is required" in missing.json()["error"]["message"]
+    assert wrong.status_code == 401
+    assert "message_id" in wrong.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_message"),
+    [
+        ({"exp": int(time.time()) - 5, "nbf": int(time.time()) - 10}, "expired"),
+        ({"nbf": int(time.time()) + 30, "exp": int(time.time()) + 60}, "not active"),
+        ({"exp": int(time.time()) + 900, "nbf": int(time.time()) - 1}, "ttl exceeds"),
+    ],
+)
+def test_project_cell_endpoint_rejects_invalid_token_lifetime(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    expected_message: str,
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setenv("RUNNER_AUTH_MAX_TTL_SECONDS", "120")
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token(overrides=overrides)}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 401
+    assert expected_message in response.json()["error"]["message"]
+
+
+def test_project_cell_endpoint_rejects_algorithm_confusion(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token(alg='HS512')}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 401
+    assert "algorithm" in response.json()["error"]["message"]
+
+
+def test_project_cell_endpoint_rejects_wrong_issuer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token(overrides={'iss': 'wrong-issuer'})}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+                "message_id": _RUNNER_MESSAGE_ID,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 401
+    assert "issuer" in response.json()["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_message"),
+    [
+        ({"project_id": "not-a-uuid"}, "project_id"),
+        ({"run_id": "not-a-uuid"}, "run_id"),
+        ({"session_id": "not-a-uuid"}, "session_id"),
+        ({"workspace_id": "not-a-uuid"}, "workspace_id"),
+        ({"jti": "runner-msg-1"}, "jti"),
+        ({"fencing_epoch": 0}, "fencing_epoch"),
+        ({"cancel_epoch": -1}, "cancel_epoch"),
+    ],
+)
+def test_project_cell_endpoint_rejects_invalid_identity_claims(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, Any],
+    expected_message: str,
+) -> None:
+    _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token(overrides=overrides)}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 401
+    assert expected_message in response.json()["error"]["message"]
+
+
+def test_project_cell_endpoint_rejects_duplicate_jti_before_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_redis = _install_runner_auth(monkeypatch, redis_results=[True, False])
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+    calls = {"n": 0}
+
+    def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        _ = url, payload, headers
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cell-dup",
+                "choices": [{"finish_reason": "stop", "message": {"content": "ok", "tool_calls": []}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
+    payload = {
+        "model": "claude-sonnet-5",
+        "metadata": {
+            "project_id": _RUNNER_PROJECT_ID,
+            "run_id": _RUNNER_RUN_ID,
+            "session_id": _RUNNER_SESSION_ID,
+            "workspace_id": _RUNNER_WORKSPACE_ID,
+            "fencing_epoch": 4,
+            "cancel_epoch": 0,
+            "message_id": _RUNNER_MESSAGE_ID,
+        },
+        "messages": [{"role": "user", "content": "check"}],
+    }
+
+    first = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json=payload,
+    )
+    second = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json=payload,
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 401
+    assert "already used" in second.json()["error"]["message"]
+    assert calls["n"] == 1
+    assert fake_redis.calls[0]["nx"] is True
+    assert fake_redis.calls[0]["ex"] == 60
+
+
+def test_project_cell_endpoint_fails_closed_when_replay_fence_unavailable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_runner_auth(monkeypatch, redis_error=RuntimeError("redis down"))
+    monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+                "message_id": _RUNNER_MESSAGE_ID,
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 503
+    assert "replay fence unavailable" in response.json()["error"]["message"]
+
+
+def test_project_cell_endpoint_calls_upstream_with_valid_runner_identity(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_redis = _install_runner_auth(monkeypatch)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+    precheck = AsyncMock(return_value=None)
+    charge = AsyncMock(return_value=UUID("55555555-5555-5555-5555-555555555555"))
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", precheck)
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native.file_logger, "log_request", lambda payload: None)
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        captured["url"] = url
+        captured["payload"] = payload
+        captured["headers"] = headers
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cell-1",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "ok", "tool_calls": []},
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        )
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
+
+    response = client.post(
+        "/v1/project-cell/messages",
+        headers={"Authorization": f"Bearer {_runner_token()}"},
+        json={
+            "model": "claude-sonnet-5",
+            "metadata": {
+                "project_id": _RUNNER_PROJECT_ID,
+                "run_id": _RUNNER_RUN_ID,
+                "session_id": _RUNNER_SESSION_ID,
+                "workspace_id": _RUNNER_WORKSPACE_ID,
+                "fencing_epoch": 4,
+                "cancel_epoch": 0,
+                "message_id": _RUNNER_MESSAGE_ID,
+                "stage": "native_agent",
+            },
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["url"] == "https://api.llmgw.ru/v1/chat/completions"
+    assert captured["payload"]["model"] == "anthropic/claude-sonnet-5"
+    precheck.assert_not_awaited()
+    charge.assert_not_awaited()
+    metadata = response.json()["metadata"]
+    assert metadata["message_id"] == _RUNNER_MESSAGE_ID
+    assert metadata["run_id"] == _RUNNER_RUN_ID
+    assert metadata["session_id"] == _RUNNER_SESSION_ID
+    assert metadata["workspace_id"] == _RUNNER_WORKSPACE_ID
+    assert metadata["fencing_epoch"] == 4
+    assert metadata["cancel_epoch"] == 0
+    assert fake_redis.calls[0]["name"].endswith(_RUNNER_MESSAGE_ID)
+
+
+def test_legacy_v1_messages_remains_auth_free(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RUNNER_AUTH_SECRET", _RUNNER_SECRET)
+    monkeypatch.setenv("RUNNER_AUTH_ISSUER", _RUNNER_ISSUER)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+
+    def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-legacy-1",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "ok", "tool_calls": []},
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
+
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-5",
+            "messages": [{"role": "user", "content": "still works"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["content"][0]["text"] == "ok"

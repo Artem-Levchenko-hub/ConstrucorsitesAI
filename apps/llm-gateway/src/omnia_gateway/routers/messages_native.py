@@ -25,6 +25,16 @@ import structlog
 from fastapi import APIRouter, Request, Response
 
 from omnia_gateway.core.errors import WalletEmptyError
+from omnia_gateway.core.runner_auth import (
+    RunnerAuthConfigError,
+    RunnerAuthError,
+    RunnerClaims,
+    RunnerReplayError,
+    RunnerReplayUnavailableError,
+    consume_runner_jti,
+    validate_runner_metadata,
+    verify_runner_bearer_header,
+)
 from omnia_gateway.providers import llmgw
 from omnia_gateway.services import billing, file_logger
 from omnia_gateway.services.model_router import native_messages_route
@@ -358,12 +368,34 @@ def _post_llmgw(url: str, payload: dict[str, Any], headers: dict[str, str]) -> h
         return client.post(url, json=payload, headers=headers)
 
 
-@router.post("/v1/messages")
-async def native_messages(request: Request) -> Response:
+async def _native_messages_impl(
+    request: Request,
+    *,
+    runner_claims: RunnerClaims | None = None,
+) -> Response:
     try:
         body: dict[str, Any] = await request.json()
     except Exception:
         return _err(400, "invalid_request_error", "body is not valid JSON")
+
+    raw_metadata = body.get("metadata")
+    try:
+        metadata = (
+            validate_runner_metadata(raw_metadata, runner_claims)
+            if runner_claims is not None
+            else raw_metadata
+            if isinstance(raw_metadata, dict)
+            else {}
+        )
+    except RunnerAuthError as exc:
+        return _err(401, "authentication_error", str(exc))
+    if runner_claims is not None:
+        try:
+            await consume_runner_jti(runner_claims)
+        except RunnerReplayError as exc:
+            return _err(401, "authentication_error", str(exc))
+        except RunnerReplayUnavailableError as exc:
+            return _err(503, "api_error", str(exc))
 
     model = str(body.get("model") or "")
     if not model:
@@ -377,15 +409,13 @@ async def native_messages(request: Request) -> Response:
             "LLMGW_API_KEY is not configured for the native agent",
         )
     api_key, api_base = route
-    raw_metadata = body.get("metadata")
-    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
-    user_id = _uuid(body.get("user") or metadata.get("user_id"))
-    project_id = _uuid(metadata.get("project_id"))
+    user_id = None if runner_claims is not None else _uuid(body.get("user") or metadata.get("user_id"))
+    project_id = runner_claims.project_id if runner_claims is not None else _uuid(metadata.get("project_id"))
     message_id = _uuid(metadata.get("message_id"))
-    run_id = _uuid(metadata.get("run_id"))
+    run_id = runner_claims.run_id if runner_claims is not None else _uuid(metadata.get("run_id"))
     stage = str(metadata.get("stage") or "native_agent")[:80]
     retry_count = _non_negative_int(metadata.get("retry_count"))
-    free = bool(metadata.get("free", False))
+    free = True if runner_claims is not None else bool(metadata.get("free", False))
 
     try:
         messages = _openai_messages(body)
@@ -511,9 +541,19 @@ async def native_messages(request: Request) -> Response:
         "provider_cost_usd": str(provider_cost_usd) if provider_cost_usd is not None else None,
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,
+        "message_id": (
+            runner_claims.jti
+            if runner_claims is not None
+            else str(message_id) if message_id is not None else None
+        ),
         "retry_count": retry_count,
         "run_id": str(run_id) if run_id else None,
+        "session_id": str(runner_claims.session_id) if runner_claims is not None else None,
         "stage": stage,
+        "workspace_id": str(runner_claims.workspace_id) if runner_claims is not None else None,
+        "fencing_epoch": runner_claims.fencing_epoch if runner_claims is not None else None,
+        "cancel_epoch": runner_claims.cancel_epoch if runner_claims is not None else None,
+        "jti": runner_claims.jti if runner_claims is not None else None,
     }
     try:
         file_logger.log_request(
@@ -544,3 +584,19 @@ async def native_messages(request: Request) -> Response:
         status_code=200,
         media_type="application/json",
     )
+
+
+@router.post("/v1/messages")
+async def native_messages(request: Request) -> Response:
+    return await _native_messages_impl(request)
+
+
+@router.post("/v1/project-cell/messages")
+async def project_cell_native_messages(request: Request) -> Response:
+    try:
+        runner_claims = verify_runner_bearer_header(request.headers.get("authorization"))
+    except RunnerAuthConfigError as exc:
+        return _err(503, "api_error", str(exc))
+    except RunnerAuthError as exc:
+        return _err(401, "authentication_error", str(exc))
+    return await _native_messages_impl(request, runner_claims=runner_claims)

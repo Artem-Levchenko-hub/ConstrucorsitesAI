@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -28,6 +29,21 @@ from omnia_api.core.config import get_settings
 from omnia_api.services.agent_builder import Action, AgentResult
 
 log = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class NativeMessagesAttemptAuth:
+    message_id: str
+    project_id: str
+    run_id: str
+    session_id: str
+    workspace_id: str
+    fencing_epoch: int
+    cancel_epoch: int
+    headers: Mapping[str, str]
+
+
+NativeMessagesAuthFactory = Callable[[int], Awaitable[NativeMessagesAttemptAuth]]
 
 # Keep the proven pre-cost native loop, but route it through the current MAX
 # production model instead of the retired Gemini/Opus-era default.
@@ -691,6 +707,8 @@ async def _call_messages(
     stage: str = "native_agent",
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Mapping[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
+    auth_factory: NativeMessagesAuthFactory | None = None,
 ) -> dict[str, Any]:
     """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
     Anthropic response dict, or raises the last error."""
@@ -711,9 +729,8 @@ async def _call_messages(
         payload["user"] = user_id
     last: Exception | None = None
     for attempt in range(_CALL_RETRIES):
-        # Every provider attempt is attributable. The gateway persists these
-        # fields with the provider usage row, including a successful retry.
-        payload["metadata"] = {
+        request_headers = dict(headers) if headers is not None else None
+        metadata: dict[str, Any] = {
             "user_id": user_id,
             "project_id": project_id,
             "run_id": run_id,
@@ -722,8 +739,28 @@ async def _call_messages(
             "stage": stage,
             "retry_count": attempt,
         }
+        if auth_factory is not None:
+            auth = await auth_factory(attempt)
+            request_headers = dict(auth.headers)
+            metadata.update(
+                project_id=auth.project_id,
+                run_id=auth.run_id,
+                session_id=auth.session_id,
+                workspace_id=auth.workspace_id,
+                fencing_epoch=auth.fencing_epoch,
+                cancel_epoch=auth.cancel_epoch,
+                message_id=auth.message_id,
+            )
+        # Every provider attempt is attributable. The gateway persists these
+        # fields with the provider usage row, including a successful retry.
+        payload["metadata"] = metadata
         try:
-            r = await client.post(url, json=payload, timeout=_HTTP_TIMEOUT_S)
+            r = await client.post(
+                url,
+                json=payload,
+                timeout=_HTTP_TIMEOUT_S,
+                headers=request_headers,
+            )
             # 402 = provider key out of balance. Retrying can't fix it, so fail
             # FAST with a human cause instead of grinding 8 backoff retries and
             # surfacing an opaque "соединение потеряно" 3+ minutes later.
@@ -765,6 +802,9 @@ async def run_native_build(
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
     max_steps: int = 24,
     allow_max_bash: bool = False,
+    messages_url: str | None = None,
+    messages_headers: Mapping[str, str] | None = None,
+    messages_auth_factory: NativeMessagesAuthFactory | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -776,7 +816,7 @@ async def run_native_build(
     resending it is ~90% cheaper than a fresh write (see _call_messages).
     """
     settings = get_settings()
-    url = f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
+    url = messages_url or f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
     written: dict[str, str] = {}
@@ -931,6 +971,8 @@ async def run_native_build(
                     message_id=str(message_id) if message_id else None,
                     free=free,
                     stage=call_stage,
+                    headers=messages_headers,
+                    auth_factory=messages_auth_factory,
                     tools=(
                         _MAX_ENTRY_WRITE_TOOLS
                         if force_max_entry_write

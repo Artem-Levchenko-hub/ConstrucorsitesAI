@@ -10,15 +10,40 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import httpx
 import pytest
 
 from omnia_api.services import agent_native
-from omnia_api.services.agent_native import _module_not_found_hint
+from omnia_api.services.agent_native import NativeMessagesAttemptAuth, _module_not_found_hint
+
+_RUNNER_SRC = Path(__file__).resolve().parents[2] / "agent-runner" / "src"
+_GATEWAY_SRC = Path(__file__).resolve().parents[2] / "llm-gateway" / "src"
+
+
+def _load_cross_package_runner_auth() -> tuple[Any, Any, Any, Any, Any, Any]:
+    for extra_src in (_RUNNER_SRC, _GATEWAY_SRC):
+        extra_src_str = str(extra_src)
+        if extra_src_str not in sys.path:
+            sys.path.append(extra_src_str)
+
+    runner_pkg = importlib.import_module("omnia_agent_runner")
+    gateway_config = importlib.import_module("omnia_gateway.core.config")
+    gateway_runner_auth = importlib.import_module("omnia_gateway.core.runner_auth")
+    return (
+        runner_pkg.HS256JWTSigner,
+        runner_pkg.ProjectCellJWTMessagesAuth,
+        runner_pkg.RunnerIdentity,
+        gateway_config.Settings,
+        gateway_runner_auth.RunnerReplayError,
+        gateway_runner_auth,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -962,6 +987,396 @@ async def test_provider_limit_stops_immediately_and_keeps_green_tree(
     assert calls["n"] == 1
     assert res.done is True
     assert res.stop_reason == "provider_stopped_green"
+
+
+@pytest.mark.asyncio
+async def test_native_build_allows_injected_messages_url_and_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    turns = iter(
+        [
+            _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"})),
+            _turn(("build", {})),
+            _turn(("done", {"summary": "ok"})),
+        ]
+    )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append({"url": url, **kwargs})
+        return next(turns)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", ""), "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        messages_url="http://gateway.internal/v1/project-cell/messages",
+        messages_headers={"Authorization": "Bearer runner-token", "X-Trace": "abc"},
+        max_steps=5,
+    )
+
+    assert res.done is True
+    assert all(
+        call["url"] == "http://gateway.internal/v1/project-cell/messages" for call in calls
+    )
+    assert all(
+        call["headers"] == {"Authorization": "Bearer runner-token", "X-Trace": "abc"}
+        for call in calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_messages_auth_factory_wires_exact_runner_metadata_and_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    runner_message_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+    async def fake_sleep(seconds: float) -> None:
+        _ = seconds
+
+    class FakeClient:
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            **kwargs: Any,
+        ) -> httpx.Response:
+            calls.append(
+                {
+                    "url": url,
+                    "json": dict(json),
+                    "metadata": dict(json["metadata"]),
+                    "timeout": kwargs["timeout"],
+                    "headers": (
+                        dict(kwargs["headers"]) if kwargs.get("headers") is not None else None
+                    ),
+                }
+            )
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", url),
+                json={"content": [], "stop_reason": "end_turn"},
+            )
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def auth_factory(attempt: int) -> NativeMessagesAttemptAuth:
+        assert attempt == 0
+        return NativeMessagesAttemptAuth(
+            message_id=runner_message_id,
+            project_id="22222222-2222-2222-2222-222222222222",
+            run_id="33333333-3333-3333-3333-333333333333",
+            session_id="44444444-4444-4444-4444-444444444444",
+            workspace_id="55555555-5555-5555-5555-555555555555",
+            fencing_epoch=7,
+            cancel_epoch=2,
+            headers={"Authorization": "Bearer runner-0", "X-Trace": "trace-0"},
+        )
+
+    response = await agent_native._call_messages(
+        FakeClient(),
+        "http://gateway.internal/v1/project-cell/messages",
+        [{"role": "user", "content": "hi"}],
+        "system",
+        user_id=None,
+        project_id=None,
+        run_id=None,
+        message_id=None,
+        headers={"Authorization": "Bearer stale"},
+        auth_factory=auth_factory,
+    )
+
+    assert response["stop_reason"] == "end_turn"
+    assert calls[0]["url"] == "http://gateway.internal/v1/project-cell/messages"
+    assert calls[0]["headers"] == {"Authorization": "Bearer runner-0", "X-Trace": "trace-0"}
+    assert calls[0]["metadata"] == {
+        "user_id": None,
+        "project_id": "22222222-2222-2222-2222-222222222222",
+        "run_id": "33333333-3333-3333-3333-333333333333",
+        "session_id": "44444444-4444-4444-4444-444444444444",
+        "workspace_id": "55555555-5555-5555-5555-555555555555",
+        "fencing_epoch": 7,
+        "cancel_epoch": 2,
+        "message_id": runner_message_id,
+        "free": False,
+        "stage": "native_agent",
+        "retry_count": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_call_messages_retry_gets_fresh_token_from_auth_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    sleeps: list[float] = []
+    factory_calls: list[int] = []
+    runner_message_ids = [
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ]
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.count = 0
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            **kwargs: Any,
+        ) -> httpx.Response:
+            calls.append(
+                {
+                    "url": url,
+                    "metadata": dict(json["metadata"]),
+                    "headers": (
+                        dict(kwargs["headers"]) if kwargs.get("headers") is not None else None
+                    ),
+                }
+            )
+            self.count += 1
+            if self.count == 1:
+                return httpx.Response(429, request=httpx.Request("POST", url), text="rate_limit")
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", url),
+                json={"content": [], "stop_reason": "end_turn"},
+            )
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def auth_factory(attempt: int) -> NativeMessagesAttemptAuth:
+        factory_calls.append(attempt)
+        return NativeMessagesAttemptAuth(
+            message_id=runner_message_ids[attempt],
+            project_id="22222222-2222-2222-2222-222222222222",
+            run_id="33333333-3333-3333-3333-333333333333",
+            session_id="44444444-4444-4444-4444-444444444444",
+            workspace_id="55555555-5555-5555-5555-555555555555",
+            fencing_epoch=7,
+            cancel_epoch=attempt,
+            headers={"Authorization": f"Bearer runner-{attempt}"},
+        )
+
+    response = await agent_native._call_messages(
+        FakeClient(),
+        "http://gateway.internal/v1/project-cell/messages",
+        [{"role": "user", "content": "hi"}],
+        "system",
+        auth_factory=auth_factory,
+    )
+
+    assert response["stop_reason"] == "end_turn"
+    assert factory_calls == [0, 1]
+    assert [call["headers"] for call in calls] == [
+        {"Authorization": "Bearer runner-0"},
+        {"Authorization": "Bearer runner-1"},
+    ]
+    assert [call["metadata"]["message_id"] for call in calls] == runner_message_ids
+    assert [call["metadata"]["cancel_epoch"] for call in calls] == [0, 1]
+    assert sleeps == [6.0]
+
+
+@pytest.mark.asyncio
+async def test_native_build_forwards_messages_auth_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def auth_factory(attempt: int) -> NativeMessagesAttemptAuth:
+        return NativeMessagesAttemptAuth(
+            message_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            project_id="22222222-2222-2222-2222-222222222222",
+            run_id="33333333-3333-3333-3333-333333333333",
+            session_id="44444444-4444-4444-4444-444444444444",
+            workspace_id="55555555-5555-5555-5555-555555555555",
+            fencing_epoch=7,
+            cancel_epoch=0,
+            headers={"Authorization": f"Bearer runner-{attempt}"},
+        )
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        assert url == "http://gateway.internal/v1/project-cell/messages"
+        assert kwargs["auth_factory"] is auth_factory
+        return _turn(("done", {"summary": "ok"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        messages_url="http://gateway.internal/v1/project-cell/messages",
+        messages_auth_factory=auth_factory,
+        max_steps=1,
+    )
+
+    assert res.done is True
+
+
+@pytest.mark.asyncio
+async def test_runner_attempt_auth_contract_matches_gateway_validation_and_replay() -> None:
+    (
+        hs256_jwt_signer,
+        project_cell_jwt_messages_auth,
+        trusted_runner_identity,
+        gateway_settings,
+        runner_replay_error,
+        gateway_runner_auth,
+    ) = _load_cross_package_runner_auth()
+    fixed_now = 1_726_000_000
+    runner_message_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    identity = trusted_runner_identity(
+        project_id=UUID("22222222-2222-2222-2222-222222222222"),
+        run_id=UUID("33333333-3333-3333-3333-333333333333"),
+        session_id=UUID("44444444-4444-4444-4444-444444444444"),
+        workspace_id=UUID("55555555-5555-5555-5555-555555555555"),
+        fencing_epoch=7,
+        cancel_epoch=2,
+    )
+    auth = project_cell_jwt_messages_auth(
+        signer=hs256_jwt_signer("runner-secret"),
+        issuer="omnia-agent-runner",
+        audience="omnia-project-cell-runner",
+        ttl_seconds=120,
+        clock=lambda: fixed_now,
+        jti_factory=lambda: UUID(runner_message_id),
+        extra_headers={"X-Trace": "trace-0"},
+    )
+    calls: list[dict[str, Any]] = []
+
+    class FakeClient:
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            **kwargs: Any,
+        ) -> httpx.Response:
+            calls.append(
+                {
+                    "url": url,
+                    "metadata": dict(json["metadata"]),
+                    "headers": dict(kwargs["headers"]),
+                }
+            )
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", url),
+                json={"content": [], "stop_reason": "end_turn"},
+            )
+
+    response = await agent_native._call_messages(
+        FakeClient(),
+        "http://gateway.internal/v1/project-cell/messages",
+        [{"role": "user", "content": "hi"}],
+        "system",
+        stage="verification",
+        headers={"Authorization": "Bearer stale"},
+        auth_factory=auth.auth_factory(identity),
+    )
+
+    assert response["stop_reason"] == "end_turn"
+    assert calls[0]["url"] == "http://gateway.internal/v1/project-cell/messages"
+    assert calls[0]["headers"]["X-Trace"] == "trace-0"
+    assert calls[0]["headers"]["Authorization"] != "Bearer stale"
+    assert calls[0]["metadata"]["message_id"] == runner_message_id
+    assert calls[0]["metadata"]["retry_count"] == 0
+    assert calls[0]["metadata"]["stage"] == "verification"
+
+    claims = gateway_runner_auth.verify_runner_bearer_header(
+        calls[0]["headers"]["Authorization"],
+        settings=gateway_settings(
+            runner_auth_secret="runner-secret",
+            runner_auth_issuer="omnia-agent-runner",
+            runner_auth_audience="omnia-project-cell-runner",
+            runner_auth_max_ttl_seconds=120,
+        ),
+        now=fixed_now,
+    )
+
+    assert claims.jti == runner_message_id
+    validated = gateway_runner_auth.validate_runner_metadata(calls[0]["metadata"], claims)
+    assert validated["project_id"] == str(identity.project_id)
+    assert validated["run_id"] == str(identity.run_id)
+    assert validated["session_id"] == str(identity.session_id)
+    assert validated["workspace_id"] == str(identity.workspace_id)
+    assert validated["fencing_epoch"] == identity.fencing_epoch
+    assert validated["cancel_epoch"] == identity.cancel_epoch
+
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, Any]] = []
+            self.results = [True, False]
+
+        async def set(
+            self,
+            name: str,
+            value: bytes,
+            *,
+            ex: int | None = None,
+            nx: bool = False,
+        ) -> bool:
+            self.calls.append({"name": name, "value": value, "ex": ex, "nx": nx})
+            return self.results.pop(0)
+
+    fake_redis = FakeRedis()
+    await gateway_runner_auth.consume_runner_jti(claims, now=fixed_now, redis_client=fake_redis)
+    with pytest.raises(runner_replay_error):
+        await gateway_runner_auth.consume_runner_jti(
+            claims,
+            now=fixed_now,
+            redis_client=fake_redis,
+        )
+    assert fake_redis.calls[0]["name"].endswith(runner_message_id)
+    assert fake_redis.calls[0]["nx"] is True
+    assert fake_redis.calls[0]["ex"] == 119
+
+
+@pytest.mark.asyncio
+async def test_native_build_defaults_to_legacy_messages_endpoint_without_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        calls.append({"url": url, **kwargs})
+        return _turn(("done", {"summary": "ok"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "detail": "clean"}
+
+    res = await agent_native.run_native_build(
+        system="s",
+        task="t",
+        execute=execute,
+        max_steps=1,
+    )
+
+    assert res.done is True
+    assert calls[0]["url"] == "http://localhost:8001/v1/messages"
+    assert calls[0]["headers"] is None
 
 
 def test_native_agent_has_eyes_and_taste() -> None:
