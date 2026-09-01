@@ -13,8 +13,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from omnia_api.models.project_cell import (
+    ProjectCellCandidate,
+    ProjectCellOperation,
+    ProjectCellWorkspace,
+)
 from omnia_api.models.user import User
+from omnia_api.services.project_cell_candidates import (
+    cancel_candidate,
+    prepare_candidate,
+    promote_candidate,
+)
 from omnia_api.services.project_cells import (
     ProjectCellBusy,
     ProjectCellIdempotencyConflict,
@@ -45,6 +54,94 @@ ALLOWED_KINDS = (
     "restore",
     "reconcile",
 )
+
+
+async def test_candidate_promotion_is_atomic_compare_and_swap(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    run: GenerationRun,
+) -> None:
+    first = await _prepare_release_candidate(db_session, workspace, run, "a" * 40)
+    await promote_candidate(
+        db_session, candidate_id=first.id, generation_run_id=run.id, fencing_epoch=7
+    )
+    second = await _prepare_release_candidate(db_session, workspace, run, "c" * 40)
+    stale = await _prepare_release_candidate(db_session, workspace, run, "d" * 40)
+
+    await promote_candidate(
+        db_session, candidate_id=second.id, generation_run_id=run.id, fencing_epoch=7
+    )
+    with pytest.raises(ProjectCellStateConflict, match="accepted candidate changed"):
+        await promote_candidate(
+            db_session, candidate_id=stale.id, generation_run_id=run.id, fencing_epoch=7
+        )
+
+    accepted = list(
+        await db_session.scalars(
+            select(ProjectCellCandidate).where(ProjectCellCandidate.status == "accepted")
+        )
+    )
+    assert [item.id for item in accepted] == [second.id]
+    assert first.status == "rejected"
+
+
+async def test_cancelled_or_stale_candidate_cannot_promote(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    run: GenerationRun,
+) -> None:
+    cancelled = await _prepare_release_candidate(db_session, workspace, run, "e" * 40)
+    await cancel_candidate(db_session, cancelled.id)
+    with pytest.raises(ProjectCellStateConflict, match="not promotable"):
+        await promote_candidate(
+            db_session, candidate_id=cancelled.id, generation_run_id=run.id, fencing_epoch=7
+        )
+
+    stale = await _prepare_release_candidate(db_session, workspace, run, "f" * 40)
+    workspace.fencing_epoch = 8
+    await db_session.flush()
+    with pytest.raises(ProjectCellStateConflict, match="stale"):
+        await promote_candidate(
+            db_session, candidate_id=stale.id, generation_run_id=run.id, fencing_epoch=7
+        )
+
+
+async def test_candidate_requires_complete_safe_immutable_evidence(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    run: GenerationRun,
+) -> None:
+    run.status = "running"
+    workspace.generation_run_id = run.id
+    workspace.fencing_epoch = 1
+    await db_session.flush()
+    with pytest.raises(ProjectCellValidationError, match="database_backup_ref"):
+        await prepare_candidate(
+            db_session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            fencing_epoch=1,
+            source_revision="a" * 40,
+            migration_digest="b" * 64,
+            database_backup_ref="secret?token=value",
+            build_ref="build/ref",
+            verification_ref="verify/ref",
+        )
+
+
+async def test_cancelled_generation_run_cannot_promote_candidate(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    run: GenerationRun,
+) -> None:
+    candidate = await _prepare_release_candidate(db_session, workspace, run, "9" * 40)
+    run.status = "cancel_requested"
+    await db_session.flush()
+
+    with pytest.raises(ProjectCellStateConflict, match="generation run is not running"):
+        await promote_candidate(
+            db_session, candidate_id=candidate.id, generation_run_id=run.id, fencing_epoch=7
+        )
 
 
 async def _new_user(session: AsyncSession, label: str) -> User:
@@ -104,6 +201,29 @@ async def _new_workspace(
     session.add(workspace)
     await session.flush()
     return workspace
+
+
+async def _prepare_release_candidate(
+    session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    run: GenerationRun,
+    revision: str,
+) -> ProjectCellCandidate:
+    run.status = "running"
+    workspace.generation_run_id = run.id
+    workspace.fencing_epoch = 7
+    await session.flush()
+    return await prepare_candidate(
+        session,
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        fencing_epoch=7,
+        source_revision=revision,
+        migration_digest="b" * 64,
+        database_backup_ref=f"backup/{revision}",
+        build_ref=f"build/{revision}",
+        verification_ref=f"verification/{revision}",
+    )
 
 
 @pytest_asyncio.fixture

@@ -102,3 +102,30 @@ Full loop: verify/review → focused commit → push → check no active generat
 An authenticated Codex Cloud environment has been created for this repository with locked dependency setup. This document does not establish that a task is running; verify the cloud task's actual status.
 
 No workstation key or production secret has been copied into this branch or cloud prompt. Codex Cloud Secrets are setup-only; do not write them to agent-readable files to bypass that boundary. A production release channel must be explicitly configured with minimal authority (for example, a protected GitHub Actions environment), not a bulk copy of workstation credentials. If that channel is absent, continue all safe implementation/testing work and report the deployment blocker accurately; do not invent a successful deployment.
+
+## Cloud continuation update — candidate promotion slice
+
+The next vertical slice adds the durable, immutable Project Cell release-candidate
+**persistence primitive** and a fenced compare-and-swap candidate transition. A candidate binds source revision,
+migration digest, database-backup reference, build reference and verification
+reference to the active generation run and fencing epoch. Cancelled candidates,
+stale epochs and candidates prepared against an older accepted release cannot
+promote. Promotion also locks and verifies that the authoritative generation run is
+still running and belongs to the workspace owner. The partial unique index permits
+only one accepted candidate per workspace. This primitive is not yet wired to the
+Project/Snapshot accepted release pointer, so the overall atomic product-promotion
+contract remains open.
+
+This slice deliberately does **not** enable canary routing and does not claim the
+runtime complete. Cell-owned preview/database binding, resident runner dispatch,
+persistent supervision/browser lifecycle, controlled egress/dependency installation,
+and production recovery/isolation proofs remain required exactly as documented above.
+
+Cloud limitations observed during this continuation:
+
+- Sequential Thinking MCP and Context7 were not present in the available toolset.
+- The checkout has no configured Git remote, so it has no permitted push/PR/release
+  channel yet.
+- Docker and local PostgreSQL executables are absent. Ruff, Mypy and diff checks can
+  run locally; PostgreSQL-backed tests and live Docker proofs require an external CI
+  or release runner.

@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -155,3 +156,67 @@ class ProjectCellOperation(Base):
     def __init__(self, **kwargs: object) -> None:
         kwargs.setdefault("request_payload", {})
         super().__init__(**kwargs)
+
+
+class ProjectCellCandidate(Base):
+    """Immutable release evidence assembled by a fenced cell generation."""
+
+    __tablename__ = "project_cell_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("project_cell_workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    generation_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("generation_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    fencing_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    migration_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    database_backup_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    build_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_accepted_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("project_cell_candidates.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="prepared")
+    cancelled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("fencing_epoch > 0", name="fencing_epoch_positive"),
+        CheckConstraint(
+            "status IN ('prepared', 'accepted', 'rejected', 'cancelled')",
+            name="status_allowed",
+        ),
+        CheckConstraint(
+            "source_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'",
+            name="source_revision_hex",
+        ),
+        CheckConstraint(
+            "migration_digest ~ '^[0-9a-f]{64}$'", name="migration_digest_hex"
+        ),
+        CheckConstraint(
+            "(status = 'cancelled') = cancelled", name="cancelled_status_consistent"
+        ),
+        UniqueConstraint(
+            "workspace_id", "source_revision", name="uq_project_cell_candidate_revision"
+        ),
+        Index(
+            "uq_project_cell_candidates_one_accepted",
+            "workspace_id",
+            unique=True,
+            postgresql_where=text("status = 'accepted'"),
+        ),
+    )
