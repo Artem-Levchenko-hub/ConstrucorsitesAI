@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-01",
-  "version": 49,
+  "version": 50,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -202,6 +202,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "01.09",
+   "what": "Утвердил письменную спецификацию owner-only Docker Project Cell и поручил самостоятельно составить план, затем без дополнительных согласований перейти к коду последовательными проверяемыми этапами.",
+   "impact": "Первая поставка выделена в самостоятельный Control Foundation: серверная allowlist подтверждённого владельца, PostgreSQL-состояние workspace/operation, идемпотентная single-flight модель и заменяемый orchestrator provider. План запрещает подключать prompt или создавать Docker-ресурсы до готовности следующих частей, поэтому промежуточный деплой остаётся тёмным и обратимым."
+  },
   {
    "date": "01.09",
    "what": "Одобрил внешний owner-only запуск Docker Project Cell для своего подтверждённого аккаунта: Claude Sonnet через LLMGW должен собирать настоящие full-stack MAX-приложения с frontend, backend, PostgreSQL, Redis и браузером.",
@@ -2447,7 +2452,7 @@
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "01.09",
    "description": "Если подключить постоянный Docker Project Cell только подтверждённому владельцу через заменяемый WorkspaceProvider, Claude Sonnet сможет уже сейчас собирать реальные full-stack MAX-приложения, а последующий переход на Kata заменит только исполнительную среду.",
-   "evidence": "Владелец утвердил внешний доступ через обычный production-интерфейс только для своего подтверждённого аккаунта и потребовал полноценный результат: frontend, backend, PostgreSQL, Redis, MAX-интеграция, браузер и самостоятельный цикл исправления. Локальный HEAD, origin/main и production повторно сверены на b2fb7b4753494fc54ffdd1286ad9af1335456d32. Контракт записан в docs/superpowers/specs/2026-09-01-docker-project-cell-owner-canary-design.md; runtime-код и серверная конфигурация на этом шаге не менялись.",
+   "evidence": "Владелец утвердил внешний доступ через обычный production-интерфейс только для своего подтверждённого аккаунта и потребовал полноценный результат: frontend, backend, PostgreSQL, Redis, MAX-интеграция, браузер и самостоятельный цикл исправления. Спецификация доставлена в origin/main ревизией d8ec761e27785c6470a374f45aa06c5669c3a5e4. После повторной сверки local/origin на d8ec761e и production на b2fb7b4 создан точный первый план docs/superpowers/plans/2026-09-01-project-cell-control-foundation.md: семь задач от owner policy и durable state до dark production deploy; runtime-код и серверная конфигурация на момент записи плана не менялись.",
    "impact": "Появился точный промежуточный путь: владелец сможет проверить свободу агента на реальном продукте без ожидания K3s, при этом общий multi-tenant запуск не получает слабую Docker-границу. Гипотеза остаётся open и без оценки до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
    "next_vector": "V4"
   }
