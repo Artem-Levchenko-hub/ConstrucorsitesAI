@@ -78,11 +78,12 @@ def _write_workspace_state(
     workspace_payload: dict[str, Any],
 ) -> None:
     path = store.workspace_path(workspace_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_text(
         json.dumps({"version": 1, "workspace": workspace_payload}),
         encoding="utf-8",
     )
+    path.chmod(0o600)
 
 
 def test_state_round_trip_is_per_workspace(tmp_path: Path) -> None:
@@ -163,8 +164,9 @@ def test_corrupt_state_file_fails_closed(tmp_path: Path) -> None:
     store = CellStateStore(tmp_path / "project-cells.json")
     workspace_id = uuid4()
     path = store.workspace_path(workspace_id)
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(mode=0o700, parents=True)
     path.write_text("{not json", encoding="utf-8")
+    path.chmod(0o600)
 
     with pytest.raises(RuntimeError):
         store.load(workspace_id)
