@@ -4,20 +4,26 @@ import hashlib
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
 
-ALLOWED_OPERATION_KINDS = frozenset({"ensure", "wake", "pause", "stop", "destroy", "status"})
+ALLOWED_OPERATION_KINDS = frozenset(
+    {"ensure", "wake", "pause", "stop", "destroy", "status", "restore", "reconcile"}
+)
 ACTIVE_OPERATION_STATUSES = ("pending", "running")
+TERMINAL_OPERATION_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "indeterminate"}
+)
 MAX_STORED_PAYLOAD_BYTES = 64 * 1024
 REDACTED_VALUE = "[REDACTED]"
 
@@ -87,6 +93,19 @@ class ProjectCellStateConflict(ProjectCellError):
     """A lifecycle transition is not valid from the current state."""
 
 
+@dataclass(frozen=True, slots=True)
+class ClaimedCellOperation:
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID | None
+    kind: str
+    request: dict[str, object]
+    request_digest: str
+    fencing_epoch: int
+
+
 def _normalize_key(key: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "", key).lower()
 
@@ -129,8 +148,13 @@ def _canonical_payload(value: dict[str, object]) -> str:
         raise ProjectCellValidationError("payload must be JSON-serializable") from exc
 
 
-def _request_digest(value: dict[str, object]) -> str:
-    return hashlib.sha256(_canonical_payload(value).encode("utf-8")).hexdigest()
+def _decoded_payload(canonical: str) -> dict[str, object]:
+    return cast(dict[str, object], json.loads(canonical))
+
+
+def _ensure_stored_size(canonical: str) -> None:
+    if len(canonical.encode("utf-8")) > MAX_STORED_PAYLOAD_BYTES:
+        raise ProjectCellValidationError("stored payload exceeds 64 KiB")
 
 
 def _reject_unsafe_request_keys(value: object) -> None:
@@ -141,7 +165,8 @@ def _reject_unsafe_request_keys(value: object) -> None:
                     f"request payload key {key!r} is not safe to store"
                 )
             _reject_unsafe_request_keys(nested)
-    elif type(value) is list:
+        return
+    if type(value) is list:
         for nested in cast(list[object], value):
             _reject_unsafe_request_keys(nested)
 
@@ -159,21 +184,30 @@ def _redact_unsafe_result_keys(value: object) -> object:
     return value
 
 
-def _decoded_payload(canonical: str) -> dict[str, object]:
-    return cast(dict[str, object], json.loads(canonical))
-
-
-def _ensure_stored_size(canonical: str) -> None:
-    if len(canonical.encode("utf-8")) > MAX_STORED_PAYLOAD_BYTES:
-        raise ProjectCellValidationError("stored payload exceeds 64 KiB")
-
-
 def _prepare_request(value: dict[str, object]) -> tuple[dict[str, object], str]:
     if type(value) is not dict:
         raise ProjectCellValidationError("request payload must be a JSON object")
     _validate_json_native(value)
     _reject_unsafe_request_keys(value)
     canonical = _canonical_payload(value)
+    _ensure_stored_size(canonical)
+    return _decoded_payload(canonical), hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _canonical_operation_envelope(
+    workspace_id: UUID,
+    generation_run_id: UUID | None,
+    kind: str,
+    request: dict[str, object],
+) -> tuple[dict[str, object], str]:
+    request_payload, _ = _prepare_request(request)
+    envelope: dict[str, object] = {
+        "workspace_id": str(workspace_id),
+        "generation_run_id": str(generation_run_id) if generation_run_id is not None else None,
+        "kind": kind,
+        "request": request_payload,
+    }
+    canonical = _canonical_payload(envelope)
     _ensure_stored_size(canonical)
     return _decoded_payload(canonical), hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -189,6 +223,10 @@ def _prepare_result(value: dict[str, object]) -> dict[str, object]:
     return _decoded_payload(canonical)
 
 
+def _hashed_error(error: str) -> str:
+    return f"provider_error:{hashlib.sha256(error.encode('utf-8')).hexdigest()}"
+
+
 async def _advisory_lock(session: AsyncSession, workspace_key: UUID) -> None:
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:workspace_key))"),
@@ -201,6 +239,56 @@ def _validate_workspace_ownership(project: Project, user: User, run: GenerationR
         raise ProjectCellOwnershipError("authenticated user does not own the project")
     if run.project_id != project.id or run.user_id != user.id:
         raise ProjectCellOwnershipError("generation run does not belong to the project owner")
+
+
+def _stored_request_payload(operation: ProjectCellOperation) -> dict[str, object]:
+    payload = operation.request_payload
+    if type(payload) is not dict:
+        raise ProjectCellValidationError("stored operation request payload must be a JSON object")
+    expected_keys = {"workspace_id", "generation_run_id", "kind", "request"}
+    if set(payload) != expected_keys:
+        raise ProjectCellValidationError(
+            "stored operation request payload is not a canonical envelope"
+        )
+
+    raw_workspace_id = payload.get("workspace_id")
+    raw_generation_run_id = payload.get("generation_run_id")
+    raw_kind = payload.get("kind")
+    request = payload.get("request")
+    if (
+        type(raw_workspace_id) is not str
+        or (raw_generation_run_id is not None and type(raw_generation_run_id) is not str)
+        or type(raw_kind) is not str
+        or type(request) is not dict
+    ):
+        raise ProjectCellValidationError("stored operation envelope has invalid field types")
+
+    expected_generation_run_id = (
+        str(operation.generation_run_id) if operation.generation_run_id is not None else None
+    )
+    if raw_workspace_id != str(operation.workspace_id):
+        raise ProjectCellValidationError("stored operation envelope workspace does not match row")
+    if raw_generation_run_id != expected_generation_run_id:
+        raise ProjectCellValidationError(
+            "stored operation envelope generation run does not match row"
+        )
+    if raw_kind != operation.kind:
+        raise ProjectCellValidationError("stored operation envelope kind does not match row")
+
+    envelope, digest = _canonical_operation_envelope(
+        operation.workspace_id,
+        operation.generation_run_id,
+        operation.kind,
+        request,
+    )
+    if payload != envelope:
+        raise ProjectCellValidationError("stored operation envelope is not canonical")
+    if operation.request_digest != digest:
+        raise ProjectCellValidationError("stored operation request digest does not match envelope")
+
+    canonical_request = envelope.get("request")
+    assert type(canonical_request) is dict
+    return canonical_request
 
 
 async def get_or_create_workspace(
@@ -240,6 +328,26 @@ def _validate_reservation(kind: str, idempotency_key: str) -> None:
         raise ProjectCellValidationError("idempotency key length must be between 8 and 128")
 
 
+def _validate_operation_request(kind: str, request: dict[str, object]) -> None:
+    if kind != "reconcile":
+        return
+    if set(request) != {"indeterminate_operation_id"}:
+        raise ProjectCellValidationError(
+            "reconcile request must contain exactly indeterminate_operation_id"
+        )
+    raw_operation_id = request.get("indeterminate_operation_id")
+    if type(raw_operation_id) is not str:
+        raise ProjectCellValidationError(
+            "reconcile indeterminate_operation_id must be a UUID string"
+        )
+    try:
+        UUID(raw_operation_id)
+    except ValueError as exc:
+        raise ProjectCellValidationError(
+            "reconcile indeterminate_operation_id must be a UUID string"
+        ) from exc
+
+
 async def reserve_cell_operation(
     session: AsyncSession,
     *,
@@ -250,7 +358,7 @@ async def reserve_cell_operation(
     request: dict[str, object],
 ) -> tuple[ProjectCellOperation, bool]:
     _validate_reservation(kind, idempotency_key)
-    request_payload, digest = _prepare_request(request)
+    _validate_operation_request(kind, request)
     await _advisory_lock(session, workspace_id)
 
     workspace = await session.get(ProjectCellWorkspace, workspace_id)
@@ -266,6 +374,13 @@ async def reserve_cell_operation(
             or generation_run.user_id != workspace.owner_id
         ):
             raise ProjectCellOwnershipError("generation run does not belong to the workspace owner")
+
+    request_payload, digest = _canonical_operation_envelope(
+        workspace_id,
+        generation_run_id,
+        kind,
+        request,
+    )
 
     existing = await session.scalar(
         select(ProjectCellOperation).where(
@@ -354,12 +469,76 @@ async def fail_cell_operation(
     if operation.status != "running":
         raise ProjectCellStateConflict(f"cannot fail operation in state {operation.status!r}")
     operation.status = "failed"
-    operation.error = f"provider_error:{hashlib.sha256(error.encode('utf-8')).hexdigest()}"
+    operation.error = _hashed_error(error)
     operation.finished_at = datetime.now(UTC)
     await session.flush()
 
 
-async def recover_interrupted_cell_operations(session: AsyncSession) -> int:
+async def mark_cell_operation_indeterminate(
+    session: AsyncSession,
+    operation_id: UUID,
+    error: str,
+) -> None:
+    operation = await _locked_operation(session, operation_id)
+    if operation.status == "indeterminate":
+        return
+    if operation.status != "running":
+        raise ProjectCellStateConflict(
+            f"cannot mark operation indeterminate in state {operation.status!r}"
+        )
+    operation.status = "indeterminate"
+    operation.error = _hashed_error(error)
+    operation.finished_at = datetime.now(UTC)
+    await session.flush()
+
+
+async def claim_cell_operation_committed(
+    session_factory: async_sessionmaker[AsyncSession],
+    operation_id: UUID,
+) -> ClaimedCellOperation:
+    async with session_factory() as session:
+        operation = await session.get(ProjectCellOperation, operation_id)
+        if operation is None:
+            raise ProjectCellNotFound("Project Cell operation was not found")
+
+        await _advisory_lock(session, operation.workspace_id)
+        locked_operation = await _locked_operation(session, operation_id)
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == locked_operation.workspace_id)
+            .with_for_update()
+        )
+        if workspace is None:
+            raise ProjectCellNotFound("Project Cell workspace was not found")
+        if locked_operation.status != "pending":
+            raise ProjectCellStateConflict(
+                f"cannot claim operation in state {locked_operation.status!r}"
+            )
+        request = _stored_request_payload(locked_operation)
+
+        workspace.fencing_epoch += 1
+        workspace.version += 1
+        locked_operation.fencing_epoch = workspace.fencing_epoch
+        locked_operation.status = "running"
+        locked_operation.started_at = datetime.now(UTC)
+        await session.flush()
+
+        claimed = ClaimedCellOperation(
+            operation_id=locked_operation.id,
+            workspace_id=locked_operation.workspace_id,
+            project_id=workspace.project_id,
+            owner_id=workspace.owner_id,
+            generation_run_id=locked_operation.generation_run_id,
+            kind=locked_operation.kind,
+            request=request,
+            request_digest=locked_operation.request_digest,
+            fencing_epoch=workspace.fencing_epoch,
+        )
+        await session.commit()
+        return claimed
+
+
+async def _recover_interrupted_cell_operations(session: AsyncSession) -> int:
     operations = list(
         (
             await session.execute(
@@ -371,8 +550,27 @@ async def recover_interrupted_cell_operations(session: AsyncSession) -> int:
         .scalars()
         .all()
     )
+    now = datetime.now(UTC)
     for operation in operations:
-        operation.status = "pending"
-        operation.started_at = None
+        operation.status = "indeterminate"
+        operation.error = _hashed_error("interrupted_before_outcome_recorded")
+        operation.finished_at = now
     await session.flush()
     return len(operations)
+
+
+async def recover_interrupted_cell_operations(
+    session: AsyncSession | None = None,
+) -> int:
+    """Finalise cell effects whose API coroutine cannot survive a restart."""
+
+    if session is not None:
+        return await _recover_interrupted_cell_operations(session)
+
+    from omnia_api.core.db import get_engine
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as own_session:
+        recovered = await _recover_interrupted_cell_operations(own_session)
+        await own_session.commit()
+        return recovered

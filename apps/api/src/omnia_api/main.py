@@ -50,6 +50,7 @@ from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
 from omnia_api.services import readiness
 from omnia_api.services.generation_runs import recover_interrupted_generation_runs
+from omnia_api.services.project_cells import recover_interrupted_cell_operations
 from omnia_api.services.ws_hub import hub
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning(
             "finalised interrupted generation runs after API restart",
             extra={"generation_run_count": recovered},
+        )
+    recovered_cells = await recover_interrupted_cell_operations()
+    if recovered_cells:
+        logger.warning(
+            "finalised interrupted Project Cell operations after API restart",
+            extra={"project_cell_operation_count": recovered_cells},
         )
     await hub.start_listener()
     try:

@@ -103,6 +103,7 @@ class ProjectCellOperation(Base):
     )
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     request_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    fencing_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(
         Text,
@@ -128,11 +129,14 @@ class ProjectCellOperation(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('ensure', 'wake', 'pause', 'stop', 'destroy', 'status')",
+            (
+                "kind IN ('ensure', 'wake', 'pause', 'stop', 'destroy', "
+                "'status', 'restore', 'reconcile')"
+            ),
             name="kind_allowed",
         ),
         CheckConstraint(
-            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')",
+            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled', 'indeterminate')",
             name="status_allowed",
         ),
         UniqueConstraint(

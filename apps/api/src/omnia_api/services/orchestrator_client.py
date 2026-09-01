@@ -8,7 +8,9 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
-from typing import Any, cast
+import re
+from dataclasses import dataclass
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 import httpx
@@ -18,6 +20,12 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
 
 log = structlog.get_logger(__name__)
+
+_REQUEST_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_CHECKPOINT_REF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
+_PROJECT_CELL_CONTROL_KINDS = frozenset(
+    {"wake", "pause", "stop", "destroy", "restore", "reconcile"}
+)
 
 
 class OrchestratorUnavailable(ApiError):
@@ -47,6 +55,332 @@ class OrchestratorBadRequest(ApiError):
             status_code=status_code,
             details=details,
         )
+
+
+def _validate_request_digest(request_digest: str) -> None:
+    if not _REQUEST_DIGEST_RE.fullmatch(request_digest):
+        raise ValueError("request_digest must be a 64-character lowercase hex string")
+
+
+def _validate_fencing_epoch(fencing_epoch: int) -> None:
+    if fencing_epoch <= 0:
+        raise ValueError("fencing_epoch must be positive")
+
+
+def _validate_checkpoint_ref(checkpoint_ref: str | None) -> None:
+    if checkpoint_ref is not None and _CHECKPOINT_REF_RE.fullmatch(checkpoint_ref) is None:
+        raise ValueError(
+            "checkpoint_ref must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$"
+        )
+
+
+def _parse_orchestrator_4xx(payload: object) -> tuple[str, dict[str, Any] | None]:
+    if type(payload) is not dict:
+        return "unknown", {"detail": payload}
+
+    body = cast(dict[str, Any], payload)
+    error = body.get("error")
+    if type(error) is dict:
+        error_body = cast(dict[str, Any], error)
+        raw_message = error_body.get("message")
+        message = raw_message if type(raw_message) is str else "unknown"
+        raw_details = error_body.get("details")
+        if type(raw_details) is dict:
+            return message, cast(dict[str, Any], raw_details)
+
+        fallback: dict[str, Any] = {}
+        raw_code = error_body.get("code")
+        if type(raw_code) is str:
+            fallback["code"] = raw_code
+        if raw_details is not None:
+            fallback["details"] = raw_details
+        return message, fallback or None
+
+    raw_detail = body.get("detail")
+    message = raw_detail if type(raw_detail) is str else "unknown"
+    return message, body
+
+
+@dataclass(frozen=True, slots=True)
+class EnsureProjectCellResourcesRequest:
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    profile_version: str
+    operation_id: UUID
+    fencing_epoch: int
+    request_digest: str
+
+    def __post_init__(self) -> None:
+        if not self.profile_version:
+            raise ValueError("profile_version must be non-empty")
+        _validate_fencing_epoch(self.fencing_epoch)
+        _validate_request_digest(self.request_digest)
+
+    def to_wire_json(self) -> dict[str, object]:
+        return {
+            "workspace_id": str(self.workspace_id),
+            "project_id": str(self.project_id),
+            "owner_id": str(self.owner_id),
+            "profile_version": self.profile_version,
+            "operation_id": str(self.operation_id),
+            "fencing_epoch": self.fencing_epoch,
+            "request_digest": self.request_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ControlProjectCellResourcesRequest:
+    workspace_id: UUID
+    kind: str
+    checkpoint_ref: str | None
+    operation_id: UUID
+    fencing_epoch: int
+    request_digest: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in _PROJECT_CELL_CONTROL_KINDS:
+            raise ValueError(f"unsupported Project Cell control kind {self.kind!r}")
+        _validate_checkpoint_ref(self.checkpoint_ref)
+        _validate_fencing_epoch(self.fencing_epoch)
+        _validate_request_digest(self.request_digest)
+        if self.kind in {"pause", "stop", "restore"} and self.checkpoint_ref is None:
+            raise ValueError(f"checkpoint_ref is required for {self.kind!r}")
+        if self.kind in {"wake", "destroy", "reconcile"} and self.checkpoint_ref is not None:
+            raise ValueError(f"checkpoint_ref is forbidden for {self.kind!r}")
+
+    def to_wire_json(self) -> dict[str, object]:
+        return {
+            "workspace_id": str(self.workspace_id),
+            "kind": self.kind,
+            "checkpoint_ref": self.checkpoint_ref,
+            "operation_id": str(self.operation_id),
+            "fencing_epoch": self.fencing_epoch,
+            "request_digest": self.request_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ObserveProjectCellResourcesRequest:
+    workspace_id: UUID
+    operation_id: UUID
+    fencing_epoch: int
+    request_digest: str
+
+    def __post_init__(self) -> None:
+        _validate_fencing_epoch(self.fencing_epoch)
+        _validate_request_digest(self.request_digest)
+
+    def to_wire_json(self) -> dict[str, object]:
+        return {
+            "workspace_id": str(self.workspace_id),
+            "operation_id": str(self.operation_id),
+            "fencing_epoch": self.fencing_epoch,
+            "request_digest": self.request_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellResourceResponse:
+    workspace_id: UUID
+    state: str
+    provider_ref: str | None
+    fencing_epoch: int | None
+    checkpoint_ref: str | None
+    has_workspace: bool
+    has_agent_home: bool
+    has_postgres: bool
+    has_redis: bool
+
+    def __post_init__(self) -> None:
+        if not self.state:
+            raise ValueError("state must be non-empty")
+        if self.provider_ref == "":
+            raise ValueError("provider_ref must be non-empty when provided")
+        _validate_checkpoint_ref(self.checkpoint_ref)
+        if self.fencing_epoch is not None and self.fencing_epoch < 0:
+            raise ValueError("fencing_epoch must be zero or positive when provided")
+
+    def to_wire_json(self) -> dict[str, object]:
+        return {
+            "workspace_id": str(self.workspace_id),
+            "state": self.state,
+            "provider_ref": self.provider_ref,
+            "fencing_epoch": self.fencing_epoch,
+            "checkpoint_ref": self.checkpoint_ref,
+            "has_workspace": self.has_workspace,
+            "has_agent_home": self.has_agent_home,
+            "has_postgres": self.has_postgres,
+            "has_redis": self.has_redis,
+        }
+
+    @classmethod
+    def from_json(
+        cls,
+        payload: dict[str, object],
+        *,
+        allow_extra: bool = False,
+    ) -> ProjectCellResourceResponse:
+        expected = {
+            "workspace_id",
+            "state",
+            "provider_ref",
+            "fencing_epoch",
+            "checkpoint_ref",
+            "has_workspace",
+            "has_agent_home",
+            "has_postgres",
+            "has_redis",
+        }
+        if not allow_extra:
+            unexpected = set(payload) - expected
+            if unexpected:
+                raise OrchestratorUnavailable(
+                    "Orchestrator returned an invalid Project Cell resource object"
+                )
+
+        workspace_id = payload.get("workspace_id")
+        state = payload.get("state")
+        provider_ref = payload.get("provider_ref")
+        fencing_epoch = payload.get("fencing_epoch")
+        checkpoint_ref = payload.get("checkpoint_ref")
+        has_workspace = payload.get("has_workspace")
+        has_agent_home = payload.get("has_agent_home")
+        has_postgres = payload.get("has_postgres")
+        has_redis = payload.get("has_redis")
+        invalid_shape = (
+            type(workspace_id) is not str
+            or type(state) is not str
+            or (provider_ref is not None and type(provider_ref) is not str)
+            or (fencing_epoch is not None and type(fencing_epoch) is not int)
+            or (checkpoint_ref is not None and type(checkpoint_ref) is not str)
+            or type(has_workspace) is not bool
+            or type(has_agent_home) is not bool
+            or type(has_postgres) is not bool
+            or type(has_redis) is not bool
+        )
+        if invalid_shape:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell resource object"
+            )
+        workspace_id = cast(str, workspace_id)
+        state = cast(str, state)
+        provider_ref = cast(str | None, provider_ref)
+        fencing_epoch = cast(int | None, fencing_epoch)
+        checkpoint_ref = cast(str | None, checkpoint_ref)
+        has_workspace = cast(bool, has_workspace)
+        has_agent_home = cast(bool, has_agent_home)
+        has_postgres = cast(bool, has_postgres)
+        has_redis = cast(bool, has_redis)
+
+        try:
+            return cls(
+                workspace_id=UUID(workspace_id),
+                state=state,
+                provider_ref=provider_ref,
+                fencing_epoch=fencing_epoch,
+                checkpoint_ref=checkpoint_ref,
+                has_workspace=has_workspace,
+                has_agent_home=has_agent_home,
+                has_postgres=has_postgres,
+                has_redis=has_redis,
+            )
+        except ValueError as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell resource object"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellPreEffectRejection:
+    operation_id: UUID
+    fencing_epoch: int
+    request_digest: str
+    effect_applied: bool
+
+    def __post_init__(self) -> None:
+        _validate_fencing_epoch(self.fencing_epoch)
+        _validate_request_digest(self.request_digest)
+        if self.effect_applied is not False:
+            raise ValueError("effect_applied must be false for a pre-effect rejection")
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProjectCellPreEffectRejection:
+        if type(payload) is not dict:
+            raise ValueError("rejection payload must be an object")
+        value = cast(dict[str, object], payload)
+        expected = {"operation_id", "fencing_epoch", "request_digest", "effect_applied"}
+        if set(value) != expected:
+            raise ValueError("rejection payload keys are invalid")
+        operation_id = value.get("operation_id")
+        fencing_epoch = value.get("fencing_epoch")
+        request_digest = value.get("request_digest")
+        effect_applied = value.get("effect_applied")
+        if (
+            type(operation_id) is not str
+            or type(fencing_epoch) is not int
+            or type(request_digest) is not str
+            or type(effect_applied) is not bool
+        ):
+            raise ValueError("rejection payload field types are invalid")
+        return cls(
+            operation_id=UUID(operation_id),
+            fencing_epoch=fencing_epoch,
+            request_digest=request_digest,
+            effect_applied=effect_applied,
+        )
+
+
+class ProjectCellOrchestratorClient(Protocol):
+    async def ensure(
+        self,
+        request: EnsureProjectCellResourcesRequest,
+    ) -> ProjectCellResourceResponse: ...
+
+    async def control(
+        self,
+        request: ControlProjectCellResourcesRequest,
+    ) -> ProjectCellResourceResponse: ...
+
+    async def observe_resources(
+        self,
+        request: ObserveProjectCellResourcesRequest,
+    ) -> ProjectCellResourceResponse: ...
+
+
+class HttpProjectCellOrchestratorClient:
+    async def ensure(
+        self,
+        request: EnsureProjectCellResourcesRequest,
+    ) -> ProjectCellResourceResponse:
+        payload = await _request(
+            "POST",
+            "/internal/workspaces/ensure",
+            json=request.to_wire_json(),
+        )
+        return ProjectCellResourceResponse.from_json(payload)
+
+    async def control(
+        self,
+        request: ControlProjectCellResourcesRequest,
+    ) -> ProjectCellResourceResponse:
+        payload = await _request(
+            "POST",
+            f"/internal/workspaces/{request.workspace_id}/control",
+            json=request.to_wire_json(),
+        )
+        return ProjectCellResourceResponse.from_json(payload)
+
+    async def observe_resources(
+        self,
+        request: ObserveProjectCellResourcesRequest,
+    ) -> ProjectCellResourceResponse:
+        payload = await _request(
+            "POST",
+            f"/internal/workspaces/{request.workspace_id}/resources/observe",
+            json=request.to_wire_json(),
+        )
+        return ProjectCellResourceResponse.from_json(payload)
 
 
 async def _request_raw(
@@ -102,14 +436,20 @@ async def _request_raw(
         )
     if resp.status_code >= 400:
         try:
-            detail = resp.json()
+            payload = resp.json()
         except Exception:
-            detail = {"raw": resp.text[:300]}
-        log.warning("orchestrator.4xx", path=path, status=resp.status_code, detail=detail)
+            payload = {"raw": resp.text[:300]}
+        message, details = _parse_orchestrator_4xx(payload)
+        log.warning(
+            "orchestrator.4xx",
+            path=path,
+            status=resp.status_code,
+            message=message,
+        )
         raise OrchestratorBadRequest(
-            f"Orchestrator rejected request: {detail.get('detail', 'unknown')}",
+            f"Orchestrator rejected request: {message}",
             status_code=resp.status_code,
-            details=detail if isinstance(detail, dict) else {"detail": detail},
+            details=details,
         )
 
     try:

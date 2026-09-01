@@ -22,17 +22,29 @@ from omnia_api.services.project_cells import (
     ProjectCellOwnershipError,
     ProjectCellStateConflict,
     ProjectCellValidationError,
+    _canonical_operation_envelope,
     claim_cell_operation,
+    claim_cell_operation_committed,
     complete_cell_operation,
     fail_cell_operation,
     get_or_create_workspace,
+    mark_cell_operation_indeterminate,
     recover_interrupted_cell_operations,
     reserve_cell_operation,
 )
 
 pytestmark = pytest.mark.asyncio
 
-ALLOWED_KINDS = ("ensure", "wake", "pause", "stop", "destroy", "status")
+ALLOWED_KINDS = (
+    "ensure",
+    "wake",
+    "pause",
+    "stop",
+    "destroy",
+    "status",
+    "restore",
+    "reconcile",
+)
 
 
 async def _new_user(session: AsyncSession, label: str) -> User:
@@ -174,6 +186,54 @@ def _payload_with_serialized_size(
     return payload
 
 
+def _enveloped_payload_with_serialized_size(
+    size: int,
+    *,
+    workspace_id: uuid.UUID,
+    generation_run_id: uuid.UUID | None,
+    kind: str,
+    multibyte: bool,
+) -> dict[str, object]:
+    empty_envelope, _ = _canonical_operation_envelope(
+        workspace_id,
+        generation_run_id,
+        kind,
+        {"text": ""},
+    )
+    empty_size = len(
+        json.dumps(
+            empty_envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+    prefix = "я" if multibyte else ""
+    filler_size = size - empty_size - len(prefix.encode("utf-8"))
+    assert filler_size >= 0
+    payload: dict[str, object] = {"text": prefix + ("x" * filler_size)}
+    envelope: dict[str, object] = {
+        "workspace_id": str(workspace_id),
+        "generation_run_id": (
+            str(generation_run_id) if generation_run_id is not None else None
+        ),
+        "kind": kind,
+        "request": payload,
+    }
+    assert (
+        len(
+            json.dumps(
+                envelope,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        == size
+    )
+    return payload
+
+
 async def test_same_operation_key_replays_same_canonical_request(
     db_session: AsyncSession,
     workspace: ProjectCellWorkspace,
@@ -198,13 +258,19 @@ async def test_same_operation_key_replays_same_canonical_request(
         request=reordered,
     )
 
-    canonical = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    envelope, digest = _canonical_operation_envelope(
+        workspace.id,
+        None,
+        "ensure",
+        request,
+    )
     assert replayed is False
     assert replayed_again is True
     assert second.id == first.id
-    assert first.request_digest == hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    assert first.request_payload == request
+    assert first.request_digest == digest
+    assert first.request_payload == envelope
     assert first.request_payload is not request
+    assert first.fencing_epoch is None
 
 
 async def test_same_key_with_different_request_precedes_busy_check(
@@ -231,6 +297,88 @@ async def test_same_key_with_different_request_precedes_busy_check(
         )
 
     assert first.status == "pending"
+
+
+async def test_same_key_with_different_kind_is_idempotency_conflict(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+) -> None:
+    await reserve_cell_operation(
+        db_session,
+        workspace_id=workspace.id,
+        generation_run_id=None,
+        kind="ensure",
+        idempotency_key="ensure:kind-conflict",
+        request={"profile_version": "v1"},
+    )
+
+    with pytest.raises(ProjectCellIdempotencyConflict):
+        await reserve_cell_operation(
+            db_session,
+            workspace_id=workspace.id,
+            generation_run_id=None,
+            kind="reconcile",
+            idempotency_key="ensure:kind-conflict",
+            request={"indeterminate_operation_id": str(uuid.uuid4())},
+        )
+
+
+@pytest.mark.parametrize(
+    "operation_request",
+    [
+        {},
+        {"indeterminate_operation_id": "not-a-uuid"},
+        {"indeterminate_operation_id": str(uuid.uuid4()), "extra": True},
+    ],
+)
+async def test_reconcile_reservation_requires_exact_target(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    operation_request: dict[str, object],
+) -> None:
+    with pytest.raises(ProjectCellValidationError):
+        await reserve_cell_operation(
+            db_session,
+            workspace_id=workspace.id,
+            generation_run_id=None,
+            kind="reconcile",
+            idempotency_key=f"reconcile:invalid:{uuid.uuid4().hex}",
+            request=operation_request,
+        )
+
+
+async def test_same_key_with_different_generation_run_is_idempotency_conflict(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    project: Project,
+    owner: User,
+    run: GenerationRun,
+) -> None:
+    later_run = await _new_run(
+        db_session,
+        project,
+        owner,
+        "same-key-later",
+        status="completed",
+    )
+    await reserve_cell_operation(
+        db_session,
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        kind="ensure",
+        idempotency_key="ensure:run-conflict",
+        request={"profile_version": "v1"},
+    )
+
+    with pytest.raises(ProjectCellIdempotencyConflict):
+        await reserve_cell_operation(
+            db_session,
+            workspace_id=workspace.id,
+            generation_run_id=later_run.id,
+            kind="ensure",
+            idempotency_key="ensure:run-conflict",
+            request={"profile_version": "v1"},
+        )
 
 
 async def test_different_key_is_busy_while_operation_active(
@@ -406,13 +554,18 @@ async def test_key_boundaries_and_all_operation_kinds_are_accepted(
         await complete_cell_operation(db_session, operation.id, {})
 
     for position, kind in enumerate(ALLOWED_KINDS):
+        request = (
+            {"indeterminate_operation_id": str(uuid.uuid4())}
+            if kind == "reconcile"
+            else {"position": position}
+        )
         operation, replayed = await reserve_cell_operation(
             db_session,
             workspace_id=workspace.id,
             generation_run_id=None,
             kind=kind,
             idempotency_key=f"allowed:{kind}",
-            request={"position": position},
+            request=request,
         )
         assert replayed is False
         await claim_cell_operation(db_session, operation.id)
@@ -496,8 +649,20 @@ async def test_payload_serialized_utf8_boundaries_are_exact(
     db_session: AsyncSession,
     workspace: ProjectCellWorkspace,
 ) -> None:
-    request_at_limit = _payload_with_serialized_size(65_536, multibyte=True)
-    request_over_limit = _payload_with_serialized_size(65_537, multibyte=False)
+    request_at_limit = _enveloped_payload_with_serialized_size(
+        65_536,
+        workspace_id=workspace.id,
+        generation_run_id=None,
+        kind="ensure",
+        multibyte=True,
+    )
+    request_over_limit = _enveloped_payload_with_serialized_size(
+        65_537,
+        workspace_id=workspace.id,
+        generation_run_id=None,
+        kind="ensure",
+        multibyte=False,
+    )
     accepted, _ = await reserve_cell_operation(
         db_session,
         workspace_id=workspace.id,
@@ -936,6 +1101,8 @@ async def test_claim_complete_and_fail_enforce_row_locked_transitions(
         await complete_cell_operation(db_session, completed.id, {})
     with pytest.raises(ProjectCellStateConflict):
         await fail_cell_operation(db_session, completed.id, "dummy premature failure")
+    with pytest.raises(ProjectCellStateConflict):
+        await mark_cell_operation_indeterminate(db_session, completed.id, "dummy premature unknown")
 
     claimed = await claim_cell_operation(db_session, completed.id)
     assert claimed.status == "running"
@@ -963,6 +1130,26 @@ async def test_claim_complete_and_fail_enforce_row_locked_transitions(
     )
     assert failed.finished_at is not None
 
+    indeterminate, _ = await reserve_cell_operation(
+        db_session,
+        workspace_id=workspace.id,
+        generation_run_id=None,
+        kind="restore",
+        idempotency_key="restore:transition-indeterminate",
+        request={"checkpoint_ref": "accepted-1"},
+    )
+    await claim_cell_operation(db_session, indeterminate.id)
+    await mark_cell_operation_indeterminate(
+        db_session,
+        indeterminate.id,
+        "dummy provider unknown",
+    )
+    assert indeterminate.status == "indeterminate"
+    assert indeterminate.error == (
+        "provider_error:" + hashlib.sha256(b"dummy provider unknown").hexdigest()
+    )
+    assert indeterminate.finished_at is not None
+
 
 async def test_transition_functions_raise_not_found_for_missing_ids(
     db_session: AsyncSession,
@@ -974,6 +1161,108 @@ async def test_transition_functions_raise_not_found_for_missing_ids(
         await complete_cell_operation(db_session, missing, {})
     with pytest.raises(ProjectCellNotFound):
         await fail_cell_operation(db_session, missing, "dummy missing operation")
+    with pytest.raises(ProjectCellNotFound):
+        await mark_cell_operation_indeterminate(db_session, missing, "dummy missing operation")
+
+
+async def test_claim_cell_operation_committed_persists_workspace_and_operation_fence(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = await _new_user(session, "claimed")
+        project = await _new_project(session, owner, "claimed")
+        workspace = await _new_workspace(session, project, owner)
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=None,
+            kind="ensure",
+            idempotency_key="ensure:claimed",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+
+    claimed = await claim_cell_operation_committed(factory, operation.id)
+
+    assert claimed.workspace_id == workspace.id
+    assert claimed.project_id == project.id
+    assert claimed.owner_id == owner.id
+    assert claimed.request == {"profile_version": "docker-owner-cell-resources-v1"}
+    assert claimed.fencing_epoch == 1
+    async with factory() as verify:
+        stored_workspace = await verify.get(ProjectCellWorkspace, workspace.id)
+        stored_operation = await verify.get(ProjectCellOperation, operation.id)
+        assert stored_workspace is not None
+        assert stored_operation is not None
+        assert stored_workspace.fencing_epoch == 1
+        assert stored_workspace.version == 2
+        assert stored_operation.fencing_epoch == 1
+        assert stored_operation.status == "running"
+
+
+async def test_claim_cell_operation_committed_rejects_tampered_envelope(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = await _new_user(session, "tampered")
+        project = await _new_project(session, owner, "tampered")
+        workspace = await _new_workspace(session, project, owner)
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=None,
+            kind="ensure",
+            idempotency_key="ensure:tampered-envelope",
+            request={"profile_version": "v1"},
+        )
+        operation.request_payload = {
+            "workspace_id": str(workspace.id),
+            "generation_run_id": None,
+            "kind": "ensure",
+            "request": {"profile_version": "v2"},
+        }
+        await session.commit()
+
+    with pytest.raises(ProjectCellValidationError):
+        await claim_cell_operation_committed(factory, operation.id)
+
+
+async def test_committed_claims_monotonically_increase_workspace_fence(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = await _new_user(session, "fence")
+        project = await _new_project(session, owner, "fence")
+        workspace = await _new_workspace(session, project, owner)
+        first, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=None,
+            kind="ensure",
+            idempotency_key="ensure:first",
+            request={"profile_version": "v1"},
+        )
+        await session.commit()
+
+    claimed_first = await claim_cell_operation_committed(factory, first.id)
+    async with factory() as session:
+        await fail_cell_operation(session, first.id, "first ended")
+        await session.commit()
+        second, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=None,
+            kind="reconcile",
+            idempotency_key="reconcile:second",
+            request={"indeterminate_operation_id": str(first.id)},
+        )
+        await session.commit()
+
+    claimed_second = await claim_cell_operation_committed(factory, second.id)
+    assert claimed_second.fencing_epoch > claimed_first.fencing_epoch
 
 
 async def test_recovery_returns_count_and_only_requeues_running_operations(
@@ -1014,10 +1303,11 @@ async def test_recovery_returns_count_and_only_requeues_running_operations(
     assert await recover_interrupted_cell_operations(db_session) == 2
 
     for operation in running:
-        assert operation.status == "pending"
-        assert operation.started_at is None
+        assert operation.status == "indeterminate"
+        assert operation.started_at is not None
         assert operation.idempotency_key.startswith("recover:running-")
-        assert operation.finished_at is None
+        assert operation.finished_at is not None
+        assert operation.error is not None
     assert terminal.status == "completed"
     assert terminal.started_at == original_terminal_started_at
     assert terminal.finished_at is not None

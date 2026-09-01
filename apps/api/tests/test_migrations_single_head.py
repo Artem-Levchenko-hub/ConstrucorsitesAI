@@ -150,22 +150,22 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_project_cell_foundation_is_the_only_head() -> None:
-    # Mutation caught: placing 0052 on the wrong parent or introducing another branch.
+def test_project_cell_fencing_is_the_only_head() -> None:
+    # Mutation caught: placing 0053 on the wrong parent or introducing another branch.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0052_project_cell_control_foundation"]
+    assert heads == ["0053_project_cell_operation_fencing"]
 
 
 def test_project_cell_migrated_schema_matches_durable_contract(
     project_cell_migration_database: ProjectCellMigrationDatabase,
 ) -> None:
     database = project_cell_migration_database
-    database.upgrade("0052_project_cell_control_foundation")
+    database.upgrade("0053_project_cell_operation_fencing")
 
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0052_project_cell_control_foundation"
+        "0053_project_cell_operation_fencing"
     )
 
     checks = {
@@ -185,11 +185,11 @@ def test_project_cell_migrated_schema_matches_durable_contract(
     assert checks == {
         "ck_project_cell_operations_kind_allowed": (
             "CHECK ((kind = ANY (ARRAY['ensure', 'wake', 'pause', 'stop', 'destroy', "
-            "'status'])))"
+            "'status', 'restore', 'reconcile'])))"
         ),
         "ck_project_cell_operations_status_allowed": (
             "CHECK ((status = ANY (ARRAY['pending', 'running', 'completed', 'failed', "
-            "'cancelled'])))"
+            "'cancelled', 'indeterminate'])))"
         ),
         "ck_project_cell_workspaces_state_allowed": (
             "CHECK ((state = ANY (ARRAY['provisioning', 'ready', 'stopped', 'failed', "
@@ -272,8 +272,10 @@ def test_project_cell_migrated_schema_matches_durable_contract(
     )
 
     server_defaults = {
-        (str(row["table_name"]), str(row["column_name"])): _normalized_catalog_sql(
-            str(row["column_default"])
+        (str(row["table_name"]), str(row["column_name"])): (
+            None
+            if row["column_default"] is None
+            else _normalized_catalog_sql(str(row["column_default"]))
         )
         for row in database.fetch(
             """
@@ -285,7 +287,8 @@ def test_project_cell_migrated_schema_matches_durable_contract(
                   ('project_cell_workspaces', 'fencing_epoch'),
                   ('project_cell_workspaces', 'version'),
                   ('project_cell_operations', 'request_payload'),
-                  ('project_cell_operations', 'status')
+                  ('project_cell_operations', 'status'),
+                  ('project_cell_operations', 'fencing_epoch')
               )
             ORDER BY table_name, column_name
             """
@@ -293,10 +296,34 @@ def test_project_cell_migrated_schema_matches_durable_contract(
     }
     assert server_defaults == {
         ("project_cell_operations", "request_payload"): "'{}'::jsonb",
+        ("project_cell_operations", "fencing_epoch"): None,
         ("project_cell_operations", "status"): "'pending'",
         ("project_cell_workspaces", "fencing_epoch"): "0",
         ("project_cell_workspaces", "provider_metadata"): "'{}'::jsonb",
         ("project_cell_workspaces", "version"): "1",
+    }
+
+    columns = {
+        (str(row["table_name"]), str(row["column_name"])): (
+            str(row["is_nullable"]),
+            _normalized_catalog_sql(str(row["data_type"])),
+        )
+        for row in database.fetch(
+            """
+            SELECT table_name, column_name, is_nullable, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND (table_name, column_name) IN (
+                  ('project_cell_operations', 'fencing_epoch'),
+                  ('project_cell_workspaces', 'fencing_epoch')
+              )
+            ORDER BY table_name, column_name
+            """
+        )
+    }
+    assert columns == {
+        ("project_cell_operations", "fencing_epoch"): ("YES", "integer"),
+        ("project_cell_workspaces", "fencing_epoch"): ("NO", "integer"),
     }
 
 

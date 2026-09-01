@@ -24,8 +24,24 @@ WORKSPACE_STATES = (
     "deleting",
     "deleted",
 )
-OPERATION_KINDS = ("ensure", "wake", "pause", "stop", "destroy", "status")
-OPERATION_STATUSES = ("pending", "running", "completed", "failed", "cancelled")
+OPERATION_KINDS = (
+    "ensure",
+    "wake",
+    "pause",
+    "stop",
+    "destroy",
+    "status",
+    "restore",
+    "reconcile",
+)
+OPERATION_STATUSES = (
+    "pending",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "indeterminate",
+)
 
 
 def _check_expressions(table: Table) -> dict[str, str]:
@@ -36,8 +52,10 @@ def _check_expressions(table: Table) -> dict[str, str]:
     }
 
 
-def _server_default_sql(column: Column[object]) -> str:
+def _server_default_sql(column: Column[object]) -> str | None:
     default = column.server_default
+    if default is None:
+        return None
     assert isinstance(default, DefaultClause)
     return str(default.arg)
 
@@ -113,6 +131,7 @@ async def test_project_cell_models_expose_exact_public_columns() -> None:
         "generation_run_id",
         "idempotency_key",
         "request_digest",
+        "fencing_epoch",
         "kind",
         "status",
         "request_payload",
@@ -136,10 +155,12 @@ async def test_project_cell_metadata_matches_the_durable_contract() -> None:
     }
     assert _check_expressions(operation) == {
         "ck_project_cell_operations_kind_allowed": (
-            "kind IN ('ensure', 'wake', 'pause', 'stop', 'destroy', 'status')"
+            "kind IN ('ensure', 'wake', 'pause', 'stop', 'destroy', 'status', "
+            "'restore', 'reconcile')"
         ),
         "ck_project_cell_operations_status_allowed": (
-            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')"
+            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled', "
+            "'indeterminate')"
         ),
     }
     assert {constraint.name for constraint in workspace.constraints} >= {
@@ -183,6 +204,8 @@ async def test_project_cell_metadata_matches_the_durable_contract() -> None:
     assert _server_default_sql(workspace.c.fencing_epoch) == "0"
     assert _server_default_sql(workspace.c.version) == "1"
     assert _server_default_sql(operation.c.status) == "pending"
+    assert _server_default_sql(operation.c.fencing_epoch) is None
+    assert operation.c.fencing_epoch.nullable is True
 
 
 # Mutation caught: reusing one process-wide dict for either durable JSON payload.
@@ -632,6 +655,7 @@ async def test_workspace_and_operation_defaults_persist(
     assert workspace.provider_metadata == {}
     assert workspace.fencing_epoch == 0
     assert workspace.version == 1
+    assert operation.fencing_epoch is None
     assert operation.status == "pending"
     assert operation.request_payload == {}
     assert operation.result_payload is None
