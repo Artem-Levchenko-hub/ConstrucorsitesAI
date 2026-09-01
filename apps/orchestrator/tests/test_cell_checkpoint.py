@@ -19,7 +19,11 @@ from omnia_orchestrator.services.cell_admission import CellAdmissionGate, Docker
 from omnia_orchestrator.services.cell_checkpoint import CellCheckpointManager
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
 from omnia_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
-from omnia_orchestrator.services.docker_cell_resources import DockerCellResourceManager
+from omnia_orchestrator.services.docker_cell_resources import (
+    DockerCellResourceManager,
+    DockerContainerRecord,
+    DockerContainerSpec,
+)
 from tests._cell_fakes import FakeDockerBackend
 
 
@@ -80,7 +84,7 @@ class ReplayGuardBackend(FakeDockerBackend):
             raise AssertionError("unexpected postgres_dump")
         return await super().postgres_dump(container_name, password)
 
-    async def create_container(self, spec) -> object:
+    async def create_container(self, spec: DockerContainerSpec) -> DockerContainerRecord:
         if self.fail_on_create_container:
             raise AssertionError("unexpected create_container")
         return await super().create_container(spec)
@@ -321,7 +325,8 @@ async def test_restore_rejects_artifact_hash_mismatch_before_mutation(
         names.postgres_volume, {"db.json": json.dumps(["accepted"]).encode("utf-8")}
     )
     await checkpoints.create(workspace_id, "accepted-1", _mutation("b", 2))
-    await manager.pause_services(workspace_id, _mutation("c", 3))
+    pause_mutation = _mutation("c", 3)
+    await manager.pause_services(workspace_id, pause_mutation)
     await helper.write_volume_files(names.workspace_volume, {"proof.txt": b"draft"})
     await helper.write_volume_files(names.agent_home_volume, {"state.txt": b"draft-home"})
     await helper.write_volume_files(names.redis_volume, {"cache.txt": b"warm"})
@@ -329,10 +334,60 @@ async def test_restore_rejects_artifact_hash_mismatch_before_mutation(
         names.checkpoint_volume,
         {"accepted-1/workspace.tar": b"corrupted-archive"},
     )
+    restore_mutation = _mutation("d", 4)
 
     with pytest.raises(CellRestoreFailed, match="hash mismatch"):
-        await checkpoints.restore(workspace_id, "accepted-1", _mutation("d", 4))
+        await checkpoints.restore(workspace_id, "accepted-1", restore_mutation)
 
+    with pytest.raises(CellRestoreFailed, match="hash mismatch"):
+        await checkpoints.restore(workspace_id, "accepted-1", restore_mutation)
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.bundle_state == "resources_paused"
+    assert state.phase == "completed"
+    assert state.last_operation_id == pause_mutation.operation_id
+    assert state.operation(restore_mutation.operation_id) is None
+    assert helper.finalized_paths == ["accepted-1"]
+    assert (await helper.read_volume_files(names.workspace_volume))["proof.txt"] == b"draft"
+    assert (
+        await helper.read_volume_files(names.agent_home_volume)
+    )["state.txt"] == b"draft-home"
+    assert (await helper.read_volume_files(names.redis_volume))["cache.txt"] == b"warm"
+
+
+@pytest.mark.asyncio
+async def test_restore_rejects_missing_artifact_before_mutation(
+    tmp_path: Path,
+) -> None:
+    manager, checkpoints, helper = _make_fixture(tmp_path)
+    workspace_id = UUID("00000000-0000-0000-0000-000000000001")
+    spec = _spec(workspace_id)
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, workspace_id)
+    await helper.write_volume_files(names.workspace_volume, {"proof.txt": b"accepted"})
+    await helper.write_volume_files(names.agent_home_volume, {"state.txt": b"accepted-home"})
+    await helper.write_volume_files(
+        names.postgres_volume, {"db.json": json.dumps(["accepted"]).encode("utf-8")}
+    )
+    await checkpoints.create(workspace_id, "accepted-1", _mutation("b", 2))
+    pause_mutation = _mutation("c", 3)
+    await manager.pause_services(workspace_id, pause_mutation)
+    await helper.write_volume_files(names.workspace_volume, {"proof.txt": b"draft"})
+    await helper.write_volume_files(names.agent_home_volume, {"state.txt": b"draft-home"})
+    await helper.write_volume_files(names.redis_volume, {"cache.txt": b"warm"})
+    await helper.delete_volume_paths(names.checkpoint_volume, ("accepted-1/workspace.tar",))
+    restore_mutation = _mutation("d", 4)
+
+    with pytest.raises(CellRestoreFailed, match=r"checkpoint artifact missing: workspace\.tar"):
+        await checkpoints.restore(workspace_id, "accepted-1", restore_mutation)
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.bundle_state == "resources_paused"
+    assert state.phase == "completed"
+    assert state.last_operation_id == pause_mutation.operation_id
+    assert state.operation(restore_mutation.operation_id) is None
     assert helper.finalized_paths == ["accepted-1"]
     assert (await helper.read_volume_files(names.workspace_volume))["proof.txt"] == b"draft"
     assert (
@@ -373,9 +428,13 @@ async def test_restore_pre_snapshot_failure_keeps_paused_state_and_journal_intac
     state = manager.state_store.load(workspace_id)
     assert state is not None
     assert state.bundle_state == "resources_paused"
-    assert state.phase == "completed"
-    assert state.last_operation_id == pause_mutation.operation_id
-    assert state.operation(state.last_operation_id) is not None
+    assert state.phase == "failed"
+    assert state.last_operation_id == restore_mutation.operation_id
+    operation = state.operation(state.last_operation_id)
+    assert operation is not None
+    assert operation.kind == "restore"
+    assert operation.status == "failed"
+    assert operation.detail == "pre-restore snapshot failed"
     helper_name = names.helper_container_name("postgres-maintenance", restore_mutation.operation_id)
     assert helper_name not in helper.containers
     assert helper.finalized_paths == ["accepted-1"]
@@ -409,18 +468,40 @@ async def test_failed_restore_rolls_back_pre_restore_state(tmp_path: Path) -> No
     )
     await manager.pause_services(workspace_id, _mutation("c", 3))
     helper.fail_after_workspace_extract = True
+    restore_mutation = _mutation("d", 4)
 
-    with pytest.raises(CellRestoreFailed):
-        await checkpoints.restore(workspace_id, "accepted-1", _mutation("d", 4))
+    with pytest.raises(CellRestoreFailed, match="restore failure injected"):
+        await checkpoints.restore(workspace_id, "accepted-1", restore_mutation)
 
     assert "pre-restore-" in helper.finalized_paths[-1]
     assert helper.rollback_completed is True
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.bundle_state == "resources_paused"
+    assert state.phase == "failed"
+    assert state.last_operation_id == restore_mutation.operation_id
+    operation = state.operation(restore_mutation.operation_id)
+    assert operation is not None
+    assert operation.status == "failed"
+    assert operation.detail == "restore failure injected"
     workspace_files = await helper.read_volume_files(names.workspace_volume)
     agent_home_files = await helper.read_volume_files(names.agent_home_volume)
     postgres_files = await helper.read_volume_files(names.postgres_volume)
     assert workspace_files["proof.txt"] == b"draft"
     assert agent_home_files["state.txt"] == b"draft-home"
     assert json.loads(postgres_files["db.json"].decode("utf-8")) == ["draft"]
+    finalized_before = list(helper.finalized_paths)
+
+    with pytest.raises(CellRestoreFailed, match="restore failure injected"):
+        await checkpoints.restore(workspace_id, "accepted-1", restore_mutation)
+
+    assert helper.finalized_paths == finalized_before
+    assert (await helper.read_volume_files(names.workspace_volume))["proof.txt"] == b"draft"
+    assert (
+        await helper.read_volume_files(names.agent_home_volume)
+    )["state.txt"] == b"draft-home"
+    replay_postgres_files = await helper.read_volume_files(names.postgres_volume)
+    assert json.loads(replay_postgres_files["db.json"].decode("utf-8")) == ["draft"]
 
 
 @pytest.mark.asyncio

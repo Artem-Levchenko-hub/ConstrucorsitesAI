@@ -263,6 +263,32 @@ async def test_project_shell_and_dependency_sync_use_long_deadlines(
     assert "params" not in observed[2]
 
 
+async def test_hot_reload_forwards_explicit_empty_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {"state": "hot_reloaded"}
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.hot_reload(
+        UUID("00000000-0000-0000-0000-000000000010"),
+        "max-preview",
+        {"blank.txt": "", "removed.txt": ""},
+        empty_files=("blank.txt",),
+    )
+
+    assert result == {"state": "hot_reloaded"}
+    assert observed["json"] == {
+        "project_id": "00000000-0000-0000-0000-000000000010",
+        "files": {"blank.txt": "", "removed.txt": ""},
+        "empty_files": ["blank.txt"],
+    }
+
+
 async def test_control_client_sends_only_fenced_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

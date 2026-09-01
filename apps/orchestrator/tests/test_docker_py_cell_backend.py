@@ -530,7 +530,11 @@ async def test_create_container_uses_fail_closed_kwargs_for_postgres_init() -> N
     assert kwargs["tmpfs"]["/var/run/postgresql"].startswith("rw,")
     assert kwargs["cpu_period"] == 100_000
     assert kwargs["cpu_quota"] == 50_000
-    assert "initdb" in " ".join(create_call["command"] or [])
+    init_command = " ".join(create_call["command"] or [])
+    assert "initdb" in init_command
+    assert "host all all samenet scram-sha-256" in init_command
+    assert "grep -Fqx" in init_command
+    assert "trust" not in init_command
     assert record.state == "exited"
     container = client.containers.items["omnia-cell-test-init"]
     assert container.wait_calls == [30]
@@ -700,6 +704,10 @@ async def test_run_workspace_command_uses_cell_mounts_and_networks() -> None:
     assert kwargs["network"] == "omnia-cell-test-internal"
     assert kwargs["read_only"] is False
     assert kwargs["user"] == "0:0"
+    assert kwargs["mem_limit"] == 1024 * 1024 * 1024
+    assert kwargs["memswap_limit"] == kwargs["mem_limit"]
+    assert kwargs["cpu_period"] == 100_000
+    assert kwargs["cpu_quota"] == 50_000
     assert kwargs["environment"]["OMNIA_CELL_CMD"] == "pnpm typecheck"
     assert kwargs["volumes"] == {
         "workspace-vol": {"bind": "/workspace-src", "mode": "rw"},

@@ -933,6 +933,8 @@ async def test_exec_workspace_agent_command_runs_inside_cell_bundle(
         "HOME": "/root",
         "CI": "1",
         "NODE_ENV": "development",
+        "COREPACK_HOME": "/home/node/.cache/node/corepack",
+        "COREPACK_ENABLE_NETWORK": "0",
         "DATABASE_URL": (
             "postgresql://postgres:"
             f"{credentials.postgres_password}@{names.postgres_container}:5432/postgres"

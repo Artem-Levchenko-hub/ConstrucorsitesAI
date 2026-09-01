@@ -997,7 +997,11 @@ def _replace_workspace_from_sandbox_archive(raw: bytes, workspace_dir: Path) -> 
 
 
 async def write_files(
-    name: str, files: dict[str, str], *, dest_root: str = "/app"
+    name: str,
+    files: dict[str, str],
+    *,
+    dest_root: str = "/app",
+    empty_files: Iterable[str] = (),
 ) -> dict[str, str]:
     """Stream a set of AI-generated files into a running container via
     `docker cp` semantics (put_archive). Paths in `files` are container-relative
@@ -1006,12 +1010,10 @@ async def write_files(
     Returns a small summary {written: int, total_bytes: int, dropped: list-of-paths}.
 
     Safety: refuses any path with `..`, leading `/`, or escaping `dest_root`.
-    Empty content (`""`) means "delete this file" (mirrors the api repo layer,
-    which unlinks empty-content files). We DELETE it (`rm -f`) rather than write
-    a zero-length file: a 0-byte source module is not a no-op to the framework —
-    e.g. an empty `src/app/page.tsx` still resolves for "/" and clashes with
-    `(app)/page.tsx`, crashing the dev server with "default export is not a React
-    Component". The app writer relies on this to drop the starter page.
+    Empty content (`""`) keeps the legacy delete semantics unless the path also
+    appears in `empty_files`, which explicitly preserves a legitimate zero-byte file.
+    This lets Project Cell mirror an empty file exactly while older callers still
+    delete by sending `""`.
 
     Missing container = explicit OrchestratorError (caller should handle).
     """
@@ -1022,6 +1024,15 @@ async def write_files(
     log.info("docker.write_files", name=name, files=len(files), dest_root=dest_root)
 
     def _do() -> dict[str, object]:
+        def _normalize_target(raw_path: str) -> tuple[str, str] | None:
+            norm = posixpath.normpath(raw_path)
+            if norm.startswith("/") or norm.startswith(".."):
+                return None
+            joined = posixpath.normpath(posixpath.join(dest_root, norm))
+            if not (joined == dest_root or joined.startswith(dest_root + "/")):
+                return None
+            return norm, joined
+
         client = _get_client()
         try:
             c = client.containers.get(name)
@@ -1046,8 +1057,18 @@ async def write_files(
 
         dropped: list[str] = []
         to_delete: list[str] = []
+        explicit_empty_paths: set[str] = set()
         written = 0
         total_bytes = 0
+
+        for raw_path in empty_files:
+            if not isinstance(raw_path, str):
+                continue
+            normalized = _normalize_target(raw_path)
+            if normalized is None:
+                continue
+            norm, _joined = normalized
+            explicit_empty_paths.add(norm)
 
         # Build one tar in memory containing every file with its directory entries.
         # Docker SDK's put_archive needs a tar stream and a target directory.
@@ -1056,21 +1077,13 @@ async def write_files(
         with tarfile.open(fileobj=buf, mode="w") as tar:
             seen_dirs: set[str] = set()
             for raw_path, content in files.items():
-                # Sanitize: no .., no absolute, must stay under dest_root.
-                norm = posixpath.normpath(raw_path)
-                if norm.startswith("/") or norm.startswith(".."):
+                normalized = _normalize_target(raw_path)
+                if normalized is None:
                     dropped.append(raw_path)
                     continue
-                # Prevent escape via well-crafted normpath edge cases.
-                joined = posixpath.normpath(posixpath.join(dest_root, norm))
-                if not (joined == dest_root or joined.startswith(dest_root + "/")):
-                    dropped.append(raw_path)
-                    continue
+                norm, joined = normalized
 
-                # Empty content = delete-intent: remove the file after the tar is
-                # applied (put_archive can only add/overwrite, not delete). A
-                # 0-byte source file would be a broken module, not a no-op.
-                if content == "":
+                if content == "" and norm not in explicit_empty_paths:
                     to_delete.append(joined)
                     continue
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 from collections.abc import Awaitable, Callable
@@ -40,29 +41,219 @@ from omnia_api.services.project_cells import (
 _PROJECT_CELL_PROFILE_VERSION = "docker-owner-cell-resources-v1"
 _PROJECT_CELL_BUILD_TIMEOUT_SECONDS = 600
 _PROJECT_CELL_SHELL_TIMEOUT_SECONDS = 300
-_PROJECT_CELL_BUILD_CMD = "\n".join(
-    [
-        "set -eu",
-        "if [ ! -f package.json ]; then",
-        "  echo 'package.json not found' >&2",
-        "  exit 1",
-        "fi",
-        "if [ -f pnpm-lock.yaml ]; then",
-        "  pnpm install --frozen-lockfile || pnpm install",
-        "else",
-        "  pnpm install",
-        "fi",
-        "if [ -f drizzle.config.ts ] && [ -f src/lib/db/schema.ts ]; then",
-        "  pnpm db:push",
-        "fi",
-        "rm -rf -- .next/types/app .next/types/validator.ts || true",
-        "if grep -q '\"typecheck\"' package.json; then",
-        "  pnpm typecheck",
-        "else",
-        "  ./node_modules/.bin/tsc --noEmit -p ./tsconfig.json",
-        "fi",
-    ]
+_PROJECT_CELL_DEPENDENCY_METADATA_STRING_FIELDS = ("packageManager",)
+_PROJECT_CELL_DEPENDENCY_METADATA_OBJECT_FIELDS = (
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+    "peerDependenciesMeta",
+    "dependenciesMeta",
+    "overrides",
+    "resolutions",
+    "pnpm",
 )
+_PROJECT_CELL_DEPENDENCY_METADATA_FIELDS = (
+    _PROJECT_CELL_DEPENDENCY_METADATA_STRING_FIELDS
+    + _PROJECT_CELL_DEPENDENCY_METADATA_OBJECT_FIELDS
+)
+
+
+def _sort_jsonish(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _sort_jsonish(item) for key, item in sorted(value.items(), key=str)}
+    if isinstance(value, list):
+        return [_sort_jsonish(item) for item in value]
+    return value
+
+
+def _normalize_project_cell_dependency_metadata(
+    package_json_text: str,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    try:
+        raw = json.loads(package_json_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} package.json is invalid JSON") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} package.json must contain a JSON object")
+    normalized: dict[str, Any] = {}
+    for field in _PROJECT_CELL_DEPENDENCY_METADATA_STRING_FIELDS:
+        value = raw.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"{label} package.json {field} must be a string")
+        normalized[field] = value
+    for field in _PROJECT_CELL_DEPENDENCY_METADATA_OBJECT_FIELDS:
+        value = raw.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"{label} package.json {field} must be an object")
+        normalized[field] = _sort_jsonish(value)
+    return normalized
+
+
+def _project_cell_dependency_reuse_error(
+    *,
+    workspace_package_json: str,
+    bundled_package_json: str,
+    workspace_lockfile: str | None,
+    bundled_lockfile: str | None,
+) -> str | None:
+    workspace_metadata = _normalize_project_cell_dependency_metadata(
+        workspace_package_json,
+        label="workspace",
+    )
+    bundled_metadata = _normalize_project_cell_dependency_metadata(
+        bundled_package_json,
+        label="bundled image",
+    )
+    if workspace_metadata != bundled_metadata:
+        return (
+            "Project Cell build blocked: dependency metadata differs from bundled "
+            "image package.json; update dependencies outside the owner-only cell path."
+        )
+    if (workspace_lockfile is None) != (bundled_lockfile is None):
+        return (
+            "Project Cell build blocked: pnpm-lock.yaml presence differs from bundled "
+            "image; cannot safely reuse bundled node_modules."
+        )
+    if workspace_lockfile is not None and workspace_lockfile != bundled_lockfile:
+        return (
+            "Project Cell build blocked: pnpm-lock.yaml differs from bundled image; "
+            "cannot safely reuse bundled node_modules."
+        )
+    return None
+
+
+def _build_project_cell_build_cmd() -> str:
+    dependency_fields_json = json.dumps(
+        list(_PROJECT_CELL_DEPENDENCY_METADATA_FIELDS)
+    )
+    return "\n".join(
+        [
+            "set -eu",
+            "if [ ! -f package.json ]; then",
+            "  echo 'package.json not found' >&2",
+            "  exit 1",
+            "fi",
+            "if [ ! -f /app/package.json ]; then",
+            (
+                "  echo 'bundled image package.json not found; "
+                "cannot validate Project Cell dependencies' >&2"
+            ),
+            "  exit 1",
+            "fi",
+            "if [ ! -e /app/node_modules ]; then",
+            (
+                "  echo 'bundled image node_modules not found; "
+                "cannot reuse Project Cell dependencies' >&2"
+            ),
+            "  exit 1",
+            "fi",
+            "node <<'NODE'",
+            "const fs = require('fs');",
+            f"const fields = {dependency_fields_json};",
+            "const stringFields = new Set(['packageManager']);",
+            "function readText(path) {",
+            "  try {",
+            "    return fs.readFileSync(path, 'utf8');",
+            "  } catch (error) {",
+            "    if (error && error.code === 'ENOENT') return null;",
+            "    throw error;",
+            "  }",
+            "}",
+            "function parsePackage(label, text) {",
+            "  if (text === null) throw new Error(`${label} package.json not found`);",
+            "  let data;",
+            "  try {",
+            "    data = JSON.parse(text);",
+            "  } catch (_error) {",
+            "    throw new Error(`${label} package.json is invalid JSON`);",
+            "  }",
+            "  if (!data || Array.isArray(data) || typeof data !== 'object') {",
+            "    throw new Error(`${label} package.json must contain a JSON object`);",
+            "  }",
+            "  return data;",
+            "}",
+            "function sortValue(value) {",
+            "  if (Array.isArray(value)) return value.map(sortValue);",
+            "  if (value && typeof value === 'object') {",
+            "    const out = {};",
+            "    for (const key of Object.keys(value).sort()) out[key] = sortValue(value[key]);",
+            "    return out;",
+            "  }",
+            "  return value;",
+            "}",
+            "function normalize(label, data) {",
+            "  const out = {};",
+            "  for (const field of fields) {",
+            "    if (!Object.prototype.hasOwnProperty.call(data, field)) continue;",
+            "    const value = data[field];",
+            "    if (value == null) continue;",
+            "    if (stringFields.has(field)) {",
+            "      if (typeof value !== 'string') {",
+            "        throw new Error(`${label} package.json ${field} must be a string`);",
+            "      }",
+            "      out[field] = value;",
+            "      continue;",
+            "    }",
+            "    if (Array.isArray(value) || typeof value !== 'object') {",
+            "      throw new Error(`${label} package.json ${field} must be an object`);",
+            "    }",
+            "    out[field] = sortValue(value);",
+            "  }",
+            "  return out;",
+            "}",
+            (
+                "const workspaceMetadata = normalize("
+                "'workspace', parsePackage('workspace', readText('package.json')));"
+            ),
+            (
+                "const bundledMetadata = normalize("
+                "'bundled image', parsePackage('bundled image', readText('/app/package.json')));"
+            ),
+            "if (JSON.stringify(workspaceMetadata) !== JSON.stringify(bundledMetadata)) {",
+            (
+                "  throw new Error('Project Cell build blocked: dependency metadata "
+                "differs from bundled image package.json; update dependencies outside "
+                "the owner-only cell path.');"
+            ),
+            "}",
+            "const workspaceLock = readText('pnpm-lock.yaml');",
+            "const bundledLock = readText('/app/pnpm-lock.yaml');",
+            "if ((workspaceLock === null) !== (bundledLock === null)) {",
+            (
+                "  throw new Error('Project Cell build blocked: pnpm-lock.yaml "
+                "presence differs from bundled image; cannot safely reuse bundled "
+                "node_modules.');"
+            ),
+            "}",
+            "if (workspaceLock !== null && workspaceLock !== bundledLock) {",
+            (
+                "  throw new Error('Project Cell build blocked: pnpm-lock.yaml "
+                "differs from bundled image; cannot safely reuse bundled "
+                "node_modules.');"
+            ),
+            "}",
+            "NODE",
+            "if [ -f drizzle.config.ts ] && [ -f src/lib/db/schema.ts ]; then",
+            "  pnpm db:push",
+            "fi",
+            "rm -rf -- .next/types/app .next/types/validator.ts || true",
+            "if grep -q '\"typecheck\"' package.json; then",
+            "  pnpm typecheck",
+            "else",
+            "  ./node_modules/.bin/tsc --noEmit -p ./tsconfig.json",
+            "fi",
+        ]
+    )
+
+
+_PROJECT_CELL_BUILD_CMD = _build_project_cell_build_cmd()
 _MAX_READ_CHARS = 16_000
 _MAX_GREP_MATCHES = 200
 _MAX_GREP_CHARS = 16_000
@@ -77,6 +268,7 @@ class ProjectCellExecutorHandle:
     execute: Executor
     sync_preview: Callable[[], Awaitable[ProjectCellPreviewSyncResult]]
     snapshot_files: Callable[[], Awaitable[dict[str, str]]]
+    stage_patch: Callable[[dict[str, str], tuple[str, ...]], Awaitable[None]]
     stage_files: Callable[[dict[str, str]], Awaitable[None]]
     apply_external_files: Callable[[dict[str, str]], Awaitable[None]]
     export_files: Callable[[], Awaitable[dict[str, str]]]
@@ -173,7 +365,7 @@ async def maybe_create_project_cell_executor(
             generation_run_id=generation_run_id,
             fencing_epoch=response.fencing_epoch,
         )
-    except OrchestratorUnavailable as exc:
+    except (OrchestratorUnavailable, OrchestratorBadRequest) as exc:
         raise ProjectCellExecutorUnavailable(exc.message) from exc
     await _mark_workspace_ready(
         session_factory=session_factory,
@@ -203,6 +395,8 @@ async def maybe_create_project_cell_executor(
         nonlocal workspace_revision
         normalized_writes = _normalize_files(writes or {})
         normalized_deletes = _normalize_delete_paths(deletes)
+        if set(normalized_writes).intersection(normalized_deletes):
+            raise ValueError("the same path cannot be written and deleted")
         if not normalized_writes and not normalized_deletes:
             return
         response = await project_cell_agent_write_files(
@@ -215,6 +409,16 @@ async def maybe_create_project_cell_executor(
         )
         workspace_revision = response.workspace_revision
 
+    async def _stage_patch(writes: dict[str, str], deletes: tuple[str, ...] = ()) -> None:
+        nonlocal dirty
+        normalized_writes = _normalize_files(writes)
+        normalized_deletes = _normalize_delete_paths(deletes)
+        if set(normalized_writes).intersection(normalized_deletes):
+            raise ValueError("the same path cannot be written and deleted")
+        await _persist_files(writes=normalized_writes, deletes=normalized_deletes)
+        _apply_to_local_state(workspace_files, writes=normalized_writes, deletes=normalized_deletes)
+        dirty = bool(_diff_files(synced_files, workspace_files))
+
     async def _apply_external_files(files: dict[str, str]) -> None:
         nonlocal synced_files, dirty
         await _stage_files(files)
@@ -222,12 +426,9 @@ async def maybe_create_project_cell_executor(
         dirty = False
 
     async def _stage_files(files: dict[str, str]) -> None:
-        nonlocal dirty
         normalized = _normalize_files(files)
         writes, deletes = _split_external_files(normalized)
-        await _persist_files(writes=writes, deletes=deletes)
-        _apply_to_local_state(workspace_files, writes=writes, deletes=deletes)
-        dirty = bool(_diff_files(synced_files, workspace_files))
+        await _stage_patch(writes, deletes)
 
     async def _refresh_workspace_from_cell() -> dict[str, str]:
         nonlocal dirty, fencing_epoch, workspace_revision
@@ -264,7 +465,19 @@ async def maybe_create_project_cell_executor(
             dirty = False
             synced_files = dict(workspace_files)
             return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
-        hot = await _hot_reload(project_id, project_slug, diff)
+        explicit_empty = tuple(
+            sorted(
+                path
+                for path, content in diff.items()
+                if content == "" and path in workspace_files
+            )
+        )
+        hot = await _hot_reload(
+            project_id,
+            project_slug,
+            diff,
+            empty_files=explicit_empty,
+        )
         generated_files: dict[str, str] = {}
         lockfile = hot.get("pnpm_lockfile")
         if isinstance(lockfile, str) and workspace_files.get("pnpm-lock.yaml") != lockfile:
@@ -434,6 +647,7 @@ async def maybe_create_project_cell_executor(
         execute=_execute,
         sync_preview=_sync_preview,
         snapshot_files=_snapshot_files,
+        stage_patch=_stage_patch,
         stage_files=_stage_files,
         apply_external_files=_apply_external_files,
         export_files=_export_files,
@@ -464,6 +678,8 @@ async def _hot_reload(
     project_id: UUID,
     slug: str,
     files: dict[str, str],
+    *,
+    empty_files: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     from omnia_api.services import orchestrator_client
 
@@ -471,6 +687,7 @@ async def _hot_reload(
         project_id=project_id,
         slug=slug,
         files=files,
+        empty_files=empty_files,
     )
 
 

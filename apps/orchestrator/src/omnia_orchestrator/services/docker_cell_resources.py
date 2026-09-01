@@ -513,6 +513,34 @@ class DockerCellResourceManager:
             detail=detail,
         )
 
+    async def prepare_control_operation(
+        self,
+        workspace_id: UUID,
+        mutation: LifecycleMutation,
+        *,
+        kind: str,
+        checkpoint_ref: str | None = None,
+    ) -> CellWorkspaceState:
+        state = self._require_state(
+            workspace_id,
+            active_operation_id=mutation.operation_id,
+        )
+        names = state.resource_names
+        if names is None:
+            raise CellResourceError("resource names missing")
+        spec = self._spec_from_state(state)
+        self._assert_profile_version(spec.profile_version)
+        await self._preflight_named_resources(spec, names)
+        self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        await self.stateful_begin_or_replay(
+            spec,
+            mutation,
+            kind=kind,
+            names=names,
+            checkpoint_ref=checkpoint_ref,
+        )
+        return state
+
     async def _ensure_volumes(
         self,
         spec: WorkspaceSpec,

@@ -8,9 +8,9 @@ editing this module only.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,19 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_project_cell_cpu_budget(self) -> Self:
+        if (
+            self.workspace_provider == "docker_owner_canary"
+            and self.docker_owner_canary_enabled
+            and self.cell_bundle_cpu_cores < 1.0
+        ):
+            raise ValueError(
+                "enabled Project Cell requires cell_bundle_cpu_cores >= 1.0 "
+                "for PostgreSQL, Redis and the executor"
+            )
+        return self
 
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")

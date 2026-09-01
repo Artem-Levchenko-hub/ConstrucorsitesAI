@@ -493,6 +493,10 @@ def _workspace_agent_exec_env(
         "HOME": "/root",
         "CI": "1",
         "NODE_ENV": "development",
+        # The persistent agent home masks /root's image cache. MAX's pinned
+        # package manager is bundled at this path and needs no public egress.
+        "COREPACK_HOME": "/home/node/.cache/node/corepack",
+        "COREPACK_ENABLE_NETWORK": "0",
         "DATABASE_URL": database_url,
         "PGHOST": postgres_container,
         "PGPORT": "5432",

@@ -13,6 +13,7 @@ import asyncio
 import io
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import docker  # type: ignore[import-untyped]
@@ -122,6 +123,7 @@ class _FakeContainer:
         self.unpause_calls = 0
         self.stop_timeouts: list[int] = []
         self.archives: list[tuple[str, bytes]] = []
+        self.exec_runs: list[tuple[list[str], str]] = []
 
     def reload(self) -> None:
         pass
@@ -147,6 +149,10 @@ class _FakeContainer:
     def put_archive(self, *, path: str, data: bytes) -> bool:
         self.archives.append((path, data))
         return True
+
+    def exec_run(self, cmd: list[str], user: str) -> object:
+        self.exec_runs.append((list(cmd), user))
+        return SimpleNamespace(exit_code=0)
 
 
 class _FakeContainers:
@@ -330,6 +336,39 @@ async def test_write_files_preserves_only_root_runtime_entrypoint_mode(
         assert archive.getmember("docker-entrypoint.sh").mode == 0o755
         assert archive.getmember("src/app.ts").mode == 0o644
         assert archive.getmember("nested/docker-entrypoint.sh").mode == 0o644
+
+
+async def test_write_files_preserves_explicit_empty_file_and_deletes_legacy_empty_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = _FakeContainer(
+        "running-id",
+        "omnia-template-nextjs-entities:dev",
+        status="running",
+    )
+    client = _FakeClient(running)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    result = await docker_client.write_files(
+        "omnia-dev-x",
+        {
+            "blank.txt": "",
+            "removed.txt": "",
+        },
+        empty_files=("blank.txt",),
+    )
+
+    assert result["written"] == "1"
+    assert result["deleted"] == "1"
+    assert len(running.archives) == 1
+    archive_root, archive_bytes = running.archives[0]
+    assert archive_root == "/app"
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+        blank = archive.getmember("blank.txt")
+        assert blank.size == 0
+        with pytest.raises(KeyError):
+            archive.getmember("removed.txt")
+    assert running.exec_runs == [(["rm", "-f", "/app/removed.txt"], "1000:1000")]
 
 
 def test_dev_templates_invoke_entrypoint_through_shell() -> None:

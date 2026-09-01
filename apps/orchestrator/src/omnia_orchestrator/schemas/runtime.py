@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Tier = Literal["free", "pro", "business"]
 RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
@@ -77,11 +77,28 @@ class HotReloadRequest(BaseModel):
     # files: dict path → content. Same shape as `<file path="...">...</file>` extraction
     # from apps/api/src/omnia_api/services/file_extractor.py.
     files: dict[str, str]
+    # Optional disambiguation for legitimate zero-byte files. Paths listed here
+    # must also exist in `files` with `""` content; other empty strings keep the
+    # legacy delete semantics for backward compatibility.
+    empty_files: list[str] = Field(default_factory=list)
     # Optional compare-and-swap token returned by exec-sandbox. When present,
     # the orchestrator refuses to apply a stale shell diff over newer edits.
     base_workspace_revision: str | None = Field(
         default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
     )
+
+    @model_validator(mode="after")
+    def _validate_empty_files(self) -> HotReloadRequest:
+        seen: set[str] = set()
+        for path in self.empty_files:
+            if path in seen:
+                raise ValueError("empty_files must not contain duplicates")
+            seen.add(path)
+            if self.files.get(path) != "":
+                raise ValueError(
+                    "empty_files paths must also appear in files with empty string content"
+                )
+        return self
 
 
 class AgentSandboxExecRequest(BaseModel):

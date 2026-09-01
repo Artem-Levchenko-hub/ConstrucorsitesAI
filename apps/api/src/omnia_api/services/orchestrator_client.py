@@ -1093,6 +1093,7 @@ async def hot_reload(
     files: dict[str, str],
     *,
     base_workspace_revision: str | None = None,
+    empty_files: Sequence[str] = (),
 ) -> dict[str, Any]:
     """POST /internal/projects/hot-reload — write AI-generated files into the
     dev container; orchestrator additionally runs `drizzle-kit push` if the
@@ -1103,8 +1104,15 @@ async def hot_reload(
     yet, PoC). apps/api always has the slug at hand from its own Project row.
     """
     payload: dict[str, Any] = {"project_id": str(project_id), "files": files}
+    normalized_empty_files: list[str] = []
+    for raw_path in empty_files:
+        if type(raw_path) is not str:
+            raise ValueError("empty_files must contain only strings")
+        normalized_empty_files.append(raw_path)
     if base_workspace_revision:
         payload["base_workspace_revision"] = base_workspace_revision
+    if normalized_empty_files:
+        payload["empty_files"] = normalized_empty_files
     return await _request(
         "POST",
         "/internal/projects/hot-reload",

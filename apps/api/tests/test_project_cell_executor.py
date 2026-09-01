@@ -25,6 +25,7 @@ from omnia_api.models.user import User
 from omnia_api.services import project_cell_executor
 from omnia_api.services.agent_builder import Action
 from omnia_api.services.orchestrator_client import (
+    OrchestratorBadRequest,
     ProjectCellAgentExecResponse,
     ProjectCellAgentWorkspaceSnapshot,
     ProjectCellAgentWriteResponse,
@@ -46,6 +47,137 @@ def _resolve_test_database_url() -> str:
         return settings.database_test_url
     base = settings.database_url.rsplit("/", 1)[0]
     return f"{base}/omnia_test"
+
+
+async def test_dependency_reuse_policy_allows_matching_bundled_metadata() -> None:
+    workspace_package = """
+    {
+      "name": "user-project",
+      "scripts": {"typecheck": "tsc --noEmit", "lint": "eslint ."},
+      "packageManager": "pnpm@10.0.0",
+      "dependencies": {"next": "15.0.0", "react": "19.0.0"},
+      "devDependencies": {"typescript": "5.6.0"},
+      "pnpm": {"onlyBuiltDependencies": ["sharp"]}
+    }
+    """
+    bundled_package = """
+    {
+      "name": "bundled-template",
+      "packageManager": "pnpm@10.0.0",
+      "dependencies": {"react": "19.0.0", "next": "15.0.0"},
+      "devDependencies": {"typescript": "5.6.0"},
+      "pnpm": {"onlyBuiltDependencies": ["sharp"]}
+    }
+    """
+
+    error = project_cell_executor._project_cell_dependency_reuse_error(
+        workspace_package_json=workspace_package,
+        bundled_package_json=bundled_package,
+        workspace_lockfile="lockfileVersion: '9.0'\n",
+        bundled_lockfile="lockfileVersion: '9.0'\n",
+    )
+
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    ("workspace_package", "workspace_lockfile", "bundled_lockfile", "expected"),
+    [
+        (
+            """
+            {
+              "packageManager": "pnpm@10.0.0",
+              "dependencies": {"next": "15.1.0"}
+            }
+            """,
+            "lockfileVersion: '9.0'\n",
+            "lockfileVersion: '9.0'\n",
+            "dependency metadata differs",
+        ),
+        (
+            """
+            {
+              "packageManager": "pnpm@10.0.0",
+              "dependencies": {"next": "15.0.0"}
+            }
+            """,
+            None,
+            "lockfileVersion: '9.0'\n",
+            "pnpm-lock.yaml presence differs",
+        ),
+        (
+            """
+            {
+              "packageManager": "pnpm@10.0.0",
+              "dependencies": {"next": "15.0.0"}
+            }
+            """,
+            "lockfileVersion: '9.1'\n",
+            "lockfileVersion: '9.0'\n",
+            "pnpm-lock.yaml differs",
+        ),
+    ],
+)
+async def test_dependency_reuse_policy_rejects_mismatch(
+    workspace_package: str,
+    workspace_lockfile: str | None,
+    bundled_lockfile: str | None,
+    expected: str,
+) -> None:
+    error = project_cell_executor._project_cell_dependency_reuse_error(
+        workspace_package_json=workspace_package,
+        bundled_package_json="""
+        {
+          "packageManager": "pnpm@10.0.0",
+          "dependencies": {"next": "15.0.0"}
+        }
+        """,
+        workspace_lockfile=workspace_lockfile,
+        bundled_lockfile=bundled_lockfile,
+    )
+
+    assert error is not None
+    assert expected in error
+
+
+@pytest.mark.parametrize(
+    ("package_json_text", "label", "expected"),
+    [
+        ("{", "workspace", "workspace package.json is invalid JSON"),
+        ("[]", "workspace", "workspace package.json must contain a JSON object"),
+        (
+            '{"packageManager": 1}',
+            "bundled image",
+            "bundled image package.json packageManager must be a string",
+        ),
+        (
+            '{"dependencies": []}',
+            "workspace",
+            "workspace package.json dependencies must be an object",
+        ),
+    ],
+)
+async def test_dependency_metadata_guards_validate_shape(
+    package_json_text: str,
+    label: str,
+    expected: str,
+) -> None:
+    with pytest.raises(ValueError, match=expected):
+        project_cell_executor._normalize_project_cell_dependency_metadata(
+            package_json_text,
+            label=label,
+        )
+
+
+async def test_project_cell_build_command_uses_bundled_dependency_guard() -> None:
+    command = project_cell_executor._PROJECT_CELL_BUILD_CMD
+
+    assert "pnpm install" not in command
+    assert "/app/package.json" in command
+    assert "/app/pnpm-lock.yaml" in command
+    assert "cannot safely reuse bundled node_modules" in command
+    assert "pnpm db:push" in command
+    assert "pnpm typecheck" in command
 
 
 @pytest_asyncio.fixture
@@ -149,6 +281,7 @@ class _ExecutorHarness:
     write_calls: list[dict[str, object]]
     exec_calls: list[dict[str, object]]
     hot_reload_calls: list[dict[str, str]]
+    hot_reload_empty_files: list[tuple[str, ...]]
     legacy_actions: list[str]
 
 
@@ -176,6 +309,7 @@ async def _prepare_executor(
     cell_exec_files = cell_exec_files or {}
     exec_calls: list[dict[str, object]] = []
     hot_reload_calls: list[dict[str, str]] = []
+    hot_reload_empty_files: list[tuple[str, ...]] = []
     write_calls: list[dict[str, object]] = []
     legacy_actions: list[str] = []
     revision_number = 1
@@ -319,10 +453,13 @@ async def _prepare_executor(
         project_id: UUID,
         slug: str,
         files: dict[str, str],
+        *,
+        empty_files: tuple[str, ...] = (),
     ) -> dict[str, object]:
         assert project_id == expected_project_id
         assert slug == expected_project_slug
         hot_reload_calls.append(dict(files))
+        hot_reload_empty_files.append(tuple(empty_files))
         if hot_reload_results:
             return dict(hot_reload_results.pop(0))
         return dict(hot_reload_result or {"state": "hot_reloaded"})
@@ -377,6 +514,7 @@ async def _prepare_executor(
         write_calls=write_calls,
         exec_calls=exec_calls,
         hot_reload_calls=hot_reload_calls,
+        hot_reload_empty_files=hot_reload_empty_files,
         legacy_actions=legacy_actions,
     )
 
@@ -625,6 +763,56 @@ async def test_write_file_preserves_zero_byte_file_in_cell(
     ]
 
 
+async def test_sync_preview_marks_zero_byte_files_as_explicit_empty_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+
+    await harness.handle.stage_patch({"blank.txt": ""})
+    sync = await harness.handle.sync_preview()
+
+    assert sync.generated_files == {}
+    assert sync.failure is None
+    assert harness.hot_reload_calls == [{"blank.txt": ""}]
+    assert harness.hot_reload_empty_files == [("blank.txt",)]
+
+
+async def test_stage_patch_preserves_zero_byte_file_and_explicit_delete(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={"remove.txt": "gone soon\n"},
+    )
+
+    await harness.handle.stage_patch(
+        {"blank.txt": "", "keep.txt": "after\n"},
+        ("remove.txt",),
+    )
+    blank = await harness.handle.execute(Action(name="read_file", args={"path": "blank.txt"}))
+    kept = await harness.handle.execute(Action(name="read_file", args={"path": "keep.txt"}))
+    removed = await harness.handle.execute(Action(name="read_file", args={"path": "remove.txt"}))
+
+    assert blank == {"ok": True, "content": ""}
+    assert kept == {"ok": True, "content": "after\n"}
+    assert removed == {"ok": False, "error": "not found: remove.txt"}
+    assert harness.write_calls == [
+        {
+            "generation_run_id": harness.run_id,
+            "fencing_epoch": 1,
+            "expected_revision": f"{1:064x}",
+            "files": {"blank.txt": "", "keep.txt": "after\n"},
+            "deletes": ["remove.txt"],
+        }
+    ]
+
+
 async def test_bash_runs_inside_cell_and_returns_remote_diff(
     monkeypatch: pytest.MonkeyPatch,
     db_session: AsyncSession,
@@ -793,3 +981,80 @@ async def test_bootstrap_rejects_mismatched_active_lease(
         )
 
     assert "active lease does not match the run" in str(caught.value)
+
+
+async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    owner = await _new_user(db_session, "bootstrap-bad-request-owner")
+    project = await _new_project(db_session, owner, label="bootstrap-bad-request")
+    run = await _new_run(db_session, project, owner, label="bootstrap-bad-request")
+    await db_session.commit()
+
+    async def ready_readiness(_user, _project_id):
+        return ProjectCellControlReadiness(
+            selected=True,
+            ready=True,
+            provider="docker_owner_canary",
+            reason="ready",
+        )
+
+    async def fake_execute_cell_operation(_session_factory, operation_id, _client):
+        workspace = await db_session.scalar(
+            select(ProjectCellWorkspace).where(
+                ProjectCellWorkspace.generation_run_id == run.id
+            )
+        )
+        assert workspace is not None
+        return SimpleNamespace(
+            operation_id=operation_id,
+            status="completed",
+            response=ProjectCellResourceResponse(
+                workspace_id=workspace.id,
+                state="resources_ready",
+                provider_ref="cell-1",
+                fencing_epoch=1,
+                checkpoint_ref=None,
+                has_workspace=True,
+                has_agent_home=True,
+                has_postgres=True,
+                has_redis=True,
+            ),
+        )
+
+    async def fake_bootstrap(
+        _workspace_id: UUID,
+        *,
+        generation_run_id: UUID | None,
+        fencing_epoch: int,
+    ) -> ProjectCellAgentWorkspaceSnapshot:
+        assert generation_run_id == run.id
+        assert fencing_epoch == 1
+        raise OrchestratorBadRequest(
+            "Orchestrator rejected request: workspace generation lease mismatch",
+            status_code=409,
+            details={"effect_applied": False},
+        )
+
+    monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", ready_readiness)
+    monkeypatch.setattr(
+        project_cell_executor,
+        "execute_cell_operation",
+        fake_execute_cell_operation,
+    )
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", fake_bootstrap)
+
+    with pytest.raises(project_cell_executor.ProjectCellExecutorUnavailable) as caught:
+        await project_cell_executor.maybe_create_project_cell_executor(
+            project_id=project.id,
+            project_slug=project.slug,
+            project_template="max_miniapp",
+            user_id=owner.id,
+            generation_run_id=run.id,
+            legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+        )
+
+    assert "workspace generation lease mismatch" in str(caught.value)

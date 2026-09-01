@@ -232,10 +232,16 @@ def _copy_workspace(src: Path, dest: Path) -> None:
     shutil.copytree(src, dest, ignore=_ignore, dirs_exist_ok=True)
 
 
-def _apply_workspace_files(project_id: str, files: dict[str, str]) -> None:
+def _apply_workspace_files(
+    project_id: str,
+    files: dict[str, str],
+    *,
+    empty_files: tuple[str, ...] = (),
+) -> None:
     root = _project_workspace_dir(project_id)
     root.mkdir(parents=True, exist_ok=True)
     canonical_root = root.resolve()
+    explicit_empty_paths = {_safe_app_path(path) for path in empty_files if path}
     for raw_path, content in files.items():
         rel = _safe_app_path(raw_path)
         if _sandbox_name_is_secret(Path(rel).name):
@@ -268,7 +274,7 @@ def _apply_workspace_files(project_id: str, files: dict[str, str]) -> None:
                 message=f"workspace target is a symlink: {rel}",
                 status_code=403,
             )
-        if content == "":
+        if content == "" and rel not in explicit_empty_paths:
             try:
                 target.unlink()
             except FileNotFoundError:
@@ -631,8 +637,17 @@ async def hot_reload(
 async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, str]:
     container_name = f"omnia-dev-{slug}"
 
-    write_result = await write_files(container_name, payload.files)
-    await asyncio.to_thread(_apply_workspace_files, str(payload.project_id), payload.files)
+    write_result = await write_files(
+        container_name,
+        payload.files,
+        empty_files=payload.empty_files,
+    )
+    await asyncio.to_thread(
+        _apply_workspace_files,
+        str(payload.project_id),
+        payload.files,
+        empty_files=tuple(payload.empty_files),
+    )
 
     # Seed PUBLIC entity catalogs with demo rows so the first browse screen
     # isn't an empty-state (NORTH STAR pillars 1 & 4). Idempotent (only fills

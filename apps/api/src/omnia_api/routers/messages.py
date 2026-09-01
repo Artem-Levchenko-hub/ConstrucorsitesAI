@@ -755,23 +755,63 @@ async def _abort_unsafe_max_backend(
     )
 
 
+def _resolve_max_shell_enabled(
+    *,
+    max_shell_requested: bool,
+    sandbox_attested: bool,
+    project_cell_handle: ProjectCellExecutorHandle | None,
+) -> bool:
+    return max_shell_requested and (sandbox_attested or project_cell_handle is not None)
+
+
+def _split_project_cell_preview_patch(
+    files: Mapping[str, str],
+    *,
+    empty_files: Sequence[str] = (),
+) -> tuple[dict[str, str], tuple[str, ...], tuple[str, ...]]:
+    payload = {path: content for path, content in files.items() if path}
+    explicit_empty = tuple(
+        sorted({path for path in empty_files if path in payload and payload[path] == ""})
+    )
+    writes: dict[str, str] = {}
+    deletes: list[str] = []
+    explicit_empty_set = set(explicit_empty)
+    for path, content in payload.items():
+        if content == "" and path not in explicit_empty_set:
+            deletes.append(path)
+            continue
+        writes[path] = content
+    return writes, tuple(sorted(set(deletes))), explicit_empty
+
+
 async def _apply_project_cell_preview_files(
     *,
     project_id: UUID,
     project_slug: str,
     files: Mapping[str, str],
     project_cell_handle: ProjectCellExecutorHandle | None = None,
+    empty_files: Sequence[str] = (),
 ) -> None:
-    payload = {path: content for path, content in files.items() if path}
-    if not payload:
+    writes, deletes, explicit_empty = _split_project_cell_preview_patch(
+        files,
+        empty_files=empty_files,
+    )
+    if not writes and not deletes:
         return
     if project_cell_handle is not None:
-        await project_cell_handle.stage_files(payload)
+        await project_cell_handle.stage_patch(writes, deletes)
         sync_result = await project_cell_handle.sync_preview()
         if sync_result.failure is not None:
             raise RuntimeError(sync_result.failure)
         return
-    await orchestrator_client.hot_reload(project_id, project_slug, payload)
+    payload = dict(writes)
+    payload.update({path: "" for path in deletes})
+    await orchestrator_client.hot_reload(
+        project_id,
+        project_slug,
+        payload,
+        empty_files=explicit_empty,
+    )
 
 
 def _extract_max_shell_files(raw_files: Any) -> dict[str, str]:
@@ -798,9 +838,15 @@ async def _rollback_project_cell_shell_files(
     project_cell_handle: ProjectCellExecutorHandle,
 ) -> bool:
     normalized_paths = sorted({path for path in touched_paths if path})
-    rollback_files = {
-        path: snapshot_files.get(path, "") for path in normalized_paths
-    }
+    rollback_files: dict[str, str] = {}
+    explicit_empty: list[str] = []
+    for path in normalized_paths:
+        if path in snapshot_files:
+            rollback_files[path] = snapshot_files[path]
+            if snapshot_files[path] == "":
+                explicit_empty.append(path)
+        else:
+            rollback_files[path] = ""
     if not rollback_files:
         return False
     try:
@@ -809,6 +855,7 @@ async def _rollback_project_cell_shell_files(
             project_slug=project_slug,
             files=rollback_files,
             project_cell_handle=project_cell_handle,
+            empty_files=tuple(explicit_empty),
         )
     except Exception as exc:
         logging.getLogger(__name__).warning(
@@ -835,8 +882,8 @@ async def _run_max_shell_action(
         return {
             "ok": False,
             "error": (
-                "MAX project shell is locked: the separate "
-                "secretless sandbox did not pass capability "
+                "MAX project shell is locked: the operator disabled it "
+                "or the isolated sandbox did not pass capability "
                 "attestation. Until it is ready use "
                 "read_file/edit_file/write_file/build."
             ),
@@ -3626,8 +3673,11 @@ async def _process_prompt(
                         f"[PP] MAX sandbox attestation unavailable: {_sandbox_cap_exc!r}",
                         flush=True,
                     )
-            _max_shell_enabled = bool(
-                _max_shell_requested and _max_sandbox_capabilities.get("ready")
+            _max_sandbox_attested = bool(_max_sandbox_capabilities.get("ready"))
+            _max_shell_enabled = _resolve_max_shell_enabled(
+                max_shell_requested=_max_shell_requested,
+                sandbox_attested=_max_sandbox_attested,
+                project_cell_handle=None,
             )
             _base_agent_executor = agent_builder.make_container_executor(
                 project_id=project_id,
@@ -4170,7 +4220,11 @@ async def _process_prompt(
                 else:
                     if _project_cell_executor_handle is not None:
                         _base_agent_executor = _project_cell_executor_handle.execute
-                        _max_shell_enabled = True
+                        _max_shell_enabled = _resolve_max_shell_enabled(
+                            max_shell_requested=_max_shell_requested,
+                            sandbox_attested=_max_sandbox_attested,
+                            project_cell_handle=_project_cell_executor_handle,
+                        )
                         _active_max_locked_files = MAX_SECURITY_LOCKED_FILES
                         await _agent_emit(
                             "agent.step",

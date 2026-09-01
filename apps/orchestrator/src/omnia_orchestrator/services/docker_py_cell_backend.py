@@ -32,6 +32,7 @@ _VOLUME_ROOT = "/volume"
 _POSTGRES_ROOT = "/var/lib/postgresql"
 _POSTGRES_DATA = "/var/lib/postgresql/PGDATA"
 _POSTGRES_PASSWORD_FILE = "/run/secrets/postgres-password.txt"
+_POSTGRES_CELL_HBA_RULE = "host all all samenet scram-sha-256"
 _REDIS_DATA = "/data"
 _WORKSPACE_SOURCE = "/workspace-src"
 _WORKSPACE_RUN_ROOT = "/work"
@@ -165,11 +166,15 @@ class DockerPyCellBackend:
     helper_image: str
     client_factory: Callable[[str], Any] | None = None
     archive_limit_bytes: int = _ARCHIVE_LIMIT_BYTES
+    exec_memory_limit_bytes: int = 1024 * 1024 * 1024
+    exec_cpu_cores: float = 0.5
     base_url: str = field(init=False)
     api: Any = field(init=False, repr=False)
     _client: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.exec_memory_limit_bytes <= 0 or self.exec_cpu_cores < 0.01:
+            raise ValueError("project cell executor requires a positive reserved resource budget")
         self.base_url = self.docker_host
         self.api = SimpleNamespace(base_url=self.docker_host)
 
@@ -677,7 +682,10 @@ class DockerPyCellBackend:
             },
             tmpfs=dict(_DEFAULT_TMPFS),
             pids_limit=_HELPER_PIDS_LIMIT,
-            mem_limit=_HELPER_MEMORY_LIMIT_BYTES,
+            mem_limit=self.exec_memory_limit_bytes,
+            memswap_limit=self.exec_memory_limit_bytes,
+            cpu_period=_CPU_PERIOD,
+            cpu_quota=int(self.exec_cpu_cores * _CPU_PERIOD),
             network=internal_network_name,
         )
         timed_out = False
@@ -928,6 +936,15 @@ class DockerPyCellBackend:
                         "--auth-host=scram-sha-256",
                         f"--pwfile={shlex.quote(_POSTGRES_PASSWORD_FILE)}",
                         f"-D {shlex.quote(_POSTGRES_DATA)}",
+                        "; fi",
+                        "&&",
+                        "if ! grep -Fqx",
+                        shlex.quote(_POSTGRES_CELL_HBA_RULE),
+                        shlex.quote(_POSTGRES_DATA + "/pg_hba.conf"),
+                        "; then printf '%s\\n'",
+                        shlex.quote(_POSTGRES_CELL_HBA_RULE),
+                        ">>",
+                        shlex.quote(_POSTGRES_DATA + "/pg_hba.conf"),
                         "; fi",
                     ]
                 ),

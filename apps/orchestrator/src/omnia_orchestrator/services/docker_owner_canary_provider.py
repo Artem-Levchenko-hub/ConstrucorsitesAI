@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 from uuid import UUID
 
@@ -9,6 +10,8 @@ from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
+    CellResourceError,
+    CellRestoreFailed,
     LifecycleMutation,
 )
 from omnia_orchestrator.core.workspace_provider import (
@@ -235,17 +238,63 @@ class DockerOwnerCanaryProvider:
             )
             if replay is not None:
                 return replay
-            await checkpoint_manager.create(
-                workspace_id,
-                checkpoint_ref,
-                mutation,
-                record_operation=False,
-            )
-            await resource_manager.pause_services_without_lock(
+            prepared = await resource_manager.prepare_control_operation(
                 workspace_id,
                 mutation,
+                kind="pause",
                 checkpoint_ref=checkpoint_ref,
-                record_operation=True,
+            )
+            try:
+                await checkpoint_manager.create(
+                    workspace_id,
+                    checkpoint_ref,
+                    mutation,
+                    record_operation=False,
+                )
+            except asyncio.CancelledError:
+                resource_manager.state_store.mark_indeterminate(
+                    workspace_id,
+                    mutation=mutation,
+                    detail="pause checkpoint cancelled",
+                )
+                raise
+            except Exception as exc:
+                resource_manager.state_store.mark_failed(
+                    workspace_id,
+                    mutation,
+                    phase="failed",
+                    provider_ref=prepared.provider_ref,
+                    bundle_state=prepared.bundle_state,
+                    detail=str(exc),
+                )
+                raise
+            try:
+                await resource_manager.pause_services_without_lock(
+                    workspace_id,
+                    mutation,
+                    checkpoint_ref=checkpoint_ref,
+                    record_operation=False,
+                )
+            except asyncio.CancelledError:
+                resource_manager.state_store.mark_indeterminate(
+                    workspace_id,
+                    mutation=mutation,
+                    detail="pause cancelled",
+                )
+                raise
+            except Exception as exc:
+                resource_manager.state_store.mark_indeterminate(
+                    workspace_id,
+                    mutation=mutation,
+                    detail=str(exc),
+                )
+                raise
+            resource_manager.state_store.complete(
+                workspace_id,
+                mutation,
+                phase="completed",
+                provider_ref=prepared.provider_ref,
+                bundle_state="resources_paused",
             )
             return await self._inspect_with_checkpoint_ref(workspace_id, checkpoint_ref, mutation)
 
@@ -278,17 +327,63 @@ class DockerOwnerCanaryProvider:
             )
             if replay is not None:
                 return replay
-            await checkpoint_manager.create(
-                workspace_id,
-                checkpoint_ref,
-                mutation,
-                record_operation=False,
-            )
-            await resource_manager.destroy_compute_without_lock(
+            prepared = await resource_manager.prepare_control_operation(
                 workspace_id,
                 mutation,
+                kind="destroy",
                 checkpoint_ref=checkpoint_ref,
-                record_operation=True,
+            )
+            try:
+                await checkpoint_manager.create(
+                    workspace_id,
+                    checkpoint_ref,
+                    mutation,
+                    record_operation=False,
+                )
+            except asyncio.CancelledError:
+                resource_manager.state_store.mark_indeterminate(
+                    workspace_id,
+                    mutation=mutation,
+                    detail="destroy checkpoint cancelled",
+                )
+                raise
+            except Exception as exc:
+                resource_manager.state_store.mark_failed(
+                    workspace_id,
+                    mutation,
+                    phase="failed",
+                    provider_ref=prepared.provider_ref,
+                    bundle_state=prepared.bundle_state,
+                    detail=str(exc),
+                )
+                raise
+            try:
+                await resource_manager.destroy_compute_without_lock(
+                    workspace_id,
+                    mutation,
+                    checkpoint_ref=checkpoint_ref,
+                    record_operation=False,
+                )
+            except asyncio.CancelledError:
+                resource_manager.state_store.mark_indeterminate(
+                    workspace_id,
+                    mutation=mutation,
+                    detail="destroy cancelled",
+                )
+                raise
+            except Exception as exc:
+                resource_manager.state_store.mark_indeterminate(
+                    workspace_id,
+                    mutation=mutation,
+                    detail=str(exc),
+                )
+                raise
+            resource_manager.state_store.complete(
+                workspace_id,
+                mutation,
+                phase="completed",
+                provider_ref=prepared.provider_ref,
+                bundle_state="retained",
             )
             return await self._inspect_with_checkpoint_ref(workspace_id, checkpoint_ref, mutation)
 
@@ -347,6 +442,11 @@ class DockerOwnerCanaryProvider:
             raise CellFenceRejected("replay envelope mismatch")
         if operation.status == "completed":
             return await self._inspect_with_checkpoint_ref(workspace_id, checkpoint_ref, mutation)
+        if operation.status == "failed":
+            detail = operation.detail or f"{kind} failed"
+            if kind == "restore":
+                raise CellRestoreFailed(detail)
+            raise CellResourceError(detail)
         if operation.status == "indeterminate":
             raise CellIndeterminateOperation("operation replay unavailable")
         raise CellFenceRejected("operation replay unavailable")
