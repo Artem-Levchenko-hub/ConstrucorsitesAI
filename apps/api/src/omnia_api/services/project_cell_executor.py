@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.db import get_engine
@@ -22,9 +23,12 @@ from omnia_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellPreviewSession,
     project_cell_agent_bootstrap,
     project_cell_agent_exec,
     project_cell_agent_write_files,
+    project_cell_apply_draft,
+    project_cell_create_preview_session,
 )
 from omnia_api.services.project_cell_control import inspect_project_cell_control
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
@@ -273,6 +277,7 @@ class ProjectCellExecutorHandle:
     apply_external_files: Callable[[dict[str, str]], Awaitable[None]]
     export_files: Callable[[], Awaitable[dict[str, str]]]
     workspace_id: UUID
+    create_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +294,7 @@ async def maybe_create_project_cell_executor(
     user_id: UUID,
     generation_run_id: UUID,
     legacy_execute: Executor,
+    vision_context: str = "",
 ) -> ProjectCellExecutorHandle | None:
     if project_template != "max_miniapp" or not project_slug:
         return None
@@ -297,7 +303,14 @@ async def maybe_create_project_cell_executor(
     async with session_factory() as session:
         project = await session.get(Project, project_id)
         user = await session.get(User, user_id)
-        run = await session.get(GenerationRun, generation_run_id)
+        run = await session.scalar(
+            select(GenerationRun)
+            .where(GenerationRun.id == generation_run_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if run is not None:
+            await session.refresh(run)
         if project is None or user is None or run is None:
             return None
         readiness = await inspect_project_cell_control(user, project_id)
@@ -367,25 +380,30 @@ async def maybe_create_project_cell_executor(
         )
     except (OrchestratorUnavailable, OrchestratorBadRequest) as exc:
         raise ProjectCellExecutorUnavailable(exc.message) from exc
+    if (
+        snapshot.generation_run_id != generation_run_id
+        or snapshot.fencing_epoch != response.fencing_epoch
+    ):
+        raise ProjectCellExecutorUnavailable("Project Cell active lease does not match the run")
     await _mark_workspace_ready(
         session_factory=session_factory,
         workspace_id=workspace_id,
         generation_run_id=generation_run_id,
         provider_ref=response.provider_ref,
+        fencing_epoch=response.fencing_epoch,
     )
 
     workspace_files = {
         _normalize_path(path): content
         for path, content in snapshot.files.items()
     }
-    if snapshot.generation_run_id != generation_run_id:
-        raise ProjectCellExecutorUnavailable("Project Cell active lease does not match the run")
-    leased_run_id = snapshot.generation_run_id
-    fencing_epoch = snapshot.fencing_epoch
+    leased_run_id = generation_run_id
+    fencing_epoch = response.fencing_epoch
     workspace_revision = snapshot.workspace_revision
     baseline_files = dict(workspace_files)
     synced_files = dict(workspace_files)
     dirty = False
+    runtime_log_tail = ""
 
     async def _persist_files(
         *,
@@ -457,37 +475,27 @@ async def maybe_create_project_cell_executor(
         return dict(workspace_files)
 
     async def _sync_preview() -> ProjectCellPreviewSyncResult:
-        nonlocal synced_files, dirty
-        if not dirty:
-            return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
+        nonlocal synced_files, dirty, workspace_revision, runtime_log_tail
+        # Even an empty patch must ensure the cell-owned runtime is alive.
         diff = _diff_files(synced_files, workspace_files)
-        if not diff:
-            dirty = False
-            synced_files = dict(workspace_files)
-            return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
-        explicit_empty = tuple(
-            sorted(
-                path
-                for path, content in diff.items()
-                if content == "" and path in workspace_files
-            )
+        draft = await project_cell_apply_draft(
+            workspace_id,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+            expected_revision=workspace_revision,
+            files={path: value for path, value in diff.items() if path in workspace_files},
+            deletes=tuple(path for path in diff if path not in workspace_files),
         )
-        hot = await _hot_reload(
-            project_id,
-            project_slug,
-            diff,
-            empty_files=explicit_empty,
-        )
-        generated_files: dict[str, str] = {}
-        lockfile = hot.get("pnpm_lockfile")
-        if isinstance(lockfile, str) and workspace_files.get("pnpm-lock.yaml") != lockfile:
-            generated_files["pnpm-lock.yaml"] = lockfile
-            await _persist_files(writes={"pnpm-lock.yaml": lockfile})
-            _apply_to_local_state(
-                workspace_files,
-                writes={"pnpm-lock.yaml": lockfile},
-            )
-        failure = _sync_failure_detail(hot)
+        workspace_revision = draft.workspace_revision
+        runtime_log_tail = draft.runtime_log_tail
+        # Install/migration steps may generate files even on failure.
+        generated_files = await _refresh_workspace_from_cell()
+        failure = _sync_failure_detail({
+            "package_exit_code": draft.package_exit_code,
+            "package_stderr_tail": draft.package_stderr_tail,
+            "migration_exit_code": draft.migration_exit_code,
+            "migration_stderr_tail": draft.migration_stderr_tail,
+        })
         if failure is not None:
             return ProjectCellPreviewSyncResult(
                 generated_files=generated_files,
@@ -498,6 +506,14 @@ async def maybe_create_project_cell_executor(
         return ProjectCellPreviewSyncResult(
             generated_files=generated_files,
             failure=None,
+        )
+
+    async def _create_preview_session() -> ProjectCellPreviewSession:
+        sync = await _sync_preview()
+        if sync.failure:
+            raise ProjectCellExecutorUnavailable(sync.failure)
+        return await project_cell_create_preview_session(
+            workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
         )
 
     async def _execute(action: Action) -> dict[str, Any]:
@@ -620,13 +636,51 @@ async def maybe_create_project_cell_executor(
                             else {}
                         ),
                     }
-                legacy_result = await legacy_execute(action)
+                if action.name == "read_logs":
+                    runtime_result: dict[str, Any] = {
+                        "ok": True, "detail": runtime_log_tail.strip() or "(no logs yet)",
+                    }
+                elif action.name == "verify_isolation":
+                    runtime_result = {
+                        "ok": False,
+                        "error": "Cell MAX isolation requires two signed tenant identities; "
+                                 "legacy email-auth isolation is not applicable.",
+                    }
+                else:
+                    preview = await project_cell_create_preview_session(
+                        workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+                    )
+                    if action.name == "runtime_check":
+                        from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
+
+                        proof = await probe_max_cell_runtime(
+                            preview, path=str(action.args.get("path") or "/"),
+                        )
+                        runtime_result = {"ok": proof.ok, "detail": proof.detail}
+                    elif action.name == "see":
+                        from omnia_api.services import agent_vision
+
+                        visual = await agent_vision.see_page(
+                            project_id, path=action.path or "/", prompt_context=vision_context,
+                            bootstrap_url=preview.bootstrap_url,
+                        )
+                        runtime_result = agent_vision.normalize_max_see_observation(visual)
+                    else:
+                        from omnia_api.services import agent_probe
+
+                        runtime_result = await agent_probe.run_probe(
+                            project_id, method=str(action.args.get("method") or "GET"),
+                            path=action.path or "/", body=action.args.get("body"),
+                            cell_preview=preview,
+                        )
                 if sync_result.generated_files:
-                    merged = dict(legacy_result.get("files") or {})
+                    merged = dict(runtime_result.get("files") or {})
                     merged.update(sync_result.generated_files)
-                    legacy_result["files"] = merged
-                return legacy_result
-            return await legacy_execute(action)
+                    runtime_result["files"] = merged
+                return runtime_result
+            if action.name in {"docs", "provider_docs", "generate_media"}:
+                return await legacy_execute(action)
+            return {"ok": False, "error": f"unknown cell action {action.name}"}
         except OrchestratorUnavailable as exc:
             return {
                 "ok": False,
@@ -652,6 +706,7 @@ async def maybe_create_project_cell_executor(
         apply_external_files=_apply_external_files,
         export_files=_export_files,
         workspace_id=workspace_id,
+        create_preview_session=_create_preview_session,
     )
 
 
@@ -661,34 +716,34 @@ async def _mark_workspace_ready(
     workspace_id: UUID,
     generation_run_id: UUID,
     provider_ref: str | None,
+    fencing_epoch: int,
 ) -> None:
     async with session_factory() as session:
-        workspace = await session.get(ProjectCellWorkspace, workspace_id)
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == workspace_id)
+            .with_for_update()
+        )
         if workspace is None:
             raise ProjectCellExecutorUnavailable("Project Cell workspace disappeared")
+        run = await session.scalar(
+            select(GenerationRun)
+            .where(GenerationRun.id == generation_run_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        )
+        if (
+            workspace.generation_run_id != generation_run_id
+            or workspace.fencing_epoch != fencing_epoch
+            or run is None
+            or run.status not in {"pending", "running"}
+        ):
+            raise ProjectCellExecutorUnavailable("Project Cell lease changed before activation")
         workspace.state = "ready"
         workspace.provider_ref = provider_ref
-        workspace.generation_run_id = generation_run_id
         workspace.ready_at = datetime.now(UTC)
         workspace.last_error = None
         await session.commit()
-
-
-async def _hot_reload(
-    project_id: UUID,
-    slug: str,
-    files: dict[str, str],
-    *,
-    empty_files: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    from omnia_api.services import orchestrator_client
-
-    return await orchestrator_client.hot_reload(
-        project_id=project_id,
-        slug=slug,
-        files=files,
-        empty_files=empty_files,
-    )
 
 
 def _apply_to_local_state(
@@ -806,7 +861,7 @@ def _sync_failure_detail(hot: dict[str, Any]) -> str | None:
             hot.get(name),
             hot.get(name.replace("_exit_code", "_stderr_tail"), ""),
         )
-        for name in ("package_exit_code", "drizzle_exit_code")
+        for name in ("package_exit_code", "migration_exit_code")
         if hot.get(name) not in (None, "0", 0, "n/a")
     ]
     if not failures:

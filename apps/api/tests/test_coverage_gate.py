@@ -10,6 +10,11 @@ passed=True).
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
 
 from omnia_api.services.build_plan import BuildPlan, Capability
 from omnia_api.services.coverage_gate import (
@@ -21,6 +26,7 @@ from omnia_api.services.coverage_gate import (
     run_coverage_gate,
     status_matches,
 )
+from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
 
 
 def test_status_matches_class_and_exact():
@@ -80,6 +86,61 @@ async def test_no_dev_url_skipped(monkeypatch):
     plan = BuildPlan(capabilities=(Capability(id="c", path="/api/x", must_have=True),))
     v = await run_coverage_gate(str(uuid.uuid4()), plan)
     assert v.skipped and v.passed
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+async def test_cell_coverage_uses_signed_session_without_legacy_runtime(
+    monkeypatch, escaped: bool,
+):
+    workspace_id = uuid.uuid4()
+    origin = f"https://cell-{workspace_id.hex[:12]}-dev.preview.lead-generator.ru"
+    preview = ProjectCellPreviewSession(
+        workspace_id,
+        origin,
+        f"{origin}/api/omnia/preview-session?expires=1893456000&signature=" + "a" * 43,
+        "2030-01-01T00:00:00Z",
+    )
+    page = SimpleNamespace(
+        goto=AsyncMock(return_value=SimpleNamespace(ok=True)),
+        url="https://attacker.example/" if escaped else f"{origin}/",
+    )
+    context = SimpleNamespace(
+        new_page=AsyncMock(return_value=page),
+        cookies=AsyncMock(return_value=[{"name": "__Host-max_session"}]),
+    )
+    browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
+    chromium = SimpleNamespace(launch=AsyncMock(return_value=browser))
+
+    @asynccontextmanager
+    async def fake_playwright():
+        yield SimpleNamespace(chromium=chromium)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("cell coverage must not use legacy runtime or login")
+
+    from omnia_api.services import functional_gate, orchestrator_client
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", fake_playwright)
+    monkeypatch.setattr(orchestrator_client, "get_status", forbidden)
+    monkeypatch.setattr(functional_gate, "_login", forbidden)
+    request = AsyncMock(return_value={"status": 200})
+    monkeypatch.setattr(functional_gate, "_api", request)
+    plan = BuildPlan(
+        capabilities=(Capability(id="products", path="/api/products", must_have=True),)
+    )
+
+    verdict = await run_coverage_gate(workspace_id, plan, cell_preview=preview)
+
+    assert verdict.passed
+    assert verdict.skipped is escaped
+    page.goto.assert_awaited_once_with(
+        preview.bootstrap_url,
+        wait_until="domcontentloaded",
+    )
+    if escaped:
+        request.assert_not_awaited()
+    else:
+        request.assert_awaited_once_with(page, "POST", "/api/products", None)
 
 
 # ── A1 route reconciliation ──────────────────────────────────────────────────

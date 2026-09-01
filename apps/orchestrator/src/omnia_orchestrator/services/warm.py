@@ -64,7 +64,7 @@ async def _discover_routes(name: str) -> list[str]:
             timeout_sec=15,
             max_output=16_000,
         )
-    except Exception as exc:  # noqa: BLE001 — warm is best-effort
+    except Exception as exc:  # warm is best-effort
         log.info("warm.discover_failed", name=name, err=str(exc))
         return []
     routes: list[str] = []
@@ -85,7 +85,7 @@ async def warm_routes(name: str) -> dict[str, int | str]:
     """
     try:
         status = await container_status(name)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"warmed": 0, "note": f"status error: {type(exc).__name__}"}
     if status.get("state") != "running":
         return {"warmed": 0, "note": "not running"}

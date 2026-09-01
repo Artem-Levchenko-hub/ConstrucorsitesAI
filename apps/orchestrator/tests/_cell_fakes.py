@@ -49,6 +49,7 @@ class FakeDockerBackend:
         self.workspace_command_calls: list[dict[str, object]] = []
         self.workspace_command_result = DockerCommandResult(exit_code=0, output="ok")
         self.workspace_command_volume_files: dict[str, bytes] | None = None
+        self.container_logs: dict[str, str] = {}
 
     def info(self) -> dict[str, object]:
         return {
@@ -271,6 +272,10 @@ class FakeDockerBackend:
         if self.postgres_smoke_calls in self.postgres_smoke_fail_on_calls:
             return False
         return container_name in self.containers
+
+    async def read_container_logs(self, name: str, *, tail: int = 200) -> str:
+        _ = tail
+        return self.container_logs.get(name, "")
 
     async def run_workspace_command(
         self,

@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
 import httpx
@@ -19,7 +20,10 @@ from omnia_orchestrator.core.workspace_provider import (
     WorkspaceStatus,
 )
 from omnia_orchestrator.routers import workspace
-from omnia_orchestrator.services.docker_cell_resources import DockerCommandResult
+from omnia_orchestrator.services.docker_cell_resources import (
+    CellResourceError,
+    DockerCommandResult,
+)
 from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from tests._cell_fakes import FakeDockerBackend
 from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
@@ -288,6 +292,28 @@ async def test_workspace_capabilities_authenticates_before_provider_status(
             f"/internal/workspaces/{UUID('00000000-0000-0000-0000-000000000041')}/resources",
             None,
         ),
+        (
+            "post",
+            f"/internal/workspaces/{UUID('00000000-0000-0000-0000-000000000042')}/draft/apply",
+            {
+                "generation_run_id": str(UUID("00000000-0000-0000-0000-000000000043")),
+                "fencing_epoch": 6,
+                "expected_revision": "a" * 64,
+                "files": {},
+                "deletes": [],
+            },
+        ),
+        (
+            "post",
+            (
+                f"/internal/workspaces/"
+                f"{UUID('00000000-0000-0000-0000-000000000044')}/draft/preview-session"
+            ),
+            {
+                "generation_run_id": str(UUID("00000000-0000-0000-0000-000000000045")),
+                "fencing_epoch": 6,
+            },
+        ),
     ],
 )
 async def test_internal_resource_routes_authenticate_before_provider(
@@ -446,6 +472,9 @@ async def test_authenticated_resource_routes_delegate_and_hide_secrets(
         "has_agent_home": True,
         "has_postgres": True,
         "has_redis": True,
+        "has_draft_runtime": False,
+        "draft_state": None,
+        "preview_url": None,
     }
     assert control.status_code == 200
     assert control.json()["checkpoint_ref"] == "accepted-1"
@@ -606,6 +635,90 @@ async def test_agent_bootstrap_returns_generation_lease_and_revision(
             {"src/app/page.tsx": "export default function Page() { return null }\n"}
         ),
     }
+
+
+async def test_agent_bootstrap_falls_back_to_template_when_project_workspace_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = UUID("00000000-0000-0000-0000-00000000007c")
+    generation_run_id = UUID("00000000-0000-0000-0000-00000000007d")
+    provider, manager, docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    template_root = tmp_path / "template"
+    missing_project_root = tmp_path / "missing"
+    (template_root / "src" / "app").mkdir(parents=True, exist_ok=True)
+    (template_root / "src" / "app" / "page.tsx").write_text(
+        "export default function Page() { return 'template' }\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(
+        workspace,
+        "_project_workspace_dir",
+        lambda _project_id: missing_project_root,
+    )
+    monkeypatch.setattr(workspace, "trusted_template_source", lambda _template: template_root)
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/bootstrap",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "generation_run_id": str(generation_run_id),
+                "fencing_epoch": 4,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "files": {"src/app/page.tsx": "export default function Page() { return 'template' }\n"},
+        "seeded_from_project": False,
+        "generation_run_id": str(generation_run_id),
+        "fencing_epoch": 4,
+        "workspace_revision": workspace._workspace_revision(
+            {"src/app/page.tsx": "export default function Page() { return 'template' }\n"}
+        ),
+    }
+    assert await docker.read_volume_files(state.resource_names.workspace_volume) == {
+        "src/app/page.tsx": b"export default function Page() { return 'template' }\n"
+    }
+
+
+async def test_agent_bootstrap_never_reseeds_binary_only_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    generation_run_id = uuid4()
+    provider, manager, docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    raw_files = {"assets/database.bin": b"\x00\xff\x01"}
+    await docker.write_volume_files(state.resource_names.workspace_volume, raw_files)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/bootstrap",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "generation_run_id": str(generation_run_id),
+                "fencing_epoch": 4,
+            },
+        )
+
+    assert response.status_code == 409
+    assert await docker.read_volume_files(state.resource_names.workspace_volume) == raw_files
 
 
 async def test_agent_bootstrap_rejects_stale_generation_before_seed_side_effects(
@@ -949,6 +1062,318 @@ async def test_exec_workspace_agent_command_runs_inside_cell_bundle(
     assert call["timeout_seconds"] == 321
 
 
+async def test_exec_workspace_agent_command_restores_draft_runtime_after_serialized_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = UUID("00000000-0000-0000-0000-000000000099")
+    generation_run_id = UUID("00000000-0000-0000-0000-00000000009a")
+    provider, manager, docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    names = state.resource_names
+    await docker.write_volume_files(names.workspace_volume, {"before.txt": b"one"})
+    await manager.ensure_draft_runtime(workspace_id)
+    docker.workspace_command_volume_files = {"before.txt": b"one", "after.txt": b"two"}
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/exec",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "generation_run_id": str(generation_run_id),
+                "fencing_epoch": 4,
+                "expected_revision": workspace._workspace_revision({"before.txt": "one"}),
+                "cmd": "pnpm typecheck",
+                "timeout_seconds": 60,
+            },
+        )
+
+    assert response.status_code == 200
+    assert docker.containers[names.draft_container_name()].state == "running"
+    assert docker.workspace_command_calls[0]["command"] == "pnpm typecheck"
+
+
+async def test_exec_reports_saved_effects_when_draft_restart_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    generation_run_id = uuid4()
+    provider, manager, docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    names = state.resource_names
+    await docker.write_volume_files(names.workspace_volume, {"before.txt": b"one"})
+    await manager.ensure_draft_runtime(workspace_id)
+    docker.workspace_command_volume_files = {"before.txt": b"one", "after.txt": b"two"}
+
+    async def fail_restart(_manager, _workspace_id: UUID):
+        raise CellResourceError("draft restart unavailable")
+
+    monkeypatch.setattr(type(manager), "ensure_draft_runtime", fail_restart)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/exec",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "generation_run_id": str(generation_run_id),
+                "fencing_epoch": 4,
+                "expected_revision": workspace._workspace_revision({"before.txt": "one"}),
+                "cmd": "pnpm typecheck",
+                "timeout_seconds": 60,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert "Command effects were saved" in response.json()["detail"]
+    assert response.json()["workspace_revision"] == workspace._workspace_revision(
+        {"before.txt": "one", "after.txt": "two"}
+    )
+
+
+async def test_draft_apply_empty_patch_seeds_template_and_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = UUID("00000000-0000-0000-0000-00000000009b")
+    generation_run_id = UUID("00000000-0000-0000-0000-00000000009c")
+    provider, manager, docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    names = state.resource_names
+    template_root = tmp_path / "draft-template"
+    missing_project_root = tmp_path / "missing"
+    (template_root / "src" / "app").mkdir(parents=True, exist_ok=True)
+    (template_root / "src" / "app" / "page.tsx").write_text(
+        "export default function Page() { return 'draft' }\n",
+        encoding="utf-8",
+    )
+    (template_root / "package.json").write_text('{"name":"draft"}\n', encoding="utf-8")
+    docker.workspace_command_result = DockerCommandResult(exit_code=0, output="migration ok")
+    docker.workspace_command_volume_files = {
+        "package.json": b'{"name":"draft"}\n',
+        "pnpm-lock.yaml": b"lockfileVersion: '9.0'\n",
+        "src/app/page.tsx": b"export default function Page() { return 'draft' }\n",
+    }
+    docker.container_logs[names.draft_container_name()] = (
+        "DATABASE_URL=postgresql://postgres:secret@pg:5432/postgres\nready"
+    )
+    published: list[tuple[str, int]] = []
+
+    async def _publish_http(host: str, port: int) -> bool:
+        published.append((host, port))
+        return True
+
+    async def _ensure_tls(_host: str, _port: int) -> bool:
+        return True
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(
+        workspace,
+        "_project_workspace_dir",
+        lambda _project_id: missing_project_root,
+    )
+    monkeypatch.setattr(workspace, "trusted_template_source", lambda _template: template_root)
+    monkeypatch.setattr(workspace.nginx_writer, "publish_http", _publish_http)
+    monkeypatch.setattr(
+        workspace.nginx_writer,
+        "ensure_tls",
+        _ensure_tls,
+    )
+    monkeypatch.setattr(workspace.nginx_writer, "dev_host", lambda slug: f"{slug}.preview.example")
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+    request = {
+        "generation_run_id": str(generation_run_id),
+        "fencing_epoch": 4,
+        "expected_revision": workspace._workspace_revision({}),
+        "files": {},
+        "deletes": [],
+    }
+
+    async with _client() as client:
+        first = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/apply",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=request,
+        )
+        second = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/apply",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=request,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    expected_files = {
+        "package.json": '{"name":"draft"}\n',
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+        "src/app/page.tsx": "export default function Page() { return 'draft' }\n",
+    }
+    assert first.json() == {
+        "state": "draft_running",
+        "workspace_revision": workspace._workspace_revision(expected_files),
+        "preview_url": f"https://{names.draft_preview_slug()}.preview.example",
+        "package_exit_code": None,
+        "package_stderr_tail": "",
+        "migration_exit_code": 0,
+        "migration_stderr_tail": "migration ok",
+        "runtime_log_tail": "DATABASE_URL=[REDACTED]\nready",
+    }
+    assert second.json()["workspace_revision"] == workspace._workspace_revision(expected_files)
+    assert docker.containers[names.draft_container_name()].state == "running"
+    assert published == [
+        (f"{names.draft_preview_slug()}.preview.example", 3200),
+        (f"{names.draft_preview_slug()}.preview.example", 3200),
+    ]
+
+
+async def test_draft_preview_publish_fails_closed_when_tls_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = UUID("00000000-0000-0000-0000-00000000009d")
+    _provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+
+    async def _publish_http(_host: str, _port: int) -> None:
+        return None
+
+    async def _ensure_tls(_host: str, _port: int) -> bool:
+        return False
+
+    unpublished: list[str] = []
+
+    async def _unpublish(host: str) -> None:
+        unpublished.append(host)
+
+    monkeypatch.setattr(workspace.nginx_writer, "publish_http", _publish_http)
+    monkeypatch.setattr(workspace.nginx_writer, "ensure_tls", _ensure_tls)
+    monkeypatch.setattr(workspace.nginx_writer, "unpublish", _unpublish)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_host", lambda slug: f"{slug}.preview.example")
+
+    with pytest.raises(OrchestratorError, match="TLS provisioning failed"):
+        await workspace._publish_draft_preview(manager, workspace_id)
+
+    assert unpublished == [f"cell-{workspace_id.hex[:12]}.preview.example"]
+
+
+async def test_failed_migration_does_not_start_or_publish_draft(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    generation_run_id = uuid4()
+    provider, manager, docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.resource_names is not None
+    names = state.resource_names
+    source = {"package.json": b'{"name":"draft"}\n'}
+    await docker.write_volume_files(names.workspace_volume, source)
+    docker.workspace_command_result = DockerCommandResult(
+        exit_code=1,
+        output="migration failed",
+    )
+
+    async def forbidden_publish(*_args, **_kwargs):
+        raise AssertionError("failed migration must not publish preview")
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace.nginx_writer, "publish_http", forbidden_publish)
+    monkeypatch.setattr(
+        workspace.nginx_writer,
+        "dev_url",
+        lambda slug: f"https://{slug}.preview.example",
+    )
+    request = {
+        "generation_run_id": str(generation_run_id),
+        "fencing_epoch": 4,
+        "expected_revision": workspace._workspace_revision(
+            {"package.json": '{"name":"draft"}\n'}
+        ),
+        "files": {},
+        "deletes": [],
+    }
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/apply",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=request,
+        )
+        preview = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/preview-session",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "generation_run_id": str(generation_run_id),
+                "fencing_epoch": 4,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "draft_failed"
+    assert response.json()["migration_exit_code"] == 1
+    assert await manager.inspect_draft_runtime(workspace_id) is None
+    assert preview.status_code == 409
+
+
+async def test_draft_preview_session_returns_signed_https_bootstrap_url(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = UUID("00000000-0000-0000-0000-00000000009d")
+    generation_run_id = UUID("00000000-0000-0000-0000-00000000009e")
+    provider, manager, _docker, _ = await _ready_provider(
+        tmp_path,
+        workspace_id,
+        generation_run_id=generation_run_id,
+    )
+    await manager.ensure_draft_runtime(workspace_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/preview-session",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "generation_run_id": str(generation_run_id),
+                "fencing_epoch": 4,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workspace_id"] == str(workspace_id)
+    assert payload["state"] == "draft_running"
+    assert payload["preview_url"].startswith("https://cell-")
+    parsed = urlparse(payload["bootstrap_url"])
+    assert parsed.scheme == "https"
+    assert parsed.path == "/api/omnia/preview-session"
+    query = parse_qs(parsed.query)
+    assert sorted(query) == ["expires", "signature"]
+    assert query["signature"][0]
+
+
 async def test_exec_workspace_agent_command_blocks_env_enumeration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -1101,3 +1526,5 @@ def test_workspace_router_registers_capability_and_resource_routes() -> None:
     assert by_path["/internal/workspaces/{workspace_id}/agent/bootstrap"] == {"POST"}
     assert by_path["/internal/workspaces/{workspace_id}/agent/write-files"] == {"POST"}
     assert by_path["/internal/workspaces/{workspace_id}/agent/exec"] == {"POST"}
+    assert by_path["/internal/workspaces/{workspace_id}/draft/apply"] == {"POST"}
+    assert by_path["/internal/workspaces/{workspace_id}/draft/preview-session"] == {"POST"}

@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Acceptance-lock for BS-36 (dogfood run #36, 2026-06-17): the entity engine
 applied a writer-declared `default` value WITHOUT ever validating it against the
 field's own type/enum.

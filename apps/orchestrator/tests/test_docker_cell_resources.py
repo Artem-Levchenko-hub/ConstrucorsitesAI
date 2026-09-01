@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
+    CellResourceError,
     CellResourceNames,
     CellResourceProfile,
     LifecycleMutation,
@@ -104,6 +106,7 @@ def _make_manager(
         state_store=state_store,
         operation_lock=lock,
         namespace="test",
+        draft_port_registry_path=str(tmp_path / "runtime-state" / ".cell-port-registry.json"),
     )
     return manager, docker_backend, state_store, lock
 
@@ -124,6 +127,61 @@ async def test_ensure_creates_exact_private_bundle(tmp_path: Path) -> None:
     assert docker.networks[handle.resource_names.egress_network].internal is True
     assert docker.containers[handle.resource_names.postgres_container].ports == {}
     assert docker.containers[handle.resource_names.redis_container].ports == {}
+
+
+@pytest.mark.asyncio
+async def test_draft_runtime_follows_pause_wake_destroy_lifecycle(tmp_path: Path) -> None:
+    manager, docker, _state_store, _lock = _make_manager(tmp_path)
+    spec = _spec(UUID("00000000-0000-0000-0000-000000000101"))
+    await manager.ensure(spec, _mutation("a", 1))
+
+    created = await manager.ensure_draft_runtime(spec.workspace_id)
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    registry_path = tmp_path / "runtime-state" / ".cell-port-registry.json"
+
+    assert created.state == "running"
+    assert docker.containers[names.draft_container_name()].ports == {"3000/tcp": "127.0.0.1:3200"}
+
+    await manager.pause_services(
+        spec.workspace_id,
+        _mutation("b", 2),
+        checkpoint_ref="accepted-1",
+    )
+    assert docker.containers[names.draft_container_name()].state == "exited"
+
+    await manager.wake(spec.workspace_id, _mutation("c", 3))
+    assert docker.containers[names.draft_container_name()].state == "running"
+
+    await manager.destroy_compute(spec.workspace_id, _mutation("d", 4))
+    assert names.draft_container_name() not in docker.containers
+    assert json.loads(registry_path.read_text(encoding="utf-8")) == {}
+
+
+@pytest.mark.asyncio
+async def test_corrupt_draft_port_registry_fails_closed(tmp_path: Path) -> None:
+    manager, _docker, _state_store, _lock = _make_manager(tmp_path)
+    workspace_id = UUID("00000000-0000-0000-0000-000000000102")
+    registry_path = tmp_path / "runtime-state" / ".cell-port-registry.json"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(CellResourceError, match="draft port registry is invalid"):
+        await manager.acquire_draft_preview_port(workspace_id)
+
+    assert registry_path.read_text(encoding="utf-8") == "{broken"
+
+
+@pytest.mark.asyncio
+async def test_draft_port_registry_save_is_atomic(tmp_path: Path) -> None:
+    manager, _docker, _state_store, _lock = _make_manager(tmp_path)
+    workspace_id = UUID("00000000-0000-0000-0000-000000000103")
+    registry_path = tmp_path / "runtime-state" / ".cell-port-registry.json"
+
+    assert await manager.acquire_draft_preview_port(workspace_id) == 3200
+    assert json.loads(registry_path.read_text(encoding="utf-8")) == {
+        str(workspace_id): 3200
+    }
+    assert list(registry_path.parent.glob(f".{registry_path.name}.*.tmp")) == []
 
 
 @pytest.mark.asyncio

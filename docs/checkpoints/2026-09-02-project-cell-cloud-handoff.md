@@ -1,4 +1,4 @@
-# Project Cell cloud continuation — 2026-09-02
+# Project Cell local continuation — 2026-09-02
 
 ## Objective and completion boundary
 
@@ -8,6 +8,10 @@ The accepted full contract is `docs/superpowers/specs/2026-09-01-docker-project-
 
 ## Current checkpoint
 
+- Latest user direction: continue locally, as fast as practical. The cloud task
+  finished; its published candidate-persistence commit `18c6b1df` was integrated
+  into `codex/project-cell-cloud-20260902`. Do not restart cloud execution or
+  transfer workstation credentials.
 - Base revision: `d81295f684356629bd02d0f1c91e3f9a2a428477` on `origin/main`.
 - This continuation branch preserves subsequent fixes. It is an unfinished development checkpoint, NOT a completed release.
 - Latest source revision has not been deployed. Owner routing remains OFF in production; do not enable it while the verified architectural gaps below remain.
@@ -121,6 +125,30 @@ runtime complete. Cell-owned preview/database binding, resident runner dispatch,
 persistent supervision/browser lifecycle, controlled egress/dependency installation,
 and production recovery/isolation proofs remain required exactly as documented above.
 
+## Local draft integration checkpoint (not yet released)
+
+- The API draft adapter now calls workspace-scoped `draft/apply` and
+  `draft/preview-session`, carrying generation identity, fencing epoch and source
+  revision. Empty patches ensure the draft runtime too. Package/migration failures
+  fail closed; generated files and revision refresh from the real cell workspace.
+- Runtime checks, logs, visual inspection and authenticated probes no longer
+  delegate to the legacy runtime when a cell is selected. Platform docs/media
+  services remain reusable. The old email-auth isolation probe is explicitly
+  unavailable for MAX cells until two signed identities are implemented.
+- Candidate retry/cancellation now enforces active run/lease ownership and
+  authoritative locked ORM refresh. Evidence references require content-addressed
+  SHA-256 keys, including database backup, build and verification artifacts.
+- Linux CI failures in the Windows lock shim and an overlong test name are fixed
+  locally. CI on the preceding published revision passed web and image builds;
+  this does not establish CI success for the subsequent local diff.
+- API executor/client/MAX runtime regression suite: **61 passed in 33.63s**.
+  Cell browser probe regression suite: **5 passed in 0.10s**. API Ruff and Mypy
+  passed (243 source files). Candidate worker reports **8 candidate tests passed**
+  against a separate disposable PostgreSQL database.
+- Orchestrator cell draft lifecycle and the messages pipeline's remaining legacy
+  bypasses are being integrated in parallel. Full review, migration/release gates,
+  commit/push and production deployment remain open. All owner flags stay off.
+
 Cloud limitations observed during this continuation:
 
 - Sequential Thinking MCP and Context7 were not present in the available toolset.
@@ -129,3 +157,33 @@ Cloud limitations observed during this continuation:
 - Docker and local PostgreSQL executables are absent. Ruff, Mypy and diff checks can
   run locally; PostgreSQL-backed tests and live Docker proofs require an external CI
   or release runner.
+
+## Local release closure update — 2026-09-02
+
+This section supersedes the earlier local gap statements where they conflict.
+
+- The selected Project Cell path now owns workspace reads/writes, shell/build,
+  migration, draft runtime, preview URL, authenticated MAX probe and logs. The
+  draft runtime uses the cell workspace volume and its dedicated PostgreSQL and
+  Redis; it does not fall back to the legacy runtime.
+- Generation-run identity and fencing are checked again at bootstrap and before
+  marking the workspace ready. Candidate retries require the same immutable
+  content-addressed evidence and an active authoritative lease.
+- Draft migration failure is fail-closed. TLS publication failure removes the
+  temporary HTTP vhost before returning an error. The persistent draft-port
+  registry is schema-validated, crash-safe and atomically replaced.
+- Release-critical API + Project Cell regression gate: **357 passed** in
+  320.20 seconds. API Ruff passed; Mypy: **243 source files clean**.
+- Full orchestrator gate: **653 passed, 5 skipped, 15 xfailed** in 18.06 seconds.
+  Orchestrator Ruff passed; Mypy: **52 source files clean**.
+- Production Compose policy and Python source compilation passed. `git diff --check`
+  is clean except Windows line-ending notices.
+- Production is still on `d81295f6`, owner routing is still off, and the exact
+  MAX dev template image was last observed missing. Commit/push/CI/deploy/image
+  build/health, owner-only enablement and the retained first MAX generation remain
+  open and must be completed serially.
+- Remaining post-canary product seams are explicit: no resident runner/browser
+  supervisor, no controlled dependency-download path, candidate persistence is not
+  yet the Project/Snapshot accepted pointer, and generic two-signed-tenant probing
+  is unavailable. The first owner canary is restricted to the bundled MAX dependency
+  set and must retain all fail-closed gates.

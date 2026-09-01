@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Acceptance-lock for BS-22 (dogfood run #19, 2026-06-16): a single
 JS-valid-but-Postgres-invalid date value 500s the ENTIRE list the moment anyone
 sorts by that column — total denial-of-view from realistic sloppy date entry.

@@ -23,11 +23,10 @@ release per query — don't hold a connection across handler suspensions.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import asyncpg
 
-_pool: Optional[asyncpg.Pool] = None
+_pool: asyncpg.Pool | None = None
 
 
 async def get_pool() -> asyncpg.Pool:

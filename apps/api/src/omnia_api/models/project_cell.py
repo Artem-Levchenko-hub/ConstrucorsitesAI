@@ -208,10 +208,19 @@ class ProjectCellCandidate(Base):
             "migration_digest ~ '^[0-9a-f]{64}$'", name="migration_digest_hex"
         ),
         CheckConstraint(
-            "(status = 'cancelled') = cancelled", name="cancelled_status_consistent"
+            "database_backup_ref ~ '^database-backup/sha256/[0-9a-f]{64}$'",
+            name="database_backup_ref_content_addressed",
         ),
-        UniqueConstraint(
-            "workspace_id", "source_revision", name="uq_project_cell_candidate_revision"
+        CheckConstraint(
+            "build_ref ~ '^build/sha256/[0-9a-f]{64}$'",
+            name="build_ref_content_addressed",
+        ),
+        CheckConstraint(
+            "verification_ref ~ '^verification/sha256/[0-9a-f]{64}$'",
+            name="verification_ref_content_addressed",
+        ),
+        CheckConstraint(
+            "(status = 'cancelled') = cancelled", name="cancelled_status_consistent"
         ),
         Index(
             "uq_project_cell_candidates_one_accepted",

@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shlex
 from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
@@ -17,6 +22,7 @@ from omnia_orchestrator.core.cell_resources import (
     LifecycleMutation,
     identity_labels,
 )
+from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
@@ -49,11 +55,63 @@ _SENSITIVE_ENV_KEY_MARKERS = (
     "ACCESS_KEY",
     "DATABASE_URL",
 )
+_DRAFT_RUNTIME_KIND = "draft-runtime"
+_DRAFT_RUNTIME_PORT = "3000/tcp"
+_DRAFT_ENV_PATH = ".omnia/draft-env.sh"
+_DRAFT_PORT_REGISTRY_FILENAME = ".cell-port-registry.json"
+_DRAFT_PORT_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 def _is_sensitive_env_key(key: str) -> bool:
     normalized = key.upper()
     return any(marker in normalized for marker in _SENSITIVE_ENV_KEY_MARKERS)
+
+
+def _draft_port_lock(path: Path) -> asyncio.Lock:
+    key = str(path)
+    lock = _DRAFT_PORT_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _DRAFT_PORT_LOCKS[key] = lock
+    return lock
+
+
+def _load_draft_port_registry(path: Path) -> dict[str, int]:
+    if path.exists() is False:
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CellResourceError("draft port registry is invalid") from exc
+    if not isinstance(payload, dict):
+        raise CellResourceError("draft port registry is invalid")
+    registry: dict[str, int] = {}
+    for key, value in payload.items():
+        try:
+            UUID(key)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise CellResourceError("draft port registry is invalid") from exc
+        if type(value) is not int or not 1 <= value <= 65535:
+            raise CellResourceError("draft port registry is invalid")
+        registry[key] = value
+    return registry
+
+
+def _save_draft_port_registry(path: Path, registry: dict[str, int]) -> None:
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with temporary_path.open("w", encoding="utf-8") as registry_file:
+            registry_file.write(json.dumps(registry, indent=2, sort_keys=True))
+            registry_file.flush()
+            os.fsync(registry_file.fileno())
+        os.replace(temporary_path, path)
+    except OSError as exc:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise CellResourceError("draft port registry could not be saved") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +271,8 @@ class CellDockerBackend(Protocol):
 
     async def postgres_smoke_query(self, container_name: str, password: str) -> bool: ...
 
+    async def read_container_logs(self, name: str, *, tail: int = 200) -> str: ...
+
     async def run_workspace_command(
         self,
         *,
@@ -238,6 +298,7 @@ class DockerCellResourceManager:
     state_store: CellStateStore
     operation_lock: WorkspaceOperationLock
     namespace: str = "prod"
+    draft_port_registry_path: str | None = None
 
     async def ensure(self, spec: WorkspaceSpec, mutation: LifecycleMutation) -> CellBundleHandle:
         return await self._upsert_bundle(spec, mutation, wake_only=False)
@@ -248,6 +309,67 @@ class DockerCellResourceManager:
             raise CellResourceError("degraded bundle cannot wake")
         spec = self._spec_from_state(state)
         return await self._upsert_bundle(spec, mutation, wake_only=True)
+
+    async def inspect_draft_runtime(self, workspace_id: UUID) -> DockerContainerRecord | None:
+        state = self.state_store.load(workspace_id)
+        if state is None or state.resource_names is None:
+            return None
+        return await self.docker.get_container(state.resource_names.draft_container_name())
+
+    async def acquire_draft_preview_port(self, workspace_id: UUID) -> int:
+        registry_path = self._draft_port_registry()
+        async with _draft_port_lock(registry_path):
+            registry = _load_draft_port_registry(registry_path)
+            key = str(workspace_id)
+            if key in registry:
+                return registry[key]
+            taken = set(registry.values())
+            if self.namespace == "test":
+                port_min, port_max = 3200, 3999
+            else:
+                settings = get_settings()
+                port_min = int(settings.cell_draft_port_range_min)
+                port_max = int(settings.cell_draft_port_range_max)
+            for port in range(port_min, port_max + 1):
+                if port in taken:
+                    continue
+                registry[key] = port
+                _save_draft_port_registry(registry_path, registry)
+                return port
+        raise CellResourceError("no free draft preview port")
+
+    async def ensure_draft_runtime(self, workspace_id: UUID) -> DockerContainerRecord:
+        state = self._require_state(workspace_id)
+        names = state.resource_names
+        if names is None:
+            raise CellResourceError("resource names missing")
+        spec = self._spec_from_state(state)
+        port = await self.acquire_draft_preview_port(workspace_id)
+        credentials = self.credential_store.load_or_create(workspace_id)
+        await self.docker.write_volume_files(
+            names.agent_home_volume,
+            {
+                _DRAFT_ENV_PATH: self._draft_env_file_content(
+                    workspace_id=workspace_id,
+                    project_id=spec.project_id,
+                    postgres_container=names.postgres_container,
+                    redis_container=names.redis_container,
+                    postgres_password=credentials.postgres_password,
+                ).encode("utf-8")
+            },
+        )
+        existing = await self.docker.get_container(names.draft_container_name())
+        if existing is not None:
+            self._verify_draft_container_record(existing, state)
+        await self._remove_container_if_present(names.draft_container_name())
+        await self.docker.create_container(
+            self._steady_draft_spec(
+                spec,
+                names,
+                port=port,
+            )
+        )
+        return await self.docker.start_container(names.draft_container_name())
 
     async def pause_services(
         self,
@@ -668,6 +790,8 @@ class DockerCellResourceManager:
             self._verify_container_record(redis, self._steady_redis_spec(spec, names))
         await self.docker.start_container(names.postgres_container)
         await self.docker.start_container(names.redis_container)
+        if await self.docker.get_container(names.draft_container_name()) is not None:
+            await self.ensure_draft_runtime(spec.workspace_id)
         await self.state_store_advance(spec.workspace_id, mutation, phase="sidecars_started")
 
     async def _observe_state(self, state: CellWorkspaceState) -> CellBundleObservation:
@@ -908,6 +1032,55 @@ class DockerCellResourceManager:
             raise CellResourceError(f"missing volume: {name}")
         return record
 
+    def _draft_port_registry(self) -> Path:
+        if self.draft_port_registry_path:
+            return Path(self.draft_port_registry_path)
+        if self.namespace == "test":
+            return self.state_store.root.parent / _DRAFT_PORT_REGISTRY_FILENAME
+        return Path(get_settings().projects_root) / _DRAFT_PORT_REGISTRY_FILENAME
+
+    async def _release_draft_preview_port(self, workspace_id: UUID) -> None:
+        registry_path = self._draft_port_registry()
+        async with _draft_port_lock(registry_path):
+            registry = _load_draft_port_registry(registry_path)
+            if registry.pop(str(workspace_id), None) is None:
+                return
+            _save_draft_port_registry(registry_path, registry)
+
+    @staticmethod
+    def _draft_auth_secret(postgres_password: str) -> str:
+        return sha256(
+            f"omnia-cell-draft-auth:{postgres_password}".encode()
+        ).hexdigest()
+
+    def _draft_env_file_content(
+        self,
+        *,
+        workspace_id: UUID,
+        project_id: UUID,
+        postgres_container: str,
+        redis_container: str,
+        postgres_password: str,
+    ) -> str:
+        _ = workspace_id
+        database_url = (
+            f"postgresql://postgres:{postgres_password}@{postgres_container}:5432/postgres"
+        )
+        payload = {
+            "AUTH_SECRET": self._draft_auth_secret(postgres_password),
+            "OMNIA_PROJECT_ID": str(project_id),
+            "DATABASE_URL": database_url,
+            "PGHOST": postgres_container,
+            "PGPORT": "5432",
+            "PGUSER": "postgres",
+            "PGPASSWORD": postgres_password,
+            "PGDATABASE": "postgres",
+            "REDIS_URL": f"redis://{redis_container}:6379/0",
+        }
+        return "".join(
+            f"export {key}={shlex.quote(value)}\n" for key, value in payload.items()
+        )
+
     async def _stop_if_present(self, name: str) -> None:
         if await self.docker.get_container(name) is not None:
             await self.docker.stop_container(name)
@@ -1076,6 +1249,58 @@ class DockerCellResourceManager:
             cpu_quota=max(self.profile.bundle_cpu_cores / 4.0, 0.25),
         )
 
+    def _draft_runtime_memory_limit_bytes(self) -> int:
+        return (
+            self.profile.bundle_memory_bytes
+            - self.profile.bundle_memory_bytes // 2
+            - self.profile.bundle_memory_bytes // 4
+        )
+
+    def _draft_runtime_cpu_quota(self) -> float:
+        return (
+            self.profile.bundle_cpu_cores
+            - max(self.profile.bundle_cpu_cores / 2.0, 0.5)
+            - max(self.profile.bundle_cpu_cores / 4.0, 0.25)
+        )
+
+    def _steady_draft_spec(
+        self,
+        spec: WorkspaceSpec,
+        names: CellResourceNames,
+        *,
+        port: int,
+    ) -> DockerContainerSpec:
+        return DockerContainerSpec(
+            name=names.draft_container_name(),
+            image="omnia-template-max-miniapp-nextjs:dev",
+            labels=identity_labels(spec, _DRAFT_RUNTIME_KIND),
+            user="0:0",
+            cap_add=[],
+            cap_drop=["ALL"],
+            read_only=True,
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            ports={_DRAFT_RUNTIME_PORT: f"127.0.0.1:{port}"},
+            env={
+                "HOME": "/root",
+                "CI": "1",
+                "NODE_ENV": "development",
+                "HOSTNAME": "0.0.0.0",
+                "PORT": "3000",
+                "OMNIA_PROJECT_ID": str(spec.project_id),
+                "OMNIA_DRAFT_ENV_FILE": f"/root/{_DRAFT_ENV_PATH}",
+                "COREPACK_HOME": "/home/node/.cache/node/corepack",
+                "COREPACK_ENABLE_NETWORK": "0",
+            },
+            volumes=(names.workspace_volume, names.agent_home_volume),
+            mounts=(),
+            network_names=(names.internal_network,),
+            helper=False,
+            tmpfs=("/tmp", "/run", "/work"),
+            memory_limit_bytes=self._draft_runtime_memory_limit_bytes(),
+            cpu_quota=self._draft_runtime_cpu_quota(),
+        )
+
     def _provider_ref(self, workspace_id: UUID) -> str:
         return f"docker-owner-canary:{workspace_id}"
 
@@ -1154,6 +1379,7 @@ class DockerCellResourceManager:
         try:
             if record_operation:
                 await self.state_store_advance(workspace_id, mutation, phase="planned")
+            await self._stop_if_present(names.draft_container_name())
             await self._stop_if_present(names.postgres_container)
             await self._stop_if_present(names.redis_container)
             if record_operation:
@@ -1216,6 +1442,7 @@ class DockerCellResourceManager:
                     mutation,
                     phase="containers_removed",
                 )
+            await self._remove_container_if_present(names.draft_container_name())
             await self._remove_container_if_present(names.postgres_container)
             await self._remove_container_if_present(names.redis_container)
             if record_operation:
@@ -1226,6 +1453,7 @@ class DockerCellResourceManager:
                 )
             await self._remove_network_if_present(names.internal_network)
             await self._remove_network_if_present(names.egress_network)
+            await self._release_draft_preview_port(workspace_id)
             if record_operation:
                 self.state_store.complete(
                     workspace_id,
@@ -1281,6 +1509,12 @@ class DockerCellResourceManager:
         redis = await self.docker.get_container(names.redis_container)
         if redis is not None:
             self._verify_container_record(redis, self._steady_redis_spec(spec, names))
+        draft = await self.docker.get_container(names.draft_container_name())
+        if draft is not None:
+            self._verify_draft_container_record(
+                draft,
+                self._require_state(spec.workspace_id),
+            )
 
     def _verify_labels(self, actual: dict[str, str], expected: dict[str, str]) -> None:
         if not self._labels_match(actual, expected):
@@ -1345,6 +1579,63 @@ class DockerCellResourceManager:
         if expected.labels.get("omnia.resource_kind", "").startswith("postgres"):
             expected_tmpfs.update({"/var/run/postgresql", "/var/lib/postgresql/data"})
         if set(record.tmpfs) != expected_tmpfs:
+            raise CellIdentityConflict("resource identity mismatch:tmpfs")
+        if record.pids_limit != expected.pids_limit:
+            raise CellIdentityConflict("resource identity mismatch:pids_limit")
+        if record.memory_limit_bytes != expected.memory_limit_bytes:
+            raise CellIdentityConflict("resource identity mismatch:memory_limit")
+        if abs(record.cpu_quota - expected.cpu_quota) > 0.001:
+            raise CellIdentityConflict("resource identity mismatch:cpu_quota")
+
+    def _verify_draft_container_record(
+        self,
+        record: DockerContainerRecord,
+        state: CellWorkspaceState,
+    ) -> None:
+        names = state.resource_names
+        if names is None:
+            raise CellIdentityConflict("resource identity mismatch:missing_names")
+        expected = self._steady_draft_spec(
+            self._spec_from_state(state),
+            names,
+            port=1,
+        )
+        self._verify_labels(record.labels, expected.labels)
+        if record.image != expected.image:
+            raise CellIdentityConflict("resource identity mismatch:image")
+        if record.user != expected.user:
+            raise CellIdentityConflict("resource identity mismatch:user")
+        if sorted(record.cap_add) != sorted(expected.cap_add):
+            raise CellIdentityConflict("resource identity mismatch:cap_add")
+        if sorted(record.cap_drop) != sorted(expected.cap_drop):
+            raise CellIdentityConflict("resource identity mismatch:cap_drop")
+        if record.read_only is not expected.read_only:
+            raise CellIdentityConflict("resource identity mismatch:read_only")
+        if record.privileged is not expected.privileged:
+            raise CellIdentityConflict("resource identity mismatch:privileged")
+        if sorted(record.security_opt) != sorted(expected.security_opt):
+            raise CellIdentityConflict("resource identity mismatch:security_opt")
+        if record.ports.keys() != {_DRAFT_RUNTIME_PORT}:
+            raise CellIdentityConflict("resource identity mismatch:ports")
+        binding = record.ports.get(_DRAFT_RUNTIME_PORT, "")
+        binding_port = binding.removeprefix("127.0.0.1:")
+        if binding.startswith("127.0.0.1:") is False or binding_port.isdigit() is False:
+            raise CellIdentityConflict("resource identity mismatch:ports")
+        if any(record.env.get(key) != value for key, value in expected.env.items()):
+            raise CellIdentityConflict("resource identity mismatch:env")
+        if any(
+            _is_sensitive_env_key(key) for key in (set(record.env) - set(expected.env))
+        ):
+            raise CellIdentityConflict("resource identity mismatch:env")
+        if sorted(record.volumes) != sorted(expected.volumes):
+            raise CellIdentityConflict("resource identity mismatch:volumes")
+        if record.mounts:
+            raise CellIdentityConflict("resource identity mismatch:bind_mounts")
+        if sorted(record.network_names) != sorted(expected.network_names):
+            raise CellIdentityConflict("resource identity mismatch:network_names")
+        if record.helper is not expected.helper:
+            raise CellIdentityConflict("resource identity mismatch:helper")
+        if set(record.tmpfs) != set(expected.tmpfs):
             raise CellIdentityConflict("resource identity mismatch:tmpfs")
         if record.pids_limit != expected.pids_limit:
             raise CellIdentityConflict("resource identity mismatch:pids_limit")

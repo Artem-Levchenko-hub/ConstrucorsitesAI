@@ -541,6 +541,70 @@ async def test_create_container_uses_fail_closed_kwargs_for_postgres_init() -> N
 
 
 @pytest.mark.asyncio
+async def test_create_container_uses_loopback_bind_and_work_copy_for_draft_runtime() -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+    client.volumes.items["agent-home-vol"] = _FakeVolume("agent-home-vol", _labels("agent-home"))
+    client.networks.items["omnia-cell-test-internal"] = _FakeNetwork(
+        "omnia-cell-test-internal",
+        _labels("internal-network"),
+        internal=True,
+    )
+    backend = _backend(client)
+
+    record = await backend.create_container(
+        DockerContainerSpec(
+            name="omnia-cell-test-draft",
+            image="omnia-template-max-miniapp-nextjs:dev",
+            labels=_labels("draft-runtime"),
+            user="0:0",
+            cap_add=[],
+            cap_drop=["ALL"],
+            read_only=True,
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            ports={"3000/tcp": "127.0.0.1:34567"},
+            env={
+                "HOME": "/root",
+                "CI": "1",
+                "NODE_ENV": "development",
+                "HOSTNAME": "0.0.0.0",
+                "PORT": "3000",
+                "OMNIA_PROJECT_ID": "00000000-0000-0000-0000-000000000002",
+                "OMNIA_DRAFT_ENV_FILE": "/root/.omnia/draft-env.sh",
+                "COREPACK_HOME": "/home/node/.cache/node/corepack",
+                "COREPACK_ENABLE_NETWORK": "0",
+            },
+            volumes=("workspace-vol", "agent-home-vol"),
+            mounts=(),
+            network_names=("omnia-cell-test-internal",),
+            helper=False,
+            tmpfs=("/tmp", "/run", "/work"),
+            pids_limit=128,
+            memory_limit_bytes=512 * 1024 * 1024,
+            cpu_quota=0.75,
+        )
+    )
+
+    create_call = client.containers.create_calls[0]
+    kwargs = create_call["kwargs"]
+    command = create_call["command"][3]
+
+    assert kwargs["network"] == "omnia-cell-test-internal"
+    assert kwargs["ports"] == {"3000/tcp": ("127.0.0.1", 34567)}
+    assert kwargs["volumes"] == {
+        "workspace-vol": {"bind": "/workspace-src", "mode": "rw"},
+        "agent-home-vol": {"bind": "/root", "mode": "rw"},
+    }
+    assert "/work" in kwargs["tmpfs"]
+    assert '. "$env_file"' in command
+    assert "pnpm dev &" in command
+    assert "cp -a /workspace-src/. /work/" in command
+    assert "cp /work/pnpm-lock.yaml /workspace-src/pnpm-lock.yaml" in command
+    assert record.ports == {"3000/tcp": "127.0.0.1:34567"}
+
+
+@pytest.mark.asyncio
 async def test_volume_helpers_use_named_volume_and_cleanup_temp_container() -> None:
     client = _FakeClient()
     client.volumes.items["workspace-vol"] = _FakeVolume(

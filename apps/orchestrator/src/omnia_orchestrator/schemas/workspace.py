@@ -69,6 +69,9 @@ class WorkspaceResourceResponse(BaseModel):
     has_agent_home: bool
     has_postgres: bool
     has_redis: bool
+    has_draft_runtime: bool = False
+    draft_state: Literal["running", "stopped", "failed"] | None = None
+    preview_url: str | None = None
 
 
 class WorkspaceAgentBootstrapResponse(BaseModel):
@@ -104,6 +107,46 @@ class WorkspaceAgentWriteResponse(BaseModel):
     written: int
     deleted: int
     workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkspaceDraftApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation_run_id: UUID
+    fencing_epoch: int = Field(gt=0)
+    expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    files: dict[str, str] = Field(default_factory=dict)
+    deletes: list[str] = Field(default_factory=list)
+
+
+class WorkspaceDraftApplyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["draft_running", "draft_failed"]
+    workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview_url: str
+    package_exit_code: int | None = None
+    package_stderr_tail: str = ""
+    migration_exit_code: int | None = None
+    migration_stderr_tail: str = ""
+    runtime_log_tail: str = ""
+
+
+class WorkspaceDraftPreviewSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation_run_id: UUID
+    fencing_epoch: int = Field(gt=0)
+
+
+class WorkspaceDraftPreviewSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: UUID
+    state: Literal["draft_running"]
+    preview_url: str
+    bootstrap_url: str
+    expires_at: str
 
 
 class WorkspaceAgentExecRequest(BaseModel):

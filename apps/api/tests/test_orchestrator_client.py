@@ -17,7 +17,9 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellAgentExecResponse,
     ProjectCellAgentWorkspaceSnapshot,
     ProjectCellAgentWriteResponse,
+    ProjectCellDraftApplyResponse,
     ProjectCellPreEffectRejection,
+    ProjectCellPreviewSession,
     ProjectCellResourceResponse,
 )
 
@@ -235,6 +237,115 @@ async def test_provision_waits_for_a_cold_template_rebuild(
     assert result == {"state": "running"}
     assert observed["timeout"] == 1320.0
     assert observed["path"] == "/internal/projects/provision"
+
+
+async def test_cell_draft_apply_uses_lease_revision_and_explicit_deletes(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    workspace_id, run_id = uuid4(), uuid4()
+
+    async def fake_request(method, path, **kwargs):
+        observed.update(method=method, path=path, **kwargs)
+        return {
+            "state": "draft_running", "workspace_revision": "b" * 64,
+            "preview_url": "https://cell.preview.example.test", "runtime_log_tail": "ready",
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    result = await orchestrator_client.project_cell_apply_draft(
+        workspace_id, generation_run_id=run_id, fencing_epoch=7,
+        expected_revision="a" * 64, files={"empty.txt": ""}, deletes=("old.txt",),
+    )
+    assert result.workspace_revision == "b" * 64
+    assert result.runtime_log_tail == "ready"
+    assert observed == {
+        "method": "POST", "path": f"/internal/workspaces/{workspace_id}/draft/apply",
+        "json": {"generation_run_id": str(run_id), "fencing_epoch": 7,
+                 "expected_revision": "a" * 64, "files": {"empty.txt": ""},
+                 "deletes": ["old.txt"]}, "timeout": 660.0,
+    }
+
+
+def _cell_preview_payload(workspace_id: UUID) -> dict[str, str]:
+    origin = f"https://cell-{workspace_id.hex[:12]}-dev.preview.lead-generator.ru"
+    return {
+        "workspace_id": str(workspace_id), "state": "draft_running", "preview_url": origin,
+        "bootstrap_url": f"{origin}/api/omnia/preview-session"
+                         "?expires=1893456000&signature=" + "a" * 43,
+        "expires_at": "2030-01-01T00:00:00Z",
+    }
+
+
+async def test_cell_preview_session_is_bound_to_workspace_and_lease(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    workspace_id, run_id = uuid4(), uuid4()
+    payload = _cell_preview_payload(workspace_id)
+
+    async def fake_request(method, path, **kwargs):
+        observed.update(method=method, path=path, **kwargs)
+        return payload
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    response = await orchestrator_client.project_cell_create_preview_session(
+        workspace_id, generation_run_id=run_id, fencing_epoch=7,
+    )
+    assert response.workspace_id == workspace_id
+    assert observed == {
+        "method": "POST", "path": f"/internal/workspaces/{workspace_id}/draft/preview-session",
+        "json": {"generation_run_id": str(run_id), "fencing_epoch": 7},
+    }
+    other_id = uuid4()
+    payload.update(_cell_preview_payload(other_id))
+    with pytest.raises(OrchestratorUnavailable, match="different cell"):
+        await orchestrator_client.project_cell_create_preview_session(
+            workspace_id, generation_run_id=run_id, fencing_epoch=7,
+        )
+
+
+@pytest.mark.parametrize("patch", [
+    {"bootstrap_url": "https://elsewhere.example.test/api/omnia/preview-session"},
+    {"preview_url": "https://cell-000000000000-dev.attacker.example"},
+    {"preview_url": "http://cell.preview.example.test"},
+    {"expires_at": "invalid"}, {"expires_at": "2030-01-01"},
+    {"state": "running"}, {"workspace_id": "not-uuid"}, {"unexpected": "secret"},
+])
+def test_cell_preview_rejects_malformed_or_cross_origin_session(patch) -> None:
+    with pytest.raises(OrchestratorUnavailable):
+        ProjectCellPreviewSession.from_json(_cell_preview_payload(uuid4()) | patch)
+
+
+def test_cell_preview_constructor_cannot_bypass_host_validation() -> None:
+    with pytest.raises(ValueError, match="invalid Project Cell preview session"):
+        ProjectCellPreviewSession(
+            workspace_id=uuid4(), preview_url="https://attacker.example",
+            bootstrap_url="https://attacker.example/api/omnia/preview-session"
+            "?expires=1893456000&signature=" + "a" * 43,
+            expires_at="2030-01-01T00:00:00Z",
+        )
+
+
+@pytest.mark.parametrize("patch", [
+    {"state": "failed"}, {"workspace_revision": "bad"}, {"package_exit_code": True},
+    {"migration_exit_code": "0"}, {"runtime_log_tail": []}, {"extra": "secret"},
+    {"state": "draft_failed", "migration_exit_code": 0},
+    {"state": "draft_running", "migration_exit_code": 1},
+])
+def test_cell_draft_rejects_invalid_response(patch) -> None:
+    with pytest.raises(OrchestratorUnavailable):
+        ProjectCellDraftApplyResponse.from_json({
+            "state": "draft_running", "workspace_revision": "a" * 64,
+            "preview_url": "https://cell.preview.example.test", **patch,
+        })
+
+
+def test_cell_draft_accepts_honest_failed_migration_response() -> None:
+    result = ProjectCellDraftApplyResponse.from_json({
+        "state": "draft_failed",
+        "workspace_revision": "a" * 64,
+        "preview_url": "https://cell.preview.example.test",
+        "migration_exit_code": 1,
+        "migration_stderr_tail": "migration failed",
+    })
+    assert result.migration_exit_code == 1
 
 
 async def test_project_shell_and_dependency_sync_use_long_deadlines(
@@ -570,3 +681,22 @@ def test_agent_workspace_snapshot_requires_exact_typed_shape() -> None:
                 "workspace_revision": "f" * 64,
             }
         )
+
+
+def test_resource_response_accepts_optional_draft_status_but_no_unknown_fields() -> None:
+    payload: dict[str, object] = {
+        "workspace_id": "00000000-0000-0000-0000-000000000031",
+        "state": "resources_ready", "provider_ref": "cell-3", "fencing_epoch": 2,
+        "checkpoint_ref": None, "has_workspace": True, "has_agent_home": True,
+        "has_postgres": True, "has_redis": True, "has_draft_runtime": True,
+        "draft_state": "running", "preview_url": "https://cell.preview.example.test",
+    }
+    response = ProjectCellResourceResponse.from_json(payload)
+    assert response.has_draft_runtime is True
+    assert response.draft_state == "running"
+    assert response.preview_url == "https://cell.preview.example.test"
+    assert response.to_wire_json() == payload
+    with pytest.raises(OrchestratorUnavailable):
+        ProjectCellResourceResponse.from_json(payload | {"raw_container": "secret"})
+    with pytest.raises(OrchestratorUnavailable):
+        ProjectCellResourceResponse.from_json(payload | {"draft_state": "unknown"})

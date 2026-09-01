@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Acceptance-lock for BS-20 (dogfood run #17, 2026-06-16): a generated entity
 app cannot FIND a record once the collection grows. Two layers compound:
 

@@ -49,6 +49,18 @@ def upgrade() -> None:
             name="ck_project_cell_candidates_migration_digest_hex",
         ),
         sa.CheckConstraint(
+            "database_backup_ref ~ '^database-backup/sha256/[0-9a-f]{64}$'",
+            name="ck_project_cell_candidates_database_backup_ref_content_addressed",
+        ),
+        sa.CheckConstraint(
+            "build_ref ~ '^build/sha256/[0-9a-f]{64}$'",
+            name="ck_project_cell_candidates_build_ref_content_addressed",
+        ),
+        sa.CheckConstraint(
+            "verification_ref ~ '^verification/sha256/[0-9a-f]{64}$'",
+            name="ck_project_cell_candidates_verification_ref_content_addressed",
+        ),
+        sa.CheckConstraint(
             "(status = 'cancelled') = cancelled",
             name="ck_project_cell_candidates_cancelled_status_consistent",
         ),
@@ -64,9 +76,6 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "workspace_id", "source_revision", name="uq_project_cell_candidate_revision"
-        ),
     )
     op.create_index(
         "uq_project_cell_candidates_one_accepted",

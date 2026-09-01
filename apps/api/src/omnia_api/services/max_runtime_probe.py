@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 from uuid import UUID
 
 import httpx
@@ -95,6 +95,25 @@ async def probe_max_runtime(
     if not bootstrap_url:
         return MaxRuntimeProbe(False, "preview session returned an invalid signed URL")
 
+    return await _probe_signed_runtime(bootstrap_url)
+
+
+async def probe_max_cell_runtime(
+    preview: orchestrator_client.ProjectCellPreviewSession,
+    *,
+    path: str = "/",
+) -> MaxRuntimeProbe:
+    """Use the validated, lease-scoped cell session without project-runtime fallback."""
+    if not path.startswith("/") or path.startswith("//") or "\\" in path:
+        return MaxRuntimeProbe(False, "runtime path must be same-origin")
+    return await _probe_signed_runtime(preview.bootstrap_url, path=path)
+
+
+async def _probe_signed_runtime(
+    bootstrap_url: str,
+    *,
+    path: str | None = None,
+) -> MaxRuntimeProbe:
     parsed = urlsplit(bootstrap_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     try:
@@ -105,6 +124,23 @@ async def probe_max_runtime(
                     False,
                     f"signed preview bootstrap failed (HTTP {bootstrap.status_code})",
                 )
+            if 300 <= bootstrap.status_code < 400:
+                location = bootstrap.headers.get("location")
+                landing = urlsplit(urljoin(origin + "/", location or ""))
+                if (
+                    not location
+                    or (landing.scheme, landing.netloc) != (parsed.scheme, parsed.netloc)
+                ):
+                    return MaxRuntimeProbe(
+                        False,
+                        "signed preview bootstrap escaped its origin",
+                    )
+            if path is not None:
+                route = await client.get(f"{origin}{path}")
+                if not 200 <= route.status_code < 400:
+                    return MaxRuntimeProbe(
+                        False, f"runtime route failed (HTTP {route.status_code})",
+                    )
             protected = await client.get(f"{origin}/api/omnia/actions?limit=1")
             if protected.status_code != 200:
                 return MaxRuntimeProbe(
