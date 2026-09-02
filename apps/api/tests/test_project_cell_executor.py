@@ -179,8 +179,17 @@ async def test_project_cell_build_command_uses_bundled_dependency_guard() -> Non
     assert "/app/package.json" in command
     assert "/app/pnpm-lock.yaml" in command
     assert "cannot safely reuse bundled node_modules" in command
-    assert "pnpm db:push" in command
     assert "pnpm typecheck" in command
+
+
+async def test_project_cell_build_uses_migrations_before_typecheck() -> None:
+    command = project_cell_executor._PROJECT_CELL_BUILD_CMD
+
+    assert "pnpm db:push" not in command
+    assert "drizzle-kit push" not in command
+    assert "node scripts/apply-migrations.mjs" in command
+    assert command.index("node scripts/apply-migrations.mjs") < command.index("pnpm typecheck")
+    assert command.startswith("set -eu\n")
 
 
 @pytest_asyncio.fixture
