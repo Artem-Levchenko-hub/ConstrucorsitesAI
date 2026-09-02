@@ -598,7 +598,10 @@ async def test_create_container_uses_loopback_bind_and_work_copy_for_draft_runti
     }
     assert "/work" in kwargs["tmpfs"]
     assert '. "$env_file"' in command
-    assert "pnpm dev &" in command
+    assert "node /app/node_modules/next/dist/bin/next dev " in command
+    assert "--port 3000 --hostname 0.0.0.0 &" in command
+    assert "--turbopack" not in command
+    assert "pnpm dev &" not in command
     assert "cp -a /workspace-src/. /work/" in command
     assert "cp /work/pnpm-lock.yaml /workspace-src/pnpm-lock.yaml" in command
     assert record.ports == {"3000/tcp": "127.0.0.1:34567"}

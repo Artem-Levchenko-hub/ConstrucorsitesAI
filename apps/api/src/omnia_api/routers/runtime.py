@@ -46,7 +46,7 @@ from omnia_api.schemas.runtime import (
     RuntimeStopRequest,
 )
 from omnia_api.services import autoheal as autoheal_svc
-from omnia_api.services import orchestrator_client
+from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.deploy_attestation import blocking_required, resolve_deploy_proof
@@ -154,6 +154,13 @@ async def get_runtime(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> RuntimeStatus:
     project = await _project_owned_by(session, project_id, current_user.id)
+    cell_status = await project_cell_runtime.load_project_cell_runtime_status(
+        session,
+        project,
+        owner=current_user,
+    )
+    if cell_status is not None:
+        return cell_status
     payload = await orchestrator_client.get_status(project_id)
     if not project.keep_alive_enabled and payload.get("keep_alive"):
         # Postgres is canonical. This also heals a stale orchestrator marker
@@ -178,6 +185,13 @@ async def start_runtime(
     layer, so a sleeping preview self-revives on the first visitor hit.)
     """
     project = await _project_owned_by(session, project_id, current_user.id)
+    cell_status = await project_cell_runtime.start_project_cell_runtime(
+        session,
+        project,
+        owner=current_user,
+    )
+    if cell_status is not None:
+        return cell_status
     _, plan = await _billing_plan_for_user(session, current_user.id)
     # Map api-side `template` to the orchestrator's actual template dir.
     # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
@@ -268,6 +282,13 @@ async def get_runtime_logs(
     Missing container → empty `logs` with 200 (UI shows "No logs yet").
     """
     project = await _project_owned_by(session, project_id, current_user.id)
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session,
+        project,
+        owner=current_user,
+    )
+    if selection.selected:
+        project_cell_runtime.raise_project_cell_public_action_unavailable()
     if tail < 1:
         tail = 1
     elif tail > 5000:
@@ -316,7 +337,14 @@ async def stop_runtime(
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> RuntimeStatus:
-    await _project_owned_by(session, project_id, current_user.id)
+    project = await _project_owned_by(session, project_id, current_user.id)
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session,
+        project,
+        owner=current_user,
+    )
+    if selection.selected:
+        project_cell_runtime.raise_project_cell_public_action_unavailable()
     pause = body.pause if body is not None else True
     payload = await orchestrator_client.stop(project_id, pause=pause)
     return _to_runtime_status(payload)
@@ -331,6 +359,13 @@ async def set_runtime_keep_alive(
 ) -> RuntimeStatus:
     """Keep the dev runtime hot across inactivity and orchestrator restarts."""
     project = await _project_owned_by(session, project_id, current_user.id)
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session,
+        project,
+        owner=current_user,
+    )
+    if selection.selected:
+        project_cell_runtime.raise_project_cell_public_action_unavailable()
     if body.enabled:
         account, plan = await _billing_plan_for_user(
             session,
@@ -388,6 +423,13 @@ async def trigger_deploy(
     current_user: CurrentUserDep,
 ) -> DeployStatus:
     project = await _project_owned_by(session, project_id, current_user.id)
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session,
+        project,
+        owner=current_user,
+    )
+    if selection.selected:
+        project_cell_runtime.raise_project_cell_public_action_unavailable()
     sha = body.commit_sha if body is not None else None
     idempotency_key = body.idempotency_key if body is not None else None
     # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем

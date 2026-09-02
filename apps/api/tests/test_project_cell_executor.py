@@ -1033,6 +1033,46 @@ async def test_bash_runs_inside_cell_and_returns_remote_diff(
     ]
 
 
+@pytest.mark.parametrize("existing_cell", [False, True])
+async def test_disabled_routing_never_falls_back_for_a_durable_cell(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+    existing_cell: bool,
+) -> None:
+    owner = await _new_user(db_session, "disabled-owner")
+    project = await _new_project(db_session, owner, label="disabled")
+    run = await _new_run(db_session, project, owner, label="disabled")
+    if existing_cell:
+        db_session.add(ProjectCellWorkspace(
+            project_id=project.id, owner_id=owner.id, provider="docker_owner_canary",
+            state="ready", generation_run_id=run.id, fencing_epoch=1,
+        ))
+    await db_session.commit()
+    monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
+
+    async def disabled_readiness(_user, _project_id):
+        return ProjectCellControlReadiness(
+            selected=False, ready=False, provider="legacy", reason="feature_disabled",
+        )
+
+    monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", disabled_readiness)
+
+    async def forbidden_legacy(_action):
+        pytest.fail("must not execute legacy commands")
+
+    kwargs = dict(
+        project_id=project.id, project_slug=project.slug, project_template="max_miniapp",
+        user_id=owner.id, generation_run_id=run.id, legacy_execute=forbidden_legacy,
+    )
+    if existing_cell:
+        with pytest.raises(project_cell_executor.ProjectCellExecutorUnavailable,
+                           match="legacy execution is disabled"):
+            await project_cell_executor.maybe_create_project_cell_executor(**kwargs)
+    else:
+        assert await project_cell_executor.maybe_create_project_cell_executor(**kwargs) is None
+
+
 async def test_selected_but_unready_project_cell_raises_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     db_session: AsyncSession,

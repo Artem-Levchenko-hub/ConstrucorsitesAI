@@ -851,6 +851,11 @@ class DockerPyCellBackend:
                 and item.get("Destination")
             ),
             network_names=tuple(str(name) for name in networks.keys()),
+            network_ipv4={
+                str(name): str(endpoint["IPAddress"])
+                for name, endpoint in networks.items()
+                if isinstance(endpoint, dict) and endpoint.get("IPAddress")
+            },
             state=str(getattr(container, "status", "") or ""),
             helper=bool(self._labels(container).get("omnia.helper") == "true"),
             tmpfs=tuple(str(item) for item in (host_config.get("Tmpfs") or {}).keys()),
@@ -1027,7 +1032,14 @@ class DockerPyCellBackend:
                         "lock_sync_loop &",
                         "sync_pid=$!",
                         f"cd {_WORKSPACE_RUN_ROOT}",
-                        "pnpm dev &",
+                        # Next 15's Turbopack rejects the immutable dependency
+                        # symlink from /work to /app. Use its default Webpack
+                        # dev server without changing the generated manifest
+                        # or widening the cell filesystem boundary.
+                        (
+                            "node /app/node_modules/next/dist/bin/next dev "
+                            "--port 3000 --hostname 0.0.0.0 &"
+                        ),
                         "draft_pid=$!",
                         'wait "$draft_pid"',
                         "status=$?",

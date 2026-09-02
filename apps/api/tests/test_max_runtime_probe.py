@@ -41,6 +41,7 @@ async def test_probe_max_runtime_proves_cookie_and_protected_data(
         return {"project_id": str(PROJECT_ID), "bootstrap_url": BOOTSTRAP}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 20.0
         if request.url.path == "/api/omnia/preview-session":
             return httpx.Response(
                 307,
@@ -180,6 +181,8 @@ async def test_cell_runtime_uses_cell_cookie_and_route_without_legacy(
     observed: list[str] = []
 
     def handler(request):
+        assert request.extensions["timeout"]["read"] == 120.0
+        assert request.extensions["timeout"]["connect"] == 5.0
         observed.append(request.url.path)
         if request.url.path == "/api/omnia/preview-session":
             return httpx.Response(307, headers={

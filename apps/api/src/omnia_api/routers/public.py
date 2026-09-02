@@ -19,7 +19,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.projects import perform_fork
 from omnia_api.schemas.project import is_fullstack
-from omnia_api.services import orchestrator_client
+from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
 
 log = logging.getLogger("omnia_api.public")
@@ -96,6 +96,12 @@ async def _resolve_snapshot(
     res = await session.execute(select(Project).where(Project.slug == slug))
     project = res.scalar_one_or_none()
     if project is None:
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
+
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(session, project)
+    if selection.selected:
+        # Dark cells have an authenticated owner preview, not a public source
+        # browser or a legacy redirect that can wake a second runtime.
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
 
     target_id = snapshot_id if snapshot_id is not None else project.current_snapshot_id

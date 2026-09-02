@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
@@ -29,6 +30,20 @@ from tests._cell_fakes import FakeDockerBackend
 from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
 
 _DEFAULT_GENERATION_RUN_ID = UUID("00000000-0000-0000-0000-000000000094")
+
+
+def _default_workspace_spec(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID | None = _DEFAULT_GENERATION_RUN_ID,
+) -> WorkspaceSpec:
+    return WorkspaceSpec(
+        workspace_id=workspace_id,
+        project_id=UUID("00000000-0000-0000-0000-000000000092"),
+        owner_id=UUID("00000000-0000-0000-0000-000000000093"),
+        profile_version="docker-owner-cell-resources-v1",
+        generation_run_id=generation_run_id,
+    )
 
 
 class _RecordingProvider:
@@ -181,11 +196,8 @@ async def _ready_provider(
         resource_manager=manager,
         checkpoint_manager=checkpoints,
     )
-    spec = WorkspaceSpec(
-        workspace_id=workspace_id,
-        project_id=UUID("00000000-0000-0000-0000-000000000092"),
-        owner_id=UUID("00000000-0000-0000-0000-000000000093"),
-        profile_version="docker-owner-cell-resources-v1",
+    spec = _default_workspace_spec(
+        workspace_id,
         generation_run_id=generation_run_id,
     )
     await provider.ensure(spec, workspace.LifecycleMutation(UUID(int=95), 4, "a" * 64))
@@ -1080,6 +1092,13 @@ async def test_exec_workspace_agent_command_restores_draft_runtime_after_seriali
     await manager.ensure_draft_runtime(workspace_id)
     docker.workspace_command_volume_files = {"before.txt": b"one", "after.txt": b"two"}
     monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    republished: list[UUID] = []
+
+    async def republish(_manager, current_workspace_id):
+        republished.append(current_workspace_id)
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "_publish_draft_preview", republish)
 
     async with _client() as client:
         response = await client.post(
@@ -1097,6 +1116,7 @@ async def test_exec_workspace_agent_command_restores_draft_runtime_after_seriali
     assert response.status_code == 200
     assert docker.containers[names.draft_container_name()].state == "running"
     assert docker.workspace_command_calls[0]["command"] == "pnpm typecheck"
+    assert republished == [workspace_id]
 
 
 async def test_exec_reports_saved_effects_when_draft_restart_fails(
@@ -1175,13 +1195,14 @@ async def test_draft_apply_empty_patch_seeds_template_and_is_idempotent(
     docker.container_logs[names.draft_container_name()] = (
         "DATABASE_URL=postgresql://postgres:secret@pg:5432/postgres\nready"
     )
-    published: list[tuple[str, int]] = []
+    published: list[tuple[str, int, str]] = []
 
-    async def _publish_http(host: str, port: int) -> bool:
-        published.append((host, port))
+    async def _publish_http(host: str, port: int, *, upstream_host: str) -> bool:
+        published.append((host, port, upstream_host))
         return True
 
-    async def _ensure_tls(_host: str, _port: int) -> bool:
+    async def _ensure_tls(_host: str, _port: int, *, upstream_host: str) -> bool:
+        assert upstream_host == "172.30.0.2"
         return True
 
     monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
@@ -1239,8 +1260,8 @@ async def test_draft_apply_empty_patch_seeds_template_and_is_idempotent(
     assert second.json()["workspace_revision"] == workspace._workspace_revision(expected_files)
     assert docker.containers[names.draft_container_name()].state == "running"
     assert published == [
-        (f"{names.draft_preview_slug()}.preview.example", 3200),
-        (f"{names.draft_preview_slug()}.preview.example", 3200),
+        (f"{names.draft_preview_slug()}.preview.example", 3000, "172.30.0.2"),
+        (f"{names.draft_preview_slug()}.preview.example", 3000, "172.30.0.2"),
     ]
 
 
@@ -1250,11 +1271,14 @@ async def test_draft_preview_publish_fails_closed_when_tls_is_unavailable(
 ) -> None:
     workspace_id = UUID("00000000-0000-0000-0000-00000000009d")
     _provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+    await manager.ensure_draft_runtime(workspace_id)
 
-    async def _publish_http(_host: str, _port: int) -> None:
+    async def _publish_http(_host: str, _port: int, *, upstream_host: str) -> None:
+        assert upstream_host == "172.30.0.2"
         return None
 
-    async def _ensure_tls(_host: str, _port: int) -> bool:
+    async def _ensure_tls(_host: str, _port: int, *, upstream_host: str) -> bool:
+        assert upstream_host == "172.30.0.2"
         return False
 
     unpublished: list[str] = []
@@ -1271,6 +1295,260 @@ async def test_draft_preview_publish_fails_closed_when_tls_is_unavailable(
         await workspace._publish_draft_preview(manager, workspace_id)
 
     assert unpublished == [f"cell-{workspace_id.hex[:12]}.preview.example"]
+
+
+async def test_draft_preview_requires_the_owned_internal_network_address(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    _provider, manager, docker, _ = await _ready_provider(tmp_path, workspace_id)
+    draft = await manager.ensure_draft_runtime(workspace_id)
+    docker.containers[draft.name] = replace(
+        draft, network_ipv4={"unrelated-network": "172.30.0.2"},
+    )
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("missing owned network address must fail before nginx mutation")
+
+    monkeypatch.setattr(workspace.nginx_writer, "publish_http", forbidden)
+    with pytest.raises(OrchestratorError, match="no internal address"):
+        await workspace._publish_draft_preview(manager, workspace_id)
+
+
+async def test_wake_republishes_the_recreated_draft_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+    draft = await manager.ensure_draft_runtime(workspace_id)
+    republished: list[UUID] = []
+
+    async def republish(_manager, current_workspace_id):
+        republished.append(current_workspace_id)
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "_publish_draft_preview", republish)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/control",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={
+                "workspace_id": str(workspace_id), "kind": "wake",
+                "operation_id": str(uuid4()), "fencing_epoch": 5,
+                "request_digest": "d" * 64,
+            },
+        )
+    assert response.status_code == 200
+    current = await manager.inspect_draft_runtime(workspace_id)
+    assert current is not None and current.resource_id != draft.resource_id
+    assert republished == [workspace_id]
+
+
+async def test_stale_ensure_sync_does_not_republish_after_newer_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, _docker, generation_run_id = await _ready_provider(
+        tmp_path,
+        workspace_id,
+    )
+    newer_mutation = workspace.LifecycleMutation(uuid4(), 5, "b" * 64)
+    await provider.ensure(
+        _default_workspace_spec(
+            workspace_id,
+            generation_run_id=generation_run_id,
+        ),
+        newer_mutation,
+    )
+    await manager.ensure_draft_runtime(workspace_id)
+    republished: list[UUID] = []
+
+    async def republish(_manager, current_workspace_id: UUID) -> str:
+        republished.append(current_workspace_id)
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "_publish_draft_preview", republish)
+
+    await workspace._sync_lifecycle_draft_preview(
+        manager,
+        workspace_id,
+        workspace.LifecycleMutation(UUID(int=95), 4, "a" * 64),
+    )
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.fencing_epoch == 5
+    assert state.last_operation_id == newer_mutation.operation_id
+    assert republished == []
+
+
+async def test_stale_wake_sync_does_not_republish_after_newer_destroy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+    await manager.ensure_draft_runtime(workspace_id)
+    stale_wake = workspace.LifecycleMutation(uuid4(), 5, "b" * 64)
+    await provider.execute_control(
+        workspace_id,
+        workspace.ControlAction(kind="wake", checkpoint_ref=None),
+        stale_wake,
+    )
+
+    async def destroy_without_removing_runtime(
+        _self,
+        _workspace_id: UUID,
+        _mutation,
+        *,
+        checkpoint_ref: str | None,
+        record_operation: bool,
+    ) -> None:
+        assert checkpoint_ref is not None
+        assert record_operation is False
+        return None
+
+    monkeypatch.setattr(
+        type(manager),
+        "destroy_compute_without_lock",
+        destroy_without_removing_runtime,
+    )
+    newer_destroy = workspace.LifecycleMutation(uuid4(), 6, "c" * 64)
+    await provider.execute_control(
+        workspace_id,
+        workspace.ControlAction(kind="destroy", checkpoint_ref=None),
+        newer_destroy,
+    )
+    republished: list[UUID] = []
+
+    async def republish(_manager, current_workspace_id: UUID) -> str:
+        republished.append(current_workspace_id)
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "_publish_draft_preview", republish)
+
+    await workspace._sync_lifecycle_draft_preview(manager, workspace_id, stale_wake)
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.fencing_epoch == 6
+    assert state.last_operation_id == newer_destroy.operation_id
+    assert await manager.inspect_draft_runtime(workspace_id) is not None
+    assert republished == []
+
+
+async def test_stale_destroy_sync_does_not_unpublish_after_newer_wake(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+    await manager.ensure_draft_runtime(workspace_id)
+    stale_destroy = workspace.LifecycleMutation(uuid4(), 5, "b" * 64)
+    await provider.execute_control(
+        workspace_id,
+        workspace.ControlAction(kind="destroy", checkpoint_ref=None),
+        stale_destroy,
+    )
+    newer_wake = workspace.LifecycleMutation(uuid4(), 6, "c" * 64)
+    await provider.execute_control(
+        workspace_id,
+        workspace.ControlAction(kind="wake", checkpoint_ref=None),
+        newer_wake,
+    )
+    unpublished: list[str] = []
+
+    async def unpublish(host: str) -> None:
+        unpublished.append(host)
+
+    monkeypatch.setattr(workspace.nginx_writer, "unpublish", unpublish)
+
+    await workspace._sync_lifecycle_draft_preview(
+        manager,
+        workspace_id,
+        stale_destroy,
+        remove=True,
+    )
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.fencing_epoch == 6
+    assert state.last_operation_id == newer_wake.operation_id
+    assert unpublished == []
+
+
+async def test_wake_publish_holds_operation_lock_until_publication_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+    await manager.ensure_draft_runtime(workspace_id)
+    publish_started = asyncio.Event()
+    release_publish = asyncio.Event()
+    publish_events: list[str] = []
+    wake_operation_id = uuid4()
+    destroy_operation_id = uuid4()
+
+    async def republish(_manager, current_workspace_id: UUID) -> str:
+        assert current_workspace_id == workspace_id
+        publish_events.append("publish-start")
+        publish_started.set()
+        await release_publish.wait()
+        publish_events.append("publish-end")
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "_publish_draft_preview", republish)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+
+    async with _client() as client:
+        wake_task = asyncio.create_task(
+            client.post(
+                f"/internal/workspaces/{workspace_id}/control",
+                headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+                json={
+                    "workspace_id": str(workspace_id),
+                    "kind": "wake",
+                    "operation_id": str(wake_operation_id),
+                    "fencing_epoch": 5,
+                    "request_digest": "d" * 64,
+                },
+            )
+        )
+        await asyncio.wait_for(publish_started.wait(), timeout=1)
+        destroy_task = asyncio.create_task(
+            client.post(
+                f"/internal/workspaces/{workspace_id}/control",
+                headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+                json={
+                    "workspace_id": str(workspace_id),
+                    "kind": "destroy",
+                    "operation_id": str(destroy_operation_id),
+                    "fencing_epoch": 6,
+                    "request_digest": "e" * 64,
+                },
+            )
+        )
+        await asyncio.sleep(0.05)
+        state = manager.state_store.load(workspace_id)
+        assert state is not None
+        assert state.fencing_epoch == 5
+        assert state.last_operation_id == wake_operation_id
+        assert destroy_task.done() is False
+        release_publish.set()
+        wake_response, destroy_response = await asyncio.gather(wake_task, destroy_task)
+
+    state = manager.state_store.load(workspace_id)
+    assert wake_response.status_code == 200
+    assert destroy_response.status_code == 200
+    assert state is not None
+    assert state.fencing_epoch == 6
+    assert state.last_operation_id == destroy_operation_id
+    assert publish_events == ["publish-start", "publish-end"]
 
 
 async def test_failed_migration_does_not_start_or_publish_draft(
@@ -1372,6 +1650,23 @@ async def test_draft_preview_session_returns_signed_https_bootstrap_url(
     query = parse_qs(parsed.query)
     assert sorted(query) == ["expires", "signature"]
     assert query["signature"][0]
+
+
+def test_bounded_redacted_text_redacts_signature_and_token_query_values() -> None:
+    text = (
+        "bootstrap=https://cell.preview.example/api/omnia/preview-session"
+        "?signature=sig-123&expires=1700000000\n"
+        "iframe=https://cell.preview.example/app?token=tok-456&mode=live"
+    )
+
+    redacted = workspace._bounded_redacted_text(text)
+
+    assert "sig-123" not in redacted
+    assert "tok-456" not in redacted
+    assert "signature=[REDACTED]" in redacted
+    assert "token=[REDACTED]" in redacted
+    assert "expires=1700000000" in redacted
+    assert "mode=live" in redacted
 
 
 async def test_exec_workspace_agent_command_blocks_env_enumeration(
