@@ -26,6 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ApiError } from "@/lib/api/client";
 import {
   createMaxPreviewSession,
   syncMaxManagedKit,
@@ -45,6 +46,24 @@ const STATUS_BAR_HEIGHT = 38;
 const DEVICE_BEZEL = 10;
 const DEVICE_WIDTH = SCREEN_WIDTH + DEVICE_BEZEL * 2;
 const DEVICE_HEIGHT = SCREEN_HEIGHT + STATUS_BAR_HEIGHT + DEVICE_BEZEL * 2;
+const PREVIEW_RETRY_LIMIT = 2;
+const PREVIEW_RETRY_DELAY_MS = 1_500;
+
+function isTransientPreviewError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  if (error.status === 0 || error.status === 409 || error.status >= 500) {
+    return true;
+  }
+  if (error.status >= 400 && error.status < 500) {
+    return false;
+  }
+  return (
+    error.code === "conflict" ||
+    error.code === "internal_error" ||
+    error.code === "orchestrator_unavailable" ||
+    error.code === "orchestrator_rejected"
+  );
+}
 
 export function MaxLivePreview({
   project,
@@ -74,6 +93,7 @@ export function MaxLivePreview({
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
+  const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -89,26 +109,76 @@ export function MaxLivePreview({
   });
   const runtimeRunning = runtime.data?.state === "running";
   const managedKit = useQuery({
-    queryKey: ["max-managed-kit-sync", project.id],
+    queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId],
     queryFn: () => syncMaxManagedKit(project.id),
     enabled: runtimeRunning,
-    retry: false,
+    retry: (failureCount, error) =>
+      failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
+    retryDelay: PREVIEW_RETRY_DELAY_MS,
     staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const previewSession = useQuery({
     queryKey: [
       "max-preview-session",
       project.id,
+      previewTargetSnapshotId,
       runtime.data?.container_name ?? null,
       managedKit.data?.synced_snapshot_id ?? null,
     ],
     queryFn: () => createMaxPreviewSession(project.id),
     enabled: runtimeRunning && managedKit.isSuccess,
-    retry: 1,
+    retry: (failureCount, error) =>
+      failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
+    retryDelay: PREVIEW_RETRY_DELAY_MS,
     staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const separatePreview = useMutation({
     mutationFn: () => createMaxPreviewSession(project.id),
+  });
+  const recoverPreview = useMutation({
+    mutationFn: async () => {
+      const runtimeResult = await runtime.refetch();
+      let activeRuntime = runtimeResult.data ?? runtime.data ?? null;
+      if (
+        !activeRuntime ||
+        ["stopped", "paused", "failed"].includes(activeRuntime.state)
+      ) {
+        activeRuntime = await start.mutateAsync();
+      }
+      const managedKitResult = await managedKit.refetch();
+      if (!managedKitResult.data) {
+        throw (
+          managedKitResult.error ??
+          new Error("Не удалось синхронизировать последнюю версию.")
+        );
+      }
+      return queryClient.fetchQuery({
+        queryKey: [
+          "max-preview-session",
+          project.id,
+          previewTargetSnapshotId,
+          activeRuntime?.container_name ?? null,
+          managedKitResult.data.synced_snapshot_id ?? null,
+        ],
+        queryFn: () => createMaxPreviewSession(project.id),
+        retry: (failureCount, error) =>
+          failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
+        retryDelay: PREVIEW_RETRY_DELAY_MS,
+        staleTime: 0,
+      });
+    },
+    onError: (error) => {
+      toast.error("Не удалось обновить превью", {
+        description:
+          error instanceof Error
+            ? error.message
+            : "Попробуйте ещё раз через пару секунд.",
+      });
+    },
   });
 
   useEffect(() => {
@@ -171,9 +241,11 @@ export function MaxLivePreview({
   // A cold provision can outlive an earlier start request. Once polling sees
   // the runtime running, that old mutation error is no longer relevant and
   // must not replace the active "preparing" state with a false failure.
+  const previewSessionError =
+    previewSession.isError && !previewSession.data ? previewSession.error : null;
   const previewError =
     (managedKit.isError ? managedKit.error : null) ??
-    (previewSession.isError ? previewSession.error : null) ??
+    previewSessionError ??
     (!runtimeRunning && start.isError ? start.error : null) ??
     (runtime.isError ? runtime.error : null);
   const preparing =
@@ -230,15 +302,7 @@ export function MaxLivePreview({
   }
 
   function retryPreview() {
-    if (!runtimeRunning) {
-      start.mutate();
-      return;
-    }
-    if (managedKit.isError) {
-      void managedKit.refetch();
-      return;
-    }
-    void previewSession.refetch();
+    recoverPreview.mutate();
   }
 
   async function confirmRestoreSnapshot() {
@@ -256,8 +320,8 @@ export function MaxLivePreview({
       className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
       data-testid="max-live-preview"
     >
-      <div className="flex shrink-0 items-center justify-between gap-3 px-3 sm:px-5">
-        <div>
+      <div className="flex shrink-0 items-start justify-between gap-3 px-3 sm:px-5">
+        <div className="min-w-0">
           <p className="omnia-kicker text-[#828491]">
             {viewingHistorical ? "История версий" : "Mobile WebView"}
           </p>
@@ -267,11 +331,29 @@ export function MaxLivePreview({
               : "Живое превью"}
           </h2>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex max-w-[62%] shrink-0 flex-wrap items-center justify-end gap-1 sm:gap-1.5">
           <span className="inline-flex items-center gap-2 text-[10px] text-[#9fa1b1]">
             <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#828491]"}`} />
             {connected ? "Подключено" : "Запускается"}
           </span>
+          {!viewingHistorical && (
+            <button
+              type="button"
+              onClick={retryPreview}
+              disabled={recoverPreview.isPending}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[#2b2d32] px-2.5 py-1 text-[10px] font-medium text-[#9fa1b1] transition-colors hover:bg-[#2b2d32] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 sm:px-3"
+              title="Обновить превью"
+              aria-label="Обновить превью"
+              data-testid="max-refresh-preview"
+            >
+              {recoverPreview.isPending ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <RefreshCw className="size-3" />
+              )}
+              <span className="hidden sm:inline">Обновить превью</span>
+            </button>
+          )}
           {onClose && (
             <button
               type="button"
@@ -405,9 +487,10 @@ export function MaxLivePreview({
                           <button
                             type="button"
                             onClick={retryPreview}
+                            disabled={recoverPreview.isPending}
                             className="mt-1 text-[10px] font-medium text-[#6a95fa]"
                           >
-                            Повторить проверку
+                            {recoverPreview.isPending ? "Обновляем…" : "Повторить проверку"}
                           </button>
                         </div>
                       )}
@@ -446,10 +529,15 @@ export function MaxLivePreview({
                           <button
                             type="button"
                             onClick={retryPreview}
+                            disabled={recoverPreview.isPending}
                             className="inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-[#2b2d32] px-4 text-[12px] font-medium text-white"
                           >
-                            <RefreshCw className="size-4" />
-                            Повторить
+                            {recoverPreview.isPending ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="size-4" />
+                            )}
+                            {recoverPreview.isPending ? "Обновляем…" : "Повторить"}
                           </button>
                           <p className="text-[9px] leading-4 text-[#828491]">
                             Если ошибка повторяется, откройте панель запуска — там указан ответственный шаг.

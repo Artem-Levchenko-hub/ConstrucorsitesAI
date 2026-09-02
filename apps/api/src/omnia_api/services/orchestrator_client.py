@@ -1019,6 +1019,42 @@ async def project_cell_create_preview_session(
     return response
 
 
+async def project_cell_create_owner_preview_session(
+    workspace_id: UUID,
+    *,
+    project_id: UUID,
+    owner_id: UUID,
+) -> ProjectCellPreviewSession:
+    """Mint viewing access independently of the generation mutation lease."""
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/draft/owner-preview-session",
+        json={"project_id": str(project_id), "owner_id": str(owner_id)},
+    )
+    response = ProjectCellPreviewSession.from_json(payload)
+    if response.workspace_id != workspace_id:
+        raise OrchestratorUnavailable("Orchestrator returned a different cell preview")
+    return response
+
+
+async def project_cell_start_owner_preview(
+    workspace_id: UUID,
+    *,
+    project_id: UUID,
+    owner_id: UUID,
+) -> ProjectCellPreviewSession:
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/draft/owner-start",
+        json={"project_id": str(project_id), "owner_id": str(owner_id)},
+        timeout=120.0,
+    )
+    response = ProjectCellPreviewSession.from_json(payload)
+    if response.workspace_id != workspace_id:
+        raise OrchestratorUnavailable("Orchestrator returned a different cell preview")
+    return response
+
+
 async def wake(project_id: UUID) -> dict[str, Any]:
     """POST /internal/projects/wake — start (or unpause) a previously provisioned project."""
     return await _request("POST", "/internal/projects/wake", json={"project_id": str(project_id)})

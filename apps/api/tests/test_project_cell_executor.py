@@ -827,6 +827,43 @@ async def test_sync_failure_blocks_runtime_actions_before_legacy_executor(
     assert harness.legacy_actions == []
 
 
+async def test_repeated_preview_checks_preserve_healthy_draft_until_source_changes(
+    monkeypatch, db_session, test_engine,
+) -> None:
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    for _ in range(3):
+        sync = await harness.handle.sync_preview()
+        assert sync.failure is None
+    assert harness.hot_reload_calls == [{}]
+    await harness.handle.stage_patch({"src/app/page.tsx": "updated"})
+    assert (await harness.handle.sync_preview()).failure is None
+    assert harness.hot_reload_calls == [{}, {"src/app/page.tsx": "updated"}]
+
+
+async def test_preview_checks_recover_stopped_draft_but_never_replay_auth_failure(
+    monkeypatch, db_session, test_engine,
+) -> None:
+    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    await harness.handle.sync_preview()
+
+    async def stopped(*args, **kwargs):
+        raise OrchestratorBadRequest("draft runtime is not running", 409)
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_create_preview_session", stopped)
+    assert (await harness.handle.sync_preview()).failure is None
+    assert harness.hot_reload_calls == [{}, {}]
+
+    async def released(*args, **kwargs):
+        raise OrchestratorBadRequest("workspace generation lease is not active", 409)
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_create_preview_session", released)
+    with pytest.raises(OrchestratorBadRequest, match="lease is not active"):
+        await harness.handle.sync_preview()
+    assert harness.hot_reload_calls == [{}, {}]
+
+
 async def test_sync_failure_stays_dirty_and_retries_same_diff(
     monkeypatch: pytest.MonkeyPatch,
     db_session: AsyncSession,

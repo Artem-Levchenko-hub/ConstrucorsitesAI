@@ -80,10 +80,14 @@ def _deny_legacy(monkeypatch):
             monkeypatch.setattr(oc, name, denied)
 
 
+@pytest.mark.parametrize("released", [False, True])
 async def test_durable_cell_public_flow_survives_disabled_owner_flag(
-    client, db_session, monkeypatch,
+    client, db_session, monkeypatch, released,
 ):
-    _, project, run, workspace = await _seed(db_session, monkeypatch)
+    owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    if released:
+        workspace.generation_run_id = None
+        await db_session.commit()
     _deny_legacy(monkeypatch)
     request = AsyncMock(return_value=_resources(workspace))
     monkeypatch.setattr(oc, "_request", request)
@@ -93,7 +97,9 @@ async def test_durable_cell_public_flow_survives_disabled_owner_flag(
         workspace_id=workspace.id, preview_url=_origin(workspace.id),
         bootstrap_url=bootstrap, expires_at="2030-01-01T00:00:00+00:00",
     ))
-    monkeypatch.setattr(oc, "project_cell_create_preview_session", preview)
+    monkeypatch.setattr(oc, "project_cell_create_owner_preview_session", preview)
+    agent_preview = AsyncMock(side_effect=AssertionError("owner preview used the agent lease"))
+    monkeypatch.setattr(oc, "project_cell_create_preview_session", agent_preview)
     base = f"/api/projects/{project.id}"
     for method, path in (("GET", "/runtime"), ("POST", "/runtime/start")):
         response = await client.request(method, base + path)
@@ -108,8 +114,13 @@ async def test_durable_cell_public_flow_survives_disabled_owner_flag(
     assert response.json()["url"] == bootstrap
     assert response.headers["cache-control"] == "no-store"
     preview.assert_awaited_once_with(
-        workspace.id, generation_run_id=run.id, fencing_epoch=7,
+        workspace.id, project_id=project.id, owner_id=owner.id,
     )
+    agent_preview.assert_not_awaited()
+    if released:
+        await db_session.refresh(workspace)
+        assert workspace.generation_run_id is None
+        assert workspace.fencing_epoch == 7
     assert all(call.args[1] == f"/internal/workspaces/{workspace.id}/resources"
                for call in request.await_args_list)
 
@@ -213,6 +224,29 @@ async def test_resource_identity_mismatch_is_rejected(monkeypatch):
     monkeypatch.setattr(oc, "_request", AsyncMock(return_value=payload))
     with pytest.raises(oc.OrchestratorUnavailable, match="invalid Project Cell resource"):
         await runtime._get_cell_resources(uuid4())
+
+
+async def test_released_owner_can_restart_preview_without_agent_bootstrap(
+    client, db_session, monkeypatch,
+):
+    owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+    monkeypatch.setattr(
+        oc, "_request", AsyncMock(return_value=_resources(workspace, running=False)),
+    )
+    start = AsyncMock(return_value=SimpleNamespace(preview_url=_origin(workspace.id)))
+    bootstrap = AsyncMock(side_effect=AssertionError("owner restart must not bootstrap source"))
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", start)
+    monkeypatch.setattr(oc, "project_cell_agent_bootstrap", bootstrap)
+    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "running"
+    start.assert_awaited_once_with(workspace.id, project_id=project.id, owner_id=owner.id)
+    bootstrap.assert_not_awaited()
+    await db_session.refresh(workspace)
+    assert workspace.generation_run_id is None
 
 
 @pytest.mark.parametrize("cell", [False, True])

@@ -11,11 +11,19 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 import redis.asyncio as aioredis
 from minio import Minio
-from playwright.async_api import Page, ViewportSize, async_playwright
+from playwright.async_api import (
+    Page,
+    ViewportSize,
+    async_playwright,
+)
+from playwright.async_api import (
+    TimeoutError as PlaywrightTimeoutError,
+)
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -29,6 +37,7 @@ from omnia_api.services import repo as repo_svc
 
 VIEWPORT: ViewportSize = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
+_LIVE_SIGNED_BOOTSTRAP_TIMEOUT_MS = 120_000
 
 # Container-backed templates render from a live dev container, not from repo
 # files — their git repo only tracks AI-generated files, no root `index.html`.
@@ -64,6 +73,32 @@ class CaptureResult:
     viewport_width: int
     scroll_width: int
     has_overflow: bool
+
+
+@dataclass(frozen=True)
+class LiveCaptureIssue:
+    """One bounded, model-safe reason a live screenshot stage failed."""
+
+    stage: str
+    reason: str
+    viewport_width: int | None = None
+
+    def to_text(self) -> str:
+        prefix = f"{self.viewport_width}px " if self.viewport_width is not None else ""
+        return f"{prefix}{self.stage}: {self.reason}"
+
+
+@dataclass(frozen=True)
+class LiveCaptureReport:
+    """Live screenshot bytes plus bounded failure notes."""
+
+    screenshots: dict[int, bytes]
+    issues: tuple[LiveCaptureIssue, ...] = ()
+
+    def summary(self) -> str:
+        if not self.issues:
+            return ""
+        return "; ".join(issue.to_text() for issue in self.issues)
 
 
 # Wait budget for remote <img> (MinIO) to paint before screenshotting. Without
@@ -254,6 +289,133 @@ async def _route_media_internal(page: Page) -> None:
         pass
 
 
+_TEXT_URL_RE = re.compile(r"https?://[^\s'\"<>)]+", re.IGNORECASE)
+
+
+def _redact_url(raw: str) -> str:
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return "[invalid URL]"
+    if not parsed.scheme or not parsed.netloc:
+        return raw
+    safe = parsed._replace(
+        netloc=parsed.netloc.rsplit("@", 1)[-1],
+        query="[REDACTED]" if parsed.query else "", fragment="",
+    )
+    return urlunsplit(safe)
+
+
+def _redact_text(text: str, *, limit: int = 300) -> str:
+    redacted = _TEXT_URL_RE.sub(lambda m: _redact_url(m.group(0)), str(text))
+    redacted = re.sub(
+        r"(?i)\b(signature|token|session|cookie|authorization)=([^&\s]+)",
+        r"\1=[REDACTED]",
+        redacted,
+    )
+    return redacted[:limit]
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    return isinstance(exc, PlaywrightTimeoutError) or "timeout" in (
+        f"{type(exc).__name__} {exc}"
+    ).lower()
+
+
+def _live_capture_issue(
+    stage: str,
+    exc: Exception,
+    *,
+    viewport_width: int | None = None,
+) -> LiveCaptureIssue:
+    if _is_timeout_error(exc):
+        if stage == "bootstrap":
+            reason = "signed preview bootstrap timed out"
+        elif stage == "warmup":
+            reason = "preview cold-start timed out"
+        else:
+            reason = "viewport capture timed out"
+    else:
+        reason = f"{type(exc).__name__}: {_redact_text(str(exc))}"
+    return LiveCaptureIssue(stage=stage, reason=reason, viewport_width=viewport_width)
+
+
+async def capture_live_url_report(
+    url: str,
+    widths: Sequence[int] = (1440, 360),
+    *,
+    height: int = 900,
+    settle_container: bool = True,
+    full_page: bool = False,
+    bootstrap_url: str | None = None,
+) -> LiveCaptureReport:
+    """Like ``capture_live_url()``, but keeps bounded failure diagnostics."""
+
+    out: dict[int, bytes] = {}
+    issues: list[LiveCaptureIssue] = []
+    startup_timeout_ms = (
+        max(GOTO_TIMEOUT_MS, _LIVE_SIGNED_BOOTSTRAP_TIMEOUT_MS)
+        if bootstrap_url
+        else GOTO_TIMEOUT_MS
+    )
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            initial_width = int(widths[0]) if widths else 1280
+            page = await browser.new_page(
+                viewport={"width": initial_width, "height": height},
+                reduced_motion="reduce",
+            )
+            try:
+                await _block_external_fonts(page)
+                await _route_media_internal(page)
+                if bootstrap_url:
+                    try:
+                        await page.goto(
+                            bootstrap_url,
+                            wait_until="domcontentloaded",
+                            timeout=startup_timeout_ms,
+                        )
+                    except Exception as exc:
+                        issues.append(_live_capture_issue("bootstrap", exc))
+                        return LiveCaptureReport({}, tuple(issues))
+                try:
+                    await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=startup_timeout_ms,
+                    )
+                    if settle_container:
+                        await _await_container_ready(page)
+                    await _await_paint(page)
+                    await _await_content(page)
+                except Exception as exc:
+                    issues.append(_live_capture_issue("warmup", exc))
+                    return LiveCaptureReport({}, tuple(issues))
+                for width in widths:
+                    try:
+                        await page.set_viewport_size({"width": int(width), "height": height})
+                        await page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=GOTO_TIMEOUT_MS,
+                        )
+                        if settle_container:
+                            await _await_container_ready(page)
+                        await _await_paint(page)
+                        await _await_content(page)
+                        out[int(width)] = await page.screenshot(full_page=full_page)
+                    except Exception as exc:
+                        issues.append(
+                            _live_capture_issue("capture", exc, viewport_width=int(width))
+                        )
+            finally:
+                await page.close()
+        finally:
+            await browser.close()
+    return LiveCaptureReport(out, tuple(issues))
+
+
 async def capture(
     files: dict[str, str],
     widths: Sequence[int] = DEFAULT_CAPTURE_WIDTHS,
@@ -345,40 +507,16 @@ async def capture_live_url(
     raised), so one flaky viewport can't blind the whole audit. Returns an empty
     dict if every width failed — the caller treats that as "couldn't see".
     """
-    out: dict[int, bytes] = {}
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            for w in widths:
-                page = await browser.new_page(
-                    viewport={"width": int(w), "height": height},
-                    reduced_motion="reduce",
-                )
-                try:
-                    await _block_external_fonts(page)
-                    await _route_media_internal(page)
-                    if bootstrap_url:
-                        await page.goto(
-                            bootstrap_url,
-                            wait_until="domcontentloaded",
-                            timeout=GOTO_TIMEOUT_MS,
-                        )
-                    await page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
-                    if settle_container:
-                        await _await_container_ready(page)
-                    await _await_paint(page)
-                    # Never grade a loading skeleton: hold until real content painted.
-                    await _await_content(page)
-                    out[int(w)] = await page.screenshot(full_page=full_page)
-                except Exception:
-                    # One bad viewport must never blind the whole audit (or raise
-                    # into the agent loop). Skip it; other widths still land.
-                    pass
-                finally:
-                    await page.close()
-        finally:
-            await browser.close()
-    return out
+    return (
+        await capture_live_url_report(
+            url,
+            widths,
+            height=height,
+            settle_container=settle_container,
+            full_page=full_page,
+            bootstrap_url=bootstrap_url,
+        )
+    ).screenshots
 
 
 async def capture_diagnostics(
@@ -395,24 +533,34 @@ async def capture_diagnostics(
     Fail-soft: any error returns whatever was collected so far (never raises)."""
     console_errors: list[str] = []
     failed: list[str] = []
+    stage_errors: list[str] = []
+    startup_timeout_ms = (
+        max(timeout_ms, _LIVE_SIGNED_BOOTSTRAP_TIMEOUT_MS) if bootstrap_url else timeout_ms
+    )
 
     def _on_console(msg: object) -> None:
         try:
-            if getattr(msg, "type", "") in ("error", "warning"):
-                console_errors.append(f"{msg.type}: {msg.text}"[:300])  # type: ignore[attr-defined]
+            msg_type = str(getattr(msg, "type", ""))
+            msg_text = str(getattr(msg, "text", ""))
+            if msg_type in ("error", "warning"):
+                console_errors.append(_redact_text(f"{msg_type}: {msg_text}"))
         except Exception:
             pass
 
     def _on_response(resp: object) -> None:
         try:
-            if resp.status >= 400:  # type: ignore[attr-defined]
-                failed.append(f"{resp.status} {resp.request.method} {resp.url}"[:300])  # type: ignore[attr-defined]
+            status = int(getattr(resp, "status", 0))
+            request = getattr(resp, "request", None)
+            method = str(getattr(request, "method", "GET"))
+            raw_url = _redact_url(str(getattr(resp, "url", "")))
+            if status >= 400:
+                failed.append(_redact_text(f"{status} {method} {raw_url}"))
         except Exception:
             pass
 
     def _on_pageerror(err: object) -> None:
         try:
-            console_errors.append(f"pageerror: {err}"[:300])
+            console_errors.append(_redact_text(f"pageerror: {err}"))
         except Exception:
             pass
 
@@ -425,16 +573,29 @@ async def capture_diagnostics(
             page.on("pageerror", _on_pageerror)
             try:
                 if bootstrap_url:
-                    await page.goto(
-                        bootstrap_url,
-                        wait_until="domcontentloaded",
-                        timeout=timeout_ms,
-                    )
-                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                    try:
+                        await page.goto(
+                            bootstrap_url,
+                            wait_until="domcontentloaded",
+                            timeout=startup_timeout_ms,
+                        )
+                    except Exception as exc:
+                        stage_errors.append(_live_capture_issue("bootstrap", exc).to_text())
+                        return {
+                            "console_errors": list(dict.fromkeys(console_errors))[:12],
+                            "failed_requests": list(dict.fromkeys(failed))[:12],
+                            "stage_errors": list(dict.fromkeys(stage_errors))[:6],
+                        }
+                await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=startup_timeout_ms,
+                )
                 await _await_container_ready(page)
                 await _await_paint(page)
-            except Exception:
-                pass  # return whatever signals were captured before the failure
+                await _await_content(page)
+            except Exception as exc:
+                stage_errors.append(_live_capture_issue("warmup", exc).to_text())
             finally:
                 await page.close()
         finally:
@@ -443,6 +604,7 @@ async def capture_diagnostics(
     return {
         "console_errors": list(dict.fromkeys(console_errors))[:12],
         "failed_requests": list(dict.fromkeys(failed))[:12],
+        "stage_errors": list(dict.fromkeys(stage_errors))[:6],
     }
 
 

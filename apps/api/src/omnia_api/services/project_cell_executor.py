@@ -517,6 +517,7 @@ async def maybe_create_project_cell_executor(
     synced_files = dict(workspace_files)
     dirty = False
     runtime_log_tail = ""
+    preview_synced = False
 
     async def _persist_files(
         *,
@@ -551,10 +552,11 @@ async def maybe_create_project_cell_executor(
         dirty = bool(_diff_files(synced_files, workspace_files))
 
     async def _apply_external_files(files: dict[str, str]) -> None:
-        nonlocal synced_files, dirty
+        nonlocal synced_files, dirty, preview_synced
         await _stage_files(files)
         synced_files = dict(workspace_files)
         dirty = False
+        preview_synced = False
 
     async def _stage_files(files: dict[str, str]) -> None:
         normalized = _normalize_files(files)
@@ -595,8 +597,21 @@ async def maybe_create_project_cell_executor(
         )
 
     async def _sync_preview() -> ProjectCellPreviewSyncResult:
-        nonlocal synced_files, dirty, workspace_revision, runtime_log_tail
-        # Even an empty patch must ensure the cell-owned runtime is alive.
+        nonlocal synced_files, dirty, workspace_revision, runtime_log_tail, preview_synced
+        # A healthy, already-synced draft must survive read-only checks. Applying
+        # even an empty patch recreates the container and cold-compiles every route.
+        if not dirty and preview_synced:
+            try:
+                await project_cell_create_preview_session(
+                    workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+                )
+            except OrchestratorBadRequest as exc:
+                # A stopped draft needs the normal fenced apply/recovery path.
+                if exc.status_code != 409 or exc.message != "draft runtime is not running":
+                    raise
+            else:
+                return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
+        preview_synced = False
         diff = _diff_files(synced_files, workspace_files)
         draft = await project_cell_apply_draft(
             workspace_id,
@@ -623,6 +638,7 @@ async def maybe_create_project_cell_executor(
             )
         synced_files = dict(workspace_files)
         dirty = False
+        preview_synced = True
         return ProjectCellPreviewSyncResult(
             generated_files=generated_files,
             failure=None,

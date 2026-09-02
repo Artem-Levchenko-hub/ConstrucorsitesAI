@@ -139,6 +139,15 @@ class WorkspaceDraftPreviewSessionRequest(BaseModel):
     fencing_epoch: int = Field(gt=0)
 
 
+class WorkspaceOwnerPreviewSessionRequest(BaseModel):
+    """API-attested owner access, never an agent execution lease."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: UUID
+    owner_id: UUID
+
+
 class WorkspaceDraftPreviewSessionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

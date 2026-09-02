@@ -303,6 +303,32 @@ async def test_cell_preview_session_is_bound_to_workspace_and_lease(monkeypatch)
         )
 
 
+async def test_owner_cell_preview_is_bound_to_workspace_and_owner_not_generation(monkeypatch):
+    observed = {}
+    workspace_id, project_id, owner_id = uuid4(), uuid4(), uuid4()
+    payload = _cell_preview_payload(workspace_id)
+
+    async def fake_request(method, path, **kwargs):
+        observed.update(method=method, path=path, **kwargs)
+        return payload
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    response = await orchestrator_client.project_cell_create_owner_preview_session(
+        workspace_id, project_id=project_id, owner_id=owner_id,
+    )
+    assert response.workspace_id == workspace_id
+    assert observed == {
+        "method": "POST",
+        "path": f"/internal/workspaces/{workspace_id}/draft/owner-preview-session",
+        "json": {"project_id": str(project_id), "owner_id": str(owner_id)},
+    }
+    payload.update(_cell_preview_payload(uuid4()))
+    with pytest.raises(OrchestratorUnavailable, match="different cell"):
+        await orchestrator_client.project_cell_create_owner_preview_session(
+            workspace_id, project_id=project_id, owner_id=owner_id,
+        )
+
+
 @pytest.mark.parametrize("patch", [
     {"bootstrap_url": "https://elsewhere.example.test/api/omnia/preview-session"},
     {"preview_url": "https://cell-000000000000-dev.attacker.example"},

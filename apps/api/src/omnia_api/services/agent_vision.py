@@ -8,12 +8,12 @@ the agent stops being a blind author — it LOOKS at what it drew and fixes
 
 Composes three existing pieces, adds nothing structural:
   dev_container.resolve_live_url  → where the running app lives
-  preview.capture_live_url        → screenshot it (1440 + 360)
+  preview.capture_live_url_report → screenshots (1440 + 360) + failure notes
   vision_audit.audit_screenshots  → vision-model verdict + concrete issues
 
-Fail-soft everywhere (R-10): no running preview, a render timeout, or a skipped
-vision verdict all degrade to a harmless observation dict, never an exception
-that could kill the loop.
+Missing preview or render failure returns a failed observation with a reason.
+Only MAX callers explicitly normalize unavailable visual infrastructure; real
+browser HTTP failures remain blocking even when the vision judge is skipped.
 """
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ async def see_page(
     """Screenshot the live dev container's ``path`` and return a vision critique.
 
     Returns the executor observation dict ``{ok, detail|error}``:
-      * ok=False  — no running preview / render failed (a readable reason the
-        agent can act on, e.g. "start the app first").
+      * ok=False  — app/runtime failure, or missing browser proof. Only the MAX
+        caller may explicitly normalize unavailable visual infrastructure.
       * ok=True   — a verdict + concrete issues, OR a neutral note when the
         vision judge was unavailable (skipped) so the agent isn't misled.
     """
@@ -69,48 +69,83 @@ async def see_page(
             }
         url = base.rstrip("/") + rel
 
+    def _capture_notes(report: Any) -> str:
+        summary = str(getattr(report, "summary", lambda: "")() or "").strip()
+        if not summary:
+            return ""
+        return "\n\nCAPTURE NOTES:\n- " + summary.replace("; ", "\n- ")
+
+    def _diagnostic_text(diag: Mapping[str, Any]) -> tuple[str, bool]:
+        failed = [str(x) for x in (diag.get("failed_requests") or [])]
+        cons = [str(x) for x in (diag.get("console_errors") or [])]
+        stage = [str(x) for x in (diag.get("stage_errors") or [])]
+        has_failed = bool(failed)
+        blocks = []
+        if failed:
+            blocks.append(
+                "Failed network requests (fix — real runtime failures):\n"
+                + "\n".join(f"  - {x}" for x in failed)
+            )
+        if cons:
+            blocks.append("Console / page errors:\n" + "\n".join(f"  - {x}" for x in cons))
+        if stage:
+            blocks.append("Capture stage notes:\n" + "\n".join(f"  - {x}" for x in stage))
+        if not blocks:
+            return "", has_failed
+        return "\n\nBROWSER SIGNALS:\n" + "\n\n".join(blocks), has_failed
+
     try:
-        shots = await preview.capture_live_url(
+        report = await preview.capture_live_url_report(
             url,
             _SEE_WIDTHS,
             bootstrap_url=bootstrap_url,
         )
     except Exception as exc:
-        return {"ok": False, "error": f"could not render {rel}: {type(exc).__name__}"}
-    if not shots:
-        return {"ok": False, "error": f"render produced no screenshot for {rel}"}
-
-    verdict = await vision_audit.audit_screenshots(
-        shots, prompt_context=prompt_context, project_id=str(pid)
-    )
-    # Browser-side signals a screenshot can't show: failed (>=400) fetches and JS
-    # console/page errors on load. A failed request is a REAL runtime failure, so it
-    # flips the observation to not-ok (the agent must not `done` over a broken fetch).
+        return {
+            "ok": False,
+            "error": (
+                f"visual QA unavailable for {rel}: "
+                f"browser setup failed ({type(exc).__name__})"
+            ),
+            "proof_unavailable": True,
+        }
+    shots = report.screenshots
     diag_text = ""
     has_failed = False
     try:
         diag = await preview.capture_diagnostics(url, bootstrap_url=bootstrap_url)
-        failed = diag.get("failed_requests") or []
-        cons = diag.get("console_errors") or []
-        has_failed = bool(failed)
-        if failed or cons:
-            blocks = []
-            if failed:
-                blocks.append(
-                    "Failed network requests (fix — real runtime failures):\n"
-                    + "\n".join(f"  - {x}" for x in failed)
-                )
-            if cons:
-                blocks.append("Console / page errors:\n" + "\n".join(f"  - {x}" for x in cons))
-            diag_text = "\n\nBROWSER SIGNALS:\n" + "\n\n".join(blocks)
+        diag_text, has_failed = _diagnostic_text(diag)
     except Exception:
         pass
+    if not shots:
+        if has_failed:
+            return {
+                "ok": False,
+                "detail": (
+                    f"could not render {rel} because the app failed while loading."
+                    f"{diag_text}"
+                ),
+            }
+        return {
+            "ok": False,
+            "error": (
+                f"visual QA unavailable for {rel}: no screenshot landed."
+                f"{_capture_notes(report)}{diag_text}"
+            ),
+            "proof_unavailable": True,
+        }
+
+    verdict = await vision_audit.audit_screenshots(
+        shots, prompt_context=prompt_context, project_id=str(pid)
+    )
+    capture_text = _capture_notes(report)
 
     if verdict.skipped:
         return {
             "ok": not has_failed,
             "detail": (
-                f"saw {rel}, but the vision judge was unavailable (skipped){diag_text}"
+                f"saw {rel}, but the vision judge was unavailable (skipped)"
+                f"{capture_text}{diag_text}"
             ),
         }
 
@@ -119,7 +154,7 @@ async def see_page(
         "ok": not has_failed,
         "detail": (
             f"LOOKED at {rel} — verdict: {verdict.verdict} ({verdict.score}/10)\n"
-            f"Apply these concrete fixes:\n{issues}{diag_text}"
+            f"Apply these concrete fixes:\n{issues}{capture_text}{diag_text}"
         ),
     }
 

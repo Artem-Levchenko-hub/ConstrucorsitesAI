@@ -1706,6 +1706,109 @@ async def test_draft_preview_session_returns_signed_https_bootstrap_url(
     assert query["signature"][0]
 
 
+@pytest.mark.parametrize("released", [False, True])
+async def test_owner_preview_survives_release_without_restoring_agent_write_access(
+    monkeypatch, tmp_path, released,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+    await manager.ensure_draft_runtime(workspace_id)
+    if released:
+        await manager.release_generation(
+            workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+            generation_run_id=run_id,
+        )
+    before = manager.state_store.load(workspace_id)
+    containers_before = dict(docker.containers)
+    spec = _default_workspace_spec(workspace_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+    headers = {"X-Internal-Token": "test-internal-token-not-a-real-secret"}
+    async with _client() as client:
+        for _ in range(2):
+            response = await client.post(
+                f"/internal/workspaces/{workspace_id}/draft/owner-preview-session",
+                headers=headers,
+                json={"project_id": str(spec.project_id), "owner_id": str(spec.owner_id)},
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["cache-control"] == "no-store"
+            assert response.json()["workspace_id"] == str(workspace_id)
+            assert urlparse(response.json()["bootstrap_url"]).scheme == "https"
+        if released:
+            stale = await client.post(
+                f"/internal/workspaces/{workspace_id}/draft/preview-session",
+                headers=headers, json={"generation_run_id": str(run_id), "fencing_epoch": 4},
+            )
+            assert stale.status_code == 409
+            write = await client.post(
+                f"/internal/workspaces/{workspace_id}/agent/write-files",
+                headers=headers, json={"generation_run_id": str(run_id), "fencing_epoch": 4,
+                                       "expected_revision": "a" * 64, "files": {"x": "y"}},
+            )
+            assert write.status_code == 409
+    assert manager.state_store.load(workspace_id) == before
+    assert docker.containers == containers_before
+
+
+async def test_owner_can_restart_retained_draft_after_release_without_recreating_it(
+    monkeypatch, tmp_path,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+    draft = await manager.ensure_draft_runtime(workspace_id)
+    await manager.release_generation(
+        workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+        generation_run_id=run_id,
+    )
+    await docker.stop_container(draft.name)
+    state_before = manager.state_store.load(workspace_id)
+    spec = _default_workspace_spec(workspace_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+
+    async def publish(*args):
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
+    async with _client() as client:
+        for _ in range(2):
+            response = await client.post(
+                f"/internal/workspaces/{workspace_id}/draft/owner-start",
+                headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+                json={"project_id": str(spec.project_id), "owner_id": str(spec.owner_id)},
+            )
+            assert response.status_code == 200, response.text
+    assert manager.state_store.load(workspace_id) == state_before
+    assert docker.containers[draft.name].resource_id == draft.resource_id
+    assert docker.containers[draft.name].state == "running"
+
+
+@pytest.mark.parametrize("endpoint", ["owner-preview-session", "owner-start"])
+@pytest.mark.parametrize("failure", ["unauthenticated", "owner", "project", "stopped"])
+async def test_owner_preview_rejects_invalid_identity_or_runtime(
+    monkeypatch, tmp_path, failure, endpoint,
+) -> None:
+    workspace_id = uuid4()
+    provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
+    if failure != "stopped":
+        await manager.ensure_draft_runtime(workspace_id)
+    spec = _default_workspace_spec(workspace_id)
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/{endpoint}",
+            headers={} if failure == "unauthenticated" else {
+                "X-Internal-Token": "test-internal-token-not-a-real-secret",
+            },
+            json={"project_id": str(uuid4() if failure == "project" else spec.project_id),
+                  "owner_id": str(uuid4() if failure == "owner" else spec.owner_id)},
+        )
+    assert response.status_code == (401 if failure == "unauthenticated" else 409)
+    assert "bootstrap_url" not in response.text
+
+
 def test_bounded_redacted_text_redacts_signature_and_token_query_values() -> None:
     text = (
         "bootstrap=https://cell.preview.example/api/omnia/preview-session"

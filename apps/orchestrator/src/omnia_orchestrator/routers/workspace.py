@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Response
 
 from omnia_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
@@ -62,6 +62,7 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceDraftPreviewSessionResponse,
     WorkspaceEnsureRequest,
     WorkspaceObserveRequest,
+    WorkspaceOwnerPreviewSessionRequest,
     WorkspaceResourceResponse,
 )
 from omnia_orchestrator.services import nginx_writer
@@ -587,45 +588,67 @@ async def create_workspace_draft_preview_session(
             generation_run_id=request.generation_run_id,
             fencing_epoch=request.fencing_epoch,
         )
-        exec_spec = _workspace_exec_spec(state)
-        draft = await manager.inspect_draft_runtime(workspace_id)
-        if draft is None or draft.state != "running":
+        return await _draft_preview_session(manager, state)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/draft/owner-preview-session",
+    response_model=WorkspaceDraftPreviewSessionResponse,
+)
+async def create_workspace_owner_preview_session(
+    workspace_id: UUID,
+    request: WorkspaceOwnerPreviewSessionRequest,
+    response: Response,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceDraftPreviewSessionResponse:
+    """View the retained app after release without reviving agent write access."""
+    verify_internal_token(x_internal_token)
+    provider = build_workspace_provider(get_settings())
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
+        if state.project_id != request.project_id or state.owner_id != request.owner_id:
             raise OrchestratorError(
-                code="conflict",
-                message="draft runtime is not running",
-                status_code=409,
+                code="conflict", message="workspace owner identity mismatch", status_code=409,
             )
-        try:
-            manager._verify_draft_container_record(draft, state)
-        except CellIdentityConflict as exc:
-            raise OrchestratorError(
-                code="conflict",
-                message=str(exc),
-                status_code=409,
-            ) from exc
-        preview_url = _draft_preview_url(workspace_id)
-        if not preview_url.startswith("https://"):
-            raise OrchestratorError(
-                code="container_failure",
-                message="draft preview requires an HTTPS development origin",
-                status_code=503,
-            )
-        now = datetime.now(UTC)
-        expires_at = now + _MAX_PREVIEW_BOOTSTRAP_TTL
-        expires = int(expires_at.timestamp())
-        signature = _max_preview_bootstrap_signature(
-            manager._draft_auth_secret(
-                manager.credential_store.load_or_create(workspace_id).postgres_password
-            ),
-            str(exec_spec.spec.project_id),
-            expires,
+        response.headers["Cache-Control"] = "no-store"
+        return await _draft_preview_session(manager, state)
+
+
+async def _draft_preview_session(
+    manager: DockerCellResourceManager,
+    state: CellWorkspaceState,
+) -> WorkspaceDraftPreviewSessionResponse:
+    """Caller holds the operation lock and has verified viewing authority."""
+    workspace_id = state.workspace_id
+    exec_spec = _workspace_exec_spec(state)
+    draft = await manager.inspect_draft_runtime(workspace_id)
+    if draft is None or draft.state != "running":
+        raise OrchestratorError(
+            code="conflict", message="draft runtime is not running", status_code=409,
         )
-        bootstrap_url = signed_preview_session_url(
-            preview_url,
-            _MAX_PREVIEW_BOOTSTRAP_PATH,
-            expires=expires,
-            signature=signature,
+    try:
+        manager._verify_draft_container_record(draft, state)
+    except CellIdentityConflict as exc:
+        raise OrchestratorError(code="conflict", message=str(exc), status_code=409) from exc
+    preview_url = _draft_preview_url(workspace_id)
+    if not preview_url.startswith("https://"):
+        raise OrchestratorError(
+            code="container_failure",
+            message="draft preview requires an HTTPS development origin", status_code=503,
         )
+    expires_at = datetime.now(UTC) + _MAX_PREVIEW_BOOTSTRAP_TTL
+    expires = int(expires_at.timestamp())
+    signature = _max_preview_bootstrap_signature(
+        manager._draft_auth_secret(
+            manager.credential_store.load_or_create(workspace_id).postgres_password
+        ),
+        str(exec_spec.spec.project_id),
+        expires,
+    )
+    bootstrap_url = signed_preview_session_url(
+        preview_url, _MAX_PREVIEW_BOOTSTRAP_PATH, expires=expires, signature=signature,
+    )
     return WorkspaceDraftPreviewSessionResponse(
         workspace_id=workspace_id,
         state="draft_running",
@@ -633,6 +656,49 @@ async def create_workspace_draft_preview_session(
         bootstrap_url=bootstrap_url,
         expires_at=expires_at.isoformat().replace("+00:00", "Z"),
     )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/draft/owner-start",
+    response_model=WorkspaceDraftPreviewSessionResponse,
+)
+async def start_workspace_owner_preview(
+    workspace_id: UUID,
+    request: WorkspaceOwnerPreviewSessionRequest,
+    response: Response,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceDraftPreviewSessionResponse:
+    """Restart only the retained draft; never seed files or acquire an agent lease."""
+    verify_internal_token(x_internal_token)
+    provider = build_workspace_provider(get_settings())
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
+        if state.project_id != request.project_id or state.owner_id != request.owner_id:
+            raise OrchestratorError(
+                code="conflict", message="workspace owner identity mismatch", status_code=409,
+            )
+        _workspace_exec_spec(state)
+        if state.phase != "completed" or state.active_generation_run_id is not None:
+            raise OrchestratorError(
+                code="conflict", message="workspace operation is still active", status_code=409,
+            )
+        draft = await manager.inspect_draft_runtime(workspace_id)
+        if draft is None:
+            raise OrchestratorError(
+                code="conflict", message="retained draft runtime is missing", status_code=409,
+            )
+        try:
+            manager._verify_draft_container_record(draft, state)
+            if draft.state != "running":
+                await manager.docker.start_container(draft.name)
+            await _publish_draft_preview(manager, workspace_id)
+        except CellResourceError as exc:
+            raise OrchestratorError(
+                code="conflict", message="retained draft runtime could not start", status_code=409,
+            ) from exc
+        response.headers["Cache-Control"] = "no-store"
+        return await _draft_preview_session(manager, state)
 
 
 async def _resource_response(

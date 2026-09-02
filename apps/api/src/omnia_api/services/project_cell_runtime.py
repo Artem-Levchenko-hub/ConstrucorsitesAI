@@ -144,6 +144,15 @@ async def start_project_cell_runtime(
         return status
     if active_generation is not None:
         return _pending_status(True, workspace=selection.workspace, resources=resources)
+    if selection.workspace.generation_run_id is None:
+        preview = await orchestrator_client.project_cell_start_owner_preview(
+            selection.workspace.id, project_id=project.id, owner_id=selection.owner.id,
+        )
+        return RuntimeStatus(
+            state="running", container_name=_public_cell_ref(selection.workspace),
+            port=None, dev_url=preview.preview_url, last_active_at=None,
+            hibernate_after_seconds=None, keep_alive=False,
+        )
     generation_run_id, fencing_epoch = require_project_cell_runtime_lease(selection.workspace)
     snapshot = await orchestrator_client.project_cell_agent_bootstrap(
         selection.workspace.id,
@@ -191,11 +200,10 @@ async def create_project_cell_preview_session(
             raise ApiError("conflict", "MAX preview ещё готовится", 409)
         raise ApiError("conflict", _CELL_FIRST_BUILD_REQUIRED, 409)
     _require_workspace_identity(project, selection)
-    generation_run_id, fencing_epoch = require_project_cell_runtime_lease(selection.workspace)
-    return await orchestrator_client.project_cell_create_preview_session(
+    return await orchestrator_client.project_cell_create_owner_preview_session(
         selection.workspace.id,
-        generation_run_id=generation_run_id,
-        fencing_epoch=fencing_epoch,
+        project_id=project.id,
+        owner_id=selection.owner.id,
     )
 
 
