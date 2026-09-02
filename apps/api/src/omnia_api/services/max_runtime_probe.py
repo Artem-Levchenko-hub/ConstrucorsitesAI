@@ -15,6 +15,9 @@ from omnia_api.services import orchestrator_client
 _BOOTSTRAP_PATH = "/api/omnia/preview-session"
 _SIGNATURE_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 _TIMEOUT = httpx.Timeout(20.0, connect=5.0)
+# Cell drafts compile their authenticated routes on first access. The real
+# isolated Next.js cold start exceeded 20s; retain a finite startup budget.
+_CELL_STARTUP_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
 
 
 @dataclass(frozen=True)
@@ -106,18 +109,21 @@ async def probe_max_cell_runtime(
     """Use the validated, lease-scoped cell session without project-runtime fallback."""
     if not path.startswith("/") or path.startswith("//") or "\\" in path:
         return MaxRuntimeProbe(False, "runtime path must be same-origin")
-    return await _probe_signed_runtime(preview.bootstrap_url, path=path)
+    return await _probe_signed_runtime(
+        preview.bootstrap_url, path=path, request_timeout=_CELL_STARTUP_TIMEOUT,
+    )
 
 
 async def _probe_signed_runtime(
     bootstrap_url: str,
     *,
     path: str | None = None,
+    request_timeout: httpx.Timeout = _TIMEOUT,
 ) -> MaxRuntimeProbe:
     parsed = urlsplit(bootstrap_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=False) as client:
             bootstrap = await client.get(bootstrap_url)
             if bootstrap.status_code not in {200, 301, 302, 303, 307, 308}:
                 return MaxRuntimeProbe(

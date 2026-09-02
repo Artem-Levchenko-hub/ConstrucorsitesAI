@@ -224,3 +224,8 @@ orchestrator **676 passed, 5 skipped, 15 xfailed**. Ruff is clean in both apps;
 Mypy is clean for 244 API and 52 orchestrator source files. Independent review
 reports no remaining actionable findings in the complete follow-up slice. Dark
 cells also reject public source/legacy redirects/remix and non-owner direct forks.
+
+Cold-start follow-up: cell HTTP probes allow 120 seconds per read (5-second
+connection limit), while legacy probes retain 20 seconds. Actual isolated Next.js
+compilation exceeded the old limit. Probe/executor tests: **37 passed**; scoped
+Ruff/Mypy and independent review clean. First release commit: `4e4b0fda`, PR #28.
