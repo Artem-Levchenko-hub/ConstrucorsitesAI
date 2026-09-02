@@ -41,6 +41,10 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellResourceResponse,
 )
 from omnia_api.services.project_cell_control import ProjectCellControlReadiness
+from omnia_api.services.project_cells import (
+    claim_cell_operation_committed,
+    complete_cell_operation,
+)
 
 pytestmark = pytest.mark.asyncio
 SET_UPDATED_AT_FN = """
@@ -356,29 +360,26 @@ async def _prepare_executor(
         ready_readiness,
     )
 
-    async def fake_execute_cell_operation(_session_factory, operation_id, _client):
-        workspace = await db_session.scalar(
-            select(ProjectCellWorkspace).where(
-                ProjectCellWorkspace.generation_run_id == expected_run_id
-            )
+    async def fake_execute_cell_operation(session_factory, operation_id, _client):
+        claimed = await claim_cell_operation_committed(session_factory, operation_id)
+        response = ProjectCellResourceResponse(
+            workspace_id=claimed.workspace_id,
+            state="resources_ready",
+            provider_ref="cell-1",
+            fencing_epoch=claimed.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
         )
-        assert workspace is not None
-        workspace.fencing_epoch = 1
-        await db_session.commit()
+        async with session_factory() as session:
+            await complete_cell_operation(session, operation_id, response.to_wire_json())
+            await session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
             status="completed",
-            response=ProjectCellResourceResponse(
-                workspace_id=workspace.id,
-                state="resources_ready",
-                provider_ref="cell-1",
-                fencing_epoch=1,
-                checkpoint_ref=None,
-                has_workspace=True,
-                has_agent_home=True,
-                has_postgres=True,
-                has_redis=True,
-            ),
+            response=response,
         )
 
     async def fake_bootstrap(
@@ -636,6 +637,7 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
     owner = await _new_user(db_session, "pending-token-owner")
     project = await _new_project(db_session, owner, label="pending-token")
     run = await _new_run(db_session, project, owner, label="pending-token")
+    run_id = run.id
     await db_session.commit()
     tokens = (uuid4(), uuid4())
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -644,7 +646,7 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
         *(
             promote_generation_after_admission(
                 factory,
-                run_id=run.id,
+                run_id=run_id,
                 dispatch_token=token,
             )
             for token in tokens
@@ -653,7 +655,7 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
 
     assert sorted(results) == ["admitted", "lost"]
     db_session.expire_all()
-    persisted = await db_session.get(GenerationRun, run.id)
+    persisted = await db_session.get(GenerationRun, run_id)
     assert persisted is not None and persisted.status == "running"
     winner = tokens[results.index("admitted")]
     assert persisted.agent_state["capacity_admitted_dispatch_token"] == str(winner)
@@ -1398,39 +1400,29 @@ async def test_queued_cancel_wins_concurrently_with_running_ensure_and_releases_
         )
 
     async def fake_execute_cell_operation(session_factory, operation_id, _client):
-        async with session_factory() as session:
-            operation = await session.get(ProjectCellOperation, operation_id)
-            assert operation is not None
-            executed_kinds.append(operation.kind)
-            operation.status = "running"
-            await session.commit()
-            workspace = await session.get(ProjectCellWorkspace, operation.workspace_id)
-            assert workspace is not None
-            workspace_id = workspace.id
-            fencing_epoch = operation.fencing_epoch
-        if operation.kind == "ensure":
+        claimed = await claim_cell_operation_committed(session_factory, operation_id)
+        executed_kinds.append(claimed.kind)
+        if claimed.kind == "ensure":
             ensure_running.set()
             await cancellation_committed.wait()
+        response = ProjectCellResourceResponse(
+            workspace_id=claimed.workspace_id,
+            state="resources_ready",
+            provider_ref="cell-cancel-admission",
+            fencing_epoch=claimed.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
         async with session_factory() as session:
-            operation = await session.get(ProjectCellOperation, operation_id)
-            assert operation is not None
-            operation.status = "completed"
-            operation.finished_at = datetime.now(UTC)
+            await complete_cell_operation(session, operation_id, response.to_wire_json())
             await session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
             status="completed",
-            response=ProjectCellResourceResponse(
-                workspace_id=workspace_id,
-                state="resources_ready",
-                provider_ref="cell-cancel-admission",
-                fencing_epoch=fencing_epoch,
-                checkpoint_ref=None,
-                has_workspace=True,
-                has_agent_home=True,
-                has_postgres=True,
-                has_redis=True,
-            ),
+            response=response,
         )
 
     async def forbidden_bootstrap(*_args, **_kwargs):
