@@ -187,3 +187,40 @@ This section supersedes the earlier local gap statements where they conflict.
   yet the Project/Snapshot accepted pointer, and generic two-signed-tenant probing
   is unavailable. The first owner canary is restricted to the bundled MAX dependency
   set and must retain all fail-closed gates.
+
+## Local production and HTTPS proof update — 2026-09-02
+
+This section supersedes previous deployment observations above.
+
+- Production API, worker, web and orchestrator are deployed and healthy at
+  `de38d465ceea64b3105627b898054548fb740fed` (merged PR #27; all seven CI jobs passed).
+  Migration head is `0054_project_cell_candidates`. Owner routing remains OFF.
+- Final-source disposable Docker proof passed: dedicated PostgreSQL CRUD, Redis,
+  workspace and agent-home persistence, stale write/exec rejection, bounded
+  commands, pause/wake, checkpoint restore, and no host mounts/ports.
+- A subsequent candidate fixes two real draft blockers: Next 15 Turbopack rejects
+  the bundled dependency symlink, and Docker 29 does not activate published ports
+  on internal-only networks. Draft now uses Next 15's default Webpack mode; nginx
+  targets the verified owned-network private container address without adding egress.
+- Candidate HTTPS proof passed on the production host: unsigned API 401, signed
+  bootstrap 307, representative frontend 200 and authenticated cell database API
+  200. The template intentionally has no root page, so the disposable proof writes
+  a representative page through the normal fenced workspace API. All synthetic
+  Docker resources and its nginx vhost were removed afterwards.
+- Public MAX runtime/start/preview-session now select the durable cell path, with
+  no legacy fallback after cell ownership. Unsupported public config edits,
+  publication, stop/keepalive and logs fail closed. Sync-kit is read-only for cells.
+- Lifecycle ingress synchronization reacquires the workspace operation lock and
+  validates both operation identity and fencing epoch; delayed lifecycle replies
+  cannot republish or remove newer ingress. Signed query values are redacted in logs.
+- This follow-up candidate still needs its own final gates, push and deployment.
+  Owner-only enablement and the retained first generation have NOT run yet.
+  Do not claim full resident-agent or arbitrary dependency-install support.
+
+Follow-up pre-commit gates: release-critical API and cell suite **360 passed**;
+new MAX HTTP/ownership/locking regressions **10 passed**; legacy public/fork
+regressions **19 passed** on separate disposable PostgreSQL databases. Full
+orchestrator **676 passed, 5 skipped, 15 xfailed**. Ruff is clean in both apps;
+Mypy is clean for 244 API and 52 orchestrator source files. Independent review
+reports no remaining actionable findings in the complete follow-up slice. Dark
+cells also reject public source/legacy redirects/remix and non-owner direct forks.

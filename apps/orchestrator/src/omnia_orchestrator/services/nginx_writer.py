@@ -22,6 +22,7 @@ down (it is shared with other tenants).
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import re
 from contextlib import suppress
@@ -39,6 +40,11 @@ log = structlog.get_logger("omnia_orchestrator.nginx")
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,253}[a-z0-9])?$")
 _ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/[A-Za-z0-9_./-]+$")
 _VHOST_TEMPLATE_MARKER = "# omnia vhost template: html-no-store-v3"
+_RFC1918_V4_NETWORKS = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
 
 
 def dev_host(slug: str) -> str:
@@ -161,7 +167,42 @@ def _inspector_location() -> str:
     }}"""
 
 
-def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
+def _validate_upstream_host(upstream_host: str) -> str:
+    """Allow only canonical IPv4 loopback or RFC1918 upstreams."""
+    try:
+        addr = ipaddress.IPv4Address(upstream_host)
+    except ipaddress.AddressValueError as exc:
+        raise OrchestratorError(
+            code="validation_failed",
+            message=f"refusing to write nginx site for unsafe upstream host: {upstream_host!r}",
+            status_code=400,
+        ) from exc
+    if str(addr) != upstream_host:
+        raise OrchestratorError(
+            code="validation_failed",
+            message=(
+                "refusing to write nginx site for non-canonical upstream host: "
+                f"{upstream_host!r}"
+            ),
+            status_code=400,
+        )
+    if upstream_host == "127.0.0.1":
+        return upstream_host
+    if any(addr in network for network in _RFC1918_V4_NETWORKS):
+        return upstream_host
+    raise OrchestratorError(
+        code="validation_failed",
+        message=f"refusing to write nginx site for non-private upstream host: {upstream_host!r}",
+        status_code=400,
+    )
+
+
+def _proxy_location(
+    port: int,
+    *,
+    inject_inspector: bool = False,
+    upstream_host: str = "127.0.0.1",
+) -> str:
     # `$omnia_connection_upgrade` is defined once in conf.d/omnia-runtime.conf.
     # X-Frame-Options is hidden so the workspace can embed the preview iframe.
     #
@@ -170,6 +211,7 @@ def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
     # routes that to @omnia_waking, which boots the container and returns a
     # self-refreshing "waking up" page instead of a raw Bad Gateway. Once the
     # app is up the proxy_pass succeeds and @omnia_waking is never reached.
+    upstream_host = _validate_upstream_host(upstream_host)
     inspector_filter = ""
     if inject_inspector:
         # This is deliberately platform-owned and injected into EVERY HTML
@@ -193,7 +235,7 @@ def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
     # Next.js content-hashes these assets, so their upstream immutable cache
     # policy is safe across deployments and should remain untouched.
     location ^~ /_next/static/ {{
-        proxy_pass http://127.0.0.1:{port};
+        proxy_pass http://{upstream_host}:{port};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -208,7 +250,7 @@ def _proxy_location(port: int, *, inject_inspector: bool = False) -> str:
     }}
 
     location / {{
-        proxy_pass http://127.0.0.1:{port};
+        proxy_pass http://{upstream_host}:{port};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -258,7 +300,7 @@ def _acme_location() -> str:
     }}"""
 
 
-def _http_block(host: str, port: int) -> str:
+def _http_block(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> str:
     dev = _is_dev_host(host)
     inspector = f"\n{_inspector_location()}\n" if dev else ""
     return f"""\
@@ -272,12 +314,12 @@ server {{
 {_acme_location()}
 {inspector}
 
-{_proxy_location(port, inject_inspector=dev)}
+{_proxy_location(port, inject_inspector=dev, upstream_host=upstream_host)}
 }}
 """
 
 
-def _https_block(host: str, port: int) -> str:
+def _https_block(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> str:
     # Prefer a pre-issued wildcard cert (instant, reliable); else the per-host
     # acme cert dir.
     cert_dir = _wildcard_cert_dir(host) or f"{get_settings().acme_certs_dir}/{host}"
@@ -306,7 +348,7 @@ server {{
     add_header Strict-Transport-Security "max-age=31536000" always;
 {inspector}
 
-{_proxy_location(port, inject_inspector=dev)}
+{_proxy_location(port, inject_inspector=dev, upstream_host=upstream_host)}
 }}
 """
 
@@ -407,7 +449,7 @@ def _validate_host(host: str) -> None:
         )
 
 
-async def publish_http(host: str, port: int) -> None:
+async def publish_http(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> None:
     """Write the HTTP(:80) block for `host` and reload nginx (fast, ~1-2s).
 
     Makes the site reachable over HTTP immediately and able to answer the
@@ -415,9 +457,10 @@ async def publish_http(host: str, port: int) -> None:
     breaks the shared nginx config — we never leave the box in a failing state.
     """
     _validate_host(host)
+    upstream_host = _validate_upstream_host(upstream_host)
     path = _site_path(host)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_http_block(host, port), encoding="utf-8")
+    path.write_text(_http_block(host, port, upstream_host=upstream_host), encoding="utf-8")
     res = await _reload()
     if not res.ok:
         path.unlink(missing_ok=True)
@@ -430,26 +473,27 @@ async def publish_http(host: str, port: int) -> None:
     log.info("nginx.published_http", host=host, port=port)
 
 
-async def ensure_tls(host: str, port: int) -> bool:
+async def ensure_tls(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> bool:
     """Issue/refresh a cert and swap the site to HTTPS. Returns True iff live.
 
     Slow (cert issuance is ~30-60s). Fail-soft: any failure leaves the HTTP
     block in place. Safe to call repeatedly (cert reuse via certbot).
     """
     _validate_host(host)
+    upstream_host = _validate_upstream_host(upstream_host)
     if not get_settings().enable_tls:
         return False
     if not await _issue_cert(host):
         return False
     path = _site_path(host)
-    path.write_text(_https_block(host, port), encoding="utf-8")
+    path.write_text(_https_block(host, port, upstream_host=upstream_host), encoding="utf-8")
     res = await _reload()
     if res.ok:
         log.info("nginx.published_https", host=host, port=port)
         return True
     # Cert exists but the HTTPS block won't load — revert to HTTP.
     log.warning("nginx.https_reload_failed", host=host, stderr=res.stderr[-300:])
-    path.write_text(_http_block(host, port), encoding="utf-8")
+    path.write_text(_http_block(host, port, upstream_host=upstream_host), encoding="utf-8")
     await _reload()
     return False
 

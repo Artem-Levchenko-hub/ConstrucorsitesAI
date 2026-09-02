@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from omnia_api.core.deps import get_current_user
 from omnia_api.main import app
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.project import Project
+from omnia_api.models.project_cell import ProjectCellWorkspace
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.services.attestation import build_attestation
@@ -164,6 +166,43 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     repeated = await ensure_current_release_proof(db_session, project)
     assert repeated.passed
     assert len(synced) == 1
+
+
+@pytest.mark.parametrize("existing_cell", [False, True])
+async def test_cell_proof_never_refreshes_legacy_runtime(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    existing_cell: bool,
+) -> None:
+    user, project, snapshot = await _project_with_snapshot(db_session)
+    project.template = "max_miniapp"
+    user.email_verified_at = datetime.now(UTC)
+    user.status = "active"
+    if existing_cell:
+        db_session.add(ProjectCellWorkspace(
+            project_id=project.id, owner_id=user.id,
+            provider="docker_owner_canary", state="ready",
+        ))
+    # Even an old valid proof must not authorize a different runtime path.
+    db_session.add(_passing_attestation(project, snapshot))
+    await db_session.commit()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "project_cell_docker_canary_enabled", not existing_cell)
+    monkeypatch.setattr(settings, "project_cell_canary_emails", user.email or "")
+
+    async def forbidden(*_args, **_kwargs):
+        pytest.fail("cell proof must not inspect or hot-reload a legacy runtime")
+
+    monkeypatch.setattr("omnia_api.services.deploy_attestation.orchestrator_client.get_status",
+                        forbidden)
+    monkeypatch.setattr("omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+                        forbidden)
+    proof = await ensure_current_release_proof(db_session, project)
+    assert proof.passed is False
+    assert proof.reason == "project_cell_publish_unavailable"
+    explicit = await resolve_deploy_proof(db_session, project, snapshot.commit_sha)
+    assert explicit.passed is False
+    assert explicit.reason == "project_cell_publish_unavailable"
 
 
 async def test_production_deploy_blocks_unproven_and_allows_proven(

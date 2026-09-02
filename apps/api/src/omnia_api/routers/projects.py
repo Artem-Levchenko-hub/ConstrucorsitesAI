@@ -43,7 +43,7 @@ from omnia_api.schemas.project import (
     ProjectUpdate,
     is_fullstack,
 )
-from omnia_api.services import max_client, orchestrator_client, repo_import
+from omnia_api.services import max_client, orchestrator_client, project_cell_runtime, repo_import
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.fork_recap import build_fork_recap
@@ -383,6 +383,9 @@ async def perform_fork(
     HEAD snapshot, committing — lives here so the two entrypoints can never
     drift in isolation behaviour.
     """
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(session, source)
+    if selection.selected and (current_user is None or current_user.id != source.owner_id):
+        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
 
     short_id = uuid4().hex[:6]

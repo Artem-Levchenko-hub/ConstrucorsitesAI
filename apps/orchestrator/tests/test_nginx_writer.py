@@ -137,6 +137,47 @@ def test_proxy_location_disables_html_cache_only() -> None:
     assert "proxy_hide_header Cache-Control" in default_location
 
 
+def test_blocks_accept_private_ipv4_upstream() -> None:
+    """Selected-cell previews may proxy to a private bridge IP, not loopback."""
+    for block in (
+        nginx_writer._http_block(
+            "test.example.com", 3200, upstream_host="10.23.45.67"
+        ),
+        nginx_writer._https_block(
+            "test.example.com", 3200, upstream_host="192.168.44.12"
+        ),
+    ):
+        assert "proxy_pass http://127.0.0.1:3200" not in block
+    assert "proxy_pass http://10.23.45.67:3200" in nginx_writer._http_block(
+        "test.example.com", 3200, upstream_host="10.23.45.67"
+    )
+    assert "proxy_pass http://192.168.44.12:3200" in nginx_writer._https_block(
+        "test.example.com", 3200, upstream_host="192.168.44.12"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "localhost",
+        "0.0.0.0",
+        "8.8.8.8",
+        "127.0.0.2",
+        "169.254.10.20",
+        "10.0.0.1:3000",
+        "10.0.0.1/path",
+        "http://10.0.0.1",
+        "010.0.0.1",
+        "::1",
+    ],
+)
+def test_proxy_location_rejects_unsafe_upstream_host(bad: str) -> None:
+    with pytest.raises(OrchestratorError) as excinfo:
+        nginx_writer._proxy_location(3200, upstream_host=bad)
+    assert excinfo.value.code == "validation_failed"
+
+
 def test_dev_vhost_injects_platform_inspector_for_old_projects() -> None:
     """The proxy—not project source—must deliver the picker to every dev HTML."""
     block = nginx_writer._https_block(
@@ -308,3 +349,97 @@ async def test_refresh_vhosts_rolls_back_on_bad_config(
     assert upgraded == 0
     # Reverted byte-for-byte.
     assert conf.read_text(encoding="utf-8") == original
+
+
+async def test_publish_http_keeps_legacy_loopback_default(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy callers still render loopback upstreams without passing the kwarg."""
+    import omnia_orchestrator.services.nginx_writer as nw
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    async def _ok() -> CmdResult:
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    monkeypatch.setattr(nw, "_reload", _ok)
+
+    await nw.publish_http("legacy.example.com", 3305)
+    conf = (tmp_path / "legacy.example.com.conf").read_text(encoding="utf-8")
+    assert "proxy_pass http://127.0.0.1:3305" in conf
+
+
+async def test_publish_http_rejects_invalid_upstream_before_write(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unsafe upstreams must fail before we touch the vhost file."""
+    import omnia_orchestrator.services.nginx_writer as nw
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    with pytest.raises(OrchestratorError) as excinfo:
+        await nw.publish_http("unsafe.example.com", 3306, upstream_host="8.8.8.8")
+    assert excinfo.value.code == "validation_failed"
+    assert not (tmp_path / "unsafe.example.com.conf").exists()
+
+
+async def test_ensure_tls_writes_private_upstream(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TLS publish preserves a validated private bridge IP upstream."""
+    import omnia_orchestrator.services.nginx_writer as nw
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    async def _ok() -> CmdResult:
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    async def _cert_ok(_host: str) -> bool:
+        return True
+
+    monkeypatch.setattr(nw, "_reload", _ok)
+    monkeypatch.setattr(nw, "_issue_cert", _cert_ok)
+
+    assert await nw.ensure_tls(
+        "private.example.com", 3310, upstream_host="172.16.5.9"
+    )
+    conf = (tmp_path / "private.example.com.conf").read_text(encoding="utf-8")
+    assert "listen 443 ssl" in conf
+    assert "proxy_pass http://172.16.5.9:3310" in conf
+
+
+async def test_ensure_tls_rejects_invalid_upstream_before_cert_issue(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unsafe upstreams must fail before any cert issuance side effect."""
+    import omnia_orchestrator.services.nginx_writer as nw
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    called = False
+
+    async def _boom(_host: str) -> bool:
+        nonlocal called
+        called = True
+        raise AssertionError("_issue_cert should not run for invalid upstreams")
+
+    monkeypatch.setattr(nw, "_issue_cert", _boom)
+
+    with pytest.raises(OrchestratorError) as excinfo:
+        await nw.ensure_tls("unsafe.example.com", 3307, upstream_host="8.8.8.8")
+    assert excinfo.value.code == "validation_failed"
+    assert called is False

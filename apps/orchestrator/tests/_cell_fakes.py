@@ -200,6 +200,7 @@ class FakeDockerBackend:
             volumes=tuple(spec.volumes),
             mounts=tuple(spec.mounts),
             network_names=tuple(spec.network_names),
+            network_ipv4={name: "172.30.0.2" for name in spec.network_names},
             state="exited" if spec.helper else "created",
             helper=spec.helper,
             tmpfs=tuple(sorted(actual_tmpfs)),

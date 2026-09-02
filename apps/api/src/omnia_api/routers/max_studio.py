@@ -34,7 +34,7 @@ from omnia_api.schemas.max_studio import (
     MaxUsagePublic,
     MaxUsageStagePublic,
 )
-from omnia_api.services import orchestrator_client
+from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.deploy_attestation import ensure_current_release_proof
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
@@ -45,6 +45,13 @@ from omnia_api.services.max_project_kit import (
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
 log = structlog.get_logger(__name__)
+_CELL_MAX_CONFIG_READ_ONLY = (
+    "Для owner-only Project Cell MAX config пока только read-only"
+)
+
+
+def _coerce_preview_expiry(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 async def _owned_max_project(
@@ -173,8 +180,18 @@ async def create_max_preview_session(
     current_user: CurrentUserDep,
 ) -> MaxPreviewSessionPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    payload = await orchestrator_client.create_max_preview_session(project.id)
+    cell_preview = await project_cell_runtime.create_project_cell_preview_session(
+        session,
+        project,
+        owner=current_user,
+    )
     response.headers["Cache-Control"] = "no-store"
+    if cell_preview is not None:
+        return MaxPreviewSessionPublic(
+            url=cell_preview.bootstrap_url,
+            expires_at=_coerce_preview_expiry(cell_preview.expires_at),
+        )
+    payload = await orchestrator_client.create_max_preview_session(project.id)
     return _preview_session_public(project, payload)
 
 
@@ -235,6 +252,27 @@ async def put_max_config(
         {"project_id": str(project_id)},
     )
     project = await _owned_max_project(session, project_id, current_user.id, lock=True)
+    cell_selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session,
+        project,
+        owner=current_user,
+        populate_existing=True,
+    )
+    if cell_selection.selected:
+        if cell_selection.workspace is not None:
+            workspace = cell_selection.workspace
+            if (
+                workspace.project_id != project.id
+                or workspace.owner_id != project.owner_id
+                or workspace.owner_id != current_user.id
+            ):
+                raise ApiError("conflict", "Project Cell workspace identity mismatch", 409)
+            project_cell_runtime.require_project_cell_runtime_lease(workspace)
+        raise ApiError(
+            "conflict",
+            _CELL_MAX_CONFIG_READ_ONLY,
+            status.HTTP_409_CONFLICT,
+        )
     active_generation = (
         await session.execute(
             select(GenerationRun.id).where(
@@ -342,6 +380,13 @@ async def sync_max_managed_kit(
         if record is not None
         else _default_config(project)
     )
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session,
+        project,
+        owner=current_user,
+    )
+    if selection.selected:
+        return _public(project, record)
     return await put_max_config(project_id, payload, session, current_user)
 
 

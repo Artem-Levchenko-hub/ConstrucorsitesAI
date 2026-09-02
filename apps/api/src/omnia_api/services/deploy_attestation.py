@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnia_api.core.config import Settings
 from omnia_api.models.attestation import Attestation
 from omnia_api.models.project import Project
+from omnia_api.models.project_cell import ProjectCellWorkspace
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.models.user import User
 from omnia_api.schemas.project import orchestrator_template
 from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
@@ -21,6 +23,7 @@ from omnia_api.services.attestation import (
     now_iso,
     verify_digest,
 )
+from omnia_api.services.project_cell_access import decide_project_cell_access
 from omnia_api.services.release_proof import run_release_proof
 
 
@@ -60,6 +63,17 @@ async def resolve_deploy_proof(
     requested_sha: str | None,
 ) -> DeployProof:
     """Resolve proof for the exact code that the orchestrator will deploy."""
+    if project.template == "max_miniapp":
+        workspace_id = await session.scalar(
+            select(ProjectCellWorkspace.id).where(
+                ProjectCellWorkspace.project_id == project.id,
+            )
+        )
+        owner = await session.get(User, project.owner_id)
+        if workspace_id is not None or (
+            owner is not None and decide_project_cell_access(owner).enabled
+        ):
+            return DeployProof(False, "project_cell_publish_unavailable")
     target_sha = requested_sha
     if target_sha is None:
         if project.current_snapshot_id is None:
@@ -119,7 +133,7 @@ async def ensure_current_release_proof(
     to the same tree that the launch workflow will publish.
     """
     current = await resolve_deploy_proof(session, project, None)
-    if current.passed or current.reason == "digest_invalid":
+    if current.passed or current.reason in {"digest_invalid", "project_cell_publish_unavailable"}:
         return current
     if project.current_snapshot_id is None:
         return DeployProof(False, "snapshot_missing")

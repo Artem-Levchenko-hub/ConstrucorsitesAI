@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -140,6 +141,9 @@ async def ensure_workspace(
             message=str(exc),
             status_code=500,
         ) from exc
+    manager = _maybe_docker_resource_manager(provider)
+    if manager is not None:
+        await _sync_lifecycle_draft_preview(manager, request.workspace_id, mutation)
     return WorkspaceResourceResponse(
         workspace_id=handle.workspace_id,
         state="resources_ready",
@@ -190,8 +194,12 @@ async def control_workspace(
             message=str(exc),
             status_code=500,
         ) from exc
-    if request.kind == "destroy":
-        await nginx_writer.unpublish(_draft_preview_host(workspace_id))
+    if request.kind in {"destroy", "wake"}:
+        manager = _maybe_docker_resource_manager(provider)
+        if manager is not None:
+            await _sync_lifecycle_draft_preview(
+                manager, workspace_id, mutation, remove=request.kind == "destroy",
+            )
     return await _resource_response(status, provider=provider)
 
 
@@ -395,7 +403,7 @@ async def exec_workspace_agent_command(
         names = exec_spec.resource_names
         credentials = manager.credential_store.load_or_create(workspace_id)
         had_draft_runtime = await manager.inspect_draft_runtime(workspace_id) is not None
-        restore_failure: CellResourceError | None = None
+        restore_failure: CellResourceError | OrchestratorError | None = None
         try:
             if had_draft_runtime:
                 await manager.docker.remove_container(names.draft_container_name())
@@ -419,7 +427,8 @@ async def exec_workspace_agent_command(
                 if had_draft_runtime:
                     try:
                         await manager.ensure_draft_runtime(workspace_id)
-                    except CellResourceError as exc:
+                        await _publish_draft_preview(manager, workspace_id)
+                    except (CellResourceError, OrchestratorError) as exc:
                         restore_failure = exc
         except CellResourceError as exc:
             raise OrchestratorError(
@@ -677,6 +686,7 @@ def _draft_state_name(raw_state: str) -> Literal["running", "stopped", "failed"]
 
 
 def _bounded_redacted_text(text: str) -> str:
+    text = re.sub(r"([?&](?:signature|token)=)[^&\s]+", r"\1[REDACTED]", text)
     return _redact_exec_output(text)[:_MAX_DRAFT_LOG_TAIL]
 
 
@@ -692,14 +702,53 @@ async def _draft_runtime_log_tail(
     )
 
 
+async def _sync_lifecycle_draft_preview(
+    manager: DockerCellResourceManager,
+    workspace_id: UUID,
+    mutation: LifecycleMutation,
+    *,
+    remove: bool = False,
+) -> None:
+    # Lifecycle providers release this lock before returning. Reacquire it and
+    # recheck the operation so an older response cannot overwrite newer ingress.
+    async with manager.operation_lock.hold(workspace_id):
+        state = manager.state_store.load(workspace_id)
+        if (
+            state is None
+            or state.fencing_epoch != mutation.fencing_epoch
+            or state.last_operation_id != mutation.operation_id
+        ):
+            return
+        if remove:
+            await nginx_writer.unpublish(_draft_preview_host(workspace_id))
+        elif await manager.inspect_draft_runtime(workspace_id) is not None:
+            await _publish_draft_preview(manager, workspace_id)
+
+
 async def _publish_draft_preview(
     manager: DockerCellResourceManager,
     workspace_id: UUID,
 ) -> str:
-    port = await manager.acquire_draft_preview_port(workspace_id)
+    """Publish while the caller holds the workspace operation lock."""
+    state = manager.state_store.load(workspace_id)
+    draft = await manager.inspect_draft_runtime(workspace_id)
+    if state is None or state.resource_names is None or draft is None or draft.state != "running":
+        raise OrchestratorError(
+            code="container_failure", message="draft runtime is not running", status_code=503,
+        )
+    manager._verify_draft_container_record(draft, state)
+    # Docker 29 does not activate published ports on internal-only networks.
+    # The host can reach the bridge IP without granting the cell external egress.
+    upstream_host = draft.network_ipv4.get(state.resource_names.internal_network)
+    if not upstream_host:
+        raise OrchestratorError(
+            code="container_failure",
+            message="draft runtime has no internal address",
+            status_code=503,
+        )
     host = _draft_preview_host(workspace_id)
-    await nginx_writer.publish_http(host, port)
-    if await nginx_writer.ensure_tls(host, port) is False:
+    await nginx_writer.publish_http(host, 3000, upstream_host=upstream_host)
+    if await nginx_writer.ensure_tls(host, 3000, upstream_host=upstream_host) is False:
         await nginx_writer.unpublish(host)
         raise OrchestratorError(
             code="container_failure",

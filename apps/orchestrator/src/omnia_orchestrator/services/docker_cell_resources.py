@@ -6,7 +6,7 @@ import asyncio
 import json
 import os
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -152,6 +152,7 @@ class DockerContainerRecord(DockerResourceRecord):
     pids_limit: int = 128
     memory_limit_bytes: int = 0
     cpu_quota: float = 0.0
+    network_ipv4: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
