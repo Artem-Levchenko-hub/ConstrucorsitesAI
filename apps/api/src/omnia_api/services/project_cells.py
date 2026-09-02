@@ -5,7 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
@@ -18,9 +18,12 @@ from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorks
 from omnia_api.models.user import User
 
 ALLOWED_OPERATION_KINDS = frozenset(
-    {"ensure", "wake", "pause", "stop", "destroy", "status", "restore", "reconcile"}
+    {
+        "ensure", "wake", "pause", "stop", "destroy", "status", "restore", "reconcile",
+        "release",
+    }
 )
-ACTIVE_OPERATION_STATUSES = ("pending", "running")
+ACTIVE_OPERATION_STATUSES = ("pending", "waiting_capacity", "running")
 TERMINAL_OPERATION_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "indeterminate"}
 )
@@ -437,9 +440,12 @@ async def claim_cell_operation(
     operation_id: UUID,
 ) -> ProjectCellOperation:
     operation = await _locked_operation(session, operation_id)
-    if operation.status != "pending":
+    if operation.status not in {"pending", "waiting_capacity"}:
         raise ProjectCellStateConflict(f"cannot claim operation in state {operation.status!r}")
     operation.status = "running"
+    operation.attempt_count += 1
+    operation.capacity_reason = None
+    operation.next_attempt_at = None
     operation.started_at = datetime.now(UTC)
     await session.flush()
     return operation
@@ -492,6 +498,36 @@ async def mark_cell_operation_indeterminate(
     await session.flush()
 
 
+async def park_cell_operation_for_capacity(
+    session: AsyncSession,
+    operation_id: UUID,
+    *,
+    reason: str,
+    retry_after_seconds: int,
+) -> None:
+    if reason not in {
+        "insufficient_cpu",
+        "insufficient_memory",
+        "insufficient_disk",
+        "insufficient_inodes",
+        "daemon_filesystem_unverifiable",
+    }:
+        raise ProjectCellValidationError("unsupported capacity reason")
+    if not 1 <= retry_after_seconds <= 10:
+        raise ProjectCellValidationError("retry_after_seconds must be between 1 and 10")
+    operation = await _locked_operation(session, operation_id)
+    if operation.status != "running":
+        raise ProjectCellStateConflict(
+            f"cannot park operation in state {operation.status!r}"
+        )
+    operation.status = "waiting_capacity"
+    operation.capacity_reason = reason
+    operation.next_attempt_at = datetime.now(UTC) + timedelta(seconds=retry_after_seconds)
+    operation.error = None
+    operation.finished_at = None
+    await session.flush()
+
+
 async def claim_cell_operation_committed(
     session_factory: async_sessionmaker[AsyncSession],
     operation_id: UUID,
@@ -510,7 +546,7 @@ async def claim_cell_operation_committed(
         )
         if workspace is None:
             raise ProjectCellNotFound("Project Cell workspace was not found")
-        if locked_operation.status != "pending":
+        if locked_operation.status not in {"pending", "waiting_capacity"}:
             raise ProjectCellStateConflict(
                 f"cannot claim operation in state {locked_operation.status!r}"
             )
@@ -520,6 +556,9 @@ async def claim_cell_operation_committed(
         workspace.version += 1
         locked_operation.fencing_epoch = workspace.fencing_epoch
         locked_operation.status = "running"
+        locked_operation.attempt_count += 1
+        locked_operation.capacity_reason = None
+        locked_operation.next_attempt_at = None
         locked_operation.started_at = datetime.now(UTC)
         await session.flush()
 

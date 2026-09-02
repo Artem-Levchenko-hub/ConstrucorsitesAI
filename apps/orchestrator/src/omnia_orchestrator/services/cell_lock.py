@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+import re
 import stat
 import time
 from collections.abc import AsyncIterator, Callable
@@ -18,6 +19,7 @@ from omnia_orchestrator.core.cell_resources import WorkspaceLockTimeout, Workspa
 
 _LOCK_FILE_MODE = 0o600
 _LOCK_DIR_MODE = 0o700
+_LOCK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +121,15 @@ class WorkspaceOperationLock:
 
     @asynccontextmanager
     async def hold(self, workspace_id: UUID) -> AsyncIterator[None]:
+        async with self.hold_named(f"workspace-{workspace_id}"):
+            yield
+
+    @asynccontextmanager
+    async def hold_named(self, name: str) -> AsyncIterator[None]:
+        if _LOCK_NAME_RE.fullmatch(name) is None:
+            raise WorkspaceLockUnavailable("workspace_lock_unavailable")
         deadline = time.monotonic() + self.acquire_timeout_seconds
-        lock_path = self.root / "locks" / f"{workspace_id}.lock"
+        lock_path = self.root / "locks" / f"{name}.lock"
         _ensure_secure_dir(lock_path.parent, create=True)
         local_lock = self._process_locks.setdefault(str(lock_path), asyncio.Lock())
         acquired_local = False

@@ -11,6 +11,7 @@ from omnia_orchestrator.core.cell_resources import (
     LifecycleMutation,
     identity_labels,
 )
+from omnia_orchestrator.core.config import Settings
 from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
 
 
@@ -22,7 +23,6 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "cell_postgres_image": "",
         "cell_redis_image": "",
         "cell_backup_image": "",
-        "cell_max_active_bundles": 1,
         "cell_bundle_cpu_cores": 2.0,
         "cell_bundle_memory_bytes": 4 * 1024**3,
         "cell_host_cpu_reserve_cores": 2.0,
@@ -73,6 +73,13 @@ def test_profile_defaults_are_dark_but_enabled_provider_requires_digest_images()
                 cell_backup_image="alpine@sha256:" + "2" * 64,
             )
         )
+
+
+def test_capacity_profile_has_no_numerical_bundle_gate() -> None:
+    profile = CellResourceProfile.from_settings(_settings())
+
+    assert "cell_max_active_bundles" not in Settings.model_fields
+    assert "max_active_bundles" not in profile.__dataclass_fields__
 
 
 def test_lifecycle_mutation_requires_sha256_digest() -> None:

@@ -39,6 +39,7 @@ from omnia_api.models.account import BusinessEntitlement, BusinessMember
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_cell import ProjectCellOperation
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
@@ -114,10 +115,14 @@ from omnia_api.services.file_extractor import (
 )
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
+    GenerationDispatch,
     compile_terminal_run_memory,
     finalize_generation_run,
+    load_generation_dispatch,
     reserve_generation_run,
     set_generation_run_status,
+    store_generation_dispatch,
+    write_capacity_dispatch_claim,
 )
 from omnia_api.services.image_resolver import resolve_images
 from omnia_api.services.intent_triage import (
@@ -134,6 +139,10 @@ from omnia_api.services.link_validator import (
 from omnia_api.services.llm_client import set_free_generation, stream_chat_completion
 from omnia_api.services.multipass_generator import multipass_generate
 from omnia_api.services.preset_classifier import classify_preset
+from omnia_api.services.project_cell_capacity import (
+    capacity_admission_event,
+    clear_capacity_admission_event,
+)
 from omnia_api.services.project_memory import record_run_artifacts, render_project_memory_context
 from omnia_api.services.prompt_builder import (
     KIT_FILES,
@@ -178,6 +187,102 @@ _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 # this map only gives the local process a strong reference. Cancellation travels
 # through Redis, so it still reaches a task started by another API process.
 _PROMPT_TASKS: dict[UUID, asyncio.Task[None]] = {}
+_CAPACITY_DISPATCH_LEASE_SECONDS = 30
+_CAPACITY_DISPATCH_HEARTBEAT_SECONDS = 10
+
+
+def _capacity_dispatch_lock_key(run_id: UUID) -> int:
+    """Return a stable PostgreSQL-compatible signed bigint for diagnostics/tests."""
+
+    raw = ((run_id.int >> 64) ^ run_id.int) & ((1 << 64) - 1)
+    return raw - (1 << 64) if raw >= (1 << 63) else raw
+
+
+async def _try_claim_capacity_dispatch(session: AsyncSession, run_id: UUID) -> bool:
+    """Probe the database advisory primitive used by integration race tests."""
+
+    result = await session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _capacity_dispatch_lock_key(run_id)},
+    )
+    return bool(result.scalar_one())
+
+
+def _capacity_dispatch_claim(run: GenerationRun) -> tuple[UUID, datetime] | None:
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    raw = state.get("capacity_dispatch_claim")
+    if not isinstance(raw, dict) or set(raw) != {"token", "expires_at"}:
+        return None
+    try:
+        token = UUID(str(raw["token"]))
+        expires_at = datetime.fromisoformat(str(raw["expires_at"]))
+    except (TypeError, ValueError):
+        return None
+    if expires_at.tzinfo is None:
+        return None
+    return token, expires_at.astimezone(UTC)
+
+
+def _write_capacity_dispatch_claim(
+    run: GenerationRun,
+    *,
+    token: UUID,
+    now: datetime | None = None,
+) -> None:
+    write_capacity_dispatch_claim(
+        run,
+        token=token,
+        lease_seconds=_CAPACITY_DISPATCH_LEASE_SECONDS,
+        now=now,
+    )
+
+
+async def _renew_capacity_dispatch_claim(run_id: UUID, token: UUID) -> str:
+    """Renew only a queued lease; identify pre-queue and admitted states."""
+
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        run = (
+            await session.execute(
+                select(GenerationRun)
+                .where(GenerationRun.id == run_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
+            return "terminal"
+        if run.status == "pending":
+            return "prequeue"
+        if run.status == "running":
+            return "admitted"
+        claim = _capacity_dispatch_claim(run)
+        if claim is None or claim[0] != token:
+            return "lost"
+        _write_capacity_dispatch_claim(run, token=token)
+        await session.commit()
+        return "renewed"
+
+
+async def _wait_for_capacity_dispatch_lease_loss(run_id: UUID, token: UUID) -> str:
+    valid_until = asyncio.get_running_loop().time() + _CAPACITY_DISPATCH_LEASE_SECONDS
+    entered_queue = False
+    while True:
+        await asyncio.sleep(_CAPACITY_DISPATCH_HEARTBEAT_SECONDS)
+        try:
+            state = await _renew_capacity_dispatch_claim(run_id, token)
+        except Exception:
+            if entered_queue and asyncio.get_running_loop().time() >= valid_until:
+                return "lost"
+            continue
+        if state == "lost":
+            return "lost"
+        if state in {"admitted", "terminal"}:
+            return "closed"
+        if state == "renewed":
+            entered_queue = True
+            valid_until = (
+                asyncio.get_running_loop().time() + _CAPACITY_DISPATCH_LEASE_SECONDS
+            )
 
 
 async def _wait_for_generation_cancel(run_id: UUID) -> None:
@@ -199,18 +304,13 @@ async def _finalize_cancelled_generation(
 ) -> None:
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
-        msg = await session.get(Message, assistant_message_id)
-        if msg is not None and msg.tokens_out is None:
-            marker = "[Отменено пользователем]"
-            if marker not in (msg.content or ""):
-                msg.content = f"{msg.content.rstrip()}\n\n{marker}".strip()
-            msg.tokens_in = msg.tokens_in or 0
-            msg.tokens_out = 0
-        run = await session.get(GenerationRun, run_id)
+        run = await session.scalar(
+            select(GenerationRun)
+            .where(GenerationRun.id == run_id)
+            .with_for_update()
+        )
         if run is not None:
-            run.status = "cancelled"
-            run.finished_at = datetime.now(UTC)
-            await compile_terminal_run_memory(session, run)
+            await _apply_cancelled_generation_locked(session, run)
         await session.commit()
     await publish_event(
         project_id,
@@ -222,6 +322,63 @@ async def _finalize_cancelled_generation(
     )
 
 
+async def _apply_cancelled_generation_locked(
+    session: AsyncSession,
+    run: GenerationRun,
+) -> None:
+    """Terminalize a locked run, assistant row and waiting operations atomically."""
+
+    msg = None
+    if run.assistant_message_id is not None:
+        msg = await session.scalar(
+            select(Message)
+            .where(
+                Message.id == run.assistant_message_id,
+                Message.project_id == run.project_id,
+            )
+            .with_for_update()
+        )
+    operations = list(
+        (
+            await session.execute(
+                select(ProjectCellOperation)
+                .where(
+                    ProjectCellOperation.generation_run_id == run.id,
+                    ProjectCellOperation.status.in_(("pending", "waiting_capacity")),
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(UTC)
+    if msg is not None and msg.tokens_out is None:
+        marker = "[Отменено пользователем]"
+        if marker not in (msg.content or ""):
+            msg.content = f"{msg.content.rstrip()}\n\n{marker}".strip()
+        msg.tokens_in = msg.tokens_in or 0
+        msg.tokens_out = 0
+    run.status = "cancelled"
+    run.finished_at = now
+    for operation in operations:
+        operation.status = "cancelled"
+        operation.capacity_reason = None
+        operation.next_attempt_at = None
+        operation.finished_at = now
+    await compile_terminal_run_memory(session, run)
+
+
+def _generation_cancel_protocol(
+    current_status: str,
+) -> Literal["terminal_without_signal", "signal_running", "already_requested"]:
+    if current_status in {"pending", "queued_for_capacity"}:
+        return "terminal_without_signal"
+    if current_status == "running":
+        return "signal_running"
+    return "already_requested"
+
+
 async def _run_tracked_prompt(
     work: Coroutine[Any, Any, None],
     *,
@@ -229,14 +386,53 @@ async def _run_tracked_prompt(
     project_id: UUID,
     assistant_message_id: UUID,
     label: str,
+    capacity_dispatch_token: UUID | None = None,
 ) -> None:
     """Run one prompt task while a Redis watcher makes Stop process-safe."""
 
-    await set_generation_run_status(run_id, "running")
+    if capacity_dispatch_token is None:
+        await set_generation_run_status(run_id, "running")
     work_task = asyncio.create_task(work)
     cancel_task = asyncio.create_task(_wait_for_generation_cancel(run_id))
+    lease_task = (
+        asyncio.create_task(
+            _wait_for_capacity_dispatch_lease_loss(run_id, capacity_dispatch_token)
+        )
+        if capacity_dispatch_token is not None
+        else None
+    )
+    admission_task = (
+        asyncio.create_task(capacity_admission_event(run_id).wait())
+        if capacity_dispatch_token is not None
+        else None
+    )
     try:
-        done, _ = await asyncio.wait({work_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
+        while True:
+            waiters: set[asyncio.Task[Any]] = {work_task, cancel_task}
+            if lease_task is not None:
+                waiters.add(lease_task)
+            if admission_task is not None:
+                waiters.add(admission_task)
+            done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            if admission_task is not None and admission_task in done:
+                admission_task = None
+                if lease_task is not None:
+                    lease_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await lease_task
+                    lease_task = None
+                continue
+            if lease_task is not None and lease_task in done:
+                lease_result = await lease_task
+                lease_task = None
+                if lease_result == "lost":
+                    work_task.cancel()
+                    cancel_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await work_task
+                    return
+                continue
+            break
         if cancel_task in done:
             work_task.cancel()
             try:
@@ -277,6 +473,11 @@ async def _run_tracked_prompt(
         )
     finally:
         cancel_task.cancel()
+        if lease_task is not None:
+            lease_task.cancel()
+        if admission_task is not None:
+            admission_task.cancel()
+        clear_capacity_admission_event(run_id)
         with suppress(Exception):
             await clear_generation_cancel(run_id)
 
@@ -288,6 +489,7 @@ def _spawn_tracked_prompt(
     project_id: UUID,
     assistant_message_id: UUID,
     label: str,
+    capacity_dispatch_token: UUID | None = None,
 ) -> None:
     task = asyncio.create_task(
         _run_tracked_prompt(
@@ -296,6 +498,7 @@ def _spawn_tracked_prompt(
             project_id=project_id,
             assistant_message_id=assistant_message_id,
             label=label,
+            capacity_dispatch_token=capacity_dispatch_token,
         )
     )
     _BACKGROUND_TASKS.add(task)
@@ -496,6 +699,7 @@ async def _prepare_max_runtime_context(
     agent_emit: Callable[[str, dict[str, Any]], Awaitable[None]],
     max_model_locked_files: frozenset[str],
     max_security_locked_files: frozenset[str],
+    capacity_dispatch_token: UUID | None = None,
 ) -> dict[str, Any]:
     project_cell_handle: ProjectCellExecutorHandle | None = None
     max_sandbox_capabilities: dict[str, Any] = {}
@@ -517,6 +721,16 @@ async def _prepare_max_runtime_context(
             generation_run_id=generation_run_id,
             legacy_execute=legacy_execute,
             vision_context=vision_context,
+            agent_emit=lambda payload: agent_emit(
+                "agent.step",
+                {
+                    **payload,
+                    "action": "capacity_wait",
+                    "human": payload.get("action", "Ожидаю ресурсы сервера"),
+                    "ok": True,
+                },
+            ),
+            capacity_dispatch_token=capacity_dispatch_token,
         )
     except project_cell_executor.ProjectCellExecutorUnavailable as cell_exc:
         await agent_emit(
@@ -1563,7 +1777,12 @@ def _recover_max_resume_prompt(candidates: Sequence[str]) -> str | None:
     return None
 
 
-def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
+def _spawn_process_prompt(
+    *,
+    run_id: UUID,
+    capacity_dispatch_token: UUID | None = None,
+    **kwargs: object,
+) -> None:
     """Fire-and-forget _process_prompt with a guaranteed strong reference.
 
     Any exception that escapes the coroutine is BOTH logged via structlog
@@ -1573,13 +1792,88 @@ def _spawn_process_prompt(*, run_id: UUID, **kwargs: object) -> None:
     """
     project_id: UUID = kwargs["project_id"]  # type: ignore[assignment]
     assistant_message_id: UUID = kwargs["assistant_message_id"]  # type: ignore[assignment]
+    typed_kwargs = cast(dict[str, Any], kwargs)
     _spawn_tracked_prompt(
-        _process_prompt(run_id=run_id, **kwargs),  # type: ignore[arg-type]
+        _process_prompt(
+            run_id=run_id,
+            capacity_dispatch_token=capacity_dispatch_token,
+            **typed_kwargs,
+        ),
         run_id=run_id,
         project_id=project_id,
         assistant_message_id=assistant_message_id,
         label="_process_prompt",
+        capacity_dispatch_token=capacity_dispatch_token,
     )
+
+
+async def resume_capacity_queued_generations() -> int:
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        runs = list(
+            (
+                await session.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.status == "queued_for_capacity")
+                    .order_by(GenerationRun.created_at, GenerationRun.id)
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        dispatches: list[tuple[GenerationRun, GenerationDispatch, UUID]] = []
+        now = datetime.now(UTC)
+        for run in runs:
+            if run.id in _PROMPT_TASKS:
+                continue
+            if not await _try_claim_capacity_dispatch(session, run.id):
+                continue
+            claim = _capacity_dispatch_claim(run)
+            if claim is not None and claim[1] > now:
+                continue
+            try:
+                dispatch = load_generation_dispatch(run)
+                user_message = await session.get(Message, dispatch.user_message_id)
+                assistant_message = await session.get(Message, dispatch.assistant_message_id)
+                if (
+                    run.assistant_message_id != dispatch.assistant_message_id
+                    or run.user_message_id != dispatch.user_message_id
+                    or user_message is None
+                    or assistant_message is None
+                    or user_message.project_id != dispatch.project_id
+                    or assistant_message.project_id != dispatch.project_id
+                    or user_message.role != "user"
+                    or assistant_message.role != "assistant"
+                ):
+                    raise ValueError("generation dispatch message ownership mismatch")
+            except ValueError as exc:
+                run.status = "failed"
+                run.error = f"invalid queued dispatch: {exc}"[:2000]
+                run.finished_at = datetime.now(UTC)
+                continue
+            claim_token = uuid4()
+            _write_capacity_dispatch_claim(run, token=claim_token, now=now)
+            dispatches.append((run, dispatch, claim_token))
+        await session.commit()
+        for run, dispatch, claim_token in dispatches:
+            _spawn_process_prompt(
+                run_id=run.id,
+                capacity_dispatch_token=claim_token,
+                project_id=dispatch.project_id,
+                user_id=dispatch.user_id,
+                user_message_id=dispatch.user_message_id,
+                assistant_message_id=dispatch.assistant_message_id,
+                current_snapshot_id=dispatch.current_snapshot_id,
+                prompt_text=dispatch.prompt_text,
+                model_id=dispatch.model_id,
+                force_model=dispatch.force_model,
+                is_free=dispatch.is_free,
+                free_business_id=dispatch.free_business_id,
+                orchestrate=dispatch.orchestrate,
+                selected_elements=dispatch.selected_elements,
+            )
+        return len(dispatches)
 
 
 async def _run_clarify(
@@ -2823,8 +3117,31 @@ async def post_prompt(
             run_id=generation_run.id,
         )
     else:
+        store_generation_dispatch(
+            generation_run,
+            GenerationDispatch(
+                schema_version=1,
+                project_id=project_id,
+                user_id=current_user.id,
+                user_message_id=user_msg.id,
+                assistant_message_id=assistant_msg.id,
+                current_snapshot_id=project.current_snapshot_id,
+                prompt_text=effective_prompt,
+                model_id=routing_model,
+                force_model=force_model,
+                is_free=is_free,
+                free_business_id=free_business_id,
+                orchestrate=orchestrate,
+                selected_elements=selected_dump,
+            ),
+        )
+        capacity_dispatch_token = (
+            uuid4() if project.template == "max_miniapp" else None
+        )
+        await session.commit()
         _spawn_process_prompt(
             run_id=generation_run.id,
+            capacity_dispatch_token=capacity_dispatch_token,
             project_id=project_id,
             user_id=current_user.id,
             user_message_id=user_msg.id,
@@ -2979,7 +3296,28 @@ async def cancel_active_generation(
             "no active generation",
             status.HTTP_409_CONFLICT,
         )
-    if run.status != "cancel_requested":
+    cancel_protocol = _generation_cancel_protocol(run.status)
+    if cancel_protocol == "terminal_without_signal":
+        await _apply_cancelled_generation_locked(session, run)
+        await session.commit()
+        await session.refresh(run)
+        try:
+            await publish_event(
+                project_id,
+                "generation.cancelled",
+                {
+                    "run_id": str(run.id),
+                    "message_id": (
+                        str(run.assistant_message_id)
+                        if run.assistant_message_id
+                        else None
+                    ),
+                },
+            )
+        except Exception:
+            pass
+        return run
+    if cancel_protocol == "signal_running":
         # Publish the process-independent signal before committing the status:
         # if Redis is unavailable, the request fails and the DB does not get
         # stuck forever in an unfulfillable cancel_requested state.
@@ -3721,6 +4059,7 @@ async def _process_prompt(
     free_business_id: UUID | None = None,
     orchestrate: bool = True,
     selected_elements: list[dict[str, Any]] | None = None,
+    capacity_dispatch_token: UUID | None = None,
 ) -> None:
     import logging as _log_mod
 
@@ -3820,6 +4159,9 @@ async def _process_prompt(
     project_memory_context = ""
     project_language: str = "ru"
     project_is_imported: bool = False
+    _project_cell_executor_handle: (
+        project_cell_executor.ProjectCellExecutorHandle | None
+    ) = None
 
     try:
         async with factory() as session:
@@ -4098,9 +4440,6 @@ async def _process_prompt(
                 emit=_agent_emit,
                 vision_context=_vision_context,
             )
-            _project_cell_executor_handle: (
-                project_cell_executor.ProjectCellExecutorHandle | None
-            ) = None
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             _max_shell_requested = (
                 project_template == "max_miniapp"
@@ -4216,6 +4555,7 @@ async def _process_prompt(
                     agent_emit=_agent_emit,
                     max_model_locked_files=MAX_MODEL_LOCKED_FILES,
                     max_security_locked_files=MAX_SECURITY_LOCKED_FILES,
+                    capacity_dispatch_token=capacity_dispatch_token,
                 )
                 _project_cell_executor_handle = _max_runtime["project_cell_handle"]
                 _base_agent_executor = _max_runtime["base_agent_executor"]
@@ -4584,6 +4924,17 @@ async def _process_prompt(
                             generation_run_id=run_id,
                             legacy_execute=_base_agent_executor,
                             vision_context=_vision_context,
+                            agent_emit=lambda payload: _agent_emit(
+                                "agent.step",
+                                {
+                                    **payload,
+                                    "action": "capacity_wait",
+                                    "human": payload.get(
+                                        "action", "Ожидаю ресурсы сервера"
+                                    ),
+                                    "ok": True,
+                                },
+                            ),
                         )
                     )
                 except project_cell_executor.ProjectCellExecutorUnavailable as _cell_exc:
@@ -8554,6 +8905,14 @@ async def _process_prompt(
             {"message_id": str(assistant_message_id), "error": str(e)},
         )
     finally:
+        if _project_cell_executor_handle is not None:
+            try:
+                await asyncio.shield(_project_cell_executor_handle.release())
+            except Exception as release_exc:
+                _log.warning(
+                    "Project Cell generation lease release failed",
+                    exc_info=release_exc,
+                )
         # Стрим завершён (done / error / отмена / краш) — снимаем горячее
         # состояние, чтобы reconnect после конца не пытался досматривать
         # мёртвый поток. Best-effort: ошибка Redis тут не должна валить ответ.

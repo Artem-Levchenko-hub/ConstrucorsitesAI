@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
-import { agentTranscriptTitle } from "@/lib/agent-transcript";
+import { CAPACITY_WAITING_COPY, agentTranscriptTitle } from "@/lib/agent-transcript";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -107,7 +107,8 @@ export function AgentTranscript({
 }) {
   const qc = useQueryClient();
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const open = Boolean(streaming) || detailsOpen;
+  const capacityWaiting = generationStatus === "queued_for_capacity";
+  const open = Boolean(streaming) || capacityWaiting || detailsOpen;
   // Which step rows are drilled-open (by index) — click a step to see inside it.
   const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
   // The durable GenerationRun timestamps survive F5. A newly-submitted optimistic
@@ -154,10 +155,13 @@ export function AgentTranscript({
     staleTime: Infinity,
   });
 
-  if (!projectId || !steps || steps.length === 0) return null;
+  const visibleSteps = steps ?? [];
+  if (!projectId || (visibleSteps.length === 0 && !capacityWaiting)) return null;
   const incomplete =
     !streaming &&
-    (generationStatus === "failed" || generationStatus === "cancelled" || steps.at(-1)?.ok === false);
+    (generationStatus === "failed" ||
+      generationStatus === "cancelled" ||
+      visibleSteps.at(-1)?.ok === false);
 
   return (
     <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
@@ -182,7 +186,11 @@ export function AgentTranscript({
           <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" />
         )}
         <span className={cn("text-xs font-medium", incomplete ? "text-red-600" : "text-fg-primary")}>
-          {agentTranscriptTitle(Boolean(streaming), generationStatus, steps.at(-1)?.ok === false)}
+          {agentTranscriptTitle(
+            Boolean(streaming),
+            generationStatus,
+            visibleSteps.at(-1)?.ok === false,
+          )}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
           {(streaming || elapsed > 0) && (
@@ -191,7 +199,9 @@ export function AgentTranscript({
               {formatElapsed(elapsed)} ·
             </span>
           )}
-          <span>{steps.length} шаг. · детали</span>
+          <span>
+            {visibleSteps.length > 0 ? `${visibleSteps.length} шаг. · детали` : "детали"}
+          </span>
         </span>
       </button>
 
@@ -204,10 +214,15 @@ export function AgentTranscript({
             transition={{ duration: 0.2, ease: EASE_OUT }}
             className="overflow-hidden border-t border-border-subtle"
           >
+            {capacityWaiting && visibleSteps.length === 0 && (
+              <p className="px-3 py-2 text-xs text-fg-secondary">
+                {CAPACITY_WAITING_COPY.detail}
+              </p>
+            )}
             <ol className="space-y-0.5 p-1.5">
-              {steps.map((s, i) => {
+              {visibleSteps.map((s, i) => {
                 const Icon = stepIcon(s);
-                const last = i === steps.length - 1;
+                const last = i === visibleSteps.length - 1;
                 const live =
                   streaming && last && s.kind === "step" && s.action !== "done";
                 const failed = s.ok === false;

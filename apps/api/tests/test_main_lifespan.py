@@ -24,6 +24,10 @@ async def test_lifespan_recovers_cell_operations_before_serving(
     async def start_listener() -> None:
         events.append("start_listener")
 
+    async def resume_capacity_queue() -> int:
+        events.append("resume_capacity_queue")
+        return 0
+
     async def stop_listener() -> None:
         events.append("stop_listener")
 
@@ -42,6 +46,7 @@ async def test_lifespan_recovers_cell_operations_before_serving(
         recover_cell_operations,
     )
     monkeypatch.setattr(main.hub, "start_listener", start_listener)
+    monkeypatch.setattr(main, "resume_capacity_queued_generations", resume_capacity_queue)
     monkeypatch.setattr(main.hub, "stop_listener", stop_listener)
     monkeypatch.setattr(main, "dispose_redis", lambda: dispose("dispose_redis"))
     monkeypatch.setattr(main, "dispose_engine", lambda: dispose("dispose_engine"))
@@ -54,6 +59,7 @@ async def test_lifespan_recovers_cell_operations_before_serving(
         "recover_generation_runs",
         "recover_cell_operations",
         "start_listener",
+        "resume_capacity_queue",
         "serving",
         "stop_listener",
         "dispose_redis",

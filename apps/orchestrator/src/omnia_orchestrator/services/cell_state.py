@@ -8,7 +8,7 @@ import secrets
 import stat
 import tempfile
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -413,6 +413,65 @@ class CellStateStore:
             provider_ref=provider_ref or workspace.provider_ref,
             resource_names=workspace.resource_names,
             operations=tuple(operations),
+        )
+        self._persist_state(next_state)
+        return next_state
+
+    def release_generation(
+        self,
+        workspace_id: UUID,
+        mutation: LifecycleMutation,
+        *,
+        generation_run_id: UUID | None,
+    ) -> CellWorkspaceState:
+        workspace = self._require_state(workspace_id)
+        operation = workspace.operation(mutation.operation_id)
+        if (
+            operation is None
+            or operation.kind != "release"
+            or operation.request_digest != mutation.request_digest
+            or operation.fencing_epoch != mutation.fencing_epoch
+            or workspace.last_operation_id != mutation.operation_id
+            or workspace.fencing_epoch != mutation.fencing_epoch
+        ):
+            raise RuntimeError("release operation fence mismatch")
+        if (
+            generation_run_id is None
+            or operation.generation_run_id != generation_run_id
+            or workspace.active_generation_run_id != generation_run_id
+            or workspace.active_generation_fencing_epoch is None
+            or workspace.active_generation_fencing_epoch >= mutation.fencing_epoch
+        ):
+            raise RuntimeError("generation lease mismatch")
+        retained_bundle_state = next(
+            (
+                item.bundle_state
+                for item in workspace.operations
+                if item.generation_run_id == generation_run_id
+                and item.fencing_epoch == workspace.active_generation_fencing_epoch
+                and item.bundle_state is not None
+            ),
+            workspace.bundle_state,
+        )
+        operations = tuple(
+            replace(
+                item,
+                status="completed",
+                phase="completed",
+                provider_ref=workspace.provider_ref,
+                bundle_state=retained_bundle_state,
+            )
+            if item.operation_id == mutation.operation_id
+            else item
+            for item in workspace.operations
+        )
+        next_state = replace(
+            workspace,
+            phase="completed",
+            bundle_state=retained_bundle_state,
+            active_generation_run_id=None,
+            active_generation_fencing_epoch=None,
+            operations=operations,
         )
         self._persist_state(next_state)
         return next_state

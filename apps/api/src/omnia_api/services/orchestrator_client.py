@@ -12,7 +12,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
 
@@ -27,7 +27,16 @@ log = structlog.get_logger(__name__)
 _REQUEST_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _CHECKPOINT_REF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
 _PROJECT_CELL_CONTROL_KINDS = frozenset(
-    {"wake", "pause", "stop", "destroy", "restore", "reconcile"}
+    {"wake", "pause", "stop", "destroy", "restore", "reconcile", "release"}
+)
+_PROJECT_CELL_CAPACITY_REASONS = frozenset(
+    {
+        "insufficient_cpu",
+        "insufficient_memory",
+        "insufficient_disk",
+        "insufficient_inodes",
+        "daemon_filesystem_unverifiable",
+    }
 )
 
 
@@ -51,7 +60,9 @@ class OrchestratorBadRequest(ApiError):
         message: str,
         status_code: int = 400,
         details: dict[str, Any] | None = None,
+        upstream_code: str | None = None,
     ) -> None:
+        self.upstream_code = upstream_code
         super().__init__(
             code="orchestrator_rejected",
             message=message,
@@ -77,14 +88,14 @@ def _validate_fencing_epoch(fencing_epoch: int) -> None:
 
 def _validate_checkpoint_ref(checkpoint_ref: str | None) -> None:
     if checkpoint_ref is not None and _CHECKPOINT_REF_RE.fullmatch(checkpoint_ref) is None:
-        raise ValueError(
-            "checkpoint_ref must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$"
-        )
+        raise ValueError("checkpoint_ref must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
 
 
-def _parse_orchestrator_4xx(payload: object) -> tuple[str, dict[str, Any] | None]:
+def _parse_orchestrator_4xx(
+    payload: object,
+) -> tuple[str, str | None, dict[str, Any] | None]:
     if type(payload) is not dict:
-        return "unknown", {"detail": payload}
+        return "unknown", None, {"detail": payload}
 
     body = cast(dict[str, Any], payload)
     error = body.get("error")
@@ -92,21 +103,22 @@ def _parse_orchestrator_4xx(payload: object) -> tuple[str, dict[str, Any] | None
         error_body = cast(dict[str, Any], error)
         raw_message = error_body.get("message")
         message = raw_message if type(raw_message) is str else "unknown"
+        raw_code = error_body.get("code")
+        code = raw_code if type(raw_code) is str else None
         raw_details = error_body.get("details")
         if type(raw_details) is dict:
-            return message, cast(dict[str, Any], raw_details)
+            return message, code, cast(dict[str, Any], raw_details)
 
         fallback: dict[str, Any] = {}
-        raw_code = error_body.get("code")
         if type(raw_code) is str:
             fallback["code"] = raw_code
         if raw_details is not None:
             fallback["details"] = raw_details
-        return message, fallback or None
+        return message, code, fallback or None
 
     raw_detail = body.get("detail")
     message = raw_detail if type(raw_detail) is str else "unknown"
-    return message, body
+    return message, None, body
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +168,10 @@ class ControlProjectCellResourcesRequest:
         _validate_request_digest(self.request_digest)
         if self.kind in {"pause", "stop", "restore"} and self.checkpoint_ref is None:
             raise ValueError(f"checkpoint_ref is required for {self.kind!r}")
-        if self.kind in {"wake", "destroy", "reconcile"} and self.checkpoint_ref is not None:
+        if (
+            self.kind in {"wake", "destroy", "reconcile", "release"}
+            and self.checkpoint_ref is not None
+        ):
             raise ValueError(f"checkpoint_ref is forbidden for {self.kind!r}")
 
     def to_wire_json(self) -> dict[str, object]:
@@ -281,9 +296,13 @@ class ProjectCellResourceResponse:
             or type(has_postgres) is not bool
             or type(has_redis) is not bool
             or type(has_draft_runtime) is not bool
-            or (draft_state is not None and (
-                type(draft_state) is not str or draft_state not in {"running", "stopped", "failed"}
-            ))
+            or (
+                draft_state is not None
+                and (
+                    type(draft_state) is not str
+                    or draft_state not in {"running", "stopped", "failed"}
+                )
+            )
             or (preview_url is not None and type(preview_url) is not str)
         )
         if invalid_shape:
@@ -485,9 +504,16 @@ class ProjectCellDraftApplyResponse:
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> ProjectCellDraftApplyResponse:
-        expected = {"state", "workspace_revision", "preview_url", "package_exit_code",
-                    "package_stderr_tail", "migration_exit_code", "migration_stderr_tail",
-                    "runtime_log_tail"}
+        expected = {
+            "state",
+            "workspace_revision",
+            "preview_url",
+            "package_exit_code",
+            "package_stderr_tail",
+            "migration_exit_code",
+            "migration_stderr_tail",
+            "runtime_log_tail",
+        }
         try:
             state = payload.get("state")
             if set(payload) - expected or state not in {"draft_running", "draft_failed"}:
@@ -499,9 +525,8 @@ class ProjectCellDraftApplyResponse:
                 if payload.get(key) is not None and type(payload[key]) is not int:
                     raise ValueError("invalid exit code")
             migration_exit_code = payload.get("migration_exit_code")
-            if (
-                (state == "draft_running" and migration_exit_code not in {None, 0})
-                or (state == "draft_failed" and migration_exit_code in {None, 0})
+            if (state == "draft_running" and migration_exit_code not in {None, 0}) or (
+                state == "draft_failed" and migration_exit_code in {None, 0}
             ):
                 raise ValueError("draft state does not match migration result")
             for key in ("package_stderr_tail", "migration_stderr_tail", "runtime_log_tail"):
@@ -549,12 +574,17 @@ def _validate_project_cell_preview_session(session: ProjectCellPreviewSession) -
     suffix = get_settings().project_cell_preview_host_suffix
     expected_host = f"cell-{session.workspace_id.hex[:12]}-dev.{suffix}"
     if (
-        preview.scheme != "https" or preview.hostname != expected_host
-        or preview.username is not None or preview.password is not None
-        or preview.port is not None or preview.path not in {"", "/"}
-        or preview.query or preview.fragment
+        preview.scheme != "https"
+        or preview.hostname != expected_host
+        or preview.username is not None
+        or preview.password is not None
+        or preview.port is not None
+        or preview.path not in {"", "/"}
+        or preview.query
+        or preview.fragment
         or (bootstrap.scheme, bootstrap.netloc) != (preview.scheme, preview.netloc)
-        or bootstrap.path != "/api/omnia/preview-session" or bootstrap.fragment
+        or bootstrap.path != "/api/omnia/preview-session"
+        or bootstrap.fragment
         or [key for key, _ in query] != ["expires", "signature"]
         or not query[0][1].isdigit()
         or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", query[1][1]) is None
@@ -603,6 +633,65 @@ class ProjectCellPreEffectRejection:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectCellCapacityRejection:
+    operation_id: UUID
+    fencing_epoch: int
+    request_digest: str
+    effect_applied: Literal[False]
+    reason: str
+    retry_after_seconds: int
+
+    def __post_init__(self) -> None:
+        _validate_fencing_epoch(self.fencing_epoch)
+        _validate_request_digest(self.request_digest)
+        if self.effect_applied is not False:
+            raise ValueError("effect_applied must be false for capacity waiting")
+        if self.reason not in _PROJECT_CELL_CAPACITY_REASONS:
+            raise ValueError("capacity reason is not allowlisted")
+        if not 1 <= self.retry_after_seconds <= 10:
+            raise ValueError("retry_after_seconds must be between 1 and 10")
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProjectCellCapacityRejection:
+        if type(payload) is not dict:
+            raise ValueError("capacity payload must be an object")
+        value = cast(dict[str, object], payload)
+        expected = {
+            "operation_id",
+            "fencing_epoch",
+            "request_digest",
+            "effect_applied",
+            "reason",
+            "retry_after_seconds",
+        }
+        if set(value) != expected:
+            raise ValueError("capacity payload keys are invalid")
+        if (
+            type(value.get("operation_id")) is not str
+            or type(value.get("fencing_epoch")) is not int
+            or type(value.get("request_digest")) is not str
+            or type(value.get("effect_applied")) is not bool
+            or type(value.get("reason")) is not str
+            or type(value.get("retry_after_seconds")) is not int
+        ):
+            raise ValueError("capacity payload field types are invalid")
+        return cls(
+            operation_id=UUID(cast(str, value["operation_id"])),
+            fencing_epoch=cast(int, value["fencing_epoch"]),
+            request_digest=cast(str, value["request_digest"]),
+            effect_applied=cast(Literal[False], value["effect_applied"]),
+            reason=cast(str, value["reason"]),
+            retry_after_seconds=cast(int, value["retry_after_seconds"]),
+        )
+
+
+class ProjectCellCapacityWait(RuntimeError):
+    def __init__(self, rejection: ProjectCellCapacityRejection) -> None:
+        self.rejection = rejection
+        super().__init__(rejection.reason)
+
+
 class ProjectCellOrchestratorClient(Protocol):
     async def ensure(
         self,
@@ -625,11 +714,34 @@ class HttpProjectCellOrchestratorClient:
         self,
         request: EnsureProjectCellResourcesRequest,
     ) -> ProjectCellResourceResponse:
-        payload = await _request(
-            "POST",
-            "/internal/workspaces/ensure",
-            json=request.to_wire_json(),
-        )
+        try:
+            payload = await _request(
+                "POST",
+                "/internal/workspaces/ensure",
+                json=request.to_wire_json(),
+            )
+        except OrchestratorBadRequest as exc:
+            if exc.status_code != 429:
+                raise
+            if exc.upstream_code != "capacity_wait":
+                raise OrchestratorUnavailable(
+                    "Orchestrator returned an invalid capacity-wait response"
+                ) from exc
+            try:
+                rejection = ProjectCellCapacityRejection.from_json(exc.details)
+            except (TypeError, ValueError) as parse_error:
+                raise OrchestratorUnavailable(
+                    "Orchestrator returned an invalid capacity-wait response"
+                ) from parse_error
+            if (
+                rejection.operation_id != request.operation_id
+                or rejection.fencing_epoch != request.fencing_epoch
+                or rejection.request_digest != request.request_digest
+            ):
+                raise OrchestratorUnavailable(
+                    "Orchestrator returned a mismatched capacity-wait response"
+                ) from exc
+            raise ProjectCellCapacityWait(rejection) from exc
         return ProjectCellResourceResponse.from_json(payload)
 
     async def control(
@@ -711,7 +823,7 @@ async def _request_raw(
             payload = resp.json()
         except Exception:
             payload = {"raw": resp.text[:300]}
-        message, details = _parse_orchestrator_4xx(payload)
+        message, upstream_code, details = _parse_orchestrator_4xx(payload)
         log.warning(
             "orchestrator.4xx",
             path=path,
@@ -722,6 +834,7 @@ async def _request_raw(
             f"Orchestrator rejected request: {message}",
             status_code=resp.status_code,
             details=details,
+            upstream_code=upstream_code,
         )
 
     try:
@@ -874,9 +987,15 @@ async def project_cell_apply_draft(
     if any(type(path) is not str for path in deletes) or set(files).intersection(deletes):
         raise ValueError("invalid draft deletes")
     payload = await _request(
-        "POST", f"/internal/workspaces/{workspace_id}/draft/apply",
-        json={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch,
-              "expected_revision": expected_revision, "files": files, "deletes": list(deletes)},
+        "POST",
+        f"/internal/workspaces/{workspace_id}/draft/apply",
+        json={
+            "generation_run_id": str(generation_run_id),
+            "fencing_epoch": fencing_epoch,
+            "expected_revision": expected_revision,
+            "files": files,
+            "deletes": list(deletes),
+        },
         timeout=660.0,
     )
     return ProjectCellDraftApplyResponse.from_json(payload)
@@ -890,7 +1009,8 @@ async def project_cell_create_preview_session(
 ) -> ProjectCellPreviewSession:
     _validate_fencing_epoch(fencing_epoch)
     payload = await _request(
-        "POST", f"/internal/workspaces/{workspace_id}/draft/preview-session",
+        "POST",
+        f"/internal/workspaces/{workspace_id}/draft/preview-session",
         json={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch},
     )
     response = ProjectCellPreviewSession.from_json(payload)

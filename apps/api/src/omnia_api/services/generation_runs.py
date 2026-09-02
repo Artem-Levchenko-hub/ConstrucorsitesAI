@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from fastapi import status
@@ -13,7 +16,255 @@ from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 
-ACTIVE_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
+ACTIVE_GENERATION_STATUSES = (
+    "pending",
+    "queued_for_capacity",
+    "running",
+    "cancel_requested",
+)
+INTERRUPTED_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationDispatch:
+    schema_version: int
+    project_id: UUID
+    user_id: UUID
+    user_message_id: UUID
+    assistant_message_id: UUID
+    current_snapshot_id: UUID | None
+    prompt_text: str
+    model_id: str
+    force_model: str | None
+    is_free: bool
+    free_business_id: UUID | None
+    orchestrate: bool
+    selected_elements: list[dict[str, object]] | None
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "project_id": str(self.project_id),
+            "user_id": str(self.user_id),
+            "user_message_id": str(self.user_message_id),
+            "assistant_message_id": str(self.assistant_message_id),
+            "current_snapshot_id": (
+                str(self.current_snapshot_id) if self.current_snapshot_id is not None else None
+            ),
+            "prompt_text": self.prompt_text,
+            "model_id": self.model_id,
+            "force_model": self.force_model,
+            "is_free": self.is_free,
+            "free_business_id": (
+                str(self.free_business_id) if self.free_business_id is not None else None
+            ),
+            "orchestrate": self.orchestrate,
+            "selected_elements": self.selected_elements,
+        }
+
+
+def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
+    state = run.agent_state
+    if type(state) is not dict or type(state.get("dispatch")) is not dict:
+        raise ValueError("generation dispatch is missing")
+    raw = state["dispatch"]
+    assert type(raw) is dict
+    expected = {
+        "schema_version",
+        "project_id",
+        "user_id",
+        "user_message_id",
+        "assistant_message_id",
+        "current_snapshot_id",
+        "prompt_text",
+        "model_id",
+        "force_model",
+        "is_free",
+        "free_business_id",
+        "orchestrate",
+        "selected_elements",
+    }
+    if set(raw) != expected:
+        raise ValueError("generation dispatch must contain exact keys")
+    if (
+        type(raw.get("schema_version")) is not int
+        or raw["schema_version"] != 1
+        or any(
+            type(raw.get(key)) is not str
+            for key in (
+                "project_id",
+                "user_id",
+                "user_message_id",
+                "assistant_message_id",
+                "prompt_text",
+                "model_id",
+            )
+        )
+        or (
+            raw.get("current_snapshot_id") is not None
+            and type(raw["current_snapshot_id"]) is not str
+        )
+        or (raw.get("force_model") is not None and type(raw["force_model"]) is not str)
+        or type(raw.get("is_free")) is not bool
+        or (raw.get("free_business_id") is not None and type(raw["free_business_id"]) is not str)
+        or type(raw.get("orchestrate")) is not bool
+        or (raw.get("selected_elements") is not None and type(raw["selected_elements"]) is not list)
+    ):
+        raise ValueError("generation dispatch field types are invalid")
+    prompt_text = str(raw["prompt_text"])
+    model_id = str(raw["model_id"])
+    if not 1 <= len(prompt_text) <= 10_000 or not model_id:
+        raise ValueError("generation dispatch text fields are invalid")
+    selected = raw.get("selected_elements")
+    if selected is not None:
+        if any(type(item) is not dict for item in selected):
+            raise ValueError("generation dispatch selected elements are invalid")
+        try:
+            json.dumps(selected, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("generation dispatch selected elements are invalid") from exc
+    try:
+        dispatch = GenerationDispatch(
+            schema_version=1,
+            project_id=UUID(str(raw["project_id"])),
+            user_id=UUID(str(raw["user_id"])),
+            user_message_id=UUID(str(raw["user_message_id"])),
+            assistant_message_id=UUID(str(raw["assistant_message_id"])),
+            current_snapshot_id=(
+                UUID(str(raw["current_snapshot_id"]))
+                if raw.get("current_snapshot_id") is not None
+                else None
+            ),
+            prompt_text=prompt_text,
+            model_id=model_id,
+            force_model=(str(raw["force_model"]) if raw.get("force_model") is not None else None),
+            is_free=bool(raw["is_free"]),
+            free_business_id=(
+                UUID(str(raw["free_business_id"]))
+                if raw.get("free_business_id") is not None
+                else None
+            ),
+            orchestrate=bool(raw["orchestrate"]),
+            selected_elements=selected,
+        )
+    except ValueError as exc:
+        raise ValueError("generation dispatch UUID is invalid") from exc
+    if dispatch.project_id != run.project_id or dispatch.user_id != run.user_id:
+        raise ValueError("generation dispatch ownership mismatch")
+    return dispatch
+
+
+def store_generation_dispatch(run: GenerationRun, dispatch: GenerationDispatch) -> None:
+    if dispatch.project_id != run.project_id or dispatch.user_id != run.user_id:
+        raise ValueError("generation dispatch ownership mismatch")
+    state = dict(run.agent_state or {})
+    state["dispatch"] = dispatch.to_json()
+    run.agent_state = state
+
+
+def write_capacity_dispatch_claim(
+    run: GenerationRun,
+    *,
+    token: UUID,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> None:
+    """Persist a queue-only dispatch lease without discarding other agent state."""
+
+    current = now or datetime.now(UTC)
+    state = dict(run.agent_state) if isinstance(run.agent_state, dict) else {}
+    state["capacity_dispatch_claim"] = {
+        "token": str(token),
+        "expires_at": (current + timedelta(seconds=lease_seconds)).isoformat(),
+    }
+    run.agent_state = state
+
+
+def capacity_dispatch_claim_token(run: GenerationRun) -> UUID | None:
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    raw = state.get("capacity_dispatch_claim")
+    if not isinstance(raw, dict) or set(raw) != {"token", "expires_at"}:
+        return None
+    try:
+        return UUID(str(raw["token"]))
+    except (TypeError, ValueError):
+        return None
+
+
+def has_capacity_dispatch_claim(run: GenerationRun) -> bool:
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    return "capacity_dispatch_claim" in state
+
+
+def capacity_admitted_dispatch_token(run: GenerationRun) -> UUID | None:
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    raw = state.get("capacity_admitted_dispatch_token")
+    if raw is None:
+        return None
+    try:
+        return UUID(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def has_capacity_admitted_dispatch_token(run: GenerationRun) -> bool:
+    state = run.agent_state if isinstance(run.agent_state, dict) else {}
+    return "capacity_admitted_dispatch_token" in state
+
+
+def mark_capacity_dispatch_admitted(run: GenerationRun, *, token: UUID) -> None:
+    state = dict(run.agent_state) if isinstance(run.agent_state, dict) else {}
+    state.pop("capacity_dispatch_claim", None)
+    state["capacity_admitted_dispatch_token"] = str(token)
+    run.agent_state = state
+
+
+async def promote_generation_after_admission(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    run_id: UUID,
+    dispatch_token: UUID | None,
+) -> Literal["admitted", "cancelled", "lost", "missing"]:
+    """CAS the exact pending/queued owner to running without reviving terminals."""
+
+    async with session_factory() as session:
+        run = await session.scalar(
+            select(GenerationRun)
+            .where(GenerationRun.id == run_id)
+            .with_for_update()
+        )
+        if run is None:
+            return "missing"
+        if run.status in {"cancel_requested", "cancelled"}:
+            return "cancelled"
+        if run.status == "queued_for_capacity":
+            if (
+                dispatch_token is None
+                or capacity_dispatch_claim_token(run) != dispatch_token
+            ):
+                return "lost"
+            mark_capacity_dispatch_admitted(run, token=dispatch_token)
+        elif run.status == "pending":
+            if (
+                has_capacity_dispatch_claim(run)
+                or has_capacity_admitted_dispatch_token(run)
+            ):
+                return "lost"
+            if dispatch_token is not None:
+                mark_capacity_dispatch_admitted(run, token=dispatch_token)
+        elif run.status == "running":
+            admitted_token = capacity_admitted_dispatch_token(run)
+            if dispatch_token is not None:
+                return "admitted" if admitted_token == dispatch_token else "lost"
+            return (
+                "lost" if has_capacity_admitted_dispatch_token(run) else "admitted"
+            )
+        else:
+            return "lost"
+        run.status = "running"
+        run.started_at = run.started_at or datetime.now(UTC)
+        await session.commit()
+        return "admitted"
 
 
 async def compile_terminal_run_memory(session: AsyncSession, run: GenerationRun) -> None:
@@ -153,7 +404,7 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
         (
             await session.execute(
                 select(GenerationRun)
-                .where(GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES))
+                .where(GenerationRun.status.in_(INTERRUPTED_GENERATION_STATUSES))
                 .with_for_update()
             )
         )
@@ -221,7 +472,13 @@ async def set_generation_run_status(
         run = await session.get(GenerationRun, run_id)
         if run is None:
             return
+        if run.status in {"completed", "failed", "cancelled"}:
+            await session.rollback()
+            return
         now = datetime.now(UTC)
+        if new_status == "running" and run.status == "queued_for_capacity":
+            await session.rollback()
+            return
         run.status = new_status
         if new_status == "running" and run.started_at is None:
             run.started_at = now

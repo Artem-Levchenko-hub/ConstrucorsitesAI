@@ -47,6 +47,7 @@ class MessagePublic(BaseModel):
     generation_status: (
         Literal[
             "pending",
+            "queued_for_capacity",
             "running",
             "cancel_requested",
             "cancelled",
@@ -138,6 +139,7 @@ class PromptResponse(BaseModel):
     replayed: bool = False
     run_status: Literal[
         "pending",
+        "queued_for_capacity",
         "running",
         "cancel_requested",
         "cancelled",
@@ -203,6 +205,7 @@ class GenerationRunPublic(BaseModel):
     assistant_message_id: UUID | None = None
     status: Literal[
         "pending",
+        "queued_for_capacity",
         "running",
         "cancel_requested",
         "cancelled",

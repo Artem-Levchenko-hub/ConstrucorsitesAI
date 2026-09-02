@@ -120,6 +120,11 @@ class ProjectCellOperation(Base):
     )
     result_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    capacity_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -132,14 +137,16 @@ class ProjectCellOperation(Base):
         CheckConstraint(
             (
                 "kind IN ('ensure', 'wake', 'pause', 'stop', 'destroy', "
-                "'status', 'restore', 'reconcile')"
+                "'status', 'restore', 'reconcile', 'release')"
             ),
             name="kind_allowed",
         ),
         CheckConstraint(
-            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled', 'indeterminate')",
+            "status IN ('pending', 'waiting_capacity', 'running', 'completed', 'failed', "
+            "'cancelled', 'indeterminate')",
             name="status_allowed",
         ),
+        CheckConstraint("attempt_count >= 0", name="attempt_count_nonnegative"),
         UniqueConstraint(
             "workspace_id",
             "idempotency_key",
@@ -149,7 +156,7 @@ class ProjectCellOperation(Base):
             "uq_project_cell_operations_one_active_per_workspace",
             "workspace_id",
             unique=True,
-            postgresql_where=text("status IN ('pending', 'running')"),
+            postgresql_where=text("status IN ('pending', 'waiting_capacity', 'running')"),
         ),
     )
 

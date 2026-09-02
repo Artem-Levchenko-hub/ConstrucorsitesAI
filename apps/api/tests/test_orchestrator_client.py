@@ -17,6 +17,8 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellAgentExecResponse,
     ProjectCellAgentWorkspaceSnapshot,
     ProjectCellAgentWriteResponse,
+    ProjectCellCapacityRejection,
+    ProjectCellCapacityWait,
     ProjectCellDraftApplyResponse,
     ProjectCellPreEffectRejection,
     ProjectCellPreviewSession,
@@ -533,6 +535,16 @@ def test_control_request_enforces_checkpoint_rules() -> None:
     with pytest.raises(ValueError):
         ControlProjectCellResourcesRequest(
             workspace_id=uuid4(),
+            kind="release",
+            checkpoint_ref="accepted-1",
+            operation_id=uuid4(),
+            fencing_epoch=1,
+            request_digest="c" * 64,
+        )
+
+    with pytest.raises(ValueError):
+        ControlProjectCellResourcesRequest(
+            workspace_id=uuid4(),
             kind="pause",
             checkpoint_ref="../escape",
             operation_id=uuid4(),
@@ -620,6 +632,121 @@ def test_pre_effect_rejection_requires_exact_typed_shape() -> None:
 
     with pytest.raises(ValueError):
         ProjectCellPreEffectRejection.from_json(payload | {"effect_applied": True})
+
+
+async def test_ensure_parses_only_exact_matching_capacity_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = EnsureProjectCellResourcesRequest(
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        owner_id=uuid4(),
+        generation_run_id=uuid4(),
+        profile_version="docker-owner-cell-resources-v1",
+        operation_id=uuid4(),
+        fencing_epoch=8,
+        request_digest="f" * 64,
+    )
+    details = {
+        "operation_id": str(request.operation_id),
+        "fencing_epoch": request.fencing_epoch,
+        "request_digest": request.request_digest,
+        "effect_applied": False,
+        "reason": "insufficient_disk",
+        "retry_after_seconds": 4,
+    }
+
+    async def capacity_wait(*_args: object, **_kwargs: object):
+        raise OrchestratorBadRequest(
+            "wait",
+            status_code=429,
+            details=details,
+            upstream_code="capacity_wait",
+        )
+
+    monkeypatch.setattr(orchestrator_client, "_request", capacity_wait)
+
+    with pytest.raises(ProjectCellCapacityWait) as caught:
+        await HttpProjectCellOrchestratorClient().ensure(request)
+
+    assert caught.value.rejection == ProjectCellCapacityRejection(
+        operation_id=request.operation_id,
+        fencing_epoch=8,
+        request_digest="f" * 64,
+        effect_applied=False,
+        reason="insufficient_disk",
+        retry_after_seconds=4,
+    )
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        None,
+        {"operation_id": str(uuid4())},
+        {
+            "operation_id": "00000000-0000-0000-0000-000000000071",
+            "fencing_epoch": 1,
+            "request_digest": "a" * 64,
+            "effect_applied": False,
+            "reason": "not_allowlisted",
+            "retry_after_seconds": 2,
+        },
+    ],
+)
+async def test_ensure_rejects_malformed_or_mismatched_capacity_wait(
+    monkeypatch: pytest.MonkeyPatch,
+    details: dict[str, object] | None,
+) -> None:
+    request = EnsureProjectCellResourcesRequest(
+        workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(), generation_run_id=uuid4(),
+        profile_version="docker-owner-cell-resources-v1", operation_id=uuid4(),
+        fencing_epoch=1, request_digest="a" * 64,
+    )
+
+    async def bad_wait(*_args: object, **_kwargs: object):
+        raise OrchestratorBadRequest("wait", status_code=429, details=details)
+
+    monkeypatch.setattr(orchestrator_client, "_request", bad_wait)
+
+    with pytest.raises(OrchestratorUnavailable):
+        await HttpProjectCellOrchestratorClient().ensure(request)
+
+
+async def test_ensure_rejects_exact_details_under_wrong_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = EnsureProjectCellResourcesRequest(
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        owner_id=uuid4(),
+        generation_run_id=uuid4(),
+        profile_version="docker-owner-cell-resources-v1",
+        operation_id=uuid4(),
+        fencing_epoch=3,
+        request_digest="b" * 64,
+    )
+    details = {
+        "operation_id": str(request.operation_id),
+        "fencing_epoch": request.fencing_epoch,
+        "request_digest": request.request_digest,
+        "effect_applied": False,
+        "reason": "insufficient_memory",
+        "retry_after_seconds": 2,
+    }
+
+    async def wrong_code(*_args: object, **_kwargs: object):
+        raise OrchestratorBadRequest(
+            "wait",
+            status_code=429,
+            details=details,
+            upstream_code="conflict",
+        )
+
+    monkeypatch.setattr(orchestrator_client, "_request", wrong_code)
+
+    with pytest.raises(OrchestratorUnavailable):
+        await HttpProjectCellOrchestratorClient().ensure(request)
 
 
 async def test_resource_response_rejects_invalid_shape(

@@ -197,6 +197,22 @@ class DockerOwnerCanaryProvider:
             )
         if action.kind == "reconcile":
             return await self.observe_resources(workspace_id, mutation)
+        if action.kind == "release":
+            state = self._require_resource_manager().state_store.load(workspace_id)
+            if state is None:
+                raise CellFenceRejected("workspace generation lease is not active")
+            existing = state.operation(mutation.operation_id)
+            generation_run_id = state.active_generation_run_id
+            if generation_run_id is None and existing is not None:
+                generation_run_id = existing.generation_run_id
+            if generation_run_id is None:
+                raise CellFenceRejected("workspace generation lease is not active")
+            handle = await self._require_resource_manager().release_generation(
+                workspace_id,
+                mutation,
+                generation_run_id=generation_run_id,
+            )
+            return self._status_from_handle(handle, mutation)
         raise WorkspaceProviderUnavailable(_UNAVAILABLE_DETAIL)
 
     def _require_resource_manager(self) -> DockerCellResourceManager:

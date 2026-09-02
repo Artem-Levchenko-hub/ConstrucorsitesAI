@@ -12,6 +12,7 @@ from omnia_orchestrator.core.workspace_provider import WorkspaceProvider
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from omnia_orchestrator.services.cell_checkpoint import CellCheckpointManager
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
+from omnia_orchestrator.services.cell_reservations import CellCapacityReservationStore
 from omnia_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
 from omnia_orchestrator.services.disabled_workspace_provider import DisabledWorkspaceProvider
 from omnia_orchestrator.services.docker_cell_resources import DockerCellResourceManager
@@ -38,17 +39,10 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
         # PostgreSQL reserves half the bundle, Redis one quarter. The agent
         # gets only the remainder; compilation must not use the 256 MiB
         # filesystem-helper limit or exceed admission's bundle reservation.
-        exec_memory_limit_bytes=(
-            profile.bundle_memory_bytes
-            - profile.bundle_memory_bytes // 2
-            - profile.bundle_memory_bytes // 4
-        ),
-        exec_cpu_cores=(
-            profile.bundle_cpu_cores
-            - max(profile.bundle_cpu_cores / 2.0, 0.5)
-            - max(profile.bundle_cpu_cores / 4.0, 0.25)
-        ),
+        exec_memory_limit_bytes=profile.executor_memory_bytes,
+        exec_cpu_cores=profile.executor_cpu_cores,
     )
+    operation_lock = WorkspaceOperationLock(state_root)
     resource_manager = DockerCellResourceManager(
         profile=profile,
         docker=docker_backend,
@@ -61,7 +55,11 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
         ),
         credential_store=credential_store,
         state_store=state_store,
-        operation_lock=WorkspaceOperationLock(state_root),
+        operation_lock=operation_lock,
+        capacity_lock=operation_lock,
+        capacity_reservations=CellCapacityReservationStore(
+            state_root / f"{state_store.root.name}-capacity-reservations"
+        ),
         namespace="test" if _is_test_namespace(state_store.root) else "prod",
     )
     checkpoint_manager = CellCheckpointManager(

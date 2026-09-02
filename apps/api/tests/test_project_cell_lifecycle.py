@@ -18,6 +18,8 @@ from omnia_api.models.user import User
 from omnia_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellCapacityRejection,
+    ProjectCellCapacityWait,
     ProjectCellResourceResponse,
 )
 from omnia_api.services.project_cell_lifecycle import (
@@ -389,6 +391,41 @@ async def test_confirmed_4xx_rejection_is_failed(
     assert outcome.status == "failed"
     assert outcome.error is not None
     assert client.ensure.await_count == 1
+
+
+async def test_exact_capacity_wait_is_persisted_for_retry(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = _factory(test_engine)
+    workspace, operation = await _reserve_operation(
+        factory,
+        kind="ensure",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+        idempotency_key="ensure:capacity-wait",
+        with_generation_run=True,
+    )
+    stored = await _read_operation(factory, operation.id)
+    client = ClientHarness.with_default_response(workspace.id, fence=1)
+    client.ensure.side_effect = ProjectCellCapacityWait(
+        ProjectCellCapacityRejection(
+            operation_id=operation.id,
+            fencing_epoch=1,
+            request_digest=stored.request_digest,
+            effect_applied=False,
+            reason="insufficient_memory",
+            retry_after_seconds=2,
+        )
+    )
+
+    outcome = await execute_cell_operation(factory, operation.id, client)
+    parked = await _read_operation(factory, operation.id)
+
+    assert outcome.status == "waiting_capacity"
+    assert parked.capacity_reason == "insufficient_memory"
+    assert parked.next_attempt_at is not None
+    assert parked.finished_at is None
+    assert parked.error is None
+    assert parked.attempt_count == 1
 
 
 @pytest.mark.parametrize(

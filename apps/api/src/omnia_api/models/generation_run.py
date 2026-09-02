@@ -74,7 +74,7 @@ class GenerationRun(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'running', 'cancel_requested', "
+            "status IN ('pending', 'queued_for_capacity', 'running', 'cancel_requested', "
             "'cancelled', 'completed', 'failed')",
             name="ck_generation_runs_status_allowed",
         ),
@@ -87,7 +87,9 @@ class GenerationRun(Base):
             "uq_generation_runs_one_active_per_project",
             "project_id",
             unique=True,
-            postgresql_where=text("status IN ('pending', 'running', 'cancel_requested')"),
+            postgresql_where=text(
+                "status IN ('pending', 'queued_for_capacity', 'running', 'cancel_requested')"
+            ),
         ),
         Index(
             "ix_generation_runs_project_id_created_at",

@@ -44,7 +44,6 @@ def _settings(state_path: str) -> SimpleNamespace:
         cell_postgres_image=_required_env("OMNIA_CELL_POSTGRES_IMAGE"),
         cell_redis_image=_required_env("OMNIA_CELL_REDIS_IMAGE"),
         cell_backup_image=_required_env("OMNIA_CELL_BACKUP_IMAGE"),
-        cell_max_active_bundles=1,
         cell_bundle_cpu_cores=1.0,
         cell_bundle_memory_bytes=1024**3,
         cell_host_cpu_reserve_cores=0.0,

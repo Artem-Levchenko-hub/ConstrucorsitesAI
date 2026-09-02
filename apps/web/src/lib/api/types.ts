@@ -419,6 +419,7 @@ export type PromptResponse = {
 
 export type GenerationRunStatus =
   | "pending"
+  | "queued_for_capacity"
   | "running"
   | "cancel_requested"
   | "cancelled"

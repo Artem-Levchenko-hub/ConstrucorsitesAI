@@ -12,6 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header
 
 from omnia_orchestrator.core.cell_resources import (
+    CellCapacityUnavailable,
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
@@ -127,6 +128,21 @@ async def ensure_workspace(
             ),
             mutation,
         )
+    except CellCapacityUnavailable as exc:
+        settings = get_settings()
+        raise OrchestratorError(
+            code="capacity_wait",
+            message=exc.reason,
+            status_code=429,
+            details={
+                "operation_id": str(mutation.operation_id),
+                "fencing_epoch": mutation.fencing_epoch,
+                "request_digest": mutation.request_digest,
+                "effect_applied": False,
+                "reason": exc.reason,
+                "retry_after_seconds": settings.cell_capacity_retry_after_seconds,
+            },
+        ) from exc
     except (CellFenceRejected, CellIdentityConflict, CellIndeterminateOperation) as exc:
         _raise_pre_effect_conflict(str(exc), mutation)
     except (WorkspaceProviderUnavailable, WorkspaceLockTimeout, WorkspaceLockUnavailable) as exc:

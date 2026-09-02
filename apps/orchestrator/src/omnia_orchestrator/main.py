@@ -13,6 +13,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
+from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import (
     OrchestratorError,
     orchestrator_error_handler,
@@ -21,6 +22,9 @@ from omnia_orchestrator.core.errors import (
 from omnia_orchestrator.core.sentry import init_sentry
 from omnia_orchestrator.routers import build_exe, byo, health, ingress, runtime, workspace
 from omnia_orchestrator.services import nginx_writer
+from omnia_orchestrator.services.cell_reservation_recovery import (
+    recover_workspace_provider_capacity,
+)
 from omnia_orchestrator.services.hibernate import (
     start_hibernate_loop,
     stop_hibernate_loop,
@@ -37,6 +41,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await nginx_writer.refresh_vhosts()
     except Exception as exc:  # never block startup on a best-effort migration
         _log.warning("startup.refresh_vhosts_failed", err=str(exc))
+    try:
+        await recover_workspace_provider_capacity(get_settings())
+    except Exception as exc:
+        # Recovery is fail-closed: an unreadable ledger is preserved and new
+        # admission will continue to account for it.
+        _log.warning("startup.capacity_reservation_recovery_failed", err=str(exc))
     await start_hibernate_loop()
     try:
         yield

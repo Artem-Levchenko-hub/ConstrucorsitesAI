@@ -6,7 +6,7 @@ import type {
 } from "@/lib/api/types";
 
 export const ACTIVE_GENERATION_STATUSES: ReadonlySet<GenerationRunStatus> =
-  new Set(["pending", "running", "cancel_requested"]);
+  new Set(["pending", "queued_for_capacity", "running", "cancel_requested"]);
 
 export function isGenerationActive(
   generation: Pick<GenerationRun, "status"> | null | undefined,

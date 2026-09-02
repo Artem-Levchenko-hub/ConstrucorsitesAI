@@ -240,6 +240,48 @@ async def test_selected_enabled_docker_owner_provider_is_ready(
     assert status.detail == "docker owner canary is ready"
 
 
+async def test_release_control_clears_generation_without_stopping_compute(tmp_path: Path) -> None:
+    manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=checkpoints,
+    )
+    workspace_id = uuid4()
+    run_id = uuid4()
+    spec = WorkspaceSpec(
+        workspace_id=workspace_id,
+        project_id=uuid4(),
+        owner_id=uuid4(),
+        profile_version="docker-owner-cell-resources-v1",
+        generation_run_id=run_id,
+    )
+    await provider.ensure(spec, LifecycleMutation(uuid4(), 1, "a" * 64))
+    running_before = {
+        name for name, record in docker.containers.items() if record.state == "running"
+    }
+
+    release_mutation = LifecycleMutation(uuid4(), 2, "b" * 64)
+    result = await provider.execute_control(
+        workspace_id,
+        ControlAction(kind="release"),
+        release_mutation,
+    )
+    replay = await provider.execute_control(
+        workspace_id,
+        ControlAction(kind="release"),
+        release_mutation,
+    )
+
+    state = manager.state_store.load(workspace_id)
+    assert state is not None
+    assert state.active_generation_run_id is None
+    assert result.state == "resources_ready"
+    assert replay == result
+    assert {
+        name for name, record in docker.containers.items() if record.state == "running"
+    } == running_before
+
+
 def test_enabled_factory_builds_live_resource_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -265,6 +307,10 @@ def test_enabled_factory_builds_live_resource_dependencies(
     assert provider.resource_manager is not None
     assert provider.checkpoint_manager is not None
     assert isinstance(provider.resource_manager.docker, DockerPyCellBackend)
+    assert provider.resource_manager.docker.exec_memory_limit_bytes == 1024**3
+    assert provider.resource_manager.docker.exec_cpu_cores == 0.5
+    assert provider.resource_manager.profile.full_quota.memory_bytes == 5 * 1024**3
+    assert provider.resource_manager.profile.full_quota.cpu_cores == 2.5
     assert provider.resource_manager.docker is provider.checkpoint_manager.docker
     assert (
         provider.resource_manager.state_store

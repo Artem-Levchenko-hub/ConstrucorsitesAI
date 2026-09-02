@@ -20,7 +20,6 @@ class CellResourceSettings(Protocol):
     cell_postgres_image: str
     cell_redis_image: str
     cell_backup_image: str
-    cell_max_active_bundles: int
     cell_bundle_cpu_cores: float
     cell_bundle_memory_bytes: int
     cell_host_cpu_reserve_cores: float
@@ -50,6 +49,27 @@ class CellResourceError(RuntimeError):
     """Base resource-management failure."""
 
 
+_CAPACITY_REASONS = frozenset(
+    {
+        "insufficient_cpu",
+        "insufficient_memory",
+        "insufficient_disk",
+        "insufficient_inodes",
+        "daemon_filesystem_unverifiable",
+    }
+)
+
+
+class CellCapacityUnavailable(CellResourceError):
+    """Physical host capacity rejected an operation before side effects."""
+
+    def __init__(self, reason: str) -> None:
+        if reason not in _CAPACITY_REASONS:
+            raise ValueError("unsupported capacity reason")
+        self.reason = reason
+        super().__init__(reason)
+
+
 class CellIdentityConflict(CellResourceError):
     """A named Docker resource exists with mismatched identity labels."""
 
@@ -75,12 +95,19 @@ class CellRestoreFailed(CellResourceError):
 
 
 @dataclass(frozen=True, slots=True)
+class CellResourceQuota:
+    cpu_cores: float
+    memory_bytes: int
+    disk_bytes: int
+    inodes: int
+
+
+@dataclass(frozen=True, slots=True)
 class CellResourceProfile:
     profile_version: str
     postgres_image: str
     redis_image: str
     backup_image: str
-    max_active_bundles: int
     bundle_cpu_cores: float
     bundle_memory_bytes: int
     host_cpu_reserve_cores: float
@@ -91,6 +118,63 @@ class CellResourceProfile:
     host_inode_reserve: int
     state_path: str
 
+    @property
+    def postgres_cpu_cores(self) -> float:
+        return max(self.bundle_cpu_cores / 2.0, 0.5)
+
+    @property
+    def redis_cpu_cores(self) -> float:
+        return max(self.bundle_cpu_cores / 4.0, 0.25)
+
+    @property
+    def executor_cpu_cores(self) -> float:
+        return self.bundle_cpu_cores - self.postgres_cpu_cores - self.redis_cpu_cores
+
+    @property
+    def draft_cpu_cores(self) -> float:
+        return self.executor_cpu_cores
+
+    @property
+    def postgres_memory_bytes(self) -> int:
+        return self.bundle_memory_bytes // 2
+
+    @property
+    def redis_memory_bytes(self) -> int:
+        return self.bundle_memory_bytes // 4
+
+    @property
+    def executor_memory_bytes(self) -> int:
+        return (
+            self.bundle_memory_bytes
+            - self.postgres_memory_bytes
+            - self.redis_memory_bytes
+        )
+
+    @property
+    def draft_memory_bytes(self) -> int:
+        return self.executor_memory_bytes
+
+    @property
+    def full_quota(self) -> CellResourceQuota:
+        """Maximum simultaneous PG + Redis + executor + draft footprint."""
+
+        return CellResourceQuota(
+            cpu_cores=(
+                self.postgres_cpu_cores
+                + self.redis_cpu_cores
+                + self.executor_cpu_cores
+                + self.draft_cpu_cores
+            ),
+            memory_bytes=(
+                self.postgres_memory_bytes
+                + self.redis_memory_bytes
+                + self.executor_memory_bytes
+                + self.draft_memory_bytes
+            ),
+            disk_bytes=self.required_free_disk_bytes,
+            inodes=self.required_free_inodes,
+        )
+
     @classmethod
     def from_settings(cls, settings: CellResourceSettings) -> CellResourceProfile:
         profile = cls(
@@ -98,7 +182,6 @@ class CellResourceProfile:
             postgres_image=str(settings.cell_postgres_image),
             redis_image=str(settings.cell_redis_image),
             backup_image=str(settings.cell_backup_image),
-            max_active_bundles=int(settings.cell_max_active_bundles),
             bundle_cpu_cores=float(settings.cell_bundle_cpu_cores),
             bundle_memory_bytes=int(settings.cell_bundle_memory_bytes),
             host_cpu_reserve_cores=float(settings.cell_host_cpu_reserve_cores),
@@ -233,6 +316,8 @@ class FilesystemCapacityEvidence:
     path: str
     free_bytes: int
     free_inodes: int
+    total_bytes: int | None = None
+    total_inodes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +337,9 @@ class HostCapacitySnapshot:
     disk_free_inodes: int
     active_bundle_count: int
     disk_path: str
+    memory_total_bytes: int | None = None
+    disk_total_bytes: int | None = None
+    disk_total_inodes: int | None = None
     filesystem_evidence: tuple[FilesystemCapacityEvidence, ...] = ()
     daemon: DockerDaemonIdentity | None = None
     failure_reason: str | None = None

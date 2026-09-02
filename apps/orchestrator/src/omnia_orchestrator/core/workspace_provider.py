@@ -51,7 +51,7 @@ WorkspaceResourceState = Literal[
 
 @dataclass(frozen=True, slots=True)
 class ControlAction:
-    kind: Literal["wake", "pause", "stop", "destroy", "restore", "reconcile"]
+    kind: Literal["wake", "pause", "stop", "destroy", "restore", "reconcile", "release"]
     checkpoint_ref: str | None = None
 
     def __post_init__(self) -> None:

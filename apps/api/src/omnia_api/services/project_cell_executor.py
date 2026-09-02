@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import posixpath
 import re
@@ -19,6 +20,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellWorkspace
 from omnia_api.models.user import User
 from omnia_api.services.agent_builder import Action, Executor
+from omnia_api.services.generation_runs import promote_generation_after_admission
 from omnia_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
@@ -30,6 +32,7 @@ from omnia_api.services.orchestrator_client import (
     project_cell_apply_draft,
     project_cell_create_preview_session,
 )
+from omnia_api.services.project_cell_capacity import signal_capacity_admitted, wait_for_capacity
 from omnia_api.services.project_cell_control import inspect_project_cell_control
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
 from omnia_api.services.project_cells import (
@@ -278,12 +281,75 @@ class ProjectCellExecutorHandle:
     export_files: Callable[[], Awaitable[dict[str, str]]]
     workspace_id: UUID
     create_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]]
+    release: Callable[[], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectCellPreviewSyncResult:
     generated_files: dict[str, str]
     failure: str | None
+
+
+async def _release_generation_lease(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    workspace_id: UUID,
+    generation_run_id: UUID,
+) -> None:
+    async with session_factory() as session:
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == workspace_id)
+            .with_for_update()
+        )
+        if workspace is None:
+            raise ProjectCellExecutorUnavailable("Project Cell workspace disappeared")
+        if workspace.generation_run_id is None:
+            return
+        if workspace.generation_run_id != generation_run_id:
+            raise ProjectCellExecutorUnavailable("Project Cell generation lease changed")
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace_id,
+            generation_run_id=generation_run_id,
+            kind="release",
+            idempotency_key=(
+                f"generation:{generation_run_id}:release:{_PROJECT_CELL_PROFILE_VERSION}"
+            ),
+            request={},
+        )
+        await session.commit()
+    outcome = await execute_cell_operation(
+        session_factory,
+        operation.id,
+        HttpProjectCellOrchestratorClient(),
+    )
+    response = outcome.response
+    if (
+        outcome.status != "completed"
+        or response is None
+        or response.workspace_id != workspace_id
+        or response.fencing_epoch is None
+        or response.state != "resources_ready"
+    ):
+        raise ProjectCellExecutorUnavailable(
+            f"Project Cell release failed: {outcome.status}"
+        )
+    async with session_factory() as session:
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == workspace_id)
+            .with_for_update()
+        )
+        if workspace is None:
+            raise ProjectCellExecutorUnavailable("Project Cell workspace disappeared")
+        if (
+            workspace.generation_run_id == generation_run_id
+            and workspace.fencing_epoch == response.fencing_epoch
+        ):
+            workspace.generation_run_id = None
+            workspace.updated_at = datetime.now(UTC)
+            await session.commit()
 
 
 async def maybe_create_project_cell_executor(
@@ -295,6 +361,8 @@ async def maybe_create_project_cell_executor(
     generation_run_id: UUID,
     legacy_execute: Executor,
     vision_context: str = "",
+    agent_emit: Callable[[dict[str, object]], Awaitable[None]] | None = None,
+    capacity_dispatch_token: UUID | None = None,
 ) -> ProjectCellExecutorHandle | None:
     if project_template != "max_miniapp" or not project_slug:
         return None
@@ -361,6 +429,18 @@ async def maybe_create_project_cell_executor(
         operation.id,
         HttpProjectCellOrchestratorClient(),
     )
+    if outcome.status == "waiting_capacity":
+        async def _discard_progress(_payload: dict[str, object]) -> None:
+            return None
+
+        outcome = await wait_for_capacity(
+            session_factory,
+            run_id=generation_run_id,
+            operation_id=operation.id,
+            client=HttpProjectCellOrchestratorClient(),
+            emit=agent_emit or _discard_progress,
+            dispatch_token=capacity_dispatch_token,
+        )
     response = outcome.response
     if (
         outcome.status != "completed"
@@ -381,6 +461,30 @@ async def maybe_create_project_cell_executor(
         raise ProjectCellExecutorUnavailable(
             f"Project Cell ensure failed: {outcome.status}"
         )
+    admission = await promote_generation_after_admission(
+        session_factory,
+        run_id=generation_run_id,
+        dispatch_token=capacity_dispatch_token,
+    )
+    if admission != "admitted":
+        if admission == "cancelled":
+            release_task = asyncio.create_task(
+                _release_generation_lease(
+                    session_factory=session_factory,
+                    workspace_id=workspace_id,
+                    generation_run_id=generation_run_id,
+                )
+            )
+            try:
+                await asyncio.shield(release_task)
+            except asyncio.CancelledError:
+                await release_task
+                raise
+            raise ProjectCellExecutorUnavailable("generation cancelled during admission")
+        raise ProjectCellExecutorUnavailable(
+            f"Project Cell admission ownership lost: {admission}"
+        )
+    signal_capacity_admitted(generation_run_id)
     try:
         snapshot = await project_cell_agent_bootstrap(
             workspace_id,
@@ -482,6 +586,13 @@ async def maybe_create_project_cell_executor(
 
     async def _snapshot_files() -> dict[str, str]:
         return dict(workspace_files)
+
+    async def _release() -> None:
+        await _release_generation_lease(
+            session_factory=session_factory,
+            workspace_id=workspace_id,
+            generation_run_id=leased_run_id,
+        )
 
     async def _sync_preview() -> ProjectCellPreviewSyncResult:
         nonlocal synced_files, dirty, workspace_revision, runtime_log_tail
@@ -716,6 +827,7 @@ async def maybe_create_project_cell_executor(
         export_files=_export_files,
         workspace_id=workspace_id,
         create_preview_session=_create_preview_session,
+        release=_release,
     )
 
 
@@ -745,7 +857,7 @@ async def _mark_workspace_ready(
             workspace.generation_run_id != generation_run_id
             or workspace.fencing_epoch != fencing_epoch
             or run is None
-            or run.status not in {"pending", "running"}
+            or run.status not in {"pending", "queued_for_capacity", "running"}
         ):
             raise ProjectCellExecutorUnavailable("Project Cell lease changed before activation")
         workspace.state = "ready"

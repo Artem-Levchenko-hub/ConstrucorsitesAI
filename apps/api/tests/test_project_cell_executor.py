@@ -20,11 +20,17 @@ from sqlalchemy.ext.asyncio import (
 from omnia_api.core.config import get_settings
 from omnia_api.models.base import Base
 from omnia_api.models.generation_run import GenerationRun
+from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
+from omnia_api.routers import messages
 from omnia_api.services import project_cell_executor
 from omnia_api.services.agent_builder import Action
+from omnia_api.services.generation_runs import (
+    promote_generation_after_admission,
+    write_capacity_dispatch_claim,
+)
 from omnia_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     ProjectCellAgentExecResponse,
@@ -307,6 +313,7 @@ async def _prepare_executor(
     cell_exec_result: dict[str, object] | None = None,
     hot_reload_result: dict[str, object] | None = None,
     hot_reload_results: list[dict[str, object]] | None = None,
+    capacity_dispatch_token: UUID | None = None,
 ) -> _ExecutorHarness:
     owner = await _new_user(db_session, "owner")
     project = await _new_project(db_session, owner)
@@ -548,6 +555,7 @@ async def _prepare_executor(
         user_id=owner.id,
         generation_run_id=expected_run_id,
         legacy_execute=legacy_execute,
+        capacity_dispatch_token=capacity_dispatch_token,
     )
     assert handle is not None
 
@@ -585,6 +593,70 @@ async def test_non_max_templates_skip_project_cell_executor() -> None:
     )
 
     assert handle is None
+
+
+async def test_immediate_ensure_with_dispatch_token_bootstraps_without_queueing(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    dispatch_token = uuid4()
+
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        capacity_dispatch_token=dispatch_token,
+    )
+
+    db_session.expire_all()
+    run = await db_session.get(GenerationRun, harness.run_id)
+    operations = list(
+        (
+            await db_session.execute(
+                select(ProjectCellOperation).where(
+                    ProjectCellOperation.generation_run_id == harness.run_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert run is not None and run.status == "running"
+    assert run.agent_state["capacity_admitted_dispatch_token"] == str(dispatch_token)
+    assert [(operation.kind, operation.status) for operation in operations] == [
+        ("ensure", "completed")
+    ]
+
+
+async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    owner = await _new_user(db_session, "pending-token-owner")
+    project = await _new_project(db_session, owner, label="pending-token")
+    run = await _new_run(db_session, project, owner, label="pending-token")
+    await db_session.commit()
+    tokens = (uuid4(), uuid4())
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    results = await asyncio.gather(
+        *(
+            promote_generation_after_admission(
+                factory,
+                run_id=run.id,
+                dispatch_token=token,
+            )
+            for token in tokens
+        )
+    )
+
+    assert sorted(results) == ["admitted", "lost"]
+    db_session.expire_all()
+    persisted = await db_session.get(GenerationRun, run.id)
+    assert persisted is not None and persisted.status == "running"
+    winner = tokens[results.index("admitted")]
+    assert persisted.agent_state["capacity_admitted_dispatch_token"] == str(winner)
 
 
 async def test_ready_owner_executor_bootstraps_workspace_and_syncs_preview(
@@ -1288,3 +1360,163 @@ async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
         )
 
     assert "workspace generation lease mismatch" in str(caught.value)
+
+
+async def test_queued_cancel_wins_concurrently_with_running_ensure_and_releases_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    owner = await _new_user(db_session, "cancel-admission-owner")
+    project = await _new_project(db_session, owner, label="cancel-admission")
+    assistant = Message(project_id=project.id, role="assistant", content="")
+    db_session.add(assistant)
+    await db_session.flush()
+    run = await _new_run(
+        db_session,
+        project,
+        owner,
+        label="cancel-admission",
+        status="queued_for_capacity",
+    )
+    run.assistant_message_id = assistant.id
+    dispatch_token = uuid4()
+    write_capacity_dispatch_claim(run, token=dispatch_token, lease_seconds=30)
+    await db_session.commit()
+    ensure_running = asyncio.Event()
+    cancellation_committed = asyncio.Event()
+    cancellation_signal = asyncio.Event()
+    executed_kinds: list[str] = []
+    signalled_runs: list[UUID] = []
+
+    async def ready_readiness(_user, _project_id):
+        return ProjectCellControlReadiness(
+            selected=True,
+            ready=True,
+            provider="docker_owner_canary",
+            reason="ready",
+        )
+
+    async def fake_execute_cell_operation(session_factory, operation_id, _client):
+        async with session_factory() as session:
+            operation = await session.get(ProjectCellOperation, operation_id)
+            assert operation is not None
+            executed_kinds.append(operation.kind)
+            operation.status = "running"
+            await session.commit()
+            workspace = await session.get(ProjectCellWorkspace, operation.workspace_id)
+            assert workspace is not None
+            workspace_id = workspace.id
+            fencing_epoch = operation.fencing_epoch
+        if operation.kind == "ensure":
+            ensure_running.set()
+            await cancellation_committed.wait()
+        async with session_factory() as session:
+            operation = await session.get(ProjectCellOperation, operation_id)
+            assert operation is not None
+            operation.status = "completed"
+            operation.finished_at = datetime.now(UTC)
+            await session.commit()
+        return SimpleNamespace(
+            operation_id=operation_id,
+            status="completed",
+            response=ProjectCellResourceResponse(
+                workspace_id=workspace_id,
+                state="resources_ready",
+                provider_ref="cell-cancel-admission",
+                fencing_epoch=fencing_epoch,
+                checkpoint_ref=None,
+                has_workspace=True,
+                has_agent_home=True,
+                has_postgres=True,
+                has_redis=True,
+            ),
+        )
+
+    async def forbidden_bootstrap(*_args, **_kwargs):
+        pytest.fail("cancelled admission must not start generation bootstrap")
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def signal_cancel(run_id: UUID) -> None:
+        signalled_runs.append(run_id)
+        cancellation_signal.set()
+
+    async def wait_for_cancel(_run_id: UUID) -> None:
+        await cancellation_signal.wait()
+
+    async def never_lose_lease(_run_id: UUID, _token: UUID) -> str:
+        await asyncio.Future()
+        return "lost"
+
+    monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", ready_readiness)
+    monkeypatch.setattr(
+        project_cell_executor,
+        "execute_cell_operation",
+        fake_execute_cell_operation,
+    )
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", forbidden_bootstrap)
+    monkeypatch.setattr(messages, "request_generation_cancel", signal_cancel)
+    monkeypatch.setattr(messages, "publish_event", noop)
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", wait_for_cancel)
+    monkeypatch.setattr(messages, "_wait_for_capacity_dispatch_lease_loss", never_lose_lease)
+    monkeypatch.setattr(messages, "_finalize_cancelled_generation", noop)
+    monkeypatch.setattr(messages, "set_generation_run_status", noop)
+    monkeypatch.setattr(messages, "_emergency_error", noop)
+    monkeypatch.setattr(messages, "clear_generation_cancel", noop)
+
+    task = asyncio.create_task(
+        messages._run_tracked_prompt(
+            project_cell_executor.maybe_create_project_cell_executor(
+                project_id=project.id,
+                project_slug=project.slug,
+                project_template="max_miniapp",
+                user_id=owner.id,
+                generation_run_id=run.id,
+                legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+                capacity_dispatch_token=dispatch_token,
+            ),
+            run_id=run.id,
+            project_id=project.id,
+            assistant_message_id=assistant.id,
+            label="cancel-during-admission",
+            capacity_dispatch_token=dispatch_token,
+        )
+    )
+    await ensure_running.wait()
+    async with AsyncSession(test_engine, expire_on_commit=False) as cancel_session:
+        cancelled = await messages.cancel_active_generation(
+            project.id,
+            cancel_session,
+            owner,
+        )
+        assert cancelled.status == "cancelled"
+    cancellation_committed.set()
+    await task
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        persisted_run = await session.get(GenerationRun, run.id)
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace).where(ProjectCellWorkspace.project_id == project.id)
+        )
+        operations = list(
+            (
+                await session.execute(
+                    select(ProjectCellOperation)
+                    .where(ProjectCellOperation.workspace_id == workspace.id)
+                    .order_by(ProjectCellOperation.fencing_epoch)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert persisted_run is not None and persisted_run.status == "cancelled"
+    assert workspace is not None and workspace.generation_run_id is None
+    assert signalled_runs == []
+    assert executed_kinds == ["ensure", "release"]
+    assert [(item.kind, item.status) for item in operations] == [
+        ("ensure", "completed"),
+        ("release", "completed"),
+    ]

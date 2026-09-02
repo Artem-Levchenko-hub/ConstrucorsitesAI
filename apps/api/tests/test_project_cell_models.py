@@ -33,6 +33,7 @@ OPERATION_KINDS = (
     "status",
     "restore",
     "reconcile",
+    "release",
 )
 OPERATION_STATUSES = (
     "pending",
@@ -41,6 +42,7 @@ OPERATION_STATUSES = (
     "failed",
     "cancelled",
     "indeterminate",
+    "waiting_capacity",
 )
 
 
@@ -137,6 +139,9 @@ async def test_project_cell_models_expose_exact_public_columns() -> None:
         "request_payload",
         "result_payload",
         "error",
+        "capacity_reason",
+        "next_attempt_at",
+        "attempt_count",
         "created_at",
         "started_at",
         "finished_at",
@@ -156,12 +161,13 @@ async def test_project_cell_metadata_matches_the_durable_contract() -> None:
     assert _check_expressions(operation) == {
         "ck_project_cell_operations_kind_allowed": (
             "kind IN ('ensure', 'wake', 'pause', 'stop', 'destroy', 'status', "
-            "'restore', 'reconcile')"
+            "'restore', 'reconcile', 'release')"
         ),
         "ck_project_cell_operations_status_allowed": (
-            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled', "
-            "'indeterminate')"
+            "status IN ('pending', 'waiting_capacity', 'running', 'completed', 'failed', "
+            "'cancelled', 'indeterminate')"
         ),
+        "ck_project_cell_operations_attempt_count_nonnegative": "attempt_count >= 0",
     }
     assert {constraint.name for constraint in workspace.constraints} >= {
         "uq_project_cell_workspaces_project_id"
@@ -196,7 +202,7 @@ async def test_project_cell_metadata_matches_the_durable_contract() -> None:
     assert active.unique is True
     assert [column.name for column in active.columns] == ["workspace_id"]
     assert str(active.dialect_options["postgresql"]["where"]) == (
-        "status IN ('pending', 'running')"
+        "status IN ('pending', 'waiting_capacity', 'running')"
     )
 
     assert _server_default_sql(workspace.c.provider_metadata) == "{}"

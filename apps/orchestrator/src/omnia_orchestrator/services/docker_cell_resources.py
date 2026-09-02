@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -26,6 +27,7 @@ from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
+from omnia_orchestrator.services.cell_reservations import CellCapacityReservationStore
 from omnia_orchestrator.services.cell_state import (
     CellCredentialStore,
     CellStateStore,
@@ -298,6 +300,8 @@ class DockerCellResourceManager:
     credential_store: CellCredentialStore
     state_store: CellStateStore
     operation_lock: WorkspaceOperationLock
+    capacity_lock: WorkspaceOperationLock | None = None
+    capacity_reservations: CellCapacityReservationStore | None = None
     namespace: str = "prod"
     draft_port_registry_path: str | None = None
 
@@ -387,6 +391,63 @@ class DockerCellResourceManager:
                 record_operation=True,
             )
 
+    async def release_generation(
+        self,
+        workspace_id: UUID,
+        mutation: LifecycleMutation,
+        *,
+        generation_run_id: UUID,
+    ) -> CellBundleHandle:
+        async with self.operation_lock.hold(workspace_id):
+            state = self._require_state(workspace_id)
+            if state.project_id is None or state.owner_id is None:
+                raise CellResourceError("workspace state missing immutable identity")
+            existing = state.operation(mutation.operation_id)
+            if existing is not None and existing.replay_completed_same_envelope(
+                mutation.request_digest,
+                mutation.fencing_epoch,
+            ):
+                return CellBundleHandle(
+                    workspace_id=workspace_id,
+                    provider_ref=state.provider_ref or self._provider_ref(workspace_id),
+                    state=state.bundle_state,
+                    fencing_epoch=mutation.fencing_epoch,
+                    resource_names=state.resource_names
+                    or CellResourceNames.for_workspace(
+                        workspace_id,
+                        namespace="test" if self.namespace == "test" else "prod",
+                    ),
+                )
+            spec = WorkspaceSpec(
+                workspace_id=workspace_id,
+                project_id=state.project_id,
+                owner_id=state.owner_id,
+                profile_version=state.profile_version,
+                generation_run_id=generation_run_id,
+            )
+            self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+            names = state.resource_names
+            if names is None:
+                raise CellResourceError("resource names missing")
+            await self.stateful_begin_or_replay(
+                spec,
+                mutation,
+                kind="release",
+                names=names,
+            )
+            released = self.state_store.release_generation(
+                workspace_id,
+                mutation,
+                generation_run_id=generation_run_id,
+            )
+            return CellBundleHandle(
+                workspace_id=workspace_id,
+                provider_ref=released.provider_ref or self._provider_ref(workspace_id),
+                state=released.bundle_state,
+                fencing_epoch=mutation.fencing_epoch,
+                resource_names=names,
+            )
+
     async def pause_services_without_lock(
         self,
         workspace_id: UUID,
@@ -454,6 +515,10 @@ class DockerCellResourceManager:
         async with self.operation_lock.hold(workspace_id):
             state = self._prepared_state(workspace_id)
             if state is None:
+                await self.recover_capacity_reservations(
+                    now=datetime.now(UTC),
+                    workspace_id=workspace_id,
+                )
                 return CellBundleObservation(
                     state="retained",
                     identity_valid=False,
@@ -464,6 +529,20 @@ class DockerCellResourceManager:
                 )
             self._assert_profile_version(state.profile_version)
             self._reject_unless_allowed(state, mutation, allow_reconcile=True)
+            capacity_lock = self.capacity_lock or self.operation_lock
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                reservation = self._capacity_reservation_store().load(workspace_id)
+                if reservation is not None:
+                    self._capacity_reservation_store().rebind(workspace_id, mutation)
+                elif state.bundle_state == "resources_ready":
+                    self._capacity_reservation_store().reserve(
+                        workspace_id,
+                        mutation,
+                        profile=self.profile,
+                        snapshot=self.capacity_reader.read(),
+                        admission_gate=self.admission_gate,
+                        running_bundle=True,
+                    )
             await self.stateful_begin_or_replay(
                 self._spec_from_state(state),
                 mutation,
@@ -486,6 +565,9 @@ class DockerCellResourceManager:
                     kind="reconcile",
                     detail=detail or "ready bundle missing compute",
                 )
+                if not any(observation.containers.values()):
+                    async with capacity_lock.hold_named("host-capacity-admission"):
+                        self._release_capacity(workspace_id, mutation)
                 return CellBundleObservation(
                     state="degraded",
                     identity_valid=True,
@@ -502,6 +584,11 @@ class DockerCellResourceManager:
                 bundle_state=observation.state,
                 detail=detail,
             )
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                if observation.state == "resources_ready":
+                    self._capacity_reservation_store().confirm(workspace_id, mutation)
+                else:
+                    self._release_capacity(workspace_id, mutation)
             return observation
 
     async def _upsert_bundle(
@@ -512,71 +599,93 @@ class DockerCellResourceManager:
         wake_only: bool,
     ) -> CellBundleHandle:
         async with self.operation_lock.hold(spec.workspace_id):
-            self._assert_profile_version(spec.profile_version)
-            state = self._prepared_state(
-                spec.workspace_id,
-                active_operation_id=mutation.operation_id,
-            )
-            if state is not None:
-                self._verify_spec_matches_state(state, spec)
-            names = self._resource_names_for_spec(spec, state)
-            await self._preflight_named_resources(spec, names)
-            if state is not None:
-                replay = self._replay_if_completed(state, mutation)
-                if replay is not None:
-                    return replay
-                self._reject_unless_allowed(state, mutation, allow_reconcile=False)
-            existing_bundle = await self._bundle_exists(names)
-            running_bundle = await self._bundle_running(names)
-            decision = self.admission_gate.check(
-                self.capacity_reader.read(),
-                existing_bundle=existing_bundle,
-                running_bundle=running_bundle,
-            )
-            if decision.allowed is False:
-                raise CellResourceError(decision.reason)
+            capacity_lock = self.capacity_lock or self.operation_lock
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                return await self._upsert_bundle_locked(spec, mutation, wake_only=wake_only)
 
+    async def _upsert_bundle_locked(
+        self,
+        spec: WorkspaceSpec,
+        mutation: LifecycleMutation,
+        *,
+        wake_only: bool,
+    ) -> CellBundleHandle:
+        await self._recover_capacity_reservations_locked(now=datetime.now(UTC))
+        self._assert_profile_version(spec.profile_version)
+        state = self._prepared_state(
+            spec.workspace_id,
+            active_operation_id=mutation.operation_id,
+        )
+        if state is not None:
+            self._verify_spec_matches_state(state, spec)
+        names = self._resource_names_for_spec(spec, state)
+        await self._preflight_named_resources(spec, names)
+        replay = None
+        if state is not None:
+            replay = self._replay_if_completed(state, mutation)
+            if replay is None:
+                self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        existing_bundle = await self._bundle_exists(names)
+        running_bundle = await self._bundle_running(names)
+        self._capacity_reservation_store().reserve(
+            spec.workspace_id,
+            mutation,
+            profile=self.profile,
+            snapshot=self.capacity_reader.read(),
+            admission_gate=self.admission_gate,
+            running_bundle=running_bundle,
+        )
+        if replay is not None:
+            return replay
+
+        provider_ref = self._provider_ref(spec.workspace_id)
+        try:
             credentials = self.credential_store.load_or_create(spec.workspace_id)
             await self.stateful_begin_or_replay(
                 spec, mutation, kind="wake" if wake_only else "ensure", names=names
             )
-            provider_ref = self._provider_ref(spec.workspace_id)
-            try:
-                await self.docker.begin_operation(mutation.operation_id)
-                await self._ensure_volumes(spec, mutation, names)
-                await self._ensure_networks(spec, mutation, names)
-                await self._ensure_postgres_initialized(
-                    spec, mutation, names, credentials.postgres_password
-                )
-                await self._ensure_sidecars(spec, mutation, names)
-                completed = self.state_store.complete(
-                    spec.workspace_id,
-                    mutation,
-                    phase="completed",
-                    provider_ref=provider_ref,
-                    bundle_state="resources_ready",
-                )
-                return CellBundleHandle(
-                    workspace_id=spec.workspace_id,
-                    provider_ref=provider_ref,
-                    state="resources_ready",
-                    fencing_epoch=mutation.fencing_epoch,
-                    resource_names=completed.resource_names or names,
-                )
-            except asyncio.CancelledError:
+            await self.docker.begin_operation(mutation.operation_id)
+            await self._ensure_volumes(spec, mutation, names)
+            await self._ensure_networks(spec, mutation, names)
+            await self._ensure_postgres_initialized(
+                spec, mutation, names, credentials.postgres_password
+            )
+            await self._ensure_sidecars(spec, mutation, names)
+            completed = self.state_store.complete(
+                spec.workspace_id,
+                mutation,
+                phase="completed",
+                provider_ref=provider_ref,
+                bundle_state="resources_ready",
+            )
+            self._capacity_reservation_store().confirm(spec.workspace_id, mutation)
+            return CellBundleHandle(
+                workspace_id=spec.workspace_id,
+                provider_ref=provider_ref,
+                state="resources_ready",
+                fencing_epoch=mutation.fencing_epoch,
+                resource_names=completed.resource_names or names,
+            )
+        except asyncio.CancelledError:
+            if self.state_store.load(spec.workspace_id) is not None:
                 self.state_store.mark_indeterminate(
                     spec.workspace_id,
                     mutation=mutation,
                     detail="bundle mutation cancelled",
                 )
-                raise
-            except Exception as exc:
+            elif not existing_bundle:
+                self._capacity_reservation_store().release(spec.workspace_id, mutation)
+            raise
+        except Exception as exc:
+            if self.state_store.load(spec.workspace_id) is not None:
                 self.state_store.mark_indeterminate(
                     spec.workspace_id,
                     mutation=mutation,
                     detail=str(exc),
                 )
-                raise
+            elif not existing_bundle:
+                self._capacity_reservation_store().release(spec.workspace_id, mutation)
+            raise
 
     async def stateful_begin_or_replay(
         self,
@@ -655,6 +764,9 @@ class DockerCellResourceManager:
         self._assert_profile_version(spec.profile_version)
         await self._preflight_named_resources(spec, names)
         self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        capacity_lock = self.capacity_lock or self.operation_lock
+        async with capacity_lock.hold_named("host-capacity-admission"):
+            self._capacity_reservation_store().rebind(workspace_id, mutation)
         await self.stateful_begin_or_replay(
             spec,
             mutation,
@@ -663,6 +775,54 @@ class DockerCellResourceManager:
             checkpoint_ref=checkpoint_ref,
         )
         return state
+
+    def _capacity_reservation_store(self) -> CellCapacityReservationStore:
+        if self.capacity_reservations is None:
+            self.capacity_reservations = CellCapacityReservationStore(
+                self.state_store.root.parent
+                / f"{self.state_store.root.name}-capacity-reservations"
+            )
+        return self.capacity_reservations
+
+    async def recover_capacity_reservations(
+        self,
+        *,
+        now: datetime | None = None,
+        workspace_id: UUID | None = None,
+    ) -> int:
+        capacity_lock = self.capacity_lock or self.operation_lock
+        async with capacity_lock.hold_named("host-capacity-admission"):
+            return await self._recover_capacity_reservations_locked(
+                now=now or datetime.now(UTC),
+                workspace_id=workspace_id,
+            )
+
+    async def _recover_capacity_reservations_locked(
+        self,
+        *,
+        now: datetime,
+        workspace_id: UUID | None = None,
+    ) -> int:
+        recovered = 0
+        store = self._capacity_reservation_store()
+        for reservation in store.expired_provisionals(now=now):
+            if workspace_id is not None and reservation.workspace_id != workspace_id:
+                continue
+            if self.state_store.load(reservation.workspace_id) is not None:
+                continue
+            containers = await self.docker.list_workspace_containers(
+                reservation.workspace_id
+            )
+            if containers:
+                continue
+            store.release(reservation.workspace_id, reservation.mutation)
+            recovered += 1
+        return recovered
+
+    def _release_capacity(self, workspace_id: UUID, mutation: LifecycleMutation) -> None:
+        store = self._capacity_reservation_store()
+        if store.load(workspace_id) is not None:
+            store.release(workspace_id, mutation)
 
     async def _ensure_volumes(
         self,
@@ -1221,8 +1381,8 @@ class DockerCellResourceManager:
             mounts=(),
             network_names=(names.internal_network,),
             helper=False,
-            memory_limit_bytes=self.profile.bundle_memory_bytes // 2,
-            cpu_quota=max(self.profile.bundle_cpu_cores / 2.0, 0.5),
+            memory_limit_bytes=self.profile.postgres_memory_bytes,
+            cpu_quota=self.profile.postgres_cpu_cores,
         )
 
     def _steady_redis_spec(
@@ -1246,23 +1406,15 @@ class DockerCellResourceManager:
             mounts=(),
             network_names=(names.internal_network,),
             helper=False,
-            memory_limit_bytes=self.profile.bundle_memory_bytes // 4,
-            cpu_quota=max(self.profile.bundle_cpu_cores / 4.0, 0.25),
+            memory_limit_bytes=self.profile.redis_memory_bytes,
+            cpu_quota=self.profile.redis_cpu_cores,
         )
 
     def _draft_runtime_memory_limit_bytes(self) -> int:
-        return (
-            self.profile.bundle_memory_bytes
-            - self.profile.bundle_memory_bytes // 2
-            - self.profile.bundle_memory_bytes // 4
-        )
+        return self.profile.draft_memory_bytes
 
     def _draft_runtime_cpu_quota(self) -> float:
-        return (
-            self.profile.bundle_cpu_cores
-            - max(self.profile.bundle_cpu_cores / 2.0, 0.5)
-            - max(self.profile.bundle_cpu_cores / 4.0, 0.25)
-        )
+        return self.profile.draft_cpu_cores
 
     def _steady_draft_spec(
         self,
@@ -1370,7 +1522,10 @@ class DockerCellResourceManager:
         self._assert_profile_version(spec.profile_version)
         await self._preflight_named_resources(spec, names)
         self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        capacity_lock = self.capacity_lock or self.operation_lock
         if record_operation:
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                self._capacity_reservation_store().rebind(workspace_id, mutation)
             await self.stateful_begin_or_replay(
                 spec,
                 mutation,
@@ -1396,6 +1551,8 @@ class DockerCellResourceManager:
                     workspace_id,
                     bundle_state="resources_paused",
                 )
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                self._release_capacity(workspace_id, mutation)
         except asyncio.CancelledError:
             if record_operation:
                 self.state_store.mark_indeterminate(
@@ -1429,7 +1586,10 @@ class DockerCellResourceManager:
         names = state.resource_names
         assert names is not None
         await self._preflight_named_resources(spec, names)
+        capacity_lock = self.capacity_lock or self.operation_lock
         if record_operation:
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                self._capacity_reservation_store().rebind(workspace_id, mutation)
             await self.stateful_begin_or_replay(
                 spec,
                 mutation,
@@ -1463,6 +1623,13 @@ class DockerCellResourceManager:
                     provider_ref=self._provider_ref(workspace_id),
                     bundle_state="retained",
                 )
+            else:
+                self.state_store.set_bundle_state(
+                    workspace_id,
+                    bundle_state="retained",
+                )
+            async with capacity_lock.hold_named("host-capacity-admission"):
+                self._release_capacity(workspace_id, mutation)
         except asyncio.CancelledError:
             if record_operation:
                 self.state_store.mark_indeterminate(

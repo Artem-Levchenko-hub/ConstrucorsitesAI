@@ -12,6 +12,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from omnia_orchestrator.core.cell_resources import CellCapacityUnavailable
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
 from omnia_orchestrator.core.workspace_provider import (
@@ -513,6 +514,47 @@ async def test_authenticated_resource_routes_delegate_and_hide_secrets(
     assert "test-internal-token" not in serialized
 
 
+async def test_ensure_returns_exact_pre_effect_capacity_wait_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CapacityProvider(_RecordingProvider):
+        async def ensure(self, spec, mutation):
+            raise CellCapacityUnavailable("insufficient_memory")
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: CapacityProvider())
+    payload = {
+        "workspace_id": "00000000-0000-0000-0000-000000000061",
+        "project_id": "00000000-0000-0000-0000-000000000062",
+        "owner_id": "00000000-0000-0000-0000-000000000063",
+        "generation_run_id": "00000000-0000-0000-0000-000000000064",
+        "profile_version": "docker-owner-cell-resources-v1",
+        "operation_id": "00000000-0000-0000-0000-000000000065",
+        "fencing_epoch": 7,
+        "request_digest": "d" * 64,
+    }
+
+    async with _client() as client:
+        response = await client.post(
+            "/internal/workspaces/ensure",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=payload,
+        )
+
+    assert response.status_code == 429
+    assert response.json() == {
+        "error": {
+            "code": "capacity_wait",
+            "message": "insufficient_memory",
+            "details": {
+                "operation_id": payload["operation_id"],
+                "fencing_epoch": 7,
+                "request_digest": "d" * 64,
+                "effect_applied": False,
+                "reason": "insufficient_memory",
+                "retry_after_seconds": 2,
+            },
+        }
+    }
 async def test_resource_route_rejects_workspace_id_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

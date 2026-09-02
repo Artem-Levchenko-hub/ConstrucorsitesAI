@@ -114,6 +114,53 @@ def test_state_round_trip_is_per_workspace(tmp_path: Path) -> None:
     assert restored.operations[0].generation_run_id == spec.generation_run_id
 
 
+def test_release_generation_clears_only_matching_active_lease(tmp_path: Path) -> None:
+    store = CellStateStore(tmp_path / "project-cells.json")
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    ensure = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    store.begin(spec, ensure, kind="ensure", phase="planned", resource_names=names)
+    store.complete(
+        workspace_id,
+        ensure,
+        provider_ref="docker-owner-canary:test",
+        bundle_state="resources_ready",
+    )
+    release = _mutation("b", 2)
+    store.begin(spec, release, kind="release", phase="planned", resource_names=names)
+
+    released = store.release_generation(
+        workspace_id,
+        release,
+        generation_run_id=spec.generation_run_id,
+    )
+
+    assert released.active_generation_run_id is None
+    assert released.active_generation_fencing_epoch is None
+    assert released.bundle_state == "resources_ready"
+    assert released.operation(release.operation_id).status == "completed"
+
+
+def test_release_generation_rejects_wrong_run_without_state_change(tmp_path: Path) -> None:
+    store = CellStateStore(tmp_path / "project-cells.json")
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    ensure = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    store.begin(spec, ensure, kind="ensure", phase="planned", resource_names=names)
+    store.complete(workspace_id, ensure, bundle_state="resources_ready")
+    release = _mutation("b", 2)
+    store.begin(spec, release, kind="release", phase="planned", resource_names=names)
+
+    with pytest.raises(RuntimeError, match="generation lease mismatch"):
+        store.release_generation(workspace_id, release, generation_run_id=uuid4())
+
+    state = store.load(workspace_id)
+    assert state is not None
+    assert state.active_generation_run_id == spec.generation_run_id
+
+
 def test_begin_rejects_immutable_identity_mismatch_without_mutating_state(tmp_path: Path) -> None:
     store = CellStateStore(tmp_path / "project-cells.json")
     workspace_id = uuid4()

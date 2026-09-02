@@ -25,7 +25,7 @@ class WorkspaceControlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: UUID
-    kind: Literal["wake", "pause", "stop", "destroy", "restore", "reconcile"]
+    kind: Literal["wake", "pause", "stop", "destroy", "restore", "reconcile", "release"]
     checkpoint_ref: str | None = None
     operation_id: UUID
     fencing_epoch: int = Field(gt=0)

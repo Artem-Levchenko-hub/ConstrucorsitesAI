@@ -24,7 +24,7 @@ const generation = (
 });
 
 describe("generation lifecycle", () => {
-  it.each(["pending", "running", "cancel_requested"] as const)(
+  it.each(["pending", "queued_for_capacity", "running", "cancel_requested"] as const)(
     "treats %s as active",
     (status) => {
       expect(isGenerationActive(generation(status))).toBe(true);
@@ -95,6 +95,17 @@ describe("generation lifecycle", () => {
         generationLoaded: true,
         hasGeneratedSnapshot: true,
         generation: generation("failed"),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps MAX publishing locked while capacity is queued", () => {
+    expect(
+      isMaxBuildReady({
+        snapshotsLoaded: true,
+        generationLoaded: true,
+        hasGeneratedSnapshot: true,
+        generation: generation("queued_for_capacity"),
       }),
     ).toBe(false);
   });

@@ -243,7 +243,7 @@ class Settings(BaseSettings):
     cell_postgres_image: str = Field(default="")
     cell_redis_image: str = Field(default="")
     cell_backup_image: str = Field(default="")
-    cell_max_active_bundles: int = Field(default=1, ge=1, le=1)
+    cell_capacity_retry_after_seconds: int = Field(default=2, ge=1, le=10)
     cell_bundle_cpu_cores: float = Field(default=2.0, gt=0)
     cell_bundle_memory_bytes: int = Field(default=4 * 1024**3, gt=0)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)

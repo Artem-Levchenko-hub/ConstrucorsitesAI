@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -10,12 +12,14 @@ from uuid import UUID, uuid4
 import pytest
 
 from omnia_orchestrator.core.cell_resources import (
+    CellCapacityUnavailable,
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
     CellResourceError,
     CellResourceNames,
     CellResourceProfile,
+    HostCapacitySnapshot,
     LifecycleMutation,
     identity_labels,
 )
@@ -38,7 +42,6 @@ def _profile(state_path: Path) -> CellResourceProfile:
         postgres_image="postgres@sha256:" + "1" * 64,
         redis_image="redis@sha256:" + "2" * 64,
         backup_image="backup@sha256:" + "3" * 64,
-        max_active_bundles=1,
         bundle_cpu_cores=2.0,
         bundle_memory_bytes=4 * 1024**3,
         host_cpu_reserve_cores=2.0,
@@ -105,10 +108,163 @@ def _make_manager(
         credential_store=CellCredentialStore(tmp_path / "runtime-state" / "credentials"),
         state_store=state_store,
         operation_lock=lock,
+        capacity_lock=lock,
         namespace="test",
         draft_port_registry_path=str(tmp_path / "runtime-state" / ".cell-port-registry.json"),
     )
     return manager, docker_backend, state_store, lock
+
+
+@pytest.mark.asyncio
+async def test_different_workspace_cold_starts_share_host_capacity_lock(tmp_path: Path) -> None:
+    manager, docker, state_store, _lock = _make_manager(tmp_path)
+    first = _spec(UUID("00000000-0000-0000-0000-000000000191"))
+    second = _spec(UUID("00000000-0000-0000-0000-000000000192"))
+    parallel_reads = 0
+    max_parallel_reads = 0
+
+    def read_capacity():
+        nonlocal parallel_reads, max_parallel_reads
+        parallel_reads += 1
+        max_parallel_reads = max(max_parallel_reads, parallel_reads)
+        try:
+            return HostCapacitySnapshot(
+                cpu_count=8,
+                load_1m=0.0,
+                memory_available_bytes=11 * 1024**3,
+                disk_free_bytes=55 * 1024**3,
+                disk_free_inodes=260_000,
+                active_bundle_count=0,
+                disk_path="/var/lib/docker",
+            )
+        finally:
+            parallel_reads -= 1
+
+    manager.capacity_reader = SimpleNamespace(read=read_capacity)
+
+    results = await asyncio.gather(
+        manager.ensure(first, _mutation("e", 1)),
+        manager.ensure(second, _mutation("f", 1)),
+        return_exceptions=True,
+    )
+
+    assert max_parallel_reads == 1
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    assert any(
+        isinstance(result, CellCapacityUnavailable) and result.reason == "insufficient_memory"
+        for result in results
+    )
+    assert len(docker.operation_ids) == 1
+    assert len(manager._capacity_reservation_store().all()) == 1
+    loser = second if state_store.load(second.workspace_id) is None else first
+    assert state_store.load(loser.workspace_id) is None
+
+
+@pytest.mark.asyncio
+async def test_expired_orphan_provisional_is_recovered_but_fresh_is_preserved(
+    tmp_path: Path,
+) -> None:
+    manager, _docker, state_store, _lock = _make_manager(tmp_path)
+    old_workspace = uuid4()
+    fresh_workspace = uuid4()
+    mismatched_workspace = uuid4()
+    old_mutation = _mutation("7", 1)
+    fresh_mutation = _mutation("8", 1)
+    mismatched_reservation = _mutation("9", 1)
+    newer_state_mutation = _mutation("a", 2)
+    now = datetime(2026, 9, 2, tzinfo=UTC)
+    snapshot = replace(manager.capacity_reader.read(), cpu_count=16)
+    ledger = manager._capacity_reservation_store()
+    ledger.reserve(
+        old_workspace,
+        old_mutation,
+        profile=manager.profile,
+        snapshot=snapshot,
+        admission_gate=manager.admission_gate,
+        running_bundle=False,
+        now=now - timedelta(minutes=6),
+    )
+    ledger.reserve(
+        fresh_workspace,
+        fresh_mutation,
+        profile=manager.profile,
+        snapshot=snapshot,
+        admission_gate=manager.admission_gate,
+        running_bundle=False,
+        now=now,
+    )
+    ledger.reserve(
+        mismatched_workspace,
+        mismatched_reservation,
+        profile=manager.profile,
+        snapshot=snapshot,
+        admission_gate=manager.admission_gate,
+        running_bundle=False,
+        now=now - timedelta(minutes=6),
+    )
+    mismatched_spec = _spec(mismatched_workspace)
+    state_store.begin(
+        mismatched_spec,
+        newer_state_mutation,
+        kind="ensure",
+        phase="planned",
+        resource_names=CellResourceNames.for_workspace(
+            mismatched_workspace,
+            namespace="test",
+        ),
+    )
+
+    recovered = await manager.recover_capacity_reservations(now=now)
+
+    assert recovered == 1
+    assert state_store.load(old_workspace) is None
+    assert ledger.load(old_workspace) is None
+    assert ledger.load(fresh_workspace) is not None
+    assert ledger.load(mismatched_workspace) is not None
+
+
+@pytest.mark.asyncio
+async def test_expired_stateless_provisional_with_matching_container_is_preserved(
+    tmp_path: Path,
+) -> None:
+    manager, docker, state_store, _lock = _make_manager(tmp_path)
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    mutation = _mutation("6", 1)
+    now = datetime(2026, 9, 2, tzinfo=UTC)
+    ledger = manager._capacity_reservation_store()
+    ledger.reserve(
+        workspace_id,
+        mutation,
+        profile=manager.profile,
+        snapshot=replace(manager.capacity_reader.read(), cpu_count=16),
+        admission_gate=manager.admission_gate,
+        running_bundle=False,
+        now=now - timedelta(minutes=6),
+    )
+    await docker.create_container(
+        DockerContainerSpec(
+            name="matching-orphan-proof",
+            image=manager.profile.redis_image,
+            labels=identity_labels(spec, "redis"),
+            user="redis",
+            cap_add=[],
+            cap_drop=["ALL"],
+            read_only=True,
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            ports={},
+            env={},
+            volumes=(),
+            mounts=(),
+            network_names=(),
+            helper=False,
+        )
+    )
+
+    assert state_store.load(workspace_id) is None
+    assert await manager.recover_capacity_reservations(now=now) == 0
+    assert ledger.load(workspace_id) is not None
 
 
 @pytest.mark.asyncio
@@ -133,7 +289,9 @@ async def test_ensure_creates_exact_private_bundle(tmp_path: Path) -> None:
 async def test_draft_runtime_follows_pause_wake_destroy_lifecycle(tmp_path: Path) -> None:
     manager, docker, _state_store, _lock = _make_manager(tmp_path)
     spec = _spec(UUID("00000000-0000-0000-0000-000000000101"))
-    await manager.ensure(spec, _mutation("a", 1))
+    ensure_mutation = _mutation("a", 1)
+    await manager.ensure(spec, ensure_mutation)
+    assert manager._capacity_reservation_store().load(spec.workspace_id).status == "confirmed"
 
     created = await manager.ensure_draft_runtime(spec.workspace_id)
     names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
@@ -148,12 +306,15 @@ async def test_draft_runtime_follows_pause_wake_destroy_lifecycle(tmp_path: Path
         checkpoint_ref="accepted-1",
     )
     assert docker.containers[names.draft_container_name()].state == "exited"
+    assert manager._capacity_reservation_store().load(spec.workspace_id) is None
 
     await manager.wake(spec.workspace_id, _mutation("c", 3))
     assert docker.containers[names.draft_container_name()].state == "running"
+    assert manager._capacity_reservation_store().load(spec.workspace_id).status == "confirmed"
 
     await manager.destroy_compute(spec.workspace_id, _mutation("d", 4))
     assert names.draft_container_name() not in docker.containers
+    assert manager._capacity_reservation_store().load(spec.workspace_id) is None
     assert json.loads(registry_path.read_text(encoding="utf-8")) == {}
 
 
@@ -437,6 +598,11 @@ async def test_reconcile_records_completed_operation_on_healthy_bundle(tmp_path:
     assert operation.kind == "reconcile"
     assert operation.status == "completed"
     assert operation.phase == "completed"
+    reservation = manager._capacity_reservation_store().load(spec.workspace_id)
+    assert reservation is not None
+    assert reservation.status == "confirmed"
+    assert reservation.operation_id == mutation.operation_id
+    assert reservation.fencing_epoch == mutation.fencing_epoch
 
 
 @pytest.mark.asyncio

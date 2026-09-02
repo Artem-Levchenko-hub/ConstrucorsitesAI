@@ -17,6 +17,7 @@ from omnia_api.services.orchestrator_client import (
     ObserveProjectCellResourcesRequest,
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellCapacityWait,
     ProjectCellOrchestratorClient,
     ProjectCellPreEffectRejection,
     ProjectCellResourceResponse,
@@ -31,10 +32,13 @@ from omnia_api.services.project_cells import (
     complete_cell_operation,
     fail_cell_operation,
     mark_cell_operation_indeterminate,
+    park_cell_operation_for_capacity,
 )
 
 _CHECKPOINT_KINDS = frozenset({"pause", "stop", "restore"})
-_STATEFUL_CONTROL_KINDS = frozenset({"wake", "pause", "stop", "destroy", "restore"})
+_STATEFUL_CONTROL_KINDS = frozenset(
+    {"wake", "pause", "stop", "destroy", "restore", "release"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +88,12 @@ async def execute_cell_operation(
 
     try:
         response = await _invoke_client(client, method_name, request)
+    except ProjectCellCapacityWait as exc:
+        return await _persist_capacity_wait(
+            session_factory,
+            claimed,
+            exc,
+        )
     except OrchestratorBadRequest as exc:
         if _is_confirmed_pre_effect_rejection(claimed, exc):
             return await _persist_failed_outcome(
@@ -388,7 +398,7 @@ async def _maybe_replayable_outcome(
     operation_id: UUID,
 ) -> ProjectCellOperationOutcome | None:
     outcome = await _load_operation_outcome(session_factory, operation_id)
-    if outcome.status == "pending":
+    if outcome.status in {"pending", "waiting_capacity"}:
         return None
     return outcome
 
@@ -493,6 +503,33 @@ async def _persist_failed_outcome(
         lambda session: fail_cell_operation(session, operation_id, error),
         "terminal_commit_failed:failed",
     )
+
+
+async def _persist_capacity_wait(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedCellOperation,
+    exc: ProjectCellCapacityWait,
+) -> ProjectCellOperationOutcome:
+    rejection = exc.rejection
+    if (
+        rejection.operation_id != claimed.operation_id
+        or rejection.fencing_epoch != claimed.fencing_epoch
+        or rejection.request_digest != claimed.request_digest
+    ):
+        return await _persist_indeterminate_outcome(
+            session_factory,
+            claimed.operation_id,
+            "capacity_identity_mismatch",
+        )
+    async with session_factory() as session:
+        await park_cell_operation_for_capacity(
+            session,
+            claimed.operation_id,
+            reason=rejection.reason,
+            retry_after_seconds=rejection.retry_after_seconds,
+        )
+        await session.commit()
+    return await _load_operation_outcome(session_factory, claimed.operation_id)
 
 
 async def _persist_indeterminate_outcome(

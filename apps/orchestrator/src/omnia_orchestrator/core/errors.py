@@ -18,6 +18,7 @@ ErrorCode = Literal[
     "not_found",
     "conflict",
     "container_failure",
+    "capacity_wait",
     # A dev container that is stopped/paused and could not be woken in-line —
     # distinct from container_failure so apps/api can tell "the world is gone"
     # (abort the build honestly) from a transient exec problem (retryable).

@@ -15,6 +15,7 @@ from omnia_api.main import app
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
@@ -25,6 +26,55 @@ from omnia_api.services.generation_runs import (
     recover_interrupted_generation_runs,
     reserve_generation_run,
 )
+
+
+async def test_queued_for_capacity_is_a_durable_active_generation_status() -> None:
+    from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+
+    assert "queued_for_capacity" in ACTIVE_GENERATION_STATUSES
+    constraint = next(
+        item
+        for item in GenerationRun.__table__.constraints
+        if "status IN" in str(getattr(item, "sqltext", ""))
+    )
+    assert "queued_for_capacity" in str(constraint.sqltext)
+
+
+async def test_generation_dispatch_requires_exact_owned_json_shape() -> None:
+    from omnia_api.services.generation_runs import GenerationDispatch, load_generation_dispatch
+
+    run = GenerationRun(
+        project_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        idempotency_key=f"dispatch-{uuid.uuid4().hex}",
+        prompt_hash="a" * 64,
+        status="queued_for_capacity",
+    )
+    run.id = uuid.uuid4()
+    dispatch = GenerationDispatch(
+        schema_version=1,
+        project_id=run.project_id,
+        user_id=run.user_id,
+        user_message_id=uuid.uuid4(),
+        assistant_message_id=uuid.uuid4(),
+        current_snapshot_id=None,
+        prompt_text="build the app",
+        model_id="google/gemini-2.5-pro",
+        force_model=None,
+        is_free=False,
+        free_business_id=None,
+        orchestrate=True,
+        selected_elements=[],
+    )
+    run.agent_state = {"dispatch": dispatch.to_json(), "steps": []}
+
+    assert load_generation_dispatch(run) == dispatch
+    run.agent_state = {"dispatch": dispatch.to_json() | {"extra": True}}
+    with pytest.raises(ValueError, match="exact keys"):
+        load_generation_dispatch(run)
+    run.agent_state = {"dispatch": dispatch.to_json() | {"user_id": str(uuid.uuid4())}}
+    with pytest.raises(ValueError, match="ownership"):
+        load_generation_dispatch(run)
 
 pytestmark = pytest.mark.asyncio
 
@@ -181,6 +231,80 @@ async def test_cancel_endpoint_marks_active_run_and_signals_redis(
     assert response.json()["id"] == str(run.id)
     assert response.json()["status"] == "cancel_requested"
     assert signalled == [run.id]
+
+
+async def test_cancel_endpoint_terminalizes_queued_run_before_any_signal_or_finalizer(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(project_id=project.id, role="assistant", content="")
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="submit-queued-cancel",
+        prompt_hash="a" * 64,
+        status="queued_for_capacity",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    workspace = ProjectCellWorkspace(
+        project_id=project.id,
+        owner_id=owner.id,
+        provider="docker_owner_canary",
+        state="provisioning",
+        generation_run_id=run.id,
+    )
+    db_session.add(workspace)
+    await db_session.flush()
+    operation = ProjectCellOperation(
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        idempotency_key="queued-cancel-operation",
+        request_digest="b" * 64,
+        fencing_epoch=1,
+        kind="ensure",
+        status="waiting_capacity",
+        request_payload={"profile_version": "docker-owner-cell-resources-v1"},
+    )
+    db_session.add(operation)
+    await db_session.commit()
+
+    async def _current_user() -> User:
+        return owner
+
+    signalled: list[uuid.UUID] = []
+
+    async def _unexpected_signal(run_id: uuid.UUID) -> None:
+        signalled.append(run_id)
+
+    async def _publish(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    app.dependency_overrides[get_current_user] = _current_user
+    monkeypatch.setattr(messages, "request_generation_cancel", _unexpected_signal)
+    monkeypatch.setattr(messages, "publish_event", _publish)
+    try:
+        response = await client.post(f"/api/projects/{project.id}/generation/cancel")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "cancelled"
+    db_session.expire_all()
+    cancelled_run = await db_session.get(GenerationRun, run.id)
+    cancelled_message = await db_session.get(Message, assistant.id)
+    cancelled_operation = await db_session.get(ProjectCellOperation, operation.id)
+    assert cancelled_run is not None and cancelled_run.status == "cancelled"
+    assert cancelled_message is not None and cancelled_message.tokens_out == 0
+    assert "[Отменено пользователем]" in cancelled_message.content
+    assert cancelled_operation is not None and cancelled_operation.status == "cancelled"
+    assert signalled == []
+    assert await recover_interrupted_generation_runs(db_session) == 0
 
 
 async def test_prompt_endpoint_replays_same_submit_without_second_spawn(

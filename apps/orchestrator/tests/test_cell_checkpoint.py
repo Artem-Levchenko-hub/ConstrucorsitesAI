@@ -33,7 +33,6 @@ def _profile(state_path: Path) -> CellResourceProfile:
         postgres_image="postgres@sha256:" + "1" * 64,
         redis_image="redis@sha256:" + "2" * 64,
         backup_image="backup@sha256:" + "3" * 64,
-        max_active_bundles=1,
         bundle_cpu_cores=2.0,
         bundle_memory_bytes=4 * 1024**3,
         host_cpu_reserve_cores=2.0,

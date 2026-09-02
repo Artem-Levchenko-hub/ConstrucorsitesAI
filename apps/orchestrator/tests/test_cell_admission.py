@@ -10,6 +10,7 @@ from omnia_orchestrator.core.cell_resources import (
     HostCapacitySnapshot,
 )
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
+from omnia_orchestrator.services.cell_reservations import ReservedCapacity
 
 
 def _profile() -> CellResourceProfile:
@@ -18,7 +19,6 @@ def _profile() -> CellResourceProfile:
         postgres_image="",
         redis_image="",
         backup_image="",
-        max_active_bundles=1,
         bundle_cpu_cores=2.0,
         bundle_memory_bytes=4 * 1024**3,
         host_cpu_reserve_cores=2.0,
@@ -170,3 +170,67 @@ def test_running_bundle_reuse_does_not_consume_capacity_slot() -> None:
     )
 
     assert decision == AdmissionDecision(True, "running_bundle_reuse")
+
+
+def test_admission_ignores_bundle_count_when_physical_headroom_exists() -> None:
+    decision = CellAdmissionGate(_profile()).check(
+        HostCapacitySnapshot(
+            cpu_count=8,
+            load_1m=1.0,
+            memory_available_bytes=12 * 1024**3,
+            disk_free_bytes=200 * 1024**3,
+            disk_free_inodes=1_000_000,
+            active_bundle_count=999,
+            disk_path="/var/lib/docker",
+        ),
+        existing_bundle=False,
+        running_bundle=False,
+    )
+
+    assert decision == AdmissionDecision(True, "admitted")
+
+
+def test_admission_subtracts_aggregate_reserved_quantities() -> None:
+    profile = _profile()
+    decision = CellAdmissionGate(profile).check(
+        HostCapacitySnapshot(
+            cpu_count=8,
+            load_1m=0.0,
+            memory_available_bytes=11 * 1024**3,
+            disk_free_bytes=55 * 1024**3,
+            disk_free_inodes=260_000,
+            active_bundle_count=1,
+            disk_path="/var/lib/docker",
+        ),
+        existing_bundle=False,
+        running_bundle=False,
+        reserved=ReservedCapacity.from_profile(profile),
+    )
+
+    assert decision == AdmissionDecision(False, "insufficient_memory")
+
+
+def test_admission_uses_total_quota_without_double_counting_running_usage() -> None:
+    profile = _profile()
+    full = ReservedCapacity.from_profile(profile)
+    decision = CellAdmissionGate(profile).check(
+        HostCapacitySnapshot(
+            cpu_count=7,
+            load_1m=2.5,
+            memory_available_bytes=9 * 1024**3,
+            memory_total_bytes=14 * 1024**3,
+            disk_free_bytes=50 * 1024**3,
+            disk_total_bytes=70 * 1024**3,
+            disk_free_inodes=250_000,
+            disk_total_inodes=350_000,
+            active_bundle_count=1,
+            disk_path="/var/lib/docker",
+        ),
+        existing_bundle=False,
+        running_bundle=False,
+        reserved=full,
+    )
+
+    assert full.cpu_cores == 2.5
+    assert full.memory_bytes == 5 * 1024**3
+    assert decision == AdmissionDecision(True, "admitted")

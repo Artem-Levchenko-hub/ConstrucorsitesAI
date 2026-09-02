@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -12,6 +14,393 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-at-least-32-bytes")
 from omnia_api.core.errors import ApiError
 from omnia_api.routers import messages
 from omnia_api.services.agent_builder import Action
+from omnia_api.services.generation_runs import promote_generation_after_admission
+
+
+def test_cancel_protocol_signals_only_genuinely_running_generation() -> None:
+    assert messages._generation_cancel_protocol("pending") == "terminal_without_signal"
+    assert (
+        messages._generation_cancel_protocol("queued_for_capacity")
+        == "terminal_without_signal"
+    )
+    assert messages._generation_cancel_protocol("running") == "signal_running"
+    assert messages._generation_cancel_protocol("cancel_requested") == "already_requested"
+
+
+class _PromotionSession:
+    def __init__(self, run: SimpleNamespace) -> None:
+        self.run = run
+        self.commits = 0
+
+    async def __aenter__(self) -> _PromotionSession:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def scalar(self, _statement: object) -> SimpleNamespace:
+        return self.run
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+class _PromotionSessionFactory:
+    def __init__(self, session: _PromotionSession) -> None:
+        self.session = session
+
+    def __call__(self) -> _PromotionSession:
+        return self.session
+
+
+@pytest.mark.asyncio
+async def test_immediate_pending_dispatch_token_wins_without_queueing() -> None:
+    winner_token = uuid4()
+    stale_token = uuid4()
+    run = SimpleNamespace(status="pending", agent_state={}, started_at=None)
+    session = _PromotionSession(run)
+
+    winner_result = await promote_generation_after_admission(  # type: ignore[arg-type]
+        _PromotionSessionFactory(session),  # type: ignore[arg-type]
+        run_id=uuid4(),
+        dispatch_token=winner_token,
+    )
+    stale_result = await promote_generation_after_admission(  # type: ignore[arg-type]
+        _PromotionSessionFactory(session),  # type: ignore[arg-type]
+        run_id=uuid4(),
+        dispatch_token=stale_token,
+    )
+
+    assert winner_result == "admitted"
+    assert stale_result == "lost"
+    assert run.status == "running"
+    assert run.agent_state == {"capacity_admitted_dispatch_token": str(winner_token)}
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "agent_state",
+    [
+        {"capacity_dispatch_claim": {"token": "malformed"}},
+        {"capacity_admitted_dispatch_token": "malformed"},
+    ],
+)
+async def test_pending_dispatch_with_existing_ownership_marker_fails_closed(
+    agent_state: dict[str, object],
+) -> None:
+    run = SimpleNamespace(status="pending", agent_state=agent_state, started_at=None)
+    session = _PromotionSession(run)
+
+    result = await promote_generation_after_admission(  # type: ignore[arg-type]
+        _PromotionSessionFactory(session),  # type: ignore[arg-type]
+        run_id=uuid4(),
+        dispatch_token=uuid4(),
+    )
+
+    assert result == "lost"
+    assert run.status == "pending"
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_dispatch_token_cannot_reenter_run_promoted_by_new_winner() -> None:
+    winner_token = uuid4()
+    stale_token = uuid4()
+    run = SimpleNamespace(
+        status="queued_for_capacity",
+        agent_state={
+            "capacity_dispatch_claim": {
+                "token": str(winner_token),
+                "expires_at": "2026-09-02T00:00:30+00:00",
+            }
+        },
+        started_at=None,
+    )
+    session = _PromotionSession(run)
+
+    winner_result = await promote_generation_after_admission(  # type: ignore[arg-type]
+        _PromotionSessionFactory(session),  # type: ignore[arg-type]
+        run_id=uuid4(),
+        dispatch_token=winner_token,
+    )
+    stale_result = await promote_generation_after_admission(  # type: ignore[arg-type]
+        _PromotionSessionFactory(session),  # type: ignore[arg-type]
+        run_id=uuid4(),
+        dispatch_token=stale_token,
+    )
+
+    assert winner_result == "admitted"
+    assert stale_result == "lost"
+    assert run.agent_state == {"capacity_admitted_dispatch_token": str(winner_token)}
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_winning_dispatch_token_may_replay_its_admission() -> None:
+    winner_token = uuid4()
+    run = SimpleNamespace(
+        status="running",
+        agent_state={"capacity_admitted_dispatch_token": str(winner_token)},
+        started_at=None,
+    )
+    session = _PromotionSession(run)
+
+    result = await promote_generation_after_admission(  # type: ignore[arg-type]
+        _PromotionSessionFactory(session),  # type: ignore[arg-type]
+        run_id=uuid4(),
+        dispatch_token=winner_token,
+    )
+
+    assert result == "admitted"
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_capacity_dispatch_uses_a_database_session_lock() -> None:
+    run_id = uuid4()
+    session = SimpleNamespace(execute=AsyncMock())
+    session.execute.return_value = SimpleNamespace(scalar_one=lambda: True)
+
+    claimed = await messages._try_claim_capacity_dispatch(session, run_id)
+
+    assert claimed is True
+    statement = session.execute.await_args.args[0]
+    assert "pg_try_advisory_xact_lock" in str(statement)
+
+
+def test_capacity_dispatch_lock_key_is_stable_and_signed_bigint() -> None:
+    run_id = uuid4()
+
+    key = messages._capacity_dispatch_lock_key(run_id)
+
+    assert key == messages._capacity_dispatch_lock_key(run_id)
+    assert -(2**63) <= key < 2**63
+
+
+@pytest.mark.asyncio
+async def test_capacity_dispatch_watcher_closes_after_queue_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    states = iter(("prequeue", "renewed", "admitted"))
+    original_sleep = asyncio.sleep
+
+    async def no_sleep(_seconds: float) -> None:
+        await original_sleep(0)
+
+    async def renew(_run_id, _token) -> str:
+        return next(states)
+
+    monkeypatch.setattr(messages.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(messages, "_renew_capacity_dispatch_claim", renew)
+
+    result = await asyncio.wait_for(
+        messages._wait_for_capacity_dispatch_lease_loss(uuid4(), uuid4()),
+        timeout=0.1,
+    )
+
+    assert result == "closed"
+
+
+@pytest.mark.asyncio
+async def test_capacity_dispatch_watcher_reports_loss_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_sleep = asyncio.sleep
+
+    async def no_sleep(_seconds: float) -> None:
+        await original_sleep(0)
+
+    async def lost(_run_id, _token) -> str:
+        return "lost"
+
+    monkeypatch.setattr(messages.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(messages, "_renew_capacity_dispatch_claim", lost)
+
+    result = await messages._wait_for_capacity_dispatch_lease_loss(uuid4(), uuid4())
+
+    assert result == "lost"
+
+
+@pytest.mark.asyncio
+async def test_closed_capacity_watcher_does_not_cancel_admitted_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = asyncio.Event()
+
+    async def work() -> None:
+        await asyncio.sleep(0)
+        completed.set()
+
+    async def never_cancel(_run_id):
+        await asyncio.Future()
+
+    async def closed(_run_id, _token) -> str:
+        return "closed"
+
+    finalize = AsyncMock()
+    cancelled = AsyncMock()
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", never_cancel)
+    monkeypatch.setattr(messages, "_wait_for_capacity_dispatch_lease_loss", closed)
+    monkeypatch.setattr(messages, "finalize_generation_run", finalize)
+    monkeypatch.setattr(messages, "_finalize_cancelled_generation", cancelled)
+    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+
+    await messages._run_tracked_prompt(
+        work(),
+        run_id=uuid4(),
+        project_id=uuid4(),
+        assistant_message_id=uuid4(),
+        label="test",
+        capacity_dispatch_token=uuid4(),
+    )
+
+    assert completed.is_set()
+    finalize.assert_awaited_once()
+    cancelled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_local_admission_signal_wins_if_database_heartbeat_fails_after_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    heartbeat_failed = asyncio.Event()
+    work_completed = asyncio.Event()
+
+    async def work() -> None:
+        messages.capacity_admission_event(run_id).set()
+        heartbeat_failed.set()
+        await asyncio.sleep(0)
+        work_completed.set()
+
+    async def never_cancel(_run_id):
+        await asyncio.Future()
+
+    async def failed_heartbeat(_run_id, _token) -> str:
+        await heartbeat_failed.wait()
+        return "lost"
+
+    finalize = AsyncMock()
+    cancelled = AsyncMock()
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", never_cancel)
+    monkeypatch.setattr(
+        messages,
+        "_wait_for_capacity_dispatch_lease_loss",
+        failed_heartbeat,
+    )
+    monkeypatch.setattr(messages, "finalize_generation_run", finalize)
+    monkeypatch.setattr(messages, "_finalize_cancelled_generation", cancelled)
+    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+
+    await messages._run_tracked_prompt(
+        work(),
+        run_id=run_id,
+        project_id=uuid4(),
+        assistant_message_id=uuid4(),
+        label="test",
+        capacity_dispatch_token=uuid4(),
+    )
+
+    assert work_completed.is_set()
+    finalize.assert_awaited_once()
+    cancelled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queued_terminal_without_cancel_signal_allows_inflight_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    ensure_running = asyncio.Event()
+    terminal_committed = asyncio.Event()
+    cleanup_completed = asyncio.Event()
+    cancel_signal = asyncio.Event()
+
+    async def work() -> None:
+        ensure_running.set()
+        await terminal_committed.wait()
+        await asyncio.sleep(0)
+        cleanup_completed.set()
+        raise RuntimeError("cancelled during admission")
+
+    async def wait_for_cancel(_run_id) -> None:
+        await cancel_signal.wait()
+
+    async def never_lose_lease(_run_id, _token) -> str:
+        await asyncio.Future()
+        return "lost"
+
+    terminalize = AsyncMock()
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", wait_for_cancel)
+    monkeypatch.setattr(
+        messages,
+        "_wait_for_capacity_dispatch_lease_loss",
+        never_lose_lease,
+    )
+    monkeypatch.setattr(messages, "_finalize_cancelled_generation", terminalize)
+    monkeypatch.setattr(messages, "set_generation_run_status", AsyncMock())
+    monkeypatch.setattr(messages, "_emergency_error", AsyncMock())
+    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+
+    tracked = asyncio.create_task(
+        messages._run_tracked_prompt(
+            work(),
+            run_id=run_id,
+            project_id=uuid4(),
+            assistant_message_id=uuid4(),
+            label="queued-cancel-cleanup",
+            capacity_dispatch_token=uuid4(),
+        )
+    )
+    await ensure_running.wait()
+    terminal_committed.set()
+    await tracked
+
+    assert cleanup_completed.is_set()
+    assert not cancel_signal.is_set()
+    terminalize.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_lost_capacity_watcher_cancels_only_waiter_without_terminalizing_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waiter_cancelled = asyncio.Event()
+
+    async def waiting_work() -> None:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            waiter_cancelled.set()
+            raise
+
+    async def never_cancel(_run_id):
+        await asyncio.Future()
+
+    async def lost(_run_id, _token) -> str:
+        return "lost"
+
+    terminalize = AsyncMock()
+    finalize = AsyncMock()
+    monkeypatch.setattr(messages, "_wait_for_generation_cancel", never_cancel)
+    monkeypatch.setattr(messages, "_wait_for_capacity_dispatch_lease_loss", lost)
+    monkeypatch.setattr(messages, "_finalize_cancelled_generation", terminalize)
+    monkeypatch.setattr(messages, "finalize_generation_run", finalize)
+    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+
+    await messages._run_tracked_prompt(
+        waiting_work(),
+        run_id=uuid4(),
+        project_id=uuid4(),
+        assistant_message_id=uuid4(),
+        label="test",
+        capacity_dispatch_token=uuid4(),
+    )
+
+    assert waiter_cancelled.is_set()
+    terminalize.assert_not_awaited()
+    finalize.assert_not_awaited()
 
 
 @pytest.mark.asyncio
