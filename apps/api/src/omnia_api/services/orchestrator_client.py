@@ -114,6 +114,7 @@ class EnsureProjectCellResourcesRequest:
     workspace_id: UUID
     project_id: UUID
     owner_id: UUID
+    generation_run_id: UUID
     profile_version: str
     operation_id: UUID
     fencing_epoch: int
@@ -130,6 +131,7 @@ class EnsureProjectCellResourcesRequest:
             "workspace_id": str(self.workspace_id),
             "project_id": str(self.project_id),
             "owner_id": str(self.owner_id),
+            "generation_run_id": str(self.generation_run_id),
             "profile_version": self.profile_version,
             "operation_id": str(self.operation_id),
             "fencing_epoch": self.fencing_epoch,

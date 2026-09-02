@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -10,6 +11,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
@@ -130,6 +132,24 @@ async def _new_workspace(
     return workspace
 
 
+async def _new_generation_run(
+    session: AsyncSession,
+    project: Project,
+    owner: User,
+    label: str,
+) -> GenerationRun:
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key=f"run-{label}-{uuid4().hex}",
+        prompt_hash="p" * 64,
+        status="running",
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
 def _factory(
     engine: AsyncEngine,
     controller: CommitController | None = None,
@@ -148,15 +168,21 @@ async def _reserve_operation(
     kind: str,
     request: dict[str, object],
     idempotency_key: str,
+    with_generation_run: bool = False,
 ) -> tuple[ProjectCellWorkspace, ProjectCellOperation]:
     async with factory() as session:
         owner = await _new_user(session, idempotency_key.replace(":", "-"))
         project = await _new_project(session, owner, idempotency_key.replace(":", "-"))
         workspace = await _new_workspace(session, project, owner)
+        generation_run = (
+            await _new_generation_run(session, project, owner, idempotency_key.replace(":", "-"))
+            if with_generation_run
+            else None
+        )
         operation, _ = await reserve_cell_operation(
             session,
             workspace_id=workspace.id,
-            generation_run_id=None,
+            generation_run_id=generation_run.id if generation_run is not None else None,
             kind=kind,
             idempotency_key=idempotency_key,
             request=request,
@@ -185,6 +211,7 @@ async def test_zero_outbound_call_before_claim_commit(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:claim-commit-fails",
+        with_generation_run=True,
     )
     factory = _factory(test_engine, controller)
     client = ClientHarness.with_default_response(workspace.id, fence=1)
@@ -210,6 +237,7 @@ async def test_terminal_commit_failure_becomes_indeterminate(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:terminal-commit-fails",
+        with_generation_run=True,
     )
     factory = _factory(test_engine, controller)
     client = ClientHarness.with_default_response(workspace.id, fence=1)
@@ -248,6 +276,7 @@ async def test_cancellation_during_terminal_commit_becomes_indeterminate(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:terminal-commit-cancelled",
+        with_generation_run=True,
     )
     factory = _factory(test_engine, controller)
     client = ClientHarness.with_default_response(workspace.id, fence=1)
@@ -270,6 +299,7 @@ async def test_timeout_is_indeterminate_and_never_replayed(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:timeout",
+        with_generation_run=True,
     )
     client = ClientHarness.with_default_response(workspace.id, fence=1)
     client.ensure.side_effect = httpx.ReadTimeout("unknown")
@@ -291,6 +321,7 @@ async def test_cancelled_after_dispatch_is_indeterminate(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:cancelled",
+        with_generation_run=True,
     )
     client = ClientHarness.with_default_response(workspace.id, fence=1)
     client.ensure.side_effect = asyncio.CancelledError()
@@ -312,6 +343,7 @@ async def test_database_digest_reaches_exact_outbound_body_unchanged(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:digest",
+        with_generation_run=True,
     )
     client = ClientHarness.with_default_response(workspace.id, fence=1)
 
@@ -320,6 +352,8 @@ async def test_database_digest_reaches_exact_outbound_body_unchanged(
     stored = await _read_operation(factory, operation.id)
 
     assert outcome.status == "completed"
+    assert stored.generation_run_id is not None
+    assert sent.generation_run_id == stored.generation_run_id
     assert sent.operation_id == operation.id
     assert sent.fencing_epoch == 1
     assert sent.request_digest == stored.request_digest
@@ -336,6 +370,7 @@ async def test_confirmed_4xx_rejection_is_failed(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:rejected",
+        with_generation_run=True,
     )
     client = ClientHarness.with_default_response(workspace.id, fence=1)
     client.ensure.side_effect = OrchestratorBadRequest(
@@ -391,6 +426,7 @@ async def test_unconfirmed_4xx_rejection_is_indeterminate(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key=f"ensure:unconfirmed-{uuid4().hex}",
+        with_generation_run=True,
     )
     client = ClientHarness.with_default_response(workspace.id, fence=1)
     client.ensure.side_effect = OrchestratorBadRequest(
@@ -414,12 +450,38 @@ async def test_local_request_validation_fails_before_outbound_call(
         kind="ensure",
         request={"profile_version": "v1", "extra": "dropped-field"},
         idempotency_key="ensure:invalid-local-shape",
+        with_generation_run=True,
     )
     client = ClientHarness.with_default_response(workspace.id, fence=1)
 
     outcome = await execute_cell_operation(factory, operation.id, client)
 
     assert outcome.status == "failed"
+    assert client.ensure.await_count == 0
+    assert client.control.await_count == 0
+    assert client.observe_resources.await_count == 0
+
+
+async def test_ensure_requires_generation_run_id_before_outbound_call(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = _factory(test_engine)
+    workspace, operation = await _reserve_operation(
+        factory,
+        kind="ensure",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+        idempotency_key="ensure:missing-generation-run",
+    )
+    client = ClientHarness.with_default_response(workspace.id, fence=1)
+
+    outcome = await execute_cell_operation(factory, operation.id, client)
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    expected = hashlib.sha256(
+        b"local_validation:ensure operation requires generation_run_id"
+    ).hexdigest()
+    assert outcome.error == f"provider_error:{expected}"
     assert client.ensure.await_count == 0
     assert client.control.await_count == 0
     assert client.observe_resources.await_count == 0
@@ -554,6 +616,7 @@ async def test_reconcile_observes_only_and_records_target_operation_id(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:unknown",
+        with_generation_run=True,
     )
     unknown_client = ClientHarness.with_default_response(workspace.id, fence=1)
     unknown_client.ensure.side_effect = OrchestratorUnavailable("network lost")
@@ -597,6 +660,7 @@ async def test_reconcile_cannot_switch_durable_target(
         kind="ensure",
         request={"profile_version": "docker-owner-cell-resources-v1"},
         idempotency_key="ensure:unknown-first",
+        with_generation_run=True,
     )
     first_client = ClientHarness.with_default_response(workspace.id, fence=1)
     first_client.ensure.side_effect = OrchestratorUnavailable("network lost")

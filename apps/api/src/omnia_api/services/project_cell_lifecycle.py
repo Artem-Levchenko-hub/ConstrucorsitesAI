@@ -261,10 +261,13 @@ def _build_ensure_request(
     profile_version = claimed.request.get("profile_version")
     if type(profile_version) is not str or not profile_version:
         raise ProjectCellValidationError("ensure request requires non-empty profile_version")
+    if claimed.generation_run_id is None:
+        raise ProjectCellValidationError("ensure operation requires generation_run_id")
     return EnsureProjectCellResourcesRequest(
         workspace_id=claimed.workspace_id,
         project_id=claimed.project_id,
         owner_id=claimed.owner_id,
+        generation_run_id=claimed.generation_run_id,
         profile_version=profile_version,
         operation_id=claimed.operation_id,
         fencing_epoch=claimed.fencing_epoch,

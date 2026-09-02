@@ -84,6 +84,65 @@ async def test_prepare_max_runtime_context_selects_project_cell_once_without_leg
 
 
 @pytest.mark.asyncio
+async def test_prepare_max_runtime_context_re_raises_project_cell_failure_without_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_emit(event: str, data: dict[str, object]) -> None:
+        emitted.append((event, dict(data)))
+
+    async def fake_maybe_create(**_kwargs):
+        raise messages.project_cell_executor.ProjectCellExecutorUnavailable("bootstrap failed")
+
+    async def fake_ensure() -> None:
+        pytest.fail("legacy ensure_provisioned path must stay unused after cell failure")
+
+    monkeypatch.setattr(
+        messages.project_cell_executor,
+        "maybe_create_project_cell_executor",
+        fake_maybe_create,
+    )
+    monkeypatch.setattr(
+        messages.orchestrator_client,
+        "agent_sandbox_capabilities",
+        lambda *args, **kwargs: pytest.fail("legacy sandbox attestation must stay unused"),
+    )
+
+    with pytest.raises(
+        messages.project_cell_executor.ProjectCellExecutorUnavailable,
+        match="bootstrap failed",
+    ):
+        await messages._prepare_max_runtime_context(
+            project_id=uuid4(),
+            project_slug="max-cell",
+            user_id=uuid4(),
+            generation_run_id=uuid4(),
+            vision_context="ctx",
+            legacy_execute=lambda _action: pytest.fail("legacy executor must stay unused"),
+            max_shell_requested=True,
+            ensure_legacy_runtime_ready=fake_ensure,
+            agent_emit=fake_emit,
+            max_model_locked_files=frozenset({"src/app/page.tsx"}),
+            max_security_locked_files=frozenset({"src/app/api/max/route.ts"}),
+        )
+
+    assert emitted == [
+        (
+            "agent.step",
+            {
+                "step": 0,
+                "action": "project_cell",
+                "human": "Project Cell не подготовился",
+                "path": "",
+                "detail": "bootstrap failed",
+                "ok": False,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_execute_max_agent_action_routes_selected_see_without_legacy_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
