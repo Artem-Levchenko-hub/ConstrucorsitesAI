@@ -272,6 +272,11 @@ async def test_cancel_endpoint_terminalizes_queued_run_before_any_signal_or_fina
         request_payload={"profile_version": "docker-owner-cell-resources-v1"},
     )
     db_session.add(operation)
+    await db_session.flush()
+    assistant_id = assistant.id
+    run_id = run.id
+    workspace_id = workspace.id
+    operation_id = operation.id
     await db_session.commit()
 
     async def _current_user() -> User:
@@ -296,12 +301,15 @@ async def test_cancel_endpoint_terminalizes_queued_run_before_any_signal_or_fina
     assert response.status_code == 202
     assert response.json()["status"] == "cancelled"
     db_session.expire_all()
-    cancelled_run = await db_session.get(GenerationRun, run.id)
-    cancelled_message = await db_session.get(Message, assistant.id)
-    cancelled_operation = await db_session.get(ProjectCellOperation, operation.id)
+    cancelled_run = await db_session.get(GenerationRun, run_id)
+    cancelled_message = await db_session.get(Message, assistant_id)
+    cancelled_workspace = await db_session.get(ProjectCellWorkspace, workspace_id)
+    cancelled_operation = await db_session.get(ProjectCellOperation, operation_id)
     assert cancelled_run is not None and cancelled_run.status == "cancelled"
     assert cancelled_message is not None and cancelled_message.tokens_out == 0
     assert "[Отменено пользователем]" in cancelled_message.content
+    assert cancelled_workspace is not None
+    assert cancelled_workspace.generation_run_id == run_id
     assert cancelled_operation is not None and cancelled_operation.status == "cancelled"
     assert signalled == []
     assert await recover_interrupted_generation_runs(db_session) == 0
