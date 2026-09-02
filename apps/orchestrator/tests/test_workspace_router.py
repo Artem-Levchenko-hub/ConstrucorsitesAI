@@ -1197,11 +1197,17 @@ async def test_draft_apply_empty_patch_seeds_template_and_is_idempotent(
     )
     published: list[tuple[str, int, str]] = []
 
-    async def _publish_http(host: str, port: int, *, upstream_host: str) -> bool:
+    async def _publish_http(
+        host: str, port: int, *, upstream_host: str, private_cell: bool,
+    ) -> bool:
+        assert private_cell is True
         published.append((host, port, upstream_host))
         return True
 
-    async def _ensure_tls(_host: str, _port: int, *, upstream_host: str) -> bool:
+    async def _ensure_tls(
+        _host: str, _port: int, *, upstream_host: str, private_cell: bool,
+    ) -> bool:
+        assert private_cell is True
         assert upstream_host == "172.30.0.2"
         return True
 
@@ -1273,11 +1279,17 @@ async def test_draft_preview_publish_fails_closed_when_tls_is_unavailable(
     _provider, manager, _docker, _ = await _ready_provider(tmp_path, workspace_id)
     await manager.ensure_draft_runtime(workspace_id)
 
-    async def _publish_http(_host: str, _port: int, *, upstream_host: str) -> None:
+    async def _publish_http(
+        _host: str, _port: int, *, upstream_host: str, private_cell: bool,
+    ) -> None:
+        assert private_cell is True
         assert upstream_host == "172.30.0.2"
         return None
 
-    async def _ensure_tls(_host: str, _port: int, *, upstream_host: str) -> bool:
+    async def _ensure_tls(
+        _host: str, _port: int, *, upstream_host: str, private_cell: bool,
+    ) -> bool:
+        assert private_cell is True
         assert upstream_host == "172.30.0.2"
         return False
 

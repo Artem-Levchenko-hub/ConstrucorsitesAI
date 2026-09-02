@@ -279,3 +279,25 @@ Ruff/Mypy and independent review clean. First release commit: `4e4b0fda`, PR #28
   typechecking. Legacy builds remain unchanged. Verify/review/push the patch;
   deploy only after the active generation releases its lease. Then recheck
   migration metadata and complete the actual UI/persistence proof.
+
+## Completed generation and mobile preview follow-up — 2026-09-02
+
+- PR #30 deployed and owner-enabled at63de945a. API/worker/web/orchestrator
+  health confirms the exact revision. Final-source Docker canary passed including
+  repeated SQL migrations preserving application data/ledger, pause/wake, restore,
+  stale request rejection and private resource isolation. Test resources removed.
+- The retained first generation completed and saved an accepted snapshot. Native
+  typecheck/runtime and persisted universal release proof passed. Accepted frontend
+  source matches the reviewed candidate. Real managed PostgreSQL backend is present.
+- Actual browser testing found a further release blocker: on390px the template's
+  public remix CTA intercepts the task dialog's Save button. Private cells reject
+  remix, so this UI is both unsupported and obstructive. Do not bypass the click.
+- This follow-up opts private cell ingress into an exact no-op JavaScript route for
+  the platform-owned remix/watermark script. Existing accepted source is unchanged;
+  existing running ingress must be republished once through the owned-workspace
+  operation lock and central publisher. Preview-session and runtime/start on an
+  already-running cell do not refresh ingress. Future draft/lifecycle publication
+  carries the policy automatically.
+  Public/legacy templates and the owner inspector keep their existing behavior.
+- Complete tests/review/push/deploy/owner-enable, then repeat normal mobile CRUD,
+  reload persistence, responsive screenshots and health before declaring success.

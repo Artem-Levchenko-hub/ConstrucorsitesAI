@@ -747,8 +747,10 @@ async def _publish_draft_preview(
             status_code=503,
         )
     host = _draft_preview_host(workspace_id)
-    await nginx_writer.publish_http(host, 3000, upstream_host=upstream_host)
-    if await nginx_writer.ensure_tls(host, 3000, upstream_host=upstream_host) is False:
+    await nginx_writer.publish_http(host, 3000, upstream_host=upstream_host, private_cell=True)
+    if await nginx_writer.ensure_tls(
+        host, 3000, upstream_host=upstream_host, private_cell=True,
+    ) is False:
         await nginx_writer.unpublish(host)
         raise OrchestratorError(
             code="container_failure",
