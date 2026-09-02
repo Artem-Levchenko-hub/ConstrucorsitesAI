@@ -107,6 +107,10 @@ class AgentResult:
     steps: int
     transcript: list[dict[str, str]] = field(default_factory=list)
     stop_reason: str = ""          # "done" | "max_steps" | "stalled" | "error" | "infra_error"
+    # Native MAX segments carry fact-gate proof forward inside the same
+    # GenerationRun. Text/legacy builders leave this empty.
+    evidence: dict[str, int] = field(default_factory=dict)
+    segments: int = 1
 
 
 def parse_action(reply: str) -> Action | None:

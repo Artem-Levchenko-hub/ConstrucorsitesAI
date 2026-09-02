@@ -1065,9 +1065,11 @@ class Settings(BaseSettings):
     # makes NO new file progress (genuinely stuck). This is the real stop condition;
     # the segment count is just a runaway backstop (a truly unbounded loop is unsafe —
     # a model that never finishes would run forever). Env: AGENT_MAX_SEGMENTS.
-    # A generation is a single bounded run. Completeness comes from the working
-    # template + deterministic final build/rollback, not another provider segment.
-    agent_max_segments: int = Field(default=1)
+    # Four segments give a full first product up to four independent provider
+    # context windows while keeping one GenerationRun/Project Cell. The upper
+    # bound is only a runaway safety backstop; no-progress and cancellation stop
+    # earlier. Env deployments may tune within this deliberately generous range.
+    agent_max_segments: int = Field(default=4, ge=1, le=8)
 
     # Native tool-use agent (2026-07-01, owner «как Claude Code, только на сервере»).
     # When ON, a container-app build runs through agent_native.run_native_build: ONE

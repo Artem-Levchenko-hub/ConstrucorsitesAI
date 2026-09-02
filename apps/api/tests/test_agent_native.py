@@ -12,7 +12,7 @@ import ast
 import asyncio
 import importlib
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -21,6 +21,7 @@ import httpx
 import pytest
 
 from omnia_api.services import agent_native
+from omnia_api.services.agent_builder import AgentResult
 from omnia_api.services.agent_native import NativeMessagesAttemptAuth, _module_not_found_hint
 
 _RUNNER_SRC = Path(__file__).resolve().parents[2] / "agent-runner" / "src"
@@ -131,6 +132,8 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "_agent_step_budget" in source
     assert "configured_steps=_agent_steps" in source
     assert "max_steps=_agent_steps" in source
+    assert "max_segments=_native_max_segments" in source
+    assert "_agent_res.segments" in source
     assert '"autonomous_recovery"' not in source
     assert "max_source_completion_gap" not in source
     assert "_seg < 2" not in source
@@ -156,6 +159,18 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "max_project_shell_enabled" in source
     assert "MAX project shell is locked" in source
     assert "Shell mutation is disabled for MAX projects." not in source
+
+
+def test_first_max_native_build_has_bounded_automatic_continuation_default() -> None:
+    config_source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "omnia_api"
+        / "core"
+        / "config.py"
+    ).read_text(encoding="utf-8")
+
+    assert "agent_max_segments: int = Field(default=4, ge=1, le=8)" in config_source
 
 
 def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None:
@@ -394,6 +409,291 @@ def test_hint_dedupes_and_caps_modules() -> None:
 # ── run_native_build loop guards (stubbed LLM + executor) ────────────────────
 
 
+@pytest.mark.asyncio
+async def test_native_segments_preserve_files_and_completion_evidence() -> None:
+    calls: list[str] = []
+
+    def completion_check(files: Mapping[str, str], evidence: Mapping[str, int]) -> str | None:
+        if "src/app/page.tsx" not in files:
+            return "missing page"
+        if evidence.get("runtime_check_after_write", 0) < 1:
+            return "missing runtime"
+        if evidence.get("see_after_write", 0) < 1:
+            return "missing signed preview"
+        return None
+
+    async def run_segment(task: str, check: Any, _initial_files: Mapping[str, str]) -> AgentResult:
+        calls.append(task)
+        if len(calls) == 1:
+            assert check(
+                {"src/app/page.tsx": "export default function Page() { return <main /> }"},
+                {"runtime_check_after_write": 1},
+            ) == "missing signed preview"
+            return AgentResult(
+                done=False,
+                summary="missing signed preview",
+                files={"src/app/page.tsx": "export default function Page() { return <main /> }"},
+                steps=40,
+                transcript=[{"role": "assistant", "content": "implemented"}],
+                stop_reason="max_steps",
+                evidence={"runtime_check_after_write": 1},
+            )
+        assert "same GenerationRun" in task
+        assert check({}, {"see_after_write": 1}) is None
+        return AgentResult(
+            done=True,
+            summary="complete",
+            files={},
+            steps=2,
+            transcript=[{"role": "assistant", "content": "verified"}],
+            stop_reason="done",
+            evidence={"see_after_write": 1},
+        )
+
+    result = await agent_native._run_native_segments(
+        task="Build the requested app",
+        completion_check=completion_check,
+        max_segments=4,
+        run_segment=run_segment,
+    )
+
+    assert result.done is True
+    assert result.files == {
+        "src/app/page.tsx": "export default function Page() { return <main /> }"
+    }
+    assert result.evidence["runtime_check_after_write"] == 1
+    assert result.evidence["see_after_write"] == 1
+    assert result.steps == 42
+    assert len(result.transcript) == 2
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_native_segment_write_invalidates_all_prior_after_write_proof() -> None:
+    calls = 0
+
+    def completion_check(files: Mapping[str, str], evidence: Mapping[str, int]) -> str | None:
+        if "src/app/page.tsx" not in files or "src/components/Product.tsx" not in files:
+            return "missing product file"
+        if evidence.get("build_after_write", 0) < 1:
+            return "missing fresh build"
+        if evidence.get("runtime_check_after_write", 0) < 1:
+            return "missing fresh runtime"
+        if evidence.get("see_after_write", 0) < 1:
+            return "missing fresh signed preview"
+        return None
+
+    async def run_segment(
+        _task: str,
+        check: Any,
+        _initial_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            page = {"src/app/page.tsx": "export default function Page() { return <main /> }"}
+            assert check(
+                page,
+                {
+                    "build_after_write": 1,
+                    "runtime_check_after_write": 1,
+                    "see_after_write": 1,
+                },
+            ) == "missing product file"
+            return AgentResult(
+                done=False,
+                summary="product breadth remains incomplete",
+                files=page,
+                steps=40,
+                stop_reason="max_steps",
+                evidence={
+                    "build_after_write": 1,
+                    "runtime_check_after_write": 1,
+                    "see_after_write": 1,
+                },
+            )
+
+        component = {
+            "src/components/Product.tsx": "export function Product() { return <section /> }"
+        }
+        assert check(component, {}) == "missing fresh build"
+        assert check(component, {"build_after_write": 1}) == "missing fresh runtime"
+        assert check(
+            component,
+            {"build_after_write": 1, "runtime_check_after_write": 1},
+        ) == "missing fresh signed preview"
+        fresh_proof = {
+            "build_after_write": 1,
+            "runtime_check_after_write": 1,
+            "see_after_write": 1,
+        }
+        assert check(component, fresh_proof) is None
+        return AgentResult(
+            done=True,
+            summary="complete after fresh proof",
+            files=component,
+            steps=4,
+            stop_reason="done",
+            evidence=fresh_proof,
+        )
+
+    result = await agent_native._run_native_segments(
+        task="Build the complete product",
+        completion_check=completion_check,
+        max_segments=4,
+        run_segment=run_segment,
+    )
+
+    assert calls == 2
+    assert result.done is True
+    assert result.evidence == {
+        "build_after_write": 1,
+        "runtime_check_after_write": 1,
+        "see_after_write": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_native_segments_stop_after_proven_no_progress() -> None:
+    calls = 0
+
+    async def run_segment(
+        _task: str,
+        _check: Any,
+        _initial_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        return AgentResult(
+            done=False,
+            summary="still exploring",
+            files={},
+            steps=12,
+            stop_reason="exploring",
+            evidence={},
+        )
+
+    result = await agent_native._run_native_segments(
+        task="Build it",
+        completion_check=lambda _files, _evidence: "missing product",
+        max_segments=4,
+        run_segment=run_segment,
+    )
+
+    assert calls == 1
+    assert result.done is False
+    assert result.stop_reason == "no_progress"
+
+
+@pytest.mark.asyncio
+async def test_native_segments_honour_cancellation_between_segments() -> None:
+    calls = 0
+    owner_task = asyncio.current_task()
+    assert owner_task is not None
+
+    async def run_segment(
+        _task: str,
+        _check: Any,
+        _initial_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            asyncio.get_running_loop().call_soon(owner_task.cancel)
+            return AgentResult(
+                done=False,
+                summary="more work remains",
+                files={"src/app/page.tsx": "changed"},
+                steps=40,
+                stop_reason="max_steps",
+                evidence={"build_after_write": 1},
+            )
+        raise AssertionError("cancelled generation started another provider segment")
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent_native._run_native_segments(
+            task="Build it",
+            completion_check=lambda _files, _evidence: "more work remains",
+            max_segments=4,
+            run_segment=run_segment,
+        )
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_native_default_stays_single_segment_for_legacy_and_non_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_segment(**_kwargs: object) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        return AgentResult(
+            done=False,
+            summary="bounded legacy result",
+            files={"index.html": "changed"},
+            steps=2,
+            stop_reason="max_steps",
+        )
+
+    monkeypatch.setattr(agent_native, "_run_native_segment", fake_segment)
+    result = await agent_native.run_native_build(
+        system="ordinary web app",
+        task="Build it",
+        execute=lambda _action: asyncio.sleep(0, result={"ok": True}),
+    )
+
+    assert calls == 1
+    assert result.stop_reason == "max_steps"
+
+
+@pytest.mark.asyncio
+async def test_native_continuation_reuses_exact_generation_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, object, object, object]] = []
+
+    async def fake_segment(**kwargs: object) -> AgentResult:
+        calls.append(
+            (
+                kwargs["user_id"],
+                kwargs["project_id"],
+                kwargs["run_id"],
+                kwargs["message_id"],
+            )
+        )
+        if len(calls) == 1:
+            return AgentResult(
+                done=False,
+                summary="continue",
+                files={"src/app/page.tsx": "changed"},
+                steps=40,
+                stop_reason="max_steps",
+                evidence={"build_after_write": 1},
+            )
+        return AgentResult(done=True, summary="done", files={}, steps=1, stop_reason="done")
+
+    monkeypatch.setattr(agent_native, "_run_native_segment", fake_segment)
+    await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="Build it",
+        execute=lambda _action: asyncio.sleep(0, result={"ok": True}),
+        user_id="user-1",
+        project_id="project-1",
+        run_id="run-1",
+        message_id="message-1",
+        max_segments=4,
+        completion_check=lambda _files, _evidence: None,
+    )
+
+    assert calls == [
+        ("user-1", "project-1", "run-1", "message-1"),
+        ("user-1", "project-1", "run-1", "message-1"),
+    ]
+
+
 def _turn(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
     """An Anthropic-shaped assistant turn with the given tool_use blocks."""
     return {
@@ -403,6 +703,105 @@ def _turn(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
             for i, (name, args) in enumerate(tools)
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_native_max_step_segment_continues_and_completes_real_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_turns = [
+        _turn(
+            (
+                "write_file",
+                {
+                    "path": "src/app/page.tsx",
+                    "content": "export default function Page() { return <main /> }",
+                },
+            )
+        ),
+        _turn(
+            (
+                "write_file",
+                {
+                    "path": "src/components/Product.tsx",
+                    "content": "export function Product() { return <section /> }",
+                },
+            )
+        ),
+    ]
+
+    async def fake_call(
+        _client: Any,
+        _url: str,
+        _convo: Any,
+        _system: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return provider_turns.pop(0)
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(_action: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+    def completion_check(files: Mapping[str, str], evidence: Mapping[str, int]) -> str | None:
+        if "src/app/page.tsx" not in files or "src/components/Product.tsx" not in files:
+            return "product breadth remains incomplete"
+        if evidence.get("build_after_write", 0) < 1:
+            return "run build after the final write"
+        return None
+
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE",
+        task="Build the complete product",
+        execute=execute,
+        completion_check=completion_check,
+        max_steps=1,
+        max_segments=4,
+    )
+
+    assert result.done is True
+    assert result.stop_reason == "max_steps_green"
+    assert result.segments == 2
+    assert result.steps == 2
+    assert set(result.files) == {"src/app/page.tsx", "src/components/Product.tsx"}
+    assert not provider_turns
+
+
+@pytest.mark.asyncio
+async def test_native_continuation_does_not_force_rewrite_existing_max_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_call(
+        _client: Any,
+        _url: str,
+        _convo: Any,
+        _system: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        assert kwargs["tools"] == agent_native._MAX_TOOLS_CACHED
+        return _turn(("read_file", {"path": "src/app/page.tsx"}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(_action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": "existing product"}
+
+    result = await agent_native._run_native_segment(
+        system="MAX VERIFICATION OVERRIDE",
+        task="Continue",
+        execute=execute,
+        completion_check=lambda _files, _evidence: "more product work remains",
+        initial_files={"src/app/page.tsx": "existing product"},
+        max_steps=agent_native._NO_WRITE_ABORT_AT,
+    )
+
+    assert calls == agent_native._NO_WRITE_ABORT_AT
+    assert result.stop_reason == "exploring"
 
 
 @pytest.mark.asyncio

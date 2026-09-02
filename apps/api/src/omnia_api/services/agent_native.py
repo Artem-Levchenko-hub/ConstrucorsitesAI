@@ -17,6 +17,7 @@ stays the prod default until this is verified on real builds and billing is wire
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -788,7 +789,7 @@ async def _call_messages(
     raise last or RuntimeError("messages call failed")
 
 
-async def run_native_build(
+async def _run_native_segment(
     *,
     system: str,
     task: str,
@@ -805,6 +806,7 @@ async def run_native_build(
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
+    initial_files: Mapping[str, str] | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -819,6 +821,7 @@ async def run_native_build(
     url = messages_url or f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
+    baseline_files = dict(initial_files or {})
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     wrote_since_build = False
@@ -920,6 +923,7 @@ async def run_native_build(
                     steps=steps,
                     transcript=convo,
                     stop_reason="max_steps" if reason == "max_steps" else f"{reason}_red",
+                    evidence=_evidence(),
                 )
             return AgentResult(
                 done=True,
@@ -931,6 +935,7 @@ async def run_native_build(
                 steps=steps,
                 transcript=convo,
                 stop_reason=f"{reason}_green",
+                evidence=_evidence(),
             )
         return AgentResult(
             done=False,
@@ -939,6 +944,7 @@ async def run_native_build(
             steps=steps,
             transcript=convo,
             stop_reason=f"{reason}_red",
+            evidence=_evidence(),
         )
 
     async with httpx.AsyncClient() as client:
@@ -946,6 +952,7 @@ async def run_native_build(
             force_max_entry_write = (
                 max_runtime
                 and completion_check is not None
+                and _MAX_PRODUCT_ENTRY_PATH not in baseline_files
                 and _MAX_PRODUCT_ENTRY_PATH not in written
                 and (
                     no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
@@ -1000,6 +1007,7 @@ async def run_native_build(
                     steps=step + 1,
                     transcript=convo,
                     stop_reason="error",
+                    evidence=_evidence(),
                 )
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
@@ -1029,6 +1037,7 @@ async def run_native_build(
                         steps=step + 1,
                         transcript=convo,
                         stop_reason="done_green",
+                        evidence=_evidence(),
                     )
                 convo.append(
                     {
@@ -1083,7 +1092,10 @@ async def run_native_build(
 
                 action = _tool_use_to_action(tu)
                 _max_contract_active = max_runtime and completion_check is not None
-                _max_entry_missing = _MAX_PRODUCT_ENTRY_PATH not in written
+                _max_entry_missing = (
+                    _MAX_PRODUCT_ENTRY_PATH not in baseline_files
+                    and _MAX_PRODUCT_ENTRY_PATH not in written
+                )
                 _max_prewrite_locked = (
                     _max_contract_active
                     and _max_entry_missing
@@ -1133,7 +1145,10 @@ async def run_native_build(
                 if name in ("write_file", "edit_file") and obs.get("ok"):
                     normalized_path = _normalize_agent_path(action.path)
                     tracked_path = normalized_path if _max_contract_active else action.path
-                    previous_content = written.get(tracked_path)
+                    previous_content = written.get(
+                        tracked_path,
+                        baseline_files.get(tracked_path),
+                    )
                     next_content: str | None = None
                     if name == "write_file":
                         next_content = action.args.get("content", "")
@@ -1149,7 +1164,8 @@ async def run_native_build(
                     content_changed = next_content is None or next_content != previous_content
                     if _max_contract_active:
                         if (
-                            _MAX_PRODUCT_ENTRY_PATH not in written
+                            _MAX_PRODUCT_ENTRY_PATH not in baseline_files
+                            and _MAX_PRODUCT_ENTRY_PATH not in written
                             and normalized_path != _MAX_PRODUCT_ENTRY_PATH
                         ):
                             non_entry_writes_before_entry += 1
@@ -1166,13 +1182,17 @@ async def run_native_build(
                             continue
                         normalized_path = _normalize_agent_path(_raw_path)
                         tracked_path = normalized_path
-                        previous_content = written.get(tracked_path)
+                        previous_content = written.get(
+                            tracked_path,
+                            baseline_files.get(tracked_path),
+                        )
                         written[tracked_path] = _raw_content
                         content_changed = previous_content != _raw_content
                         _shell_changed = _shell_changed or content_changed
                         if _max_contract_active:
                             if (
-                                _MAX_PRODUCT_ENTRY_PATH not in written
+                                _MAX_PRODUCT_ENTRY_PATH not in baseline_files
+                                and _MAX_PRODUCT_ENTRY_PATH not in written
                                 and normalized_path != _MAX_PRODUCT_ENTRY_PATH
                             ):
                                 non_entry_writes_before_entry += 1
@@ -1203,6 +1223,7 @@ async def run_native_build(
             if (
                 max_runtime
                 and completion_check is not None
+                and _MAX_PRODUCT_ENTRY_PATH not in baseline_files
                 and _MAX_PRODUCT_ENTRY_PATH not in written
                 and non_entry_writes_before_entry > 0
                 and _MAX_PRODUCT_ENTRY_REQUIRED_RESULT not in str(results)
@@ -1219,6 +1240,7 @@ async def run_native_build(
                     steps=step + 1,
                     transcript=convo,
                     stop_reason="done",
+                    evidence=_evidence(),
                 )
             # Infra circuit breaker: a turn where EVERY executed op died on
             # infra means the container/orchestrator is gone — the model can't
@@ -1242,6 +1264,7 @@ async def run_native_build(
                     max_entry_write_required = (
                         max_runtime
                         and completion_check is not None
+                        and _MAX_PRODUCT_ENTRY_PATH not in baseline_files
                         and _MAX_PRODUCT_ENTRY_PATH not in written
                         and no_write_turns >= _MAX_PREWRITE_DISCOVERY_TURNS
                     )
@@ -1273,6 +1296,7 @@ async def run_native_build(
                     steps=step + 1,
                     transcript=convo,
                     stop_reason="infra_error",
+                    evidence=_evidence(),
                 )
             if no_write_turns >= _NO_WRITE_ABORT_AT:
                 return AgentResult(
@@ -1285,6 +1309,7 @@ async def run_native_build(
                     steps=step + 1,
                     transcript=convo,
                     stop_reason="exploring",
+                    evidence=_evidence(),
                 )
 
     # Hard stop means no more provider calls. A local build decides whether the
@@ -1293,4 +1318,210 @@ async def run_native_build(
         steps=effective_max_steps,
         reason="max_steps",
         detail="build failed",
+    )
+
+
+NativeSegmentRunner = Callable[
+    [
+        str,
+        Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+        Mapping[str, str],
+    ],
+    Awaitable[AgentResult],
+]
+
+_CONTINUATION_TERMINAL_REASONS = frozenset(
+    {"error", "infra_error", "provider_stopped_red"}
+)
+
+
+def _merge_segment_evidence(
+    previous: Mapping[str, int],
+    current: Mapping[str, int],
+    *,
+    wrote_files: bool,
+) -> dict[str, int]:
+    # A source write invalidates every earlier "*_after_write" proof. Native
+    # segments expose proof relative to their own latest write, so only the new
+    # segment may certify the resulting tree. A proof-only continuation can
+    # safely add its evidence to the unchanged tree.
+    if wrote_files:
+        return dict(current)
+    merged = dict(previous)
+    for name, count in current.items():
+        merged[name] = max(merged.get(name, 0), count)
+    return merged
+
+
+def _cumulative_completion_check(
+    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+    baseline_files: Mapping[str, str],
+    baseline_evidence: Mapping[str, int],
+) -> Callable[[Mapping[str, str], Mapping[str, int]], str | None]:
+    def check(
+        written: Mapping[str, str],
+        evidence: Mapping[str, int],
+    ) -> str | None:
+        if completion_check is None:
+            return None
+        effective_files = {**baseline_files, **written}
+        effective_evidence = _merge_segment_evidence(
+            baseline_evidence,
+            evidence,
+            wrote_files=bool(written),
+        )
+        return completion_check(effective_files, effective_evidence)
+
+    return check
+
+
+async def _run_native_segments(
+    *,
+    task: str,
+    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+    max_segments: int,
+    run_segment: NativeSegmentRunner,
+) -> AgentResult:
+    """Continue one native build without creating another run or workspace.
+
+    Each provider segment gets a fresh transcript window, while the files and
+    fact-gate evidence remain cumulative. Continuation is allowed only after
+    observable file/proof progress; infrastructure failures and a whole
+    no-progress segment stop immediately. ``max_segments`` is a runaway
+    backstop, not a success condition.
+    """
+
+    segment_limit = max(1, int(max_segments))
+    cumulative_files: dict[str, str] = {}
+    cumulative_evidence: dict[str, int] = {}
+    cumulative_transcript: list[dict[str, str]] = []
+    total_steps = 0
+    segment_task = task
+    last_result: AgentResult | None = None
+
+    for segment in range(1, segment_limit + 1):
+        files_before = dict(cumulative_files)
+        evidence_before = dict(cumulative_evidence)
+
+        segment_completion_check = (
+            _cumulative_completion_check(
+                completion_check,
+                files_before,
+                evidence_before,
+            )
+            if completion_check is not None
+            else None
+        )
+
+        result = await run_segment(segment_task, segment_completion_check, files_before)
+        last_result = result
+        total_steps += result.steps
+        cumulative_transcript.extend(result.transcript)
+        wrote_files = bool(result.files)
+        cumulative_files.update(result.files)
+        cumulative_evidence = _merge_segment_evidence(
+            cumulative_evidence,
+            result.evidence,
+            wrote_files=wrote_files,
+        )
+
+        combined = AgentResult(
+            done=result.done,
+            summary=result.summary,
+            files=dict(cumulative_files),
+            steps=total_steps,
+            transcript=list(cumulative_transcript),
+            stop_reason=result.stop_reason,
+            evidence=dict(cumulative_evidence),
+            segments=segment,
+        )
+        if result.done or segment_limit == 1:
+            return combined
+        if result.stop_reason in _CONTINUATION_TERMINAL_REASONS:
+            return combined
+
+        file_progress = cumulative_files != files_before
+        evidence_progress = cumulative_evidence != evidence_before
+        if not file_progress and not evidence_progress:
+            combined.summary = (
+                "Автономная генерация остановлена: целый сегмент не изменил "
+                "продукт и не добавил проверяемых доказательств готовности."
+            )
+            combined.stop_reason = "no_progress"
+            return combined
+        if segment == segment_limit:
+            combined.summary = (
+                f"{result.summary}\n\nДостигнут защитный предел автономного продолжения "
+                f"({segment_limit} сегм.)."
+            ).strip()
+            combined.stop_reason = "max_segments"
+            return combined
+
+        segment_task = (
+            "Continue the autonomous build in the same GenerationRun and the same "
+            "Project Cell. All files from the previous segment are preserved. Inspect "
+            "the live tree, finish the remaining acceptance gap, rerun required proof "
+            "after any source write, and call done only when the product is complete. "
+            "Do not restart, scaffold over, or duplicate the project.\n\n"
+            f"Original request:\n{task}\n\n"
+            f"Previous segment stopped as {result.stop_reason}:\n{result.summary}"
+        )
+        # Give the outer cancellation watcher a deterministic boundary before
+        # another provider request starts.
+        await asyncio.sleep(0)
+
+    assert last_result is not None  # segment_limit is always >= 1
+    return last_result
+
+
+async def run_native_build(
+    *,
+    system: str,
+    task: str,
+    execute: Callable[[Action], Awaitable[dict[str, Any]]],
+    user_id: Any = None,
+    project_id: Any = None,
+    run_id: Any = None,
+    message_id: Any = None,
+    free: bool = False,
+    emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
+    max_steps: int = 24,
+    max_segments: int = 1,
+    allow_max_bash: bool = False,
+    messages_url: str | None = None,
+    messages_headers: Mapping[str, str] | None = None,
+    messages_auth_factory: NativeMessagesAuthFactory | None = None,
+) -> AgentResult:
+    """Run one native generation, optionally continuing inside the same run."""
+
+    async def run_segment(
+        segment_task: str,
+        segment_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+        initial_files: Mapping[str, str],
+    ) -> AgentResult:
+        return await _run_native_segment(
+            system=system,
+            task=segment_task,
+            execute=execute,
+            user_id=user_id,
+            project_id=project_id,
+            run_id=run_id,
+            message_id=message_id,
+            free=free,
+            emit=emit,
+            completion_check=segment_check,
+            max_steps=max_steps,
+            allow_max_bash=allow_max_bash,
+            messages_url=messages_url,
+            messages_headers=messages_headers,
+            messages_auth_factory=messages_auth_factory,
+            initial_files=initial_files,
+        )
+
+    return await _run_native_segments(
+        task=task,
+        completion_check=completion_check,
+        max_segments=max_segments,
+        run_segment=run_segment,
     )

@@ -1322,14 +1322,14 @@ _MAX_STABLE_SINGLE_PASS_STEPS = 40
 
 
 def _agent_step_budget(project_template: str, *, configured_steps: int) -> int:
-    """Return the turn budget for one coherent product-build transcript.
+    """Return the turn budget for each coherent provider segment.
 
     The verified early MAX production loop (revision ``217328d9``) completed a
-    real five-screen app in one 40-step pass. Letting a shorter pass start a new
-    recovery segment created the later "этапы 2–5" failure mode: every segment
-    reinterpreted a working product and kept expanding it. MAX
-    therefore gets one coherent pass with at least the proven budget. Other
-    stacks retain their configured budget.
+    real five-screen app in 40 steps, so MAX keeps that floor per segment. The
+    same-run continuation layer may open another fresh transcript only when the
+    prior segment made measurable file/proof progress and the completion contract
+    is still open; a no-progress segment stops instead of repeatedly expanding a
+    working product. Other stacks retain their configured budget and one segment.
     """
 
     steps = max(1, int(configured_steps))
@@ -4984,8 +4984,11 @@ async def _process_prompt(
                         )
 
             if _agent_res is None and get_settings().use_native_agent:
-                # Native tool-use path (owner «как Claude Code, только на сервере»): ONE
-                # model end-to-end via native Anthropic tools + preserved thinking;
+                # Native tool-use path (owner «как Claude Code, только на сервере»): one
+                # GenerationRun/Project Cell, with bounded fresh provider segments
+                # while verified product progress continues. Each segment preserves
+                # cumulative files and completion evidence; it never creates another
+                # message, run or workspace.
                 # fact-gate only (the `build` tool). Reuses the SAME executor; the
                 # native system prompt drops the text-action LOOP_PROTOCOL. Handles
                 # bare/from-scratch builds too (no forced template). Guards are
@@ -5021,6 +5024,11 @@ async def _process_prompt(
 
                     _completion_check = _max_completion_check
 
+                _native_max_segments = (
+                    get_settings().agent_max_segments
+                    if project_template == "max_miniapp" and not _is_edit
+                    else 1
+                )
                 _agent_res = await agent_native.run_native_build(
                     system=agent_native.native_system_prompt(_stack_guide or "", _skills),
                     task=_agent_user,
@@ -5033,6 +5041,7 @@ async def _process_prompt(
                     emit=_agent_emit,
                     completion_check=_completion_check,
                     max_steps=_agent_steps,
+                    max_segments=_native_max_segments,
                     allow_max_bash=_max_shell_enabled,
                 )
             elif _agent_res is None:
@@ -5085,13 +5094,13 @@ async def _process_prompt(
                     steps=_agent_res.steps,
                     transcript=_agent_res.transcript,
                     stop_reason="no_ai_write",
+                    evidence=_agent_res.evidence,
+                    segments=_agent_res.segments,
                 )
-            # MAX has one coherent provider pass. The same native transcript owns
-            # implementation and repair; the hard-stop path then performs local
-            # build/runtime/acceptance proof without starting a fresh model run.
-            # An incomplete result is rolled back below instead of being expanded
-            # by a new agent context (the former user-visible "этап 2/2").
-            _seg = 1
+            # Rollback is evaluated only after the same-run continuation policy
+            # reaches done, cancellation/infra/no-progress, or its runaway backstop.
+            # A bounded provider segment is not itself grounds to delete progress.
+            _seg = _agent_res.segments
             # A stopped run is never committed as a partially implemented edit,
             # even when its local typecheck happens to be green. Restore every
             # touched path from the last snapshot, remove newly-created files,
@@ -5162,6 +5171,8 @@ async def _process_prompt(
                                 in {"provider_stopped_green", "provider_stopped_red"}
                                 else "unsafe_changes_rolled_back"
                             ),
+                            evidence=_agent_res.evidence,
+                            segments=_agent_res.segments,
                         )
                         await _agent_emit(
                             "agent.step",
@@ -5231,6 +5242,8 @@ async def _process_prompt(
                             steps=_agent_res.steps,
                             transcript=_agent_res.transcript,
                             stop_reason="core_only_rolled_back",
+                            evidence=_agent_res.evidence,
+                            segments=_agent_res.segments,
                         )
                         await _agent_emit(
                             "agent.step",
