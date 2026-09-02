@@ -530,16 +530,7 @@ async def _prepare_max_runtime_context(
                 "ok": False,
             },
         )
-        agent_result = agent_builder.AgentResult(
-            done=False,
-            summary=(
-                "Генерация не запускалась: owner-only Project Cell "
-                f"недоступен ({cell_exc})."
-            ),
-            files={},
-            steps=0,
-            stop_reason="project_cell_unavailable",
-        )
+        raise
     else:
         if project_cell_handle is not None:
             base_agent_executor = project_cell_handle.execute

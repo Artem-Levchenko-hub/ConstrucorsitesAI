@@ -80,6 +80,10 @@ jobs:
           tests/test_generation_telegram_removal_migration.py
           tests/test_migrations_single_head.py
           tests/test_telegram_reporting_removed.py
+          tests/test_orchestrator_client.py
+          tests/test_project_cell_lifecycle.py
+          tests/test_project_cell_wire_contract.py
+          tests/test_messages_project_cell.py
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest

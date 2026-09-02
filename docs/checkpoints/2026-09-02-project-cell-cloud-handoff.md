@@ -229,3 +229,32 @@ Cold-start follow-up: cell HTTP probes allow 120 seconds per read (5-second
 connection limit), while legacy probes retain 20 seconds. Actual isolated Next.js
 compilation exceeded the old limit. Probe/executor tests: **37 passed**; scoped
 Ruff/Mypy and independent review clean. First release commit: `4e4b0fda`, PR #28.
+
+## Retained first-generation HTTP failure and fix — 2026-09-02
+
+- PR #28 merged and production API/worker/web/orchestrator were all healthy at
+  `608c254e517f21ed516e4e2b43402b34c67f544e`; migration head remained 0054.
+  Both final-source disposable runtime/HTTPS canaries passed. Owner routing was
+  enabled for exactly one verified allowlisted repository owner.
+- The retained first MAX generation was accepted with HTTP 202, but failed without
+  a snapshot. Actual API-to-orchestrator ensure omitted the required
+  `generation_run_id`; orchestrator validation returned HTTP 500. Direct-route
+  canaries did not cover this transport boundary. The failed setup also returned
+  an AgentResult that let the caller provision the legacy runtime and seed MAX core.
+- The patch carries the claimed generation lease in the ensure DTO, rejects a
+  lease-less ensure before dispatch, and propagates setup failure before legacy
+  provisioning, seed reads, core writes or model calls. An ASGI test validates the
+  adapter against the orchestrator's actual request/response models. CI now runs
+  the adapter, lifecycle, wire-contract and MAX fail-closed regression files.
+- Normal lifecycle reconciliation recorded no cell workspace/PostgreSQL resources
+  for the failed attempt. Only its legacy container was stopped; its data and
+  project remain preserved for retry. Do not treat the failed attempt as a working
+  generation or claim the broad resident-agent/dependency-install gaps are closed.
+- Pre-commit gates: release-critical tests 140 passed; expanded cell suite had
+  216 passed and one stale test assertion expecting a raw error instead of its
+  intentional stored hash. After correcting that assertion, both the missing-lease
+  and exact-lease tests passed. The focused HTTP test passed, MAX message tests
+  16 passed, and API Ruff/Mypy (244 files) were clean. Independent review found
+  no actionable defects. Commit/push/merge/deploy the fix, re-enable the same owner,
+  retry the retained project with a new idempotency key, and verify the actual
+  generated frontend, authenticated backend, database persistence and narrow UI.

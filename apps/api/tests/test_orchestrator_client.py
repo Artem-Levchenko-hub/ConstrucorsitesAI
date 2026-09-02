@@ -467,6 +467,7 @@ async def test_every_client_body_preserves_mutation_identity(
 ) -> None:
     raw_calls: list[dict[str, object]] = []
     workspace_id = UUID("00000000-0000-0000-0000-000000000021")
+    generation_run_id = UUID("00000000-0000-0000-0000-000000000022")
     operation_id = uuid4()
     digest = "b" * 64
 
@@ -491,6 +492,7 @@ async def test_every_client_body_preserves_mutation_identity(
             workspace_id=workspace_id,
             project_id=uuid4(),
             owner_id=uuid4(),
+            generation_run_id=generation_run_id,
             profile_version="docker-owner-cell-resources-v1",
             operation_id=operation_id,
             fencing_epoch=9,
@@ -512,6 +514,8 @@ async def test_every_client_body_preserves_mutation_identity(
     assert sent_json["operation_id"] == str(operation_id)
     assert sent_json["fencing_epoch"] == 9
     assert sent_json["request_digest"] == digest
+    if method_name == "ensure":
+        assert sent_json["generation_run_id"] == str(generation_run_id)
     assert sent_json == dto.to_wire_json()
 
 
