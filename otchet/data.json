@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-02",
-  "version": 55,
+  "version": 56,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2464,13 +2464,13 @@
   {
    "id": "H129",
    "title": "Capacity-based очередь Project Cell уберёт числовой лимит проектов без гонок и потери данных",
-   "status": "open",
+   "status": "testing",
    "score": null,
    "category": "автономность / инфра / очередь / MAX / Project Cell",
    "period": "02.09",
    "description": "Если заменить max_active_bundles на атомарное резервирование CPU, RAM, диска и inode, а ожидание сделать durable-статусом с автоматической гибернацией idle-ячеек, владелец сможет создавать проекты подряд без искусственного лимита и повторной отправки prompt.",
-   "evidence": "Production-диагностика проекта БарберПро зафиксировала точную причину: orchestrator вернул container_failure/active_bundle_limit, потому что прежний проект уже занимал единственный разрешённый bundle из draft, PostgreSQL и Redis. API ошибочно превратил детерминированный отказ до side effect в indeterminate. На сервере 8 CPU, около 10,6 GiB доступной RAM и 204 GiB свободного диска; значит сбой вызван числовым guard, а не фактическим исчерпанием ёмкости. Утверждённый контракт записан в docs/superpowers/specs/2026-09-02-project-cell-capacity-scheduler-design.md: durable FIFO-очередь, транзакционные reservation/lease, fencing, typed capacity wait, safe idle hibernate/wake и production-proof минимум трёх быстрых проектов.",
-   "impact": "Причина пользовательского сбоя отделена от мощности сервера и превращена в проверяемый план без фиксированного числа проектов. Пока runtime не менялся: БарберПро автоматически не восстановлен, H129 остаётся open, score=null, а новый шаг V4=false до реализации, деплоя и живого frontend→backend→PostgreSQL proof для трёх последовательных проектов.",
+   "evidence": "Production-диагностика проекта БарберПро зафиксировала точную причину: orchestrator вернул container_failure/active_bundle_limit, потому что прежний проект уже занимал единственный разрешённый bundle из draft, PostgreSQL и Redis. API ошибочно превратил детерминированный отказ до side effect в indeterminate. На сервере 8 CPU, около 10,6 GiB доступной RAM и 204 GiB свободного диска; значит сбой вызван числовым guard, а не фактическим исчерпанием ёмкости. Утверждённый контракт записан в docs/superpowers/specs/2026-09-02-project-cell-capacity-scheduler-design.md. Исполнимый TDD-план docs/superpowers/plans/2026-09-02-project-cell-capacity-scheduler.md связывает durable FIFO-очередь, транзакционные reservation/lease, fencing, typed capacity wait, safe idle hibernate/wake, restart recovery и production-proof минимум трёх быстрых проектов с конкретными файлами и проверками. Чистый baseline: orchestrator 71 passed, web lifecycle 16 passed; локальный API baseline заблокирован отсутствием PostgreSQL listener и Docker Desktop, поэтому DB/migration gate явно перенесён в disposable PostgreSQL 16 до доставки.",
+   "impact": "Причина пользовательского сбоя отделена от мощности сервера и переведена из идеи в реализацию по девяти проверяемым задачам без фиксированного числа проектов. H129 теперь testing, но runtime пока не менялся: БарберПро автоматически не восстановлен, score=null, а новый шаг V4=false до кода, деплоя и живого frontend→backend→PostgreSQL proof для трёх последовательных проектов.",
    "next_vector": "V4"
   }
  ],
