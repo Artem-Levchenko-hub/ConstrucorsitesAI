@@ -244,9 +244,9 @@ def _build_project_cell_build_cmd() -> str:
             ),
             "}",
             "NODE",
-            "if [ -f drizzle.config.ts ] && [ -f src/lib/db/schema.ts ]; then",
-            "  pnpm db:push",
-            "fi",
+            # Cells are migration-owned, just like their draft runtime. Schema
+            # reconciliation would treat the migration ledger/indexes as drift.
+            "node scripts/apply-migrations.mjs",
             "rm -rf -- .next/types/app .next/types/validator.ts || true",
             "if grep -q '\"typecheck\"' package.json; then",
             "  pnpm typecheck",

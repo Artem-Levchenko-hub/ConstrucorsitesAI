@@ -258,3 +258,24 @@ Ruff/Mypy and independent review clean. First release commit: `4e4b0fda`, PR #28
   no actionable defects. Commit/push/merge/deploy the fix, re-enable the same owner,
   retry the retained project with a new idempotency key, and verify the actual
   generated frontend, authenticated backend, database persistence and narrow UI.
+
+## Real generation and migration-driven build follow-up — 2026-09-02
+
+- The HTTP/fail-closed fix merged as PR #29. All seven CI jobs passed; production
+  API, worker, web and orchestrator are healthy on
+  `40b7d1b2f9891dbecabb8393ee7881f2ac8d501b`, migration head 0054. The single verified
+  owner is enabled. Actual public generation now completes cell ensure and reaches
+  native model file writes and build commands; no legacy runtime is running.
+- The retained run is still active at this checkpoint. Its frontend was written,
+  signed preview bootstrap returns 307, and page/health/authenticated actions
+  return 200. Browser inspection nevertheless found a client-side exception;
+  there is no accepted app snapshot yet. Do not call the first app finished.
+- Its build exposed another concrete defect: selected-cell build invoked
+  `pnpm db:push`, although the cell runtime uses SQL migrations. Drizzle proposed
+  dropping `__omnia_migrations` and managed indexes. Read-only SQL confirmed the
+  ledger, tables, unique constraint and foreign key remained intact.
+- This follow-up replaces that build step with the same fail-closed
+  `node scripts/apply-migrations.mjs` contract used by the cell runtime, before
+  typechecking. Legacy builds remain unchanged. Verify/review/push the patch;
+  deploy only after the active generation releases its lease. Then recheck
+  migration metadata and complete the actual UI/persistence proof.
