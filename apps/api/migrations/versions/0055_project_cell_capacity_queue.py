@@ -14,13 +14,20 @@ down_revision: str | None = "0054_project_cell_candidates"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+_GENERATION_STATUS_CONSTRAINT_PRE_0055 = (
+    "ck_generation_runs_ck_generation_runs_status_allowed"
+)
+_GENERATION_STATUS_CONSTRAINT_0055 = "ck_generation_runs_status_allowed"
+
 
 def upgrade() -> None:
     op.drop_constraint(
-        op.f("ck_generation_runs_status_allowed"), "generation_runs", type_="check"
+        op.f(_GENERATION_STATUS_CONSTRAINT_PRE_0055),
+        "generation_runs",
+        type_="check",
     )
     op.create_check_constraint(
-        "status_allowed",
+        op.f(_GENERATION_STATUS_CONSTRAINT_0055),
         "generation_runs",
         "status IN ('pending', 'queued_for_capacity', 'running', 'cancel_requested', "
         "'cancelled', 'completed', 'failed')",
@@ -153,10 +160,12 @@ def downgrade() -> None:
 
     op.drop_index("uq_generation_runs_one_active_per_project", table_name="generation_runs")
     op.drop_constraint(
-        op.f("ck_generation_runs_status_allowed"), "generation_runs", type_="check"
+        op.f(_GENERATION_STATUS_CONSTRAINT_0055),
+        "generation_runs",
+        type_="check",
     )
     op.create_check_constraint(
-        "status_allowed",
+        op.f(_GENERATION_STATUS_CONSTRAINT_PRE_0055),
         "generation_runs",
         "status IN ('pending', 'running', 'cancel_requested', 'cancelled', 'completed', 'failed')",
     )

@@ -11,11 +11,14 @@ line with exactly one head and one root.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import Mock, call
 from uuid import uuid4
 
 import asyncpg  # type: ignore[import-untyped]
@@ -121,6 +124,54 @@ def _chain() -> dict[str, str | None]:
         down = _DOWN.search(text)
         chain[rev.group(1)] = down.group(1) if down else None
     return chain
+
+
+def _load_capacity_queue_migration() -> ModuleType:
+    path = _VERSIONS / "0055_project_cell_capacity_queue.py"
+    spec = importlib.util.spec_from_file_location("migration_0055_capacity_queue", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_capacity_queue_migration_uses_actual_generation_constraint_names() -> None:
+    migration = _load_capacity_queue_migration()
+    recorder = Mock()
+    recorder.f.side_effect = lambda name: name
+    migration.op = recorder
+
+    migration.upgrade()
+
+    recorder.drop_constraint.assert_any_call(
+        "ck_generation_runs_ck_generation_runs_status_allowed",
+        "generation_runs",
+        type_="check",
+    )
+    upgrade_create = next(
+        item
+        for item in recorder.create_check_constraint.call_args_list
+        if item.args[1] == "generation_runs"
+    )
+    assert upgrade_create.args[0] == "ck_generation_runs_status_allowed"
+    assert "queued_for_capacity" in str(upgrade_create.args[2])
+
+    recorder.reset_mock()
+    recorder.f.side_effect = lambda name: name
+    migration.downgrade()
+
+    assert call(
+        "ck_generation_runs_status_allowed", "generation_runs", type_="check"
+    ) in recorder.drop_constraint.call_args_list
+    downgrade_create = next(
+        item
+        for item in recorder.create_check_constraint.call_args_list
+        if item.args[1] == "generation_runs"
+    )
+    assert downgrade_create.args[0] == (
+        "ck_generation_runs_ck_generation_runs_status_allowed"
+    )
+    assert "queued_for_capacity" not in str(downgrade_create.args[2])
 
 
 def test_revision_ids_are_unique() -> None:
