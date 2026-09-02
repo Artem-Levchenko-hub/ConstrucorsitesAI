@@ -674,6 +674,46 @@ async def test_reconcile_cleanup_removes_only_expected_ephemera(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", ["volume-read", "volume-write", "volume-delete", "volume-promote", "volume-clear"]
+)
+async def test_reconcile_recognizes_request_helpers_without_widening_ownership(
+    tmp_path: Path, kind: str,
+) -> None:
+    manager, docker, _, _ = _make_manager(tmp_path)
+    spec = _spec(uuid4())
+    handle = await manager.ensure(spec, _mutation("a", 1))
+    volume_name = handle.resource_names.workspace_volume
+    stem = f"{volume_name[:48].rstrip('-')}-{kind}"
+    labels = {**identity_labels(spec, kind), "omnia.helper": "true"}
+    template = DockerContainerSpec(
+        name=stem, image=manager.profile.backup_image, labels=labels,
+        user="0:0", cap_add=[], cap_drop=["ALL"], read_only=True,
+        privileged=False, security_opt=["no-new-privileges:true"], ports={},
+        env={}, volumes=(volume_name,), mounts=(), network_names=(), helper=True,
+    )
+    valid_names = [stem, f"{stem}-{uuid4().hex}"]
+    foreign_owner_name = f"{stem}-{uuid4().hex}"
+    invalid_names = [
+        f"{stem}-{'a' * 31}", f"{stem}-{'z' * 32}",
+        f"{stem}-extra-{'a' * 32}", f"foreign-{kind}-{uuid4().hex}",
+    ]
+    for name in [*valid_names, *invalid_names]:
+        await docker.create_container(replace(template, name=name))
+    await docker.create_container(replace(
+        template, name=foreign_owner_name,
+        labels={**labels, "omnia.owner_id": str(uuid4())},
+    ))
+
+    observation = await manager.reconcile(spec.workspace_id, _mutation("b", 2))
+
+    assert observation.state == "resources_ready"
+    assert all(name not in docker.containers for name in valid_names)
+    assert all(name in docker.containers for name in [*invalid_names, foreign_owner_name])
+    assert volume_name in docker.volumes
+
+
+@pytest.mark.asyncio
 async def test_reconcile_marks_missing_ready_compute_degraded_and_removes_leaks(
     tmp_path: Path,
 ) -> None:

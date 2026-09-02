@@ -1832,8 +1832,16 @@ class DockerCellResourceManager:
             return self._matches_operation_name(record.name, f"{stem}-{kind}-")
         for source_name in names.retained_volumes:
             prefix = source_name[:48].rstrip("-")
-            if record.name == f"{prefix}-{kind}":
+            helper_stem = f"{prefix}-{kind}"
+            if record.name == helper_stem:
                 return True
+            # New volume helpers belong to individual requests. Retain support
+            # for legacy fixed names, but accept only our exact UUID-hex suffix.
+            request_prefix = f"{helper_stem}-"
+            if record.name.startswith(request_prefix):
+                suffix = record.name.removeprefix(request_prefix)
+                if len(suffix) == 32 and all(char in "0123456789abcdef" for char in suffix):
+                    return True
         return False
 
     def _is_expected_secret_staging_volume(
