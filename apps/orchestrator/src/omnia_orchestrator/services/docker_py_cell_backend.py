@@ -1184,7 +1184,19 @@ class DockerPyCellBackend:
         return container
 
     async def _remove_container_object(self, container: Any) -> None:
-        await asyncio.to_thread(lambda: container.remove(force=True))
+        try:
+            await asyncio.to_thread(lambda: container.remove(force=True))
+        except docker.errors.NotFound:
+            return
+        except docker.errors.APIError as exc:
+            detail = f"{getattr(exc, 'explanation', '') or ''} {exc}".lower()
+            if exc.status_code == 404 or (
+                exc.status_code == 409
+                and "removal of container" in detail
+                and "already in progress" in detail
+            ):
+                return
+            raise
 
     def _get_archive_bytes(self, container: Any, path: str, label: str) -> bytes:
         chunks, _ = container.get_archive(path)

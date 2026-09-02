@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
 from omnia_api.services.generation_runs import (
+    _finalize_generation_run,
     finalize_generation_run,
     reconcile_completed_build_runs,
     recover_interrupted_generation_runs,
@@ -559,6 +561,36 @@ async def test_tracked_prompt_uses_product_outcome_finalizer(
 
     assert statuses == ["running"]
     assert finalized == [run_id]
+
+
+async def test_product_outcome_finalizer_never_overwrites_cancelled_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finished_at = object()
+    run = SimpleNamespace(
+        status="cancelled",
+        assistant_message_id=None,
+        response_mode="build",
+        finished_at=finished_at,
+        error=None,
+    )
+    session = AsyncMock(spec=AsyncSession)
+    session.get.return_value = run
+    session.scalar.return_value = run
+    compile_memory = AsyncMock()
+    monkeypatch.setattr(
+        "omnia_api.services.generation_runs.compile_terminal_run_memory",
+        compile_memory,
+    )
+
+    result = await _finalize_generation_run(session, uuid.uuid4())
+
+    assert result == "cancelled"
+    assert run.status == "cancelled"
+    assert run.finished_at is finished_at
+    assert run.error is None
+    compile_memory.assert_not_awaited()
+    session.commit.assert_awaited_once()
 
 
 async def test_build_without_snapshot_is_failed_product_outcome(

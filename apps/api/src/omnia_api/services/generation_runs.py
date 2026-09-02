@@ -491,9 +491,17 @@ async def set_generation_run_status(
 
 
 async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
-    run = await session.get(GenerationRun, run_id)
+    run = await session.scalar(
+        select(GenerationRun)
+        .where(GenerationRun.id == run_id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
     if run is None:
         return "failed"
+    if run.status in {"completed", "failed", "cancelled"}:
+        await session.commit()
+        return run.status
     message = (
         await session.get(Message, run.assistant_message_id)
         if run.assistant_message_id is not None

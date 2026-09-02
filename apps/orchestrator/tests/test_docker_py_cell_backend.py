@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import tarfile
+import threading
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 import docker  # type: ignore[import-untyped]
@@ -479,6 +482,62 @@ def _backend(client: _FakeClient) -> DockerPyCellBackend:
         helper_image="alpine@sha256:" + "9" * 64,
         client_factory=lambda _host: client,
     )
+
+
+def _docker_api_error(status_code: int, explanation: str) -> docker.errors.APIError:
+    response = SimpleNamespace(
+        status_code=status_code,
+        url="http+docker://localhost/v1.51/containers/helper",
+        reason="Conflict" if status_code == 409 else "Not Found",
+    )
+    return docker.errors.APIError(
+        explanation,
+        response=response,
+        explanation=explanation,
+    )
+
+
+@pytest.mark.asyncio
+async def test_helper_container_removal_is_idempotent_during_concurrent_cleanup() -> None:
+    backend = _backend(_FakeClient())
+    barrier = threading.Barrier(2)
+    attempt_lock = threading.Lock()
+    attempts = 0
+
+    class ConcurrentlyRemovedContainer:
+        def remove(self, *, force: bool) -> None:
+            nonlocal attempts
+            assert force is True
+            with attempt_lock:
+                attempts += 1
+                attempt = attempts
+            barrier.wait(timeout=2)
+            if attempt == 2:
+                raise _docker_api_error(
+                    409,
+                    "removal of container helper is already in progress",
+                )
+
+    removing = ConcurrentlyRemovedContainer()
+    await asyncio.gather(
+        backend._remove_container_object(removing),
+        backend._remove_container_object(removing),
+    )
+
+    class MissingContainer:
+        def remove(self, *, force: bool) -> None:
+            assert force is True
+            raise docker.errors.NotFound("helper is already gone")
+
+    await backend._remove_container_object(MissingContainer())
+
+    class ConflictedContainer:
+        def remove(self, *, force: bool) -> None:
+            assert force is True
+            raise _docker_api_error(409, "container is paused by another operation")
+
+    with pytest.raises(docker.errors.APIError, match="paused by another operation"):
+        await backend._remove_container_object(ConflictedContainer())
 
 
 @pytest.mark.asyncio

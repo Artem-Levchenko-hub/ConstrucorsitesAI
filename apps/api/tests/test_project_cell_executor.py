@@ -28,6 +28,7 @@ from omnia_api.routers import messages
 from omnia_api.services import project_cell_executor
 from omnia_api.services.agent_builder import Action
 from omnia_api.services.generation_runs import (
+    finalize_generation_run,
     promote_generation_after_admission,
     write_capacity_dispatch_claim,
 )
@@ -1364,7 +1365,7 @@ async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
     assert "workspace generation lease mismatch" in str(caught.value)
 
 
-async def test_queued_cancel_wins_concurrently_with_running_ensure_and_releases_lease(
+async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
     monkeypatch: pytest.MonkeyPatch,
     db_session: AsyncSession,
     test_engine: AsyncEngine,
@@ -1442,6 +1443,27 @@ async def test_queued_cancel_wins_concurrently_with_running_ensure_and_releases_
         await asyncio.Future()
         return "lost"
 
+    async def outer_project_cell_flow() -> None:
+        try:
+            await project_cell_executor.maybe_create_project_cell_executor(
+                project_id=project.id,
+                project_slug=project.slug,
+                project_template="max_miniapp",
+                user_id=owner.id,
+                generation_run_id=run.id,
+                legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+                capacity_dispatch_token=dispatch_token,
+            )
+        except project_cell_executor.ProjectCellExecutorUnavailable:
+            # The outer build flow converts Project Cell setup failure into a
+            # normal product outcome, after the fenced release has completed.
+            return
+
+    async def finalize_with_test_database(run_id: UUID) -> str:
+        factory = async_sessionmaker(test_engine, expire_on_commit=False)
+        async with factory() as session:
+            return await finalize_generation_run(run_id, session)
+
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
     monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", ready_readiness)
     monkeypatch.setattr(
@@ -1458,18 +1480,11 @@ async def test_queued_cancel_wins_concurrently_with_running_ensure_and_releases_
     monkeypatch.setattr(messages, "set_generation_run_status", noop)
     monkeypatch.setattr(messages, "_emergency_error", noop)
     monkeypatch.setattr(messages, "clear_generation_cancel", noop)
+    monkeypatch.setattr(messages, "finalize_generation_run", finalize_with_test_database)
 
     task = asyncio.create_task(
         messages._run_tracked_prompt(
-            project_cell_executor.maybe_create_project_cell_executor(
-                project_id=project.id,
-                project_slug=project.slug,
-                project_template="max_miniapp",
-                user_id=owner.id,
-                generation_run_id=run.id,
-                legacy_execute=lambda _action: None,  # type: ignore[arg-type]
-                capacity_dispatch_token=dispatch_token,
-            ),
+            outer_project_cell_flow(),
             run_id=run.id,
             project_id=project.id,
             assistant_message_id=assistant.id,
@@ -1505,6 +1520,7 @@ async def test_queued_cancel_wins_concurrently_with_running_ensure_and_releases_
             .all()
         )
     assert persisted_run is not None and persisted_run.status == "cancelled"
+    assert persisted_run.error is None
     assert workspace is not None and workspace.generation_run_id is None
     assert signalled_runs == []
     assert executed_kinds == ["ensure", "release"]
