@@ -6,7 +6,7 @@ import tarfile
 import threading
 from pathlib import PurePosixPath
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import docker  # type: ignore[import-untyped]
 import pytest
@@ -149,9 +149,10 @@ class _FakeNetwork:
     def __init__(self, name: str, labels: dict[str, str], *, internal: bool) -> None:
         self.id = f"net-{name}"
         self.name = name
-        self.attrs = {"Labels": dict(labels), "Internal": internal}
+        self.attrs: dict[str, Any] = {"Labels": dict(labels), "Internal": internal}
         self.removed = False
         self.connections: list[str] = []
+        self.event_log: list[str] | None = None
 
     def remove(self) -> None:
         self.removed = True
@@ -164,7 +165,8 @@ class _FakeNetwork:
 
 
 class _FakeNetworks:
-    def __init__(self) -> None:
+    def __init__(self, client: _FakeClient) -> None:
+        self.client = client
         self.items: dict[str, _FakeNetwork] = {}
         self.create_calls: list[dict[str, Any]] = []
         self.list_calls: list[dict[str, Any] | None] = []
@@ -202,7 +204,11 @@ class _FakeNetworks:
         if not filters or "label" not in filters:
             return list(self.items.values())
         key, expected = str(filters["label"]).split("=", 1)
-        return [item for item in self.items.values() if item.attrs["Labels"].get(key) == expected]
+        return [
+            item
+            for item in self.items.values()
+            if cast(dict[str, str], item.attrs["Labels"]).get(key) == expected
+        ]
 
 
 class _FakeContainer:
@@ -383,7 +389,7 @@ class _FakeContainer:
         return _FakeExecResult()
 
     def _simulate_workspace_command_status(self) -> int:
-        if self.command[:3] != ["sh", "-eu", "-c"]:
+        if self.command is None or self.command[:3] != ["sh", "-eu", "-c"]:
             return 0
         script = self.command[3]
         environment = self.kwargs.get("environment") or {}
@@ -461,7 +467,7 @@ class _FakeClient:
         self.ping_calls = 0
         self.events: list[str] = []
         self.volumes = _FakeVolumes()
-        self.networks = _FakeNetworks()
+        self.networks = _FakeNetworks(self)
         self.containers = _FakeContainers(self)
 
     def ping(self) -> None:
@@ -495,6 +501,197 @@ def _docker_api_error(status_code: int, explanation: str) -> docker.errors.APIEr
         response=response,
         explanation=explanation,
     )
+
+
+@pytest.mark.asyncio
+async def test_volume_inspection_reads_only_metadata() -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"large.db": b"private"}
+    )
+    record = await _backend(client).get_volume("workspace-vol")
+    assert record is not None
+    assert record.name == "workspace-vol"
+    assert record.labels == _labels("workspace")
+    assert record.files == {}
+    assert client.containers.create_calls == []
+    assert await _backend(client).get_volume("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_parallel_volume_readers_have_independent_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"proof.txt": b"retained"}
+    )
+    readers = 6
+    barrier = threading.Barrier(readers)
+    create_lock = threading.Lock()
+    original_create = client.containers.create
+    original_archive = _FakeContainer.get_archive
+
+    def create(image: str, command: list[str] | None = None, **kwargs: Any) -> _FakeContainer:
+        with create_lock:
+            if kwargs["name"] in client.containers.items:
+                raise _docker_api_error(409, "The container name is already in use")
+            return original_create(image, command, **kwargs)
+
+    def read(container: _FakeContainer, path: str) -> tuple[list[bytes], dict[str, object]]:
+        barrier.wait(timeout=5)
+        assert container.status == "running"
+        return original_archive(container, path)
+
+    monkeypatch.setattr(client.containers, "create", create)
+    monkeypatch.setattr(_FakeContainer, "get_archive", read)
+    # Separate backend objects also model requests handled by different workers.
+    results = await asyncio.gather(
+        *(_backend(client).read_volume_files("workspace-vol") for _ in range(readers))
+    )
+    assert results == [{"proof.txt": b"retained"}] * readers
+    names = [call["kwargs"]["name"] for call in client.containers.create_calls]
+    assert len(set(names)) == readers
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+async def test_volume_read_does_not_remove_another_requests_helper() -> None:
+    client = _FakeClient()
+    backend = _backend(client)
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+    existing = client.containers.create(
+        backend.helper_image,
+        name="workspace-vol-volume-read",
+        labels=backend._helper_labels(_labels("workspace"), "volume-read"),
+    )
+    existing.start()
+    await backend.read_volume_files("workspace-vol")
+    assert existing.status == "running"
+    assert existing.remove_calls == []
+    assert list(client.containers.items.values()) == [existing]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["start", "reload"])
+async def test_volume_helper_startup_failure_cleans_only_its_container(
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+
+    def fail(_container: _FakeContainer) -> None:
+        raise _docker_api_error(500, "startup failed")
+
+    monkeypatch.setattr(_FakeContainer, stage, fail)
+    with pytest.raises(docker.errors.APIError, match="startup failed"):
+        await _backend(client).read_volume_files("workspace-vol")
+    assert client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].removed is False
+
+
+@pytest.mark.asyncio
+async def test_helper_name_conflict_retries_allocation_without_replaying_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+    original_create = client.containers.create
+    attempted_names: list[str] = []
+
+    def create(image: str, command: list[str] | None = None, **kwargs: Any) -> _FakeContainer:
+        attempted_names.append(kwargs["name"])
+        if len(attempted_names) < 3:
+            raise _docker_api_error(409, "The container name is already in use")
+        return original_create(image, command, **kwargs)
+
+    monkeypatch.setattr(client.containers, "create", create)
+    await _backend(client).write_volume_files("workspace-vol", {"proof.txt": b"once"})
+    assert len(set(attempted_names)) == 3
+    assert len(client.containers.create_calls) == 1
+    assert client.volumes.items["workspace-vol"].files == {"proof.txt": b"once"}
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "detail", "expected_attempts"),
+    [
+        (409, "The container name is already in use", 3),
+        (409, "container is paused by another operation", 1),
+        (500, "daemon unavailable", 1),
+    ],
+)
+async def test_helper_allocation_retry_is_bounded_and_specific(
+    monkeypatch: pytest.MonkeyPatch, status: int, detail: str, expected_attempts: int,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+    attempts = 0
+
+    def fail(*_args: Any, **_kwargs: Any) -> _FakeContainer:
+        nonlocal attempts
+        attempts += 1
+        raise _docker_api_error(status, detail)
+
+    monkeypatch.setattr(client.containers, "create", fail)
+    with pytest.raises(docker.errors.APIError, match=detail):
+        await _backend(client).read_volume_files("workspace-vol")
+    assert attempts == expected_attempts
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["create", "start", "reload"])
+async def test_cancelled_helper_startup_waits_for_late_container_cleanup(
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume("workspace-vol", _labels("workspace"))
+    entered = threading.Event()
+    release = threading.Event()
+    target = client.containers if stage == "create" else _FakeContainer
+    original = getattr(target, stage)
+
+    def delayed(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        assert release.wait(timeout=5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(target, stage, delayed)
+    task = asyncio.create_task(_backend(client).read_volume_files("workspace-vol"))
+    try:
+        assert await asyncio.to_thread(entered.wait, 3)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()  # Repeated disconnect/shutdown cancellation must not orphan it.
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+    assert len(client.containers.create_calls) == 1
+    assert client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].removed is False
+
+
+@pytest.mark.asyncio
+async def test_failed_volume_read_removes_helper_and_keeps_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"proof.txt": b"keep"}
+    )
+
+    def fail(_container: _FakeContainer, _path: str) -> Any:
+        raise _docker_api_error(500, "archive failed")
+
+    monkeypatch.setattr(_FakeContainer, "get_archive", fail)
+    with pytest.raises(docker.errors.APIError, match="archive failed"):
+        await _backend(client).read_volume_files("workspace-vol")
+    assert client.containers.items == {}
+    assert client.volumes.items["workspace-vol"].files == {"proof.txt": b"keep"}
 
 
 @pytest.mark.asyncio
@@ -686,9 +883,11 @@ async def test_volume_helpers_use_named_volume_and_cleanup_temp_container() -> N
 
     assert read_back == {"stage/proof.txt": b"accepted", "stale.txt": b"old"}
     assert helper_calls[0]["kwargs"]["volumes"] == {
-        "workspace-vol": {"bind": "/volume", "mode": "rw"}
+        "workspace-vol": {"bind": "/volume", "mode": "ro"}
     }
     assert helper_calls[0]["kwargs"]["network"] == "none"
+    assert all(call["kwargs"]["auto_remove"] is True for call in helper_calls)
+    assert all(call["command"] == ["sleep", "300"] for call in helper_calls)
     assert helper_calls[0]["kwargs"]["labels"]["omnia.resource_kind"] == "volume-read"
     assert helper_calls[1]["kwargs"]["labels"]["omnia.resource_kind"] == "volume-write"
     assert helper_calls[2]["kwargs"]["labels"]["omnia.resource_kind"] == "volume-delete"

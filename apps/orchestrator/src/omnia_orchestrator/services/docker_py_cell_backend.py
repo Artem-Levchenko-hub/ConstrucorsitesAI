@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import docker  # type: ignore[import-untyped]
 import requests
@@ -37,7 +37,9 @@ _REDIS_DATA = "/data"
 _WORKSPACE_SOURCE = "/workspace-src"
 _WORKSPACE_RUN_ROOT = "/work"
 _AGENT_HOME_ROOT = "/root"
-_HELPER_SLEEP = ["sh", "-lc", "trap 'exit 0' TERM INT; while :; do sleep 3600; done"]
+# A file helper must not run forever if its owning orchestrator process dies.
+# This exceeds the SDK's per-call timeout; it is not an agent execution limit.
+_HELPER_SLEEP = ["sleep", "300"]
 _HELPER_TMPFS = {
     "/tmp": "rw,nosuid,nodev,noexec,size=32m",
     "/run": "rw,nosuid,nodev,noexec,size=16m",
@@ -183,6 +185,7 @@ class DockerPyCellBackend:
         await asyncio.to_thread(self._ping_client)
 
     async def get_volume(self, name: str) -> DockerVolumeRecord | None:
+        """Inspect identity without mounting or archiving a live application volume."""
         volume = await self._get_volume_obj(name)
         if volume is None:
             return None
@@ -190,7 +193,7 @@ class DockerPyCellBackend:
             resource_id=self._resource_id(volume),
             name=name,
             labels=self._labels(volume),
-            files=await self.read_volume_files(name),
+            files={},
         )
 
     async def create_volume(self, name: str, labels: dict[str, str]) -> DockerVolumeRecord:
@@ -241,7 +244,7 @@ class DockerPyCellBackend:
         container = await self._start_helper_container(
             name=self._helper_name("volume-read", name),
             labels=self._helper_labels(labels, "volume-read"),
-            volumes={name: {"bind": _VOLUME_ROOT, "mode": "rw"}},
+            volumes={name: {"bind": _VOLUME_ROOT, "mode": "ro"}},
         )
         try:
             raw = await asyncio.to_thread(self._get_archive_bytes, container, _VOLUME_ROOT, name)
@@ -1149,18 +1152,16 @@ class DockerPyCellBackend:
         volumes: dict[str, dict[str, str]],
     ) -> Any:
         self._require_identity_labels(labels)
-        existing = await self._get_container_obj(name)
-        if existing is not None:
-            if self._labels_match(self._labels(existing), labels) is False:
-                raise CellIdentityConflict("helper container identity mismatch")
-            await self._remove_container_object(existing)
 
         def _create() -> Any:
             return self._client_obj().containers.create(
                 self.helper_image,
                 command=_HELPER_SLEEP,
-                name=name,
+                # Helpers belong to a single call, not to the shared volume.
+                # Never remove a namesake: it may be serving another request.
+                name=f"{name}-{uuid4().hex}",
                 detach=True,
+                auto_remove=True,
                 labels=labels,
                 user="0:0",
                 cap_add=[],
@@ -1177,11 +1178,48 @@ class DockerPyCellBackend:
                 network="none",
             )
 
-        container = await asyncio.to_thread(_create)
-        await asyncio.to_thread(container.start)
-        if hasattr(container, "reload"):
-            await asyncio.to_thread(container.reload)
-        return container
+        def _create_and_start() -> Any:
+            for attempt in range(3):
+                try:
+                    container = _create()
+                    break
+                except docker.errors.APIError as exc:
+                    detail = str(getattr(exc, "explanation", "") or "").lower()
+                    if not (
+                        attempt < 2
+                        and exc.status_code == 409
+                        and "container name" in detail
+                        and "already in use" in detail
+                    ):
+                        raise
+                    # Creation was rejected, so retry only allocation under a
+                    # fresh name. Never replay a file write or shell command.
+            try:
+                container.start()
+                if hasattr(container, "reload"):
+                    container.reload()
+                return container
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    container.remove(force=True)
+                raise
+
+        startup = asyncio.create_task(asyncio.to_thread(_create_and_start))
+        try:
+            return await asyncio.shield(startup)
+        except asyncio.CancelledError:
+            # A cancelled await does not stop docker-py's worker thread. Wait
+            # for its result so a late-created helper cannot escape cleanup.
+            while not startup.done():
+                try:
+                    await asyncio.shield(startup)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not startup.cancelled() and startup.exception() is None:
+                await self._remove_container_object(startup.result())
+            raise
 
     async def _remove_container_object(self, container: Any) -> None:
         try:
