@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-09-01",
-  "version": 54,
+  "updated": "2026-09-02",
+  "version": 55,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -202,6 +202,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "02.09",
+   "what": "Потребовал убрать искусственный лимит Project Cell: проекты должны создаваться подряд в любом количестве, автоматически получать отдельное окружение и ограничиваться только реальной ёмкостью сервера.",
+   "impact": "Утверждён capacity-based контракт вместо лимита active_bundle_limit: prompt сохраняется один раз, при нехватке ресурсов ждёт в durable-очереди и запускается сам; idle-ячейки освобождают compute без удаления workspace, PostgreSQL, Redis и принятой версии. Диагностика уже связала сбой БарберПро с занятым единственным bundle; runtime-реализация и production-проверка трёх последовательных проектов ещё впереди."
+  },
   {
    "date": "01.09",
    "what": "Утвердил письменную спецификацию owner-only Docker Project Cell и поручил самостоятельно составить план, затем без дополнительных согласований перейти к коду последовательными проверяемыми этапами.",
@@ -2455,6 +2460,18 @@
     "evidence": "Tasks 1–6 собрали тёмный Control Foundation: fail-closed owner policy; durable workspace/operation модели и миграция 0052; безопасные конкурентные reservation/idempotency/transition операции; заменяемый WorkspaceProvider; внутренний authenticated capability GET; side-effect-free API readiness coordinator. Проверки по этапам: Task 1 — 7 focused; Task 2 — 25 focused плюс Alembic upgrade/downgrade/upgrade и live PostgreSQL catalog parity; Task 3 — 43 focused/GenerationRun regressions; Task 4 — 15 provider/router и 31 compatibility; Task 5 — 21 focused и 3 отдельные client regressions; Task 6 — AST mutation RED→GREEN для function-local imports/calls, 98 API focused и 48 orchestrator focused. Полный orchestrator suite: 532 passed, 15 xfailed; полный API suite остановлен на воспроизводимом чужом regression test_async_onboarding.py::test_run_async_onboarding_streams_and_stashes (SurveyQuestion ошибочно используется как dict), при этом весь foundation focused suite зелёный. API full Ruff и mypy чисты; orchestrator scoped Ruff и full mypy чисты, full Ruff сохраняет только прежние unrelated нарушения. Контрольная ревизия Tasks 1–4 и миграция 0052 развёрнуты на production SHA 1b8a86e контролируемым rollout: API, worker, web и orchestrator показывают одну ревизию, все compose-сервисы healthy, внешний web-health и api/health вернули HTTP 200. Маршрутизация Project Cell по умолчанию отключена; публичный prompt path ничего из control foundation не импортирует и не вызывает. Реальный Docker, shell, browser, LLMGW-runner и model-visible cell ещё не подключены. Control Foundation 0c669813 подтверждён здоровым на production; отдельные исполнимые планы Fencing Hardening (5 задач) и Cell Resources (7 задач) написаны и получили PASS независимой ревизии после четырёх раундов исправлений, при этом runtime, флаги и canary не менялись и остаются отключены.",
    "impact": "Появился проверяемый управляющий фундамент без риска случайно запустить контейнер из пользовательского запроса: система решает допуск owner-canary, надёжно хранит будущий lifecycle и строго fail-closed проверяет готовность провайдера, но пока физически ничего не создаёт. H128 остаётся testing, score остаётся null, default routing disabled, а шаг V4 Owner-only Docker Project Cell остаётся false до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
    "next_vector": "V4"
+  },
+  {
+   "id": "H129",
+   "title": "Capacity-based очередь Project Cell уберёт числовой лимит проектов без гонок и потери данных",
+   "status": "open",
+   "score": null,
+   "category": "автономность / инфра / очередь / MAX / Project Cell",
+   "period": "02.09",
+   "description": "Если заменить max_active_bundles на атомарное резервирование CPU, RAM, диска и inode, а ожидание сделать durable-статусом с автоматической гибернацией idle-ячеек, владелец сможет создавать проекты подряд без искусственного лимита и повторной отправки prompt.",
+   "evidence": "Production-диагностика проекта БарберПро зафиксировала точную причину: orchestrator вернул container_failure/active_bundle_limit, потому что прежний проект уже занимал единственный разрешённый bundle из draft, PostgreSQL и Redis. API ошибочно превратил детерминированный отказ до side effect в indeterminate. На сервере 8 CPU, около 10,6 GiB доступной RAM и 204 GiB свободного диска; значит сбой вызван числовым guard, а не фактическим исчерпанием ёмкости. Утверждённый контракт записан в docs/superpowers/specs/2026-09-02-project-cell-capacity-scheduler-design.md: durable FIFO-очередь, транзакционные reservation/lease, fencing, typed capacity wait, safe idle hibernate/wake и production-proof минимум трёх быстрых проектов.",
+   "impact": "Причина пользовательского сбоя отделена от мощности сервера и превращена в проверяемый план без фиксированного числа проектов. Пока runtime не менялся: БарберПро автоматически не восстановлен, H129 остаётся open, score=null, а новый шаг V4=false до реализации, деплоя и живого frontend→backend→PostgreSQL proof для трёх последовательных проектов.",
+   "next_vector": "V4"
   }
  ],
  "vectors": [
@@ -2637,7 +2654,11 @@
       [
        "Поднять Project Cell на текущем сервере и пройти MAX end-to-end canary с restart/cancel/isolation-проверками",
        false
-    ]
+      ],
+      [
+       "Capacity-based Project Cell: без числового лимита, с durable-очередью, атомарным admission и hibernate/wake; 3+ проекта подряд проходят production e2e",
+       false
+      ]
    ],
    "hyp_ids": [
     "H41",
@@ -2647,7 +2668,8 @@
     "H79",
     "H87",
     "H127",
-    "H128"
+     "H128",
+     "H129"
    ]
   },
   {
