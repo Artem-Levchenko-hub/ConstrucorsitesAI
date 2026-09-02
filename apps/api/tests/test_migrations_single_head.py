@@ -214,7 +214,7 @@ def test_project_cell_candidates_migration_upgrade_and_rollback(
     project_cell_migration_database: ProjectCellMigrationDatabase,
 ) -> None:
     database = project_cell_migration_database
-    database.upgrade("head")
+    database.upgrade("0054_project_cell_candidates")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
         "0054_project_cell_candidates"
     )
