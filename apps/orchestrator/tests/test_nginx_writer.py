@@ -126,6 +126,21 @@ def test_proxy_location_carries_websocket_upgrade() -> None:
     assert "proxy_hide_header X-Frame-Options" in block
 
 
+@pytest.mark.parametrize("renderer", [nginx_writer._http_block, nginx_writer._https_block])
+def test_private_cell_suppresses_public_remix_without_modifying_app_or_inspector(renderer) -> None:
+    host = "cell-0123456789ab-dev.preview.omniadevelop.ru"
+    block = renderer(host, 3000, upstream_host="172.30.0.2", private_cell=True)
+    location = block.split("location = /omnia-remix-cta.js {", 1)[1].split("\n    }", 1)[0]
+    assert 'return 200 "/* Public remix is unavailable for private cells. */";' in location
+    assert "types { }" in location
+    assert "default_type application/javascript;" in location
+    assert 'add_header Cache-Control "no-store" always;' in location
+    assert "proxy_pass" not in location
+    assert "location = /_omnia/inspector.js" in block
+    assert "proxy_pass http://172.30.0.2:3000" in block
+    assert "location = /omnia-remix-cta.js" not in renderer(host, 3000)
+
+
 def test_proxy_location_disables_html_cache_only() -> None:
     """A deployed app shell must refresh while hashed assets keep their policy."""
     block = nginx_writer._proxy_location(3200)
@@ -443,3 +458,38 @@ async def test_ensure_tls_rejects_invalid_upstream_before_cert_issue(
         await nw.ensure_tls("unsafe.example.com", 3307, upstream_host="8.8.8.8")
     assert excinfo.value.code == "validation_failed"
     assert called is False
+
+
+@pytest.mark.parametrize("tls_reload_ok", [False, True])
+async def test_private_cell_policy_survives_http_tls_and_fallback(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, tls_reload_ok: bool,
+) -> None:
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    host = "cell-0123456789ab-dev.preview.omniadevelop.ru"
+    conf = tmp_path / f"{host}.conf"
+    rendered: list[str] = []
+
+    async def reload() -> CmdResult:
+        text = conf.read_text(encoding="utf-8")
+        rendered.append(text)
+        ok = "listen 443 ssl" not in text or tls_reload_ok
+        return CmdResult(rc=0 if ok else 1, stdout="", stderr="test TLS failure" if not ok else "")
+
+    async def certificate(_host: str) -> bool:
+        return True
+
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    monkeypatch.setattr(nginx_writer, "_issue_cert", certificate)
+    await nginx_writer.publish_http(host, 3000, upstream_host="172.30.0.2", private_cell=True)
+    assert await nginx_writer.ensure_tls(
+        host, 3000, upstream_host="172.30.0.2", private_cell=True,
+    ) is tls_reload_ok
+    assert len(rendered) == (2 if tls_reload_ok else 3)
+    for block in rendered:
+        assert "location = /omnia-remix-cta.js" in block
+        assert "proxy_pass http://172.30.0.2:3000" in block
+    assert ("listen 443 ssl" in rendered[-1]) is tls_reload_ok

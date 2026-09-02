@@ -300,7 +300,25 @@ def _acme_location() -> str:
     }}"""
 
 
-def _http_block(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> str:
+def _private_cell_assets() -> str:
+    """Private cells cannot remix; suppress its floating CTA and watermark.
+
+    Serve a platform-owned no-op at ingress so existing workspaces are covered
+    without changing accepted source files or disabling the editor inspector.
+    """
+    return """\
+    location = /omnia-remix-cta.js {
+        types { }
+        default_type application/javascript;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        return 200 "/* Public remix is unavailable for private cells. */";
+    }"""
+
+
+def _http_block(
+    host: str, port: int, *, upstream_host: str = "127.0.0.1", private_cell: bool = False,
+) -> str:
     dev = _is_dev_host(host)
     inspector = f"\n{_inspector_location()}\n" if dev else ""
     return f"""\
@@ -313,13 +331,16 @@ server {{
 
 {_acme_location()}
 {inspector}
+{_private_cell_assets() if private_cell else ""}
 
 {_proxy_location(port, inject_inspector=dev, upstream_host=upstream_host)}
 }}
 """
 
 
-def _https_block(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> str:
+def _https_block(
+    host: str, port: int, *, upstream_host: str = "127.0.0.1", private_cell: bool = False,
+) -> str:
     # Prefer a pre-issued wildcard cert (instant, reliable); else the per-host
     # acme cert dir.
     cert_dir = _wildcard_cert_dir(host) or f"{get_settings().acme_certs_dir}/{host}"
@@ -347,6 +368,7 @@ server {{
     ssl_certificate_key {cert_dir}/privkey.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
 {inspector}
+{_private_cell_assets() if private_cell else ""}
 
 {_proxy_location(port, inject_inspector=dev, upstream_host=upstream_host)}
 }}
@@ -449,7 +471,9 @@ def _validate_host(host: str) -> None:
         )
 
 
-async def publish_http(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> None:
+async def publish_http(
+    host: str, port: int, *, upstream_host: str = "127.0.0.1", private_cell: bool = False,
+) -> None:
     """Write the HTTP(:80) block for `host` and reload nginx (fast, ~1-2s).
 
     Makes the site reachable over HTTP immediately and able to answer the
@@ -460,7 +484,10 @@ async def publish_http(host: str, port: int, *, upstream_host: str = "127.0.0.1"
     upstream_host = _validate_upstream_host(upstream_host)
     path = _site_path(host)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_http_block(host, port, upstream_host=upstream_host), encoding="utf-8")
+    path.write_text(
+        _http_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
+        encoding="utf-8",
+    )
     res = await _reload()
     if not res.ok:
         path.unlink(missing_ok=True)
@@ -473,7 +500,9 @@ async def publish_http(host: str, port: int, *, upstream_host: str = "127.0.0.1"
     log.info("nginx.published_http", host=host, port=port)
 
 
-async def ensure_tls(host: str, port: int, *, upstream_host: str = "127.0.0.1") -> bool:
+async def ensure_tls(
+    host: str, port: int, *, upstream_host: str = "127.0.0.1", private_cell: bool = False,
+) -> bool:
     """Issue/refresh a cert and swap the site to HTTPS. Returns True iff live.
 
     Slow (cert issuance is ~30-60s). Fail-soft: any failure leaves the HTTP
@@ -486,14 +515,20 @@ async def ensure_tls(host: str, port: int, *, upstream_host: str = "127.0.0.1") 
     if not await _issue_cert(host):
         return False
     path = _site_path(host)
-    path.write_text(_https_block(host, port, upstream_host=upstream_host), encoding="utf-8")
+    path.write_text(
+        _https_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
+        encoding="utf-8",
+    )
     res = await _reload()
     if res.ok:
         log.info("nginx.published_https", host=host, port=port)
         return True
     # Cert exists but the HTTPS block won't load — revert to HTTP.
     log.warning("nginx.https_reload_failed", host=host, stderr=res.stderr[-300:])
-    path.write_text(_http_block(host, port, upstream_host=upstream_host), encoding="utf-8")
+    path.write_text(
+        _http_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
+        encoding="utf-8",
+    )
     await _reload()
     return False
 
