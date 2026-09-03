@@ -10,7 +10,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from omnia_orchestrator.core import workspace_provider as workspace_provider_contract
-from omnia_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
+from omnia_orchestrator.core.cell_resources import (
+    CellTerminalOperationFailed,
+    LifecycleMutation,
+)
 from omnia_orchestrator.core.config import Settings, get_settings
 from omnia_orchestrator.core.workspace_provider import (
     ControlAction,
@@ -578,7 +581,10 @@ async def test_composite_control_replays_recorded_checkpoint_failure_without_res
     assert f"{effective_checkpoint_ref}/manifest.json" in checkpoint_files
     create_calls_before_replay = failing_checkpoints.create_calls
 
-    with pytest.raises(CellResourceError, match="checkpoint sealed before control mutation"):
+    with pytest.raises(
+        CellTerminalOperationFailed,
+        match="checkpoint sealed before control mutation",
+    ):
         await provider.execute_control(workspace_id, action, mutation)
 
     assert failing_checkpoints.create_calls == create_calls_before_replay

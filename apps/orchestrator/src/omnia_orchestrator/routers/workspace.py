@@ -19,6 +19,7 @@ from omnia_orchestrator.core.cell_resources import (
     CellResourceError,
     CellResourceNames,
     CellRestoreFailed,
+    CellTerminalOperationFailed,
     LifecycleMutation,
     WorkspaceLockTimeout,
     WorkspaceLockUnavailable,
@@ -198,7 +199,12 @@ async def control_workspace(
             ControlAction(kind=request.kind, checkpoint_ref=request.checkpoint_ref),
             mutation,
         )
-    except (CellFenceRejected, CellIdentityConflict, CellIndeterminateOperation) as exc:
+    except (
+        CellFenceRejected,
+        CellIdentityConflict,
+        CellIndeterminateOperation,
+        CellTerminalOperationFailed,
+    ) as exc:
         _raise_pre_effect_conflict(str(exc), mutation)
     except (WorkspaceProviderUnavailable, WorkspaceLockTimeout, WorkspaceLockUnavailable) as exc:
         raise OrchestratorError(

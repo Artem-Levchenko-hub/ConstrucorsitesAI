@@ -10,8 +10,8 @@ from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
-    CellResourceError,
     CellRestoreFailed,
+    CellTerminalOperationFailed,
     LifecycleMutation,
 )
 from omnia_orchestrator.core.workspace_provider import (
@@ -462,7 +462,7 @@ class DockerOwnerCanaryProvider:
             detail = operation.detail or f"{kind} failed"
             if kind == "restore":
                 raise CellRestoreFailed(detail)
-            raise CellResourceError(detail)
+            raise CellTerminalOperationFailed(detail)
         if operation.status == "indeterminate":
             raise CellIndeterminateOperation("operation replay unavailable")
         raise CellFenceRejected("operation replay unavailable")

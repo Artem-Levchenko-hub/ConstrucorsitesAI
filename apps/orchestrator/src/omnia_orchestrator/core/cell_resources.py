@@ -78,6 +78,10 @@ class CellIndeterminateOperation(CellResourceError):
     """A previous operation ended in an indeterminate state."""
 
 
+class CellTerminalOperationFailed(CellResourceError):
+    """An exact replay proved that the original operation failed before effect."""
+
+
 class CellFenceRejected(CellResourceError):
     """A fencing epoch was stale or already consumed."""
 

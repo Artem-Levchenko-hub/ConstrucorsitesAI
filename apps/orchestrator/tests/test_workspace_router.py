@@ -12,7 +12,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from omnia_orchestrator.core.cell_resources import CellCapacityUnavailable
+from omnia_orchestrator.core.cell_resources import (
+    CellCapacityUnavailable,
+    CellTerminalOperationFailed,
+)
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
 from omnia_orchestrator.core.workspace_provider import (
@@ -555,6 +558,51 @@ async def test_ensure_returns_exact_pre_effect_capacity_wait_envelope(
             },
         }
     }
+
+
+async def test_control_terminal_replay_returns_exact_pre_effect_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailedReplayProvider(_RecordingProvider):
+        async def execute_control(self, workspace_id, action, mutation):
+            raise CellTerminalOperationFailed("checkpoint failed before control mutation")
+
+    monkeypatch.setattr(
+        workspace,
+        "build_workspace_provider",
+        lambda _settings: FailedReplayProvider(),
+    )
+    payload = {
+        "workspace_id": "00000000-0000-0000-0000-000000000071",
+        "kind": "pause",
+        "checkpoint_ref": "capacity-test",
+        "operation_id": "00000000-0000-0000-0000-000000000072",
+        "fencing_epoch": 8,
+        "request_digest": "e" * 64,
+    }
+
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{payload['workspace_id']}/control",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=payload,
+        )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": {
+            "code": "conflict",
+            "message": "checkpoint failed before control mutation",
+            "details": {
+                "operation_id": payload["operation_id"],
+                "fencing_epoch": 8,
+                "request_digest": "e" * 64,
+                "effect_applied": False,
+            },
+        }
+    }
+
+
 async def test_resource_route_rejects_workspace_id_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
