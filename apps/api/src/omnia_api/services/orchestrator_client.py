@@ -757,10 +757,12 @@ class HttpProjectCellOrchestratorClient:
         self,
         request: ControlProjectCellResourcesRequest,
     ) -> ProjectCellResourceResponse:
+        timeout = 930.0 if request.kind in {"pause", "stop", "destroy", "restore"} else 30.0
         payload = await _request(
             "POST",
             f"/internal/workspaces/{request.workspace_id}/control",
             json=request.to_wire_json(),
+            timeout=timeout,
         )
         return ProjectCellResourceResponse.from_json(payload)
 

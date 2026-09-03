@@ -301,18 +301,51 @@ async def hibernate_one_idle_workspace(
             await session.rollback()
             return False
         checkpoint_ref = f"capacity-{requesting_run_id.hex[:12]}"
-        operation, _ = await reserve_cell_operation(
-            session,
-            workspace_id=victim.id,
-            generation_run_id=None,
-            kind="pause",
-            idempotency_key=f"capacity:{requesting_run_id}:pause:{victim.id}",
-            request={"checkpoint_ref": checkpoint_ref},
+        idempotency_base = f"capacity:{requesting_run_id}:pause:{victim.id}"
+        prior_operations = list(
+            (
+                await session.execute(
+                    select(ProjectCellOperation)
+                    .where(
+                        ProjectCellOperation.workspace_id == victim.id,
+                        ProjectCellOperation.generation_run_id.is_(None),
+                        ProjectCellOperation.kind == "pause",
+                        ProjectCellOperation.idempotency_key.like(f"{idempotency_base}%"),
+                    )
+                    .order_by(ProjectCellOperation.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
         )
+        operation = prior_operations[0] if prior_operations else None
+        replay_indeterminate = operation is not None and operation.status == "indeterminate"
+        if operation is None or operation.status in {"failed", "cancelled"}:
+            idempotency_key = (
+                idempotency_base
+                if not prior_operations
+                else f"{idempotency_base}:{len(prior_operations) + 1}"
+            )
+            operation, _ = await reserve_cell_operation(
+                session,
+                workspace_id=victim.id,
+                generation_run_id=None,
+                kind="pause",
+                idempotency_key=idempotency_key,
+                request={"checkpoint_ref": checkpoint_ref},
+            )
+            replay_indeterminate = False
         victim_id = victim.id
         await session.commit()
 
-    outcome = await execute_cell_operation(session_factory, operation.id, client)
+    if replay_indeterminate:
+        outcome = await replay_indeterminate_cell_operation(
+            session_factory,
+            operation.id,
+            client,
+        )
+    else:
+        outcome = await execute_cell_operation(session_factory, operation.id, client)
     response = outcome.response
     if (
         outcome.status != "completed"
@@ -323,15 +356,26 @@ async def hibernate_one_idle_workspace(
     ):
         return False
     async with session_factory() as session:
+        await _scheduler_lock(session)
         workspace = await session.scalar(
             select(ProjectCellWorkspace)
             .where(ProjectCellWorkspace.id == victim_id)
             .with_for_update()
         )
+        later_effect_may_be_unknown = await session.scalar(
+            select(ProjectCellOperation.id)
+            .where(
+                ProjectCellOperation.workspace_id == victim_id,
+                ProjectCellOperation.fencing_epoch > response.fencing_epoch,
+                ProjectCellOperation.status.not_in(("failed", "cancelled")),
+            )
+            .limit(1)
+        )
         if (
             workspace is None
             or workspace.generation_run_id is not None
-            or workspace.fencing_epoch != response.fencing_epoch
+            or workspace.fencing_epoch < response.fencing_epoch
+            or later_effect_may_be_unknown is not None
         ):
             await session.rollback()
             return False

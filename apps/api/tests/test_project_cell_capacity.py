@@ -18,6 +18,7 @@ from omnia_api.services.project_cell_capacity import (
     claim_capacity_turn,
     claim_idle_hibernation_victim,
     claim_stale_generation_lease,
+    hibernate_one_idle_workspace,
     release_one_stale_generation_lease,
 )
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
@@ -253,3 +254,79 @@ async def test_capacity_replays_indeterminate_release_before_hibernation(
         assert refreshed_workspace.generation_run_id is None
         assert refreshed_release is not None
         assert refreshed_release.status == "completed"
+
+
+async def test_capacity_retries_pause_after_confirmed_terminal_failure(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"pause-retry-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        now = datetime.now(UTC)
+        _, requesting_run, _ = await _project_run(
+            session,
+            owner,
+            created_at=now,
+            label="pause-requesting",
+        )
+        _, _, idle_workspace = await _project_run(
+            session,
+            owner,
+            created_at=now - timedelta(seconds=5),
+            label="pause-idle",
+        )
+        checkpoint_ref = f"capacity-{requesting_run.id.hex[:12]}"
+        failed_pause, _ = await reserve_cell_operation(
+            session,
+            workspace_id=idle_workspace.id,
+            generation_run_id=None,
+            kind="pause",
+            idempotency_key=f"capacity:{requesting_run.id}:pause:{idle_workspace.id}",
+            request={"checkpoint_ref": checkpoint_ref},
+        )
+        await session.commit()
+    await claim_cell_operation_committed(factory, failed_pause.id)
+    async with factory() as session:
+        await fail_cell_operation(session, failed_pause.id, "checkpoint source too large")
+        await session.commit()
+
+    replayed_requests: list[object] = []
+
+    async def pause_control(request: object) -> ProjectCellResourceResponse:
+        replayed_requests.append(request)
+        return ProjectCellResourceResponse(
+            workspace_id=idle_workspace.id,
+            state="resources_paused",
+            provider_ref="cell-1",
+            fencing_epoch=2,
+            checkpoint_ref=checkpoint_ref,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    client = type("PauseClient", (), {})()
+    client.control = pause_control
+
+    paused = await hibernate_one_idle_workspace(
+        factory,
+        requesting_run_id=requesting_run.id,
+        client=client,
+    )
+
+    assert paused is True
+    assert len(replayed_requests) == 1
+    retry_request = replayed_requests[0]
+    assert retry_request.operation_id != failed_pause.id
+    assert retry_request.fencing_epoch == 2
+    async with factory() as session:
+        workspace = await session.get(ProjectCellWorkspace, idle_workspace.id)
+        retry = await session.get(ProjectCellOperation, retry_request.operation_id)
+        assert workspace is not None
+        assert workspace.state == "stopped"
+        assert retry is not None
+        assert retry.idempotency_key.endswith(":2")
+        assert retry.status == "completed"

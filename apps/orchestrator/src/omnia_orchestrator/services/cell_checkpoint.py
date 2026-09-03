@@ -315,7 +315,13 @@ class CellCheckpointManager:
             machine_payload = await self.machine_runtime.checkpoint_payload(
                 self._require_state(workspace_id)
             )
-        workspace_tar = _archive_bytes(await self.docker.read_volume_files(names.workspace_volume))
+        if machine_payload is None:
+            workspace_files = await self.docker.read_volume_files(names.workspace_volume)
+        else:
+            workspace_files = await self.docker.read_workspace_source_files(
+                names.workspace_volume
+            )
+        workspace_tar = _archive_bytes(workspace_files)
         agent_home_tar = _archive_bytes(
             await self.docker.read_volume_files(names.agent_home_volume)
         )

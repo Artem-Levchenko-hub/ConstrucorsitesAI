@@ -89,6 +89,61 @@ class ReplayGuardBackend(FakeDockerBackend):
         return await super().create_container(spec)
 
 
+class SourceOnlyCheckpointBackend(FakeDockerBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.raw_reads: list[str] = []
+        self.source_reads: list[str] = []
+
+    async def read_volume_files(self, name: str) -> dict[str, bytes]:
+        self.raw_reads.append(name)
+        return await super().read_volume_files(name)
+
+    async def read_workspace_source_files(self, name: str) -> dict[str, bytes]:
+        self.source_reads.append(name)
+        return await super().read_volume_files(name)
+
+
+async def test_checkpoint_archives_workspace_source_without_dependency_caches(tmp_path):
+    from unittest.mock import AsyncMock
+
+    docker = SourceOnlyCheckpointBackend()
+    manager, checkpoints, _ = _make_fixture(tmp_path, docker)
+    checkpoints.machine_runtime = SimpleNamespace(
+        checkpoint_payload=AsyncMock(return_value=b'{}')
+    )
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, spec.workspace_id)
+    await docker.write_volume_files(
+        names.workspace_volume,
+        {"src/app/page.tsx": b"export default function Page() {}"},
+    )
+    docker.raw_reads.clear()
+    docker.source_reads.clear()
+
+    await checkpoints.create(spec.workspace_id, "source-only", _mutation("b", 2))
+
+    assert docker.source_reads == [names.workspace_volume]
+    assert names.workspace_volume not in docker.raw_reads
+
+
+async def test_legacy_checkpoint_archives_complete_workspace(tmp_path):
+    docker = SourceOnlyCheckpointBackend()
+    manager, checkpoints, _ = _make_fixture(tmp_path, docker)
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, spec.workspace_id)
+    await docker.write_volume_files(names.workspace_volume, {"node_modules/cache": b"legacy"})
+    docker.raw_reads.clear()
+    docker.source_reads.clear()
+
+    await checkpoints.create(spec.workspace_id, "legacy-full", _mutation("b", 2))
+
+    assert names.workspace_volume in docker.raw_reads
+    assert docker.source_reads == []
+
+
 async def test_portable_checkpoint_payload_is_sealed_and_restored_with_same_revision(tmp_path):
     from unittest.mock import AsyncMock
 

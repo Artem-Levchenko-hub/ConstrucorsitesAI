@@ -484,8 +484,46 @@ async def test_control_client_sends_only_fenced_envelope(
                 "fencing_epoch": 4,
                 "request_digest": "a" * 64,
             },
+            "timeout": 30.0,
         }
     ]
+
+
+@pytest.mark.parametrize("kind", ["pause", "stop", "destroy", "restore"])
+async def test_long_control_operations_use_checkpoint_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    raw_calls: list[dict[str, object]] = []
+    workspace_id = uuid4()
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        raw_calls.append({"method": method, "path": path, **kwargs})
+        return {
+            "workspace_id": str(workspace_id),
+            "state": "resources_paused",
+            "provider_ref": "cell-1",
+            "fencing_epoch": 5,
+            "checkpoint_ref": "checkpoint-1" if kind in {"pause", "stop", "restore"} else None,
+            "has_workspace": True,
+            "has_agent_home": True,
+            "has_postgres": True,
+            "has_redis": True,
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    request = ControlProjectCellResourcesRequest(
+        workspace_id=workspace_id,
+        kind=kind,
+        checkpoint_ref="checkpoint-1" if kind in {"pause", "stop", "restore"} else None,
+        operation_id=uuid4(),
+        fencing_epoch=5,
+        request_digest="f" * 64,
+    )
+
+    await HttpProjectCellOrchestratorClient().control(request)
+
+    assert raw_calls[0]["timeout"] == 930.0
 
 
 @pytest.mark.parametrize("method_name", ["ensure", "observe_resources"])
