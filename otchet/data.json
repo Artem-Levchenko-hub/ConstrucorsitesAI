@@ -1,13 +1,18 @@
 {
  "meta": {
-  "updated": "2026-09-02",
-  "version": 61,
+  "updated": "2026-09-03",
+  "version": 62,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Внутренний golden path пройден; честный путь до MVP — 21 из 26",
-  "subtitle": "Production доказал регистрацию, business onboarding, Pro + ledger, real generation, safe preview, exact-commit deploy и отмену продления. Финальная галочка ждёт SMTP, живую ЮKassa и запуск двух пользователей через промодерированный MAX-бот.",
+  "title": "Project Cell получил отдельный PostgreSQL с полными правами",
+  "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
+   {
+    "s": "worked",
+    "t": "Полные права PostgreSQL теперь ограничены одним проектом",
+    "d": "Каждая portable Project Cell получает отдельный PostgreSQL-контейнер, пароль и диск. Живой production-canary подтвердил SUPERUSER, блокировку сети к managed MAX PostgreSQL, сохранение SQL-маркера после halt/recreate и fail-closed восстановление snapshot."
+   },
    {
     "s": "worked",
     "t": "Публикация выровняла URL, доступ, статусы и юридическую кнопку",
@@ -202,6 +207,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "03.09",
+   "what": "Поручил дать агенту полный административный доступ к PostgreSQL проекта, сохранив служебную БД MAX и другие проекты изолированными.",
+   "impact": "На production каждая portable Project Cell теперь получает собственный PostgreSQL-контейнер и volume. Агент может создавать базы, роли, схемы, ограничения и миграции как SUPERUSER; сетевой доступ к managed MAX PostgreSQL заблокирован, а данные проектной БД включены в halt/recreate и snapshot/restore."
+  },
   {
    "date": "02.09",
    "what": "Остановил служебные генерации и решил сам проверить систему одним большим MAX-промптом под аккаунтом undj00x03@gmail.com.",
@@ -2477,6 +2487,18 @@
    "evidence": "Причина старого сбоя БарберПро подтверждена: orchestrator возвращал container_failure/active_bundle_limit при фактически доступных 8 CPU, около 10,6 GiB RAM и 204 GiB диска. Искусственный лимит заменён межпроцессным host-capacity lock, durable provisional/confirmed ledger с полными CPU/RAM/disk/inode quantities, строгим capacity_wait 429, PostgreSQL FIFO, safe hibernate, fenced release, queue-only heartbeat, restart recovery и UI-статусом ожидания. Финальный код прошёл на Linux: orchestrator 700 passed/1 skipped/15 xfailed, focused API 71+14+33 passed, migration 0055 upgrade→downgrade→upgrade и single-head 9 passed, web production Docker build и 179 web tests при 7 прежних environment-only localStorage failures. Ревизия 7553d0b7 доставлена в main и production; API/worker/web пересобраны, orchestrator синхронизирован, migration current=0055, внутренние и публичные health вернули 200. Живой запуск принял подряд три новых проекта и retry БарберПро: два одновременно перешли в running, два сохранились в queued_for_capacity, старый idle workspace автоматически hibernate, повторная отправка четырёх idempotency key вернула те же run_id без дублей. По просьбе владельца служебные запуски отменены. Live-cancel выявил две гонки: queued cancellation могла быть переписана в failed финализатором, а параллельный cleanup helper-контейнера давал разовый Docker 409/HTTP 503; обе исправлены локально с полным race-тестом, focused API 74 passed и orchestrator backend 9 passed, Ruff/mypy/diff-check green, но исправления ещё не доставлены. Пользовательский run 20e93985-b26f-4dee-8a48-4a4a9e41fbbc доказал следующий blocker: агент создал реальные product-файлы, применил миграции, дважды прошёл typecheck и signed preview, но default AGENT_MAX_SEGMENTS=1 остановил его до done, после чего first-MAX rollback удалил результат. Локальный TDD-фикс продолжает работу внутри того же GenerationRun/Project Cell, переносит cumulative files и post-write proof между сегментами, останавливается на cancellation/infra/no-progress и оставляет generous safety backstop; focused native suite проходит 47 тестов, Ruff и mypy зелёные. Исправление ещё не доставлено и живой committed snapshot после него не доказан.",
    "impact": "Production уже не ограничивает число создаваемых проектов фиксированной цифрой: запрос сохраняется один раз, ждёт только фактическую CPU/RAM/disk/inode ёмкость и автоматически продолжает тот же run; duplicate-submit не создаёт вторую работу, idle compute освобождается без удаления данных. Локально устранён и произвольный односегментный обрыв самой сборки: продуктивный MAX-run сможет автоматически продолжаться без нового сообщения, run или workspace и без промежуточного core-only rollback. H129 остаётся testing и score=null: нужно доставить накопленные race/continuation-исправления, возобновить пользовательскую генерацию и подтвердить committed snapshot плюс повторное открытие frontend→backend→PostgreSQL приложения.",
    "next_vector": "V4"
+  },
+  {
+   "id": "H130",
+   "title": "Выделенный PostgreSQL даст агенту полный контроль над БД без доступа к MAX",
+   "status": "worked",
+   "score": 9,
+   "category": "автономность / инфра / безопасность / PostgreSQL / MAX",
+   "period": "03.09",
+   "description": "Если каждой portable Project Cell выдавать отдельный PostgreSQL-контейнер и диск, агент сможет самостоятельно управлять базами, ролями, схемами, настройками и миграциями, не получая доступ к служебной БД MAX и данным других проектов.",
+   "evidence": "Ревизии a7d6202d и 56b4d065 добавили отдельные пароль, контейнер и volume проектной БД, SUPERUSER через DATABASE_URL на 127.0.0.1, общий изолированный network namespace с guard, resource caps и включение PGDATA в snapshot. Первые production-прогоны нашли два реальных EACCES при очистке и возврате владельца PGDATA 0700; ревизии 0b2da012 и 07201820 ограниченно добавили DAC_OVERRIDE только networkless writable/ownership helpers. Финальный чистый suite: 867 passed, 5 skipped, 15 xfailed; Ruff и mypy зелёные, независимое ревью без P0–P3. Production SHA 072018202fa500c8fc843cc2c557b7cee6504325: API, worker, web и orchestrator на одной ревизии; live-canary STATUS=0 получил PROJECT_POSTGRES_SUPERUSER_AND_CORE_NETWORK_ISOLATION_PASS, BOUNDARY_REMOVE_RECREATE_PASS и SQLITE_ROW_QUIESCE_RESTORE_CHECK_FAILURE_FENCE_RECOVERY_PASS, после чего test containers/volumes/networks = 0.",
+   "impact": "Агент больше не зависит от заранее подготовленной платформой схемы: он может построить полноценный backend под задачу пользователя и администрировать свою БД без ограничений PostgreSQL. Полные права не распространяются на хост, служебную БД MAX или соседние проекты; данные проектной БД сохраняются и проверяются при восстановлении.",
+   "next_vector": "V4"
   }
  ],
  "vectors": [
@@ -2663,6 +2685,10 @@
       [
        "Capacity-based Project Cell: без числового лимита, с durable-очередью, атомарным admission и hibernate/wake; 3+ проекта подряд проходят production e2e",
        false
+      ],
+      [
+       "Выделенный PostgreSQL Project Cell: SUPERUSER, отдельный volume, изоляция от MAX core, halt/recreate и fail-closed restore доказаны на production (03.09)",
+       true
       ]
    ],
    "hyp_ids": [
@@ -2672,9 +2698,10 @@
     "H78",
     "H79",
     "H87",
-    "H127",
+     "H127",
      "H128",
-     "H129"
+     "H129",
+     "H130"
    ]
   },
   {
