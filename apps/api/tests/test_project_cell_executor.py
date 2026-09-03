@@ -1070,6 +1070,43 @@ async def test_cell_runtime_check_uses_workspace_session_not_legacy(
     assert harness.legacy_actions == []
 
 
+async def test_portable_cell_runtime_check_falls_back_when_home_page_is_missing(
+    monkeypatch, db_session, test_engine,
+) -> None:
+    from omnia_api.services import max_runtime_probe
+
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={
+            ".omnia/cell.json": '{"version":1}',
+            "src/app/support/page.tsx": "export default function Support(){return null}\n",
+        },
+        capabilities={"portable_machine": True},
+    )
+
+    async def fake_probe(
+        preview,
+        *,
+        path,
+        fallback_paths=(),
+        portable_project_id=None,
+        expected_epoch=None,
+    ):
+        assert preview.workspace_id == harness.workspace_id
+        assert path == "/"
+        assert fallback_paths == ("/support",)
+        assert portable_project_id == harness.project_id
+        assert expected_epoch == 1
+        return max_runtime_probe.MaxRuntimeProbe(True, "cell database verified via /support")
+
+    monkeypatch.setattr(max_runtime_probe, "probe_max_cell_runtime", fake_probe)
+    result = await harness.handle.execute(Action(name="runtime_check", args={"path": "/"}))
+    assert result == {"ok": True, "detail": "cell database verified via /support"}
+    assert harness.legacy_actions == []
+
+
 async def test_ready_mark_cannot_steal_a_newer_workspace_lease(
     monkeypatch, db_session, test_engine,
 ) -> None:

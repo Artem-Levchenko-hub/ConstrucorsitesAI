@@ -4878,13 +4878,7 @@ async def _process_prompt(
                     await _apply_project_cell_preview_files(
                         project_id=project_id,
                         project_slug=project_slug,
-                        files={"src/app/page.tsx": ""},
-                        project_cell_handle=_project_cell_executor_handle,
-                    )
-                    await _apply_project_cell_preview_files(
-                        project_id=project_id,
-                        project_slug=project_slug,
-                        files=_starter_files,
+                        files={**_starter_files, "src/app/page.tsx": ""},
                         project_cell_handle=_project_cell_executor_handle,
                     )
                     _max_seed_files = _starter_files

@@ -93,10 +93,28 @@ async def run_release_proof(
                 )
             else:
                 from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
+                from omnia_api.services.max_runtime_routes import (
+                    resolve_max_runtime_probe_paths,
+                )
 
                 if cell_preview is None:
                     cell_preview = await project_cell_handle.create_preview_session()
-                max_probe = await probe_max_cell_runtime(cell_preview, path="/")
+                probe_path = "/"
+                probe_kwargs: dict[str, object] = {}
+                snapshot_files = getattr(project_cell_handle, "snapshot_files", None)
+                if callable(snapshot_files):
+                    current_files = await snapshot_files()
+                    probe_path, fallback_paths = resolve_max_runtime_probe_paths(
+                        current_files,
+                        requested_path="/",
+                    )
+                    if fallback_paths:
+                        probe_kwargs["fallback_paths"] = fallback_paths
+                max_probe = await probe_max_cell_runtime(
+                    cell_preview,
+                    path=probe_path,
+                    **probe_kwargs,
+                )
             checks.append(Check("max_data_plane", max_probe.ok, max_probe.detail[:240]))
         except Exception as exc:
             checks.append(Check("max_data_plane", False, f"probe failed: {exc!r}"))

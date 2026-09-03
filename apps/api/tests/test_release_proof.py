@@ -127,9 +127,10 @@ async def test_release_proof_uses_only_selected_project_cell_runtime(monkeypatch
     async def forbidden(*_args, **_kwargs):
         raise AssertionError("legacy orchestrator path must not be used")
 
-    async def cell_probe(session, *, path):
+    async def cell_probe(session, *, path, fallback_paths=()):
         assert session is preview
         assert path == "/"
+        assert fallback_paths == ()
         calls.append("max_cell_probe")
         return MaxRuntimeProbe(True, "cell protected data verified")
 
@@ -149,6 +150,76 @@ async def test_release_proof_uses_only_selected_project_cell_runtime(monkeypatch
         project_cell_handle=SimpleNamespace(
             execute=execute,
             create_preview_session=create_preview_session,
+        ),
+    )
+
+    assert verdict.passed
+    assert calls == ["build", "runtime_check", "preview_session", "max_cell_probe"]
+
+
+async def test_release_proof_uses_fallback_probe_route_when_home_page_is_missing(
+    monkeypatch,
+) -> None:
+    project_id = uuid4()
+    workspace_id = uuid4()
+    calls: list[str] = []
+    preview = ProjectCellPreviewSession(
+        workspace_id=workspace_id,
+        preview_url=(
+            f"https://cell-{workspace_id.hex[:12]}-dev.preview.lead-generator.ru"
+        ),
+        bootstrap_url=(
+            f"https://cell-{workspace_id.hex[:12]}-dev.preview.lead-generator.ru/"
+            "api/omnia/preview-session?expires=4102444800&signature=" + "a" * 64
+        ),
+        expires_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+    )
+
+    async def execute(action):
+        calls.append(action.name)
+        if action.name == "build":
+            return {"ok": True, "detail": "cell typecheck clean"}
+        assert action.name == "runtime_check"
+        assert action.args == {"path": "/"}
+        return {"ok": True, "detail": "cell runtime HTTP ok via /support"}
+
+    async def create_preview_session():
+        calls.append("preview_session")
+        return preview
+
+    async def snapshot_files():
+        return {
+            ".omnia/cell.json": '{"version":1}',
+            "src/app/support/page.tsx": "export default function Support(){return null}\n",
+        }
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("legacy orchestrator path must not be used")
+
+    async def cell_probe(session, *, path, fallback_paths=()):
+        assert session is preview
+        assert path == "/"
+        assert fallback_paths == ("/support",)
+        calls.append("max_cell_probe")
+        return MaxRuntimeProbe(True, "cell protected data verified via /support")
+
+    settings = get_settings().model_copy(update={"use_security_gate": False})
+    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
+    monkeypatch.setattr(release_proof.orchestrator_client, "agent_build", forbidden)
+    monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", forbidden)
+    monkeypatch.setattr(release_proof.orchestrator_client, "get_status", forbidden)
+    monkeypatch.setattr(
+        "omnia_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
+    )
+
+    verdict = await release_proof.run_release_proof(
+        project_id,
+        "max-app",
+        require_max_data=True,
+        project_cell_handle=SimpleNamespace(
+            execute=execute,
+            create_preview_session=create_preview_session,
+            snapshot_files=snapshot_files,
         ),
     )
 

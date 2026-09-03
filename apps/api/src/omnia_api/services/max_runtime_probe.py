@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -105,17 +106,26 @@ async def probe_max_cell_runtime(
     preview: orchestrator_client.ProjectCellPreviewSession,
     *,
     path: str = "/",
+    fallback_paths: Sequence[str] = (),
     portable_project_id: UUID | None = None,
     expected_epoch: int | None = None,
 ) -> MaxRuntimeProbe:
     """Use the validated, lease-scoped cell session without project-runtime fallback."""
-    if not path.startswith("/") or path.startswith("//") or "\\" in path:
-        return MaxRuntimeProbe(False, "runtime path must be same-origin")
+    candidate_paths = (path, *tuple(fallback_paths))
+    for candidate_path in candidate_paths:
+        if (
+            not candidate_path
+            or not candidate_path.startswith("/")
+            or candidate_path.startswith("//")
+            or "\\" in candidate_path
+        ):
+            return MaxRuntimeProbe(False, "runtime path must be same-origin")
     if portable_project_id is not None and (type(expected_epoch) is not int or expected_epoch < 1):
         return MaxRuntimeProbe(False, "portable proof requires the active lease epoch")
     return await _probe_signed_runtime(
         preview.bootstrap_url,
         path=path,
+        fallback_paths=fallback_paths,
         request_timeout=_CELL_STARTUP_TIMEOUT,
         portable_project_id=portable_project_id,
         expected_epoch=expected_epoch,
@@ -126,12 +136,14 @@ async def _probe_signed_runtime(
     bootstrap_url: str,
     *,
     path: str | None = None,
+    fallback_paths: Sequence[str] = (),
     request_timeout: httpx.Timeout = _TIMEOUT,
     portable_project_id: UUID | None = None,
     expected_epoch: int | None = None,
 ) -> MaxRuntimeProbe:
     parsed = urlsplit(bootstrap_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
+    product_detail = ""
     try:
         async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=False) as client:
             if portable_project_id is not None:
@@ -159,8 +171,14 @@ async def _probe_signed_runtime(
                         "signed preview bootstrap escaped its origin",
                     )
             paths = list(
-                dict.fromkeys((["/"] if portable_project_id else []) + ([path] if path else []))
+                dict.fromkeys(
+                    [candidate for candidate in (path, *tuple(fallback_paths)) if candidate]
+                )
             )
+            if not paths:
+                paths = ["/"]
+            failures: list[str] = []
+            success_path: str | None = None
             for product_path in paths:
                 route = await client.get(f"{origin}{product_path}")
                 # A redirect to a managed endpoint is not product evidence.
@@ -169,10 +187,22 @@ async def _probe_signed_runtime(
                     if portable_project_id
                     else 200 <= route.status_code < 400
                 )
-                if not valid_status:
+                if valid_status:
+                    success_path = product_path
+                    break
+                failures.append(f"{product_path} -> HTTP {route.status_code}")
+            if success_path is None:
+                if len(paths) == 1:
                     return MaxRuntimeProbe(
-                        False, f"runtime route failed (HTTP {route.status_code})",
+                        False,
+                        f"runtime route failed (HTTP {failures[0].rsplit(' ', 1)[-1]})",
                     )
+                return MaxRuntimeProbe(
+                    False,
+                    "runtime routes failed: " + "; ".join(failures),
+                )
+            if success_path != paths[0]:
+                product_detail = f" via {success_path}"
             protected = await client.get(f"{origin}/api/omnia/actions?limit=1")
             if protected.status_code != 200:
                 return MaxRuntimeProbe(
@@ -203,7 +233,10 @@ async def _probe_signed_runtime(
     except httpx.HTTPError as exc:
         return MaxRuntimeProbe(False, f"MAX data-plane request failed: {type(exc).__name__}")
 
-    return MaxRuntimeProbe(True, "signed preview auth and protected MAX data read passed")
+    return MaxRuntimeProbe(
+        True,
+        "signed preview auth and protected MAX data read passed" + product_detail,
+    )
 
 
 __all__ = ["MaxRuntimeProbe", "probe_max_runtime"]

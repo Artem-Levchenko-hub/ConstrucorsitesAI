@@ -803,15 +803,28 @@ async def maybe_create_project_cell_executor(
                     )
                     if action.name == "runtime_check":
                         from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
+                        from omnia_api.services.max_runtime_routes import (
+                            resolve_max_runtime_probe_paths,
+                        )
 
+                        runtime_path = str(action.args.get("path") or "/")
+                        fallback_paths: tuple[str, ...] = ()
+                        proof_kwargs: dict[str, Any] = {}
+                        if _is_portable():
+                            runtime_path, fallback_paths = resolve_max_runtime_probe_paths(
+                                workspace_files,
+                                requested_path=runtime_path,
+                            )
+                            proof_kwargs = {
+                                "portable_project_id": project_id,
+                                "expected_epoch": fencing_epoch,
+                            }
+                            if fallback_paths:
+                                proof_kwargs["fallback_paths"] = fallback_paths
                         proof = await probe_max_cell_runtime(
                             preview,
-                            path=str(action.args.get("path") or "/"),
-                            **(
-                                {"portable_project_id": project_id, "expected_epoch": fencing_epoch}
-                                if _is_portable()
-                                else {}
-                            ),
+                            path=runtime_path,
+                            **proof_kwargs,
                         )
                         runtime_result = {"ok": proof.ok, "detail": proof.detail}
                     else:
