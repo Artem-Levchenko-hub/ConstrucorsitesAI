@@ -249,12 +249,41 @@ async def start_container(spec: ContainerSpec) -> str:
             try:
                 project_network = client.networks.get(spec.network_name)
             except docker.errors.NotFound:
-                with suppress(docker.errors.APIError):
-                    project_network = client.networks.create(
-                        spec.network_name,
-                        driver="bridge",
-                        internal=spec.network_internal,
-                    )
+                try:
+                    network_pool = get_settings().cell_network_pool
+                    if network_pool:
+                        from omnia_orchestrator.services.machine_network_allocation import (
+                            create_pool_network,
+                        )
+
+                        project_network = create_pool_network(
+                            client,
+                            network_pool,
+                            spec.network_name,
+                            driver="bridge",
+                            check_duplicate=True,
+                            internal=spec.network_internal,
+                        )
+                    else:
+                        project_network = client.networks.create(
+                            spec.network_name,
+                            driver="bridge",
+                            check_duplicate=True,
+                            internal=spec.network_internal,
+                        )
+                except (docker.errors.APIError, ValueError) as exc:
+                    # A concurrent provision may have created the deterministic
+                    # network after our first lookup. Recover only when it now
+                    # exists; otherwise keep the real allocation error instead
+                    # of replacing it with a misleading follow-up 404.
+                    try:
+                        project_network = client.networks.get(spec.network_name)
+                    except docker.errors.NotFound:
+                        raise OrchestratorError(
+                            code="container_failure",
+                            message=f"project network allocation failed: {exc}",
+                            status_code=503,
+                        ) from exc
             if project_network is None:
                 project_network = client.networks.get(spec.network_name)
             for service_name in spec.network_service_names:
@@ -1322,6 +1351,60 @@ async def destroy_container(name: str) -> None:
             raise OrchestratorError(
                 code="container_failure",
                 message=f"remove failed for {name}: {exc}",
+                status_code=500,
+            ) from exc
+
+    await asyncio.to_thread(_do)
+
+
+async def destroy_project_network(
+    project_id: str,
+    *,
+    service_names: tuple[str, ...] = (),
+) -> None:
+    """Remove one deterministic legacy project network after its runtimes.
+
+    Shared services are detached explicitly. Any other remaining endpoint
+    fails closed so teardown never disconnects an unrelated live container.
+    """
+    name = f"omnia-proj-{project_id}"
+    log.info("docker.destroy_project_network", name=name)
+
+    def _do() -> None:
+        client = _get_client()
+        try:
+            network = client.networks.get(name)
+        except docker.errors.NotFound:
+            return
+
+        try:
+            network.reload()
+            containers = (network.attrs or {}).get("Containers") or {}
+            allowed = set(service_names)
+            for container_id, metadata in list(containers.items()):
+                container_name = str((metadata or {}).get("Name") or "")
+                if container_name in allowed:
+                    network.disconnect(container_id, force=True)
+
+            network.reload()
+            remaining = (network.attrs or {}).get("Containers") or {}
+            if remaining:
+                names = sorted(
+                    str((metadata or {}).get("Name") or container_id)
+                    for container_id, metadata in remaining.items()
+                )
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"project network still has endpoints: {', '.join(names)}",
+                    status_code=409,
+                )
+            network.remove()
+        except docker.errors.NotFound:
+            return
+        except docker.errors.APIError as exc:
+            raise OrchestratorError(
+                code="container_failure",
+                message=f"project network removal failed: {exc}",
                 status_code=500,
             ) from exc
 

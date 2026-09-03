@@ -178,9 +178,22 @@ class _FakeNetwork:
     def __init__(self, name: str) -> None:
         self.name = name
         self.connections: list[tuple[str, tuple[str, ...]]] = []
+        self.attrs: dict[str, Any] = {"Containers": {}}
+        self.disconnections: list[tuple[str, bool]] = []
+        self.removed = False
 
     def connect(self, service: str, *, aliases: list[str]) -> None:
         self.connections.append((service, tuple(aliases)))
+
+    def reload(self) -> None:
+        pass
+
+    def disconnect(self, container_id: str, *, force: bool) -> None:
+        self.disconnections.append((container_id, force))
+        self.attrs["Containers"].pop(container_id, None)
+
+    def remove(self) -> None:
+        self.removed = True
 
 
 class _FakeNetworks:
@@ -1111,6 +1124,95 @@ async def test_start_container_creates_per_project_network_when_set(
     assert client.containers.run_kwargs.get("network") == "omnia-proj-1"
 
 
+async def test_start_container_uses_configured_explicit_network_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.services import machine_network_allocation
+
+    monkeypatch.setenv("CELL_NETWORK_POOL", "10.253.0.0/16")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    client = _FakeClient(None)
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def fake_create_pool_network(
+        docker_client: Any,
+        pool: str,
+        name: str,
+        **kwargs: Any,
+    ) -> _FakeNetwork:
+        assert docker_client is client
+        calls.append((pool, name, kwargs))
+        return client.networks.create(name, **kwargs)
+
+    monkeypatch.setattr(
+        machine_network_allocation,
+        "create_pool_network",
+        fake_create_pool_network,
+    )
+    await docker_client.start_container(
+        ContainerSpec(
+            name="omnia-dev-x",
+            image="omnia-template-x:dev",
+            port=3200,
+            project_id="00000000-0000-0000-0000-000000000001",
+            env={},
+            network_name="omnia-proj-1",
+        )
+    )
+
+    assert calls == [
+        (
+            "10.253.0.0/16",
+            "omnia-proj-1",
+            {"driver": "bridge", "check_duplicate": True, "internal": False},
+        )
+    ]
+
+
+async def test_destroy_project_network_detaches_only_allowed_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = "00000000-0000-0000-0000-000000000001"
+    name = f"omnia-proj-{project_id}"
+    client = _FakeClient(None)
+    client.networks = _FakeNetworks({name})
+    network = client.networks.items[name]
+    network.attrs["Containers"] = {
+        "db-id": {"Name": "omnia-postgres-users"},
+    }
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    await docker_client.destroy_project_network(
+        project_id,
+        service_names=("omnia-postgres-users",),
+    )
+
+    assert network.disconnections == [("db-id", True)]
+    assert network.removed is True
+
+
+async def test_destroy_project_network_refuses_unknown_live_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = "00000000-0000-0000-0000-000000000001"
+    name = f"omnia-proj-{project_id}"
+    client = _FakeClient(None)
+    client.networks = _FakeNetworks({name})
+    network = client.networks.items[name]
+    network.attrs["Containers"] = {"other-id": {"Name": "unrelated"}}
+    monkeypatch.setattr(docker_client, "_get_client", lambda: client)
+
+    with pytest.raises(OrchestratorError, match="unrelated"):
+        await docker_client.destroy_project_network(
+            project_id,
+            service_names=("omnia-postgres-users",),
+        )
+
+    assert network.removed is False
+
+
 async def test_start_container_recreates_legacy_runtime_for_new_sandbox_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1177,6 +1279,7 @@ async def test_start_container_max_profile_has_db_only_project_network(
     ]
     assert client.networks.create_kwargs[network_name] == {
         "driver": "bridge",
+        "check_duplicate": True,
         "internal": False,
     }
 

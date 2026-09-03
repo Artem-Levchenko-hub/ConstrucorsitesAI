@@ -37,6 +37,7 @@ from omnia_orchestrator.core.docker_client import (
     container_logs,
     container_security_facts,
     destroy_container,
+    destroy_project_network,
     docker_runtime_facts,
     exec_cmd,
     find_project_container,
@@ -1620,6 +1621,10 @@ async def destroy(
     # 1. Containers — dev + prod. Missing is a no-op.
     await destroy_container(f"omnia-dev-{slug}")
     await destroy_container(f"omnia-app-{slug}")
+    await destroy_project_network(
+        project_id,
+        service_names=(get_settings().runtime_db_container_name,),
+    )
 
     # 2. Ports — dev + prod pools.
     await get_port_allocator().release(pid)
