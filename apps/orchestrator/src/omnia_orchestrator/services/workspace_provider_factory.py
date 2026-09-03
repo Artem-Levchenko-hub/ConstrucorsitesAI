@@ -18,6 +18,7 @@ from omnia_orchestrator.services.disabled_workspace_provider import DisabledWork
 from omnia_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
+from omnia_orchestrator.services.machine_adapter import MachineAdapter
 
 
 def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
@@ -41,6 +42,7 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
         # filesystem-helper limit or exceed admission's bundle reservation.
         exec_memory_limit_bytes=profile.executor_memory_bytes,
         exec_cpu_cores=profile.executor_cpu_cores,
+        network_pool=settings.cell_network_pool,
     )
     operation_lock = WorkspaceOperationLock(state_root)
     resource_manager = DockerCellResourceManager(
@@ -69,6 +71,11 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
         credential_store=credential_store,
         state_store=state_store,
     )
+    if settings.cell_machine_enabled:
+        machine_runtime = MachineAdapter(resource_manager, settings)
+        machine_runtime.validate_available()
+        resource_manager.machine_runtime = machine_runtime
+        checkpoint_manager.machine_runtime = machine_runtime
     return DockerOwnerCanaryProvider(
         resource_manager=resource_manager,
         checkpoint_manager=checkpoint_manager,

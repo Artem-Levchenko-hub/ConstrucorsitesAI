@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -82,6 +82,7 @@ class WorkspaceAgentBootstrapResponse(BaseModel):
     generation_run_id: UUID
     fencing_epoch: int
     workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    capabilities: dict[str, object] = Field(default_factory=dict)
 
 
 class WorkspaceAgentBootstrapRequest(BaseModel):
@@ -166,6 +167,8 @@ class WorkspaceAgentExecRequest(BaseModel):
     expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     cmd: str = Field(min_length=1)
     timeout_seconds: int = Field(default=180, ge=1, le=900)
+    operation_id: UUID = Field(default_factory=uuid4)
+    task_role: Literal["bootstrap", "build", "test"] | None = None
 
 
 class WorkspaceAgentExecResponse(BaseModel):

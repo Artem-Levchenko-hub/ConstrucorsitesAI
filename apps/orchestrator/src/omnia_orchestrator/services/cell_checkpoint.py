@@ -55,6 +55,7 @@ class CellCheckpointManager:
         self.docker = docker
         self.credential_store = credential_store
         self.state_store = state_store
+        self.machine_runtime: Any | None = None
 
     async def create(
         self,
@@ -156,6 +157,12 @@ class CellCheckpointManager:
         artifacts = await self._load_artifacts(
             names.checkpoint_volume, checkpoint_ref, manifest
         )
+        if self.machine_runtime is not None:
+            validate = getattr(self.machine_runtime, "validate_restore_payload", None)
+            if validate is not None:
+                await validate(state, artifacts.get("machine.json"))
+        elif "machine.json" in artifacts:
+            raise CellRestoreFailed("portable environment provider is unavailable")
         self._begin_if_missing(
             state,
             mutation,
@@ -173,11 +180,21 @@ class CellCheckpointManager:
                 names=names,
                 helper_name=helper_name,
             )
-            pre_restore_artifacts = await self._capture_checkpoint_artifacts(
-                workspace_id=workspace_id,
-                names=names,
-                postgres_container_name=helper_name,
-            )
+            recovery = self.machine_runtime is not None and getattr(
+                self.machine_runtime, "recovery_required", lambda state: False
+            )(state)
+            if recovery:
+                # The failed current state cannot honestly be sealed as a rollback
+                # checkpoint. An explicit restore may replace it with the already
+                # identity/hash-verified requested envelope. Failed recovery stays
+                # fenced/degraded; this never certifies the failed source/data.
+                pre_restore_artifacts = dict(artifacts)
+            else:
+                pre_restore_artifacts = await self._capture_checkpoint_artifacts(
+                    workspace_id=workspace_id,
+                    names=names,
+                    postgres_container_name=helper_name,
+                )
             pre_restore = self._build_manifest(
                 workspace_id=workspace_id,
                 state=state,
@@ -293,6 +310,11 @@ class CellCheckpointManager:
         names: Any,
         postgres_container_name: str,
     ) -> dict[str, bytes]:
+        machine_payload = None
+        if self.machine_runtime is not None:
+            machine_payload = await self.machine_runtime.checkpoint_payload(
+                self._require_state(workspace_id)
+            )
         workspace_tar = _archive_bytes(await self.docker.read_volume_files(names.workspace_volume))
         agent_home_tar = _archive_bytes(
             await self.docker.read_volume_files(names.agent_home_volume)
@@ -301,11 +323,14 @@ class CellCheckpointManager:
             postgres_container_name,
             await self._postgres_password(workspace_id),
         )
-        return {
+        artifacts = {
             "workspace.tar": workspace_tar,
             "agent-home.tar": agent_home_tar,
             "postgres.dump": postgres_dump,
         }
+        if machine_payload is not None:
+            artifacts["machine.json"] = machine_payload
+        return artifacts
 
     def _build_manifest(
         self,
@@ -449,6 +474,12 @@ class CellCheckpointManager:
         if await self.docker.postgres_smoke_query(postgres_container_name, password) is False:
             raise CellRestoreFailed("postgres smoke query failed")
         await self.docker.clear_volume(names.redis_volume)
+        if self.machine_runtime is not None:
+            await self.machine_runtime.restore_payload(
+                self._require_state(workspace_id), artifacts.get("machine.json")
+            )
+        elif "machine.json" in artifacts:
+            raise CellRestoreFailed("portable environment provider is unavailable")
 
     async def _replace_volume_files(self, volume_name: str, files: dict[str, bytes]) -> None:
         current = await self.docker.read_volume_files(volume_name)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import parse_qsl, urlsplit
@@ -347,6 +347,7 @@ class ProjectCellAgentWorkspaceSnapshot:
     generation_run_id: UUID | None
     fencing_epoch: int
     workspace_revision: str
+    capabilities: dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentWorkspaceSnapshot:
@@ -356,6 +357,7 @@ class ProjectCellAgentWorkspaceSnapshot:
             "generation_run_id",
             "fencing_epoch",
             "workspace_revision",
+            "capabilities",
         }
         unexpected = set(payload) - expected
         if unexpected:
@@ -367,12 +369,18 @@ class ProjectCellAgentWorkspaceSnapshot:
         generation_run_id = payload.get("generation_run_id")
         fencing_epoch = payload.get("fencing_epoch")
         workspace_revision = payload.get("workspace_revision")
+        capabilities = payload.get("capabilities", {})
         if (
             type(raw_files) is not dict
             or type(seeded_from_project) is not bool
             or (generation_run_id is not None and type(generation_run_id) is not str)
             or type(fencing_epoch) is not int
             or type(workspace_revision) is not str
+            or type(capabilities) is not dict
+            or (
+                "portable_machine" in capabilities
+                and type(capabilities["portable_machine"]) is not bool
+            )
         ):
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell workspace snapshot"
@@ -395,6 +403,7 @@ class ProjectCellAgentWorkspaceSnapshot:
                 ),
                 fencing_epoch=fencing_epoch,
                 workspace_revision=workspace_revision,
+                capabilities=dict(capabilities),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(
@@ -942,6 +951,8 @@ async def project_cell_agent_exec(
     fencing_epoch: int,
     expected_revision: str,
     timeout_seconds: int = 180,
+    task_role: str | None = None,
+    operation_id: UUID | None = None,
 ) -> ProjectCellAgentExecResponse:
     if not isinstance(cmd, str) or not cmd.strip():
         raise ValueError("cmd must be a non-empty string")
@@ -949,6 +960,8 @@ async def project_cell_agent_exec(
         raise ValueError("timeout_seconds must be between 1 and 900")
     _validate_fencing_epoch(fencing_epoch)
     _validate_workspace_revision(expected_revision)
+    if task_role not in (None, "bootstrap", "build", "test"):
+        raise ValueError("invalid portable task role")
     payload = await _request(
         "POST",
         f"/internal/workspaces/{workspace_id}/agent/exec",
@@ -960,6 +973,8 @@ async def project_cell_agent_exec(
             "expected_revision": expected_revision,
             "cmd": cmd,
             "timeout_seconds": timeout_seconds,
+            **({"task_role": task_role} if task_role is not None else {}),
+            **({"operation_id": str(operation_id)} if operation_id is not None else {}),
         },
         timeout=float(timeout_seconds + 30),
     )
@@ -996,7 +1011,9 @@ async def project_cell_apply_draft(
             "files": files,
             "deletes": list(deletes),
         },
-        timeout=660.0,
+        # Server machine apply has one 900s aggregate budget including build,
+        # capture and readiness. Keep a transport/cleanup margin outside it.
+        timeout=930.0,
     )
     return ProjectCellDraftApplyResponse.from_json(payload)
 

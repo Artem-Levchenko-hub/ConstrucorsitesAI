@@ -569,6 +569,32 @@ async def test_execute_max_agent_action_routes_selected_runtime_check_without_le
 
 
 @pytest.mark.asyncio
+async def test_portable_action_uses_provider_boundary_not_next_source_lock_or_autobuild():
+    async def execute(action):
+        return {"ok": True, "detail": action.name}
+
+    handle = SimpleNamespace(is_portable=lambda: True, execute=execute)
+    for action in (
+        Action(
+            name="write_file", args={"path": "src/app/layout.tsx", "content": "new product shell"}
+        ),
+        Action(name="bash", args={"cmd": "pip install flask"}),
+    ):
+        result = await messages._execute_max_agent_action(
+            action,
+            project_id=uuid4(),
+            project_slug="portable",
+            vision_context="",
+            base_agent_executor=lambda action: pytest.fail("legacy executor"),
+            max_shell_enabled=True,
+            project_cell_handle=handle,
+            active_max_locked_files=frozenset({"src/app/layout.tsx"}),
+            max_model_write_rejection=lambda path, content: None,
+        )
+        assert result == {"ok": True, "detail": action.name}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("use_cell", [False, True])
 async def test_execute_max_agent_action_rejects_removed_see_before_any_dispatch(
     use_cell: bool,

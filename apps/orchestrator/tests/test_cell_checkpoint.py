@@ -89,6 +89,73 @@ class ReplayGuardBackend(FakeDockerBackend):
         return await super().create_container(spec)
 
 
+async def test_portable_checkpoint_payload_is_sealed_and_restored_with_same_revision(tmp_path):
+    from unittest.mock import AsyncMock
+
+    manager, checkpoints, _docker = _make_fixture(tmp_path)
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    payload = b'{"reference":"immutable-environment-A"}'
+    runtime = SimpleNamespace(
+        checkpoint_payload=AsyncMock(return_value=payload), restore_payload=AsyncMock()
+    )
+    checkpoints.machine_runtime = runtime
+    sealed = await checkpoints.create(spec.workspace_id, "portable-A", _mutation("b", 2))
+    assert "machine.json" in sealed.artifacts
+    await manager.pause_services(spec.workspace_id, _mutation("c", 3), checkpoint_ref="portable-A")
+    await checkpoints.restore(spec.workspace_id, "portable-A", _mutation("d", 4))
+    assert runtime.restore_payload.await_args.args[1] == payload
+
+
+async def test_explicit_restore_of_failed_quiesce_uses_verified_target_not_failed_capture(tmp_path):
+    from unittest.mock import AsyncMock
+
+    manager, checkpoints, docker = _make_fixture(tmp_path)
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, spec.workspace_id)
+    await docker.write_volume_files(names.workspace_volume, {"source": b"known good"})
+    await checkpoints.create(spec.workspace_id, "known-good", _mutation("b", 2))
+    await manager.pause_services(spec.workspace_id, _mutation("c", 3))
+    runtime = SimpleNamespace(
+        recovery_required=lambda state: True,
+        checkpoint_payload=AsyncMock(side_effect=AssertionError("never certify failed quiescence")),
+        restore_payload=AsyncMock(),
+    )
+    checkpoints.machine_runtime = runtime
+    await checkpoints.restore(spec.workspace_id, "known-good", _mutation("d", 4))
+    runtime.restore_payload.assert_awaited_once()
+    assert (await docker.read_volume_files(names.workspace_volume))["source"] == b"known good"
+    assert manager.state_store.load(spec.workspace_id).phase == "completed"
+
+
+async def test_nested_machine_preflight_failure_precedes_any_source_or_database_replacement(
+    tmp_path,
+):
+    from unittest.mock import AsyncMock
+
+    manager, checkpoints, docker = _make_fixture(tmp_path)
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, spec.workspace_id)
+    await docker.write_volume_files(names.workspace_volume, {"source": b"target"})
+    await checkpoints.create(spec.workspace_id, "target", _mutation("b", 2))
+    await docker.write_volume_files(names.workspace_volume, {"source": b"current"})
+    await manager.pause_services(spec.workspace_id, _mutation("c", 3))
+    runtime = SimpleNamespace(
+        recovery_required=lambda state: True,
+        validate_restore_payload=AsyncMock(
+            side_effect=CellRestoreFailed("nested artifact missing")
+        ),
+        restore_payload=AsyncMock(),
+    )
+    checkpoints.machine_runtime = runtime
+    with pytest.raises(CellRestoreFailed, match="nested artifact missing"):
+        await checkpoints.restore(spec.workspace_id, "target", _mutation("d", 4))
+    assert (await docker.read_volume_files(names.workspace_volume))["source"] == b"current"
+    runtime.restore_payload.assert_not_awaited()
+
+
 def _make_fixture(
     tmp_path: Path,
     docker: FakeDockerBackend | None = None,

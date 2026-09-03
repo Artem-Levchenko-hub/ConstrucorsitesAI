@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from omnia_orchestrator.core.cell_resources import (
@@ -304,6 +304,7 @@ class DockerCellResourceManager:
     capacity_reservations: CellCapacityReservationStore | None = None
     namespace: str = "prod"
     draft_port_registry_path: str | None = None
+    machine_runtime: Any | None = None
 
     async def ensure(self, spec: WorkspaceSpec, mutation: LifecycleMutation) -> CellBundleHandle:
         return await self._upsert_bundle(spec, mutation, wake_only=False)
@@ -429,6 +430,8 @@ class DockerCellResourceManager:
             names = state.resource_names
             if names is None:
                 raise CellResourceError("resource names missing")
+            if self.machine_runtime is not None:
+                await self.machine_runtime.halt(state)
             await self.stateful_begin_or_replay(
                 spec,
                 mutation,
@@ -641,6 +644,8 @@ class DockerCellResourceManager:
         provider_ref = self._provider_ref(spec.workspace_id)
         try:
             credentials = self.credential_store.load_or_create(spec.workspace_id)
+            if self.machine_runtime is not None and state is not None:
+                await self.machine_runtime.halt(state)
             await self.stateful_begin_or_replay(
                 spec, mutation, kind="wake" if wake_only else "ensure", names=names
             )
@@ -1290,6 +1295,14 @@ class DockerCellResourceManager:
         *,
         allow_reconcile: bool,
     ) -> None:
+        from omnia_orchestrator.services.machine_identity import is_portable_workspace
+
+        if self.machine_runtime is None and is_portable_workspace(
+            self.state_store.root, state.workspace_id
+        ):
+            raise CellResourceError(
+                "portable machine provider is unavailable; lifecycle transition is blocked"
+            )
         if mutation.fencing_epoch < state.fencing_epoch:
             raise CellFenceRejected("stale fencing epoch")
         if state.phase == "indeterminate" and allow_reconcile is False:
@@ -1535,6 +1548,8 @@ class DockerCellResourceManager:
         try:
             if record_operation:
                 await self.state_store_advance(workspace_id, mutation, phase="planned")
+            if self.machine_runtime is not None:
+                await self.machine_runtime.halt(state)
             await self._stop_if_present(names.draft_container_name())
             await self._stop_if_present(names.postgres_container)
             await self._stop_if_present(names.redis_container)
@@ -1603,6 +1618,8 @@ class DockerCellResourceManager:
                     mutation,
                     phase="containers_removed",
                 )
+            if self.machine_runtime is not None:
+                await self.machine_runtime.halt(state, remove_network=True)
             await self._remove_container_if_present(names.draft_container_name())
             await self._remove_container_if_present(names.postgres_container)
             await self._remove_container_if_present(names.redis_container)

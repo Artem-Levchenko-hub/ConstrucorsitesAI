@@ -27,6 +27,7 @@ from omnia_orchestrator.core.cell_resources import (
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.internal_auth import verify_internal_token
+from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.core.workspace_provider import (
     ControlAction,
@@ -280,6 +281,7 @@ async def get_workspace_resources(
 @router.post(
     "/workspaces/{workspace_id}/agent/bootstrap",
     response_model=WorkspaceAgentBootstrapResponse,
+    response_model_exclude_defaults=True,
 )
 async def bootstrap_workspace_agent(
     workspace_id: UUID,
@@ -308,6 +310,7 @@ async def bootstrap_workspace_agent(
         generation_run_id=generation_run_id,
         fencing_epoch=fencing_epoch,
         workspace_revision=workspace_revision,
+        capabilities=(manager.machine_runtime.capabilities() if manager.machine_runtime else {}),
     )
 
 
@@ -357,6 +360,7 @@ async def write_workspace_agent_files(
         deletes_to_apply = tuple(
             path for path in deletes if path in current_files and path not in writes
         )
+        await _prepare_portable_write(manager, state, desired_files)
         if deletes_to_apply:
             await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
         if writes_to_apply:
@@ -401,6 +405,28 @@ async def exec_workspace_agent_command(
             _raise_agent_stale_conflict(
                 expected_revision=request.expected_revision,
                 current_revision=current_revision,
+            )
+        manifest = await _prepare_portable_write(manager, state, current_files)
+        if manifest is not None:
+            if manager.machine_runtime is None:
+                raise OrchestratorError(
+                    code="docker_unavailable",
+                    message="portable machine provider is unavailable",
+                    status_code=503,
+                )
+            try:
+                result = await manager.machine_runtime.execute(state, manifest, request)
+            except (CellResourceError, ValueError) as exc:
+                raise OrchestratorError(
+                    code="container_failure", message=str(exc), status_code=409
+                ) from exc
+            updated_files = await _read_agent_workspace_files(manager, volume_name)
+            return WorkspaceAgentExecResponse(
+                ok=result.exit_code == 0 and not result.timed_out,
+                exit_code=result.exit_code,
+                detail=_redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT],
+                timed_out=result.timed_out,
+                workspace_revision=_workspace_revision(updated_files),
             )
         if any(bad in low for bad in _EXEC_DENY):
             return WorkspaceAgentExecResponse(
@@ -510,6 +536,7 @@ async def apply_workspace_draft(
                 expected_revision=request.expected_revision,
                 current_revision=current_revision,
             )
+        manifest = await _prepare_portable_write(manager, state, desired_files)
         if current_revision == request.expected_revision:
             deletes_to_apply = tuple(
                 path for path in deletes if path in current_files and path not in writes
@@ -523,6 +550,33 @@ async def apply_workspace_draft(
                 await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
             if writes_to_apply:
                 await manager.docker.write_volume_files(volume_name, writes_to_apply)
+        if manifest is not None:
+            if manager.machine_runtime is None:
+                raise OrchestratorError(
+                    code="docker_unavailable",
+                    message="portable machine provider is unavailable",
+                    status_code=503,
+                )
+            try:
+                result = await manager.machine_runtime.apply(state, manifest, request)
+                preview_url = (
+                    await _publish_draft_preview(manager, workspace_id)
+                    if result.exit_code == 0
+                    else _draft_preview_url(workspace_id)
+                )
+            except (CellResourceError, ValueError) as exc:
+                raise OrchestratorError(
+                    code="container_failure", message=str(exc), status_code=409
+                ) from exc
+            updated_files = await _read_agent_workspace_files(manager, volume_name)
+            return WorkspaceDraftApplyResponse(
+                state="draft_running" if result.exit_code == 0 else "draft_failed",
+                workspace_revision=_workspace_revision(updated_files),
+                preview_url=preview_url,
+                package_exit_code=result.exit_code,
+                package_stderr_tail=_bounded_redacted_text(result.output),
+                migration_exit_code=result.exit_code,
+            )
         exec_spec = _workspace_exec_spec(state)
         names = exec_spec.resource_names
         credentials = manager.credential_store.load_or_create(workspace_id)
@@ -622,15 +676,29 @@ async def _draft_preview_session(
     """Caller holds the operation lock and has verified viewing authority."""
     workspace_id = state.workspace_id
     exec_spec = _workspace_exec_spec(state)
-    draft = await manager.inspect_draft_runtime(workspace_id)
-    if draft is None or draft.state != "running":
-        raise OrchestratorError(
-            code="conflict", message="draft runtime is not running", status_code=409,
+    if _portable_active(manager, workspace_id):
+        _require_portable_runtime(manager)
+        preview = manager.machine_runtime.preview(state)
+        if preview is None or preview[0] != "running":
+            raise OrchestratorError(
+                code="conflict", message="draft runtime is not running", status_code=409
+            )
+        auth_secret = manager.machine_runtime.secret(workspace_id)
+    else:
+        draft = await manager.inspect_draft_runtime(workspace_id)
+        if draft is None or draft.state != "running":
+            raise OrchestratorError(
+                code="conflict",
+                message="draft runtime is not running",
+                status_code=409,
+            )
+        try:
+            manager._verify_draft_container_record(draft, state)
+        except CellIdentityConflict as exc:
+            raise OrchestratorError(code="conflict", message=str(exc), status_code=409) from exc
+        auth_secret = manager._draft_auth_secret(
+            manager.credential_store.load_or_create(workspace_id).postgres_password
         )
-    try:
-        manager._verify_draft_container_record(draft, state)
-    except CellIdentityConflict as exc:
-        raise OrchestratorError(code="conflict", message=str(exc), status_code=409) from exc
     preview_url = _draft_preview_url(workspace_id)
     if not preview_url.startswith("https://"):
         raise OrchestratorError(
@@ -640,9 +708,7 @@ async def _draft_preview_session(
     expires_at = datetime.now(UTC) + _MAX_PREVIEW_BOOTSTRAP_TTL
     expires = int(expires_at.timestamp())
     signature = _max_preview_bootstrap_signature(
-        manager._draft_auth_secret(
-            manager.credential_store.load_or_create(workspace_id).postgres_password
-        ),
+        auth_secret,
         str(exec_spec.spec.project_id),
         expires,
     )
@@ -683,6 +749,12 @@ async def start_workspace_owner_preview(
             raise OrchestratorError(
                 code="conflict", message="workspace operation is still active", status_code=409,
             )
+        if _portable_active(manager, workspace_id):
+            _require_portable_runtime(manager)
+            await manager.machine_runtime.resume_preview(state)
+            await _publish_draft_preview(manager, workspace_id)
+            response.headers["Cache-Control"] = "no-store"
+            return await _draft_preview_session(manager, state)
         draft = await manager.inspect_draft_runtime(workspace_id)
         if draft is None:
             raise OrchestratorError(
@@ -722,6 +794,13 @@ async def _resource_response(
                     draft_state = _draft_state_name(draft.state)
                 except CellIdentityConflict:
                     draft_state = "failed"
+            if _portable_active(manager, status.workspace_id):
+                portable = (
+                    manager.machine_runtime.preview(state) if manager.machine_runtime else None
+                )
+                has_draft_runtime = True
+                draft_state = _draft_state_name(portable[0]) if portable else "stopped"
+                preview_url = _draft_preview_url(status.workspace_id)
     return WorkspaceResourceResponse(
         workspace_id=status.workspace_id,
         state=status.state,
@@ -745,6 +824,56 @@ def _maybe_docker_resource_manager(provider: object | None) -> DockerCellResourc
     ):
         return provider.resource_manager
     return None
+
+
+def _portable_active(manager: DockerCellResourceManager, workspace_id: UUID) -> bool:
+    # Trusted controller state is sticky. Guest deletion of .omnia/cell.json or
+    # disabling the provider must never expose the credentialed legacy executor.
+    from omnia_orchestrator.services.machine_identity import is_portable_workspace
+
+    return is_portable_workspace(manager.state_store.root, workspace_id) or bool(
+        manager.machine_runtime
+        and getattr(manager.machine_runtime, "exists", lambda _: False)(workspace_id)
+    )
+
+
+def _require_portable_runtime(manager: DockerCellResourceManager) -> None:
+    if manager.machine_runtime is None:
+        raise OrchestratorError(
+            code="container_failure",
+            message="portable machine provider is unavailable",
+            status_code=503,
+        )
+
+
+async def _prepare_portable_write(
+    manager: DockerCellResourceManager, state: CellWorkspaceState, files: dict[str, str]
+) -> MachineManifest | None:
+    """Caller holds lease/source lock. Retire credentialed HMR BEFORE guest writes."""
+    from omnia_orchestrator.services.machine_identity import machine_identity_root
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    manifest = _machine_manifest(files, manager=manager, workspace_id=state.workspace_id)
+    if manifest is None:
+        return None
+    _require_portable_runtime(manager)
+    draft = await manager.inspect_draft_runtime(state.workspace_id)
+    if draft is not None:
+        manager._verify_draft_container_record(draft, state)
+    marker = machine_identity_root(manager.state_store.root, state.workspace_id) / "portable.json"
+    if not marker.exists():
+        write_controller_json(
+            marker,
+            {
+                "workspace_id": str(state.workspace_id),
+                "project_id": str(state.project_id),
+                "kind": "portable",
+            },
+        )
+    if draft is not None:
+        await manager.docker.remove_container(draft.name)
+        await nginx_writer.unpublish(_draft_preview_host(state.workspace_id))
+    return manifest
 
 
 def _draft_preview_host(workspace_id: UUID) -> str:
@@ -776,6 +905,10 @@ async def _draft_runtime_log_tail(
     manager: DockerCellResourceManager,
     workspace_id: UUID,
 ) -> str:
+    if _portable_active(manager, workspace_id):
+        _require_portable_runtime(manager)
+        state = manager.state_store.load(workspace_id)
+        return _bounded_redacted_text(await manager.machine_runtime.logs(state))
     draft = await manager.inspect_draft_runtime(workspace_id)
     if draft is None:
         return ""
@@ -803,6 +936,13 @@ async def _sync_lifecycle_draft_preview(
             return
         if remove:
             await nginx_writer.unpublish(_draft_preview_host(workspace_id))
+        elif _portable_active(manager, workspace_id):
+            _require_portable_runtime(manager)
+            preview = manager.machine_runtime.preview(state)
+            if preview is None or preview[0] != "running":
+                await nginx_writer.unpublish(_draft_preview_host(workspace_id))
+            else:
+                await _publish_draft_preview(manager, workspace_id)
         elif await manager.inspect_draft_runtime(workspace_id) is not None:
             await _publish_draft_preview(manager, workspace_id)
 
@@ -813,6 +953,27 @@ async def _publish_draft_preview(
 ) -> str:
     """Publish while the caller holds the workspace operation lock."""
     state = manager.state_store.load(workspace_id)
+    if state is not None and _portable_active(manager, workspace_id):
+        _require_portable_runtime(manager)
+        preview = manager.machine_runtime.preview(state)
+        if preview is None or preview[0] != "running" or not preview[1]:
+            raise OrchestratorError(
+                code="container_failure",
+                message="portable draft gateway is not running",
+                status_code=503,
+            )
+        host = _draft_preview_host(workspace_id)
+        await nginx_writer.publish_http(host, 3000, upstream_host=preview[1], private_cell=True)
+        if not await nginx_writer.ensure_tls(
+            host, 3000, upstream_host=preview[1], private_cell=True
+        ):
+            await nginx_writer.unpublish(host)
+            raise OrchestratorError(
+                code="container_failure",
+                message="draft preview TLS provisioning failed",
+                status_code=503,
+            )
+        return _draft_preview_url(workspace_id)
     draft = await manager.inspect_draft_runtime(workspace_id)
     if state is None or state.resource_names is None or draft is None or draft.state != "running":
         raise OrchestratorError(
@@ -870,13 +1031,22 @@ async def _ensure_seed_workspace_files(
         if await asyncio.to_thread(project_root.is_dir):
             seeded_files, _dropped = await _collect_project_workspace_files(project_root)
             seeded_from_project = bool(seeded_files)
-    if not seeded_files:
+    if not seeded_files or manager.machine_runtime is not None:
         template_root = trusted_template_source(_PROJECT_CELL_TEMPLATE_DIR)
-        seeded_files, _dropped = await asyncio.to_thread(
+        template_files, _dropped = await asyncio.to_thread(
             _collect_workspace_text_files,
             template_root,
         )
-        seeded_from_project = False
+        pristine = not seeded_files or seeded_files == template_files
+        if not seeded_files:
+            seeded_files = template_files
+            seeded_from_project = False
+        if manager.machine_runtime is not None and pristine:
+            from omnia_orchestrator.services.machine_defaults import next_machine_seed
+
+            seeded_files = next_machine_seed(seeded_files)
+    if ".omnia/cell.json" in seeded_files:
+        await _prepare_portable_write(manager, state, seeded_files)
     await manager.docker.clear_volume(volume_name)
     if seeded_files:
         await manager.docker.write_volume_files(
@@ -926,6 +1096,24 @@ class _WorkspaceExecSpec:
     def __init__(self, spec: WorkspaceSpec, resource_names: CellResourceNames) -> None:
         self.spec = spec
         self.resource_names = resource_names
+
+
+def _machine_manifest(
+    files: dict[str, str], *, manager: DockerCellResourceManager, workspace_id: UUID
+) -> MachineManifest | None:
+    try:
+        manifest = MachineManifest.from_files(files)
+    except ValueError as exc:
+        raise OrchestratorError(
+            code="validation_failed", message=f"invalid machine manifest: {exc}", status_code=400
+        ) from exc
+    if manifest is None and _portable_active(manager, workspace_id):
+        raise OrchestratorError(
+            code="conflict",
+            message="portable workspace manifest is missing; legacy downgrade is forbidden",
+            status_code=409,
+        )
+    return manifest
 
 
 def _workspace_agent_exec_env(

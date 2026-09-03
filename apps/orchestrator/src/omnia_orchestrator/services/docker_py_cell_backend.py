@@ -170,6 +170,7 @@ class DockerPyCellBackend:
     archive_limit_bytes: int = _ARCHIVE_LIMIT_BYTES
     exec_memory_limit_bytes: int = 1024 * 1024 * 1024
     exec_cpu_cores: float = 0.5
+    network_pool: str = ""
     base_url: str = field(init=False)
     api: Any = field(init=False, repr=False)
     _client: Any | None = field(default=None, init=False, repr=False)
@@ -379,6 +380,20 @@ class DockerPyCellBackend:
         self._require_identity_labels(labels)
 
         def _create() -> Any:
+            if self.network_pool:
+                from omnia_orchestrator.services.machine_network_allocation import (
+                    create_pool_network,
+                )
+
+                return create_pool_network(
+                    self._client_obj(),
+                    self.network_pool,
+                    name,
+                    driver="bridge",
+                    check_duplicate=True,
+                    internal=internal,
+                    labels=labels,
+                )
             return self._client_obj().networks.create(
                 name,
                 driver="bridge",

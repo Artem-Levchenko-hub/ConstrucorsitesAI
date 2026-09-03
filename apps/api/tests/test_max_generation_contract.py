@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from omnia_api.services.max_generation_contract import (
@@ -15,6 +17,34 @@ COMPLEX_BRIEF = """
 ИИ тренер следит за сном и питанием, показывает статистику тренировок с графиком.
 Нужны профиль пользователя, история действий, уведомления, loading/empty/error/retry.
 """
+
+
+def test_portable_completion_requires_manifest_tests_and_runtime():
+    files = {
+        ".omnia/cell.json": json.dumps(
+            {
+                "version": 1,
+                "tasks": [{"name": "check", "role": "test", "argv": ["python3", "-m", "unittest"]}],
+                "services": [{"name": "web", "argv": ["python3", "server.py"]}],
+                "routes": [{"path": "/", "service": "web", "port": 8080}],
+            }
+        ),
+        "server.py": ("from flask import Flask\napp = Flask(__name__)\n"
+                      "@app.get('/')\ndef index(): return 'Python product'"),
+    }
+    assert max_source_completion_gap("A Python product", files, portable=True) is None
+    assert "runtime_check" in max_completion_gap("A Python product", files, {}, portable=True)
+    assert (
+        max_completion_gap(
+            "A Python product", files, {"runtime_check_after_write": 1}, portable=True
+        )
+        is None
+    )
+    assert max_source_completion_gap("A Python product", files) is not None
+    manifest = json.loads(files[".omnia/cell.json"])
+    manifest["tasks"] = []
+    files[".omnia/cell.json"] = json.dumps(manifest)
+    assert "test" in max_source_completion_gap("A Python product", files, portable=True)
 
 
 def _complete_files() -> dict[str, str]:

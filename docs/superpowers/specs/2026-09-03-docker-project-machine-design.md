@@ -1,10 +1,10 @@
 # Docker Project Machine
 
-Status: implementation direction approved by the owner on 2026-09-03. Docker is the selected runtime now; K3s/Kata work is outside this change. The first independently delivered slice removes `see` from all generation paths. Arbitrary-stack machine runtime tasks remain unimplemented; existing legacy restrictions remain until their replacements pass verification.
+Status: owner-approved direction refined on 2026-09-03 to the primary MAX stack with extensible dependencies/tools. Docker is selected; K3s/Kata is outside this change. The no-see slice is already delivered. The machine implementation is under verification; deployment is a separate delivery gate. See [main-stack rollout](../../operations/project-cell-main-stack.md) for the operative scope and limits. Universal-language parity and public publication below are future design, not acceptance criteria for this iteration.
 
 ## Outcome and boundaries
 
-The agent develops a real MAX mini-app in its own persistent Linux machine: installs language packages and system tools, creates frontend/backend/worker processes, owns application schemas, runs functional tests, survives service restarts, and publishes a verified release. MAX is the output/authentication/integration contract, not a framework or language restriction. A Next.js-only dependency prototype is an intermediate result, never completion.
+The agent develops a MAX mini-app using Next.js/React/TypeScript, Node22, pnpm and the existing PostgreSQL-backed managed APIs first. Package manifests and lockfiles are project-controlled, not a fixed dependency allowlist. Necessary helper tools/processes may run inside the isolated project machine. Installed userland, source and declared data survive checked recreation. This iteration does not implement arbitrary managed database grants, new business integrations or public release publication. Generic internal primitives may remain without a promise of universal framework support.
 
 - Retain the existing authenticated, verified, allowlisted owner-canary rollout boundary. Do not enable arbitrary public accounts.
 - Use Docker now; do not install K3s/Kata or weaken their existing installation guards.

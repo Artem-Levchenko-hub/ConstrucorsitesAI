@@ -814,15 +814,22 @@ async def _run_native_segment(
     infra_dead_turns = 0  # consecutive turns where EVERY tool op died on infra
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
+    invalidated_proofs: set[str] = set()
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
+        for tool in invalidated_proofs:
+            result[f"{tool}_after_write"] = 0
         for tool in proof_after_write:
             result[f"{tool}_after_write"] = 1
         return result
+
+    def _invalidate_proofs(*names: str) -> None:
+        invalidated_proofs.update(names)
+        proof_after_write.difference_update(names)
 
     def _completion_gap() -> str | None:
         if completion_check is None:
@@ -835,10 +842,13 @@ async def _run_native_segment(
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic and prove the tree with one local build only."""
+        _invalidate_proofs("build")
         try:
             final_build = await execute(Action(name="build", args={}, raw=""))
         except Exception as exc:
             final_build = {"ok": False, "error": f"final build probe crashed: {exc}"}
+        if final_build.get("environment_mutated"):
+            _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
         if emit:
             await emit(
                 "agent.step",
@@ -1102,10 +1112,16 @@ async def _run_native_segment(
                         ),
                     }
                 else:
+                    if name in {"build", "runtime_check", "probe", "verify_isolation"}:
+                        _invalidate_proofs(name)
                     try:
                         obs = await execute(action)
                     except Exception as exc:  # a tool crash must not kill the build
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                if obs.get("environment_mutated"):
+                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                    wrote_since_build = True
+                    last_build_ok = None
                 # Emit AFTER execute so the step carries a `detail` — what the tool
                 # actually did (written content preview, build output, read result)
                 # — so the UI can let the user drill INTO a step and see inside it.
@@ -1142,7 +1158,7 @@ async def _run_native_segment(
                     if next_content is not None:
                         written[tracked_path] = next_content
                     wrote_since_build = True
-                    proof_after_write.clear()
+                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
                     content_changed = next_content is None or next_content != previous_content
                     if _max_contract_active:
                         if (
@@ -1156,7 +1172,7 @@ async def _run_native_segment(
                     elif content_changed:
                         product_progress_this_turn = True
                 if isinstance(obs.get("files"), dict) and obs.get("files"):
-                    proof_after_write.clear()
+                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
                     wrote_since_build = True
                     _shell_changed = False
                     for _raw_path, _raw_content in obs["files"].items():
@@ -1331,7 +1347,8 @@ def _merge_segment_evidence(
         return dict(current)
     merged = dict(previous)
     for name, count in current.items():
-        merged[name] = max(merged.get(name, 0), count)
+        # Explicit zero is a proof tombstone, not an absent observation.
+        merged[name] = count if name.endswith("_after_write") else max(merged.get(name, 0), count)
     return merged
 
 

@@ -288,10 +288,17 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
     return found
 
 
-def build_max_product_contract(prompt: str) -> str:
+def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
     """Human/model-readable checklist appended to a full MAX build task."""
 
     capabilities = requested_max_capabilities(prompt)
+    if portable:
+        return (
+            "PORTABLE MAX PRODUCT ACCEPTANCE: implement the complete requested product, "
+            "declare real build/test/service commands, then pass build and signed runtime_check. "
+            "Do not fabricate user data or integration success. Explicit brief coverage: "
+            + ", ".join(label for _key, label, _needles in capabilities)
+        )
     lines = [
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
         "- No product home page or visual template exists initially. Create "
@@ -384,6 +391,8 @@ def normalize_max_globals_css(css: str) -> str:
 def max_source_completion_gap(
     prompt: str,
     files: Mapping[str, str],
+    *,
+    portable: bool = False,
 ) -> str | None:
     """Return a source/product gap independently of runtime proof infrastructure.
 
@@ -392,6 +401,10 @@ def max_source_completion_gap(
     not a source gap and therefore never authorises another paid segment.
     """
 
+    if portable:
+        from omnia_api.services.portable_cell_contract import portable_source_gap
+
+        return portable_source_gap(files, requested_max_capabilities(prompt))
     page = files.get("src/app/page.tsx", "")
     if not page:
         return (
@@ -503,6 +516,8 @@ def max_completion_gap(
     prompt: str,
     files: Mapping[str, str],
     evidence: Mapping[str, int],
+    *,
+    portable: bool = False,
 ) -> str | None:
     """Return the actionable product/runtime gap for the native MAX agent.
 
@@ -512,7 +527,7 @@ def max_completion_gap(
     intentionally not blocking for MAX.
     """
 
-    source_gap = max_source_completion_gap(prompt, files)
+    source_gap = max_source_completion_gap(prompt, files, portable=portable)
     if source_gap:
         return source_gap
     if evidence.get("runtime_check_after_write", 0) < 1:

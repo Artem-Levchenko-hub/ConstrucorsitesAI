@@ -54,6 +54,13 @@ class Settings(BaseSettings):
 
     # Docker daemon socket. On prod Linux: unix:///var/run/docker.sock.
     docker_host: str = Field(default="unix:///var/run/docker.sock")
+    # Dedicated, operator-inventoried pool; never edit Docker daemon pools.
+    cell_network_pool: str = ""
+    cell_machine_enabled: bool = False
+    cell_machine_base_image: str = ""
+    cell_machine_guard_image: str = ""
+    # Include public NAT/platform addresses as well as any operator exclusions.
+    cell_machine_denied_cidrs: list[str] = Field(default_factory=list)
     # Docker CLI / Buildx writes activity and builder metadata under
     # `$DOCKER_CONFIG`. The hardened systemd unit mounts the user's home
     # read-only, so builds must use an orchestrator-owned writable directory.

@@ -319,6 +319,58 @@ async def test_draft_runtime_follows_pause_wake_destroy_lifecycle(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_portable_runtime_is_halted_before_lease_change_pause_and_destroy(tmp_path):
+    from unittest.mock import AsyncMock
+
+    manager, _docker, _state_store, _lock = _make_manager(tmp_path)
+    spec = replace(_spec(uuid4()), generation_run_id=uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    runtime = SimpleNamespace(halt=AsyncMock())
+    manager.machine_runtime = runtime
+    await manager.ensure(replace(spec, generation_run_id=uuid4()), _mutation("b", 2))
+    assert runtime.halt.await_count == 1
+    assert runtime.halt.await_args.args[0].active_generation_fencing_epoch == 1
+    await manager.pause_services(spec.workspace_id, _mutation("c", 3), checkpoint_ref=None)
+    assert runtime.halt.await_count == 2
+    await manager.destroy_compute(spec.workspace_id, _mutation("d", 4))
+    assert runtime.halt.await_count == 3
+    assert runtime.halt.await_args.kwargs == {"remove_network": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["ensure", "release", "pause", "destroy", "prepare"])
+async def test_disabled_portable_provider_cannot_advance_lease_or_release_capacity(
+    tmp_path, operation
+):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    manager, docker, state_store, _lock = _make_manager(tmp_path)
+    spec = replace(_spec(uuid4()), generation_run_id=uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    marker = state_store.root.parent / "project-machines" / str(spec.workspace_id) / "machine.json"
+    write_controller_json(marker, {"workspace_id": str(spec.workspace_id), "epoch": 1})
+    before = state_store.load(spec.workspace_id)
+    reservation = manager._capacity_reservation_store().load(spec.workspace_id)
+    with pytest.raises(CellResourceError, match=r"portable.*unavailable"):
+        mutation = _mutation("b", 2)
+        if operation == "ensure":
+            await manager.ensure(replace(spec, generation_run_id=uuid4()), mutation)
+        elif operation == "release":
+            await manager.release_generation(
+                spec.workspace_id, mutation, generation_run_id=spec.generation_run_id
+            )
+        elif operation == "pause":
+            await manager.pause_services(spec.workspace_id, mutation, checkpoint_ref=None)
+        elif operation == "destroy":
+            await manager.destroy_compute(spec.workspace_id, mutation)
+        else:
+            await manager.prepare_control_operation(spec.workspace_id, mutation, kind="pause")
+    assert state_store.load(spec.workspace_id) == before
+    assert manager._capacity_reservation_store().load(spec.workspace_id) == reservation
+    assert docker.containers[before.resource_names.postgres_container].state == "running"
+
+
+@pytest.mark.asyncio
 async def test_corrupt_draft_port_registry_fails_closed(tmp_path: Path) -> None:
     manager, _docker, _state_store, _lock = _make_manager(tmp_path)
     workspace_id = UUID("00000000-0000-0000-0000-000000000102")

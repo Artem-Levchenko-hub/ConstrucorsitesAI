@@ -16,6 +16,92 @@ BOOTSTRAP = (
 )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unauthenticated_status", [401, 200])
+async def test_portable_runtime_requires_negative_auth_and_trusted_identity(
+    monkeypatch, unauthenticated_status
+):
+    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+
+    observed = []
+
+    def handler(request):
+        observed.append(request.url.path)
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(
+                307,
+                headers={"Location": "/", "Set-Cookie": "__Host-max_session=valid; Path=/; Secure"},
+            )
+        if request.url.path == "/__omnia/identity":
+            if request.headers.get("cookie") != "__Host-max_session=valid":
+                return httpx.Response(unauthenticated_status)
+            return httpx.Response(
+                200, json={"project_id": str(PROJECT_ID), "user_id": "preview", "epoch": 7}
+            )
+        if request.url.path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        return httpx.Response(200, text="Flask product")
+
+    _install_transport(monkeypatch, handler)
+    origin = f"https://cell-{PROJECT_ID.hex[:12]}-dev.preview.lead-generator.ru"
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        ProjectCellPreviewSession(
+            PROJECT_ID, origin, BOOTSTRAP.replace(ORIGIN, origin), "2030-01-01T00:00:00Z"
+        ),
+        portable_project_id=PROJECT_ID,
+        expected_epoch=7,
+    )
+    assert result.ok is (unauthenticated_status == 401)
+    if result.ok:
+        assert observed.count("/__omnia/identity") == 3
+    else:
+        assert "unauthenticated" in result.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/", "/__omnia/identity", "/api/omnia/actions", "/extra"])
+@pytest.mark.parametrize("root_status,epoch", [(500, 7), (200, 6), (200, 7)])
+async def test_portable_proof_always_requires_product_root_and_exact_epoch(
+    monkeypatch,
+    path,
+    root_status,
+    epoch,
+):
+    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+
+    visited = []
+
+    def handler(request):
+        visited.append(request.url.path)
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(
+                307,
+                headers={"Location": "/", "Set-Cookie": "__Host-max_session=valid; Path=/; Secure"},
+            )
+        if request.url.path == "/__omnia/identity":
+            if request.headers.get("cookie") != "__Host-max_session=valid":
+                return httpx.Response(401)
+            return httpx.Response(
+                200, json={"project_id": str(PROJECT_ID), "user_id": "preview", "epoch": epoch}
+            )
+        if request.url.path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        return httpx.Response(root_status if request.url.path == "/" else 200)
+
+    _install_transport(monkeypatch, handler)
+    origin = f"https://cell-{PROJECT_ID.hex[:12]}-dev.preview.lead-generator.ru"
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        ProjectCellPreviewSession(
+            PROJECT_ID, origin, BOOTSTRAP.replace(ORIGIN, origin), "2030-01-01T00:00:00Z"
+        ),
+        path=path,
+        portable_project_id=PROJECT_ID,
+        expected_epoch=7,
+    )
+    assert "/" in visited
+    assert result.ok is (root_status == 200 and epoch == 7)
+
+
 def _install_transport(
     monkeypatch: pytest.MonkeyPatch,
     handler: Any,

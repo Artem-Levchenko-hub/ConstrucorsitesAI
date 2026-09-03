@@ -822,6 +822,22 @@ async def _execute_max_agent_action(
 
     if action.name not in _KNOWN_ACTIONS:
         return {"ok": False, "error": f"unknown action {action.name}"}
+    if (
+        project_cell_handle is not None
+        and getattr(project_cell_handle, "is_portable", lambda: False)()
+    ):
+        if action.name in {"write_file", "edit_file"}:
+            from omnia_api.services.secret_safety import contains_provider_secret, is_secret_file
+
+            candidate = str(action.args.get("content") or action.args.get("replace") or "")
+            if is_secret_file(action.path) or contains_provider_secret(candidate):
+                return {
+                    "ok": False,
+                    "error": "Credential files and provider secrets must stay in Studio.",
+                }
+        if action.name == "bash" and not max_shell_enabled:
+            return {"ok": False, "error": "Project Cell shell is disabled by the operator."}
+        return await project_cell_handle.execute(action)
     if project_cell_handle is not None and action.name in {
         "runtime_check",
         "read_logs",
@@ -4602,6 +4618,15 @@ async def _process_prompt(
                 from omnia_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
 
                 _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
+                if _project_cell_executor_handle is not None:
+                    from omnia_api.services.portable_cell_contract import (
+                        machine_stack_guide_from_executor,
+                    )
+
+                    _stack_guide = await machine_stack_guide_from_executor(
+                        _stack_guide,
+                        _project_cell_executor_handle,
+                    )
             # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
             # perf canons aligned with the gates) when enabled. None → unchanged.
             _skills = (
@@ -4744,7 +4769,15 @@ async def _process_prompt(
                         build_max_product_contract,
                     )
 
-                    _max_product_contract = build_max_product_contract(prompt_text)
+                    _portable_capable = (
+                        _project_cell_executor_handle is not None
+                        and _project_cell_executor_handle.capabilities.get("portable_machine")
+                        is True
+                        and _project_cell_executor_handle.is_portable()
+                    )
+                    _max_product_contract = build_max_product_contract(
+                        prompt_text, portable=_portable_capable
+                    )
                     _agent_user = (
                         "Построй полноценный MAX Mini App под ПОЛНЫЙ запрос "
                         f"пользователя:\n\n{prompt_text}\n\n{_seed_block}\n\n"
@@ -4756,6 +4789,17 @@ async def _process_prompt(
                         "управляемые Studio-файлы. Не зашивай секреты пользователя в код.\n\n"
                         f"{_max_product_contract}"
                     )
+                    if _portable_capable:
+                        _agent_user = (
+                            "Build the complete MAX product requested by the user:\n\n"
+                            f"{prompt_text}\n\n{_seed_block}\n\n"
+                            "Use Next.js/React/TypeScript with Node22 and pnpm. "
+                            "Create src/app/page.tsx and real product tests. Install needed "
+                            "libraries/tools in the project machine; extend .omnia/cell.json "
+                            "only for necessary helpers. The trusted MAX boundary remains "
+                            "platform-owned; no product UI is supplied.\n\n"
+                            + _max_product_contract
+                        )
                     # The final envelope below restores the proven 40-turn MAX
                     # single pass after this branch assembles the product prompt.
                     _agent_steps = 30
@@ -5002,7 +5046,15 @@ async def _process_prompt(
                             **_max_seed_files,
                             **written,
                         }
-                        return max_completion_gap(prompt_text, effective_files, evidence)
+                        return max_completion_gap(
+                            prompt_text,
+                            effective_files,
+                            evidence,
+                            portable=(
+                                _project_cell_executor_handle is not None
+                                and _project_cell_executor_handle.is_portable()
+                            ),
+                        )
 
                     _completion_check = _max_completion_check
 
@@ -5351,6 +5403,15 @@ async def _process_prompt(
                     }
 
                 def _backend_verdict() -> GuardrailVerdict:
+                    if (
+                        _project_cell_executor_handle is not None
+                        and _project_cell_executor_handle.is_portable()
+                    ):
+                        return GuardrailVerdict(
+                            safe=True,
+                            violations=[],
+                            summary="Project data is isolated from managed MAX credentials",
+                        )
                     if project_template == "max_miniapp":
                         from omnia_api.services.max_generation_contract import (
                             unsafe_max_backend_paths,

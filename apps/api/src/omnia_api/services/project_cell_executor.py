@@ -6,10 +6,11 @@ import posixpath
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -270,6 +271,12 @@ class ProjectCellExecutorUnavailable(RuntimeError):
     """Selected owner-only Project Cell path could not be prepared safely."""
 
 
+def portable_selected(capabilities: dict[str, object], files: dict[str, str]) -> bool:
+    # Capability comes from the selected trusted provider; a source file alone
+    # must never weaken legacy checks or advertise unavailable execution.
+    return capabilities.get("portable_machine") is True and ".omnia/cell.json" in files
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellExecutorHandle:
     execute: Executor
@@ -282,6 +289,8 @@ class ProjectCellExecutorHandle:
     workspace_id: UUID
     create_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]]
     release: Callable[[], Awaitable[None]]
+    capabilities: dict[str, object] = dataclass_field(default_factory=dict)
+    is_portable: Callable[[], bool] = lambda: False
 
 
 @dataclass(frozen=True, slots=True)
@@ -518,6 +527,10 @@ async def maybe_create_project_cell_executor(
     dirty = False
     runtime_log_tail = ""
     preview_synced = False
+    capabilities = dict(snapshot.capabilities)
+
+    def _is_portable() -> bool:
+        return portable_selected(capabilities, workspace_files)
 
     async def _persist_files(
         *,
@@ -652,7 +665,7 @@ async def maybe_create_project_cell_executor(
             workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
         )
 
-    async def _execute(action: Action) -> dict[str, Any]:
+    async def _execute_action(action: Action) -> dict[str, Any]:
         nonlocal dirty, workspace_revision
         try:
             if action.name == "list_dir":
@@ -715,13 +728,15 @@ async def maybe_create_project_cell_executor(
                     "detail": f"patched {path}",
                 }
             if action.name == "build":
+                portable = _is_portable()
                 result = await project_cell_agent_exec(
                     workspace_id,
-                    _PROJECT_CELL_BUILD_CMD,
+                    "omnia:build" if portable else _PROJECT_CELL_BUILD_CMD,
                     generation_run_id=leased_run_id,
                     fencing_epoch=fencing_epoch,
                     expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_BUILD_TIMEOUT_SECONDS,
+                    **({"task_role": "build", "operation_id": uuid4()} if portable else {}),
                 )
                 workspace_revision = result.workspace_revision
                 await _refresh_workspace_from_cell()
@@ -741,6 +756,7 @@ async def maybe_create_project_cell_executor(
                     fencing_epoch=fencing_epoch,
                     expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_SHELL_TIMEOUT_SECONDS,
+                    **({"operation_id": uuid4()} if _is_portable() else {}),
                 )
                 workspace_revision = result.workspace_revision
                 changed_files = await _refresh_workspace_from_cell()
@@ -789,7 +805,13 @@ async def maybe_create_project_cell_executor(
                         from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
 
                         proof = await probe_max_cell_runtime(
-                            preview, path=str(action.args.get("path") or "/"),
+                            preview,
+                            path=str(action.args.get("path") or "/"),
+                            **(
+                                {"portable_project_id": project_id, "expected_epoch": fencing_epoch}
+                                if _is_portable()
+                                else {}
+                            ),
                         )
                         runtime_result = {"ok": proof.ok, "detail": proof.detail}
                     else:
@@ -824,6 +846,18 @@ async def maybe_create_project_cell_executor(
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+    async def _execute(action: Action) -> dict[str, Any]:
+        nonlocal preview_synced
+        mutated = _is_portable() and action.name in {"bash", "build"}
+        if mutated:
+            # Package/rootfs/process mutations need not alter tracked source.
+            # Invalidate before awaiting, including partial failures/timeouts.
+            preview_synced = False
+        result = await _execute_action(action)
+        if mutated:
+            result["environment_mutated"] = True
+        return result
+
     return ProjectCellExecutorHandle(
         execute=_execute,
         sync_preview=_sync_preview,
@@ -835,6 +869,8 @@ async def maybe_create_project_cell_executor(
         workspace_id=workspace_id,
         create_preview_session=_create_preview_session,
         release=_release,
+        capabilities=capabilities,
+        is_portable=_is_portable,
     )
 
 

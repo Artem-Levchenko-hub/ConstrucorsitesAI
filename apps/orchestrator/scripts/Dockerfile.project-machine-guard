@@ -1,0 +1,8 @@
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iptables ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --chmod=0644 src/omnia_orchestrator/services/machine_egress.py /opt/omnia/machine_egress.py
+COPY --chmod=0644 src/omnia_orchestrator/services/machine_boundary.py /opt/omnia/machine_boundary.py
+COPY --chmod=0644 scripts/project_machine_namespace_guard.py /opt/omnia/project_machine_namespace_guard.py
+RUN chmod 0755 /opt /opt/omnia
+CMD ["python3", "-c", "raise SystemExit('explicit trusted guard/proxy command required')"]

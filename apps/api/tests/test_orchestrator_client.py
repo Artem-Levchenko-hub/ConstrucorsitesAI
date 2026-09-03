@@ -263,7 +263,7 @@ async def test_cell_draft_apply_uses_lease_revision_and_explicit_deletes(monkeyp
         "method": "POST", "path": f"/internal/workspaces/{workspace_id}/draft/apply",
         "json": {"generation_run_id": str(run_id), "fencing_epoch": 7,
                  "expected_revision": "a" * 64, "files": {"empty.txt": ""},
-                 "deletes": ["old.txt"]}, "timeout": 660.0,
+                 "deletes": ["old.txt"]}, "timeout": 930.0,
     }
 
 

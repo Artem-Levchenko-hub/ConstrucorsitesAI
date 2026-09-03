@@ -105,12 +105,20 @@ async def probe_max_cell_runtime(
     preview: orchestrator_client.ProjectCellPreviewSession,
     *,
     path: str = "/",
+    portable_project_id: UUID | None = None,
+    expected_epoch: int | None = None,
 ) -> MaxRuntimeProbe:
     """Use the validated, lease-scoped cell session without project-runtime fallback."""
     if not path.startswith("/") or path.startswith("//") or "\\" in path:
         return MaxRuntimeProbe(False, "runtime path must be same-origin")
+    if portable_project_id is not None and (type(expected_epoch) is not int or expected_epoch < 1):
+        return MaxRuntimeProbe(False, "portable proof requires the active lease epoch")
     return await _probe_signed_runtime(
-        preview.bootstrap_url, path=path, request_timeout=_CELL_STARTUP_TIMEOUT,
+        preview.bootstrap_url,
+        path=path,
+        request_timeout=_CELL_STARTUP_TIMEOUT,
+        portable_project_id=portable_project_id,
+        expected_epoch=expected_epoch,
     )
 
 
@@ -119,11 +127,20 @@ async def _probe_signed_runtime(
     *,
     path: str | None = None,
     request_timeout: httpx.Timeout = _TIMEOUT,
+    portable_project_id: UUID | None = None,
+    expected_epoch: int | None = None,
 ) -> MaxRuntimeProbe:
     parsed = urlsplit(bootstrap_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     try:
         async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=False) as client:
+            if portable_project_id is not None:
+                for headers in ({}, {"Cookie": "__Host-max_session=invalid.invalid"}):
+                    rejected = await client.get(f"{origin}/__omnia/identity", headers=headers)
+                    if rejected.status_code != 401:
+                        return MaxRuntimeProbe(
+                            False, "portable boundary accepts unauthenticated identity"
+                        )
             bootstrap = await client.get(bootstrap_url)
             if bootstrap.status_code not in {200, 301, 302, 303, 307, 308}:
                 return MaxRuntimeProbe(
@@ -141,9 +158,18 @@ async def _probe_signed_runtime(
                         False,
                         "signed preview bootstrap escaped its origin",
                     )
-            if path is not None:
-                route = await client.get(f"{origin}{path}")
-                if not 200 <= route.status_code < 400:
+            paths = list(
+                dict.fromkeys((["/"] if portable_project_id else []) + ([path] if path else []))
+            )
+            for product_path in paths:
+                route = await client.get(f"{origin}{product_path}")
+                # A redirect to a managed endpoint is not product evidence.
+                valid_status = (
+                    200 <= route.status_code < 300
+                    if portable_project_id
+                    else 200 <= route.status_code < 400
+                )
+                if not valid_status:
                     return MaxRuntimeProbe(
                         False, f"runtime route failed (HTTP {route.status_code})",
                     )
@@ -159,6 +185,21 @@ async def _probe_signed_runtime(
                 body = None
             if not isinstance(body, dict) or not isinstance(body.get("actions"), list):
                 return MaxRuntimeProbe(False, "protected MAX data response is malformed")
+            if portable_project_id is not None:
+                identity = await client.get(f"{origin}/__omnia/identity")
+                try:
+                    identity_body = identity.json()
+                except ValueError:
+                    identity_body = None
+                if (
+                    identity.status_code != 200
+                    or not isinstance(identity_body, dict)
+                    or identity_body.get("project_id") != str(portable_project_id)
+                    or not isinstance(identity_body.get("user_id"), str)
+                    or type(identity_body.get("epoch")) is not int
+                    or identity_body["epoch"] != expected_epoch
+                ):
+                    return MaxRuntimeProbe(False, "portable boundary identity proof failed")
     except httpx.HTTPError as exc:
         return MaxRuntimeProbe(False, f"MAX data-plane request failed: {type(exc).__name__}")
 

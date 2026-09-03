@@ -83,6 +83,75 @@ def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     assert "картинка «летит» при прокрутке" not in prompt
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation", ["bash_ok", "bash_failure", "bash_timeout", "failed_probe", "build"]
+)
+async def test_machine_mutation_or_reverification_cannot_reuse_old_proof(monkeypatch, mutation):
+    turns = iter(
+        [
+            _turn(("build", {}), ("runtime_check", {"path": "/"})),
+            _turn(
+                (
+                    "runtime_check"
+                    if mutation == "failed_probe"
+                    else "build"
+                    if mutation == "build"
+                    else "bash",
+                    {"cmd": "kill product"},
+                )
+            ),
+            _turn(("done", {"summary": "STALE_PROOF"})),
+        ]
+    )
+
+    async def fake_call(*args, **kwargs):
+        try:
+            return next(turns)
+        except StopIteration:
+            raise RuntimeError("authored fixture ends here")
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    calls = {"build": 0, "runtime_check": 0}
+
+    async def execute(action):
+        if action.name == "bash":
+            return {
+                "ok": mutation == "bash_ok",
+                "environment_mutated": True,
+                "detail": "partial mutation, no source diff",
+            }
+        calls[action.name] = calls.get(action.name, 0) + 1
+        # Subsequent local auto-verification cannot turn this negative fixture green.
+        return {
+            "ok": calls[action.name] == 1,
+            **({"environment_mutated": True} if action.name == "build" else {}),
+        }
+
+    result = await agent_native._run_native_segment(
+        system="MAX VERIFICATION OVERRIDE",
+        task="authored test only",
+        execute=execute,
+        initial_files={"src/app/page.tsx": "existing product"},
+        max_steps=4,
+        completion_check=lambda files, evidence: (
+            None if evidence.get("runtime_check_after_write") else "fresh runtime_check required"
+        ),
+    )
+    assert result.done is False
+    assert not result.evidence.get("runtime_check_after_write")
+
+
+def test_segment_merge_does_not_resurrect_invalidated_proofs_without_source_diff():
+    evidence = agent_native._merge_segment_evidence(
+        {"build_after_write": 1, "runtime_check_after_write": 1},
+        {"build_after_write": 0, "runtime_check_after_write": 0},
+        wrote_files=False,
+    )
+    assert evidence["build_after_write"] == 0
+    assert evidence["runtime_check_after_write"] == 0
+
+
 def test_max_native_toolset_removes_incompatible_proof_and_landing_noise() -> None:
     names = [tool["name"] for tool in agent_native._MAX_TOOLS_CACHED]
 

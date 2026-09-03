@@ -319,6 +319,7 @@ async def _prepare_executor(
     hot_reload_result: dict[str, object] | None = None,
     hot_reload_results: list[dict[str, object]] | None = None,
     capacity_dispatch_token: UUID | None = None,
+    capabilities: dict[str, object] | None = None,
 ) -> _ExecutorHarness:
     owner = await _new_user(db_session, "owner")
     project = await _new_project(db_session, owner)
@@ -397,6 +398,7 @@ async def _prepare_executor(
             generation_run_id=expected_run_id,
             fencing_epoch=1,
             workspace_revision=_current_revision(),
+            capabilities=capabilities or {},
         )
 
     async def fake_write_files(
@@ -439,6 +441,8 @@ async def _prepare_executor(
         fencing_epoch: int,
         expected_revision: str,
         timeout_seconds: int = 180,
+        task_role: str | None = None,
+        operation_id: UUID | None = None,
     ) -> ProjectCellAgentExecResponse:
         assert workspace_id
         assert generation_run_id == expected_run_id
@@ -447,6 +451,7 @@ async def _prepare_executor(
         exec_calls.append(
             {
                 "cmd": cmd,
+                **({"task_role": task_role, "operation_id": operation_id} if task_role else {}),
                 "timeout_seconds": timeout_seconds,
                 "generation_run_id": generation_run_id,
                 "fencing_epoch": fencing_epoch,
@@ -660,6 +665,57 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
     assert persisted is not None and persisted.status == "running"
     winner = tokens[results.index("admitted")]
     assert persisted.agent_state["capacity_admitted_dispatch_token"] == str(winner)
+
+
+async def test_portable_executor_advertises_capabilities_and_dispatches_manifest_build(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "server.py": "print('python')"},
+        capabilities={"portable_machine": True, "manifest_path": ".omnia/cell.json"},
+    )
+    assert harness.handle.capabilities["portable_machine"] is True
+    assert harness.handle.is_portable()
+    result = await harness.handle.execute(Action(name="build", args={}))
+    assert result["ok"]
+    assert harness.exec_calls[0]["cmd"] == "omnia:build"
+    assert harness.exec_calls[0]["task_role"] == "build"
+    assert isinstance(harness.exec_calls[0]["operation_id"], UUID)
+
+
+@pytest.mark.parametrize("ok,timed_out", [(True, False), (False, False), (False, True)])
+async def test_portable_shell_invalidates_preview_without_source_diff(
+    monkeypatch,
+    db_session,
+    test_engine,
+    ok,
+    timed_out,
+):
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/app/page.tsx": "product"},
+        capabilities={"portable_machine": True},
+        cell_exec_result={
+            "ok": ok,
+            "exit_code": 0 if ok else 124,
+            "timed_out": timed_out,
+            "detail": "partial mutation",
+        },
+    )
+    await harness.handle.sync_preview()
+    assert len(harness.hot_reload_calls) == 1
+    result = await harness.handle.execute(Action(name="bash", args={"cmd": "kill product"}))
+    assert result["environment_mutated"] is True
+    assert not result.get("files")
+    await harness.handle.sync_preview()
+    assert len(harness.hot_reload_calls) == 2
 
 
 async def test_ready_owner_executor_bootstraps_workspace_and_syncs_preview(
