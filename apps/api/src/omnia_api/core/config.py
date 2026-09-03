@@ -985,7 +985,7 @@ class Settings(BaseSettings):
 
     # Bounded design-intelligence plugin (2026-08-17). Classifies a container UI
     # brief into one product archetype + compact UX contract before the existing
-    # coding-agent pass, then gives the SAME contract to the existing `see` audit.
+    # coding-agent pass and persists the same contract as design memory.
     # It adds no model call, phase or completion loop. USE_DESIGN_INTELLIGENCE_PLUGIN=0
     # restores the legacy design-mood-only path immediately.
     use_design_intelligence_plugin: bool = Field(default=True)

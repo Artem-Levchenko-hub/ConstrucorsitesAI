@@ -130,7 +130,6 @@ def test_completion_requires_only_max_compatible_runtime_proof() -> None:
     evidence = {
         "build_after_write": 1,
         "runtime_check_after_write": 1,
-        "see_after_write": 1,
     }
     assert max_completion_gap(COMPLEX_BRIEF, files, evidence) is None
 

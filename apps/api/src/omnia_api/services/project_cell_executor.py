@@ -757,7 +757,6 @@ async def maybe_create_project_cell_executor(
             if action.name in {
                 "read_logs",
                 "runtime_check",
-                "see",
                 "probe",
                 "verify_isolation",
             }:
@@ -793,14 +792,6 @@ async def maybe_create_project_cell_executor(
                             preview, path=str(action.args.get("path") or "/"),
                         )
                         runtime_result = {"ok": proof.ok, "detail": proof.detail}
-                    elif action.name == "see":
-                        from omnia_api.services import agent_vision
-
-                        visual = await agent_vision.see_page(
-                            project_id, path=action.path or "/", prompt_context=vision_context,
-                            bootstrap_url=preview.bootstrap_url,
-                        )
-                        runtime_result = agent_vision.normalize_max_see_observation(visual)
                     else:
                         from omnia_api.services import agent_probe
 

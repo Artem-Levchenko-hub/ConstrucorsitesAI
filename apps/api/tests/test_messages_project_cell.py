@@ -532,14 +532,14 @@ async def test_prepare_max_runtime_context_re_raises_project_cell_failure_withou
 
 
 @pytest.mark.asyncio
-async def test_execute_max_agent_action_routes_selected_see_without_legacy_bootstrap(
+async def test_execute_max_agent_action_routes_selected_runtime_check_without_legacy_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[str] = []
 
     async def fake_execute(action: Action) -> dict[str, object]:
         seen.append(action.name)
-        return {"ok": True, "detail": "cell see"}
+        return {"ok": True, "detail": "cell runtime"}
 
     monkeypatch.setattr(
         messages.orchestrator_client,
@@ -553,7 +553,7 @@ async def test_execute_max_agent_action_routes_selected_see_without_legacy_boots
     )
 
     result = await messages._execute_max_agent_action(
-        Action(name="see", args={"path": "/"}),
+        Action(name="runtime_check", args={"path": "/"}),
         project_id=uuid4(),
         project_slug="max-cell",
         vision_context="ctx",
@@ -564,8 +564,31 @@ async def test_execute_max_agent_action_routes_selected_see_without_legacy_boots
         max_model_write_rejection=lambda _path, _content: None,
     )
 
-    assert result == {"ok": True, "detail": "cell see"}
-    assert seen == ["see"]
+    assert result == {"ok": True, "detail": "cell runtime"}
+    assert seen == ["runtime_check"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_cell", [False, True])
+async def test_execute_max_agent_action_rejects_removed_see_before_any_dispatch(
+    use_cell: bool,
+) -> None:
+    def forbidden_execute(_action: Action) -> None:
+        pytest.fail("removed visual action must not reach any executor")
+
+    result = await messages._execute_max_agent_action(
+        Action(name="see", args={"path": "/"}),
+        project_id=uuid4(),
+        project_slug="max-no-see",
+        vision_context="old context remains compatible",
+        base_agent_executor=forbidden_execute,
+        max_shell_enabled=False,
+        project_cell_handle=SimpleNamespace(execute=forbidden_execute) if use_cell else None,
+        active_max_locked_files=frozenset(),
+        max_model_write_rejection=lambda _path, _content: None,
+    )
+
+    assert result == {"ok": False, "error": "unknown action see"}
 
 
 @pytest.mark.asyncio

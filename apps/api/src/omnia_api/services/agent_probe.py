@@ -4,7 +4,7 @@ Gives the agent the EYE it was missing: it can make a REAL authenticated request
 against the live app — as a logged-in user, through a browser, with cookies — and
 read the exact `{status, body}` back. A typecheck-clean app with a 200 home page
 can still 4xx every user POST (a client/server field mismatch, a broken action);
-that failure is invisible to `build`/`runtime_check`/`see` but is exactly what
+that failure is invisible to `build`/`runtime_check` but is exactly what
 `probe` surfaces.
 
 Reuses the PROVEN functional-gate machinery (Playwright + NextAuth csrf+callback

@@ -45,7 +45,7 @@ CSVs directly so the surface stays narrow.
   `services.prompt_builder._compute_skill_brief`.
 - **Container-agent wiring** — live through `services.design_plugin`: one
   versioned pre-build product/UX contract is injected into the existing agent
-  pass, persisted as `DESIGN.md`, and reused by its existing `see` audit. The
+  pass and persisted as `DESIGN.md`; generation has no `see` tool or visual-judge loop. The
   MAX template also injects a package-exact `@maxhub/max-ui@0.2.0` skill. The path intentionally
   selects only app-safe UX/icon/chart rows; it does not execute upstream scripts,
   inject landing-page structure, call a model/network, or add a completion phase.

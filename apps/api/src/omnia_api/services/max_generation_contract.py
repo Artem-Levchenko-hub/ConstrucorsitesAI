@@ -316,8 +316,8 @@ def build_max_product_contract(prompt: str) -> str:
         "the exact shape is `const { answer } = await requestOmniaAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
         "- After implementation: run a clean build, runtime_check the finished home screen "
-        "and see it once through the signed MAX preview. Apply concrete visual findings, but "
-        "do not retry unavailable QA infrastructure or generic probe/verify_isolation.",
+        "through the signed MAX preview and fix real runtime failures. "
+        "Do not retry incompatible generic probe/verify_isolation.",
     ]
     if capabilities:
         lines.append("- Explicit brief coverage (each needs visible UI and behaviour):")
@@ -507,7 +507,7 @@ def max_completion_gap(
     """Return the actionable product/runtime gap for the native MAX agent.
 
     A clean build is still enforced by the native loop's fact gate. The MAX-safe
-    evidence is ``runtime_check`` plus one ``see`` using a signed preview session.
+    evidence is ``runtime_check`` using a signed preview session.
     Generic ``probe`` and ``verify_isolation`` require a normal web login and are
     intentionally not blocking for MAX.
     """
@@ -517,8 +517,6 @@ def max_completion_gap(
         return source_gap
     if evidence.get("runtime_check_after_write", 0) < 1:
         return "Run runtime_check on the finished product after the last source write."
-    if evidence.get("see_after_write", 0) < 1:
-        return "Run see once through the signed MAX preview after the last source write."
     return None
 
 

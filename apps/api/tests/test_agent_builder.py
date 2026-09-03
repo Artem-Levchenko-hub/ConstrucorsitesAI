@@ -481,69 +481,67 @@ def test_container_write_surfaces_resolved_lockfile(
     assert observation["files"] == {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}
 
 
-# ── vision tool: see ─────────────────────────────────────────────────────────
+# ── removed visual action and functional verification ────────────────────────
 
 
-def test_parse_see_action():
+def test_parse_rejects_removed_see_action():
     a = ab.parse_action('look\n<omnia:action name="see">{"path":"/dashboard"}</omnia:action>')
-    assert a is not None and a.name == "see" and a.path == "/dashboard"
+    assert a is None
 
 
-def test_container_see_receives_bound_design_context(monkeypatch):
-    """Executor binds author contract to its existing visual-review action."""
-    from omnia_api.services import agent_vision
+def test_container_runtime_check_receives_requested_route(monkeypatch):
+    """Removing visual review does not remove real route verification."""
+    from omnia_api.services import orchestrator_client
 
     captured = {}
 
-    async def _fake_see(project_id, **kwargs):
+    async def _fake_runtime(project_id, **kwargs):
         captured.update(project_id=project_id, **kwargs)
-        return {"ok": True, "detail": "beautiful"}
+        return {"ok": True, "status_code": 200}
 
-    monkeypatch.setattr(agent_vision, "see_page", _fake_see)
+    monkeypatch.setattr(orchestrator_client, "runtime_status", _fake_runtime)
     execute = ab.make_container_executor(
         project_id="project-1",
         slug="slug",
-        vision_context="omnia-design-contract",
     )
-    result = asyncio.run(execute(ab.Action(name="see", args={"path": "/dashboard"})))
+    result = asyncio.run(execute(ab.Action(name="runtime_check", args={"path": "/dashboard"})))
 
     assert result["ok"] is True
     assert captured == {
         "project_id": "project-1",
         "path": "/dashboard",
-        "prompt_context": "omnia-design-contract",
+        "slug": "slug",
     }
 
 
-def test_see_loop_fixes_then_done():
-    """build clean → see (ugly) → fix → see (beautiful) → done. `see` is a verify
-    action: it runs twice non-consecutively without a false looping abort."""
+def test_runtime_check_loop_fixes_then_done():
+    """Repeated functional checks can repair a route without a false loop abort."""
     record: list = []
-    state = {"ugly": True}
+    state = {"broken": True}
 
     async def _exec(action: ab.Action):
         record.append((action.name, action.path))
         if action.name == "build":
             return {"ok": True, "detail": "typecheck clean"}
-        if action.name == "see":
+        if action.name == "runtime_check":
             return (
-                {"ok": True, "detail": "verdict: generic (4/10)\n- hero too small"}
-                if state["ugly"]
-                else {"ok": True, "detail": "verdict: beautiful (9/10)\n(no concrete issues)"}
+                {"ok": False, "detail": "route failed: HTTP 500"}
+                if state["broken"]
+                else {"ok": True, "detail": "route renders: HTTP 200"}
             )
         if action.name == "edit_file":
-            state["ugly"] = False
+            state["broken"] = False
             return {"ok": True, "content": action.args.get("replace", "x")}
         return {"ok": True, "detail": "ok"}
 
     replies = [
         '<omnia:action name="write_file">{"path":"src/app/page.tsx","content":"v1"}</omnia:action>',
         '<omnia:action name="build"></omnia:action>',
-        '<omnia:action name="see">{"path":"/"}</omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
         '<omnia:action name="edit_file">{"path":"src/app/page.tsx","search":"v1",'
         '"replace":"v2"}</omnia:action>',
-        '<omnia:action name="see">{"path":"/"}</omnia:action>',
-        '<omnia:action name="done">{"summary":"made it pretty"}</omnia:action>',
+        '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+        '<omnia:action name="done">{"summary":"fixed runtime error"}</omnia:action>',
     ]
     res = asyncio.run(
         ab.run_agent_build(
@@ -556,7 +554,7 @@ def test_see_loop_fixes_then_done():
         )
     )
     assert res.done is True and res.stop_reason == "done"
-    assert sum(1 for n, _ in record if n == "see") == 2  # ran twice, no false abort
+    assert sum(1 for n, _ in record if n == "runtime_check") == 2
 
 
 # ── green-gate: require_green_before_done ────────────────────────────────────

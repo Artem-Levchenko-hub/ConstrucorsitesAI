@@ -1,8 +1,8 @@
 """Bounded design-intelligence plugin for container UI generation.
 
 The plugin is deliberately a pure, local pre-build step.  It turns a product
-brief into a compact design contract that the existing coding agent consumes
-and the existing ``see`` tool audits.  It does not start another model, add an
+brief into a compact design contract that the existing coding agent consumes.
+It does not start another model, add an
 acceptance phase, or own completion; the proven single-pass agent loop remains
 the only loop.
 
@@ -413,9 +413,8 @@ OMNIA DESIGN PRO · {PLUGIN_VERSION} — обязательный дизайн-�
 {mood}
 """.strip()
 
-    # ``vision_audit`` intentionally bounds this to 300 chars. Put measurable
-    # design intent first so the single existing visual check evaluates the same
-    # contract the author received, rather than only the raw product nouns.
+    # Retain compact design metadata for stored-contract compatibility.
+    # Generation does not invoke a visual review with this context.
     vision_context = (
         f"{PLUGIN_ID} {PLUGIN_VERSION}; продукт: {pattern.label}; "
         f"IA: {pattern.architecture}; стиль: {preset.name}; {nav_rule}; "

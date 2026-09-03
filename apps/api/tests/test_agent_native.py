@@ -90,7 +90,7 @@ def test_max_native_toolset_removes_incompatible_proof_and_landing_noise() -> No
     assert "probe" not in names
     assert "verify_isolation" not in names
     assert "runtime_check" in names
-    assert "see" in names
+    assert "see" not in names
     assert "generate_media" in names
     assert "done" in names
     assert agent_native._MAX_TOOLS_CACHED[-1]["cache_control"] == agent_native._CACHE
@@ -148,7 +148,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "pnpm_lockfile" in source
     assert "unsafe_max_backend_paths" in source
     assert "max_model_write_rejection" in source
-    assert "create_max_preview_session" in source
+    assert "_project_cell_runtime_check" in source
     assert "_recover_max_resume_prompt" in source
     assert '{"src/app/page.tsx": ""}' in source
     assert '"rm -f -- src/app/page.tsx"' not in source
@@ -418,7 +418,7 @@ async def test_native_segments_preserve_files_and_completion_evidence() -> None:
             return "missing page"
         if evidence.get("runtime_check_after_write", 0) < 1:
             return "missing runtime"
-        if evidence.get("see_after_write", 0) < 1:
+        if evidence.get("probe_after_write", 0) < 1:
             return "missing signed preview"
         return None
 
@@ -439,7 +439,7 @@ async def test_native_segments_preserve_files_and_completion_evidence() -> None:
                 evidence={"runtime_check_after_write": 1},
             )
         assert "same GenerationRun" in task
-        assert check({}, {"see_after_write": 1}) is None
+        assert check({}, {"probe_after_write": 1}) is None
         return AgentResult(
             done=True,
             summary="complete",
@@ -447,7 +447,7 @@ async def test_native_segments_preserve_files_and_completion_evidence() -> None:
             steps=2,
             transcript=[{"role": "assistant", "content": "verified"}],
             stop_reason="done",
-            evidence={"see_after_write": 1},
+            evidence={"probe_after_write": 1},
         )
 
     result = await agent_native._run_native_segments(
@@ -462,7 +462,7 @@ async def test_native_segments_preserve_files_and_completion_evidence() -> None:
         "src/app/page.tsx": "export default function Page() { return <main /> }"
     }
     assert result.evidence["runtime_check_after_write"] == 1
-    assert result.evidence["see_after_write"] == 1
+    assert result.evidence["probe_after_write"] == 1
     assert result.steps == 42
     assert len(result.transcript) == 2
     assert len(calls) == 2
@@ -479,7 +479,7 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
             return "missing fresh build"
         if evidence.get("runtime_check_after_write", 0) < 1:
             return "missing fresh runtime"
-        if evidence.get("see_after_write", 0) < 1:
+        if evidence.get("probe_after_write", 0) < 1:
             return "missing fresh signed preview"
         return None
 
@@ -497,7 +497,7 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
                 {
                     "build_after_write": 1,
                     "runtime_check_after_write": 1,
-                    "see_after_write": 1,
+                    "probe_after_write": 1,
                 },
             ) == "missing product file"
             return AgentResult(
@@ -509,7 +509,7 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
                 evidence={
                     "build_after_write": 1,
                     "runtime_check_after_write": 1,
-                    "see_after_write": 1,
+                    "probe_after_write": 1,
                 },
             )
 
@@ -525,7 +525,7 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
         fresh_proof = {
             "build_after_write": 1,
             "runtime_check_after_write": 1,
-            "see_after_write": 1,
+            "probe_after_write": 1,
         }
         assert check(component, fresh_proof) is None
         return AgentResult(
@@ -549,7 +549,7 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
     assert result.evidence == {
         "build_after_write": 1,
         "runtime_check_after_write": 1,
-        "see_after_write": 1,
+        "probe_after_write": 1,
     }
 
 
@@ -1210,7 +1210,7 @@ async def test_native_hard_stop_runs_missing_local_proofs_before_shipping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A green tree must not fail only because the provider turn ended before
-    deterministic runtime, persistence and visual proof tool calls."""
+    deterministic runtime and persistence proof tool calls."""
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -1234,8 +1234,8 @@ async def test_native_hard_stop_runs_missing_local_proofs_before_shipping(
             return "Run runtime_check after the last source write."
         if evidence.get("probe_after_write", 0) < 1:
             return "Run probe after the last source write."
-        if evidence.get("see", 0) < 2:
-            return "Run a second see after the visual fix."
+        if evidence.get("probe", 0) < 2:
+            return "Run a second probe for persistence readback."
         return None
 
     res = await agent_native.run_native_build(
@@ -1248,7 +1248,7 @@ async def test_native_hard_stop_runs_missing_local_proofs_before_shipping(
 
     assert res.done is True
     assert res.stop_reason == "max_steps_green"
-    assert actions == ["write_file", "build", "runtime_check", "probe", "see", "see"]
+    assert actions == ["write_file", "build", "runtime_check", "probe", "probe"]
 
 
 @pytest.mark.asyncio
@@ -1780,23 +1780,18 @@ async def test_native_build_defaults_to_legacy_messages_endpoint_without_headers
     assert calls[0]["headers"] is None
 
 
-def test_native_agent_has_eyes_and_taste() -> None:
-    """Smart-agent contract (deep-research 2026-07-17): the native builder must
-    ADVERTISE the `see` vision tool (screenshot → design self-critique) AND carry
-    design-system + think-first rules in its system prompt — the two levers that
-    lift TASTE and cut bugs. A dropped `see` or a stripped taste block silently
-    reverts the agent to «компилируется, но уродливо»."""
+def test_native_agent_keeps_design_guidance_without_visual_judge() -> None:
+    """Design and root-cause guidance do not require a screenshot judge."""
     from omnia_api.services import agent_builder as B
 
     names = [t["name"] for t in agent_native._TOOLS]
-    assert "see" in names, "native agent must offer the `see` vision-critique tool"
-    # Dead schema is worse than none — the executor must actually route `see`.
-    assert "see" in B._KNOWN_ACTIONS, "executor must route the `see` action"
+    assert "see" not in names
+    assert "see" not in B._KNOWN_ACTIONS
 
     sysp = agent_native.native_system_prompt("STACK GUIDE", None)
-    assert "ВКУС В ДИЗАЙНЕ" in sysp, "design-taste + see-loop rules must be present"
+    assert "ВКУС В ДИЗАЙНЕ" in sysp, "design guidance must remain present"
     assert "root-cause" in sysp, "think-before-fix (fewer-bugs) rule must be present"
-    assert "`see` главный" in agent_native._NATIVE_PREAMBLE  # visual-critique cycle
+    assert "`see`" not in sysp
 
 
 def test_native_agent_can_generate_media() -> None:

@@ -27,7 +27,7 @@ import httpx
 import structlog
 
 from omnia_api.core.config import get_settings
-from omnia_api.services.agent_builder import Action, AgentResult
+from omnia_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
 
 log = structlog.get_logger(__name__)
 
@@ -201,15 +201,6 @@ _TOOLS: list[dict[str, Any]] = [
         ["path"],
     ),
     _tool(
-        "see",
-        "LOOK at a rendered route with your eyes: screenshots the running "
-        "page (desktop + mobile) and returns a strict vision-designer critique — "
-        "concrete fixes (hero too small, 3 identical cards, weak contrast, cramped "
-        "spacing, generic look). A clean build does NOT mean it looks good; `see` "
-        "is the only way to judge and fix TASTE. Default path '/'.",
-        {"path": _STR},
-    ),
-    _tool(
         "generate_media",
         "GENERATE a real IMAGE or short VIDEO with AI (same key) "
         "and get back a hosted URL to EMBED (returned in the tool result — copy it "
@@ -290,11 +281,6 @@ _MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
         "for offline generators, tests, migrations and data transforms in the "
         "project container; it has no network and is never host/root access. To add "
         "dependencies, edit package.json; Omnia syncs them with lifecycle scripts disabled."
-    ),
-    "see": (
-        "Inspect the rendered MAX miniapp at its mobile viewport and return a strict "
-        "product-design critique: hierarchy, density, readability, touch targets, "
-        "safe areas, navigation, states, and generic repeated surfaces."
     ),
     "generate_media": (
         "Generate a product-relevant visual asset only when the brief requires real "
@@ -528,16 +514,14 @@ _NATIVE_COMMON_PREAMBLE = (
 )
 
 _NATIVE_WEB_DESIGN_PREAMBLE = (
-    "ВКУС В ДИЗАЙНЕ — чистый build ≠ красиво. Перед done ОБЯЗАТЕЛЬНО `see` главный "
-    "экран (и ещё 1 ключевой, если есть) — vision-судья вернёт КОНКРЕТНЫЕ фиксы; "
-    "примени их и повтори `see`, пока не станет чисто. `see` дорог — 1–2 ключевых "
-    "экрана, НЕ каждый. Принципы (это НЕ шаблон — думай под нишу): (1) иерархия — "
+    "ВКУС В ДИЗАЙНЕ — учитывай требования продукта при написании интерфейса. "
+    "Принципы (это НЕ шаблон — думай под нишу): (1) иерархия — "
     "ОДИН доминантный герой/заголовок, вторичное тише; (2) контраст ≥ 4.5:1; "
     "(3) ритм отступов кратен 4/8, секции просторные, воздух; (4) тип-шкала "
     "(крупный герой → мельче тело), не один размер; (5) НИКОГДА «голый Tailwind» "
     "дефолт (сине-серый, одинаковые карточки) — один бренд-акцент дозой; "
-    "(6) mobile-first (адаптив — жёсткое условие). Не «сделай красивее» вслепую — "
-    "`see` → конкретный дефект → точечный фикс.\n\n"
+    "(6) mobile-first (адаптив — жёсткое условие). Исправляй конкретные дефекты, "
+    "сохраняя работающие пользовательские сценарии.\n\n"
 )
 
 _NATIVE_WEB_MEDIA_PREAMBLE = (
@@ -598,8 +582,7 @@ _NATIVE_WEB_MEDIA_PREAMBLE = (
 
 _MAX_NATIVE_DESIGN_PREAMBLE = (
     "ВКУС В ДИЗАЙНЕ — MAX = утилитарный mobile product на 360–390px, НЕ landing page. "
-    "Перед done ОБЯЗАТЕЛЬНО `see` главный экран MAX-продукта (и ещё 1 ключевой, если "
-    "есть) — исправляй КОНКРЕТНЫЕ замечания, не гадай вслепую. Источники правды по "
+    "Исправляй конкретные дефекты пользовательских сценариев. Источники правды по "
     "визуалу: `DESIGN.md`, `SYSTEM_PROMPT.md` стека и `max-ui-design.md`; они важнее "
     "общих вкусовых эвристик. Приоритет: (1) один главный пользовательский сценарий "
     "и один доминантный CTA на экран; (2) ясная иерархия, реальные loading/empty/error/"
@@ -608,7 +591,7 @@ _MAX_NATIVE_DESIGN_PREAMBLE = (
     "заворачивай всё в одинаковые карточки, строй композицию размером, отступами и "
     "акцентом; (6) НЕ тащи hero-секции, Awwwards-риторику, фоновые видео, scroll-scrub "
     "и hover-first приёмы, если пользователь прямо не просил промо/immersive экран "
-    "внутри mini app. `see` → конкретный дефект → точечный фикс.\n\n"
+    "внутри mini app.\n\n"
 )
 
 _NATIVE_EXECUTION_PREAMBLE = (
@@ -616,7 +599,7 @@ _NATIVE_EXECUTION_PREAMBLE = (
     "наугад — это плодит новые баги). Не изобретай API/SDK — `docs` (Context7) даёт "
     "РЕАЛЬНУЮ текущую сигнатуру (галлюцинация API = главный источник цикла build↔fix). "
     "Пойми минимально (read/grep) → пиши ПОЛНЫМИ файлами → build → чини реальные "
-    "ошибки → ДОКАЖИ (runtime_check/probe/verify) → `see` дизайн → done. Не крути "
+    "ошибки → ДОКАЖИ (runtime_check/probe/verify) → done. Не крути "
     "лишние read, когда контекста хватает.\n\n"
 )
 
@@ -664,19 +647,18 @@ _DONE_WHEN_GREEN_NUDGE = (
 )
 _MAX_DONE_WHEN_GREEN_NUDGE = (
     "[LOOP GUARD] The MAX build is clean. Run runtime_check once after the final write "
-    "and run see once through the signed MAX preview, then call done NOW. Do not call "
+    "through the signed MAX preview, then call done NOW. Do not call "
     "generic probe or verify_isolation."
 )
 
 _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "MAX VERIFICATION OVERRIDE (takes precedence over the generic web-app rules above): "
-    "MAX uses signed initData and an authenticated preview session. The generic probe, "
-    "verify_isolation and see tools currently authenticate as a normal web user and cannot "
+    "MAX uses signed initData and an authenticated preview session. The generic probe and "
+    "verify_isolation tools currently authenticate as a normal web user and cannot "
     "prove this runtime. Do NOT call or retry probe/verify_isolation in a MAX build. Finish "
     "the complete source product, run build until clean, run runtime_check after the final "
-    "write, then call see ONCE; the executor supplies a signed MAX preview session. Apply a "
-    "concrete visual fix if returned, rebuild/runtime_check/see once more, then call done. If "
-    "visual QA reports unavailable, do not retry it."
+    "write; the executor supplies a signed MAX preview session. Fix concrete runtime "
+    "failures, rerun build/runtime_check after a source change, then call done."
 )
 
 
@@ -890,8 +872,6 @@ async def _run_native_segment(
                         {"method": "GET", "path": "/api/omnia/actions"},
                         "",
                     )
-                if action is None and "see" in gap:
-                    action = Action("see", {"path": "/"}, "")
                 if action is None:
                     break
                 try:
@@ -1107,7 +1087,9 @@ async def _run_native_segment(
                     and (_max_prewrite_locked or non_entry_writes_before_entry > 0)
                 )
                 obs: dict[str, Any]
-                if _max_entry_required and not (
+                if name not in _KNOWN_ACTIONS:
+                    obs = {"ok": False, "error": f"unknown action {name}"}
+                elif _max_entry_required and not (
                     name in {"write_file", "edit_file"}
                     and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
                 ):
@@ -1211,7 +1193,7 @@ async def _run_native_segment(
                     wrote_since_build = False
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
-                    if name in {"build", "runtime_check", "see", "probe", "verify_isolation"}:
+                    if name in {"build", "runtime_check", "probe", "verify_isolation"}:
                         proof_after_write.add(name)
                 _tr = _obs_to_tool_result(tu_id, obs)
                 if name == "build" and not obs.get("ok"):

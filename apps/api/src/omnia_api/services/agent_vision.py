@@ -1,10 +1,7 @@
-"""Agent VISION tool — the engine behind the builder loop's `see` action.
+"""Standalone visual-review utility, not exposed or invoked by generation.
 
-Gives the agent real EYES: screenshot the live dev-container page it is building,
-hand it to the same Awwwards-strict vision judge the acceptance gate uses
-(`vision_audit`), and return concrete fix-deltas as the agent's observation. So
-the agent stops being a blind author — it LOOKS at what it drew and fixes
-"ugly"/"broken", not just "compiles".
+Retained for compatibility and independent diagnostic tests. It can capture a
+live page and return a vision critique, but no generation executor routes here.
 
 Composes three existing pieces, adds nothing structural:
   dev_container.resolve_live_url  → where the running app lives

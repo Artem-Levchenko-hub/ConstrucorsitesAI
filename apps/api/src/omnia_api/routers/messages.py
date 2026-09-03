@@ -818,35 +818,17 @@ async def _execute_max_agent_action(
     active_max_locked_files: frozenset[str],
     max_model_write_rejection: Callable[[str, str], str | None],
 ) -> dict[str, Any]:
+    from omnia_api.services.agent_builder import _KNOWN_ACTIONS
+
+    if action.name not in _KNOWN_ACTIONS:
+        return {"ok": False, "error": f"unknown action {action.name}"}
     if project_cell_handle is not None and action.name in {
-        "see",
         "runtime_check",
         "read_logs",
         "probe",
         "verify_isolation",
     }:
         return await project_cell_handle.execute(action)
-    if action.name == "see":
-        # MAX previews authenticate through signed initData/session,
-        # not the generic email login. Bootstrap a short-lived
-        # preview identity before Playwright captures the product.
-        from omnia_api.services import agent_vision
-
-        try:
-            preview_session = await orchestrator_client.create_max_preview_session(project_id)
-            bootstrap_url = str(preview_session.get("bootstrap_url") or "")
-            visual = await agent_vision.see_page(
-                project_id,
-                path=action.path or "/",
-                prompt_context=vision_context,
-                bootstrap_url=bootstrap_url,
-            )
-        except Exception as see_exc:
-            visual = {
-                "ok": False,
-                "error": f"MAX visual QA unavailable: {type(see_exc).__name__}",
-            }
-        return agent_vision.normalize_max_see_observation(visual)
     if action.name == "runtime_check":
         runtime = await base_agent_executor(action)
         if not runtime.get("ok"):
@@ -4408,8 +4390,8 @@ async def _process_prompt(
                 await _record_agent_step(step_row)
 
             # Omnia Design Pro: one pure pre-build classification. Its compact
-            # contract reaches both the coding agent and the already-required
-            # `see`; it never creates an extra generation/acceptance phase.
+            # contract reaches the coding agent and its persisted design memory;
+            # it never creates an extra generation/acceptance phase.
             _design_contract = None
             if orchestrate and get_settings().use_design_intelligence_plugin:
                 try:
@@ -4609,7 +4591,7 @@ async def _process_prompt(
             _orch_name = orchestrator_template(project_template)
             # Bare / no-stack experiment: the agent picks its OWN framework, so the
             # Next-specific `build` typecheck (require_green_before_done) does not
-            # apply — completion is proven by runtime_check/probe/see instead.
+            # apply — completion is proven by runtime_check/probe instead.
             _bare_stack = _orch_name == "bare-nextjs"
             _stack_guide = (
                 agent_builder.load_stack_system_prompt(_orch_name)

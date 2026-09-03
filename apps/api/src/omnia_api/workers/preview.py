@@ -498,8 +498,7 @@ async def capture_live_url(
 ) -> dict[int, bytes]:
     """Screenshot a LIVE running URL (the dev container's preview) at each width.
 
-    The agent's `see` tool uses this to LOOK at the page it just built; the
-    bytes pipe straight into ``vision_audit.audit_screenshots``. Mirrors the
+    This standalone capture utility is not a generation completion gate. Mirrors the
     live-container branch of ``_render_async`` (await client-side data + paint
     before the shot) but returns raw PNG bytes per width like ``capture()``.
 
@@ -527,8 +526,8 @@ async def capture_diagnostics(
 ) -> dict[str, list[str]]:
     """Load a live URL once and collect BROWSER-side signals a screenshot can't
     show: console errors/warnings, uncaught page errors, and failed (>=400) network
-    requests. The agent's `see` tool appends these to its observation so a JS error
-    or a broken fetch on load is visible, not just "the page looks off".
+    requests. Diagnostic callers can inspect JS errors and broken fetches on load
+    independently of screenshot appearance.
 
     Fail-soft: any error returns whatever was collected so far (never raises)."""
     console_errors: list[str] = []
