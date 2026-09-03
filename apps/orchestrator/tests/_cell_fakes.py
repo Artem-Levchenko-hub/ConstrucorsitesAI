@@ -99,6 +99,9 @@ class FakeDockerBackend:
         record = self.volumes.get(name)
         return {} if record is None else dict(record.files)
 
+    async def read_workspace_source_files(self, name: str) -> dict[str, bytes]:
+        return await self.read_volume_files(name)
+
     async def write_volume_files(self, name: str, files: dict[str, bytes]) -> None:
         await self._before_mutation("volume_write")
         record = self.volumes[name]

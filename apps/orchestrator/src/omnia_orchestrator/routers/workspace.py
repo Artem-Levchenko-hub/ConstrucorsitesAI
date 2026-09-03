@@ -1292,7 +1292,10 @@ async def _read_agent_workspace_files(
     manager: DockerCellResourceManager,
     volume_name: str,
 ) -> dict[str, str]:
-    raw_files = await manager.docker.read_volume_files(volume_name)
+    # Portable machines retain package/build caches in the workspace volume.
+    # Agent revisions cover source only; archiving node_modules/.next here can
+    # exceed the bounded control-plane payload after a successful build.
+    raw_files = await manager.docker.read_workspace_source_files(volume_name)
     files: dict[str, str] = {}
     total_bytes = 0
     for raw_path, payload in sorted(raw_files.items()):

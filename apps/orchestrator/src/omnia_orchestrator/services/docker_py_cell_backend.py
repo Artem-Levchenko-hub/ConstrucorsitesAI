@@ -60,10 +60,12 @@ _CPU_PERIOD = 100_000
 _HELPER_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
 _HELPER_PIDS_LIMIT = 64
 _ARCHIVE_LIMIT_BYTES = 128 * 1024 * 1024
+_WORKSPACE_SOURCE_ARCHIVE_PATH = "/tmp/workspace-source.tar"
 _ONE_SHOT_HELPERS = frozenset({"postgres-ownership", "postgres-init"})
 _WORKSPACE_SYNC_PRESERVE_PATTERNS = (
     "node_modules",
     ".next",
+    ".pnpm-store",
     ".git",
     "dist",
     "build",
@@ -83,6 +85,14 @@ _WORKSPACE_SYNC_EXCLUDES = (
     "*/secrets.json",
     "*/secrets.yaml",
     "*/secrets.yml",
+)
+_WORKSPACE_SOURCE_ARCHIVE_EXCLUDES = tuple(
+    dict.fromkeys(
+        (
+            *(f"./{item}" for item in _WORKSPACE_SYNC_PRESERVE_PATTERNS),
+            *(f"*/{item}" for item in _WORKSPACE_SYNC_PRESERVE_PATTERNS),
+        )
+    )
 )
 
 
@@ -250,6 +260,64 @@ class DockerPyCellBackend:
         try:
             raw = await asyncio.to_thread(self._get_archive_bytes, container, _VOLUME_ROOT, name)
             return _archive_to_files(raw, root_prefix=PurePosixPath(_VOLUME_ROOT).name)
+        finally:
+            await self._remove_container_object(container)
+
+    async def read_workspace_source_files(self, name: str) -> dict[str, bytes]:
+        """Read bounded project source without package/build/cache payloads."""
+        volume = await self._get_volume_obj(name)
+        if volume is None:
+            return {}
+        labels = self._labels(volume)
+        source_tmpfs = dict(_HELPER_TMPFS)
+        source_tmpfs["/tmp"] = (
+            f"rw,nosuid,nodev,noexec,size={self.archive_limit_bytes + 1024 * 1024}"
+        )
+        container = await self._start_helper_container(
+            name=self._helper_name("workspace-source-read", name),
+            labels=self._helper_labels(labels, "workspace-source-read"),
+            volumes={name: {"bind": _VOLUME_ROOT, "mode": "ro"}},
+            tmpfs=source_tmpfs,
+        )
+        try:
+            archive_command = [
+                "tar",
+                "-C",
+                _VOLUME_ROOT,
+                *(f"--exclude={item}" for item in _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES),
+                "-cf",
+                _WORKSPACE_SOURCE_ARCHIVE_PATH,
+                ".",
+            ]
+            await asyncio.to_thread(
+                self._exec_checked,
+                container,
+                archive_command,
+                f"archive workspace source {name}",
+            )
+            raw_size = await asyncio.to_thread(
+                self._exec_checked,
+                container,
+                ["stat", "-c", "%s", _WORKSPACE_SOURCE_ARCHIVE_PATH],
+                f"stat workspace source archive {name}",
+            )
+            try:
+                archive_size = int(raw_size.strip())
+            except ValueError as exc:
+                raise CellResourceError("workspace source archive returned invalid size") from exc
+            if archive_size > self.archive_limit_bytes:
+                raise CellResourceError(
+                    f"{name} source archive exceeds {self.archive_limit_bytes} bytes"
+                )
+            raw = await asyncio.to_thread(
+                self._exec_checked,
+                container,
+                ["cat", _WORKSPACE_SOURCE_ARCHIVE_PATH],
+                f"read workspace source archive {name}",
+            )
+            if len(raw) != archive_size:
+                raise CellResourceError("workspace source archive size changed during read")
+            return _archive_to_files(raw, root_prefix="")
         finally:
             await self._remove_container_object(container)
 
@@ -1165,6 +1233,7 @@ class DockerPyCellBackend:
         name: str,
         labels: dict[str, str],
         volumes: dict[str, dict[str, str]],
+        tmpfs: dict[str, str] | None = None,
     ) -> Any:
         self._require_identity_labels(labels)
 
@@ -1187,7 +1256,7 @@ class DockerPyCellBackend:
                 ports={},
                 environment={},
                 volumes=volumes,
-                tmpfs=dict(_HELPER_TMPFS),
+                tmpfs=dict(_HELPER_TMPFS if tmpfs is None else tmpfs),
                 pids_limit=_HELPER_PIDS_LIMIT,
                 mem_limit=_HELPER_MEMORY_LIMIT_BYTES,
                 network="none",

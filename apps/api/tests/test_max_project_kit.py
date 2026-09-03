@@ -64,6 +64,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert set(files) == {
         "postcss.config.mjs",
         "src/app/layout.tsx",
+        "src/app/api/omnia/health/route.ts",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/lib/db/index.ts",
@@ -175,6 +176,7 @@ def test_starter_kit_has_no_product_page_or_visual_template() -> None:
     files = render_max_starter_files(_config(), uuid4())
 
     assert "src/app/page.tsx" not in files
+    assert "src/app/api/omnia/health/route.ts" in files
     assert "src/app/globals.css" in files
     assert "src/app/layout.tsx" in files
     assert "package.json" in files

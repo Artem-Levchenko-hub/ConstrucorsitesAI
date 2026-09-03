@@ -57,6 +57,7 @@ def _sync_preserves_top_level(path: str) -> bool:
     return top in {
         "node_modules",
         ".next",
+        ".pnpm-store",
         ".git",
         "dist",
         "build",
@@ -75,19 +76,21 @@ def _sync_excludes_path(path: str, script: str) -> bool:
         return f"--exclude={pattern}" in script or f"--exclude='{pattern}'" in script
 
     pure = PurePosixPath(path)
-    top = pure.parts[0]
     name = pure.name
-    if top in {
+    skipped_directories = {
         "node_modules",
         ".next",
+        ".pnpm-store",
         ".git",
         "dist",
         "build",
         ".venv",
         "vendor",
         "__pycache__",
-    }:
-        return _has_exclude(f"./{top}")
+    }
+    skipped = next((part for part in pure.parts if part in skipped_directories), None)
+    if skipped is not None:
+        return _has_exclude(f"./{skipped}") or _has_exclude(f"*/{skipped}")
     if name == ".env" or name.startswith(".env."):
         return _has_exclude("./.env") and _has_exclude("*/.env.*")
     if name in {"secrets.json", "secrets.yaml", "secrets.yml"}:
@@ -342,6 +345,23 @@ class _FakeContainer:
             for path in command[2:]:
                 self.temp_files.pop(path, None)
             return _FakeExecResult()
+        if command[:3] == ["tar", "-C", "/volume"]:
+            mounted_name = next(iter((self.kwargs.get("volumes") or {}).keys()))
+            volume = self.manager.client.volumes.items[mounted_name]
+            script = " ".join(command)
+            source_files = {
+                path: payload
+                for path, payload in volume.files.items()
+                if not _sync_excludes_path(path, script)
+            }
+            archive_path = command[command.index("-cf") + 1]
+            self.temp_files[archive_path] = _archive(source_files, root=".")
+            return _FakeExecResult()
+        if command[:3] == ["stat", "-c", "%s"]:
+            payload = self.temp_files.get(command[3], b"")
+            return _FakeExecResult(output=f"{len(payload)}\n".encode())
+        if command[:1] == ["cat"]:
+            return _FakeExecResult(output=self.temp_files.get(command[1], b""))
         if command[:3] != ["sh", "-eu", "-c"]:
             return _FakeExecResult()
         script = command[3]
@@ -895,6 +915,79 @@ async def test_volume_helpers_use_named_volume_and_cleanup_temp_container() -> N
     assert helper_calls[4]["kwargs"]["labels"]["omnia.resource_kind"] == "volume-clear"
     assert client.containers.items == {}
     assert client.volumes.items["workspace-vol"].files == {}
+
+
+@pytest.mark.asyncio
+async def test_workspace_source_read_excludes_runtime_caches_and_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol",
+        _labels("workspace"),
+        files={
+            "package.json": b"{}",
+            "src/app/page.tsx": b"export default 1",
+            "node_modules/pkg/index.js": b"vendored",
+            ".next/cache/data": b"generated",
+            ".pnpm-store/v3/files/pkg": b"cached",
+            "nested/node_modules/pkg/index.js": b"nested vendored",
+            ".env.local": b"secret",
+            "nested/secrets.json": b"secret",
+        },
+    )
+    backend = _backend(client)
+    commands: list[list[str]] = []
+    original_exec_run = _FakeContainer.exec_run
+
+    def capture_exec(
+        container: _FakeContainer,
+        command: list[str],
+        *,
+        environment: dict[str, str] | None = None,
+        demux: bool = False,
+    ) -> _FakeExecResult:
+        commands.append(command)
+        return original_exec_run(
+            container,
+            command,
+            environment=environment,
+            demux=demux,
+        )
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", capture_exec)
+
+    files = await backend.read_workspace_source_files("workspace-vol")
+
+    assert files == {
+        "package.json": b"{}",
+        "src/app/page.tsx": b"export default 1",
+    }
+    helper = client.containers.create_calls[0]
+    command = commands[0]
+    assert "--exclude=./node_modules" in command
+    assert "--exclude=*/node_modules" in command
+    assert "--exclude=./.next" in command
+    assert "--exclude=./.pnpm-store" in command
+    assert helper["kwargs"]["labels"]["omnia.resource_kind"] == "workspace-source-read"
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+async def test_workspace_source_read_rejects_oversize_archive_and_cleans_helper() -> None:
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol",
+        _labels("workspace"),
+        files={"src/app/page.tsx": b"x" * 2048},
+    )
+    backend = _backend(client)
+    backend.archive_limit_bytes = 1024
+
+    with pytest.raises(CellResourceError, match="source archive exceeds 1024 bytes"):
+        await backend.read_workspace_source_files("workspace-vol")
+
+    assert client.containers.items == {}
 
 
 @pytest.mark.asyncio

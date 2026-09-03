@@ -28,7 +28,11 @@ def next_machine_manifest() -> MachineManifest:
                 {
                     "name": "web",
                     "argv": ["pnpm", "start"],
-                    "readiness": {"port": 3000, "path": "/", "timeout_seconds": 120},
+                    "readiness": {
+                        "port": 3000,
+                        "path": "/api/omnia/health",
+                        "timeout_seconds": 120,
+                    },
                 }
             ],
             "routes": [{"path": "/", "service": "web", "port": 3000}],
@@ -48,6 +52,7 @@ def next_machine_seed(template: dict[str, str]) -> dict[str, str]:
         "postcss.config.mjs",
         "src/app/layout.tsx",
         "src/app/globals.css",
+        "src/app/api/omnia/health/route.ts",
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/lib/max/bridge.ts",

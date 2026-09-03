@@ -111,6 +111,9 @@ def render_max_managed_files(
     files = {
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
+        "src/app/api/omnia/health/route.ts": _template_file(
+            "src/app/api/omnia/health/route.ts"
+        ),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
         "src/lib/db/index.ts": _template_file("src/lib/db/index.ts"),
@@ -473,6 +476,7 @@ MAX_SECURITY_LOCKED_FILES = frozenset(
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/app/layout.tsx",
+        "src/app/api/omnia/health/route.ts",
         "next.config.ts",
         "drizzle.config.ts",
         "postcss.config.mjs",
