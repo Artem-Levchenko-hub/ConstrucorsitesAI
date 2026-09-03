@@ -57,7 +57,9 @@ container with its own persistent volume. The controller injects `DATABASE_URL`
 plus matching `PG*` variables into the project machine, using a project-scoped
 superuser password that is distinct from the managed MAX core PostgreSQL
 credentials. Snapshot/restore includes that dedicated PostgreSQL volume together
-with the machine environment artifact.
+with the machine environment artifact. The sidecar joins the trusted guard's
+network namespace and listens on loopback, so PostgreSQL superuser server-side
+programs cannot bypass the core/private-network fence.
 
 ## Commands, services and recovery
 

@@ -52,7 +52,7 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
     assert "AUTH_SECRET" not in options["environment"]
     assert (
         options["environment"]["DATABASE_URL"]
-        == "postgresql://postgres:test-project-postgres-password@127.0.0.1:5432/app"
+        == "postgresql://postgres:test-project-postgres-password@127.0.0.1:5432/postgres"
     )
     assert options["environment"]["PGHOST"] == "127.0.0.1"
     assert options["environment"]["PGPASSWORD"] == "test-project-postgres-password"
@@ -151,7 +151,15 @@ def test_project_postgres_shares_guard_namespace_without_host_or_core_access(tmp
     runtime = backend(tmp_path)
     options = runtime._project_postgres_options("guard-id", 7)
     assert options["network_mode"] == "container:guard-id"
-    assert options["command"] == ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    assert options["command"] == [
+        "postgres",
+        "-D",
+        "/var/lib/postgresql/data",
+        "-c",
+        "listen_addresses=127.0.0.1",
+        "-c",
+        "unix_socket_directories=",
+    ]
     assert options["cap_drop"] == ["ALL"]
     assert options["cap_add"] == []
     assert options["privileged"] is False
@@ -159,11 +167,7 @@ def test_project_postgres_shares_guard_namespace_without_host_or_core_access(tmp
     assert options["ports"] == {}
     assert options["mem_limit"] == options["memswap_limit"]
     assert set(options["volumes"]) == {runtime.project_postgres_volume}
-    assert options["environment"] == {
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "test-project-postgres-password",
-        "POSTGRES_DB": "app",
-    }
+    assert options["environment"] == {"PGDATA": "/var/lib/postgresql/data"}
 
 
 def test_restore_reference_allows_legacy_machine_artifact_without_project_postgres_volume(tmp_path):
@@ -329,6 +333,7 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path)
     after.services[0].argv = ["python3", "new.py"]
     write_controller_json(runtime.metadata_path, {"manifest": before.model_dump(mode="json")})
     runtime._container = lambda: SimpleNamespace(labels={"omnia.fencing_epoch": "7"})
+    runtime._project_postgres = lambda: None
     operations = []
     runtime._checkpoint_for_recreate = lambda value: operations.append(("capture", value.digest()))
     runtime.remove = lambda **kwargs: operations.append(("remove", kwargs))

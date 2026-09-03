@@ -8,7 +8,7 @@ import json
 import socket
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
 
 from omnia_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
@@ -45,7 +45,7 @@ class MachineAdapter:
 
     @property
     def root(self) -> Path:
-        return self.manager.state_store.root.parent / "project-machines"
+        return Path(self.manager.state_store.root).parent / "project-machines"
 
     def capabilities(self) -> dict[str, object]:
         return {
@@ -106,6 +106,10 @@ class MachineAdapter:
         if names is None or state.project_id is None or state.owner_id is None:
             raise CellResourceError("portable machine identity incomplete")
         profile = self.manager.profile
+        project_postgres_memory = self._project_postgres_memory_bytes()
+        project_postgres_cpu = self._project_postgres_cpu_cores()
+        self._max_core_memory_bytes()
+        self._max_core_cpu_cores()
         backend = DockerMachineBackend(
             client=self.manager.docker._client_obj(),
             workspace_id=state.workspace_id,
@@ -118,8 +122,8 @@ class MachineAdapter:
             guard_image=self.settings.cell_machine_guard_image,
             postgres_image=profile.postgres_image,
             project_postgres_password=self.project_database_password(state.workspace_id),
-            project_postgres_memory_bytes=self._project_postgres_memory_bytes(),
-            project_postgres_cpu_cores=self._project_postgres_cpu_cores(),
+            project_postgres_memory_bytes=project_postgres_memory,
+            project_postgres_cpu_cores=project_postgres_cpu,
             network_pool=self.settings.cell_network_pool,
             denied_cidrs=tuple(self.settings.cell_machine_denied_cidrs),
             # Proxy64 + guard32 + gateway32 MiB and .2 CPU stay inside the
@@ -131,11 +135,12 @@ class MachineAdapter:
             namespace=self.manager.namespace,
         )
 
-        def epoch():
+        def epoch() -> int | None:
             current = self.manager.state_store.load(state.workspace_id)
             if current is None or current.active_generation_run_id is None:
                 return None
-            return current.active_generation_fencing_epoch
+            value = current.active_generation_fencing_epoch
+            return int(value) if value is not None else None
 
         return ProjectMachine(self.root, state.workspace_id, backend, lease_epoch=epoch), backend
 
@@ -157,23 +162,25 @@ class MachineAdapter:
         )
 
     def _project_postgres_memory_bytes(self) -> int:
-        draft = self.manager.profile.draft_memory_bytes
+        draft = int(self.manager.profile.draft_memory_bytes)
         reserve = max(_PROJECT_POSTGRES_MIN_MEMORY_BYTES, draft // 4)
         return min(_PROJECT_POSTGRES_TARGET_MEMORY_BYTES, reserve)
 
     def _project_postgres_cpu_cores(self) -> float:
-        draft = self.manager.profile.draft_cpu_cores
+        draft = float(self.manager.profile.draft_cpu_cores)
         reserve = max(_PROJECT_POSTGRES_MIN_CPU_CORES, draft / 3)
         return min(_PROJECT_POSTGRES_TARGET_CPU_CORES, reserve)
 
     def _max_core_memory_bytes(self) -> int:
-        remaining = self.manager.profile.draft_memory_bytes - self._project_postgres_memory_bytes()
+        remaining = (
+            int(self.manager.profile.draft_memory_bytes) - self._project_postgres_memory_bytes()
+        )
         if remaining <= 0:
             raise CellResourceError("draft memory cannot fit managed core and project postgres")
         return remaining
 
     def _max_core_cpu_cores(self) -> float:
-        remaining = self.manager.profile.draft_cpu_cores - self._project_postgres_cpu_cores()
+        remaining = float(self.manager.profile.draft_cpu_cores) - self._project_postgres_cpu_cores()
         if remaining <= 0:
             raise CellResourceError("draft CPU cannot fit managed core and project postgres")
         return remaining
@@ -225,7 +232,7 @@ class MachineAdapter:
                 raise ValueError(f"manifest has no {role} task")
         else:
             commands = [("shell", ["sh", "-lc", request.cmd], ".", request.timeout_seconds)]
-        output = []
+        output: list[str] = []
         for name, argv, cwd, timeout in commands:
             operation_mutation = LifecycleMutation(
                 uuid5(request.operation_id, name), mutation.fencing_epoch, digest
@@ -284,7 +291,7 @@ class MachineAdapter:
             environment_ref=reference.model_dump(mode="json"), restored_image=reference.image_id
         )
         write_controller_json(backend.metadata_path, metadata)
-        return reference
+        return cast(MachineEnvironmentRef, reference)
 
     async def checkpoint_payload(self, state: Any) -> bytes | None:
         reference = await self.checkpoint(state)
@@ -505,7 +512,7 @@ class MachineAdapter:
         self._wait_http(gateway, gateway_ip, "/__omnia/identity", expected=401, timeout=30)
 
     @staticmethod
-    def _wait_http(container, address: str, path: str, *, expected: int, timeout: int) -> None:
+    def _wait_http(container: Any, address: str, path: str, *, expected: int, timeout: int) -> None:
         import http.client
 
         deadline = time.monotonic() + machine_remaining_seconds(timeout)

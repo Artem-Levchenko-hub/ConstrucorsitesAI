@@ -15,16 +15,19 @@ import socket
 import tarfile
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
-import docker
+import docker  # type: ignore[import-untyped]
 
 from omnia_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
 from omnia_orchestrator.core.project_machine import MachineManifest, MachineService
 from omnia_orchestrator.services.machine_egress import GuardPolicy
+from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
 from omnia_orchestrator.services.machine_network_allocation import (
     choose_subnet,
     create_pool_network,
@@ -37,7 +40,7 @@ from omnia_orchestrator.services.project_machine import (
 _PIN = re.compile(r"^(?:sha256:|[^\s@]+@sha256:)[0-9a-f]{64}$")
 _PROJECT_POSTGRES_HOST = "127.0.0.1"
 _PROJECT_POSTGRES_PORT = 5432
-_PROJECT_POSTGRES_DB = "app"
+_PROJECT_POSTGRES_DB = "postgres"
 _PROJECT_POSTGRES_USER = "postgres"
 _PROJECT_POSTGRES_DATA = "/var/lib/postgresql/data"
 _USERLAND_CAPS = [
@@ -252,7 +255,7 @@ class DockerMachineBackend:
             "postgresql://"
             + _PROJECT_POSTGRES_USER
             + ":"
-            + self.project_postgres_password
+            + quote(self.project_postgres_password, safe="")
             + "@"
             + _PROJECT_POSTGRES_HOST
             + ":"
@@ -476,7 +479,16 @@ class DockerMachineBackend:
                 "omnia.fencing_epoch": str(epoch),
                 "omnia.image_ref": self.postgres_image,
             },
-            "command": ["postgres", "-c", f"listen_addresses={_PROJECT_POSTGRES_HOST}"],
+            "entrypoint": [],
+            "command": [
+                "postgres",
+                "-D",
+                _PROJECT_POSTGRES_DATA,
+                "-c",
+                f"listen_addresses={_PROJECT_POSTGRES_HOST}",
+                "-c",
+                "unix_socket_directories=",
+            ],
             "network_mode": "container:" + namespace_id,
             "user": _PROJECT_POSTGRES_USER,
             "cap_drop": ["ALL"],
@@ -497,13 +509,8 @@ class DockerMachineBackend:
             },
             "tmpfs": {
                 "/tmp": "rw,nosuid,nodev,size=32m",
-                "/var/run/postgresql": "rw,nosuid,nodev,size=8m",
             },
-            "environment": {
-                "POSTGRES_USER": _PROJECT_POSTGRES_USER,
-                "POSTGRES_PASSWORD": self.project_postgres_password,
-                "POSTGRES_DB": _PROJECT_POSTGRES_DB,
-            },
+            "environment": {"PGDATA": _PROJECT_POSTGRES_DATA},
             "log_config": docker.types.LogConfig(
                 type="json-file", config={"max-size": "1m", "max-file": "2"}
             ),
@@ -512,6 +519,7 @@ class DockerMachineBackend:
     def _prepare_project_postgres_volume(self) -> None:
         self._volume(self.project_postgres_volume)
         self._ensure_project_postgres_permissions()
+        self._initialize_project_postgres_volume()
 
     def _ensure_project_postgres_permissions(self) -> None:
         helper_name = self.stem + "-project-postgres-prepare"
@@ -522,17 +530,19 @@ class DockerMachineBackend:
             self.postgres_image,
             [
                 "sh",
-                "-lc",
+                "-eu",
+                "-c",
                 f"mkdir -p {_PROJECT_POSTGRES_DATA} "
                 f"&& chown -R postgres:postgres {_PROJECT_POSTGRES_DATA}",
             ],
             name=helper_name,
             labels=self.labels("project-postgres-prepare"),
             detach=True,
+            entrypoint=[],
             network_mode="none",
             user="0:0",
             cap_drop=["ALL"],
-            cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER"],
+            cap_add=["CHOWN"],
             privileged=False,
             security_opt=["no-new-privileges:true"],
             read_only=True,
@@ -565,6 +575,67 @@ class DockerMachineBackend:
             ):
                 helper.remove(force=True)
 
+    def _initialize_project_postgres_volume(self) -> None:
+        helper_name = self.stem + "-project-postgres-init"
+        helper = self._lookup(self.client.containers, helper_name, "project-postgres-init")
+        if helper is not None:
+            helper.remove(force=True)
+        script = " ".join(
+            [
+                "if [ ! -f \"$PGDATA/PG_VERSION\" ]; then",
+                "umask 077;",
+                "printf '%s' \"$POSTGRES_PASSWORD\" > /tmp/postgres-password;",
+                "initdb --username=postgres --auth-host=scram-sha-256",
+                "--pwfile=/tmp/postgres-password -D \"$PGDATA\";",
+                "rm -f /tmp/postgres-password;",
+                "fi",
+            ]
+        )
+        helper = self.client.containers.create(
+            self.postgres_image,
+            ["sh", "-eu", "-c", script],
+            name=helper_name,
+            labels=self.labels("project-postgres-init"),
+            detach=True,
+            entrypoint=[],
+            network_mode="none",
+            user=_PROJECT_POSTGRES_USER,
+            cap_drop=["ALL"],
+            cap_add=[],
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            read_only=True,
+            volumes={
+                self.project_postgres_volume: {
+                    "bind": _PROJECT_POSTGRES_DATA,
+                    "mode": "rw",
+                }
+            },
+            tmpfs={"/tmp": "rw,nosuid,nodev,size=8m"},
+            environment={
+                "PGDATA": _PROJECT_POSTGRES_DATA,
+                "POSTGRES_PASSWORD": self.project_postgres_password,
+            },
+            mem_limit=128 * 1024**2,
+            memswap_limit=128 * 1024**2,
+            nano_cpus=100_000_000,
+            pids_limit=64,
+            log_config=docker.types.LogConfig(
+                type="json-file", config={"max-size": "256k", "max-file": "1"}
+            ),
+        )
+        try:
+            helper.start()
+            outcome = helper.wait(timeout=machine_remaining_seconds(60))
+            if outcome.get("StatusCode") != 0:
+                raise CellResourceError("project postgres initialization failed")
+        finally:
+            if (
+                self._lookup(self.client.containers, helper_name, "project-postgres-init")
+                is not None
+            ):
+                helper.remove(force=True)
+
     def _ensure_project_postgres(self, namespace_id: str, epoch: int) -> None:
         postgres = self._project_postgres()
         if postgres is not None:
@@ -590,9 +661,11 @@ class DockerMachineBackend:
     def _project_postgres_matches(self, postgres: Any, namespace_id: str, epoch: int) -> bool:
         postgres.reload()
         attrs = postgres.attrs
-        labels = attrs.get("Config", {}).get("Labels") or postgres.labels
+        config = attrs.get("Config", {})
+        labels = config.get("Labels") or postgres.labels
         host = attrs.get("HostConfig", {})
         mounts = attrs.get("Mounts") or []
+        expected = self._project_postgres_options(namespace_id, epoch)
         volume_matches = any(
             item.get("Name") == self.project_postgres_volume
             and item.get("Destination") == _PROJECT_POSTGRES_DATA
@@ -602,12 +675,17 @@ class DockerMachineBackend:
         return bool(
             labels.get("omnia.fencing_epoch") == str(epoch)
             and labels.get("omnia.image_ref") == self.postgres_image
+            and config.get("User") == _PROJECT_POSTGRES_USER
+            and not (config.get("Entrypoint") or [])
+            and config.get("Cmd") == expected["command"]
             and host.get("NetworkMode") == "container:" + namespace_id
             and host.get("Privileged") is False
             and host.get("ReadonlyRootfs") is True
             and not (host.get("CapAdd") or [])
             and "ALL" in (host.get("CapDrop") or [])
             and not (host.get("PortBindings") or {})
+            and "no-new-privileges:true" in (host.get("SecurityOpt") or [])
+            and "/tmp" in (host.get("Tmpfs") or {})
             and host.get("Memory") == self.project_postgres_memory_bytes
             and host.get("MemorySwap") == self.project_postgres_memory_bytes
             and host.get("NanoCpus")
@@ -698,7 +776,7 @@ class DockerMachineBackend:
         metadata["exec_logs"][exec_id] = log
         write_controller_json(self.metadata_path, metadata)
         self.client.api.exec_start(exec_id, detach=True)
-        return exec_id
+        return str(exec_id)
 
     def _read_log(self, path: str) -> str:
         guard = self._lookup(self.client.containers, self.stem + "-guard", "namespace-guard")
@@ -812,7 +890,7 @@ class DockerMachineBackend:
         if guard is None:
             raise CellResourceError("namespace guard is missing")
         guard.reload()
-        return guard.attrs["NetworkSettings"]["Networks"][self.internal_network]["IPAddress"]
+        return str(guard.attrs["NetworkSettings"]["Networks"][self.internal_network]["IPAddress"])
 
     def stop_services(self) -> None:
         # Stop the whole container so daemonized descendants cannot keep writing.
@@ -851,9 +929,9 @@ class DockerMachineBackend:
         if project_postgres is None:
             return False
         project_postgres.reload()
-        return project_postgres.status == "running"
+        return bool(project_postgres.status == "running")
 
-    def export_image(self):
+    def export_image(self) -> tuple[str, Iterable[bytes]]:
         machine = self._container()
         if machine is None:
             raise CellResourceError("cannot snapshot a missing machine")
@@ -963,6 +1041,7 @@ class DockerMachineBackend:
                 "restore-check",
                 "archive",
                 "project-postgres-prepare",
+                "project-postgres-init",
                 "project-postgres-restore",
             }:
                 continue
@@ -975,7 +1054,7 @@ class DockerMachineBackend:
                 continue
             raise CellResourceError("recovery helper process death is unverified")
 
-    def validate_restore(self, reference) -> None:
+    def validate_restore(self, reference: MachineEnvironmentRef) -> None:
         self._reconcile_recovery_helpers()
         self._prepare_project_postgres_volume()
         helper_name = self.stem + "-project-postgres-restore-check"
@@ -984,10 +1063,19 @@ class DockerMachineBackend:
             helper.remove(force=True)
         helper = self.client.containers.create(
             self.postgres_image,
-            ["postgres", "-c", f"listen_addresses={_PROJECT_POSTGRES_HOST}"],
+            [
+                "postgres",
+                "-D",
+                _PROJECT_POSTGRES_DATA,
+                "-c",
+                f"listen_addresses={_PROJECT_POSTGRES_HOST}",
+                "-c",
+                "unix_socket_directories=",
+            ],
             name=helper_name,
             labels=self.labels("project-postgres-restore"),
             detach=True,
+            entrypoint=[],
             network_mode="none",
             user=_PROJECT_POSTGRES_USER,
             cap_drop=["ALL"],
@@ -1006,13 +1094,8 @@ class DockerMachineBackend:
             },
             tmpfs={
                 "/tmp": "size=32m",
-                "/var/run/postgresql": "size=8m",
             },
-            environment={
-                "POSTGRES_USER": _PROJECT_POSTGRES_USER,
-                "POSTGRES_PASSWORD": self.project_postgres_password,
-                "POSTGRES_DB": _PROJECT_POSTGRES_DB,
-            },
+            environment={"PGDATA": _PROJECT_POSTGRES_DATA},
             log_config=docker.types.LogConfig(
                 type="json-file", config={"max-size": "1m", "max-file": "1"}
             ),
@@ -1106,7 +1189,7 @@ class DockerMachineBackend:
         metadata["pending_image"] = image_id
         write_controller_json(self.metadata_path, metadata)
 
-    def validate_restore_reference(self, reference) -> None:
+    def validate_restore_reference(self, reference: MachineEnvironmentRef) -> None:
         if reference.workspace_id != self.workspace_id or reference.base_image != self.base_image:
             raise CellIdentityConflict("environment restore identity mismatch")
         if reference.manifest is not None:
@@ -1124,7 +1207,7 @@ class DockerMachineBackend:
         ):
             raise CellIdentityConflict("environment volume identity mismatch")
 
-    def begin_restore(self, reference) -> None:
+    def begin_restore(self, reference: MachineEnvironmentRef) -> None:
         self.validate_restore_reference(reference)
         metadata = self._metadata()
         self._reconcile_recovery_helpers()
@@ -1179,7 +1262,9 @@ class DockerMachineBackend:
     def _archive_helper(self, volume: str, *, writable: bool) -> Any:
         metadata = self._metadata()
         manifest = MachineManifest.model_validate(metadata["manifest"])
-        allowed = {name: {} for name in self.environment_volume_names(manifest)}
+        allowed: dict[str, dict[str, str]] = {
+            name: {} for name in self.environment_volume_names(manifest)
+        }
         if metadata.get("restore_in_progress"):
             allowed = {item["name"]: {} for item in metadata["restore_target"]["volumes"]}
         if volume not in allowed:
@@ -1201,7 +1286,7 @@ class DockerMachineBackend:
             volumes={volume: {"bind": "/volume", "mode": "rw" if writable else "ro"}},
         )
 
-    def export_volume(self, name: str):
+    def export_volume(self, name: str) -> Iterable[bytes]:
         self._reconcile_recovery_helpers()
         helper = self._archive_helper(name, writable=False)
         try:

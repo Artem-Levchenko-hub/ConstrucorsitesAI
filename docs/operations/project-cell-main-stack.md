@@ -31,7 +31,9 @@ product or a fixed package list. No model generation is part of deployment proof
   The portable machine separately receives `DATABASE_URL` plus matching `PG*`
   variables for a dedicated project PostgreSQL sidecar with its own volume.
   That instance is isolated from the managed MAX core and is fully
-  admin-controlled by the agent inside the project machine.
+  admin-controlled by the agent inside the project machine. It shares the
+  trusted guard's network namespace and listens only on loopback, so even a
+  PostgreSQL `COPY PROGRAM` process inherits the core/private-network deny.
 - Shell/build attempts invalidate preview and completion proofs even without
   source changes and even on failures. Fresh completion checks require the actual
   product root, signed MAX bootstrap/session, protected data, negative auth and
@@ -118,6 +120,8 @@ declared recovery checks succeed. Dedicated PostgreSQL restore also boots a
 temporary local-only Postgres process against the restored volume and requires a
 controller-side `select 1` smoke before activation. Owned restore/archive helpers
 are discovered, identity-checked and confirmed dead before pause, imports and activation.
+Legacy machine artifacts without the dedicated database volume remain restorable;
+that restore initializes an empty project database instead of reusing newer data.
 
 Declared datastore quiesce failure/pending state cannot be bypassed by retrying a
 stopped container. Pause retains that stopped rootfs but does not certify it as a
@@ -131,6 +135,9 @@ remains fenced/degraded. No automatic merge or salvage is claimed.
   storage monitoring/retention. No shared-host hostile-tenant qualification.
 - Egress is HTTP(S)/CONNECT, not arbitrary raw TCP/UDP. Installers must honor the
   proxy. Private registries and destinations are not automatically authorized.
+  PostgreSQL shares this guard: a database-side program can deliberately use the
+  same public-only proxy known to project code, so this is bounded egress rather
+  than a zero-egress database process.
 - Gateway strips product `Set-Cookie`, incoming product Cookie/Authorization,
   spoofed identity/forwarded headers and Upgrade. Arbitrary app-cookie auth and
   WebSockets/HMR are not supported; default Next serves a production build.

@@ -2,6 +2,15 @@
 
 import json
 from collections.abc import Mapping
+from typing import Protocol
+
+RequestedCapability = tuple[str, str, tuple[str, ...]]
+
+
+class PortableGuideExecutor(Protocol):
+    capabilities: Mapping[str, object]
+
+    async def snapshot_files(self) -> Mapping[str, str]: ...
 
 PORTABLE_CELL_GUIDE = """
 MAX PLATFORM CORE CONTRACT — EXTENSIBLE MAIN STACK
@@ -45,8 +54,9 @@ aggregate; defaults per service: .25 CPU,128 MiB RAM,1 GiB disk admission,64 pid
 RAM/CPU/pids are enforced; disk is admission/snapshot bounded, not a hard quota.
 A dedicated project PostgreSQL is reachable at 127.0.0.1 via DATABASE_URL with
 full admin access. It is isolated from the managed MAX core PostgreSQL and from
-other projects. Manage your own schema, migrations, roles, extensions, backup
-checks and restore checks there; never expect access to managed platform secrets.
+other projects. Manage your own schema, migrations, roles, settings and bundled
+extensions there. The platform snapshots and restore-smokes its disk. Database
+superuser access does not grant container, host or managed-platform privileges.
 
 MAX AUTH AND MANAGED INTEGRATIONS ARE A SEPARATE TRUSTED BOUNDARY.
 PostgreSQL-backed managed APIs remain in the trusted core. /api/max/* and /api/omnia/* stay
@@ -90,14 +100,16 @@ def machine_stack_guide(
 
 
 async def machine_stack_guide_from_executor(
-    legacy: str, executor, *, new_product: bool = False
+    legacy: str, executor: PortableGuideExecutor, *, new_product: bool = False
 ) -> str:
     # History is not selection: customized legacy source may have no snapshots.
     files = await executor.snapshot_files()
     return machine_stack_guide(legacy, executor.capabilities, files)
 
 
-def portable_source_gap(files: Mapping[str, str], capabilities) -> str | None:
+def portable_source_gap(
+    files: Mapping[str, str], capabilities: list[RequestedCapability]
+) -> str | None:
     try:
         manifest = json.loads(files.get(".omnia/cell.json", ""))
         if not isinstance(manifest, dict) or manifest.get("version") != 1:

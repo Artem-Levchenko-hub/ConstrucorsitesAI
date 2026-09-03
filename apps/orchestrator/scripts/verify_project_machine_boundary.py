@@ -27,6 +27,27 @@ from omnia_orchestrator.services.machine_environment import (
 from omnia_orchestrator.services.machine_network_allocation import create_pool_network
 
 
+def project_postgres_sql(backend, sql):
+    result = backend._project_postgres().exec_run(
+        [
+            "psql",
+            "-h",
+            "127.0.0.1",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-Atq",
+            "-c",
+            sql,
+        ],
+        environment={"PGPASSWORD": backend.project_postgres_password},
+        user="postgres",
+    )
+    assert result.exit_code == 0, result.output
+    return result.output.decode("utf-8", errors="replace").strip()
+
+
 def next_fixture():
     from omnia_orchestrator.services.machine_defaults import next_machine_seed
 
@@ -261,6 +282,31 @@ async def run(args):
         )
         assert result.exit_code == 0, result.output
         print("ADAPTER_MANIFEST_BUILD_TEST_SERVICE_PASS", flush=True)
+        assert backend.project_postgres_password != password
+        pg.reload()
+        core_pg_ip = pg.attrs["NetworkSettings"]["Networks"][network.name]["IPAddress"]
+        network_check = backend._container().exec_run(
+            [
+                "python3",
+                "-c",
+                "import socket,sys; "
+                "local=socket.create_connection(('127.0.0.1',5432),2); local.close(); "
+                "blocked=socket.socket(); blocked.settimeout(2); "
+                f"code=blocked.connect_ex(('{core_pg_ip}',5432)); blocked.close(); "
+                "print('project-db-local/core-db-blocked', code); sys.exit(code==0)",
+            ]
+        )
+        assert network_check.exit_code == 0, network_check.output
+        assert project_postgres_sql(
+            backend, "select rolsuper from pg_roles where rolname=current_user"
+        ) == "t"
+        assert project_postgres_sql(
+            backend,
+            "create table if not exists omnia_acceptance(marker text primary key); "
+            "insert into omnia_acceptance values ('retained') on conflict do nothing; "
+            "select marker from omnia_acceptance",
+        ) == "retained"
+        print("PROJECT_POSTGRES_SUPERUSER_AND_CORE_NETWORK_ISOLATION_PASS", flush=True)
         gateway_state, address = adapter.preview(state)
         assert gateway_state == "running"
         assert request(address, "/")[0] == 401
@@ -298,6 +344,9 @@ async def run(args):
             client.images.remove(image_id, force=True)
         await adapter.resume_preview(state)
         assert expected_body in request(adapter.preview(state)[1], "/", session_cookie)[1]
+        assert project_postgres_sql(
+            backend, "select marker from omnia_acceptance"
+        ) == "retained"
         print("BOUNDARY_REMOVE_RECREATE_PASS", flush=True)
         if args.next:
             outcome = backend._container().exec_run(["pnpm", "test"], workdir="/workspace")
@@ -332,6 +381,10 @@ async def run(args):
             raise AssertionError("incomplete restore started machine")
         await asyncio.to_thread(environments.restore, good, manifest_digest=manifest.digest())
         assert backend._metadata()["restore_in_progress"] is False
+        await machine.ensure(manifest, LifecycleMutation(uuid4(), 7, "a" * 64))
+        assert project_postgres_sql(
+            backend, "select marker from omnia_acceptance"
+        ) == "retained"
         print("SQLITE_ROW_QUIESCE_RESTORE_CHECK_FAILURE_FENCE_RECOVERY_PASS", flush=True)
     except BaseException:
         for container in client.containers.list(all=True, filters=selector):
