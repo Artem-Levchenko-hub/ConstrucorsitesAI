@@ -171,6 +171,45 @@ def test_project_postgres_shares_guard_namespace_without_host_or_core_access(tmp
     assert options["environment"] == {"PGDATA": "/var/lib/postgresql/data"}
 
 
+def test_project_postgres_ownership_helper_can_traverse_restored_pgdata(tmp_path):
+    runtime = backend(tmp_path)
+    created = []
+
+    class Helper:
+        def start(self):
+            pass
+
+        def wait(self, **_options):
+            return {"StatusCode": 0}
+
+        def remove(self, **_options):
+            pass
+
+    class Containers:
+        def create(self, *args, **options):
+            created.append((args, options))
+            return Helper()
+
+    runtime.client = SimpleNamespace(containers=Containers())
+    runtime._lookup = lambda *_args: None
+
+    runtime._ensure_project_postgres_permissions()
+
+    _args, options = created[0]
+    assert options["network_mode"] == "none"
+    assert options["cap_drop"] == ["ALL"]
+    assert options["cap_add"] == ["CHOWN", "DAC_OVERRIDE"]
+    assert options["privileged"] is False
+    assert options["read_only"] is True
+    assert options["user"] == "0:0"
+    assert options["volumes"] == {
+        runtime.project_postgres_volume: {
+            "bind": "/var/lib/postgresql/data",
+            "mode": "rw",
+        }
+    }
+
+
 def test_restore_reference_allows_legacy_machine_artifact_without_project_postgres_volume(tmp_path):
     from omnia_orchestrator.services.machine_environment import (
         MachineEnvironmentRef,

@@ -542,7 +542,9 @@ class DockerMachineBackend:
             network_mode="none",
             user="0:0",
             cap_drop=["ALL"],
-            cap_add=["CHOWN"],
+            # CHOWN authorizes ownership changes; DAC_OVERRIDE is separately
+            # required to traverse restored PGDATA (postgres-owned, mode 0700).
+            cap_add=["CHOWN", "DAC_OVERRIDE"],
             privileged=False,
             security_opt=["no-new-privileges:true"],
             read_only=True,
