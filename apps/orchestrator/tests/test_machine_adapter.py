@@ -55,6 +55,14 @@ async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tm
     ]
 
 
+def test_capabilities_advertise_dedicated_project_postgres():
+    capabilities = module().MachineAdapter(SimpleNamespace(), SimpleNamespace()).capabilities()
+    assert capabilities["portable_machine"] is True
+    assert capabilities["dedicated_postgres"] is True
+    assert capabilities["database_url_env"] == "DATABASE_URL"
+    assert capabilities["database_admin"] == "full"
+
+
 async def test_missing_manifest_tests_is_not_a_successful_build(tmp_path):
     api = module()
     runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())

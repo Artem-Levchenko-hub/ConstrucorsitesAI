@@ -43,6 +43,10 @@ ephemeral. Services may declare depends_on and mounts [{"volume":"data",
 "target":"/data"}]. One named volume has one guest target. Resource limits are
 aggregate; defaults per service: .25 CPU,128 MiB RAM,1 GiB disk admission,64 pids.
 RAM/CPU/pids are enforced; disk is admission/snapshot bounded, not a hard quota.
+A dedicated project PostgreSQL is reachable at 127.0.0.1 via DATABASE_URL with
+full admin access. It is isolated from the managed MAX core PostgreSQL and from
+other projects. Manage your own schema, migrations, roles, extensions, backup
+checks and restore checks there; never expect access to managed platform secrets.
 
 MAX AUTH AND MANAGED INTEGRATIONS ARE A SEPARATE TRUSTED BOUNDARY.
 PostgreSQL-backed managed APIs remain in the trusted core. /api/max/* and /api/omnia/* stay
@@ -56,9 +60,10 @@ request body. Product-owned storage must scope records by the trusted user id.
 Managed actions are GET/POST /api/omnia/actions; existing MAX client source can
 be read for exact request shapes. Managed integrations use the reserved browser
 API, never embedded provider keys. The machine cannot contact managed PostgreSQL.
-Do not write credential files or provider secrets, disable auth, forge evidence,
-fabricate user history or simulate integrations. Own product data/SQLite/service
-volumes are allowed; keep backup/recovery checks honest.
+Use the dedicated DATABASE_URL above for product data. Do not write credential
+files or provider secrets, disable auth, forge evidence, fabricate user history
+or simulate integrations. Own product data/SQLite/service volumes are allowed;
+keep backup/recovery checks honest.
 
 Create the requested UI, behavior, navigation and real failure/empty states from
 scratch. A manifest, starter server, decorative tabs or bundled core is not the

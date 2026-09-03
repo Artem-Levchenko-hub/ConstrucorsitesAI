@@ -52,6 +52,12 @@ Transient credentials are injected through controller-owned ephemeral mounts and
 Keep project/data networks internal. A small dedicated public-egress proxy/resolver has no Docker socket, host mounts or platform credentials. An externally enforced project network fence permits only its proxy/resolver, project data and the narrowly scoped MAX boundary; merely setting HTTP_PROXY is not sufficient. The proxy resolves destination addresses itself and rejects all forbidden addresses after DNS/redirect normalization, including IPv6 and mapped addresses. Direct IP bypass, alternate DNS and host gateway access are negative acceptance tests. Project destination and byte/rate logs redact secrets.
 
 MAX session/launch validation and platform integrations stay behind a language-neutral HTTP boundary. Preserve existing verified behavior first through the managed core adapter, then route reserved platform paths to that boundary and product paths to manifest services. Strip caller-supplied identity headers and bind verified identity to project, release and user. Custom backend code is allowed to use its project database; another project's or the platform database is unreachable. Independent two-user tests verify in-app authorization. Removing source-level raw-DB restrictions is gated on this boundary, not on a prompt assertion.
+For the main-stack rollout, that project database is a dedicated PostgreSQL sidecar
+container with its own persistent volume. The controller injects `DATABASE_URL`
+plus matching `PG*` variables into the project machine, using a project-scoped
+superuser password that is distinct from the managed MAX core PostgreSQL
+credentials. Snapshot/restore includes that dedicated PostgreSQL volume together
+with the machine environment artifact.
 
 ## Commands, services and recovery
 

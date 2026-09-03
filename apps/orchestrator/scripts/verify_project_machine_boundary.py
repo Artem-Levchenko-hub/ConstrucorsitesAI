@@ -129,6 +129,7 @@ async def run(args):
             credential_store=credentials,
             namespace="test",
             profile=SimpleNamespace(
+                postgres_image=args.postgres_image,
                 executor_cpu_cores=0.5,
                 executor_memory_bytes=1024 * 1024**2,
                 required_free_disk_bytes=4 * 1024**3,

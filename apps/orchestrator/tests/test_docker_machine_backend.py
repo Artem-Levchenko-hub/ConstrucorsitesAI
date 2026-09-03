@@ -22,6 +22,10 @@ def backend(tmp_path, **overrides):
         workspace_volume="test-source",
         base_image="sha256:" + "a" * 64,
         guard_image="sha256:" + "b" * 64,
+        postgres_image="postgres@sha256:" + "c" * 64,
+        project_postgres_password="test-project-postgres-password",
+        project_postgres_memory_bytes=128 * 1024 * 1024,
+        project_postgres_cpu_cores=0.1,
         network_pool="10.253.240.0/24",
         denied_cidrs=("170.168.72.200/32",),
         cpu_cores=1.0,
@@ -35,6 +39,7 @@ def backend(tmp_path, **overrides):
 
 def test_project_root_can_install_userland_but_cannot_control_network_or_host(tmp_path):
     runtime = backend(tmp_path)
+    runtime._metadata = lambda: {"proxy_ip": "10.0.0.2"}
     options = runtime.container_options(MachineManifest.model_validate(payload()), "guard-id", 7)
     assert options["network_mode"] == "container:guard-id"
     assert options["cap_drop"] == ["ALL"]
@@ -45,7 +50,12 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
     assert not options["ports"]
     assert options["memswap_limit"] == options["mem_limit"]
     assert "AUTH_SECRET" not in options["environment"]
-    assert "DATABASE_URL" not in options["environment"]
+    assert (
+        options["environment"]["DATABASE_URL"]
+        == "postgresql://postgres:test-project-postgres-password@127.0.0.1:5432/app"
+    )
+    assert options["environment"]["PGHOST"] == "127.0.0.1"
+    assert options["environment"]["PGPASSWORD"] == "test-project-postgres-password"
     assert options["volumes"]["test-source"]["bind"] == "/workspace"
     assert not any(name.startswith("/") for name in options["volumes"])
 
@@ -127,6 +137,65 @@ def test_shared_volume_at_two_destinations_never_silently_drops_a_mount(tmp_path
         runtime.container_options(MachineManifest.model_validate(value), "guard-id", 7)
 
 
+def test_environment_snapshot_contract_includes_dedicated_project_postgres_volume(tmp_path):
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    assert runtime.environment_volume_names(manifest) == (
+        "test-source",
+        f"{runtime.stem}-home",
+        runtime.project_postgres_volume,
+    )
+
+
+def test_project_postgres_shares_guard_namespace_without_host_or_core_access(tmp_path):
+    runtime = backend(tmp_path)
+    options = runtime._project_postgres_options("guard-id", 7)
+    assert options["network_mode"] == "container:guard-id"
+    assert options["command"] == ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    assert options["cap_drop"] == ["ALL"]
+    assert options["cap_add"] == []
+    assert options["privileged"] is False
+    assert options["read_only"] is True
+    assert options["ports"] == {}
+    assert options["mem_limit"] == options["memswap_limit"]
+    assert set(options["volumes"]) == {runtime.project_postgres_volume}
+    assert options["environment"] == {
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "test-project-postgres-password",
+        "POSTGRES_DB": "app",
+    }
+
+
+def test_restore_reference_allows_legacy_machine_artifact_without_project_postgres_volume(tmp_path):
+    from omnia_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
+
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    legacy = MachineEnvironmentRef(
+        workspace_id=runtime.workspace_id,
+        image_id="sha256:" + "d" * 64,
+        artifact_ref="a" * 32 + ".tar",
+        sha256="b" * 64,
+        size=1,
+        base_image=runtime.base_image,
+        manifest_digest=manifest.digest(),
+        manifest=manifest,
+        volumes=tuple(
+            VolumeEnvironmentRef(
+                name=name,
+                artifact_ref=f"{index:032x}.tar",
+                sha256="c" * 64,
+                size=1,
+            )
+            for index, name in enumerate(runtime.volume_mapping(manifest), start=1)
+        ),
+    )
+    runtime.validate_restore_reference(legacy)
+
+
 def test_tmpfs_command_logs_use_bounded_exec_read_not_docker_archive(tmp_path):
     from types import SimpleNamespace
 
@@ -173,12 +242,15 @@ def test_restore_removes_old_rootfs_and_only_activates_complete_target(tmp_path)
         {"manifest": manifest.model_dump(mode="json"), "environment_ref": {"previous": True}},
     )
     removed = []
+    resets = []
     runtime._container = lambda: SimpleNamespace()
     runtime._checkpoint_for_recreate = lambda value: None
     runtime.client = SimpleNamespace(containers=SimpleNamespace(list=lambda **kwargs: []))
     runtime.remove = lambda **kwargs: removed.append(True)
+    runtime._reset_project_postgres_volume = lambda: resets.append(True)
     runtime.begin_restore(target)
     assert removed == [True]
+    assert resets == [True]
     assert runtime._metadata()["rollback_ref"] == {"previous": True}
     with pytest.raises(Exception, match="incomplete"):
         runtime.ensure(manifest, 7)
@@ -189,6 +261,61 @@ def test_restore_removes_old_rootfs_and_only_activates_complete_target(tmp_path)
     assert runtime._metadata()["environment_ref"] == target.model_dump(mode="json")
     assert runtime._metadata()["restored_image"] == target.image_id
     assert not runtime._metadata()["restore_in_progress"]
+
+
+def test_remove_fences_project_postgres_sidecar_too(tmp_path):
+    runtime = backend(tmp_path)
+
+    class Container:
+        def __init__(self, key):
+            self.key = key
+            self.labels = {"omnia.fencing_epoch": "7"}
+
+        def remove(self, force=True):
+            alive[self.key] = False
+
+        def reload(self):
+            pass
+
+    alive = {"machine": True, "postgres": True}
+    runtime._container = lambda: Container("machine") if alive["machine"] else None
+    runtime._project_postgres = lambda: Container("postgres") if alive["postgres"] else None
+    runtime.remove(expected_epoch=7)
+    assert alive == {"machine": False, "postgres": False}
+
+
+def test_remove_does_not_partially_delete_when_sidecar_epoch_differs(tmp_path):
+    runtime = backend(tmp_path)
+
+    class Container:
+        def __init__(self, key, epoch):
+            self.key = key
+            self.labels = {"omnia.fencing_epoch": str(epoch)}
+
+        def remove(self, force=True):
+            alive[self.key] = False
+
+    alive = {"machine": True, "postgres": True}
+    machine = Container("machine", 7)
+    postgres = Container("postgres", 8)
+    runtime._container = lambda: machine if alive["machine"] else None
+    runtime._project_postgres = lambda: postgres if alive["postgres"] else None
+    runtime.remove(expected_epoch=7)
+    assert alive == {"machine": True, "postgres": True}
+
+
+def test_is_running_reports_live_project_postgres_even_without_machine_process(tmp_path):
+    runtime = backend(tmp_path)
+
+    class Container:
+        status = "running"
+
+        def reload(self):
+            pass
+
+    runtime._container = lambda: None
+    runtime._project_postgres = lambda: Container()
+    assert runtime.is_running() is True
 
 
 def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path):

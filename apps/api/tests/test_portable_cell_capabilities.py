@@ -43,6 +43,9 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
     assert "Next.js" in guide and "Node.js 22" in guide and "pnpm" in guide
     assert "any language, framework" not in guide
     assert "src/app/page.tsx" in guide
+    assert "DATABASE_URL" in guide
+    assert "dedicated project PostgreSQL" in guide
+    assert "isolated from the managed MAX core" in guide
     assert "Do NOT call or retry probe/verify_isolation" in prompt
 
 

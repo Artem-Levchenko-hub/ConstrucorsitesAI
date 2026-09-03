@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import secrets
 import tempfile
 import time
 import urllib.request
@@ -88,6 +89,10 @@ async def run(args):
                 workspace_volume=volume.name,
                 base_image=args.base_image,
                 guard_image=args.guard_image,
+                postgres_image=args.postgres_image,
+                project_postgres_password=secrets.token_urlsafe(32),
+                project_postgres_memory_bytes=128 * 1024**2,
+                project_postgres_cpu_cores=0.1,
                 network_pool=args.pool,
                 denied_cidrs=tuple(args.deny),
                 cpu_cores=0.75,
@@ -221,7 +226,7 @@ async def run(args):
                 environments.capture,
                 manifest_digest=manifest.digest(),
                 base_image=args.base_image,
-                volumes=tuple(backend.volume_mapping(manifest)),
+                volumes=backend.environment_volume_names(manifest),
                 manifest=manifest,
             )
             backend.remove()
@@ -263,6 +268,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-image", required=True)
     parser.add_argument("--guard-image", required=True)
+    parser.add_argument("--postgres-image", required=True)
     parser.add_argument("--pool", required=True)
     parser.add_argument("--deny", action="append", required=True)
     parser.add_argument("--smoke", action="store_true")

@@ -35,6 +35,11 @@ from omnia_orchestrator.services.project_machine import (
 )
 
 _PIN = re.compile(r"^(?:sha256:|[^\s@]+@sha256:)[0-9a-f]{64}$")
+_PROJECT_POSTGRES_HOST = "127.0.0.1"
+_PROJECT_POSTGRES_PORT = 5432
+_PROJECT_POSTGRES_DB = "app"
+_PROJECT_POSTGRES_USER = "postgres"
+_PROJECT_POSTGRES_DATA = "/var/lib/postgresql/data"
 _USERLAND_CAPS = [
     "CHOWN",
     "DAC_OVERRIDE",
@@ -107,6 +112,10 @@ class DockerMachineBackend:
     workspace_volume: str
     base_image: str
     guard_image: str
+    postgres_image: str
+    project_postgres_password: str
+    project_postgres_memory_bytes: int
+    project_postgres_cpu_cores: float
     network_pool: str
     denied_cidrs: tuple[str, ...]
     cpu_cores: float
@@ -116,10 +125,18 @@ class DockerMachineBackend:
     namespace: str = "prod"
 
     def __post_init__(self) -> None:
-        if not _PIN.fullmatch(self.base_image) or not _PIN.fullmatch(self.guard_image):
-            raise ValueError("machine and guard images must be digest pinned")
+        if (
+            not _PIN.fullmatch(self.base_image)
+            or not _PIN.fullmatch(self.guard_image)
+            or not _PIN.fullmatch(self.postgres_image)
+        ):
+            raise ValueError("machine, guard and postgres images must be digest pinned")
         if not self.denied_cidrs:
             raise ValueError("machine public host/platform destination denies are required")
+        if not self.project_postgres_password:
+            raise ValueError("project postgres password is required")
+        if self.project_postgres_memory_bytes <= 0 or self.project_postgres_cpu_cores <= 0:
+            raise ValueError("project postgres resource limits must be positive")
         for cidr in self.denied_cidrs:
             ipaddress.ip_network(cidr)
         choose_subnet(self.network_pool, [], str(self.workspace_id))
@@ -132,6 +149,14 @@ class DockerMachineBackend:
     @property
     def machine_name(self) -> str:
         return self.stem + "-dev"
+
+    @property
+    def project_postgres_name(self) -> str:
+        return self.stem + "-project-postgres"
+
+    @property
+    def project_postgres_volume(self) -> str:
+        return self.stem + "-app-postgres-data"
 
     @property
     def metadata_path(self) -> Path:
@@ -170,6 +195,9 @@ class DockerMachineBackend:
     def _container(self) -> Any | None:
         return self._lookup(self.client.containers, self.machine_name, "development")
 
+    def _project_postgres(self) -> Any | None:
+        return self._lookup(self.client.containers, self.project_postgres_name, "project-postgres")
+
     def _network(self, name: str, *, internal: bool) -> Any:
         found = self._lookup(self.client.networks, name, "public-egress")
         if found is not None:
@@ -204,6 +232,42 @@ class DockerMachineBackend:
                     raise ValueError("one volume cannot use multiple guest targets in one machine")
                 volumes[name] = {"bind": mount.target, "mode": "rw"}
         return volumes
+
+    def environment_volume_names(self, manifest: MachineManifest) -> tuple[str, ...]:
+        return (*self.volume_mapping(manifest), self.project_postgres_volume)
+
+    def snapshot_volume_names(self, manifest: MachineManifest) -> tuple[str, ...]:
+        # A machine created before dedicated PostgreSQL has no database volume.
+        # Keep its last snapshot restorable; every post-upgrade ensure creates
+        # the volume, so subsequent captures include it.
+        if (
+            self._lookup(self.client.volumes, self.project_postgres_volume, "project-volume")
+            is None
+        ):
+            return tuple(self.volume_mapping(manifest))
+        return self.environment_volume_names(manifest)
+
+    def project_database_env(self) -> dict[str, str]:
+        database_url = (
+            "postgresql://"
+            + _PROJECT_POSTGRES_USER
+            + ":"
+            + self.project_postgres_password
+            + "@"
+            + _PROJECT_POSTGRES_HOST
+            + ":"
+            + str(_PROJECT_POSTGRES_PORT)
+            + "/"
+            + _PROJECT_POSTGRES_DB
+        )
+        return {
+            "DATABASE_URL": database_url,
+            "PGHOST": _PROJECT_POSTGRES_HOST,
+            "PGPORT": str(_PROJECT_POSTGRES_PORT),
+            "PGUSER": _PROJECT_POSTGRES_USER,
+            "PGPASSWORD": self.project_postgres_password,
+            "PGDATABASE": _PROJECT_POSTGRES_DB,
+        }
 
     def container_options(
         self, manifest: MachineManifest, namespace_id: str, epoch: int
@@ -260,6 +324,7 @@ class DockerMachineBackend:
                 "https_proxy": f"http://{proxy_ip}:3128",
                 "NO_PROXY": "127.0.0.1,localhost",
                 "no_proxy": "127.0.0.1,localhost",
+                **self.project_database_env(),
             },
             "log_config": docker.types.LogConfig(
                 type="json-file", config={"max-size": "1m", "max-file": "2"}
@@ -274,10 +339,16 @@ class DockerMachineBackend:
         # Validate resource contract before the first Docker mutation.
         self.container_options(manifest, "pending", epoch)
         existing = self._container()
+        reuse_existing = False
         if existing is not None:
             physical_epoch = int(existing.labels.get("omnia.fencing_epoch", "0"))
             if physical_epoch > epoch:
                 raise CellIdentityConflict("a newer physical machine already exists")
+            project_postgres = self._project_postgres()
+            if project_postgres is not None and project_postgres.labels.get(
+                "omnia.fencing_epoch"
+            ) != str(physical_epoch):
+                raise CellIdentityConflict("machine and project postgres epochs differ")
             metadata = self._metadata()
             previous_manifest = MachineManifest.model_validate(metadata["manifest"])
             if physical_epoch != epoch or previous_manifest.digest() != manifest.digest():
@@ -289,7 +360,7 @@ class DockerMachineBackend:
                     metadata["quiesce_state"] = None
                     write_controller_json(self.metadata_path, metadata)
                     existing.start()
-                return
+                reuse_existing = True
         internal = self.client.networks.get(self.internal_network)
         if not internal.attrs.get("Internal"):
             raise CellIdentityConflict("project data network must stay internal")
@@ -372,6 +443,10 @@ class DockerMachineBackend:
             raise CellResourceError("namespace guard readiness is unverified")
         if guard.labels.get("omnia.policy_digest") != policy.digest():
             raise CellIdentityConflict("namespace guard policy changed")
+        for name in self.volume_mapping(manifest):
+            if name != self.workspace_volume:
+                self._volume(name)
+        self._ensure_project_postgres(guard.id, epoch)
         metadata = self._metadata()
         metadata.update(
             proxy_ip=proxy_ip,
@@ -383,15 +458,188 @@ class DockerMachineBackend:
             quiesce_state=None,
         )
         write_controller_json(self.metadata_path, metadata)
-        for name in self.volume_mapping(manifest):
-            if name != self.workspace_volume:
-                self._volume(name)
+        if reuse_existing:
+            return
         image = metadata.get("restored_image", self.base_image)
         machine = self.client.containers.create(
             image,
             **self.container_options(manifest, guard.id, epoch),
         )
         machine.start()
+
+    def _project_postgres_options(self, namespace_id: str, epoch: int) -> dict[str, Any]:
+        return {
+            "name": self.project_postgres_name,
+            "detach": True,
+            "labels": {
+                **self.labels("project-postgres"),
+                "omnia.fencing_epoch": str(epoch),
+                "omnia.image_ref": self.postgres_image,
+            },
+            "command": ["postgres", "-c", f"listen_addresses={_PROJECT_POSTGRES_HOST}"],
+            "network_mode": "container:" + namespace_id,
+            "user": _PROJECT_POSTGRES_USER,
+            "cap_drop": ["ALL"],
+            "cap_add": [],
+            "privileged": False,
+            "security_opt": ["no-new-privileges:true"],
+            "ports": {},
+            "read_only": True,
+            "mem_limit": self.project_postgres_memory_bytes,
+            "memswap_limit": self.project_postgres_memory_bytes,
+            "nano_cpus": int(self.project_postgres_cpu_cores * 1_000_000_000),
+            "pids_limit": 128,
+            "volumes": {
+                self.project_postgres_volume: {
+                    "bind": _PROJECT_POSTGRES_DATA,
+                    "mode": "rw",
+                }
+            },
+            "tmpfs": {
+                "/tmp": "rw,nosuid,nodev,size=32m",
+                "/var/run/postgresql": "rw,nosuid,nodev,size=8m",
+            },
+            "environment": {
+                "POSTGRES_USER": _PROJECT_POSTGRES_USER,
+                "POSTGRES_PASSWORD": self.project_postgres_password,
+                "POSTGRES_DB": _PROJECT_POSTGRES_DB,
+            },
+            "log_config": docker.types.LogConfig(
+                type="json-file", config={"max-size": "1m", "max-file": "2"}
+            ),
+        }
+
+    def _prepare_project_postgres_volume(self) -> None:
+        self._volume(self.project_postgres_volume)
+        self._ensure_project_postgres_permissions()
+
+    def _ensure_project_postgres_permissions(self) -> None:
+        helper_name = self.stem + "-project-postgres-prepare"
+        helper = self._lookup(self.client.containers, helper_name, "project-postgres-prepare")
+        if helper is not None:
+            helper.remove(force=True)
+        helper = self.client.containers.create(
+            self.postgres_image,
+            [
+                "sh",
+                "-lc",
+                f"mkdir -p {_PROJECT_POSTGRES_DATA} "
+                f"&& chown -R postgres:postgres {_PROJECT_POSTGRES_DATA}",
+            ],
+            name=helper_name,
+            labels=self.labels("project-postgres-prepare"),
+            detach=True,
+            network_mode="none",
+            user="0:0",
+            cap_drop=["ALL"],
+            cap_add=["CHOWN", "DAC_OVERRIDE", "FOWNER"],
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            read_only=True,
+            volumes={
+                self.project_postgres_volume: {
+                    "bind": _PROJECT_POSTGRES_DATA,
+                    "mode": "rw",
+                }
+            },
+            tmpfs={"/tmp": "rw,nosuid,nodev,size=8m"},
+            mem_limit=32 * 1024**2,
+            memswap_limit=32 * 1024**2,
+            nano_cpus=50_000_000,
+            pids_limit=32,
+            log_config=docker.types.LogConfig(
+                type="json-file", config={"max-size": "256k", "max-file": "1"}
+            ),
+        )
+        try:
+            helper.start()
+            outcome = helper.wait(timeout=machine_remaining_seconds(30))
+            if outcome.get("StatusCode") != 0:
+                raise CellResourceError("project postgres volume ownership setup failed")
+        finally:
+            if (
+                self._lookup(
+                    self.client.containers, helper_name, "project-postgres-prepare"
+                )
+                is not None
+            ):
+                helper.remove(force=True)
+
+    def _ensure_project_postgres(self, namespace_id: str, epoch: int) -> None:
+        postgres = self._project_postgres()
+        if postgres is not None:
+            physical_epoch = int(postgres.labels.get("omnia.fencing_epoch", "0"))
+            if physical_epoch > epoch:
+                raise CellIdentityConflict("a newer project postgres already exists")
+            if physical_epoch != epoch or not self._project_postgres_matches(
+                postgres, namespace_id, epoch
+            ):
+                postgres.remove(force=True)
+                postgres = None
+        if postgres is None:
+            self._prepare_project_postgres_volume()
+            postgres = self.client.containers.create(
+                self.postgres_image,
+                **self._project_postgres_options(namespace_id, epoch),
+            )
+        postgres.reload()
+        if postgres.status != "running":
+            postgres.start()
+        self._wait_project_postgres_ready(postgres)
+
+    def _project_postgres_matches(self, postgres: Any, namespace_id: str, epoch: int) -> bool:
+        postgres.reload()
+        attrs = postgres.attrs
+        labels = attrs.get("Config", {}).get("Labels") or postgres.labels
+        host = attrs.get("HostConfig", {})
+        mounts = attrs.get("Mounts") or []
+        volume_matches = any(
+            item.get("Name") == self.project_postgres_volume
+            and item.get("Destination") == _PROJECT_POSTGRES_DATA
+            and item.get("RW") is True
+            for item in mounts
+        )
+        return bool(
+            labels.get("omnia.fencing_epoch") == str(epoch)
+            and labels.get("omnia.image_ref") == self.postgres_image
+            and host.get("NetworkMode") == "container:" + namespace_id
+            and host.get("Privileged") is False
+            and host.get("ReadonlyRootfs") is True
+            and not (host.get("CapAdd") or [])
+            and "ALL" in (host.get("CapDrop") or [])
+            and not (host.get("PortBindings") or {})
+            and host.get("Memory") == self.project_postgres_memory_bytes
+            and host.get("MemorySwap") == self.project_postgres_memory_bytes
+            and host.get("NanoCpus")
+            == int(self.project_postgres_cpu_cores * 1_000_000_000)
+            and host.get("PidsLimit") == 128
+            and volume_matches
+        )
+
+    def _wait_project_postgres_ready(self, postgres: Any) -> None:
+        deadline = time.monotonic() + machine_remaining_seconds(60)
+        while time.monotonic() < deadline:
+            postgres.reload()
+            if postgres.status != "running":
+                raise CellResourceError("project postgres stopped during startup")
+            result = postgres.exec_run(
+                [
+                    "pg_isready",
+                    "-h",
+                    _PROJECT_POSTGRES_HOST,
+                    "-U",
+                    _PROJECT_POSTGRES_USER,
+                    "-d",
+                    _PROJECT_POSTGRES_DB,
+                ],
+                environment={"PGPASSWORD": self.project_postgres_password},
+                user=_PROJECT_POSTGRES_USER,
+            )
+            if result.exit_code == 0:
+                return
+            time.sleep(max(0, min(0.2, deadline - time.monotonic())))
+        machine_remaining_seconds(60)
+        raise CellResourceError("project postgres readiness is unverified")
 
     def _wait_proxy_ready(self, proxy: Any, address: str) -> None:
         deadline = time.monotonic() + machine_remaining_seconds(30)
@@ -418,7 +666,7 @@ class DockerMachineBackend:
         reference = store.capture(
             manifest_digest=manifest.digest(),
             base_image=self.base_image,
-            volumes=tuple(self.volume_mapping(manifest)),
+            volumes=self.snapshot_volume_names(manifest),
             manifest=manifest,
         )
         metadata = self._metadata()
@@ -574,24 +822,36 @@ class DockerMachineBackend:
         machine = self._container()
         if machine is not None:
             machine.stop(timeout=10)
+        project_postgres = self._project_postgres()
+        if project_postgres is not None:
+            project_postgres.stop(timeout=10)
 
     def remove(self, expected_epoch: int | None = None) -> None:
         machine = self._container()
-        if machine is not None:
-            if expected_epoch is not None and machine.labels.get("omnia.fencing_epoch") != str(
-                expected_epoch
-            ):
-                return
-            machine.remove(force=True)
-        if self._container() is not None:
+        project_postgres = self._project_postgres()
+        resources = tuple(item for item in (machine, project_postgres) if item is not None)
+        if expected_epoch is not None and any(
+            item.labels.get("omnia.fencing_epoch") != str(expected_epoch) for item in resources
+        ):
+            return
+        for item in resources:
+            item.remove(force=True)
+        if machine is not None and self._container() is not None:
             raise CellResourceError("machine removal was not confirmed")
+        if project_postgres is not None and self._project_postgres() is not None:
+            raise CellResourceError("project postgres removal was not confirmed")
 
     def is_running(self) -> bool:
         machine = self._container()
-        if machine is None:
+        if machine is not None:
+            machine.reload()
+            if machine.status == "running":
+                return True
+        project_postgres = self._project_postgres()
+        if project_postgres is None:
             return False
-        machine.reload()
-        return machine.status == "running"
+        project_postgres.reload()
+        return project_postgres.status == "running"
 
     def export_image(self):
         machine = self._container()
@@ -699,7 +959,12 @@ class DockerMachineBackend:
         for helper in self.client.containers.list(all=True, filters={"label": selector}):
             labels = helper.attrs.get("Config", {}).get("Labels") or {}
             kind = labels.get("omnia.resource_kind")
-            if kind not in {"restore-check", "archive"}:
+            if kind not in {
+                "restore-check",
+                "archive",
+                "project-postgres-prepare",
+                "project-postgres-restore",
+            }:
                 continue
             if any(labels.get(key) != value for key, value in self.labels(kind).items()):
                 raise CellIdentityConflict("recovery helper identity mismatch")
@@ -712,6 +977,75 @@ class DockerMachineBackend:
 
     def validate_restore(self, reference) -> None:
         self._reconcile_recovery_helpers()
+        self._prepare_project_postgres_volume()
+        helper_name = self.stem + "-project-postgres-restore-check"
+        helper = self._lookup(self.client.containers, helper_name, "project-postgres-restore")
+        if helper is not None:
+            helper.remove(force=True)
+        helper = self.client.containers.create(
+            self.postgres_image,
+            ["postgres", "-c", f"listen_addresses={_PROJECT_POSTGRES_HOST}"],
+            name=helper_name,
+            labels=self.labels("project-postgres-restore"),
+            detach=True,
+            network_mode="none",
+            user=_PROJECT_POSTGRES_USER,
+            cap_drop=["ALL"],
+            privileged=False,
+            security_opt=["no-new-privileges:true"],
+            read_only=True,
+            mem_limit=self.project_postgres_memory_bytes,
+            memswap_limit=self.project_postgres_memory_bytes,
+            nano_cpus=int(self.project_postgres_cpu_cores * 1_000_000_000),
+            pids_limit=128,
+            volumes={
+                self.project_postgres_volume: {
+                    "bind": _PROJECT_POSTGRES_DATA,
+                    "mode": "rw",
+                }
+            },
+            tmpfs={
+                "/tmp": "size=32m",
+                "/var/run/postgresql": "size=8m",
+            },
+            environment={
+                "POSTGRES_USER": _PROJECT_POSTGRES_USER,
+                "POSTGRES_PASSWORD": self.project_postgres_password,
+                "POSTGRES_DB": _PROJECT_POSTGRES_DB,
+            },
+            log_config=docker.types.LogConfig(
+                type="json-file", config={"max-size": "1m", "max-file": "1"}
+            ),
+        )
+        try:
+            helper.start()
+            self._wait_project_postgres_ready(helper)
+            smoke = helper.exec_run(
+                [
+                    "psql",
+                    "-h",
+                    _PROJECT_POSTGRES_HOST,
+                    "-U",
+                    _PROJECT_POSTGRES_USER,
+                    "-d",
+                    _PROJECT_POSTGRES_DB,
+                    "-Atc",
+                    "select 1",
+                ],
+                environment={"PGPASSWORD": self.project_postgres_password},
+                user=_PROJECT_POSTGRES_USER,
+            )
+            output = smoke.output if isinstance(smoke.output, bytes) else str(smoke.output).encode()
+            if smoke.exit_code != 0 or output.strip() != b"1":
+                raise CellResourceError("project postgres restore smoke failed")
+        finally:
+            if (
+                self._lookup(
+                    self.client.containers, helper_name, "project-postgres-restore"
+                )
+                is not None
+            ):
+                helper.remove(force=True)
         manifest = reference.manifest
         if manifest is None:
             # Older environment artifacts had no declared data-store checks.
@@ -775,13 +1109,16 @@ class DockerMachineBackend:
     def validate_restore_reference(self, reference) -> None:
         if reference.workspace_id != self.workspace_id or reference.base_image != self.base_image:
             raise CellIdentityConflict("environment restore identity mismatch")
-        if reference.manifest is not None and set(
-            volume.name for volume in reference.volumes
-        ) != set(self.volume_mapping(reference.manifest)):
-            raise CellIdentityConflict("environment volume set differs from captured manifest")
+        if reference.manifest is not None:
+            actual = {volume.name for volume in reference.volumes}
+            current = set(self.environment_volume_names(reference.manifest))
+            legacy = set(self.volume_mapping(reference.manifest))
+            if actual not in (current, legacy):
+                raise CellIdentityConflict("environment volume set differs from captured manifest")
         allowed_prefix = self.stem + "-data-"
         if any(
-            volume.name not in (self.workspace_volume, self.stem + "-home")
+            volume.name
+            not in (self.workspace_volume, self.stem + "-home", self.project_postgres_volume)
             and not re.fullmatch(re.escape(allowed_prefix) + r"[a-z][a-z0-9_-]{0,62}", volume.name)
             for volume in reference.volumes
         ):
@@ -808,6 +1145,23 @@ class DockerMachineBackend:
         metadata.pop("pending_image", None)
         write_controller_json(self.metadata_path, metadata)
         self.remove()
+        if self.project_postgres_volume not in {item.name for item in reference.volumes}:
+            self._reset_project_postgres_volume()
+
+    def _reset_project_postgres_volume(self) -> None:
+        volume = self._lookup(
+            self.client.volumes, self.project_postgres_volume, "project-volume"
+        )
+        if volume is not None:
+            volume.remove()
+            if (
+                self._lookup(
+                    self.client.volumes, self.project_postgres_volume, "project-volume"
+                )
+                is not None
+            ):
+                raise CellResourceError("project postgres volume removal was not confirmed")
+        self._volume(self.project_postgres_volume)
 
     def finish_restore(self) -> None:
         self._reconcile_recovery_helpers()
@@ -825,7 +1179,7 @@ class DockerMachineBackend:
     def _archive_helper(self, volume: str, *, writable: bool) -> Any:
         metadata = self._metadata()
         manifest = MachineManifest.model_validate(metadata["manifest"])
-        allowed = self.volume_mapping(manifest)
+        allowed = {name: {} for name in self.environment_volume_names(manifest)}
         if metadata.get("restore_in_progress"):
             allowed = {item["name"]: {} for item in metadata["restore_target"]["volumes"]}
         if volume not in allowed:

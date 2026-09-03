@@ -32,6 +32,10 @@ from omnia_orchestrator.services.project_machine import (
 
 MACHINE_APPLY_TIMEOUT_SECONDS = 900
 MACHINE_APPLY_CLEANUP_RESERVE_SECONDS = 30
+_PROJECT_POSTGRES_MIN_MEMORY_BYTES = 128 * 1024**2
+_PROJECT_POSTGRES_TARGET_MEMORY_BYTES = 256 * 1024**2
+_PROJECT_POSTGRES_MIN_CPU_CORES = 0.1
+_PROJECT_POSTGRES_TARGET_CPU_CORES = 0.15
 
 
 class MachineAdapter:
@@ -50,6 +54,9 @@ class MachineAdapter:
             "public_package_egress": True,
             "persistent_environment": True,
             "managed_max_boundary": True,
+            "dedicated_postgres": True,
+            "database_url_env": "DATABASE_URL",
+            "database_admin": "full",
             "commands": ["bash", "build", "runtime_check"],
             "task_roles": ["bootstrap", "build", "test"],
             "framework": "nextjs",
@@ -65,16 +72,19 @@ class MachineAdapter:
         if (
             not _PIN.fullmatch(self.settings.cell_machine_base_image)
             or not _PIN.fullmatch(self.settings.cell_machine_guard_image)
+            or not _PIN.fullmatch(self.manager.profile.postgres_image)
             or not self.settings.cell_machine_denied_cidrs
             or not self.settings.cell_network_pool
         ):
             raise CellResourceError(
-                "portable machine images, public host denies and pool are required"
+                "portable machine base/guard/postgres images, public host denies "
+                "and pool are required"
             )
         client = self.manager.docker._client_obj()
         for image in (
             self.settings.cell_machine_base_image,
             self.settings.cell_machine_guard_image,
+            self.manager.profile.postgres_image,
         ):
             client.images.get(image)
 
@@ -106,6 +116,10 @@ class MachineAdapter:
             workspace_volume=names.workspace_volume,
             base_image=self.settings.cell_machine_base_image,
             guard_image=self.settings.cell_machine_guard_image,
+            postgres_image=profile.postgres_image,
+            project_postgres_password=self.project_database_password(state.workspace_id),
+            project_postgres_memory_bytes=self._project_postgres_memory_bytes(),
+            project_postgres_cpu_cores=self._project_postgres_cpu_cores(),
             network_pool=self.settings.cell_network_pool,
             denied_cidrs=tuple(self.settings.cell_machine_denied_cidrs),
             # Proxy64 + guard32 + gateway32 MiB and .2 CPU stay inside the
@@ -134,6 +148,35 @@ class MachineAdapter:
             )
             .postgres_password
         )
+
+    def project_database_password(self, workspace_id: UUID) -> str:
+        return (
+            CellCredentialStore(self.root / "project-postgres-secrets")
+            .load_or_create(workspace_id)
+            .postgres_password
+        )
+
+    def _project_postgres_memory_bytes(self) -> int:
+        draft = self.manager.profile.draft_memory_bytes
+        reserve = max(_PROJECT_POSTGRES_MIN_MEMORY_BYTES, draft // 4)
+        return min(_PROJECT_POSTGRES_TARGET_MEMORY_BYTES, reserve)
+
+    def _project_postgres_cpu_cores(self) -> float:
+        draft = self.manager.profile.draft_cpu_cores
+        reserve = max(_PROJECT_POSTGRES_MIN_CPU_CORES, draft / 3)
+        return min(_PROJECT_POSTGRES_TARGET_CPU_CORES, reserve)
+
+    def _max_core_memory_bytes(self) -> int:
+        remaining = self.manager.profile.draft_memory_bytes - self._project_postgres_memory_bytes()
+        if remaining <= 0:
+            raise CellResourceError("draft memory cannot fit managed core and project postgres")
+        return remaining
+
+    def _max_core_cpu_cores(self) -> float:
+        remaining = self.manager.profile.draft_cpu_cores - self._project_postgres_cpu_cores()
+        if remaining <= 0:
+            raise CellResourceError("draft CPU cannot fit managed core and project postgres")
+        return remaining
 
     async def execute(
         self, state: Any, manifest: MachineManifest, request: Any
@@ -233,7 +276,7 @@ class MachineAdapter:
             store.capture,
             manifest_digest=manifest.digest(),
             base_image=backend.base_image,
-            volumes=tuple(backend.volume_mapping(manifest)),
+            volumes=backend.snapshot_volume_names(manifest),
             manifest=manifest,
         )
         metadata = backend._metadata()
@@ -380,10 +423,6 @@ class MachineAdapter:
                 security_opt=["no-new-privileges:true"],
                 user="node",
                 working_dir="/app",
-                mem_limit=self.manager.profile.draft_memory_bytes,
-                memswap_limit=self.manager.profile.draft_memory_bytes,
-                nano_cpus=int(self.manager.profile.draft_cpu_cores * 1_000_000_000),
-                pids_limit=256,
                 environment={
                     "NODE_ENV": "development",
                     "AUTH_SECRET": secret,
@@ -392,6 +431,10 @@ class MachineAdapter:
                     f"@{names.postgres_container}:5432/postgres",
                     "REDIS_URL": f"redis://{names.redis_container}:6379/0",
                 },
+                mem_limit=self._max_core_memory_bytes(),
+                memswap_limit=self._max_core_memory_bytes(),
+                nano_cpus=int(self._max_core_cpu_cores() * 1_000_000_000),
+                pids_limit=256,
             )
             # Only the immutable managed core can call its fixed platform API.
             # Generated project code still has the namespace DROP guard.

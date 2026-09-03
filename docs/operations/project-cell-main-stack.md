@@ -28,6 +28,10 @@ product or a fixed package list. No model generation is part of deployment proof
 - The pristine MAX core owns managed PostgreSQL credentials and signing secrets.
   The gateway owns reserved `/api/omnia`, `/api/max`, `/auth`, `/__omnia` routes.
   Product servers receive trusted user/project/epoch headers, not signing keys.
+  The portable machine separately receives `DATABASE_URL` plus matching `PG*`
+  variables for a dedicated project PostgreSQL sidecar with its own volume.
+  That instance is isolated from the managed MAX core and is fully
+  admin-controlled by the agent inside the project machine.
 - Shell/build attempts invalidate preview and completion proofs even without
   source changes and even on failures. Fresh completion checks require the actual
   product root, signed MAX bootstrap/session, protected data, negative auth and
@@ -86,8 +90,8 @@ networks or change daemon address pools. The public host IP is upstream NAT and
 is not discoverable from host interfaces; explicitly deny every relevant public
 platform IP in trusted configuration, including future addresses.
 
-API/worker require the changed code but no new machine environment forwarding:
-capabilities come from the orchestrator. Preserve existing `PROJECT_CELL_*`,
+API/worker require the changed code; capabilities and the dedicated project
+PostgreSQL runtime environment come from the orchestrator. Preserve existing `PROJECT_CELL_*`,
 `WORKSPACE_PROVIDER=docker_owner_canary`, `DOCKER_OWNER_CANARY_ENABLED=true`,
 owner allowlists and pinned PG/Redis/backup settings. Rebuild/restart API/worker
 using canonical production compose, restart the orchestrator, verify status,
@@ -96,7 +100,9 @@ IDs. Do not claim delivery until that loop is complete.
 
 Default resource profile remains unchanged: bundle memory4GiB / CPU2, executor
 1GiB / .5CPU. Proxy/guard/gateway reserve128MiB / .2CPU inside that slice, leaving
-896MiB / .3CPU for the machine; the core uses the already-accounted draft slice.
+896MiB / .3CPU for the machine. The dedicated project PostgreSQL sidecar uses
+256MiB / .15CPU from the draft slice by default, leaving the managed core the
+remainder of that already-accounted draft budget.
 PNPM9 tarball workers are reduced to one, lifecycle concurrency1, network4,
 Node heap at most512MiB (lower for small budgets), Next build workers1. These are
 practical defaults, not package restrictions; aggregate cgroup limits still apply.
@@ -105,11 +111,13 @@ practical defaults, not package restrictions; aggregate cgroup limits still appl
 
 Environment snapshots are private immutable sanitized rootfs images plus named
 volume archives with workspace/base/manifest identity, sizes and SHA256 hashes.
-All nested artifacts are validated before restoring source/home/PostgreSQL.
+All nested artifacts are validated before restoring source/home/dedicated project PostgreSQL.
 Source checkpoints seal the matching environment reference. No log/tmpfs/secrets
 enter the captured image config. Restoration is durably fenced until imports and
-declared recovery checks succeed. Owned restore/archive helpers are discovered,
-identity-checked and confirmed dead before pause, imports and activation.
+declared recovery checks succeed. Dedicated PostgreSQL restore also boots a
+temporary local-only Postgres process against the restored volume and requires a
+controller-side `select 1` smoke before activation. Owned restore/archive helpers
+are discovered, identity-checked and confirmed dead before pause, imports and activation.
 
 Declared datastore quiesce failure/pending state cannot be bypassed by retrying a
 stopped container. Pause retains that stopped rootfs but does not certify it as a
@@ -126,8 +134,10 @@ remains fenced/degraded. No automatic merge or salvage is claimed.
 - Gateway strips product `Set-Cookie`, incoming product Cookie/Authorization,
   spoofed identity/forwarded headers and Upgrade. Arbitrary app-cookie auth and
   WebSockets/HMR are not supported; default Next serves a production build.
-- The existing managed PostgreSQL API foundation is preserved, not expanded into
-  arbitrary product DB grants, payments, booking/roles or new provider actions.
+- The existing managed PostgreSQL API foundation is preserved. Product code gets
+  its own dedicated PostgreSQL, not broader grants into the managed platform DB.
+  Payments, booking/roles or new provider actions still require their separate
+  product/platform work; this change only isolates and delegates the project DB.
   Public product publication remains rejected separately (409); it is not part
   of this iteration. Real user/MAX launch and generated product behavior require
   the user's later testing; authored owner-preview tests are narrower evidence.
