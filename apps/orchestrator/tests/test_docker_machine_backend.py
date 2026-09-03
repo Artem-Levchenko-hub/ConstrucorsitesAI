@@ -1,5 +1,6 @@
 import importlib
 import importlib.util
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -198,6 +199,44 @@ def test_restore_reference_allows_legacy_machine_artifact_without_project_postgr
         ),
     )
     runtime.validate_restore_reference(legacy)
+
+
+def test_writable_restore_helper_can_traverse_private_project_postgres_volume(tmp_path):
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    created = []
+
+    class Containers:
+        def create(self, *args, **options):
+            created.append((args, options))
+            return object()
+
+    runtime.client = SimpleNamespace(containers=Containers())
+    runtime._metadata = lambda: {
+        "manifest": manifest.model_dump(mode="json"),
+        "restore_in_progress": True,
+        "restore_target": {"volumes": [{"name": runtime.project_postgres_volume}]},
+    }
+
+    runtime._archive_helper(runtime.project_postgres_volume, writable=True)
+
+    _args, options = created[0]
+    assert options["network_mode"] == "none"
+    assert options["cap_drop"] == ["ALL"]
+    assert options["cap_add"] == ["DAC_OVERRIDE"]
+    assert options["privileged"] is False
+    assert options["read_only"] is True
+    assert options["user"] == "0:0"
+    assert options["volumes"] == {
+        runtime.project_postgres_volume: {"bind": "/volume", "mode": "rw"}
+    }
+
+    runtime._archive_helper(runtime.project_postgres_volume, writable=False)
+    _args, read_options = created[1]
+    assert read_options["cap_add"] == []
+    assert read_options["volumes"] == {
+        runtime.project_postgres_volume: {"bind": "/volume", "mode": "ro"}
+    }
 
 
 def test_tmpfs_command_logs_use_bounded_exec_read_not_docker_archive(tmp_path):

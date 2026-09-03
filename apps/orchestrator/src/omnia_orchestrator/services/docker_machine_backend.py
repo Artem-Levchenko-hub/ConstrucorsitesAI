@@ -1277,6 +1277,12 @@ class DockerMachineBackend:
             labels=self.labels("archive"),
             network_mode="none",
             cap_drop=["ALL"],
+            # PostgreSQL owns PGDATA as uid 70 with mode 0700.  The restore
+            # helper is root but, after cap_drop=ALL, root cannot traverse or
+            # clear that directory.  Grant the one filesystem capability only
+            # to writable restore helpers; they remain networkless and receive
+            # exactly one controller-owned volume.
+            cap_add=["DAC_OVERRIDE"] if writable else [],
             privileged=False,
             read_only=True,
             security_opt=["no-new-privileges:true"],
