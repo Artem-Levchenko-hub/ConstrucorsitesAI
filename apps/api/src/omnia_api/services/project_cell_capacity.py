@@ -23,6 +23,7 @@ from omnia_api.services.orchestrator_client import ProjectCellOrchestratorClient
 from omnia_api.services.project_cell_lifecycle import (
     ProjectCellOperationOutcome,
     execute_cell_operation,
+    replay_indeterminate_cell_operation,
 )
 from omnia_api.services.project_cells import ACTIVE_OPERATION_STATUSES, reserve_cell_operation
 
@@ -209,18 +210,38 @@ async def release_one_stale_generation_lease(
             await session.rollback()
             return False
         workspace, stale_run_id = claimed
-        operation, _ = await reserve_cell_operation(
-            session,
-            workspace_id=workspace.id,
-            generation_run_id=stale_run_id,
-            kind="release",
-            idempotency_key=f"capacity:release:{workspace.id}:{stale_run_id}",
-            request={},
+        operation = await session.scalar(
+            select(ProjectCellOperation)
+            .where(
+                ProjectCellOperation.workspace_id == workspace.id,
+                ProjectCellOperation.generation_run_id == stale_run_id,
+                ProjectCellOperation.kind == "release",
+                ProjectCellOperation.status == "indeterminate",
+            )
+            .order_by(ProjectCellOperation.created_at.desc())
+            .limit(1)
         )
+        replay_indeterminate = operation is not None
+        if operation is None:
+            operation, _ = await reserve_cell_operation(
+                session,
+                workspace_id=workspace.id,
+                generation_run_id=stale_run_id,
+                kind="release",
+                idempotency_key=f"capacity:release:{workspace.id}:{stale_run_id}",
+                request={},
+            )
         workspace_id = workspace.id
         await session.commit()
 
-    outcome = await execute_cell_operation(session_factory, operation.id, client)
+    if replay_indeterminate:
+        outcome = await replay_indeterminate_cell_operation(
+            session_factory,
+            operation.id,
+            client,
+        )
+    else:
+        outcome = await execute_cell_operation(session_factory, operation.id, client)
     response = outcome.response
     if (
         outcome.status != "completed"
@@ -231,15 +252,26 @@ async def release_one_stale_generation_lease(
     ):
         return False
     async with session_factory() as session:
+        await _scheduler_lock(session)
         locked_workspace = await session.scalar(
             select(ProjectCellWorkspace)
             .where(ProjectCellWorkspace.id == workspace_id)
             .with_for_update()
         )
+        later_effect_may_be_unknown = await session.scalar(
+            select(ProjectCellOperation.id)
+            .where(
+                ProjectCellOperation.workspace_id == workspace_id,
+                ProjectCellOperation.fencing_epoch > response.fencing_epoch,
+                ProjectCellOperation.status.not_in(("failed", "cancelled")),
+            )
+            .limit(1)
+        )
         if (
             locked_workspace is None
             or locked_workspace.generation_run_id != stale_run_id
-            or locked_workspace.fencing_epoch != response.fencing_epoch
+            or locked_workspace.fencing_epoch < response.fencing_epoch
+            or later_effect_may_be_unknown is not None
         ):
             await session.rollback()
             return False

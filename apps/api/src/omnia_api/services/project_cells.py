@@ -577,6 +577,67 @@ async def claim_cell_operation_committed(
         return claimed
 
 
+async def reclaim_indeterminate_cell_operation_committed(
+    session_factory: async_sessionmaker[AsyncSession],
+    operation_id: UUID,
+) -> ClaimedCellOperation:
+    """Replay one uncertain operation with its original durable fence/envelope."""
+
+    async with session_factory() as session:
+        operation = await session.get(ProjectCellOperation, operation_id)
+        if operation is None:
+            raise ProjectCellNotFound("Project Cell operation was not found")
+
+        await _advisory_lock(session, operation.workspace_id)
+        locked_operation = await _locked_operation(session, operation_id)
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == locked_operation.workspace_id)
+            .with_for_update()
+        )
+        if workspace is None:
+            raise ProjectCellNotFound("Project Cell workspace was not found")
+        if locked_operation.status != "indeterminate":
+            raise ProjectCellStateConflict(
+                f"cannot replay operation in state {locked_operation.status!r}"
+            )
+        if locked_operation.fencing_epoch is None:
+            raise ProjectCellStateConflict("indeterminate operation has no fencing epoch")
+        if workspace.fencing_epoch < locked_operation.fencing_epoch:
+            raise ProjectCellStateConflict("workspace fence is older than operation fence")
+        active = await session.scalar(
+            select(ProjectCellOperation.id)
+            .where(
+                ProjectCellOperation.workspace_id == locked_operation.workspace_id,
+                ProjectCellOperation.id != locked_operation.id,
+                ProjectCellOperation.status.in_(ACTIVE_OPERATION_STATUSES),
+            )
+            .limit(1)
+        )
+        if active is not None:
+            raise ProjectCellBusy("Project Cell workspace already has an active operation")
+
+        request = _stored_request_payload(locked_operation)
+        locked_operation.status = "running"
+        locked_operation.attempt_count += 1
+        locked_operation.error = None
+        locked_operation.finished_at = None
+        locked_operation.started_at = datetime.now(UTC)
+        claimed = ClaimedCellOperation(
+            operation_id=locked_operation.id,
+            workspace_id=locked_operation.workspace_id,
+            project_id=workspace.project_id,
+            owner_id=workspace.owner_id,
+            generation_run_id=locked_operation.generation_run_id,
+            kind=locked_operation.kind,
+            request=request,
+            request_digest=locked_operation.request_digest,
+            fencing_epoch=locked_operation.fencing_epoch,
+        )
+        await session.commit()
+        return claimed
+
+
 async def _recover_interrupted_cell_operations(session: AsyncSession) -> int:
     operations = list(
         (

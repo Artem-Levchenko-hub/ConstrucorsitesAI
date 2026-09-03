@@ -25,6 +25,7 @@ from omnia_api.services.orchestrator_client import (
 from omnia_api.services.project_cells import (
     TERMINAL_OPERATION_STATUSES,
     ClaimedCellOperation,
+    ProjectCellBusy,
     ProjectCellNotFound,
     ProjectCellStateConflict,
     ProjectCellValidationError,
@@ -33,6 +34,7 @@ from omnia_api.services.project_cells import (
     fail_cell_operation,
     mark_cell_operation_indeterminate,
     park_cell_operation_for_capacity,
+    reclaim_indeterminate_cell_operation_committed,
 )
 
 _CHECKPOINT_KINDS = frozenset({"pause", "stop", "restore"})
@@ -74,8 +76,34 @@ async def execute_cell_operation(
 
     try:
         claimed = await claim_cell_operation_committed(session_factory, operation_id)
-    except ProjectCellStateConflict:
+    except (ProjectCellBusy, ProjectCellStateConflict):
         return await _load_operation_outcome(session_factory, operation_id)
+
+    return await _dispatch_claimed_cell_operation(session_factory, claimed, client)
+
+
+async def replay_indeterminate_cell_operation(
+    session_factory: async_sessionmaker[AsyncSession],
+    operation_id: UUID,
+    client: ProjectCellOrchestratorClient,
+) -> ProjectCellOperationOutcome:
+    """Redrive the exact durable envelope so provider idempotency proves its effect."""
+
+    try:
+        claimed = await reclaim_indeterminate_cell_operation_committed(
+            session_factory,
+            operation_id,
+        )
+    except (ProjectCellBusy, ProjectCellStateConflict):
+        return await _load_operation_outcome(session_factory, operation_id)
+    return await _dispatch_claimed_cell_operation(session_factory, claimed, client)
+
+
+async def _dispatch_claimed_cell_operation(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedCellOperation,
+    client: ProjectCellOrchestratorClient,
+) -> ProjectCellOperationOutcome:
 
     try:
         method_name, request = _build_client_call(claimed)
