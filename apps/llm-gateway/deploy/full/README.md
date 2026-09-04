@@ -29,11 +29,15 @@ location /llm/ {
 
    ```bash
    docker exec omnia-prod-postgres sh -lc \
-     'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
+     'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
      "select status,count(*) from generation_runs
-      where status in ('"'"'pending'"'"','"'"'running'"'"','"'"'cancel_requested'"'"')
-      group by status;"'
+      where finished_at is null
+      group by status
+      order by status;"'
    ```
+
+   Any output blocks the update. This includes a generation queued for server
+   capacity even though its model work has not started yet.
 
 2. Back up Postgres and the current Compose/nginx configuration.
 3. Validate configuration before changing containers:

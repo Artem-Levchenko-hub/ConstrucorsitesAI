@@ -20,11 +20,13 @@ from omnia_api.services.project_cell_capacity import (
     claim_stale_generation_lease,
     hibernate_one_idle_workspace,
     release_one_stale_generation_lease,
+    wait_for_capacity,
 )
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
 from omnia_api.services.project_cells import (
     claim_cell_operation_committed,
     fail_cell_operation,
+    park_cell_operation_for_capacity,
     reserve_cell_operation,
 )
 
@@ -254,6 +256,99 @@ async def test_capacity_replays_indeterminate_release_before_hibernation(
         assert refreshed_workspace.generation_run_id is None
         assert refreshed_release is not None
         assert refreshed_release.status == "completed"
+
+
+async def test_capacity_wait_replays_same_ensure_after_orchestrator_restart(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"ensure-restart-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        _project, run, workspace = await _project_run(
+            session,
+            owner,
+            created_at=datetime.now(UTC),
+            label="ensure-restart",
+        )
+        workspace.state = "provisioning"
+        workspace.generation_run_id = run.id
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            kind="ensure",
+            idempotency_key=f"generation:{run.id}:ensure:restart-test",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+
+    await claim_cell_operation_committed(factory, operation.id)
+    async with factory() as session:
+        await park_cell_operation_for_capacity(
+            session,
+            operation.id,
+            reason="insufficient_memory",
+            retry_after_seconds=1,
+        )
+        await session.commit()
+
+    async def no_idle_workspace(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "omnia_api.services.project_cell_capacity.hibernate_one_idle_workspace",
+        no_idle_workspace,
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.project_cell_capacity.asyncio.sleep",
+        no_delay,
+    )
+
+    requests: list[object] = []
+
+    async def ensure(request: object) -> ProjectCellResourceResponse:
+        requests.append(request)
+        if len(requests) == 1:
+            raise OrchestratorUnavailable("orchestrator restarted during dispatch")
+        return ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref=f"cell-{workspace.id}",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    client = type("RestartingClient", (), {})()
+    client.ensure = ensure
+
+    outcome = await wait_for_capacity(
+        factory,
+        run_id=run.id,
+        operation_id=operation.id,
+        client=client,
+        emit=no_idle_workspace,
+    )
+
+    assert outcome.status == "completed"
+    assert len(requests) == 2
+    assert requests[0].operation_id == operation.id
+    assert requests[1].operation_id == operation.id
+    assert requests[1].fencing_epoch == requests[0].fencing_epoch
+    async with factory() as session:
+        persisted = await session.get(ProjectCellOperation, operation.id)
+        assert persisted is not None
+        assert persisted.status == "completed"
+        assert persisted.attempt_count == 3
 
 
 async def test_capacity_retries_pause_after_confirmed_terminal_failure(

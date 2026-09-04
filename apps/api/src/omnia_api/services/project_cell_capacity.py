@@ -415,6 +415,11 @@ async def wait_for_capacity(
                     lease_seconds=30,
                 )
             turn = await claim_capacity_turn(session, run_id)
+            operation_status = await session.scalar(
+                select(ProjectCellOperation.status).where(
+                    ProjectCellOperation.id == operation_id,
+                )
+            )
             await session.commit()
 
         progress = (turn.position, turn.reason)
@@ -440,7 +445,14 @@ async def wait_for_capacity(
             requesting_run_id=run_id,
             client=client,
         )
-        outcome = await execute_cell_operation(session_factory, operation_id, client)
+        if operation_status == "indeterminate":
+            outcome = await replay_indeterminate_cell_operation(
+                session_factory,
+                operation_id,
+                client,
+            )
+        else:
+            outcome = await execute_cell_operation(session_factory, operation_id, client)
         if outcome.status == "waiting_capacity":
             async with session_factory() as session:
                 operation = await session.get(ProjectCellOperation, operation_id)
@@ -458,6 +470,9 @@ async def wait_for_capacity(
                         ),
                     )
             await asyncio.sleep(delay)
+            continue
+        if outcome.status == "indeterminate":
+            await asyncio.sleep(1)
             continue
         if outcome.status == "completed":
             return outcome

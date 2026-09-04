@@ -8,6 +8,7 @@ gate="${release_dir}/local-release-gate.sh"
 rollback_manifest="${release_dir}/rollback-manifest.sh"
 compose_policy="${release_dir}/test-compose-policy.sh"
 runbook="${release_dir}/README.md"
+active_generation_gate="${release_dir}/check-active-generations.sh"
 ci_workflow="${release_dir}/../../.github/workflows/ci.yml"
 test_root="$(mktemp -d)"
 trap 'rm -rf "${test_root}"' EXIT
@@ -16,6 +17,31 @@ fail() {
   echo "release tool test failed: $1" >&2
   exit 1
 }
+
+mkdir -p "${test_root}/active-gate-bin"
+cat >"${test_root}/active-gate-bin/docker" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"finished_at is null"* ]]; then
+  printf '%s\n' 'queued_for_capacity|1'
+fi
+EOF
+chmod +x "${test_root}/active-gate-bin/docker"
+if PATH="${test_root}/active-gate-bin:${PATH}" \
+  bash "${active_generation_gate}" >"${test_root}/active-gate.out" 2>&1; then
+  fail "active generation gate ignored a capacity-queued generation"
+fi
+grep -Fq 'queued_for_capacity|1' "${test_root}/active-gate.out" \
+  || fail "active generation gate did not report the blocking queued generation"
+
+cat >"${test_root}/active-gate-bin/docker" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${test_root}/active-gate-bin/docker"
+PATH="${test_root}/active-gate-bin:${PATH}" \
+  bash "${active_generation_gate}" >"${test_root}/quiescent-gate.out"
+grep -Fq 'no active generations' "${test_root}/quiescent-gate.out" \
+  || fail "active generation gate did not confirm quiescence"
 
 grep -Fq 'blank_env="$(mktemp)"' "${compose_policy}" \
   || fail "compose policy does not create an isolated empty environment"
@@ -168,6 +194,16 @@ grep -Fq \
   'install -m 700 infra/release/remove-env-value.sh "${removal_env_tool}"' \
   "${runbook}" \
   || fail "runbook does not persist the env remover before mutation"
+grep -Fq \
+  'active_generation_gate=/opt/omnia-runtime/releases/check-active-generations.sh' \
+  "${runbook}" \
+  || fail "runbook does not load the generation gate outside the checkout"
+grep -Fq \
+  'install -m 700 infra/release/check-active-generations.sh "${active_generation_gate}"' \
+  "${runbook}" \
+  || fail "runbook does not persist the generation gate before mutation"
+grep -Fq 'bash "$active_generation_gate"' "${runbook}" \
+  || fail "runbook does not execute the persisted generation gate"
 grep -Fq \
   'compat_migration=/opt/omnia-runtime/releases/0048_remove_generation_telegram_reports.py' \
   "${runbook}" \

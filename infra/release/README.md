@@ -90,7 +90,7 @@ Run this query before every API/worker recreation and before rollback. It must
 produce no rows.
 
 ~~~bash
-active_generations="$(docker exec omnia-prod-postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status,count(*) from generation_runs where status in ('"'"'pending'"'"','"'"'running'"'"','"'"'cancel_requested'"'"') group by status;"')"
+active_generations="$(docker exec omnia-prod-postgres sh -lc 'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status,count(*) from generation_runs where finished_at is null group by status order by status;"')"
 test -z "$active_generations"
 ~~~
 
@@ -121,12 +121,14 @@ export ROLLBACK_POINTER=/opt/omnia-runtime/releases/pending-rollback.json
 rollback_manifest_tool=/opt/omnia-runtime/releases/rollback-manifest.sh
 rollback_env_updater=/opt/omnia-runtime/releases/update-env-value.sh
 removal_env_tool=/opt/omnia-runtime/releases/remove-env-value.sh
+active_generation_gate=/opt/omnia-runtime/releases/check-active-generations.sh
 compat_migration=/opt/omnia-runtime/releases/0048_remove_generation_telegram_reports.py
 rollback_compose_override=/opt/omnia-runtime/releases/rollback-0048.override.yml
 
 install -m 700 infra/release/rollback-manifest.sh "${rollback_manifest_tool}"
 install -m 700 infra/release/update-env-value.sh "${rollback_env_updater}"
 install -m 700 infra/release/remove-env-value.sh "${removal_env_tool}"
+install -m 700 infra/release/check-active-generations.sh "${active_generation_gate}"
 install -m 600 apps/api/migrations/versions/0048_remove_generation_telegram_reports.py "${compat_migration}"
 bash "$rollback_manifest_tool" write "$ROLLBACK_POINTER" "$RELEASE_RECORD" "$FULL_ENV_BACKUP" "$ORCHESTRATOR_ENV_BACKUP" "$RELEASE_SHA" "$ROLLBACK_SHA"
 
@@ -311,8 +313,7 @@ key assignment from a protected candidate, atomically install it, and recreate
 the two Python services.
 
 ~~~bash
-active_generations="$(docker exec omnia-prod-postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status,count(*) from generation_runs where status in ('"'"'pending'"'"','"'"'running'"'"','"'"'cancel_requested'"'"') group by status;"')"
-test -z "$active_generations"
+bash "$active_generation_gate"
 candidate_full_env="$(mktemp "$full_env.remove-telegram.XXXXXX")"
 removal_render="$(mktemp)"
 trap 'rm -f "$candidate_full_env" "$removal_render"' EXIT
@@ -410,6 +411,7 @@ cd /opt/omnia
 rollback_pointer=/opt/omnia-runtime/releases/pending-rollback.json
 rollback_manifest_tool=/opt/omnia-runtime/releases/rollback-manifest.sh
 rollback_env_updater=/opt/omnia-runtime/releases/update-env-value.sh
+active_generation_gate=/opt/omnia-runtime/releases/check-active-generations.sh
 compat_migration=/opt/omnia-runtime/releases/0048_remove_generation_telegram_reports.py
 rollback_compose_override=/opt/omnia-runtime/releases/rollback-0048.override.yml
 
@@ -421,12 +423,12 @@ ROLLBACK_SHA="$(bash "$rollback_manifest_tool" read "$rollback_pointer" rollback
 test -d "$RELEASE_RECORD"
 test -f "$FULL_ENV_BACKUP"
 test -f "$ORCHESTRATOR_ENV_BACKUP"
+test -f "$active_generation_gate"
 test -f "$compat_migration"
 test -f "$rollback_compose_override"
 test "$(cat "$RELEASE_RECORD/live-git-sha.txt")" = "$ROLLBACK_SHA"
 
-active_generations="$(docker exec omnia-prod-postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status,count(*) from generation_runs where status in ('"'"'pending'"'"','"'"'running'"'"','"'"'cancel_requested'"'"') group by status;"')"
-test -z "$active_generations"
+bash "$active_generation_gate"
 
 full_env=/opt/omnia/apps/llm-gateway/deploy/full/.env
 orchestrator_env=/opt/omnia/apps/orchestrator/.env
