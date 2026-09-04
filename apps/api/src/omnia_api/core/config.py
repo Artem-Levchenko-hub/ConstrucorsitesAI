@@ -1043,6 +1043,13 @@ class Settings(BaseSettings):
     agentic_builder_canary_users: str = Field(default="")
     project_cell_docker_canary_enabled: bool = Field(default=False)
     project_cell_canary_emails: str = Field(default="")
+    use_max_finalization_coordinator: bool = Field(default=False)
+    use_project_cell_activity_watchdog: bool = Field(default=False)
+    use_generation_event_replay: bool = Field(default=False)
+    use_cell_resource_profile_v2: bool = Field(default=False)
+    max_generation_deadline_seconds: int = Field(default=1500, ge=1)
+    project_cell_heartbeat_seconds: int = Field(default=15, ge=1)
+    project_cell_watchdog_grace_seconds: int = Field(default=20, ge=1)
     project_cell_operation_timeout_seconds: int = Field(default=180, ge=1, le=3600)
     project_cell_preview_host_suffix: str = Field(
         default="preview.lead-generator.ru",
