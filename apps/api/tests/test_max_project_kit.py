@@ -244,7 +244,7 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
     for task in manifest.tasks:
         assert task.argv[:1] == ["pnpm"]
         if task.argv[1] == "install":
-            assert task.argv == ["pnpm", "install", "--no-frozen-lockfile"]
+            assert task.argv == ["pnpm", "install", "--frozen-lockfile"]
         else:
             assert task.argv[1] in scripts
     assert manifest.services[0].argv == ["pnpm", "start"]
@@ -259,7 +259,7 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
         target = tmp_path / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-    test_task = next(task for task in manifest.tasks if task.role == "test")
+    test_task = next(task for task in manifest.tasks if task.argv[1] == "test")
     pnpm = which(test_task.argv[0])
     assert pnpm is not None
     result = run(

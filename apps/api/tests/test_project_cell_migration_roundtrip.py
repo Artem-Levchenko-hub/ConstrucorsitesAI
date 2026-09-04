@@ -115,6 +115,58 @@ async def _seed_running_0052(database_url: str) -> tuple[UUID, UUID, dict[str, o
     return workspace_id, operation_id, request
 
 
+async def _seed_finalization_0055(database_url: str) -> tuple[UUID, UUID]:
+    connection = await asyncpg.connect(_asyncpg_dsn(database_url))
+    owner_id = uuid4()
+    project_id = uuid4()
+    workspace_id = uuid4()
+    run_id = uuid4()
+    try:
+        await connection.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)",
+            owner_id,
+            f"finalization-{owner_id.hex}@example.com",
+            "x",
+        )
+        await connection.execute(
+            """
+            INSERT INTO projects (id, owner_id, name, slug, template)
+            VALUES ($1, $2, $3, $4, 'blank')
+            """,
+            project_id,
+            owner_id,
+            "Finalization fixture",
+            f"finalization-{project_id.hex}",
+        )
+        await connection.execute(
+            """
+            INSERT INTO generation_runs
+                (id, project_id, user_id, idempotency_key, prompt_hash, status)
+            VALUES ($1, $2, $3, $4, $5, 'running')
+            """,
+            run_id,
+            project_id,
+            owner_id,
+            f"run:{run_id.hex}",
+            "a" * 64,
+        )
+        await connection.execute(
+            """
+            INSERT INTO project_cell_workspaces
+                (id, project_id, owner_id, provider, state, generation_run_id,
+                 fencing_epoch, version)
+            VALUES ($1, $2, $3, 'docker_owner_canary', 'ready', $4, 7, 2)
+            """,
+            workspace_id,
+            project_id,
+            owner_id,
+            run_id,
+        )
+    finally:
+        await connection.close()
+    return workspace_id, run_id
+
+
 async def _read_operation(
     database_url: str,
     operation_id: UUID,
@@ -195,3 +247,144 @@ def test_0053_roundtrip(disposable_migration_database: str) -> None:
     assert fencing_epoch == 7
     assert restored_envelope == envelope
     assert restored_digest == digest
+
+
+async def _insert_finalization_rows(database_url: str, workspace_id: UUID, run_id: UUID) -> None:
+    connection = await asyncpg.connect(_asyncpg_dsn(database_url))
+    proof_id = uuid4()
+    try:
+        project_id = await connection.fetchval(
+            "SELECT project_id FROM generation_runs WHERE id = $1",
+            run_id,
+        )
+        assert isinstance(project_id, UUID)
+        await connection.execute(
+            """
+            INSERT INTO project_cell_proofs
+                (id, workspace_id, generation_run_id, fencing_epoch, proof_key,
+                 workspace_revision, dependency_digest, schema_data_digest,
+                 cell_manifest_digest, base_image_digest, toolchain_digest,
+                 resource_profile_version, build_config_digest)
+            VALUES
+                ($1, $2, $3, 7, $4, $5, $6, $7, $8, $9, $10,
+                 'docker-owner-cell-resources-v2', $11)
+            """,
+            proof_id,
+            workspace_id,
+            run_id,
+            "1" * 64,
+            "2" * 64,
+            "3" * 64,
+            "4" * 64,
+            "5" * 64,
+            "6" * 64,
+            "7" * 64,
+            "8" * 64,
+        )
+        await connection.execute(
+            """
+            INSERT INTO project_cell_proof_results
+                (id, proof_id, workspace_id, dimension, dimension_key, outcome,
+                 operation_id, artifact_ref, detail_digest, redacted_detail)
+            VALUES ($1, $2, $3, 'full_build', $4, 'green', $5, $6, $7, 'green')
+            """,
+            uuid4(),
+            proof_id,
+            workspace_id,
+            "9" * 64,
+            uuid4(),
+            "build/sha256/" + ("b" * 64),
+            "a" * 64,
+        )
+        await connection.execute(
+            """
+            INSERT INTO project_cell_activity_leases
+                (operation_id, workspace_id, generation_run_id, kind, state, fencing_epoch,
+                 proof_key, phase, started_at, deadline_at, heartbeat_at, log_bytes)
+            VALUES ($1, $2, $3, 'finalization', 'active', 7, $4, 'full_build',
+                    now(), now() + interval '5 minutes', now(), 128)
+            """,
+            uuid4(),
+            workspace_id,
+            run_id,
+            "1" * 64,
+        )
+        await connection.execute(
+            """
+            INSERT INTO generation_events
+                (id, generation_run_id, project_id, message_id, seq, event_type, payload)
+            VALUES ($1, $2, $3, NULL, 1, 'generation.phase', '{"phase":"edit"}'::jsonb)
+            """,
+            uuid4(),
+            run_id,
+            project_id,
+        )
+    finally:
+        await connection.close()
+
+
+async def _assert_0056_schema(database_url: str) -> None:
+    connection = await asyncpg.connect(_asyncpg_dsn(database_url))
+    try:
+        assert (
+            await connection.fetchval("SELECT version_num FROM alembic_version")
+            == "0056_project_cell_finalization"
+        )
+        for table_name in (
+            "project_cell_proofs",
+            "project_cell_proof_results",
+            "project_cell_activity_leases",
+            "generation_events",
+        ):
+            assert await connection.fetchval("SELECT to_regclass($1)", table_name) == table_name
+        assert (
+            await connection.fetchval(
+                """
+                SELECT count(*) FROM pg_indexes
+                WHERE tablename = 'project_cell_activity_leases'
+                  AND indexname = 'uq_project_cell_activity_leases_one_active_per_workspace'
+                """
+            )
+            == 1
+        )
+        assert (
+            await connection.fetchval(
+                """
+                SELECT count(*) FROM pg_indexes
+                WHERE tablename = 'generation_events'
+                  AND indexname = 'uq_generation_events_generation_run_id_seq'
+                """
+            )
+            == 1
+        )
+    finally:
+        await connection.close()
+
+
+async def _assert_0056_schema_absent(database_url: str) -> None:
+    connection = await asyncpg.connect(_asyncpg_dsn(database_url))
+    try:
+        for table_name in (
+            "project_cell_proofs",
+            "project_cell_proof_results",
+            "project_cell_activity_leases",
+            "generation_events",
+        ):
+            assert await connection.fetchval("SELECT to_regclass($1)", table_name) is None
+    finally:
+        await connection.close()
+
+
+def test_0056_roundtrip(disposable_migration_database: str) -> None:
+    _run_alembic(disposable_migration_database, "upgrade", "0055_project_cell_capacity_queue")
+    workspace_id, run_id = asyncio.run(_seed_finalization_0055(disposable_migration_database))
+
+    _run_alembic(disposable_migration_database, "upgrade", "head")
+    asyncio.run(_insert_finalization_rows(disposable_migration_database, workspace_id, run_id))
+    asyncio.run(_assert_0056_schema(disposable_migration_database))
+
+    _run_alembic(disposable_migration_database, "downgrade", "0055_project_cell_capacity_queue")
+    asyncio.run(_assert_0056_schema_absent(disposable_migration_database))
+
+    _run_alembic(disposable_migration_database, "upgrade", "head")
+    asyncio.run(_assert_0056_schema(disposable_migration_database))

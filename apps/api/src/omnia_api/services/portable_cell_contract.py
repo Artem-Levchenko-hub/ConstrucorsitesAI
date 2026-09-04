@@ -1,16 +1,18 @@
 """Technology-neutral guidance used only for an enabled, selected Cell provider."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol
 
 RequestedCapability = tuple[str, str, tuple[str, ...]]
 
 
 class PortableGuideExecutor(Protocol):
-    capabilities: Mapping[str, object]
+    @property
+    def capabilities(self) -> Mapping[str, object]: ...
 
-    async def snapshot_files(self) -> Mapping[str, str]: ...
+    @property
+    def snapshot_files(self) -> Callable[[], Awaitable[Mapping[str, str]]]: ...
 
 PORTABLE_CELL_GUIDE = """
 MAX PLATFORM CORE CONTRACT — EXTENSIBLE MAIN STACK
@@ -19,7 +21,7 @@ Build the product on this primary stack first. The selected provider supports
 public package installation and persistent Linux userland. package.json and lock
 files are project-controlled: add compatible libraries as needed. Use auxiliary
 tools/processes only when the task needs them; do not replace the whole UI stack.
-New pristine projects have .omnia/cell.json with install/build/test/start defaults.
+New pristine projects have .omnia/cell.json with bootstrap/fast/full/start defaults.
 Create src/app/page.tsx and the complete product, plus meaningful tests/*.test.mjs.
 If an older untouched seed lacks the manifest, use the Next commands below first.
 Existing projects without this manifest keep their legacy Next.js behavior until
@@ -29,16 +31,18 @@ host Docker, host files, devices, privileged flags or other projects' networks.
 
 Default manifest (extend only when a real helper/service is necessary):
 {"version":1,"tasks":[
- {"name":"install","role":"bootstrap","argv":["pnpm","install","--no-frozen-lockfile"],"timeout_seconds":900},
- {"name":"build","role":"build","argv":["pnpm","build"],"timeout_seconds":900},
- {"name":"test","role":"test","argv":["pnpm","test"]}],
+ {"name":"install","role":"bootstrap","argv":["pnpm","install","--frozen-lockfile"],"timeout_seconds":900},
+ {"name":"typecheck","role":"fast_check","argv":["pnpm","typecheck"],"timeout_seconds":180},
+ {"name":"lint","role":"fast_check","argv":["pnpm","lint"],"timeout_seconds":180},
+ {"name":"build","role":"full_build","argv":["pnpm","build"],"timeout_seconds":600},
+ {"name":"final-test","role":"full_build","argv":["pnpm","test"],"timeout_seconds":300}],
  "services":[{"name":"web","argv":["pnpm","start"],
  "readiness":{"port":3000,"path":"/","timeout_seconds":120}}],
  "routes":[{"path":"/","service":"web","port":3000}]}
 
 argv is explicit, cwd is relative to /workspace. Use sh -lc explicitly if needed.
-bootstrap/build/test tasks run in declared order; build runs all three roles and
-requires actual test tasks. bash executes in this same machine. Never use a fake
+Each role runs only its declared tasks; full_build requires a real final test.
+bash executes in this same machine. Never use a fake
 test exit or claim build success without exercising product behavior. Services
 are controller-supervised after runtime_check applies the checked manifest;
 bind HTTP services to 0.0.0.0, not only localhost. Do not daemonize a service argv.
@@ -81,9 +85,9 @@ product. Run build and runtime_check after the final source write. runtime_check
 independently verifies the product HTTP route, signed MAX session, protected data
 read, rejected anonymous/bad-cookie access and trusted project identity. No see
 tool exists. Do not claim deployment, payment or business integrations untested.
-Any shell/build may mutate installed packages or running processes even without a
-source diff. Run fresh build and runtime_check after those actions. A failed or
-timed-out command invalidates prior proof too. No screenshot/see tools are available.
+Proof invalidation follows observed before/after source, dependency, schema,
+manifest and environment digests. Clean commands keep their proof. No
+screenshot/see tools are available.
 """.strip()
 
 
@@ -116,7 +120,15 @@ def portable_source_gap(
             raise ValueError
         tasks = manifest.get("tasks", [])
         if not any(
-            isinstance(task, dict) and task.get("role") == "test" and task.get("argv")
+            isinstance(task, dict)
+            and (
+                task.get("role") == "test"
+                or (
+                    task.get("role") == "full_build"
+                    and "test" in str(task.get("name", "")).lower()
+                )
+            )
+            and task.get("argv")
             for task in tasks
         ):
             return "Portable product requires a declared test task that checks its behavior."

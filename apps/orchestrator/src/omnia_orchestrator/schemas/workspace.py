@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -168,7 +169,24 @@ class WorkspaceAgentExecRequest(BaseModel):
     cmd: str = Field(min_length=1)
     timeout_seconds: int = Field(default=180, ge=1, le=900)
     operation_id: UUID = Field(default_factory=uuid4)
-    task_role: Literal["bootstrap", "build", "test"] | None = None
+    task_role: Literal[
+        "bootstrap",
+        "fast_check",
+        "full_build",
+        "build",
+        "test",
+    ] | None = None
+
+
+class WorkspaceIdentityDigest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dependency_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    schema_data_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cell_manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    environment_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    build_config_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class WorkspaceAgentExecResponse(BaseModel):
@@ -179,3 +197,20 @@ class WorkspaceAgentExecResponse(BaseModel):
     detail: str
     timed_out: bool = False
     workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_id: UUID
+    before_identity: WorkspaceIdentityDigest
+    after_identity: WorkspaceIdentityDigest
+    environment_mutated: bool
+
+
+class WorkspaceAgentOperationStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: UUID
+    state: Literal["running", "completed", "failed", "timed_out", "cancelled"]
+    phase: str
+    started_at: datetime
+    deadline_at: datetime
+    heartbeat_at: datetime
+    log_bytes: int = Field(ge=0)
+    terminal_response: WorkspaceAgentExecResponse | None = None

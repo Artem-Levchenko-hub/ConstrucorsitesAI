@@ -12,9 +12,10 @@ import json
 import os
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -35,21 +36,35 @@ class MachineOperationResult(BaseModel):
     state: str
     exit_code: int | None = None
     output: str = ""
+    timed_out: bool = False
+
+
+class MachineRequestStatus(BaseModel):
+    operation_id: str
+    state: str
+    phase: str
+    started_at: datetime
+    deadline_at: datetime
+    heartbeat_at: datetime
+    log_bytes: int
+    result: MachineOperationResult | None = None
+    transport_response: dict[str, Any] | None = None
 
 
 _deadline: ContextVar[float | None] = ContextVar("machine_operation_deadline", default=None)
 
 
 @contextmanager
-def machine_budget(seconds: float | None):
+def machine_budget(seconds: float | None) -> Iterator[None]:
     """Carry the aggregate deadline into asyncio.to_thread without shared state.
 
     None explicitly leaves the expired work budget for mandatory teardown.
     Nested work can shorten but never extend its caller's remaining budget.
     """
     deadline = None if seconds is None else time.monotonic() + max(0, seconds)
-    if deadline is not None and _deadline.get() is not None:
-        deadline = min(deadline, _deadline.get())
+    outer_deadline = _deadline.get()
+    if deadline is not None and outer_deadline is not None:
+        deadline = min(deadline, outer_deadline)
     token = _deadline.set(deadline)
     try:
         yield
@@ -131,6 +146,9 @@ class ProjectMachine:
         payload = _read_plain_json_file(self.path)
         if payload.get("workspace_id") != str(self.workspace_id):
             raise CellFenceRejected("machine workspace identity mismatch")
+        payload.setdefault("epoch", 0)
+        payload.setdefault("cancelled_epoch", 0)
+        payload.setdefault("operations", {})
         return payload
 
     async def assert_fence(self, mutation: LifecycleMutation) -> dict[str, Any]:
@@ -190,7 +208,16 @@ class ProjectMachine:
             if not existing.get("exec_id"):
                 raise CellIndeterminateOperation("command start outcome unknown; inspect machine")
             return operation_id
-        record = {"digest": digest, "state": "starting", "epoch": mutation.fencing_epoch}
+        now = datetime.now(UTC).isoformat()
+        record = {
+            "digest": digest,
+            "state": "starting",
+            "epoch": mutation.fencing_epoch,
+            "kind": "command",
+            "started_at": now,
+            "heartbeat_at": now,
+            "log_bytes": 0,
+        }
         state["operations"][operation_id] = record
         write_controller_json(self.path, state)
         exec_id = await machine_effect(
@@ -221,10 +248,203 @@ class ProjectMachine:
             exit_code=raw["exit_code"],
             output=str(raw["output"])[-24000:],
         )
+        record["heartbeat_at"] = datetime.now(UTC).isoformat()
+        record["log_bytes"] = len(result.output.encode("utf-8"))
         if not raw["running"]:
             record.update(state="completed", result=result.model_dump())
-            write_controller_json(self.path, state)
+        write_controller_json(self.path, state)
         return result
+
+    async def request_start(
+        self,
+        mutation: LifecycleMutation,
+        *,
+        phase: str,
+        deadline_at: datetime,
+    ) -> MachineOperationResult | None:
+        if deadline_at.tzinfo is None or deadline_at.utcoffset() is None:
+            raise ValueError("request deadline must be timezone-aware")
+        state = await self.assert_ready(mutation)
+        operation_id = str(mutation.operation_id)
+        existing = state["operations"].get(operation_id)
+        if existing is not None:
+            if (
+                existing.get("kind") != "request"
+                or existing.get("digest") != mutation.request_digest
+                or existing.get("epoch") != mutation.fencing_epoch
+            ):
+                raise CellFenceRejected("machine request replay envelope mismatch")
+            raw_result = existing.get("result")
+            return (
+                MachineOperationResult.model_validate(raw_result)
+                if raw_result is not None
+                else None
+            )
+        now = datetime.now(UTC).isoformat()
+        state["operations"][operation_id] = {
+            "kind": "request",
+            "digest": mutation.request_digest,
+            "state": "running",
+            "epoch": mutation.fencing_epoch,
+            "phase": phase,
+            "started_at": now,
+            "deadline_at": deadline_at.isoformat(),
+            "heartbeat_at": now,
+            "log_bytes": 0,
+        }
+        write_controller_json(self.path, state)
+        return None
+
+    async def request_heartbeat(
+        self,
+        mutation: LifecycleMutation,
+        *,
+        phase: str,
+        log_bytes: int,
+        min_interval_seconds: int = 15,
+        force: bool = False,
+    ) -> None:
+        state = await self.assert_ready(mutation)
+        record = state["operations"].get(str(mutation.operation_id))
+        if (
+            record is None
+            or record.get("kind") != "request"
+            or record.get("digest") != mutation.request_digest
+            or record.get("state") != "running"
+        ):
+            raise CellFenceRejected("unknown active machine request")
+        now = datetime.now(UTC)
+        previous = datetime.fromisoformat(record["heartbeat_at"])
+        if (
+            force
+            or record.get("phase") != phase
+            or (now - previous).total_seconds() >= max(1, min_interval_seconds)
+        ):
+            record["phase"] = phase
+            record["heartbeat_at"] = now.isoformat()
+            record["log_bytes"] = max(int(record.get("log_bytes", 0)), max(0, log_bytes))
+            write_controller_json(self.path, state)
+
+    async def request_finish(
+        self,
+        mutation: LifecycleMutation,
+        result: MachineOperationResult,
+    ) -> MachineOperationResult:
+        state = await self.assert_ready(mutation)
+        record = state["operations"].get(str(mutation.operation_id))
+        if (
+            record is None
+            or record.get("kind") != "request"
+            or record.get("digest") != mutation.request_digest
+        ):
+            raise CellFenceRejected("unknown machine request")
+        existing = record.get("result")
+        if existing is not None:
+            stored = MachineOperationResult.model_validate(existing)
+            if stored != result:
+                raise CellFenceRejected("machine request terminal replay mismatch")
+            return stored
+        now = datetime.now(UTC).isoformat()
+        terminal_state = (
+            "timed_out"
+            if result.timed_out
+            else "completed"
+            if result.exit_code == 0
+            else "failed"
+        )
+        record.update(
+            state=terminal_state,
+            heartbeat_at=now,
+            log_bytes=len(result.output.encode("utf-8")),
+            result=result.model_dump(),
+        )
+        write_controller_json(self.path, state)
+        return result
+
+    async def store_transport_response(
+        self,
+        *,
+        operation_id: UUID,
+        fencing_epoch: int,
+        response: dict[str, Any],
+    ) -> None:
+        state = self.state()
+        current = self.lease_epoch()
+        record = state["operations"].get(str(operation_id))
+        if (
+            current != fencing_epoch
+            or record is None
+            or record.get("kind") != "request"
+            or record.get("epoch") != fencing_epoch
+            or record.get("result") is None
+        ):
+            raise CellFenceRejected("cannot attach transport response to unknown request")
+        existing = record.get("transport_response")
+        if existing is not None and existing != response:
+            raise CellFenceRejected("machine transport response replay mismatch")
+        record["transport_response"] = response
+        write_controller_json(self.path, state)
+
+    async def request_status(
+        self,
+        *,
+        operation_id: UUID,
+        fencing_epoch: int,
+    ) -> MachineRequestStatus:
+        state = self.state()
+        record = state["operations"].get(str(operation_id))
+        if record is None or record.get("kind") != "request":
+            raise CellFenceRejected("unknown machine request")
+        await self.assert_fence(
+            LifecycleMutation(operation_id, fencing_epoch, str(record.get("digest", "")))
+        )
+        return self._request_status_from_record(operation_id, record)
+
+    async def inspect_request_status(self, *, operation_id: UUID) -> MachineRequestStatus:
+        """Read controller-owned request state without requiring a live API lease."""
+        record = self.state()["operations"].get(str(operation_id))
+        if record is None or record.get("kind") != "request":
+            raise CellFenceRejected("unknown machine request")
+        return self._request_status_from_record(operation_id, record)
+
+    @staticmethod
+    def _request_status_from_record(
+        operation_id: UUID,
+        record: dict[str, Any],
+    ) -> MachineRequestStatus:
+        return MachineRequestStatus(
+            operation_id=str(operation_id),
+            state=str(record["state"]),
+            phase=str(record.get("phase", "unknown")),
+            started_at=datetime.fromisoformat(record["started_at"]),
+            deadline_at=datetime.fromisoformat(record["deadline_at"]),
+            heartbeat_at=datetime.fromisoformat(record["heartbeat_at"]),
+            log_bytes=int(record.get("log_bytes", 0)),
+            result=(
+                MachineOperationResult.model_validate(record["result"])
+                if record.get("result") is not None
+                else None
+            ),
+            transport_response=record.get("transport_response"),
+        )
+
+    async def exec_terminate(
+        self,
+        operation_id: str,
+        mutation: LifecycleMutation,
+        *,
+        grace_seconds: int,
+    ) -> None:
+        state = await self.assert_ready(mutation)
+        record = state["operations"].get(operation_id)
+        if not record or record.get("epoch") != mutation.fencing_epoch:
+            raise CellFenceRejected("unknown command in this lease")
+        if record.get("result") is not None:
+            return
+        exec_id = record.get("exec_id")
+        if not exec_id:
+            raise CellIndeterminateOperation("command start outcome unknown; inspect machine")
+        await machine_effect(self.backend.terminate_exec, exec_id, grace_seconds)
 
     async def cancel(self, mutation: LifecycleMutation) -> None:
         state = self.state()

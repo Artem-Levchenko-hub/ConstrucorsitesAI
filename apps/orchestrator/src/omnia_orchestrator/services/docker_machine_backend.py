@@ -6,6 +6,7 @@ service ports and named project volume requests come from the manifest.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import ipaddress
 import json
@@ -56,15 +57,40 @@ _USERLAND_CAPS = [
     "SYS_CHROOT",
 ]
 _LOG_LIMIT = 24000
+_ENVIRONMENT_INVENTORY_LIMIT = 1024 * 1024
+_ENVIRONMENT_REVISION = "project-machine-environment-v2"
+
+_ENVIRONMENT_INVENTORY_SCRIPT = r"""
+import json,subprocess
+commands=[
+ ["dpkg-query","-W","-f=${Package}=${Version}\\n"],
+ ["python3","-m","pip","freeze","--all"],
+ ["node","--version"],
+ ["corepack","--version"],
+ ["pnpm","--version"],
+]
+rows=[]
+for command in commands:
+ try:
+  result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+                        text=True,timeout=30,check=False)
+  output="\\n".join(sorted(line.strip() for line in result.stdout.splitlines() if line.strip()))
+  rows.append({"command":command,"exit_code":result.returncode,"output":output})
+ except Exception as exc:
+  rows.append({"command":command,"error":type(exc).__name__})
+print(json.dumps(rows,sort_keys=True,separators=(",",":")))
+"""
 
 # A Docker exec survives the HTTP request. Output is drained continuously but
 # only a bounded tail is retained; long-running descendants remain in the same
 # container cgroup and cannot survive remove/lease transfer.
 _EXEC_WRAPPER = r"""
 import json,os,subprocess,sys
-argv,cwd,log=json.loads(sys.argv[1])
+argv,cwd,log,pidfile=json.loads(sys.argv[1])
 open(log,'wb').close()
-p=subprocess.Popen(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+p=subprocess.Popen(argv,cwd=cwd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
+                   start_new_session=True)
+with open(pidfile,'w') as f: f.write(str(p.pid))
 tail=b''
 while True:
     chunk=p.stdout.read1(8192)
@@ -125,6 +151,7 @@ class DockerMachineBackend:
     memory_bytes: int
     disk_bytes: int
     pids: int
+    resource_profile_version: str = "docker-owner-cell-resources-v1"
     namespace: str = "prod"
 
     def __post_init__(self) -> None:
@@ -162,6 +189,50 @@ class DockerMachineBackend:
         return self.stem + "-app-postgres-data"
 
     @property
+    def pnpm_cache_volume(self) -> str:
+        return self.stem + "-data-omnia-pnpm-store"
+
+    @property
+    def corepack_cache_volume(self) -> str:
+        return self.stem + "-data-omnia-corepack"
+
+    @property
+    def next_cache_volume(self) -> str:
+        cache_key = self._metadata().get("next_cache_key")
+        if not isinstance(cache_key, str) or re.fullmatch(r"[0-9a-f]{24}", cache_key) is None:
+            cache_key = hashlib.sha256(
+                f"{self.base_image}:{self.resource_profile_version}".encode()
+            ).hexdigest()[:24]
+        return self.stem + "-data-omnia-next-" + cache_key
+
+    def configure_cache_identity(
+        self,
+        *,
+        dependency_digest: str,
+        build_config_digest: str,
+        manifest_digest: str,
+    ) -> None:
+        values = (dependency_digest, build_config_digest, manifest_digest)
+        if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in values):
+            raise ValueError("cache identity requires lowercase sha256 digests")
+        cache_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "base_image": self.base_image,
+                    "build_config": build_config_digest,
+                    "dependencies": dependency_digest,
+                    "manifest": manifest_digest,
+                    "profile": self.resource_profile_version,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()[:24]
+        metadata = self._metadata()
+        metadata["next_cache_key"] = cache_key
+        write_controller_json(self.metadata_path, metadata)
+
+    @property
     def metadata_path(self) -> Path:
         return self.root / str(self.workspace_id) / "docker.json"
 
@@ -169,8 +240,12 @@ class DockerMachineBackend:
         from omnia_orchestrator.services.cell_state import _read_plain_json_file
 
         if not self.metadata_path.exists():
-            return {"services": {}, "exec_logs": {}}
-        return _read_plain_json_file(self.metadata_path)
+            return {"services": {}, "exec_logs": {}, "exec_pids": {}}
+        payload = _read_plain_json_file(self.metadata_path)
+        payload.setdefault("services", {})
+        payload.setdefault("exec_logs", {})
+        payload.setdefault("exec_pids", {})
+        return payload
 
     def labels(self, kind: str) -> dict[str, str]:
         return {
@@ -227,6 +302,12 @@ class DockerMachineBackend:
         volumes = {
             self.workspace_volume: {"bind": "/workspace", "mode": "rw"},
             self.stem + "-home": {"bind": "/root", "mode": "rw"},
+            self.pnpm_cache_volume: {"bind": "/pnpm/store", "mode": "rw"},
+            self.corepack_cache_volume: {
+                "bind": "/root/.cache/node/corepack",
+                "mode": "rw",
+            },
+            self.next_cache_volume: {"bind": "/workspace/.next/cache", "mode": "rw"},
         }
         for service in manifest.services:
             for mount in service.mounts:
@@ -271,6 +352,57 @@ class DockerMachineBackend:
             "PGPASSWORD": self.project_postgres_password,
             "PGDATABASE": _PROJECT_POSTGRES_DB,
         }
+
+    def environment_digest(self) -> str:
+        """Hash controller-selected runtime and package inventory without environment values."""
+
+        machine = self._container()
+        if machine is None:
+            cached = self._metadata().get("environment_digest")
+            if isinstance(cached, str) and re.fullmatch(r"[0-9a-f]{64}", cached):
+                return cached
+            return hashlib.sha256(
+                json.dumps(
+                    {
+                        "base_image": self.base_image,
+                        "controller_revision": _ENVIRONMENT_REVISION,
+                        "inventory": None,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        result = machine.exec_run(
+            ["python3", "-I", "-S", "-c", _ENVIRONMENT_INVENTORY_SCRIPT],
+            user="0:0",
+            workdir="/workspace",
+        )
+        if isinstance(result, tuple):
+            exit_code, output = int(result[0]), result[1]
+        else:
+            exit_code = int(getattr(result, "exit_code", 1))
+            output = getattr(result, "output", b"")
+        raw = output.encode("utf-8") if isinstance(output, str) else bytes(output)
+        if exit_code != 0 or len(raw) > _ENVIRONMENT_INVENTORY_LIMIT:
+            raise CellResourceError("machine environment inventory is unavailable or unbounded")
+        try:
+            inventory = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CellResourceError("machine environment inventory is invalid") from exc
+        canonical = json.dumps(
+            {
+                "base_image": self.base_image,
+                "controller_revision": _ENVIRONMENT_REVISION,
+                "inventory": inventory,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(canonical).hexdigest()
+        metadata = self._metadata()
+        metadata["environment_digest"] = digest
+        write_controller_json(self.metadata_path, metadata)
+        return digest
 
     def container_options(
         self, manifest: MachineManifest, namespace_id: str, epoch: int
@@ -318,8 +450,14 @@ class DockerMachineBackend:
                 "PNPM_WORKERS": str(os.cpu_count() or 1024),
                 "npm_config_child_concurrency": "1",
                 "npm_config_network_concurrency": "4",
+                "npm_config_store_dir": "/pnpm/store",
+                "COREPACK_HOME": "/root/.cache/node/corepack",
                 "NODE_OPTIONS": "--max-old-space-size="
-                + str(min(512, max(128, self.memory_bytes // 1024**2 * 3 // 5))),
+                + str(
+                    1280
+                    if self.resource_profile_version == "docker-owner-cell-resources-v2"
+                    else min(512, max(128, self.memory_bytes // 1024**2 * 3 // 5))
+                ),
                 "NEXT_TELEMETRY_DISABLED": "1",
                 "HTTP_PROXY": f"http://{proxy_ip}:3128",
                 "HTTPS_PROXY": f"http://{proxy_ip}:3128",
@@ -458,6 +596,7 @@ class DockerMachineBackend:
             epoch=epoch,
             services={},
             exec_logs={},
+            exec_pids={},
             quiesce_state=None,
         )
         write_controller_json(self.metadata_path, metadata)
@@ -760,13 +899,21 @@ class DockerMachineBackend:
         if machine is None:
             raise CellResourceError("machine is missing")
         log = "/run/omnia-logs/command-" + str(UUID(operation_id)) + ".log"
+        pidfile = "/run/omnia-logs/command-" + str(UUID(operation_id)) + ".pid"
         response = self.client.api.exec_create(
             machine.id,
             [
                 "python3",
                 "-c",
                 _EXEC_WRAPPER,
-                json.dumps([argv, "/workspace" + ("/" + cwd if cwd != "." else ""), log]),
+                json.dumps(
+                    [
+                        argv,
+                        "/workspace" + ("/" + cwd if cwd != "." else ""),
+                        log,
+                        pidfile,
+                    ]
+                ),
             ],
             user="0:0",
             workdir="/workspace",
@@ -776,6 +923,7 @@ class DockerMachineBackend:
         exec_id = response["Id"]
         metadata = self._metadata()
         metadata["exec_logs"][exec_id] = log
+        metadata["exec_pids"][exec_id] = pidfile
         write_controller_json(self.metadata_path, metadata)
         self.client.api.exec_start(exec_id, detach=True)
         return str(exec_id)
@@ -814,6 +962,33 @@ class DockerMachineBackend:
             "exit_code": status.get("ExitCode"),
             "output": self._read_log(metadata["exec_logs"][exec_id]),
         }
+
+    def terminate_exec(self, exec_id: str, grace_seconds: int) -> None:
+        """Send SIGTERM, then SIGKILL only if this command remains alive."""
+        metadata = self._metadata()
+        pidfile = metadata["exec_pids"].get(exec_id)
+        machine = self._container()
+        if machine is None or not pidfile:
+            raise CellIdentityConflict("unknown machine command process")
+        inspected = self.client.api.exec_inspect(exec_id)
+        if inspected.get("ContainerID") != machine.id:
+            raise CellIdentityConflict("command container identity changed")
+        script = (
+            "import os,signal,sys,time; p=sys.argv[1]; grace=float(sys.argv[2]); "
+            "pid=int(open(p).read()); os.killpg(pid,signal.SIGTERM); "
+            "deadline=time.monotonic()+grace; "
+            "exec(\"while time.monotonic()<deadline:\\n"
+            " try: os.kill(pid,0)\\n"
+            " except ProcessLookupError: break\\n"
+            " time.sleep(.1)\\n"
+            "else:\\n os.killpg(pid,signal.SIGKILL)\")"
+        )
+        result = machine.exec_run(
+            ["python3", "-I", "-S", "-c", script, pidfile, str(grace_seconds)],
+            user="0:0",
+        )
+        if result.exit_code:
+            raise CellResourceError("command termination could not be confirmed")
 
     def start_service(self, service: MachineService, epoch: int) -> None:
         machine = self._container()

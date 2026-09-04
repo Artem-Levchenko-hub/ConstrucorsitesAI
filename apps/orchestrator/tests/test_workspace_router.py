@@ -737,8 +737,6 @@ async def test_agent_bootstrap_returns_generation_lease_and_revision(
             {"src/app/page.tsx": "export default function Page() { return null }\n"}
         ),
     }
-
-
 async def test_agent_bootstrap_falls_back_to_template_when_project_workspace_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -1117,7 +1115,11 @@ async def test_exec_workspace_agent_command_runs_inside_cell_bundle(
         )
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    assert {
+        key: payload[key]
+        for key in ("ok", "exit_code", "detail", "timed_out", "workspace_revision")
+    } == {
         "ok": True,
         "exit_code": 0,
         "detail": "DATABASE_URL=[REDACTED]\nbuild clean",
@@ -1126,6 +1128,14 @@ async def test_exec_workspace_agent_command_runs_inside_cell_bundle(
             {"after.txt": "two", "before.txt": "one"}
         ),
     }
+    assert payload["operation_id"]
+    assert payload["before_identity"]["workspace_revision"] == workspace._workspace_revision(
+        {"before.txt": "one"}
+    )
+    assert payload["after_identity"]["workspace_revision"] == workspace._workspace_revision(
+        {"after.txt": "two", "before.txt": "one"}
+    )
+    assert payload["environment_mutated"] is True
     assert len(docker.workspace_command_calls) == 1
     call = docker.workspace_command_calls[0]
     assert call["workspace_volume_name"] == names.workspace_volume
@@ -1901,13 +1911,19 @@ async def test_exec_workspace_agent_command_blocks_env_enumeration(
         )
 
     assert response.status_code == 200
-    assert response.json() == {
+    payload = response.json()
+    assert {
+        key: payload[key]
+        for key in ("ok", "exit_code", "detail", "timed_out", "workspace_revision")
+    } == {
         "ok": False,
         "exit_code": 126,
         "detail": "command blocked: environment and secret enumeration is not allowed",
         "timed_out": False,
         "workspace_revision": workspace._workspace_revision({}),
     }
+    assert payload["before_identity"] == payload["after_identity"]
+    assert payload["environment_mutated"] is False
     assert docker.workspace_command_calls == []
 
 

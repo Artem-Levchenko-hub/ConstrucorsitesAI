@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { simulatePromptStream } from "@/lib/ws-mock";
 import type {
   AgentStep,
+  GenerationEventEnvelope,
   Message,
   PassProgress,
   SelectedElement,
@@ -14,6 +15,7 @@ import type {
   WalletState,
   WsEvent,
 } from "@/lib/api/types";
+import { mergeAgentStepsBySequence } from "@/lib/agent-steps";
 import {
   cancelGeneration,
   getLatestGeneration,
@@ -63,14 +65,24 @@ export type PromptSubmitOptions = {
 function openRealStream(
   projectId: string,
   apply: (event: WsEvent) => void,
-  opts?: { onOpen?: () => void; onClose?: () => void },
+  opts?: {
+    onOpen?: () => void;
+    onClose?: () => void;
+    runId?: string | null;
+    afterSeq?: number;
+  },
 ): StreamHandle {
   const wsBase =
     process.env.NEXT_PUBLIC_WS_URL ??
     (typeof window !== "undefined"
       ? `wss://${window.location.host}`
       : "wss://constructor.lead-generator.ru");
-  const ws = new WebSocket(`${wsBase}/api/ws/projects/${projectId}`);
+  const replayQuery = opts?.runId
+    ? `?run_id=${encodeURIComponent(opts.runId)}&after_seq=${Math.max(0, opts.afterSeq ?? 0)}`
+    : "";
+  const ws = new WebSocket(
+    `${wsBase}/api/ws/projects/${projectId}${replayQuery}`,
+  );
 
   // Keep-alive ping — many proxies (and our nginx) close idle WS at 60s.
   const pingInt = setInterval(() => {
@@ -132,6 +144,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const streamMetaRef = useRef<
     Record<string, { lastSeq: number; resyncing: boolean }>
   >({});
+  const activeGenerationRunRef = useRef<string | null>(null);
+  const lastGenerationSeqRef = useRef<Record<string, number>>({});
   // The silence watchdog must hear every meaningful server event, not only
   // updates to the assistant's text. Agentic builds can legitimately spend
   // several minutes emitting `agent.step` while the chat content stays empty.
@@ -177,6 +191,96 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
   const apply = useCallback(
     (event: WsEvent) => {
+      if (event.type === "generation.replay.complete") {
+        lastGenerationSeqRef.current[event.data.run_id] = Math.max(
+          lastGenerationSeqRef.current[event.data.run_id] ?? 0,
+          event.data.high_water,
+        );
+        return;
+      }
+      if (event.type === "generation.event") {
+        const envelope: GenerationEventEnvelope = event.data;
+        const lastSeq = lastGenerationSeqRef.current[envelope.run_id] ?? 0;
+        if (envelope.seq <= lastSeq) return;
+        if (envelope.seq > lastSeq + 1) {
+          sendRef.current?.({
+            type: "generation.resync",
+            run_id: envelope.run_id,
+            after_seq: lastSeq,
+          });
+          return;
+        }
+        activeGenerationRunRef.current = envelope.run_id;
+        lastGenerationSeqRef.current[envelope.run_id] = envelope.seq;
+        const data = envelope.data;
+        const mid = typeof data.message_id === "string" ? data.message_id : null;
+        if (mid) watchdogHeartbeatRef.current[mid]?.();
+
+        let next: AgentStep | null = null;
+        if (envelope.type === "agent.step" && mid) {
+          const rawKind = data.kind;
+          const kind =
+            rawKind === "escalate" ||
+            rawKind === "stalled" ||
+            rawKind === "retry"
+              ? rawKind
+              : "step";
+          next = {
+            eventId: envelope.event_id,
+            runId: envelope.run_id,
+            seq: envelope.seq,
+            step: typeof data.step === "number" ? data.step : null,
+            kind,
+            action: typeof data.action === "string" ? data.action : "",
+            path: typeof data.path === "string" ? data.path : "",
+            tool: typeof data.tool === "string" ? data.tool : undefined,
+            detail: typeof data.detail === "string" ? data.detail : undefined,
+            ok: typeof data.ok === "boolean" ? data.ok : undefined,
+          };
+        } else if (envelope.type.startsWith("tool.") && mid) {
+          const operationId =
+            typeof data.operation_id === "string"
+              ? data.operation_id
+              : envelope.event_id;
+          const phase =
+            typeof data.phase === "string" ? data.phase : "операция";
+          const finished = envelope.type === "tool.finished";
+          const state = typeof data.state === "string" ? data.state : "active";
+          next = {
+            eventId: `operation:${operationId}`,
+            runId: envelope.run_id,
+            seq: envelope.seq,
+            step: null,
+            kind: "heartbeat",
+            action: finished ? `${phase}: завершено` : `${phase}: выполняется`,
+            path: "",
+            operationId,
+            detail:
+              typeof data.log_bytes === "number"
+                ? `Обработано ${data.log_bytes} байт журнала`
+                : undefined,
+            ok: finished ? state === "completed" : undefined,
+          };
+        } else if (envelope.type === "generation.phase" && mid) {
+          const phase = typeof data.phase === "string" ? data.phase : "generation";
+          next = {
+            eventId: envelope.event_id,
+            runId: envelope.run_id,
+            seq: envelope.seq,
+            step: null,
+            kind: "heartbeat",
+            action: `Этап: ${phase}`,
+            path: "",
+          };
+        }
+        if (mid && next) {
+          qc.setQueryData<AgentStep[]>(
+            ["agent-steps", projectId, mid],
+            (prev) => mergeAgentStepsBySequence(prev ?? [], [next]),
+          );
+        }
+        return;
+      }
       const activeMessageId = streamEventMessageId(event);
       if (activeMessageId) {
         watchdogHeartbeatRef.current[activeMessageId]?.();
@@ -654,6 +758,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // submit (new prompt) and the reconnect effect (page refresh mid-build).
   const connect = useCallback(() => {
     const ctl = openRealStream(projectId, apply, {
+      runId: activeGenerationRunRef.current,
+      afterSeq: activeGenerationRunRef.current
+        ? (lastGenerationSeqRef.current[activeGenerationRunRef.current] ?? 0)
+        : 0,
       onOpen: () => {
         reconnectAttemptsRef.current = 0;
       },
@@ -695,6 +803,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           // the same canonical message/run; never turn a network silence into a
           // second prompt or a fake terminal error.
           streamingRef.current = true;
+          activeGenerationRunRef.current = generation?.id ?? null;
           terminalGenerationMessagesRef.current.delete(messageId);
           reconnectAttemptsRef.current = 0;
           cancelRef.current?.();
@@ -848,6 +957,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           opts,
         );
         message_id = resp.message_id;
+        activeGenerationRunRef.current = resp.run_id;
+        lastGenerationSeqRef.current[resp.run_id] ??= 0;
+        if (!USE_MOCKS) {
+          cancelRef.current?.();
+          connect();
+        }
         qc.invalidateQueries({ queryKey: ["generation", projectId] });
         if (
           resp.replayed &&
@@ -1032,6 +1147,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             }
             terminalGenerationMessagesRef.current.delete(last.id);
             streamingRef.current = true;
+            activeGenerationRunRef.current = generation?.id ?? null;
             reconnectAttemptsRef.current = 0;
             connect();
             watchMessage(last.id, () => recoverSilentStream(last.id));

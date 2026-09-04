@@ -27,7 +27,15 @@ def test_default_max_environment_is_next_with_extensible_dependencies_not_produc
     assert manifest.services[0].readiness is not None
     assert manifest.services[0].readiness.path == "/api/omnia/health"
     assert manifest.routes[0].port == 3000
-    assert [task.role for task in manifest.tasks] == ["bootstrap", "build", "test"]
+    assert [task.role for task in manifest.tasks] == [
+        "bootstrap",
+        "fast_check",
+        "fast_check",
+        "full_build",
+        "full_build",
+    ]
+    assert manifest.tasks[0].argv == ["pnpm", "install", "--frozen-lockfile"]
+    assert "experimental: { cpus: 2 }" in seeded["next.config.ts"]
     package = json.loads(seeded["package.json"])
     assert package["engines"]["node"] == ">=22"
     assert package["packageManager"] == "pnpm@9.15.0"

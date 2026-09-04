@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Response
@@ -54,6 +57,7 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceAgentBootstrapResponse,
     WorkspaceAgentExecRequest,
     WorkspaceAgentExecResponse,
+    WorkspaceAgentOperationStatusResponse,
     WorkspaceAgentWriteRequest,
     WorkspaceAgentWriteResponse,
     WorkspaceCapabilityResponse,
@@ -63,6 +67,7 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceDraftPreviewSessionRequest,
     WorkspaceDraftPreviewSessionResponse,
     WorkspaceEnsureRequest,
+    WorkspaceIdentityDigest,
     WorkspaceObserveRequest,
     WorkspaceOwnerPreviewSessionRequest,
     WorkspaceResourceResponse,
@@ -75,6 +80,7 @@ from omnia_orchestrator.services.cell_draft_support import (
 from omnia_orchestrator.services.cell_state import CellWorkspaceState
 from omnia_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from omnia_orchestrator.services.project_machine import machine_effect
 from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
 
 router = APIRouter(prefix="/internal", tags=["workspace"])
@@ -421,25 +427,79 @@ async def exec_workspace_agent_command(
                     status_code=503,
                 )
             try:
+                machine, backend = manager.machine_runtime.parts(state)
+                backend.configure_cache_identity(
+                    dependency_digest=_selected_files_digest(
+                        current_files, fixed_paths=_DEPENDENCY_IDENTITY_PATHS
+                    ),
+                    build_config_digest=_selected_files_digest(
+                        current_files, fixed_paths=_BUILD_CONFIG_PATHS
+                    ),
+                    manifest_digest=manifest.digest(),
+                )
+                request_digest = manager.machine_runtime._request_digest(manifest, request)
+                await machine.ensure(
+                    manifest,
+                    LifecycleMutation(
+                        request.operation_id,
+                        request.fencing_epoch,
+                        request_digest,
+                    ),
+                )
+                before_identity = _workspace_identity_digest(
+                    current_files,
+                    manifest=manifest,
+                    environment_digest=await machine_effect(backend.environment_digest),
+                )
                 result = await manager.machine_runtime.execute(state, manifest, request)
             except (CellResourceError, ValueError) as exc:
                 raise OrchestratorError(
                     code="container_failure", message=str(exc), status_code=409
                 ) from exc
             updated_files = await _read_agent_workspace_files(manager, volume_name)
-            return WorkspaceAgentExecResponse(
+            status = await machine.request_status(
+                operation_id=request.operation_id,
+                fencing_epoch=request.fencing_epoch,
+            )
+            if status.transport_response is not None:
+                return WorkspaceAgentExecResponse.model_validate(status.transport_response)
+            after_identity = _workspace_identity_digest(
+                updated_files,
+                manifest=manifest,
+                environment_digest=await machine_effect(backend.environment_digest),
+            )
+            response = WorkspaceAgentExecResponse(
                 ok=result.exit_code == 0 and not result.timed_out,
                 exit_code=result.exit_code,
                 detail=_redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT],
                 timed_out=result.timed_out,
                 workspace_revision=_workspace_revision(updated_files),
+                operation_id=request.operation_id,
+                before_identity=before_identity,
+                after_identity=after_identity,
+                environment_mutated=before_identity != after_identity,
             )
+            await machine.store_transport_response(
+                operation_id=request.operation_id,
+                fencing_epoch=request.fencing_epoch,
+                response=response.model_dump(mode="json"),
+            )
+            return response
+        legacy_identity = _workspace_identity_digest(
+            current_files,
+            manifest=None,
+            environment_digest=_digest_json({"legacy_image": _PROJECT_CELL_EXEC_IMAGE}),
+        )
         if any(bad in low for bad in _EXEC_DENY):
             return WorkspaceAgentExecResponse(
                 ok=False,
                 exit_code=126,
                 detail="command blocked by safety denylist",
                 workspace_revision=current_revision,
+                operation_id=request.operation_id,
+                before_identity=legacy_identity,
+                after_identity=legacy_identity,
+                environment_mutated=False,
             )
         if _command_exposes_environment(low):
             return WorkspaceAgentExecResponse(
@@ -447,6 +507,10 @@ async def exec_workspace_agent_command(
                 exit_code=126,
                 detail="command blocked: environment and secret enumeration is not allowed",
                 workspace_revision=current_revision,
+                operation_id=request.operation_id,
+                before_identity=legacy_identity,
+                after_identity=legacy_identity,
+                environment_mutated=False,
             )
         exec_spec = _workspace_exec_spec(state)
         names = exec_spec.resource_names
@@ -500,6 +564,97 @@ async def exec_workspace_agent_command(
         detail=detail or ("ok" if ok else "non-zero exit"),
         timed_out=result.timed_out,
         workspace_revision=_workspace_revision(updated_files),
+        operation_id=request.operation_id,
+        before_identity=legacy_identity,
+        after_identity=_workspace_identity_digest(
+            updated_files,
+            manifest=None,
+            environment_digest=legacy_identity.environment_digest,
+        ),
+        environment_mutated=_workspace_revision(updated_files) != current_revision,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent/identity",
+    response_model=WorkspaceIdentityDigest,
+)
+async def get_workspace_agent_identity(
+    workspace_id: UUID,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceIdentityDigest:
+    verify_internal_token(x_internal_token)
+    provider = build_workspace_provider(get_settings())
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
+        _require_generation_lease_match(
+            state,
+            generation_run_id=generation_run_id,
+            fencing_epoch=fencing_epoch,
+        )
+        files = await _read_agent_workspace_files(manager, volume_name)
+        manifest = await _prepare_portable_write(manager, state, files)
+        if manifest is None or manager.machine_runtime is None:
+            raise OrchestratorError(
+                code="conflict",
+                message="portable machine manifest is unavailable",
+                status_code=409,
+            )
+        _machine, backend = manager.machine_runtime.parts(state)
+        return _workspace_identity_digest(
+            files,
+            manifest=manifest,
+            environment_digest=await machine_effect(backend.environment_digest),
+        )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent/operations/{operation_id}",
+    response_model=WorkspaceAgentOperationStatusResponse,
+)
+async def get_workspace_agent_operation(
+    workspace_id: UUID,
+    operation_id: UUID,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceAgentOperationStatusResponse:
+    verify_internal_token(x_internal_token)
+    provider = build_workspace_provider(get_settings())
+    manager = _require_docker_resource_manager(provider)
+    # Journal reads must remain available while the mutating request owns the
+    # workspace lock. The controller file is replaced atomically, so this path
+    # can safely observe it without contending with the long-running command.
+    state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
+    if manager.machine_runtime is None:
+        raise OrchestratorError(
+            code="docker_unavailable",
+            message="portable machine provider is unavailable",
+            status_code=503,
+        )
+    machine, _backend = manager.machine_runtime.parts(state)
+    try:
+        status = await machine.inspect_request_status(operation_id=operation_id)
+    except CellFenceRejected as exc:
+        raise OrchestratorError(
+            code="conflict",
+            message=str(exc),
+            status_code=409,
+        ) from exc
+    return WorkspaceAgentOperationStatusResponse(
+        operation_id=operation_id,
+        state=status.state,
+        phase=status.phase,
+        started_at=status.started_at,
+        deadline_at=status.deadline_at,
+        heartbeat_at=status.heartbeat_at,
+        log_bytes=status.log_bytes,
+        terminal_response=(
+            WorkspaceAgentExecResponse.model_validate(status.transport_response)
+            if status.transport_response is not None
+            else None
+        ),
     )
 
 
@@ -683,13 +838,13 @@ async def _draft_preview_session(
     workspace_id = state.workspace_id
     exec_spec = _workspace_exec_spec(state)
     if _portable_active(manager, workspace_id):
-        _require_portable_runtime(manager)
-        preview = manager.machine_runtime.preview(state)
+        runtime = _require_portable_runtime(manager)
+        preview = runtime.preview(state)
         if preview is None or preview[0] != "running":
             raise OrchestratorError(
                 code="conflict", message="draft runtime is not running", status_code=409
             )
-        auth_secret = manager.machine_runtime.secret(workspace_id)
+        auth_secret = runtime.secret(workspace_id)
     else:
         draft = await manager.inspect_draft_runtime(workspace_id)
         if draft is None or draft.state != "running":
@@ -756,8 +911,8 @@ async def start_workspace_owner_preview(
                 code="conflict", message="workspace operation is still active", status_code=409,
             )
         if _portable_active(manager, workspace_id):
-            _require_portable_runtime(manager)
-            await manager.machine_runtime.resume_preview(state)
+            runtime = _require_portable_runtime(manager)
+            await runtime.resume_preview(state)
             await _publish_draft_preview(manager, workspace_id)
             response.headers["Cache-Control"] = "no-store"
             return await _draft_preview_session(manager, state)
@@ -843,13 +998,15 @@ def _portable_active(manager: DockerCellResourceManager, workspace_id: UUID) -> 
     )
 
 
-def _require_portable_runtime(manager: DockerCellResourceManager) -> None:
-    if manager.machine_runtime is None:
+def _require_portable_runtime(manager: DockerCellResourceManager) -> Any:
+    runtime = manager.machine_runtime
+    if runtime is None:
         raise OrchestratorError(
             code="container_failure",
             message="portable machine provider is unavailable",
             status_code=503,
         )
+    return runtime
 
 
 async def _prepare_portable_write(
@@ -912,9 +1069,9 @@ async def _draft_runtime_log_tail(
     workspace_id: UUID,
 ) -> str:
     if _portable_active(manager, workspace_id):
-        _require_portable_runtime(manager)
+        runtime = _require_portable_runtime(manager)
         state = manager.state_store.load(workspace_id)
-        return _bounded_redacted_text(await manager.machine_runtime.logs(state))
+        return _bounded_redacted_text(await runtime.logs(state))
     draft = await manager.inspect_draft_runtime(workspace_id)
     if draft is None:
         return ""
@@ -943,8 +1100,8 @@ async def _sync_lifecycle_draft_preview(
         if remove:
             await nginx_writer.unpublish(_draft_preview_host(workspace_id))
         elif _portable_active(manager, workspace_id):
-            _require_portable_runtime(manager)
-            preview = manager.machine_runtime.preview(state)
+            runtime = _require_portable_runtime(manager)
+            preview = runtime.preview(state)
             if preview is None or preview[0] != "running":
                 await nginx_writer.unpublish(_draft_preview_host(workspace_id))
             else:
@@ -960,8 +1117,8 @@ async def _publish_draft_preview(
     """Publish while the caller holds the workspace operation lock."""
     state = manager.state_store.load(workspace_id)
     if state is not None and _portable_active(manager, workspace_id):
-        _require_portable_runtime(manager)
-        preview = manager.machine_runtime.preview(state)
+        runtime = _require_portable_runtime(manager)
+        preview = runtime.preview(state)
         if preview is None or preview[0] != "running" or not preview[1]:
             raise OrchestratorError(
                 code="container_failure",
@@ -1280,6 +1437,82 @@ async def _workspace_volume_identity(
             status_code=409,
         )
     return state, volume_name
+
+
+_DEPENDENCY_IDENTITY_PATHS = (
+    "package.json",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "requirements.txt",
+    ".omnia/system-packages.txt",
+)
+_BUILD_CONFIG_PATHS = (
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.ts",
+    "tsconfig.json",
+    "vite.config.js",
+    "vite.config.ts",
+)
+
+
+def _digest_json(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _selected_files_digest(
+    files: dict[str, str],
+    *,
+    fixed_paths: tuple[str, ...] = (),
+    include: Callable[[str], bool] | None = None,
+) -> str:
+    selected: dict[str, str | None] = {path: files.get(path) for path in fixed_paths}
+    if include is not None:
+        selected.update(
+            (path, content)
+            for path, content in files.items()
+            if path not in selected and include(path)
+        )
+    return _digest_json(selected)
+
+
+def _workspace_identity_digest(
+    files: dict[str, str],
+    *,
+    manifest: MachineManifest | None,
+    environment_digest: str,
+) -> WorkspaceIdentityDigest:
+    schema_markers = {"migrations", "migration", "drizzle", "prisma", "schema"}
+    return WorkspaceIdentityDigest(
+        workspace_revision=_workspace_revision(files),
+        dependency_digest=_selected_files_digest(
+            files,
+            fixed_paths=_DEPENDENCY_IDENTITY_PATHS,
+        ),
+        schema_data_digest=_selected_files_digest(
+            files,
+            fixed_paths=("drizzle.config.ts", "prisma/schema.prisma"),
+            include=lambda path: path.endswith(".sql")
+            or bool(schema_markers.intersection(path.lower().split("/"))),
+        ),
+        cell_manifest_digest=(
+            manifest.digest()
+            if manifest is not None
+            else _digest_json({"portable_manifest": None})
+        ),
+        environment_digest=environment_digest,
+        build_config_digest=_selected_files_digest(
+            files,
+            fixed_paths=_BUILD_CONFIG_PATHS,
+        ),
+    )
 
 
 async def _collect_project_workspace_files(project_root: Path) -> tuple[dict[str, str], set[str]]:

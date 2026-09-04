@@ -11,25 +11,27 @@ import asyncio
 import json
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import UUID
-
-from fastapi import WebSocket
 
 from omnia_api.core.redis import get_redis
 
 
+class JsonSocket(Protocol):
+    async def send_json(self, data: Any) -> None: ...
+
+
 class WebSocketHub:
     def __init__(self) -> None:
-        self._connections: dict[UUID, set[WebSocket]] = defaultdict(set)
+        self._connections: dict[UUID, set[JsonSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
         self._listener_task: asyncio.Task[None] | None = None
 
-    async def connect(self, project_id: UUID, ws: WebSocket) -> None:
+    async def connect(self, project_id: UUID, ws: JsonSocket) -> None:
         async with self._lock:
             self._connections[project_id].add(ws)
 
-    async def disconnect(self, project_id: UUID, ws: WebSocket) -> None:
+    async def disconnect(self, project_id: UUID, ws: JsonSocket) -> None:
         async with self._lock:
             self._connections[project_id].discard(ws)
             if not self._connections[project_id]:

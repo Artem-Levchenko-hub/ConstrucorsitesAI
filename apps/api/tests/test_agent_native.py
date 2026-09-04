@@ -219,7 +219,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "max_model_write_rejection" in source
     assert "_project_cell_runtime_check" in source
     assert "_recover_max_resume_prompt" in source
-    assert '{"src/app/page.tsx": ""}' in source
+    assert '_starter_patch = {**_starter_files, "src/app/page.tsx": ""}' in source
     assert '"rm -f -- src/app/page.tsx"' not in source
     assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
     assert "normalize_max_globals_css" in source

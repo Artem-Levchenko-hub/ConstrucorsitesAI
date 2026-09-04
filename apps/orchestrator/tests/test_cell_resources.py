@@ -25,6 +25,14 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "cell_backup_image": "",
         "cell_bundle_cpu_cores": 2.0,
         "cell_bundle_memory_bytes": 4 * 1024**3,
+        "cell_active_machine_cpu_cores": 2.0,
+        "cell_active_machine_memory_bytes": 2 * 1024**3,
+        "cell_project_postgres_cpu_cores": 0.15,
+        "cell_project_postgres_memory_bytes": 256 * 1024**2,
+        "cell_helper_cpu_cores": 0.2,
+        "cell_helper_memory_bytes": 128 * 1024**2,
+        "cell_managed_core_cpu_cores": 0.35,
+        "cell_managed_core_memory_bytes": 768 * 1024**2,
         "cell_host_cpu_reserve_cores": 2.0,
         "cell_host_memory_reserve_bytes": 4 * 1024**3,
         "cell_required_free_disk_bytes": 20 * 1024**3,
@@ -80,6 +88,23 @@ def test_capacity_profile_has_no_numerical_bundle_gate() -> None:
 
     assert "cell_max_active_bundles" not in Settings.model_fields
     assert "max_active_bundles" not in profile.__dataclass_fields__
+
+
+def test_v2_full_quota_sums_every_component_once() -> None:
+    profile = CellResourceProfile.from_settings(
+        _settings(cell_profile_version="docker-owner-cell-resources-v2")
+    )
+
+    assert profile.active_machine_quota.cpu_cores == 2.0
+    assert profile.active_machine_quota.memory_bytes == 2 * 1024**3
+    assert profile.full_quota.cpu_cores == sum(
+        quota.cpu_cores for quota in profile.component_quotas()
+    )
+    assert profile.full_quota.memory_bytes == sum(
+        quota.memory_bytes for quota in profile.component_quotas()
+    )
+    assert profile.full_quota.cpu_cores == 4.2
+    assert profile.full_quota.memory_bytes == 6 * 1024**3 + 128 * 1024**2
 
 
 def test_lifecycle_mutation_requires_sha256_digest() -> None:

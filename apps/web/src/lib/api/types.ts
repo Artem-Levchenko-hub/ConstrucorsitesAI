@@ -796,10 +796,15 @@ export type MultipassStage =
  * a Claude-Code-style step list while the agent works.
  */
 export type AgentStep = {
+  /** Durable identity is absent only on compatibility rows written before replay v2. */
+  eventId?: string;
+  runId?: Uuid;
+  seq?: number;
   step: number | null;
-  kind: "step" | "escalate" | "stalled" | "retry";
+  kind: "step" | "escalate" | "stalled" | "retry" | "heartbeat";
   action: string;
   path: string;
+  operationId?: Uuid;
   /** Raw tool name (write_file/build/…) for icon selection. */
   tool?: string;
   /** What the step did inside — content/output preview, shown on drill-in. */
@@ -831,8 +836,21 @@ export type StreamBrief = {
   sections: Array<{ id: string; name: string }>;
 };
 
+export type GenerationEventEnvelope = {
+  event_id: Uuid;
+  run_id: Uuid;
+  seq: number;
+  type: string;
+  data: Record<string, unknown>;
+};
+
 /** WebSocket events on /api/ws/projects/:id (server → client). */
 export type WsEvent =
+  | { type: "generation.event"; data: GenerationEventEnvelope }
+  | {
+      type: "generation.replay.complete";
+      data: { run_id: Uuid; high_water: number };
+    }
   | { type: "snapshot.created"; data: { snapshot: Snapshot } }
   | {
       type: "preview.ready";

@@ -44,6 +44,14 @@ class NativeMessagesAttemptAuth:
     headers: Mapping[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class NativeProofCheckpoint:
+    proof_key: str | None = None
+    fast_check_green: bool = False
+    source_complete: bool = False
+    acceptance_started: bool = False
+
+
 NativeMessagesAuthFactory = Callable[[int], Awaitable[NativeMessagesAttemptAuth]]
 
 # Keep the proven pre-cost native loop, but route it through the current MAX
@@ -841,7 +849,37 @@ async def _run_native_segment(
             return f"Product acceptance check failed: {type(exc).__name__}."
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
-        """Stop provider traffic and prove the tree with one local build only."""
+        """Stop provider traffic; flagged MAX transfers proof to finalization."""
+        if max_runtime and get_settings().use_max_finalization_coordinator:
+            from omnia_api.services.max_generation_contract import (
+                max_source_completion_gap,
+            )
+
+            effective_files = {**baseline_files, **written}
+            source_gap = max_source_completion_gap(
+                task,
+                effective_files,
+                portable=".omnia/cell.json" in effective_files,
+            )
+            source_complete = source_gap is None
+            return AgentResult(
+                done=False,
+                summary=(
+                    "Исходники собраны; выполняю финальную проверку."
+                    if source_complete
+                    else source_gap or detail
+                ),
+                files=written,
+                steps=steps,
+                transcript=convo,
+                stop_reason="max_steps" if reason == "max_steps" else reason,
+                evidence=_evidence(),
+                needs_finalization=source_complete,
+                proof_checkpoint=NativeProofCheckpoint(
+                    source_complete=source_complete,
+                    acceptance_started=source_complete,
+                ),
+            )
         _invalidate_proofs("build")
         try:
             final_build = await execute(Action(name="build", args={}, raw=""))
@@ -1433,8 +1471,10 @@ async def _run_native_segments(
             stop_reason=result.stop_reason,
             evidence=dict(cumulative_evidence),
             segments=segment,
+            needs_finalization=result.needs_finalization,
+            proof_checkpoint=result.proof_checkpoint,
         )
-        if result.done or segment_limit == 1:
+        if result.done or result.needs_finalization or segment_limit == 1:
             return combined
         if result.stop_reason in _CONTINUATION_TERMINAL_REASONS:
             return combined
@@ -1459,8 +1499,8 @@ async def _run_native_segments(
         segment_task = (
             "Continue the autonomous build in the same GenerationRun and the same "
             "Project Cell. All files from the previous segment are preserved. Inspect "
-            "the live tree, finish the remaining acceptance gap, rerun required proof "
-            "after any source write, and call done only when the product is complete. "
+            "the live tree, finish the remaining source/product gap, and call done "
+            "when the implementation is complete. Deterministic final proof is reserved. "
             "Do not restart, scaffold over, or duplicate the project.\n\n"
             f"Original request:\n{task}\n\n"
             f"Previous segment stopped as {result.stop_reason}:\n{result.summary}"

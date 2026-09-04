@@ -31,6 +31,15 @@ async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tm
         async def exec_status(self, operation, mutation):
             return SimpleNamespace(state="completed", exit_code=0, output="passed")
 
+        async def request_start(self, mutation, **kwargs):
+            return None
+
+        async def request_heartbeat(self, mutation, **kwargs):
+            pass
+
+        async def request_finish(self, mutation, result):
+            return result
+
     runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
     runtime.parts = lambda state: (Machine(), object())
     value = payload()
@@ -53,6 +62,59 @@ async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tm
         (["go", "build", "./..."], "backend"),
         (["python", "-m", "unittest"], "."),
     ]
+
+
+async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path):
+    from unittest.mock import AsyncMock
+
+    api = module()
+    commands = []
+
+    class Machine:
+        async def ensure(self, manifest, mutation):
+            pass
+
+        async def request_start(self, mutation, **kwargs):
+            return None
+
+        async def request_heartbeat(self, mutation, **kwargs):
+            pass
+
+        async def request_finish(self, mutation, result):
+            return result
+
+        async def exec_start(self, argv, cwd, mutation):
+            commands.append(argv)
+            return str(mutation.operation_id)
+
+        async def exec_status(self, operation, mutation):
+            return SimpleNamespace(state="completed", exit_code=0, output="passed")
+
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.parts = lambda state: (Machine(), object())
+    runtime._activate_runtime = AsyncMock()
+    value = payload()
+    value["tasks"] = [
+        {"name": "install", "role": "bootstrap", "argv": ["pnpm", "install"]},
+        {"name": "types", "role": "fast_check", "argv": ["pnpm", "typecheck"]},
+        {"name": "build", "role": "full_build", "argv": ["pnpm", "build"]},
+        {"name": "final-test", "role": "full_build", "argv": ["pnpm", "test"]},
+    ]
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(),
+        fencing_epoch=7,
+        expected_revision="a" * 64,
+        cmd="omnia:full_build",
+        task_role="full_build",
+    )
+
+    result = await runtime.execute(
+        SimpleNamespace(), MachineManifest.model_validate(value), request
+    )
+
+    assert result.exit_code == 0
+    assert commands == [["pnpm", "build"], ["pnpm", "test"]]
+    runtime._activate_runtime.assert_awaited_once()
 
 
 def test_capabilities_advertise_dedicated_project_postgres():
@@ -142,15 +204,26 @@ async def test_sequential_install_build_share_one_request_budget(monkeypatch, bu
                 state="completed" if complete else "running", exit_code=0, output="real work"
             )
 
-        async def cancel(self, mutation):
+        async def exec_terminate(self, operation, mutation, *, grace_seconds):
             cancelled.append(clock[0])
+
+        async def request_start(self, mutation, **kwargs):
+            return None
+
+        async def request_heartbeat(self, mutation, **kwargs):
+            pass
+
+        async def request_finish(self, mutation, result):
+            return result
 
     async def tick(_seconds):
         clock[0] += 100
 
     monkeypatch.setattr(api.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(api.asyncio, "sleep", tick)
-    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime = api.MachineAdapter(
+        SimpleNamespace(), SimpleNamespace(cell_machine_command_grace_seconds=20)
+    )
     runtime.parts = lambda state: (Machine(), object())
     value = payload()
     value["tasks"] = [

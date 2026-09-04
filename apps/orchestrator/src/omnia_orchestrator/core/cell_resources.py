@@ -22,6 +22,14 @@ class CellResourceSettings(Protocol):
     cell_backup_image: str
     cell_bundle_cpu_cores: float
     cell_bundle_memory_bytes: int
+    cell_active_machine_cpu_cores: float
+    cell_active_machine_memory_bytes: int
+    cell_project_postgres_cpu_cores: float
+    cell_project_postgres_memory_bytes: int
+    cell_helper_cpu_cores: float
+    cell_helper_memory_bytes: int
+    cell_managed_core_cpu_cores: float
+    cell_managed_core_memory_bytes: int
     cell_host_cpu_reserve_cores: float
     cell_host_memory_reserve_bytes: int
     cell_required_free_disk_bytes: int
@@ -121,6 +129,18 @@ class CellResourceProfile:
     required_free_inodes: int
     host_inode_reserve: int
     state_path: str
+    active_machine_cpu_cores: float = 2.0
+    active_machine_memory_bytes: int = 2 * 1024**3
+    project_postgres_cpu_cores: float = 0.15
+    project_postgres_memory_bytes: int = 256 * 1024**2
+    helper_cpu_cores: float = 0.2
+    helper_memory_bytes: int = 128 * 1024**2
+    managed_core_cpu_cores: float = 0.35
+    managed_core_memory_bytes: int = 768 * 1024**2
+
+    @property
+    def is_v2(self) -> bool:
+        return self.profile_version == "docker-owner-cell-resources-v2"
 
     @property
     def postgres_cpu_cores(self) -> float:
@@ -132,10 +152,14 @@ class CellResourceProfile:
 
     @property
     def executor_cpu_cores(self) -> float:
+        if self.is_v2:
+            return self.active_machine_cpu_cores
         return self.bundle_cpu_cores - self.postgres_cpu_cores - self.redis_cpu_cores
 
     @property
     def draft_cpu_cores(self) -> float:
+        if self.is_v2:
+            return self.project_postgres_cpu_cores + self.managed_core_cpu_cores
         return self.executor_cpu_cores
 
     @property
@@ -148,6 +172,8 @@ class CellResourceProfile:
 
     @property
     def executor_memory_bytes(self) -> int:
+        if self.is_v2:
+            return self.active_machine_memory_bytes
         return (
             self.bundle_memory_bytes
             - self.postgres_memory_bytes
@@ -156,27 +182,68 @@ class CellResourceProfile:
 
     @property
     def draft_memory_bytes(self) -> int:
+        if self.is_v2:
+            return self.project_postgres_memory_bytes + self.managed_core_memory_bytes
         return self.executor_memory_bytes
 
     @property
-    def full_quota(self) -> CellResourceQuota:
-        """Maximum simultaneous PG + Redis + executor + draft footprint."""
-
+    def active_machine_quota(self) -> CellResourceQuota:
         return CellResourceQuota(
             cpu_cores=(
-                self.postgres_cpu_cores
-                + self.redis_cpu_cores
-                + self.executor_cpu_cores
-                + self.draft_cpu_cores
+                self.active_machine_cpu_cores if self.is_v2 else self.executor_cpu_cores
             ),
             memory_bytes=(
-                self.postgres_memory_bytes
-                + self.redis_memory_bytes
-                + self.executor_memory_bytes
-                + self.draft_memory_bytes
+                self.active_machine_memory_bytes if self.is_v2 else self.executor_memory_bytes
             ),
             disk_bytes=self.required_free_disk_bytes,
             inodes=self.required_free_inodes,
+        )
+
+    def component_quotas(self) -> tuple[CellResourceQuota, ...]:
+        if not self.is_v2:
+            return (
+                CellResourceQuota(
+                    self.postgres_cpu_cores, self.postgres_memory_bytes, 0, 0
+                ),
+                CellResourceQuota(self.redis_cpu_cores, self.redis_memory_bytes, 0, 0),
+                self.active_machine_quota,
+                CellResourceQuota(
+                    self.draft_cpu_cores, self.draft_memory_bytes, 0, 0
+                ),
+            )
+        return (
+            CellResourceQuota(
+                self.postgres_cpu_cores, self.postgres_memory_bytes, 0, 0
+            ),
+            CellResourceQuota(self.redis_cpu_cores, self.redis_memory_bytes, 0, 0),
+            self.active_machine_quota,
+            CellResourceQuota(
+                self.project_postgres_cpu_cores,
+                self.project_postgres_memory_bytes,
+                0,
+                0,
+            ),
+            CellResourceQuota(
+                self.helper_cpu_cores, self.helper_memory_bytes, 0, 0
+            ),
+            CellResourceQuota(
+                self.managed_core_cpu_cores,
+                self.managed_core_memory_bytes,
+                0,
+                0,
+            ),
+        )
+
+    @property
+    def full_quota(self) -> CellResourceQuota:
+        """Maximum simultaneous footprint, with every component counted once."""
+
+        components = self.component_quotas()
+        return CellResourceQuota(
+            cpu_cores=sum(item.cpu_cores for item in components),
+            memory_bytes=sum(item.memory_bytes for item in components),
+            disk_bytes=sum(item.disk_bytes for item in components),
+            inodes=sum(item.inodes for item in components),
         )
 
     @classmethod
@@ -188,6 +255,14 @@ class CellResourceProfile:
             backup_image=str(settings.cell_backup_image),
             bundle_cpu_cores=float(settings.cell_bundle_cpu_cores),
             bundle_memory_bytes=int(settings.cell_bundle_memory_bytes),
+            active_machine_cpu_cores=float(settings.cell_active_machine_cpu_cores),
+            active_machine_memory_bytes=int(settings.cell_active_machine_memory_bytes),
+            project_postgres_cpu_cores=float(settings.cell_project_postgres_cpu_cores),
+            project_postgres_memory_bytes=int(settings.cell_project_postgres_memory_bytes),
+            helper_cpu_cores=float(settings.cell_helper_cpu_cores),
+            helper_memory_bytes=int(settings.cell_helper_memory_bytes),
+            managed_core_cpu_cores=float(settings.cell_managed_core_cpu_cores),
+            managed_core_memory_bytes=int(settings.cell_managed_core_memory_bytes),
             host_cpu_reserve_cores=float(settings.cell_host_cpu_reserve_cores),
             host_memory_reserve_bytes=int(settings.cell_host_memory_reserve_bytes),
             required_free_disk_bytes=int(settings.cell_required_free_disk_bytes),

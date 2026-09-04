@@ -14,7 +14,11 @@ from sqlalchemy import case, exists, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from omnia_api.models.project_cell import (
+    ProjectCellActivityLease,
+    ProjectCellOperation,
+    ProjectCellWorkspace,
+)
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     write_capacity_dispatch_claim,
@@ -135,6 +139,12 @@ async def claim_idle_hibernation_victim(
                     ProjectCellOperation.status.in_(ACTIVE_OPERATION_STATUSES),
                 )
             ),
+            ~exists(
+                select(ProjectCellActivityLease.operation_id).where(
+                    ProjectCellActivityLease.workspace_id == ProjectCellWorkspace.id,
+                    ProjectCellActivityLease.state == "active",
+                )
+            ),
             )
             .order_by(
                 case((ProjectCellWorkspace.ready_at.is_(None), 1), else_=0),
@@ -175,6 +185,12 @@ async def claim_stale_generation_lease(
                     select(ProjectCellOperation.id).where(
                         ProjectCellOperation.workspace_id == ProjectCellWorkspace.id,
                         ProjectCellOperation.status.in_(ACTIVE_OPERATION_STATUSES),
+                    )
+                ),
+                ~exists(
+                    select(ProjectCellActivityLease.operation_id).where(
+                        ProjectCellActivityLease.workspace_id == ProjectCellWorkspace.id,
+                        ProjectCellActivityLease.state == "active",
                     )
                 ),
             )
@@ -338,6 +354,14 @@ async def hibernate_one_idle_workspace(
         victim_id = victim.id
         await session.commit()
 
+    if not await _hibernate_victim_still_idle(
+        session_factory,
+        workspace_id=victim_id,
+        pause_operation_id=operation.id,
+        client=client,
+    ):
+        return False
+
     if replay_indeterminate:
         outcome = await replay_indeterminate_cell_operation(
             session_factory,
@@ -383,6 +407,90 @@ async def hibernate_one_idle_workspace(
         workspace.updated_at = datetime.now(UTC)
         await session.commit()
     return True
+
+
+async def _hibernate_victim_still_idle(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: UUID,
+    pause_operation_id: UUID,
+    client: ProjectCellOrchestratorClient,
+) -> bool:
+    """Recheck durable activity after selection and before the pause side effect."""
+    async with session_factory() as session:
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == workspace_id)
+            .with_for_update()
+        )
+        active_activity = await session.scalar(
+            select(ProjectCellActivityLease)
+            .where(
+                ProjectCellActivityLease.workspace_id == workspace_id,
+                ProjectCellActivityLease.state == "active",
+            )
+            .order_by(ProjectCellActivityLease.started_at.desc())
+            .limit(1)
+        )
+        if active_activity is not None:
+            status_method = getattr(client, "agent_operation_status", None)
+            if not callable(status_method):
+                await session.rollback()
+                return False
+            try:
+                status = await status_method(workspace_id, active_activity.operation_id)
+            except Exception:
+                await session.rollback()
+                return False
+            if status.state in {"starting", "running"}:
+                await session.rollback()
+                return False
+            active_activity.state = (
+                "completed"
+                if status.state == "completed"
+                else "timed_out"
+                if status.state == "timed_out"
+                else "cancelled"
+                if status.state == "cancelled"
+                else "failed"
+            )
+            active_activity.finished_at = max(
+                status.heartbeat_at,
+                active_activity.heartbeat_at,
+            )
+            active_activity.heartbeat_at = active_activity.finished_at
+            active_activity.log_bytes = max(active_activity.log_bytes, status.log_bytes)
+            await session.flush()
+            active_activity = None
+        other_operation = await session.scalar(
+            select(ProjectCellOperation.id)
+            .where(
+                ProjectCellOperation.workspace_id == workspace_id,
+                ProjectCellOperation.id != pause_operation_id,
+                ProjectCellOperation.status.in_(ACTIVE_OPERATION_STATUSES),
+            )
+            .limit(1)
+        )
+        if (
+            workspace is not None
+            and workspace.state == "ready"
+            and workspace.generation_run_id is None
+            and active_activity is None
+            and other_operation is None
+        ):
+            # Preserve any terminal activity reconciliation performed above;
+            # otherwise the partial unique index keeps a ghost active lease.
+            await session.commit()
+            return True
+        operation = await session.get(ProjectCellOperation, pause_operation_id)
+        if operation is not None and operation.status in {"pending", "waiting_capacity"}:
+            operation.status = "cancelled"
+            operation.finished_at = datetime.now(UTC)
+            operation.error = "hibernation vetoed by active workspace work"
+            await session.commit()
+        else:
+            await session.rollback()
+        return False
 
 
 async def wait_for_capacity(

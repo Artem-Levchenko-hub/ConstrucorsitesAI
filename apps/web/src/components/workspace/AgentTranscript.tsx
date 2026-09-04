@@ -59,6 +59,7 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 function stepIcon(s: AgentStep): typeof FileCode2 {
+  if (s.kind === "heartbeat") return Loader2;
   if (s.kind === "escalate") return Zap;
   if (s.kind === "retry" || s.kind === "stalled") return RefreshCw;
   // `action` is now a human phrase from the backend, so key the icon off the raw
@@ -224,14 +225,17 @@ export function AgentTranscript({
                 const Icon = stepIcon(s);
                 const last = i === visibleSteps.length - 1;
                 const live =
-                  streaming && last && s.kind === "step" && s.action !== "done";
+                  streaming &&
+                  last &&
+                  (s.kind === "step" || s.kind === "heartbeat") &&
+                  s.action !== "done";
                 const failed = s.ok === false;
                 const detail = (s.detail ?? "").trim();
                 const canDrill = detail.length > 0;
                 const isOpen = !!openSteps[i];
                 return (
                   <motion.li
-                    key={i}
+                    key={s.eventId ?? i}
                     initial={{ opacity: 0, x: -4 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.18, ease: EASE_OUT }}

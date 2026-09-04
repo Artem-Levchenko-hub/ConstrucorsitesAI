@@ -13,16 +13,33 @@ def next_machine_manifest() -> MachineManifest:
                 {
                     "name": "install",
                     "role": "bootstrap",
-                    "argv": ["pnpm", "install", "--no-frozen-lockfile"],
+                    "argv": ["pnpm", "install", "--frozen-lockfile"],
                     "timeout_seconds": 900,
                 },
                 {
-                    "name": "build",
-                    "role": "build",
-                    "argv": ["pnpm", "build"],
-                    "timeout_seconds": 900,
+                    "name": "typecheck",
+                    "role": "fast_check",
+                    "argv": ["pnpm", "typecheck"],
+                    "timeout_seconds": 180,
                 },
-                {"name": "test", "role": "test", "argv": ["pnpm", "test"], "timeout_seconds": 300},
+                {
+                    "name": "targeted-test",
+                    "role": "fast_check",
+                    "argv": ["pnpm", "test"],
+                    "timeout_seconds": 300,
+                },
+                {
+                    "name": "build",
+                    "role": "full_build",
+                    "argv": ["pnpm", "build"],
+                    "timeout_seconds": 600,
+                },
+                {
+                    "name": "final-test",
+                    "role": "full_build",
+                    "argv": ["pnpm", "test"],
+                    "timeout_seconds": 300,
+                },
             ],
             "services": [
                 {
@@ -71,7 +88,7 @@ def next_machine_seed(template: dict[str, str]) -> dict[str, str]:
     package["scripts"]["test"] = "node --test tests/*.test.mjs"
     files["package.json"] = json.dumps(package, indent=2) + "\n"
     files["next.config.ts"] = files["next.config.ts"].replace(
-        "reactStrictMode: true,", "reactStrictMode: true,\n  experimental: { cpus: 1 },"
+        "reactStrictMode: true,", "reactStrictMode: true,\n  experimental: { cpus: 2 },"
     )
     files[".omnia/cell.json"] = next_machine_manifest().model_dump_json(indent=2)
     # The browser needs a type, not the platform's cookie-signing implementation.

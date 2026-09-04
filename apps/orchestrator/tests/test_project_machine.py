@@ -1,5 +1,6 @@
 import importlib
 import importlib.util
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -64,6 +65,56 @@ async def test_command_replay_returns_result_without_repeating_side_effect(tmp_p
     assert result.output == "installed"
     assert await machine.exec_start(["pip", "install", "flask"], ".", mutation) == operation
     assert len(backend.commands) == 1
+
+
+async def test_request_journal_persists_heartbeat_and_terminal_replay(tmp_path):
+    machine, _backend, _lease, mutation = fixture(tmp_path)
+    await machine.ensure(MachineManifest.model_validate(payload()), mutation)
+    deadline = datetime.now(UTC) + timedelta(minutes=5)
+
+    assert await machine.request_start(
+        mutation,
+        phase="full_build",
+        deadline_at=deadline,
+    ) is None
+    await machine.request_heartbeat(
+        mutation,
+        phase="build",
+        log_bytes=128,
+        force=True,
+    )
+    terminal = module().MachineOperationResult(
+        operation_id=str(mutation.operation_id),
+        state="completed",
+        exit_code=0,
+        output="green",
+    )
+    await machine.request_finish(mutation, terminal)
+
+    assert await machine.request_start(
+        mutation,
+        phase="ignored",
+        deadline_at=deadline,
+    ) == terminal
+    status = await machine.request_status(
+        operation_id=mutation.operation_id,
+        fencing_epoch=mutation.fencing_epoch,
+    )
+    assert status.state == "completed"
+    assert status.phase == "build"
+    assert status.log_bytes == len("green")
+    assert status.result == terminal
+
+
+async def test_request_operation_id_with_different_digest_is_rejected(tmp_path):
+    machine, _backend, _lease, mutation = fixture(tmp_path)
+    await machine.ensure(MachineManifest.model_validate(payload()), mutation)
+    deadline = datetime.now(UTC) + timedelta(minutes=5)
+    await machine.request_start(mutation, phase="bootstrap", deadline_at=deadline)
+    changed = LifecycleMutation(mutation.operation_id, mutation.fencing_epoch, "b" * 64)
+
+    with pytest.raises(CellFenceRejected, match="replay envelope mismatch"):
+        await machine.request_start(changed, phase="bootstrap", deadline_at=deadline)
 
 
 async def test_failed_new_epoch_ensure_never_admits_commands_to_previous_physical_machine(tmp_path):

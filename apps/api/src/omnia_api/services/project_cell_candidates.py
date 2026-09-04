@@ -70,6 +70,19 @@ async def prepare_candidate(
             )
 
     accepted_id = await _accepted_candidate_id(session, workspace_id)
+    if accepted_id is not None:
+        accepted = await session.get(ProjectCellCandidate, accepted_id)
+        if (
+            accepted is not None
+            and accepted.generation_run_id == generation_run_id
+            and accepted.fencing_epoch == fencing_epoch
+            and accepted.source_revision == source_revision
+            and accepted.migration_digest == migration_digest
+            and accepted.database_backup_ref == database_backup_ref
+            and accepted.build_ref == build_ref
+            and accepted.verification_ref == verification_ref
+        ):
+            return accepted
     existing = await _matching_candidate(
         session,
         workspace_id=workspace_id,
@@ -112,6 +125,15 @@ async def promote_candidate(
     await _lock_workspace(session, workspace_id)
     candidate = await _locked_candidate(session, candidate_id)
     workspace = await _locked_workspace(session, candidate.workspace_id)
+    if candidate.status == "accepted" and not candidate.cancelled:
+        if (
+            candidate.generation_run_id == generation_run_id
+            and candidate.fencing_epoch == fencing_epoch
+            and workspace.generation_run_id == generation_run_id
+            and workspace.fencing_epoch == fencing_epoch
+        ):
+            return candidate
+        raise ProjectCellStateConflict("accepted candidate replay does not match")
     if candidate.status != "prepared" or candidate.cancelled:
         raise ProjectCellStateConflict("candidate is not promotable")
     if candidate.generation_run_id != generation_run_id:

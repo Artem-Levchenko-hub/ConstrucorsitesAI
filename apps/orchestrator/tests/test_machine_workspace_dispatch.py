@@ -1,4 +1,7 @@
+import asyncio
 import json
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -13,6 +16,44 @@ from tests.test_workspace_router import _internal_settings as _internal_settings
 class PortableRuntime:
     def __init__(self):
         self.commands = []
+        self.machine = SimpleNamespace(
+            ensure=self._ensure,
+            inspect_request_status=self._inspect_request_status,
+            request_status=self._request_status,
+            store_transport_response=self._store_transport_response,
+        )
+        self.backend = SimpleNamespace(
+            configure_cache_identity=lambda **_kwargs: None,
+            environment_digest=lambda: "e" * 64,
+        )
+
+    async def _ensure(self, manifest, mutation):
+        pass
+
+    async def _request_status(self, **kwargs):
+        return SimpleNamespace(transport_response=None)
+
+    async def _inspect_request_status(self, **kwargs):
+        now = datetime.now(UTC)
+        return SimpleNamespace(
+            state="running",
+            phase="full_build",
+            started_at=now,
+            deadline_at=now + timedelta(minutes=5),
+            heartbeat_at=now,
+            log_bytes=128,
+            transport_response=None,
+        )
+
+    async def _store_transport_response(self, **kwargs):
+        pass
+
+    def parts(self, state):
+        return self.machine, self.backend
+
+    @staticmethod
+    def _request_digest(manifest, request):
+        return "d" * 64
 
     def capabilities(self):
         return {
@@ -157,6 +198,66 @@ async def test_manifest_build_dispatches_to_machine_after_lease_and_revision_che
         )
         assert denied.status_code == 409
         assert len(runtime.commands) == 1
+
+
+@pytest.mark.usefixtures("_internal_settings")
+async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
+    tmp_path, monkeypatch
+):
+    workspace_id = uuid4()
+    provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+
+    class BlockingRuntime(PortableRuntime):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release_command = asyncio.Event()
+
+        async def execute(self, state, manifest, request):
+            self.started.set()
+            await self.release_command.wait()
+            return DockerCommandResult(exit_code=0, output="done", timed_out=False)
+
+    runtime = BlockingRuntime()
+    manager.machine_runtime = runtime
+    files = {".omnia/cell.json": json.dumps(payload()), "server.py": "print('python')"}
+    state = manager.state_store.load(workspace_id)
+    await docker.write_volume_files(
+        state.resource_names.workspace_volume,
+        {path: content.encode() for path, content in files.items()},
+    )
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    operation_id = uuid4()
+    request = {
+        "generation_run_id": str(run_id),
+        "fencing_epoch": 4,
+        "expected_revision": workspace._workspace_revision(files),
+        "cmd": "omnia:full_build",
+        "task_role": "full_build",
+        "operation_id": str(operation_id),
+    }
+    headers = {"X-Internal-Token": "test-internal-token-not-a-real-secret"}
+    async with _client() as client:
+        command = asyncio.create_task(
+            client.post(
+                f"/internal/workspaces/{workspace_id}/agent/exec",
+                json=request,
+                headers=headers,
+            )
+        )
+        await asyncio.wait_for(runtime.started.wait(), timeout=1)
+        status = await asyncio.wait_for(
+            client.get(
+                f"/internal/workspaces/{workspace_id}/agent/operations/{operation_id}",
+                headers=headers,
+            ),
+            timeout=1,
+        )
+        assert status.status_code == 200, status.text
+        assert status.json()["state"] == "running"
+        runtime.release_command.set()
+        response = await command
+        assert response.status_code == 200, response.text
 
 
 @pytest.mark.usefixtures("_internal_settings")

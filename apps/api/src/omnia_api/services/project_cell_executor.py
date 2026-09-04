@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID, uuid4
@@ -15,6 +16,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_engine
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
@@ -26,9 +28,13 @@ from omnia_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellAgentOperationStatus,
     ProjectCellPreviewSession,
+    ProjectCellWorkspaceIdentity,
     project_cell_agent_bootstrap,
     project_cell_agent_exec,
+    project_cell_agent_identity,
+    project_cell_agent_operation_status,
     project_cell_agent_write_files,
     project_cell_apply_draft,
     project_cell_create_preview_session,
@@ -36,6 +42,7 @@ from omnia_api.services.orchestrator_client import (
 from omnia_api.services.project_cell_capacity import signal_capacity_admitted, wait_for_capacity
 from omnia_api.services.project_cell_control import inspect_project_cell_control
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
+from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 from omnia_api.services.project_cells import (
     ProjectCellBusy,
     ProjectCellNotFound,
@@ -46,7 +53,8 @@ from omnia_api.services.project_cells import (
     reserve_cell_operation,
 )
 
-_PROJECT_CELL_PROFILE_VERSION = "docker-owner-cell-resources-v1"
+_PROJECT_CELL_PROFILE_V1 = "docker-owner-cell-resources-v1"
+_PROJECT_CELL_PROFILE_V2 = "docker-owner-cell-resources-v2"
 _PROJECT_CELL_BUILD_TIMEOUT_SECONDS = 600
 _PROJECT_CELL_SHELL_TIMEOUT_SECONDS = 300
 _PROJECT_CELL_DEPENDENCY_METADATA_STRING_FIELDS = ("packageManager",)
@@ -271,6 +279,62 @@ class ProjectCellExecutorUnavailable(RuntimeError):
     """Selected owner-only Project Cell path could not be prepared safely."""
 
 
+class ProjectCellCommandRole(StrEnum):
+    BOOTSTRAP = "bootstrap"
+    FAST_CHECK = "fast_check"
+    FULL_BUILD = "full_build"
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellCommandObservation:
+    operation_id: UUID
+    role: ProjectCellCommandRole | None
+    ok: bool
+    timed_out: bool
+    redacted_detail: str
+    before: ProofIdentity
+    after: ProofIdentity
+    invalidated_dimensions: frozenset[ProofDimension]
+
+
+def invalidated_dimensions(
+    before: ProofIdentity,
+    after: ProofIdentity,
+) -> frozenset[ProofDimension]:
+    if (
+        before.fencing_epoch != after.fencing_epoch
+        or before.cell_manifest_digest != after.cell_manifest_digest
+        or before.base_image_digest != after.base_image_digest
+        or before.toolchain_digest != after.toolchain_digest
+        or before.resource_profile_version != after.resource_profile_version
+    ):
+        return frozenset(ProofDimension)
+    invalid: set[ProofDimension] = set()
+    if before.dependency_digest != after.dependency_digest:
+        invalid.update(ProofDimension)
+    if before.workspace_revision != after.workspace_revision:
+        invalid.update(
+            {
+                ProofDimension.FAST_CHECK,
+                ProofDimension.FULL_BUILD,
+                ProofDimension.RUNTIME,
+                ProofDimension.RELEASE,
+            }
+        )
+    if before.schema_data_digest != after.schema_data_digest:
+        invalid.update({ProofDimension.RUNTIME, ProofDimension.RELEASE})
+    if before.build_config_digest != after.build_config_digest:
+        invalid.update(
+            {
+                ProofDimension.FAST_CHECK,
+                ProofDimension.FULL_BUILD,
+                ProofDimension.RUNTIME,
+                ProofDimension.RELEASE,
+            }
+        )
+    return frozenset(invalid)
+
+
 def portable_selected(capabilities: dict[str, object], files: dict[str, str]) -> bool:
     # Capability comes from the selected trusted provider; a source file alone
     # must never weaken legacy checks or advertise unavailable execution.
@@ -289,6 +353,12 @@ class ProjectCellExecutorHandle:
     workspace_id: UUID
     create_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]]
     release: Callable[[], Awaitable[None]]
+    current_identity: Callable[[], Awaitable[ProofIdentity]] | None = None
+    run_role: (
+        Callable[[ProjectCellCommandRole, UUID], Awaitable[ProjectCellCommandObservation]] | None
+    ) = None
+    runtime_probe: Callable[[str], Awaitable[Any]] | None = None
+    operation_status: Callable[[UUID], Awaitable[ProjectCellAgentOperationStatus]] | None = None
     capabilities: dict[str, object] = dataclass_field(default_factory=dict)
     is_portable: Callable[[], bool] = lambda: False
 
@@ -304,6 +374,7 @@ async def _release_generation_lease(
     session_factory: async_sessionmaker[AsyncSession],
     workspace_id: UUID,
     generation_run_id: UUID,
+    profile_version: str,
 ) -> None:
     async with session_factory() as session:
         workspace = await session.scalar(
@@ -323,7 +394,7 @@ async def _release_generation_lease(
             generation_run_id=generation_run_id,
             kind="release",
             idempotency_key=(
-                f"generation:{generation_run_id}:release:{_PROJECT_CELL_PROFILE_VERSION}"
+                f"generation:{generation_run_id}:release:{profile_version}"
             ),
             request={},
         )
@@ -376,6 +447,11 @@ async def maybe_create_project_cell_executor(
     if project_template != "max_miniapp" or not project_slug:
         return None
 
+    profile_version = (
+        _PROJECT_CELL_PROFILE_V2
+        if get_settings().use_cell_resource_profile_v2
+        else _PROJECT_CELL_PROFILE_V1
+    )
     session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with session_factory() as session:
         project = await session.get(Project, project_id)
@@ -419,8 +495,8 @@ async def maybe_create_project_cell_executor(
                 workspace_id=workspace.id,
                 generation_run_id=run.id,
                 kind="ensure",
-                idempotency_key=f"generation:{run.id}:ensure:{_PROJECT_CELL_PROFILE_VERSION}",
-                request={"profile_version": _PROJECT_CELL_PROFILE_VERSION},
+                idempotency_key=f"generation:{run.id}:ensure:{profile_version}",
+                request={"profile_version": profile_version},
             )
             await session.commit()
         except (
@@ -482,6 +558,7 @@ async def maybe_create_project_cell_executor(
                     session_factory=session_factory,
                     workspace_id=workspace_id,
                     generation_run_id=generation_run_id,
+                    profile_version=profile_version,
                 )
             )
             try:
@@ -528,9 +605,112 @@ async def maybe_create_project_cell_executor(
     runtime_log_tail = ""
     preview_synced = False
     capabilities = dict(snapshot.capabilities)
+    last_identity: ProofIdentity | None = None
 
     def _is_portable() -> bool:
         return portable_selected(capabilities, workspace_files)
+
+    def _proof_identity(identity: ProjectCellWorkspaceIdentity) -> ProofIdentity:
+        return ProofIdentity(
+            workspace_id=workspace_id,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+            workspace_revision=identity.workspace_revision,
+            dependency_digest=identity.dependency_digest,
+            schema_data_digest=identity.schema_data_digest,
+            cell_manifest_digest=identity.cell_manifest_digest,
+            base_image_digest=identity.environment_digest,
+            toolchain_digest=identity.environment_digest,
+            resource_profile_version=profile_version,
+            build_config_digest=identity.build_config_digest,
+        )
+
+    def _command_observation(
+        result: Any,
+        role: ProjectCellCommandRole | None,
+    ) -> ProjectCellCommandObservation:
+        if (
+            result.operation_id is None
+            or result.before_identity is None
+            or result.after_identity is None
+        ):
+            raise ProjectCellExecutorUnavailable(
+                "Project Cell orchestrator omitted identity-aware command evidence"
+            )
+        before = _proof_identity(result.before_identity)
+        after = _proof_identity(result.after_identity)
+        return ProjectCellCommandObservation(
+            operation_id=result.operation_id,
+            role=role,
+            ok=result.ok,
+            timed_out=result.timed_out,
+            redacted_detail=result.detail,
+            before=before,
+            after=after,
+            invalidated_dimensions=invalidated_dimensions(before, after),
+        )
+
+    async def _current_identity() -> ProofIdentity:
+        nonlocal last_identity
+        if not _is_portable():
+            raise ProjectCellExecutorUnavailable("portable Project Cell identity is unavailable")
+        identity = await project_cell_agent_identity(
+            workspace_id,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+        )
+        last_identity = _proof_identity(identity)
+        return last_identity
+
+    async def _run_role(
+        role: ProjectCellCommandRole,
+        operation_id: UUID,
+    ) -> ProjectCellCommandObservation:
+        nonlocal dirty, last_identity, preview_synced, synced_files, workspace_revision
+        timeout = {
+            ProjectCellCommandRole.BOOTSTRAP: 900,
+            ProjectCellCommandRole.FAST_CHECK: 480,
+            ProjectCellCommandRole.FULL_BUILD: 900,
+        }[role]
+        result = await project_cell_agent_exec(
+            workspace_id,
+            f"omnia:{role.value}",
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+            expected_revision=workspace_revision,
+            timeout_seconds=timeout,
+            task_role=role.value,
+            operation_id=operation_id,
+        )
+        workspace_revision = result.workspace_revision
+        observation = _command_observation(result, role)
+        last_identity = observation.after
+        if observation.invalidated_dimensions:
+            preview_synced = False
+        await _refresh_workspace_from_cell()
+        if role is ProjectCellCommandRole.FULL_BUILD and observation.ok:
+            synced_files = dict(workspace_files)
+            dirty = False
+            preview_synced = True
+        return observation
+
+    async def _operation_status(operation_id: UUID) -> ProjectCellAgentOperationStatus:
+        return await project_cell_agent_operation_status(workspace_id, operation_id)
+
+    async def _runtime_probe(proof_key: str) -> Any:
+        from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
+
+        preview = await project_cell_create_preview_session(
+            workspace_id,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
+        )
+        return await probe_max_cell_runtime(
+            preview,
+            portable_project_id=project_id,
+            expected_epoch=fencing_epoch,
+            proof_key=proof_key,
+        )
 
     async def _persist_files(
         *,
@@ -607,6 +787,7 @@ async def maybe_create_project_cell_executor(
             session_factory=session_factory,
             workspace_id=workspace_id,
             generation_run_id=leased_run_id,
+            profile_version=profile_version,
         )
 
     async def _sync_preview() -> ProjectCellPreviewSyncResult:
@@ -624,6 +805,25 @@ async def maybe_create_project_cell_executor(
                     raise
             else:
                 return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
+        if _is_portable() and get_settings().use_max_finalization_coordinator:
+            if dirty:
+                return ProjectCellPreviewSyncResult(
+                    generated_files={},
+                    failure=None,
+                )
+            try:
+                await project_cell_create_preview_session(
+                    workspace_id,
+                    generation_run_id=leased_run_id,
+                    fencing_epoch=fencing_epoch,
+                )
+            except OrchestratorBadRequest as exc:
+                return ProjectCellPreviewSyncResult(
+                    generated_files={},
+                    failure=f"preview reconciliation failed: {exc.message}",
+                )
+            preview_synced = True
+            return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
         preview_synced = False
         diff = _diff_files(synced_files, workspace_files)
         draft = await project_cell_apply_draft(
@@ -729,6 +929,17 @@ async def maybe_create_project_cell_executor(
                 }
             if action.name == "build":
                 portable = _is_portable()
+                if portable and get_settings().use_max_finalization_coordinator:
+                    observation = await _run_role(ProjectCellCommandRole.FAST_CHECK, uuid4())
+                    return {
+                        "ok": observation.ok,
+                        "detail": observation.redacted_detail
+                        or ("ok" if observation.ok else "non-zero exit"),
+                        "environment_mutated": bool(observation.invalidated_dimensions),
+                        "invalidated_dimensions": sorted(
+                            item.value for item in observation.invalidated_dimensions
+                        ),
+                    }
                 result = await project_cell_agent_exec(
                     workspace_id,
                     "omnia:build" if portable else _PROJECT_CELL_BUILD_CMD,
@@ -736,7 +947,8 @@ async def maybe_create_project_cell_executor(
                     fencing_epoch=fencing_epoch,
                     expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_BUILD_TIMEOUT_SECONDS,
-                    **({"task_role": "build", "operation_id": uuid4()} if portable else {}),
+                    task_role="build" if portable else None,
+                    operation_id=uuid4() if portable else None,
                 )
                 workspace_revision = result.workspace_revision
                 await _refresh_workspace_from_cell()
@@ -756,7 +968,7 @@ async def maybe_create_project_cell_executor(
                     fencing_epoch=fencing_epoch,
                     expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_SHELL_TIMEOUT_SECONDS,
-                    **({"operation_id": uuid4()} if _is_portable() else {}),
+                    operation_id=uuid4() if _is_portable() else None,
                 )
                 workspace_revision = result.workspace_revision
                 changed_files = await _refresh_workspace_from_cell()
@@ -767,6 +979,40 @@ async def maybe_create_project_cell_executor(
                     "ok": result.ok,
                     "detail": detail,
                 }
+                if _is_portable() and result.before_identity and result.after_identity:
+                    observation = _command_observation(result, None)
+                    response["environment_mutated"] = bool(
+                        observation.invalidated_dimensions
+                    )
+                    response["invalidated_dimensions"] = sorted(
+                        item.value for item in observation.invalidated_dimensions
+                    )
+                    response["mutation"] = {
+                        "source_changed": (
+                            observation.before.workspace_revision
+                            != observation.after.workspace_revision
+                        ),
+                        "dependency_changed": (
+                            observation.before.dependency_digest
+                            != observation.after.dependency_digest
+                        ),
+                        "schema_data_changed": (
+                            observation.before.schema_data_digest
+                            != observation.after.schema_data_digest
+                        ),
+                        "manifest_changed": (
+                            observation.before.cell_manifest_digest
+                            != observation.after.cell_manifest_digest
+                        ),
+                        "environment_changed": (
+                            observation.before.toolchain_digest
+                            != observation.after.toolchain_digest
+                        ),
+                        "build_config_changed": (
+                            observation.before.build_config_digest
+                            != observation.after.build_config_digest
+                        ),
+                    }
                 if changed_files:
                     response["files"] = changed_files
                 return response
@@ -776,6 +1022,15 @@ async def maybe_create_project_cell_executor(
                 "probe",
                 "verify_isolation",
             }:
+                if (
+                    _is_portable()
+                    and get_settings().use_max_finalization_coordinator
+                    and dirty
+                ):
+                    return {
+                        "ok": False,
+                        "error": "runtime proof is reserved until the green full build",
+                    }
                 sync_result = await _sync_preview()
                 if sync_result.failure is not None:
                     return {
@@ -861,14 +1116,9 @@ async def maybe_create_project_cell_executor(
 
     async def _execute(action: Action) -> dict[str, Any]:
         nonlocal preview_synced
-        mutated = _is_portable() and action.name in {"bash", "build"}
-        if mutated:
-            # Package/rootfs/process mutations need not alter tracked source.
-            # Invalidate before awaiting, including partial failures/timeouts.
-            preview_synced = False
         result = await _execute_action(action)
-        if mutated:
-            result["environment_mutated"] = True
+        if result.get("environment_mutated") is True:
+            preview_synced = False
         return result
 
     return ProjectCellExecutorHandle(
@@ -882,6 +1132,10 @@ async def maybe_create_project_cell_executor(
         workspace_id=workspace_id,
         create_preview_session=_create_preview_session,
         release=_release,
+        current_identity=_current_identity,
+        run_role=_run_role,
+        runtime_probe=_runtime_probe,
+        operation_status=_operation_status,
         capabilities=capabilities,
         is_portable=_is_portable,
     )

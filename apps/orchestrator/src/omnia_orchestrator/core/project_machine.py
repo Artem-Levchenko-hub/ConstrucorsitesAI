@@ -56,7 +56,16 @@ class MachineCommand(_StrictModel):
 
 class MachineTask(MachineCommand):
     name: Name
-    role: Literal["bootstrap", "build", "test", "migrate", "quiesce", "restore_check"]
+    role: Literal[
+        "bootstrap",
+        "fast_check",
+        "full_build",
+        "build",
+        "test",
+        "migrate",
+        "quiesce",
+        "restore_check",
+    ]
     timeout_seconds: int = Field(default=900, ge=1, le=3600)
 
 

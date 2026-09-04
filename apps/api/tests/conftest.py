@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_session
-from omnia_api.main import app
 from omnia_api.models.base import Base
 from omnia_api.models.billing import DEFAULT_BILLING_PLANS, BillingPlan
 
@@ -153,6 +152,8 @@ async def db_session(test_engine) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
+    from omnia_api.main import app
+
     async def _override_session() -> AsyncIterator[AsyncSession]:
         yield db_session
 

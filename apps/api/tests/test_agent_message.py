@@ -36,6 +36,19 @@ def test_done_empty_summary_falls_back_friendly() -> None:
     assert _agent_result_message(_res(done=True, summary=""), is_edit=False) == (
         "Готово — приложение собрано."
     )
+
+
+def test_source_complete_handoff_keeps_finalization_message() -> None:
+    message = _agent_result_message(
+        _res(
+            done=False,
+            needs_finalization=True,
+            summary="Исходники собраны; выполняю финальную проверку.",
+            stop_reason="done",
+        ),
+        is_edit=False,
+    )
+    assert message == "Исходники собраны; выполняю финальную проверку."
     assert _agent_result_message(_res(done=True, summary="   "), is_edit=True) == (
         "Готово — правка применена."
     )

@@ -454,21 +454,90 @@ class ProjectCellAgentWriteResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectCellWorkspaceIdentity:
+    workspace_revision: str
+    dependency_digest: str
+    schema_data_digest: str
+    cell_manifest_digest: str
+    environment_digest: str
+    build_config_digest: str
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.workspace_revision,
+            self.dependency_digest,
+            self.schema_data_digest,
+            self.cell_manifest_digest,
+            self.environment_digest,
+            self.build_config_digest,
+        ):
+            _validate_workspace_revision(value)
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProjectCellWorkspaceIdentity:
+        expected = {
+            "workspace_revision",
+            "dependency_digest",
+            "schema_data_digest",
+            "cell_manifest_digest",
+            "environment_digest",
+            "build_config_digest",
+        }
+        if type(payload) is not dict or set(payload) != expected:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell workspace identity"
+            )
+        values = cast(dict[str, object], payload)
+        if any(type(values[name]) is not str for name in expected):
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell workspace identity"
+            )
+        try:
+            return cls(**cast(dict[str, str], values))
+        except ValueError as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell workspace identity"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectCellAgentExecResponse:
     ok: bool
     exit_code: int
     detail: str
     timed_out: bool
     workspace_revision: str
+    operation_id: UUID | None = None
+    before_identity: ProjectCellWorkspaceIdentity | None = None
+    after_identity: ProjectCellWorkspaceIdentity | None = None
+    environment_mutated: bool = False
 
     def __post_init__(self) -> None:
         _validate_workspace_revision(self.workspace_revision)
+        evidence = (self.operation_id, self.before_identity, self.after_identity)
+        if any(item is not None for item in evidence) and not all(
+            item is not None for item in evidence
+        ):
+            raise ValueError("incomplete Project Cell command evidence")
+        if self.after_identity is not None:
+            if self.workspace_revision != self.after_identity.workspace_revision:
+                raise ValueError("workspace revision does not match command evidence")
+            if self.environment_mutated != (self.before_identity != self.after_identity):
+                raise ValueError("mutation flag does not match command evidence")
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentExecResponse:
-        expected = {"ok", "exit_code", "detail", "timed_out", "workspace_revision"}
+        legacy = {"ok", "exit_code", "detail", "timed_out", "workspace_revision"}
+        transport = legacy | {
+            "operation_id",
+            "before_identity",
+            "after_identity",
+            "environment_mutated",
+        }
+        is_transport = bool(set(payload) - legacy)
+        expected = transport if is_transport else legacy
         unexpected = set(payload) - expected
-        if unexpected:
+        if unexpected or set(payload) != expected:
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell exec response"
             )
@@ -477,12 +546,18 @@ class ProjectCellAgentExecResponse:
         detail = payload.get("detail")
         timed_out = payload.get("timed_out")
         workspace_revision = payload.get("workspace_revision")
+        operation_id = payload.get("operation_id")
+        before_identity = payload.get("before_identity")
+        after_identity = payload.get("after_identity")
+        environment_mutated = payload.get("environment_mutated", False)
         if (
             type(ok) is not bool
             or type(exit_code) is not int
             or type(detail) is not str
             or type(timed_out) is not bool
             or type(workspace_revision) is not str
+            or (is_transport and type(operation_id) is not str)
+            or (is_transport and type(environment_mutated) is not bool)
         ):
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell exec response"
@@ -494,10 +569,90 @@ class ProjectCellAgentExecResponse:
                 detail=detail,
                 timed_out=timed_out,
                 workspace_revision=workspace_revision,
+                operation_id=(UUID(operation_id) if type(operation_id) is str else None),
+                before_identity=(
+                    ProjectCellWorkspaceIdentity.from_json(before_identity)
+                    if is_transport
+                    else None
+                ),
+                after_identity=(
+                    ProjectCellWorkspaceIdentity.from_json(after_identity)
+                    if is_transport
+                    else None
+                ),
+                environment_mutated=cast(bool, environment_mutated),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell exec response"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellAgentOperationStatus:
+    operation_id: UUID
+    state: str
+    phase: str
+    started_at: datetime
+    deadline_at: datetime
+    heartbeat_at: datetime
+    log_bytes: int
+    terminal_response: ProjectCellAgentExecResponse | None
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentOperationStatus:
+        expected = {
+            "operation_id",
+            "state",
+            "phase",
+            "started_at",
+            "deadline_at",
+            "heartbeat_at",
+            "log_bytes",
+            "terminal_response",
+        }
+        if set(payload) != expected:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell operation status"
+            )
+        try:
+            state = payload["state"]
+            if state not in {"running", "completed", "failed", "timed_out", "cancelled"}:
+                raise ValueError("invalid operation state")
+            log_bytes = payload["log_bytes"]
+            if type(log_bytes) is not int or log_bytes < 0:
+                raise ValueError("invalid operation log size")
+            terminal = payload["terminal_response"]
+            if terminal is not None and type(terminal) is not dict:
+                raise ValueError("invalid terminal response")
+            if any(
+                type(payload[name]) is not str
+                for name in (
+                    "operation_id",
+                    "phase",
+                    "started_at",
+                    "deadline_at",
+                    "heartbeat_at",
+                )
+            ):
+                raise ValueError("invalid operation status fields")
+            return cls(
+                operation_id=UUID(cast(str, payload["operation_id"])),
+                state=state,
+                phase=cast(str, payload["phase"]),
+                started_at=datetime.fromisoformat(cast(str, payload["started_at"])),
+                deadline_at=datetime.fromisoformat(cast(str, payload["deadline_at"])),
+                heartbeat_at=datetime.fromisoformat(cast(str, payload["heartbeat_at"])),
+                log_bytes=log_bytes,
+                terminal_response=(
+                    ProjectCellAgentExecResponse.from_json(cast(dict[str, object], terminal))
+                    if terminal is not None
+                    else None
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid Project Cell operation status"
             ) from exc
 
 
@@ -717,6 +872,12 @@ class ProjectCellOrchestratorClient(Protocol):
         request: ObserveProjectCellResourcesRequest,
     ) -> ProjectCellResourceResponse: ...
 
+    async def agent_operation_status(
+        self,
+        workspace_id: UUID,
+        operation_id: UUID,
+    ) -> ProjectCellAgentOperationStatus: ...
+
 
 class HttpProjectCellOrchestratorClient:
     async def ensure(
@@ -776,6 +937,13 @@ class HttpProjectCellOrchestratorClient:
             json=request.to_wire_json(),
         )
         return ProjectCellResourceResponse.from_json(payload)
+
+    async def agent_operation_status(
+        self,
+        workspace_id: UUID,
+        operation_id: UUID,
+    ) -> ProjectCellAgentOperationStatus:
+        return await project_cell_agent_operation_status(workspace_id, operation_id)
 
 
 async def _request_raw(
@@ -962,7 +1130,7 @@ async def project_cell_agent_exec(
         raise ValueError("timeout_seconds must be between 1 and 900")
     _validate_fencing_epoch(fencing_epoch)
     _validate_workspace_revision(expected_revision)
-    if task_role not in (None, "bootstrap", "build", "test"):
+    if task_role not in (None, "bootstrap", "fast_check", "full_build", "build", "test"):
         raise ValueError("invalid portable task role")
     payload = await _request(
         "POST",
@@ -981,6 +1149,35 @@ async def project_cell_agent_exec(
         timeout=float(timeout_seconds + 30),
     )
     return ProjectCellAgentExecResponse.from_json(payload)
+
+
+async def project_cell_agent_identity(
+    workspace_id: UUID,
+    *,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+) -> ProjectCellWorkspaceIdentity:
+    _validate_fencing_epoch(fencing_epoch)
+    payload = await _request(
+        "GET",
+        f"/internal/workspaces/{workspace_id}/agent/identity",
+        params={
+            "generation_run_id": str(generation_run_id),
+            "fencing_epoch": fencing_epoch,
+        },
+    )
+    return ProjectCellWorkspaceIdentity.from_json(payload)
+
+
+async def project_cell_agent_operation_status(
+    workspace_id: UUID,
+    operation_id: UUID,
+) -> ProjectCellAgentOperationStatus:
+    payload = await _request(
+        "GET",
+        f"/internal/workspaces/{workspace_id}/agent/operations/{operation_id}",
+    )
+    return ProjectCellAgentOperationStatus.from_json(payload)
 
 
 async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:

@@ -72,6 +72,87 @@ def test_package_workers_and_node_heap_respect_cell_budget(tmp_path, monkeypatch
     assert env["NODE_OPTIONS"] == "--max-old-space-size=512"
 
 
+def test_v2_active_machine_uses_two_cpu_two_gib_and_project_caches(tmp_path):
+    runtime = backend(
+        tmp_path,
+        cpu_cores=2.0,
+        memory_bytes=2 * 1024**3,
+        resource_profile_version="docker-owner-cell-resources-v2",
+    )
+    runtime._metadata = lambda: {"proxy_ip": "10.0.0.2"}
+
+    options = runtime.container_options(MachineManifest.model_validate(payload()), "guard", 7)
+
+    assert options["nano_cpus"] == 2_000_000_000
+    assert options["mem_limit"] == 2 * 1024**3
+    assert options["environment"]["NODE_OPTIONS"] == "--max-old-space-size=1280"
+    assert options["environment"]["npm_config_child_concurrency"] == "1"
+    assert options["environment"]["npm_config_store_dir"] == "/pnpm/store"
+    assert options["environment"]["COREPACK_HOME"] == "/root/.cache/node/corepack"
+    assert options["volumes"][runtime.pnpm_cache_volume]["bind"] == "/pnpm/store"
+    assert options["volumes"][runtime.corepack_cache_volume]["bind"] == (
+        "/root/.cache/node/corepack"
+    )
+    assert options["volumes"][runtime.next_cache_volume]["bind"] == (
+        "/workspace/.next/cache"
+    )
+    assert all(not name.startswith("/") for name in options["volumes"])
+
+
+def test_command_timeout_targets_only_the_exec_process_group(tmp_path):
+    runtime = backend(tmp_path)
+    calls = []
+
+    class Machine:
+        id = "machine-id"
+
+        def exec_run(self, argv, *, user):
+            calls.append((argv, user))
+            return SimpleNamespace(exit_code=0)
+
+    runtime._metadata = lambda: {
+        "exec_logs": {"exec-id": "/run/omnia-logs/command-test.log"},
+        "exec_pids": {"exec-id": "/run/omnia-logs/command-test.pid"},
+    }
+    runtime._container = lambda: Machine()
+    runtime.client = SimpleNamespace(
+        api=SimpleNamespace(
+            exec_inspect=lambda exec_id: {
+                "ContainerID": "machine-id",
+                "Running": exec_id == "exec-id",
+            }
+        )
+    )
+
+    runtime.terminate_exec("exec-id", 17)
+
+    assert len(calls) == 1
+    argv, user = calls[0]
+    assert argv[:4] == ["python3", "-I", "-S", "-c"]
+    assert argv[-2:] == ["/run/omnia-logs/command-test.pid", "17"]
+    assert argv[4].index("SIGTERM") < argv[4].index("SIGKILL")
+    assert user == "0:0"
+
+
+def test_environment_digest_changes_with_controller_owned_package_inventory(tmp_path):
+    runtime = backend(tmp_path)
+    inventory = [b'[{"command":["dpkg-query"],"exit_code":0,"output":"base=1"}]']
+
+    class Container:
+        def exec_run(self, argv, **kwargs):
+            assert argv[:4] == ["python3", "-I", "-S", "-c"]
+            assert "environment" not in kwargs
+            return SimpleNamespace(exit_code=0, output=inventory[0])
+
+    runtime._container = lambda: Container()
+    first = runtime.environment_digest()
+    inventory[0] = b'[{"command":["dpkg-query"],"exit_code":0,"output":"base=1\\nnew=2"}]'
+    second = runtime.environment_digest()
+
+    assert first != second
+    assert len(first) == len(second) == 64
+
+
 def test_service_budget_is_rejected_before_docker_side_effects(tmp_path):
     runtime = backend(tmp_path, memory_bytes=1)
     with pytest.raises(ValueError, match="resource"):
@@ -144,6 +225,9 @@ def test_environment_snapshot_contract_includes_dedicated_project_postgres_volum
     assert runtime.environment_volume_names(manifest) == (
         "test-source",
         f"{runtime.stem}-home",
+        runtime.pnpm_cache_volume,
+        runtime.corepack_cache_volume,
+        runtime.next_cache_volume,
         runtime.project_postgres_volume,
     )
 

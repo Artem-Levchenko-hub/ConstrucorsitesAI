@@ -219,6 +219,57 @@ async def test_project_cell_agent_exec_validates_and_calls_exact_path(
         )
 
 
+async def test_project_cell_agent_exec_parses_identity_transport_and_new_roles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_id = uuid4()
+    run_id = uuid4()
+    operation_id = uuid4()
+    before = {
+        "workspace_revision": "1" * 64,
+        "dependency_digest": "2" * 64,
+        "schema_data_digest": "3" * 64,
+        "cell_manifest_digest": "4" * 64,
+        "environment_digest": "5" * 64,
+        "build_config_digest": "6" * 64,
+    }
+    after = {**before, "workspace_revision": "7" * 64}
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        assert method == "POST"
+        assert path.endswith("/agent/exec")
+        assert kwargs["json"]["task_role"] == "full_build"  # type: ignore[index]
+        return {
+            "ok": True,
+            "exit_code": 0,
+            "detail": "green",
+            "timed_out": False,
+            "workspace_revision": "7" * 64,
+            "operation_id": str(operation_id),
+            "before_identity": before,
+            "after_identity": after,
+            "environment_mutated": True,
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    result = await orchestrator_client.project_cell_agent_exec(
+        workspace_id,
+        "omnia:full_build",
+        generation_run_id=run_id,
+        fencing_epoch=7,
+        expected_revision="1" * 64,
+        task_role="full_build",
+        operation_id=operation_id,
+    )
+
+    assert result.operation_id == operation_id
+    assert result.before_identity is not None
+    assert result.after_identity is not None
+    assert result.before_identity.workspace_revision == "1" * 64
+    assert result.after_identity.workspace_revision == "7" * 64
+    assert result.environment_mutated is True
+
+
 async def test_provision_waits_for_a_cold_template_rebuild(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

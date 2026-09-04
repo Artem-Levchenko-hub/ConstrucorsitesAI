@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -8,13 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from omnia_api.models.project_cell import (
+    ProjectCellActivityLease,
+    ProjectCellOperation,
+    ProjectCellWorkspace,
+)
 from omnia_api.models.user import User
 from omnia_api.services.orchestrator_client import (
     OrchestratorUnavailable,
     ProjectCellResourceResponse,
 )
 from omnia_api.services.project_cell_capacity import (
+    _hibernate_victim_still_idle,
     claim_capacity_turn,
     claim_idle_hibernation_victim,
     claim_stale_generation_lease,
@@ -123,6 +129,69 @@ async def test_hibernation_victim_excludes_active_generation_and_requester(
     assert victim is not None
     assert victim.id == idle_workspace.id
     assert victim.id not in {requesting_workspace.id, active_workspace.id}
+
+
+async def test_terminal_activity_reconciliation_clears_ghost_lease(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    async with factory() as session:
+        owner = User(email=f"terminal-activity-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        _, requesting_run, _ = await _project_run(
+            session, owner, created_at=now, label="terminal-requesting"
+        )
+        _, _, idle_workspace = await _project_run(
+            session,
+            owner,
+            created_at=now - timedelta(seconds=5),
+            label="terminal-idle",
+        )
+        pause, _ = await reserve_cell_operation(
+            session,
+            workspace_id=idle_workspace.id,
+            generation_run_id=None,
+            kind="pause",
+            idempotency_key=f"terminal-activity:{requesting_run.id}",
+            request={"checkpoint_ref": "terminal-activity"},
+        )
+        activity = ProjectCellActivityLease(
+            workspace_id=idle_workspace.id,
+            generation_run_id=None,
+            kind="command",
+            state="active",
+            fencing_epoch=1,
+            started_at=now - timedelta(minutes=1),
+            deadline_at=now + timedelta(minutes=5),
+            heartbeat_at=now - timedelta(seconds=15),
+        )
+        session.add(activity)
+        await session.commit()
+        activity_id = activity.operation_id
+
+    async def operation_status(_workspace_id, _operation_id):
+        return SimpleNamespace(
+            state="completed",
+            heartbeat_at=now,
+            log_bytes=256,
+        )
+
+    client = SimpleNamespace(agent_operation_status=operation_status)
+    assert await _hibernate_victim_still_idle(
+        factory,
+        workspace_id=idle_workspace.id,
+        pause_operation_id=pause.id,
+        client=client,
+    )
+
+    async with factory() as session:
+        reconciled = await session.get(ProjectCellActivityLease, activity_id)
+        assert reconciled is not None
+        assert reconciled.state == "completed"
+        assert reconciled.finished_at == now
+        assert reconciled.log_bytes == 256
 
 
 async def test_terminal_generation_lease_is_recoverable_but_active_is_not(

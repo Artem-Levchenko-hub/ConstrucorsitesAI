@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         if (
             self.workspace_provider == "docker_owner_canary"
             and self.docker_owner_canary_enabled
+            and self.cell_profile_version == "docker-owner-cell-resources-v1"
             and self.cell_bundle_cpu_cores < 1.0
         ):
             raise ValueError(
@@ -61,6 +62,8 @@ class Settings(BaseSettings):
     cell_machine_guard_image: str = ""
     # Include public NAT/platform addresses as well as any operator exclusions.
     cell_machine_denied_cidrs: list[str] = Field(default_factory=list)
+    cell_machine_command_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
+    cell_machine_command_grace_seconds: int = Field(default=20, ge=1, le=60)
     # Docker CLI / Buildx writes activity and builder metadata under
     # `$DOCKER_CONFIG`. The hardened systemd unit mounts the user's home
     # read-only, so builds must use an orchestrator-owned writable directory.
@@ -246,13 +249,23 @@ class Settings(BaseSettings):
         default="disabled"
     )
     docker_owner_canary_enabled: bool = Field(default=False)
-    cell_profile_version: str = Field(default="docker-owner-cell-resources-v1")
+    cell_profile_version: Literal[
+        "docker-owner-cell-resources-v1", "docker-owner-cell-resources-v2"
+    ] = Field(default="docker-owner-cell-resources-v1")
     cell_postgres_image: str = Field(default="")
     cell_redis_image: str = Field(default="")
     cell_backup_image: str = Field(default="")
     cell_capacity_retry_after_seconds: int = Field(default=2, ge=1, le=10)
     cell_bundle_cpu_cores: float = Field(default=2.0, gt=0)
     cell_bundle_memory_bytes: int = Field(default=4 * 1024**3, gt=0)
+    cell_active_machine_cpu_cores: float = Field(default=2.0, gt=0)
+    cell_active_machine_memory_bytes: int = Field(default=2 * 1024**3, gt=0)
+    cell_project_postgres_cpu_cores: float = Field(default=0.15, gt=0)
+    cell_project_postgres_memory_bytes: int = Field(default=256 * 1024**2, gt=0)
+    cell_helper_cpu_cores: float = Field(default=0.2, ge=0)
+    cell_helper_memory_bytes: int = Field(default=128 * 1024**2, ge=0)
+    cell_managed_core_cpu_cores: float = Field(default=0.35, gt=0)
+    cell_managed_core_memory_bytes: int = Field(default=768 * 1024**2, gt=0)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
     cell_host_memory_reserve_bytes: int = Field(default=4 * 1024**3, ge=0)
     cell_required_free_disk_bytes: int = Field(default=20 * 1024**3, gt=0)

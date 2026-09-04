@@ -24,6 +24,7 @@ from omnia_api.models.billing import (
 )
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
+from omnia_api.models.generation_event import GenerationEvent
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.hero_media_asset import HeroMediaAsset
 from omnia_api.models.hero_media_brief import HeroMediaBrief
@@ -34,8 +35,11 @@ from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import (
+    ProjectCellActivityLease,
     ProjectCellCandidate,
     ProjectCellOperation,
+    ProjectCellProof,
+    ProjectCellProofResult,
     ProjectCellWorkspace,
 )
 from omnia_api.models.project_memory import ProjectMemoryRevision
@@ -66,6 +70,7 @@ __all__ = [
     "BusinessProfile",
     "CustomDomain",
     "DeployTarget",
+    "GenerationEvent",
     "GenerationRun",
     "HeroMediaAsset",
     "HeroMediaBrief",
@@ -78,8 +83,11 @@ __all__ = [
     "Message",
     "Payment",
     "Project",
+    "ProjectCellActivityLease",
     "ProjectCellCandidate",
     "ProjectCellOperation",
+    "ProjectCellProof",
+    "ProjectCellProofResult",
     "ProjectCellWorkspace",
     "ProjectIntegrationBinding",
     "ProjectMemoryRevision",

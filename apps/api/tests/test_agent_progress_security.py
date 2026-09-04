@@ -1,5 +1,6 @@
 from omnia_api.services.agent_progress import (
     REDACTED,
+    bounded_redacted_text,
     redact_sensitive_text,
     sanitize_agent_steps,
 )
@@ -45,3 +46,10 @@ def test_public_transcript_sanitizer_preserves_safe_shape() -> None:
     assert rows[0]["step"] == 1
     assert rows[0]["ok"] is True
     assert rows[0]["detail"] == f"AUTH_SECRET={REDACTED}\nbuild clean"
+
+
+def test_bounded_redaction_catches_token_crossing_storage_boundary() -> None:
+    result = bounded_redacted_text("A" * 4090 + "ghp_" + "B" * 24, max_bytes=4096)
+
+    assert "ghp_" not in result
+    assert REDACTED in result

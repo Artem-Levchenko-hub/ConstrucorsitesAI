@@ -107,6 +107,8 @@ class AgentResult:
     # GenerationRun. Text/legacy builders leave this empty.
     evidence: dict[str, int] = field(default_factory=dict)
     segments: int = 1
+    needs_finalization: bool = False
+    proof_checkpoint: object | None = None
 
 
 def parse_action(reply: str) -> Action | None:

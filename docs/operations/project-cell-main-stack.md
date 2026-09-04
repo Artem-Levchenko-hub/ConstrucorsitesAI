@@ -10,7 +10,8 @@ product or a fixed package list. No model generation is part of deployment proof
 - The existing owner-canary provider advertises the capability over bootstrap.
   New empty cells seeded from the trusted template (including byte-identical
   pristine project-directory copies) receive `.omnia/cell.json`
-  with `pnpm install --no-frozen-lockfile`, `pnpm build`, `pnpm test`, `pnpm start`.
+  with frozen `pnpm install`, separate fast checks, one final build/test, and
+  `pnpm start`.
   The package test script requires real `tests/*.test.mjs`; no passing dummy test
   or product page is supplied. The agent creates `src/app/page.tsx` and product UI.
 - Existing no-manifest source stays on the legacy path. An intentional manifest
@@ -34,12 +35,15 @@ product or a fixed package list. No model generation is part of deployment proof
   admin-controlled by the agent inside the project machine. It shares the
   trusted guard's network namespace and listens only on loopback, so even a
   PostgreSQL `COPY PROGRAM` process inherits the core/private-network deny.
-- Shell/build attempts invalidate preview and completion proofs even without
-  source changes and even on failures. Fresh completion checks require the actual
+- Proof invalidation follows controller-owned source, dependency, schema,
+  manifest, environment, toolchain and profile digests. A read-only command does
+  not invalidate a green build; changed dependencies invalidate every later proof.
+  Fresh completion checks require the actual
   product root, signed MAX bootstrap/session, protected data, negative auth and
   exact active lease epoch. Segment continuation cannot revive invalidated proof.
-- Build/command requests share one aggregate deadline across install/build/test,
-  not a fresh deadline per task. API build is600s and shell300s; whole preview
+- Each role has one aggregate deadline: bootstrap installs once, fast checks run
+  during editing, and the coordinator owns one final build/test. API build is
+  600s and shell 300s; whole preview
   apply reserves870s for work including capture/readiness plus30s for cleanup,
   with930s transport timeout. Blocking helpers inherit remaining work time:
   they cannot open a fresh readiness/quiesce window at the end of the request.
@@ -83,6 +87,15 @@ CELL_MACHINE_BASE_IMAGE=sha256:APPROVED_BUILT_MAIN_STACK_IMAGE_ID
 CELL_MACHINE_GUARD_IMAGE=sha256:APPROVED_BUILT_GUARD_IMAGE_ID
 CELL_NETWORK_POOL=10.253.0.0/16
 CELL_MACHINE_DENIED_CIDRS=["170.168.72.200/32"]
+CELL_PROFILE_VERSION=docker-owner-cell-resources-v2
+CELL_ACTIVE_MACHINE_CPU_CORES=2
+CELL_ACTIVE_MACHINE_MEMORY_BYTES=2147483648
+CELL_PROJECT_POSTGRES_CPU_CORES=0.15
+CELL_PROJECT_POSTGRES_MEMORY_BYTES=268435456
+CELL_HELPER_CPU_CORES=0.2
+CELL_HELPER_MEMORY_BYTES=134217728
+CELL_MANAGED_CORE_CPU_CORES=0.35
+CELL_MANAGED_CORE_MEMORY_BYTES=805306368
 ```
 
 The pool was free in the scoped 2026-09-03 inventory; recheck all Docker networks
@@ -100,14 +113,53 @@ using canonical production compose, restart the orchestrator, verify status,
 health and canary capability/bootstrap. Record pushed/deployed revision and image
 IDs. Do not claim delivery until that loop is complete.
 
-Default resource profile remains unchanged: bundle memory4GiB / CPU2, executor
-1GiB / .5CPU. Proxy/guard/gateway reserve128MiB / .2CPU inside that slice, leaving
-896MiB / .3CPU for the machine. The dedicated project PostgreSQL sidecar uses
-256MiB / .15CPU from the draft slice by default, leaving the managed core the
-remainder of that already-accounted draft budget.
-PNPM9 tarball workers are reduced to one, lifecycle concurrency1, network4,
-Node heap at most512MiB (lower for small budgets), Next build workers1. These are
-practical defaults, not package restrictions; aggregate cgroup limits still apply.
+Add these **API and worker** switches initially disabled, then enable one at a
+time for the existing owner canary only:
+
+```dotenv
+USE_MAX_FINALIZATION_COORDINATOR=false
+USE_PROJECT_CELL_ACTIVITY_WATCHDOG=false
+USE_GENERATION_EVENT_REPLAY=false
+USE_CELL_RESOURCE_PROFILE_V2=false
+MAX_GENERATION_DEADLINE_SECONDS=1500
+PROJECT_CELL_HEARTBEAT_SECONDS=15
+PROJECT_CELL_WATCHDOG_GRACE_SECONDS=20
+```
+
+Rollout order is observability, coordinator, activity watchdog, resource profile
+v2, durable event replay, then coordinator ownership for the owner MAX canary.
+After each step check API/worker/orchestrator health and the authored no-model
+acceptance fixture. Each switch rolls back independently. Rollback retains proof,
+activity and event records and never removes installed project libraries or the
+dedicated project PostgreSQL database.
+
+V2 admission counts each concurrent component once: legacy cell PostgreSQL
+1 CPU/2 GiB, Redis .5 CPU/1 GiB, active project machine 2 CPU/2 GiB, dedicated
+project PostgreSQL .15 CPU/256 MiB, guard/proxy/gateway helpers .2 CPU/128 MiB,
+and managed core .35 CPU/768 MiB. Total: **4.2 CPU and 6.125 GiB** plus the
+configured disk/inode envelope. If the complete envelope is unavailable, the
+request queues; Docker is not started with a smaller hidden limit. The machine
+uses two Next workers, a 1280 MiB Node heap, lifecycle concurrency 1, and
+project-only named pnpm/Corepack/Next cache volumes. Profile v1 remains an
+explicit rollback value.
+
+Useful diagnostics (run against the production application database with the
+normal operator account; do not paste secrets or full logs):
+
+```sql
+select dimension, outcome, operation_id, created_at
+from project_cell_proof_results order by created_at desc limit 50;
+select workspace_id, operation_id, kind, state, phase, heartbeat_at, deadline_at
+from project_cell_activity_leases order by heartbeat_at desc limit 50;
+select generation_run_id, seq, event_type, created_at
+from generation_events order by created_at desc limit 100;
+```
+
+Inspect a known command through
+`GET /internal/workspaces/{workspace_id}/agent/operations/{operation_id}`.
+Alert when an active lease has no heartbeat for more than 20 seconds. A terminal
+watchdog failure includes phase, proof key and operation ID; use those fields to
+correlate the generation row, activity lease and command journal.
 
 ## Recovery and limitations
 

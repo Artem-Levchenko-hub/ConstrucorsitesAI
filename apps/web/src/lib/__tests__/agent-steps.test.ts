@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { AgentStep } from "@/lib/api/types";
-import { restorePersistedAgentSteps } from "@/lib/agent-steps";
+import {
+  mergeAgentStepsBySequence,
+  restorePersistedAgentSteps,
+} from "@/lib/agent-steps";
 
 const persisted: AgentStep[] = [
   {
@@ -26,5 +29,27 @@ describe("agent step history", () => {
   it("keeps the cache unchanged when no persisted history exists", () => {
     expect(restorePersistedAgentSteps([], null)).toEqual([]);
     expect(restorePersistedAgentSteps(undefined, undefined)).toBeUndefined();
+  });
+
+  it("merges durable history over a shorter local prefix", () => {
+    const rows = (start: number, end: number): AgentStep[] =>
+      Array.from({ length: end - start + 1 }, (_, offset) => {
+        const seq = start + offset;
+        return {
+          eventId: `event-${seq}`,
+          runId: "00000000-0000-0000-0000-000000000001",
+          seq,
+          step: seq,
+          kind: "step",
+          action: "build",
+          path: "",
+        };
+      });
+
+    expect(
+      mergeAgentStepsBySequence(rows(1, 51), rows(1, 130)).map(
+        (step) => step.seq,
+      ),
+    ).toEqual(Array.from({ length: 130 }, (_, index) => index + 1));
   });
 });

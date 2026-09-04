@@ -11,6 +11,7 @@ from omnia_api.services.agent_builder import Action
 from omnia_api.services.functional_gate import Check, FunctionalVerdict, summarize
 
 if TYPE_CHECKING:
+    from omnia_api.services.max_finalization import ProofBundle
     from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
     from omnia_api.services.project_cell_executor import ProjectCellExecutorHandle
 
@@ -19,6 +20,7 @@ async def run_release_proof(
     project_id: UUID,
     project_slug: str,
     *,
+    proof: ProofBundle | None = None,
     require_max_data: bool = False,
     project_cell_handle: ProjectCellExecutorHandle | None = None,
 ) -> FunctionalVerdict:
@@ -27,6 +29,11 @@ async def run_release_proof(
     Every failure becomes a failed check instead of escaping. Callers can therefore
     persist an honest negative attestation and keep production deploy fail-closed.
     """
+    if proof is not None:
+        from omnia_api.services.max_finalization import proof_bundle_verdict
+
+        return proof_bundle_verdict(proof, require_max_data=require_max_data)
+
     settings = get_settings()
     checks: list[Check] = []
     try:
@@ -100,20 +107,19 @@ async def run_release_proof(
                 if cell_preview is None:
                     cell_preview = await project_cell_handle.create_preview_session()
                 probe_path = "/"
-                probe_kwargs: dict[str, object] = {}
+                fallback_paths: tuple[str, ...] = ()
                 snapshot_files = getattr(project_cell_handle, "snapshot_files", None)
                 if callable(snapshot_files):
                     current_files = await snapshot_files()
-                    probe_path, fallback_paths = resolve_max_runtime_probe_paths(
+                    probe_path, resolved_fallback_paths = resolve_max_runtime_probe_paths(
                         current_files,
                         requested_path="/",
                     )
-                    if fallback_paths:
-                        probe_kwargs["fallback_paths"] = fallback_paths
+                    fallback_paths = tuple(resolved_fallback_paths)
                 max_probe = await probe_max_cell_runtime(
                     cell_preview,
                     path=probe_path,
-                    **probe_kwargs,
+                    fallback_paths=fallback_paths,
                 )
             checks.append(Check("max_data_plane", max_probe.ok, max_probe.detail[:240]))
         except Exception as exc:

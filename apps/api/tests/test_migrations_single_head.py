@@ -201,13 +201,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_project_cell_capacity_queue_is_the_only_head() -> None:
+def test_project_cell_finalization_is_the_only_head() -> None:
     # Mutation caught: placing 0054 on the wrong parent or introducing another branch.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0055_project_cell_capacity_queue"]
-    assert chain["0055_project_cell_capacity_queue"] == "0054_project_cell_candidates"
+    assert heads == ["0056_project_cell_finalization"]
+    assert chain["0056_project_cell_finalization"] == "0055_project_cell_capacity_queue"
 
 
 def test_project_cell_candidates_migration_upgrade_and_rollback(

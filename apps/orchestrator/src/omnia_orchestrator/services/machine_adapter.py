@@ -7,11 +7,16 @@ import hashlib
 import json
 import socket
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
 
-from omnia_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
+from omnia_orchestrator.core.cell_resources import (
+    CellFenceRejected,
+    CellResourceError,
+    LifecycleMutation,
+)
 from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.services.cell_state import CellCredentialStore
@@ -23,6 +28,7 @@ from omnia_orchestrator.services.machine_environment import (
 )
 from omnia_orchestrator.services.machine_services import MachineServices
 from omnia_orchestrator.services.project_machine import (
+    MachineOperationResult,
     ProjectMachine,
     machine_budget,
     machine_effect,
@@ -58,7 +64,7 @@ class MachineAdapter:
             "database_url_env": "DATABASE_URL",
             "database_admin": "full",
             "commands": ["bash", "build", "runtime_check"],
-            "task_roles": ["bootstrap", "build", "test"],
+            "task_roles": ["bootstrap", "fast_check", "full_build"],
             "framework": "nextjs",
             "default_stack": "max-nextjs-typescript",
             "node_major": 22,
@@ -126,12 +132,19 @@ class MachineAdapter:
             project_postgres_cpu_cores=project_postgres_cpu,
             network_pool=self.settings.cell_network_pool,
             denied_cidrs=tuple(self.settings.cell_machine_denied_cidrs),
-            # Proxy64 + guard32 + gateway32 MiB and .2 CPU stay inside the
-            # previously reserved executor slice. Managed core uses draft slice.
-            cpu_cores=profile.executor_cpu_cores - 0.2,
-            memory_bytes=profile.executor_memory_bytes - 128 * 1024**2,
+            cpu_cores=(
+                profile.active_machine_cpu_cores
+                if profile.is_v2
+                else profile.executor_cpu_cores - 0.2
+            ),
+            memory_bytes=(
+                profile.active_machine_memory_bytes
+                if profile.is_v2
+                else profile.executor_memory_bytes - 128 * 1024**2
+            ),
             disk_bytes=profile.required_free_disk_bytes,
             pids=512,
+            resource_profile_version=profile.profile_version,
             namespace=self.manager.namespace,
         )
 
@@ -162,16 +175,22 @@ class MachineAdapter:
         )
 
     def _project_postgres_memory_bytes(self) -> int:
+        if self.manager.profile.is_v2:
+            return int(self.manager.profile.project_postgres_memory_bytes)
         draft = int(self.manager.profile.draft_memory_bytes)
         reserve = max(_PROJECT_POSTGRES_MIN_MEMORY_BYTES, draft // 4)
         return min(_PROJECT_POSTGRES_TARGET_MEMORY_BYTES, reserve)
 
     def _project_postgres_cpu_cores(self) -> float:
+        if self.manager.profile.is_v2:
+            return float(self.manager.profile.project_postgres_cpu_cores)
         draft = float(self.manager.profile.draft_cpu_cores)
         reserve = max(_PROJECT_POSTGRES_MIN_CPU_CORES, draft / 3)
         return min(_PROJECT_POSTGRES_TARGET_CPU_CORES, reserve)
 
     def _max_core_memory_bytes(self) -> int:
+        if self.manager.profile.is_v2:
+            return int(self.manager.profile.managed_core_memory_bytes)
         remaining = (
             int(self.manager.profile.draft_memory_bytes) - self._project_postgres_memory_bytes()
         )
@@ -180,6 +199,8 @@ class MachineAdapter:
         return remaining
 
     def _max_core_cpu_cores(self) -> float:
+        if self.manager.profile.is_v2:
+            return float(self.manager.profile.managed_core_cpu_cores)
         remaining = float(self.manager.profile.draft_cpu_cores) - self._project_postgres_cpu_cores()
         if remaining <= 0:
             raise CellResourceError("draft CPU cannot fit managed core and project postgres")
@@ -188,21 +209,78 @@ class MachineAdapter:
     async def execute(
         self, state: Any, manifest: MachineManifest, request: Any
     ) -> DockerCommandResult:
+        command_grace = int(
+            getattr(self.settings, "cell_machine_command_grace_seconds", 20)
+        )
+        cleanup_reserve = command_grace + 5
         try:
-            with machine_budget(request.timeout_seconds):
-                async with asyncio.timeout(machine_remaining_seconds(request.timeout_seconds)):
+            with machine_budget(request.timeout_seconds + cleanup_reserve):
+                async with asyncio.timeout(
+                    machine_remaining_seconds(request.timeout_seconds + cleanup_reserve)
+                ):
                     return await self._execute(state, manifest, request)
         except TimeoutError:
             machine, _backend = self.parts(state)
+            digest = self._request_digest(manifest, request)
+            mutation = LifecycleMutation(request.operation_id, request.fencing_epoch, digest)
             with machine_budget(None):
-                await machine.cancel(
-                    LifecycleMutation(
-                        request.operation_id, request.fencing_epoch, manifest.digest()
-                    )
+                status = await machine.inspect_request_status(
+                    operation_id=request.operation_id
                 )
-            return DockerCommandResult(
-                exit_code=124, output="request budget exhausted; machine fenced", timed_out=True
+                if status.result is not None:
+                    return DockerCommandResult(
+                        exit_code=status.result.exit_code or 0,
+                        output=status.result.output,
+                        timed_out=status.result.timed_out,
+                    )
+                if status.state in {"starting", "running"}:
+                    active_names = {task.name for task in manifest.tasks}
+                    if status.phase in active_names:
+                        operation_id = uuid5(request.operation_id, status.phase)
+                        try:
+                            await machine.exec_terminate(
+                                str(operation_id),
+                                LifecycleMutation(
+                                    operation_id,
+                                    request.fencing_epoch,
+                                    digest,
+                                ),
+                                    grace_seconds=command_grace,
+                            )
+                        except CellFenceRejected:
+                            # The request budget can expire just before exec_start
+                            # records a child command; there is then nothing to kill.
+                            pass
+            terminal = MachineOperationResult(
+                operation_id=str(request.operation_id),
+                state="completed",
+                exit_code=124,
+                output="request budget exhausted; command process terminated",
+                timed_out=True,
             )
+            with machine_budget(None):
+                stored = await machine.request_finish(mutation, terminal)
+            return DockerCommandResult(
+                exit_code=stored.exit_code or 124,
+                output=stored.output,
+                timed_out=stored.timed_out,
+            )
+
+    @staticmethod
+    def _request_digest(manifest: MachineManifest, request: Any) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "cmd": request.cmd,
+                    "role": request.task_role,
+                    "revision": request.expected_revision,
+                    "manifest": manifest.digest(),
+                    "timeout_seconds": request.timeout_seconds,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
 
     async def _execute(
         self, state: Any, manifest: MachineManifest, request: Any
@@ -211,15 +289,6 @@ class MachineAdapter:
         role = request.task_role
         if role == "build" and not any(task.role == "test" for task in manifest.tasks):
             raise ValueError("portable build requires a declared test task")
-        machine, _backend = self.parts(state)
-        digest = hashlib.sha256(
-            json.dumps(
-                {"cmd": request.cmd, "role": role, "revision": request.expected_revision},
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
-        mutation = LifecycleMutation(request.operation_id, request.fencing_epoch, digest)
-        await machine.ensure(manifest, mutation)
         if role:
             roles = ("bootstrap", "build", "test") if role == "build" else (role,)
             commands = [
@@ -232,41 +301,119 @@ class MachineAdapter:
                 raise ValueError(f"manifest has no {role} task")
         else:
             commands = [("shell", ["sh", "-lc", request.cmd], ".", request.timeout_seconds)]
+        machine, _backend = self.parts(state)
+        digest = self._request_digest(manifest, request)
+        mutation = LifecycleMutation(request.operation_id, request.fencing_epoch, digest)
+        await machine.ensure(manifest, mutation)
+        replayed = await machine.request_start(
+            mutation,
+            phase=role or "shell",
+            deadline_at=datetime.now(UTC) + timedelta(seconds=request.timeout_seconds),
+        )
+        if replayed is not None:
+            return DockerCommandResult(
+                exit_code=replayed.exit_code or 0,
+                output=replayed.output,
+                timed_out=replayed.timed_out,
+            )
+
+        async def finish(
+            *,
+            exit_code: int,
+            output: str,
+            timed_out: bool = False,
+        ) -> DockerCommandResult:
+            terminal = MachineOperationResult(
+                operation_id=str(request.operation_id),
+                state="completed",
+                exit_code=exit_code,
+                output=output[-24000:],
+                timed_out=timed_out,
+            )
+            stored = await machine.request_finish(mutation, terminal)
+            return DockerCommandResult(
+                exit_code=stored.exit_code or 0,
+                output=stored.output,
+                timed_out=stored.timed_out,
+            )
+
         output: list[str] = []
+        heartbeat_seconds = int(
+            getattr(self.settings, "cell_machine_command_heartbeat_seconds", 15)
+        )
         for name, argv, cwd, timeout in commands:
+            await machine.request_heartbeat(
+                mutation,
+                phase=name,
+                log_bytes=len("\n".join(output).encode("utf-8")),
+                min_interval_seconds=heartbeat_seconds,
+                force=True,
+            )
             operation_mutation = LifecycleMutation(
                 uuid5(request.operation_id, name), mutation.fencing_epoch, digest
             )
             if time.monotonic() >= request_deadline:
-                with machine_budget(None):
-                    await machine.cancel(operation_mutation)
-                return DockerCommandResult(
-                    exit_code=124, output="request budget exhausted; machine fenced", timed_out=True
+                return await finish(
+                    exit_code=124,
+                    output="request budget exhausted before next command",
+                    timed_out=True,
                 )
             deadline = min(request_deadline, time.monotonic() + timeout)
             operation = await machine.exec_start(argv, cwd, operation_mutation)
             while True:
                 result = await machine.exec_status(operation, operation_mutation)
+                await machine.request_heartbeat(
+                    mutation,
+                    phase=name,
+                    log_bytes=len(("\n".join(output) + result.output).encode("utf-8")),
+                    min_interval_seconds=heartbeat_seconds,
+                )
                 if time.monotonic() >= deadline:
                     with machine_budget(None):
-                        await machine.cancel(operation_mutation)
-                    return DockerCommandResult(
+                        await machine.exec_terminate(
+                            operation,
+                            operation_mutation,
+                            grace_seconds=int(
+                                getattr(
+                                    self.settings,
+                                    "cell_machine_command_grace_seconds",
+                                    20,
+                                )
+                            ),
+                        )
+                    return await finish(
                         exit_code=124,
                         output="\n".join(output)
-                        + f"\n{name} timed out; machine fenced and stopped",
+                        + f"\n{name} timed out; command process terminated",
                         timed_out=True,
                     )
                 if result.state == "completed":
                     output.append(f"[{name}] {result.output}")
                     if result.exit_code != 0:
-                        return DockerCommandResult(
+                        return await finish(
                             exit_code=result.exit_code or 1,
                             output="\n".join(output),
-                            timed_out=False,
                         )
                     break
                 await asyncio.sleep(0.2)
-        return DockerCommandResult(exit_code=0, output="\n".join(output), timed_out=False)
+        if role == "full_build":
+            await self._activate_runtime(state, manifest, request)
+        return await finish(exit_code=0, output="\n".join(output))
+
+    async def _activate_runtime(self, state: Any, manifest: MachineManifest, request: Any) -> None:
+        """Start services from the exact successful full-build workspace."""
+        await self.checkpoint(state)
+        machine, backend = self.parts(state)
+        mutation = LifecycleMutation(uuid4(), request.fencing_epoch, manifest.digest())
+        await machine.ensure(manifest, mutation)
+        await MachineServices(machine, backend).reconcile(manifest, mutation)
+        await machine_effect(
+            self._start_boundary,
+            state,
+            manifest,
+            backend,
+            request.fencing_epoch,
+        )
 
     async def checkpoint(self, state: Any) -> MachineEnvironmentRef | None:
         if not self.exists(state.workspace_id):
@@ -394,19 +541,13 @@ class MachineAdapter:
                 fencing_epoch=request.fencing_epoch,
                 expected_revision=request.expected_revision,
                 cmd="omnia:build",
-                task_role="build",
+                task_role="full_build",
                 operation_id=uuid4(),
                 timeout_seconds=900,
             ),
         )
         if result.exit_code:
             return result
-        await self.checkpoint(state)
-        machine, backend = self.parts(state)
-        mutation = LifecycleMutation(uuid4(), request.fencing_epoch, manifest.digest())
-        await machine.ensure(manifest, mutation)
-        await MachineServices(machine, backend).reconcile(manifest, mutation)
-        await machine_effect(self._start_boundary, state, manifest, backend, request.fencing_epoch)
         return result
 
     def _start_boundary(

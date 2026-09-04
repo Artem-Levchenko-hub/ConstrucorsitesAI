@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,6 +27,8 @@ _CELL_STARTUP_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
 class MaxRuntimeProbe:
     ok: bool
     detail: str
+    artifact_digest: str | None = None
+    artifact_ref: str | None = None
 
 
 def _valid_bootstrap_url(
@@ -109,6 +113,7 @@ async def probe_max_cell_runtime(
     fallback_paths: Sequence[str] = (),
     portable_project_id: UUID | None = None,
     expected_epoch: int | None = None,
+    proof_key: str | None = None,
 ) -> MaxRuntimeProbe:
     """Use the validated, lease-scoped cell session without project-runtime fallback."""
     candidate_paths = (path, *tuple(fallback_paths))
@@ -122,13 +127,37 @@ async def probe_max_cell_runtime(
             return MaxRuntimeProbe(False, "runtime path must be same-origin")
     if portable_project_id is not None and (type(expected_epoch) is not int or expected_epoch < 1):
         return MaxRuntimeProbe(False, "portable proof requires the active lease epoch")
-    return await _probe_signed_runtime(
+    result = await _probe_signed_runtime(
         preview.bootstrap_url,
         path=path,
         fallback_paths=fallback_paths,
         request_timeout=_CELL_STARTUP_TIMEOUT,
         portable_project_id=portable_project_id,
         expected_epoch=expected_epoch,
+    )
+    if not result.ok or proof_key is None:
+        return result
+    if not re.fullmatch(r"[0-9a-f]{64}", proof_key):
+        return MaxRuntimeProbe(False, "runtime proof key is invalid")
+    artifact_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "proof_key": proof_key,
+                "path": path,
+                "fallback_paths": list(fallback_paths),
+                "project_id": str(portable_project_id),
+                "fencing_epoch": expected_epoch,
+                "evidence": result.detail,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return MaxRuntimeProbe(
+        True,
+        result.detail,
+        artifact_digest=artifact_digest,
+        artifact_ref=f"runtime/sha256/{artifact_digest}",
     )
 
 

@@ -113,6 +113,10 @@ from omnia_api.services.file_extractor import (
     extract_edits,
     extract_files,
 )
+from omnia_api.services.generation_events import (
+    append_generation_event,
+    generation_event_envelope,
+)
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     GenerationDispatch,
@@ -1289,7 +1293,7 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
     reply). Partial files still commit, so on a non-finish we show a friendly RU
     message that keeps the user moving («Починить» / повтори), keyed to why the
     agent stopped."""
-    if getattr(res, "done", False):
+    if getattr(res, "done", False) or getattr(res, "needs_finalization", False):
         return (getattr(res, "summary", "") or "").strip() or (
             "Готово — правка применена." if is_edit else "Готово — приложение собрано."
         )
@@ -4125,18 +4129,64 @@ async def _process_prompt(
         """
 
         safe = sanitize_agent_step(step_row)
-        if len(_agent_step_log) < 200:
-            _agent_step_log.append(safe)
-            async with factory() as progress_session:
+        async with factory() as progress_session:
+            event = await append_generation_event(
+                progress_session,
+                run_id=run_id,
+                project_id=project_id,
+                message_id=assistant_message_id,
+                event_type="agent.step",
+                payload={"message_id": str(assistant_message_id), **safe},
+            )
+            if len(_agent_step_log) < 200:
+                _agent_step_log.append(safe)
                 progress_message = await progress_session.get(Message, assistant_message_id)
                 if progress_message is not None:
                     progress_message.agent_steps = list(_agent_step_log)
-                    await progress_session.commit()
-        await publish_event(
-            project_id,
-            "agent.step",
-            {"message_id": str(assistant_message_id), **safe},
-        )
+            await progress_session.commit()
+            await progress_session.refresh(event)
+            progress_session.expunge(event)
+        try:
+            await publish_event(
+                project_id,
+                "generation.event",
+                dict(generation_event_envelope(event)),
+            )
+        except Exception:
+            _log.warning(
+                "generation_event_publish_failed",
+                extra={"project_id": str(project_id), "run_id": str(run_id)},
+                exc_info=True,
+            )
+
+    async def _record_generation_event(
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        async with factory() as progress_session:
+            event = await append_generation_event(
+                progress_session,
+                run_id=run_id,
+                project_id=project_id,
+                message_id=assistant_message_id,
+                event_type=event_type,
+                payload={"message_id": str(assistant_message_id), **dict(payload)},
+            )
+            await progress_session.commit()
+            await progress_session.refresh(event)
+            progress_session.expunge(event)
+        try:
+            await publish_event(
+                project_id,
+                "generation.event",
+                dict(generation_event_envelope(event)),
+            )
+        except Exception:
+            _log.warning(
+                "generation_event_publish_failed",
+                extra={"project_id": str(project_id), "run_id": str(run_id)},
+                exc_info=True,
+            )
 
     # Resumable-stream accumulator. `_run_stream` resets its per-pass
     # `state["accumulated"]` on every fallback re-run, but the CLIENT's content
@@ -4160,6 +4210,9 @@ async def _process_prompt(
     _project_cell_executor_handle: (
         project_cell_executor.ProjectCellExecutorHandle | None
     ) = None
+    _max_finalization_coordinator: Any = None
+    _max_finalization_proof: Any = None
+    _max_generation_deadline_task: asyncio.Task[None] | None = None
 
     try:
         async with factory() as session:
@@ -4500,6 +4553,12 @@ async def _process_prompt(
                 )
 
             async def _probe_build_status() -> dict[str, Any]:
+                if _max_finalization_coordinator is not None:
+                    _proof_result = await _max_finalization_coordinator.fast_check()
+                    return {
+                        "ok": _proof_result.outcome == "green",
+                        "detail": _proof_result.redacted_detail,
+                    }
                 if _project_cell_executor_handle is not None:
                     return await _project_cell_build(_project_cell_executor_handle)
                 return await orchestrator_client.agent_build(project_id, project_slug)
@@ -4562,6 +4621,63 @@ async def _process_prompt(
                 _max_shell_enabled = _max_runtime["max_shell_enabled"]
                 _active_max_locked_files = _max_runtime["active_max_locked_files"]
                 _agent_res = _max_runtime["agent_result"]
+                if (
+                    _project_cell_executor_handle is not None
+                    and _project_cell_executor_handle.is_portable()
+                    and get_settings().use_max_finalization_coordinator
+                ):
+                    from omnia_api.services.max_finalization import (
+                        MaxFinalizationCoordinator,
+                        watch_generation_deadline,
+                    )
+
+                    _max_finalization_coordinator = MaxFinalizationCoordinator(
+                        session_factory=factory,
+                        generation_run_id=run_id,
+                        project_id=project_id,
+                        project_slug=project_slug,
+                        executor=_project_cell_executor_handle,
+                        emit=_record_generation_event,
+                    )
+
+                    async def _max_generation_deadline_watchdog() -> None:
+                        async with factory() as _deadline_session:
+                            _deadline_run = await _deadline_session.get(
+                                GenerationRun,
+                                run_id,
+                            )
+                            if _deadline_run is None:
+                                return
+                            _deadline_started = (
+                                _deadline_run.started_at or _deadline_run.created_at
+                            )
+                        _deadline_at = _deadline_started + timedelta(
+                            seconds=get_settings().max_generation_deadline_seconds
+                        )
+                        await asyncio.sleep(
+                            max(0.0, (_deadline_at - datetime.now(UTC)).total_seconds())
+                        )
+                        await watch_generation_deadline(
+                            session_factory=factory,
+                            generation_run_id=run_id,
+                        )
+
+                    if get_settings().use_project_cell_activity_watchdog:
+                        _max_generation_deadline_task = asyncio.create_task(
+                            _max_generation_deadline_watchdog()
+                        )
+                    _direct_max_agent_executor = _agent_executor
+
+                    async def _agent_executor(
+                        action: agent_builder.Action,
+                    ) -> dict[str, Any]:
+                        if action.name == "build":
+                            _proof_result = await _max_finalization_coordinator.fast_check()
+                            return {
+                                "ok": _proof_result.outcome == "green",
+                                "detail": _proof_result.redacted_detail,
+                            }
+                        return await _direct_max_agent_executor(action)
             # Seed the agent with the project layout + the CrudResource component
             # up-front so it does NOT burn steps re-discovering the fixed template
             # (the #1 latency sink observed in the first live runs). Fail-soft.
@@ -4875,14 +4991,29 @@ async def _process_prompt(
                     # Kit v12 and older left a real root page in the container.
                     # Remove it before seeding v13 so a legacy canvas can neither
                     # enter model context nor survive a failed first generation.
-                    await _apply_project_cell_preview_files(
-                        project_id=project_id,
-                        project_slug=project_slug,
-                        files={**_starter_files, "src/app/page.tsx": ""},
-                        project_cell_handle=_project_cell_executor_handle,
-                    )
+                    _starter_patch = {**_starter_files, "src/app/page.tsx": ""}
+                    if _max_finalization_coordinator is not None:
+                        assert _project_cell_executor_handle is not None
+                        _starter_writes, _starter_deletes, _ = (
+                            _split_project_cell_preview_patch(_starter_patch)
+                        )
+                        await _project_cell_executor_handle.stage_patch(
+                            _starter_writes,
+                            _starter_deletes,
+                        )
+                    else:
+                        await _apply_project_cell_preview_files(
+                            project_id=project_id,
+                            project_slug=project_slug,
+                            files=_starter_patch,
+                            project_cell_handle=_project_cell_executor_handle,
+                        )
                     _max_seed_files = _starter_files
-                    _starter_build = await _probe_build_status()
+                    _starter_build = (
+                        {"ok": True, "detail": "platform core staged"}
+                        if _max_finalization_coordinator is not None
+                        else await _probe_build_status()
+                    )
                     if _starter_build.get("ok"):
                         await _agent_emit(
                             "agent.step",
@@ -5146,7 +5277,9 @@ async def _process_prompt(
             # proof recovery above). Shipping it is safer than discarding a
             # complete product merely because the provider turn ended. Other
             # stacks preserve the historical conservative rollback policy.
-            _must_restore_previous = not _agent_res.done or (
+            _must_restore_previous = (
+                not _agent_res.done and not _agent_res.needs_finalization
+            ) or (
                 _bounded_stop and project_template != "max_miniapp"
             )
             _first_max_without_product = (
@@ -5578,8 +5711,19 @@ async def _process_prompt(
             _runtime_ok = True  # fail-soft default: a probe error ≠ a broken app
             _rt_error = ""
             try:
-                _rt = await _probe_runtime_status("/")
-                if project_template == "max_miniapp" and _rt.get("ok"):
+                _rt = (
+                    {
+                        "ok": True,
+                        "detail": "runtime proof reserved for deterministic finalization",
+                    }
+                    if _max_finalization_coordinator is not None
+                    else await _probe_runtime_status("/")
+                )
+                if (
+                    _max_finalization_coordinator is None
+                    and project_template == "max_miniapp"
+                    and _rt.get("ok")
+                ):
                     # A first request can still hit the previous Turbopack graph
                     # while HMR notices the last write. Require a second green
                     # response after a short settle window before publishing.
@@ -6296,6 +6440,25 @@ async def _process_prompt(
                     enabled=True,
                 )
 
+            if _max_finalization_coordinator is not None and files:
+                from omnia_api.services.max_finalization import MaxFinalizationStatus
+
+                assert _project_cell_executor_handle is not None
+                _finalization = await _max_finalization_coordinator.finalize(
+                    files=await _project_cell_executor_handle.snapshot_files(),
+                    prompt=prompt_text,
+                )
+                if _finalization.status is MaxFinalizationStatus.COMPLETE:
+                    _max_finalization_proof = _finalization.proof
+                    accumulated = (
+                        "Готово — правка применена и проверена."
+                        if _is_edit
+                        else "Готово — приложение собрано и проверено."
+                    )
+                else:
+                    accumulated += "\n\n⚠️ " + _finalization.redacted_detail
+                    files = {}
+
             # Universal release proof. The specialised realtime/isolation gates
             # above cover only two stacks; every container build (including MAX)
             # must still prove that its FINAL live tree typechecks, serves and has
@@ -6309,6 +6472,7 @@ async def _process_prompt(
                 _release_verdict = await run_release_proof(
                     project_id,
                     project_slug,
+                    proof=_max_finalization_proof,
                     require_max_data=project_template == "max_miniapp",
                     project_cell_handle=_project_cell_executor_handle,
                 )
@@ -8955,6 +9119,10 @@ async def _process_prompt(
             {"message_id": str(assistant_message_id), "error": str(e)},
         )
     finally:
+        if _max_generation_deadline_task is not None:
+            _max_generation_deadline_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await _max_generation_deadline_task
         if _project_cell_executor_handle is not None:
             try:
                 await asyncio.shield(_project_cell_executor_handle.release())

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -40,8 +40,10 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellDraftApplyResponse,
     ProjectCellPreviewSession,
     ProjectCellResourceResponse,
+    ProjectCellWorkspaceIdentity,
 )
 from omnia_api.services.project_cell_control import ProjectCellControlReadiness
+from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 from omnia_api.services.project_cells import (
     claim_cell_operation_committed,
     complete_cell_operation,
@@ -92,6 +94,49 @@ async def test_dependency_reuse_policy_allows_matching_bundled_metadata() -> Non
     )
 
     assert error is None
+
+
+def _proof_identity() -> ProofIdentity:
+    return ProofIdentity(
+        workspace_id=UUID(int=1),
+        generation_run_id=UUID(int=2),
+        fencing_epoch=7,
+        workspace_revision="1" * 64,
+        dependency_digest="2" * 64,
+        schema_data_digest="3" * 64,
+        cell_manifest_digest="4" * 64,
+        base_image_digest="5" * 64,
+        toolchain_digest="6" * 64,
+        resource_profile_version="docker-owner-cell-resources-v2",
+        build_config_digest="7" * 64,
+    )
+
+
+async def test_identity_invalidation_matrix_is_exact() -> None:
+    initial = _proof_identity()
+
+    assert project_cell_executor.invalidated_dimensions(initial, initial) == frozenset()
+    assert project_cell_executor.invalidated_dimensions(
+        initial,
+        replace(initial, workspace_revision="8" * 64),
+    ) == {
+        ProofDimension.FAST_CHECK,
+        ProofDimension.FULL_BUILD,
+        ProofDimension.RUNTIME,
+        ProofDimension.RELEASE,
+    }
+    assert project_cell_executor.invalidated_dimensions(
+        initial,
+        replace(initial, schema_data_digest="8" * 64),
+    ) == {ProofDimension.RUNTIME, ProofDimension.RELEASE}
+    assert project_cell_executor.invalidated_dimensions(
+        initial,
+        replace(initial, dependency_digest="8" * 64),
+    ) == frozenset(ProofDimension)
+    assert project_cell_executor.invalidated_dimensions(
+        initial,
+        replace(initial, fencing_epoch=8),
+    ) == frozenset(ProofDimension)
 
 
 @pytest.mark.parametrize(
@@ -448,6 +493,7 @@ async def _prepare_executor(
         assert generation_run_id == expected_run_id
         assert fencing_epoch == 1
         assert expected_revision == _current_revision()
+        before_revision = _current_revision()
         exec_calls.append(
             {
                 "cmd": cmd,
@@ -469,12 +515,31 @@ async def _prepare_executor(
             cell_exec_result
             or {"ok": True, "exit_code": 0, "detail": "cell exec ok", "timed_out": False}
         )
+        identity_values = {
+            "dependency_digest": "2" * 64,
+            "schema_data_digest": "3" * 64,
+            "cell_manifest_digest": "4" * 64,
+            "environment_digest": "5" * 64,
+            "build_config_digest": "6" * 64,
+        }
+        before_identity = ProjectCellWorkspaceIdentity(
+            workspace_revision=before_revision,
+            **identity_values,
+        )
+        after_identity = ProjectCellWorkspaceIdentity(
+            workspace_revision=_current_revision(),
+            **identity_values,
+        )
         return ProjectCellAgentExecResponse(
             ok=bool(payload["ok"]),
             exit_code=int(payload["exit_code"]),
             detail=str(payload["detail"]),
             timed_out=bool(payload["timed_out"]),
             workspace_revision=_current_revision(),
+            operation_id=operation_id,
+            before_identity=before_identity if operation_id is not None else None,
+            after_identity=after_identity if operation_id is not None else None,
+            environment_mutated=before_identity != after_identity,
         )
 
     async def fake_hot_reload(
@@ -689,7 +754,7 @@ async def test_portable_executor_advertises_capabilities_and_dispatches_manifest
 
 
 @pytest.mark.parametrize("ok,timed_out", [(True, False), (False, False), (False, True)])
-async def test_portable_shell_invalidates_preview_without_source_diff(
+async def test_clean_portable_shell_retains_preview_and_proof_identity(
     monkeypatch,
     db_session,
     test_engine,
@@ -712,10 +777,11 @@ async def test_portable_shell_invalidates_preview_without_source_diff(
     await harness.handle.sync_preview()
     assert len(harness.hot_reload_calls) == 1
     result = await harness.handle.execute(Action(name="bash", args={"cmd": "kill product"}))
-    assert result["environment_mutated"] is True
+    assert result["environment_mutated"] is False
+    assert result["invalidated_dimensions"] == []
     assert not result.get("files")
     await harness.handle.sync_preview()
-    assert len(harness.hot_reload_calls) == 2
+    assert len(harness.hot_reload_calls) == 1
 
 
 async def test_ready_owner_executor_bootstraps_workspace_and_syncs_preview(

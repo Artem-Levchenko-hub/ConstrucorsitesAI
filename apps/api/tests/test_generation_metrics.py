@@ -16,7 +16,11 @@ from omnia_api.services.generation_metrics import (
 def test_phase_accounting_is_monotonic_and_counts_expensive_work() -> None:
     run = GenerationRun(agent_state={})
 
-    record_phase_started(run, GenerationPhase.FINAL_BUILD, now=datetime(2026, 9, 4, tzinfo=UTC))
+    record_phase_started(
+        run,
+        GenerationPhase.FINAL_BUILD,
+        now=datetime(2026, 9, 4, tzinfo=UTC),
+    )
     increment_generation_counter(run, "full_build")
     record_phase_finished(
         run,
