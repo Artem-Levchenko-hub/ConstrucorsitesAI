@@ -23,6 +23,13 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     ORCHESTRATOR_INTERNAL_TOKEN="compose-policy-orchestrator-token" \
     NEXTAUTH_SECRET="compose-policy-nextauth-secret" \
     OMNIA_RELEASE_SHA="0123456789abcdef0123456789abcdef01234567" \
+    USE_MAX_FINALIZATION_COORDINATOR="true" \
+    USE_PROJECT_CELL_ACTIVITY_WATCHDOG="true" \
+    USE_GENERATION_EVENT_REPLAY="true" \
+    USE_CELL_RESOURCE_PROFILE_V2="true" \
+    MAX_GENERATION_DEADLINE_SECONDS="1600" \
+    PROJECT_CELL_HEARTBEAT_SECONDS="16" \
+    PROJECT_CELL_WATCHDOG_GRACE_SECONDS="21" \
     docker compose --env-file "${blank_env}" -f "${compose_file}" config --format json
 ) >"${rendered}"
 
@@ -44,6 +51,18 @@ assert api["ACCEPTANCE_GAUNTLET_REFERENCE_GATE"] == "false"
 assert worker["ACCEPTANCE_GAUNTLET_REFERENCE_GATE"] == "false"
 assert api["REFERENCE_CEILING_ENFORCED"] == "false"
 assert worker["REFERENCE_CEILING_ENFORCED"] == "false"
+expected_finalization = {
+    "USE_MAX_FINALIZATION_COORDINATOR": "true",
+    "USE_PROJECT_CELL_ACTIVITY_WATCHDOG": "true",
+    "USE_GENERATION_EVENT_REPLAY": "true",
+    "USE_CELL_RESOURCE_PROFILE_V2": "true",
+    "MAX_GENERATION_DEADLINE_SECONDS": "1600",
+    "PROJECT_CELL_HEARTBEAT_SECONDS": "16",
+    "PROJECT_CELL_WATCHDOG_GRACE_SECONDS": "21",
+}
+for key, value in expected_finalization.items():
+    assert api[key] == value
+    assert worker[key] == value
 assert "generation-report-worker" not in services
 for service in services.values():
     environment = service.get("environment", {})
@@ -53,5 +72,9 @@ for service in services.values():
 PY
 
 grep -qx 'USE_PROJECT_MEMORY=true' "${env_example}"
+grep -qx 'USE_MAX_FINALIZATION_COORDINATOR=false' "${env_example}"
+grep -qx 'USE_PROJECT_CELL_ACTIVITY_WATCHDOG=false' "${env_example}"
+grep -qx 'USE_GENERATION_EVENT_REPLAY=false' "${env_example}"
+grep -qx 'USE_CELL_RESOURCE_PROFILE_V2=false' "${env_example}"
 
 echo "rendered production Compose policy passed"
