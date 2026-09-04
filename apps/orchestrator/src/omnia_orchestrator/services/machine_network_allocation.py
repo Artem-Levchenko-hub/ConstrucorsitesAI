@@ -2,18 +2,19 @@
 
 import hashlib
 import ipaddress
+from typing import Any
 
-import docker
+import docker  # type: ignore[import-untyped]
 
 
 def choose_subnet(pool: str, occupied: list[str], key: str) -> str:
     network = ipaddress.ip_network(pool, strict=True)
     if (
-        network.version != 4
+        not isinstance(network, ipaddress.IPv4Network)
         or network.prefixlen > 28
         or network.prefixlen < 16
         or not any(
-            network.subnet_of(ipaddress.ip_network(private))
+            network.subnet_of(ipaddress.IPv4Network(private))
             for private in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
         )
     ):
@@ -28,7 +29,7 @@ def choose_subnet(pool: str, occupied: list[str], key: str) -> str:
     raise ValueError("configured cell subnet pool exhausted or overlaps reserved routes")
 
 
-def docker_network_subnets(client) -> list[str]:
+def docker_network_subnets(client: Any) -> list[str]:
     return [
         entry["Subnet"]
         for network in client.networks.list()
@@ -37,7 +38,7 @@ def docker_network_subnets(client) -> list[str]:
     ]
 
 
-def create_pool_network(client, pool: str, name: str, **options):
+def create_pool_network(client: Any, pool: str, name: str, **options: Any) -> Any:
     """Docker is the cross-controller allocation arbiter; refresh after a race."""
     for attempt in range(8):
         subnet = choose_subnet(pool, docker_network_subnets(client), name)

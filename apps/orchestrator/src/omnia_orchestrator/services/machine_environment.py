@@ -145,7 +145,10 @@ class MachineEnvironmentStore:
         if reference.manifest is not None and reference.manifest.digest() != manifest_digest:
             raise EnvironmentIntegrityError("environment embedded manifest digest mismatch")
         _ensure_secure_dir(self.root, create=False)
-        artifacts = [reference, *reference.volumes]
+        artifacts: list[MachineEnvironmentRef | VolumeEnvironmentRef] = [
+            reference,
+            *reference.volumes,
+        ]
         if sum(item.size for item in artifacts) > self.max_bytes:
             raise EnvironmentIntegrityError("environment exceeds disk budget")
         # Check every artifact before the first import; a bad volume must not

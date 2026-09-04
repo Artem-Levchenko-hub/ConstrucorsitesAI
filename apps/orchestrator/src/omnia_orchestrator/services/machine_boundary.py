@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
 _RESERVED = ("/api/omnia", "/api/max", "/__omnia", "/auth")
@@ -28,7 +29,7 @@ _HOP = {
 }
 
 
-def verified_user(value: str, secret: str) -> dict | None:
+def verified_user(value: str, secret: str) -> dict[str, Any] | None:
     try:
         encoded, provided = value.split(".")
         expected = base64.urlsafe_b64encode(
@@ -70,7 +71,7 @@ def canonical_request_path(raw: str) -> str | None:
     return path
 
 
-def route_port(path: str, routes: list[dict]) -> int | None:
+def route_port(path: str, routes: list[dict[str, Any]]) -> int | None:
     canonical = canonical_request_path(path)
     if canonical is None or any(
         canonical == item or canonical.startswith(item + "/") for item in _RESERVED
@@ -79,12 +80,13 @@ def route_port(path: str, routes: list[dict]) -> int | None:
     for route in sorted(routes, key=lambda item: len(item["path"]), reverse=True):
         prefix = route["path"]
         if prefix == "/" or canonical == prefix or canonical.startswith(prefix + "/"):
-            return route["port"]
+            port = route["port"]
+            return port if type(port) is int else None
     return None
 
 
 def product_headers(
-    headers: dict[str, str], *, project_id: str, epoch: int, user: dict
+    headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any]
 ) -> dict[str, str]:
     clean = {
         key: value
@@ -105,33 +107,33 @@ def product_headers(
 
 class BoundaryServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    config: dict
+    config: dict[str, Any]
 
 
 class BoundaryHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, _format, *_args):
+    def log_message(self, _format: str, *_args: object) -> None:
         # No signed bootstrap URL, cookie, body, or project credentials in logs.
         pass
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         self._forward()
 
-    def do_POST(self):
+    def do_POST(self) -> None:
         self._forward()
 
-    def do_PUT(self):
+    def do_PUT(self) -> None:
         self._forward()
 
-    def do_PATCH(self):
+    def do_PATCH(self) -> None:
         self._forward()
 
-    def do_DELETE(self):
+    def do_DELETE(self) -> None:
         self._forward()
 
-    def do_HEAD(self):
+    def do_HEAD(self) -> None:
         self._forward()
 
-    def _reply(self, status, body=b""):
+    def _reply(self, status: int, body: bytes = b"") -> None:
         self.send_response(status)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
@@ -139,8 +141,8 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _forward(self):
-        config = self.server.config
+    def _forward(self) -> None:
+        config = cast(BoundaryServer, self.server).config
         path = canonical_request_path(self.path)
         if path is None or self.headers.get("Transfer-Encoding"):
             return self._reply(400)
@@ -154,7 +156,7 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
             path == prefix or path.startswith(prefix + "/") for prefix in ("/api/omnia", "/api/max")
         )
         if managed:
-            target, port = config["core_host"], 3000
+            target, port = str(config["core_host"]), 3000
             headers = {
                 key: value
                 for key, value in self.headers.items()
@@ -181,14 +183,16 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                         }
                     ).encode(),
                 )
-            port = route_port(self.path, config["routes"])
-            if port is None:
+            routes = cast(list[dict[str, Any]], config["routes"])
+            route_target_port = route_port(self.path, routes)
+            if route_target_port is None:
                 return self._reply(404)
-            target = config["machine_host"]
+            port = route_target_port
+            target = str(config["machine_host"])
             headers = product_headers(
                 dict(self.headers),
-                project_id=config["project_id"],
-                epoch=config["epoch"],
+                project_id=str(config["project_id"]),
+                epoch=int(config["epoch"]),
                 user=user,
             )
         connection = http.client.HTTPConnection(target, port, timeout=120)
@@ -218,7 +222,7 @@ if __name__ == "__main__":
     while not os.path.isfile(config_path):
         time.sleep(0.1)
     with open(config_path, encoding="utf-8") as config_file:
-        configuration = json.load(config_file)
+        configuration = cast(dict[str, Any], json.load(config_file))
     with BoundaryServer(("0.0.0.0", 3000), BoundaryHandler) as server:
         server.config = configuration
         server.serve_forever()

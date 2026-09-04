@@ -16,6 +16,7 @@ import socket
 import socketserver
 import time
 from dataclasses import asdict, dataclass
+from typing import cast
 from urllib.parse import urlsplit
 
 
@@ -133,9 +134,10 @@ class _Handler(socketserver.BaseRequestHandler):
                     + "\r\nConnection: close\r\n\r\n"
                 ).encode("iso-8859-1") + body
             answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            server = cast(_Proxy, self.server)
             addresses = checked_addresses(
-                [item[4][0] for item in answers],
-                self.server.denied_cidrs,
+                [str(item[4][0]) for item in answers],
+                server.denied_cidrs,
             )
             last_error = None
             for address in addresses:

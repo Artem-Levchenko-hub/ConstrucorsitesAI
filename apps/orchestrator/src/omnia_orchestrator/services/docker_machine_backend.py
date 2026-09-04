@@ -449,7 +449,15 @@ class DockerMachineBackend:
                 # tarball worker pool to one even on a many-core Docker host.
                 "PNPM_WORKERS": str(os.cpu_count() or 1024),
                 "npm_config_child_concurrency": "1",
-                "npm_config_network_concurrency": "4",
+                # Keep cold installs fast enough for the two-core cell, while
+                # avoiding bursty proxy traffic. Transient registry resets get
+                # bounded exponential retries instead of failing generation.
+                "npm_config_network_concurrency": "2",
+                "npm_config_fetch_retries": "5",
+                "npm_config_fetch_retry_factor": "2",
+                "npm_config_fetch_retry_mintimeout": "2000",
+                "npm_config_fetch_retry_maxtimeout": "20000",
+                "npm_config_fetch_timeout": "120000",
                 "npm_config_store_dir": "/pnpm/store",
                 "COREPACK_HOME": "/root/.cache/node/corepack",
                 "NODE_OPTIONS": "--max-old-space-size="

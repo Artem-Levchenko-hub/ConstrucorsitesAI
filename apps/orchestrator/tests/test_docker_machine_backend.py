@@ -68,7 +68,12 @@ def test_package_workers_and_node_heap_respect_cell_budget(tmp_path, monkeypatch
     env = options["environment"]
     assert env["PNPM_WORKERS"] == "8"  # pnpm9 subtracts this from availableParallelism
     assert env["npm_config_child_concurrency"] == "1"
-    assert env["npm_config_network_concurrency"] == "4"
+    assert env["npm_config_network_concurrency"] == "2"
+    assert env["npm_config_fetch_retries"] == "5"
+    assert env["npm_config_fetch_retry_factor"] == "2"
+    assert env["npm_config_fetch_retry_mintimeout"] == "2000"
+    assert env["npm_config_fetch_retry_maxtimeout"] == "20000"
+    assert env["npm_config_fetch_timeout"] == "120000"
     assert env["NODE_OPTIONS"] == "--max-old-space-size=512"
 
 
