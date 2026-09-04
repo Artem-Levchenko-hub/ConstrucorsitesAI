@@ -57,7 +57,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - uses: astral-sh/setup-uv@v5
+      - name: Activate the pinned pnpm release
+        run: corepack enable && corepack prepare pnpm@9.15.0 --activate
+      - name: Verify pnpm release
+        run: test "$(pnpm --version)" = "9.15.0"
       - name: Install the locked API environment
         working-directory: apps/api
         run: uv sync --frozen
@@ -84,6 +91,11 @@ jobs:
           tests/test_project_cell_lifecycle.py
           tests/test_project_cell_wire_contract.py
           tests/test_messages_project_cell.py
+      - name: Run MAX portable starter contract
+        working-directory: apps/api
+        run: >-
+          uv run pytest -q
+          tests/test_max_project_kit.py::test_every_max_starter_overlay_keeps_portable_machine_tasks_executable
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest

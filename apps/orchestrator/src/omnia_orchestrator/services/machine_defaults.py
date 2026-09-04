@@ -62,7 +62,8 @@ def next_machine_seed(template: dict[str, str]) -> dict[str, str]:
     files = {
         path: content
         for path, content in template.items()
-        if path in keep or path.startswith(("public/", "src/app/legal/", "src/app/support/"))
+        if path in keep
+        or path.startswith(("public/", "src/app/legal/", "src/app/support/", "tests/"))
     }
     package = json.loads(files["package.json"])
     package["scripts"].pop("db:push", None)

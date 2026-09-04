@@ -573,6 +573,7 @@ def render_max_starter_files(
         # has evolved after the first build.
         "package.json": _template_file("package.json"),
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
+        "tests/starter.test.mjs": _template_file("tests/starter.test.mjs"),
         "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
         **render_max_managed_files(config, project_id),
         "src/app/globals.css": _template_file("src/app/globals.css"),

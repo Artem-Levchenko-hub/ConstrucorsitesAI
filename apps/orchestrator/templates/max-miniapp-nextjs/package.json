@@ -6,6 +6,7 @@
     "dev": "next dev --turbopack --port 3000 --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --port 3000 --hostname 0.0.0.0",
+    "test": "node --test tests/*.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "typecheck": "tsc --noEmit"

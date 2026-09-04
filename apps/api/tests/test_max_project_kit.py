@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 import inspect
+import json
+import sys
 from decimal import Decimal
 from pathlib import Path
+from shutil import which
+from subprocess import run
 from uuid import uuid4
 
 import pytest
@@ -188,6 +193,84 @@ def test_starter_kit_has_no_product_page_or_visual_template() -> None:
     assert "canvas-" not in css
     assert "feature-grid" not in css
     assert "TODO" not in "\n".join(files.values())
+
+
+@pytest.mark.parametrize(
+    "app_type",
+    ["loyalty", "catalog", "booking", "event", "education", "custom"],
+)
+def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
+    app_type: str, tmp_path: Path
+) -> None:
+    """The API-owned overlay is the last writer over the portable machine seed."""
+    apps_root = Path(__file__).parents[2]
+    orchestrator_source = apps_root / "orchestrator" / "src"
+    template = apps_root / "orchestrator" / "templates" / "max-miniapp-nextjs"
+    template_files = {
+        path.relative_to(template).as_posix(): path.read_text(encoding="utf-8")
+        for path in template.rglob("*")
+        if path.is_file()
+    }
+    machine_defaults_path = (
+        orchestrator_source / "omnia_orchestrator" / "services" / "machine_defaults.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "max_starter_machine_defaults", machine_defaults_path
+    )
+    assert spec is not None and spec.loader is not None
+    machine_defaults = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(orchestrator_source))
+    try:
+        spec.loader.exec_module(machine_defaults)
+    finally:
+        sys.path.pop(0)
+    assert Path(machine_defaults.__file__).resolve() == machine_defaults_path.resolve()
+
+    final_files = {
+        **machine_defaults.next_machine_seed(template_files),
+        **render_max_starter_files(
+            MaxProjectConfigPayload(
+                app_name="Portable MAX",
+                app_type=app_type,
+                summary="Contract fixture",
+            )
+        ),
+    }
+    manifest = machine_defaults.MachineManifest.from_files(final_files)
+
+    assert manifest is not None
+    scripts = json.loads(final_files["package.json"])["scripts"]
+    assert {"dev", "build", "start", "test", "typecheck"}.issubset(scripts)
+    for task in manifest.tasks:
+        assert task.argv[:1] == ["pnpm"]
+        if task.argv[1] == "install":
+            assert task.argv == ["pnpm", "install", "--no-frozen-lockfile"]
+        else:
+            assert task.argv[1] in scripts
+    assert manifest.services[0].argv == ["pnpm", "start"]
+    assert "start" in scripts
+    assert "tests/starter.test.mjs" in final_files
+    # All six MAX app types share this one physical starter. Execute the final
+    # materialized test task once; the parametrized checks above still prove
+    # that every variant resolves the same machine contract.
+    if app_type != "custom":
+        return
+    for relative_path, content in final_files.items():
+        target = tmp_path / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    test_task = next(task for task in manifest.tasks if task.role == "test")
+    pnpm = which(test_task.argv[0])
+    assert pnpm is not None
+    result = run(
+        [pnpm, *test_task.argv[1:]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "MAX starter package satisfies portable machine contract" in result.stdout
 
 
 def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
