@@ -27,6 +27,40 @@ from omnia_orchestrator.services.machine_environment import (
 from omnia_orchestrator.services.machine_network_allocation import create_pool_network
 
 
+def template_text_files(template: Path) -> dict[str, str]:
+    """Return authored template sources, never local install/build caches."""
+    files: dict[str, str] = {}
+    for path in template.rglob("*"):
+        relative = path.relative_to(template)
+        if (
+            not path.is_file()
+            or any(part in {".next", "node_modules"} for part in relative.parts)
+            or relative.name == "tsconfig.tsbuildinfo"
+        ):
+            continue
+        files[relative.as_posix()] = path.read_text(encoding="utf-8")
+    return files
+
+
+def fixture_profile(postgres_image: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        postgres_image=postgres_image,
+        is_v2=True,
+        profile_version="docker-owner-cell-resources-v2",
+        active_machine_cpu_cores=2.0,
+        active_machine_memory_bytes=2 * 1024**3,
+        project_postgres_cpu_cores=0.15,
+        project_postgres_memory_bytes=256 * 1024**2,
+        managed_core_cpu_cores=0.35,
+        managed_core_memory_bytes=768 * 1024**2,
+        executor_cpu_cores=0.5,
+        executor_memory_bytes=1024 * 1024**2,
+        required_free_disk_bytes=4 * 1024**3,
+        draft_cpu_cores=0.75,
+        draft_memory_bytes=768 * 1024**2,
+    )
+
+
 def project_postgres_sql(backend, sql):
     result = backend._project_postgres().exec_run(
         [
@@ -52,13 +86,7 @@ def next_fixture():
     from omnia_orchestrator.services.machine_defaults import next_machine_seed
 
     template = Path(__file__).resolve().parents[1] / "templates" / "max-miniapp-nextjs"
-    files = next_machine_seed(
-        {
-            path.relative_to(template).as_posix(): path.read_text(encoding="utf-8")
-            for path in template.rglob("*")
-            if path.is_file()
-        }
-    )
+    files = next_machine_seed(template_text_files(template))
     files["src/app/page.tsx"] = """import { headers } from "next/headers";
 import isNumber from "is-number";
 import { execFileSync } from "node:child_process";
@@ -149,14 +177,7 @@ async def run(args):
             state_store=SimpleNamespace(root=root / "states", load=lambda _: state),
             credential_store=credentials,
             namespace="test",
-            profile=SimpleNamespace(
-                postgres_image=args.postgres_image,
-                executor_cpu_cores=0.5,
-                executor_memory_bytes=1024 * 1024**2,
-                required_free_disk_bytes=4 * 1024**3,
-                draft_cpu_cores=0.75,
-                draft_memory_bytes=768 * 1024**2,
-            ),
+            profile=fixture_profile(args.postgres_image),
             docker=SimpleNamespace(_client_obj=lambda: client),
         )
         settings = SimpleNamespace(
