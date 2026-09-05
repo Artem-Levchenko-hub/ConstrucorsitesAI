@@ -180,7 +180,11 @@ async def _probe_signed_runtime(
                     rejected = await client.get(f"{origin}/__omnia/identity", headers=headers)
                     if rejected.status_code != 401:
                         return MaxRuntimeProbe(
-                            False, "portable boundary accepts unauthenticated identity"
+                            False,
+                            "portable boundary accepts unauthenticated identity"
+                            if 200 <= rejected.status_code < 300
+                            else "portable boundary rejection check failed "
+                            f"(HTTP {rejected.status_code}; expected 401)",
                         )
             bootstrap = await client.get(bootstrap_url)
             if bootstrap.status_code not in {200, 301, 302, 303, 307, 308}:

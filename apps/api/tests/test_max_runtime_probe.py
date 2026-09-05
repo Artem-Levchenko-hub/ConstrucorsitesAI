@@ -17,7 +17,7 @@ BOOTSTRAP = (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("unauthenticated_status", [401, 200])
+@pytest.mark.parametrize("unauthenticated_status", [401, 200, 502])
 async def test_portable_runtime_requires_negative_auth_and_trusted_identity(
     monkeypatch, unauthenticated_status
 ):
@@ -54,8 +54,11 @@ async def test_portable_runtime_requires_negative_auth_and_trusted_identity(
     assert result.ok is (unauthenticated_status == 401)
     if result.ok:
         assert observed.count("/__omnia/identity") == 3
-    else:
+    elif unauthenticated_status == 200:
         assert "unauthenticated" in result.detail
+    else:
+        assert "HTTP 502" in result.detail
+        assert "accepts unauthenticated" not in result.detail
 
 
 @pytest.mark.asyncio

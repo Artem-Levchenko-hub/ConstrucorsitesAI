@@ -1408,7 +1408,8 @@ async def test_draft_preview_publish_fails_closed_when_tls_is_unavailable(
 
     unpublished: list[str] = []
 
-    async def _unpublish(host: str) -> None:
+    async def _unpublish(host: str, *, http_only: bool = False) -> None:
+        assert http_only is True
         unpublished.append(host)
 
     monkeypatch.setattr(workspace.nginx_writer, "publish_http", _publish_http)
@@ -1775,6 +1776,36 @@ async def test_draft_preview_session_returns_signed_https_bootstrap_url(
     query = parse_qs(parsed.query)
     assert sorted(query) == ["expires", "signature"]
     assert query["signature"][0]
+
+
+@pytest.mark.parametrize("publish_ok", [True, False])
+async def test_portable_session_requires_published_ingress(monkeypatch, tmp_path, publish_ok):
+    workspace_id = uuid4()
+    provider, _manager, _docker, run_id = await _ready_provider(tmp_path, workspace_id)
+    published = []
+
+    async def publish(_manager, current_id):
+        published.append(current_id)
+        if not publish_ok:
+            raise OrchestratorError(code="container_failure", message="TLS failed", status_code=503)
+        return "https://cell.preview.example"
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: provider)
+    monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+    monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+        preview=lambda state: ("running", "172.30.0.2"), secret=lambda _: "test-secret",
+    ))
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/preview-session",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={"generation_run_id": str(run_id), "fencing_epoch": 4},
+        )
+    assert published == [workspace_id]
+    assert response.status_code == (200 if publish_ok else 503)
+    assert ("bootstrap_url" in response.json()) is publish_ok
 
 
 @pytest.mark.parametrize("released", [False, True])

@@ -493,3 +493,103 @@ async def test_private_cell_policy_survives_http_tls_and_fallback(
         assert "location = /omnia-remix-cta.js" in block
         assert "proxy_pass http://172.30.0.2:3000" in block
     assert ("listen 443 ssl" in rendered[-1]) is tls_reload_ok
+
+
+@pytest.mark.parametrize("upstream", ["172.30.0.2", "172.30.0.3"])
+async def test_republishing_preview_never_drops_existing_tls(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, upstream: str,
+) -> None:
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    host = "cell-repeat.preview.omniadevelop.ru"
+    conf = tmp_path / f"{host}.conf"
+    conf.write_text(nginx_writer._https_block(
+        host, 3000, upstream_host="172.30.0.2", private_cell=True,
+    ))
+    rendered: list[str] = []
+
+    async def reload() -> CmdResult:
+        rendered.append(conf.read_text())
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    async def certificate(_host: str) -> bool:
+        return True
+
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    monkeypatch.setattr(nginx_writer, "_issue_cert", certificate)
+    await nginx_writer.publish_http(host, 3000, upstream_host=upstream, private_cell=True)
+    assert await nginx_writer.ensure_tls(host, 3000, upstream_host=upstream, private_cell=True)
+    assert all("listen 443 ssl" in block for block in rendered)
+    assert f"proxy_pass http://{upstream}:3000" in conf.read_text()
+
+
+@pytest.mark.parametrize("operation", ["publish_http", "ensure_tls"])
+async def test_republish_failure_restores_existing_https(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    host = "cell-rollback.preview.omniadevelop.ru"
+    conf = tmp_path / f"{host}.conf"
+    original = nginx_writer._https_block(
+        host, 3000, upstream_host="172.30.0.2", private_cell=True,
+    )
+    conf.write_text(original)
+    rendered: list[str] = []
+
+    async def reload() -> CmdResult:
+        rendered.append(conf.read_text() if conf.exists() else "")
+        return CmdResult(rc=1 if len(rendered) == 1 else 0, stdout="", stderr="test failure")
+
+    async def certificate(_host: str) -> bool:
+        return True
+
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    monkeypatch.setattr(nginx_writer, "_issue_cert", certificate)
+    if operation == "publish_http":
+        with pytest.raises(OrchestratorError):
+            await nginx_writer.publish_http(
+                host, 3000, upstream_host="172.30.0.3", private_cell=True,
+            )
+    else:
+        assert not await nginx_writer.ensure_tls(
+            host, 3000, upstream_host="172.30.0.3", private_cell=True,
+        )
+    assert conf.read_text() == original
+    assert all("listen 443 ssl" in block for block in rendered)
+
+
+@pytest.mark.parametrize("existing_tls", [False, True])
+async def test_failed_preview_publication_only_removes_http_site(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, existing_tls: bool,
+) -> None:
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    host = "cell-cleanup.preview.omniadevelop.ru"
+    conf = tmp_path / f"{host}.conf"
+    render = nginx_writer._https_block if existing_tls else nginx_writer._http_block
+    original = render(host, 3000, upstream_host="172.30.0.2", private_cell=True)
+    conf.write_text(original)
+    reloads = []
+
+    async def reload() -> CmdResult:
+        reloads.append(True)
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    await nginx_writer.unpublish(host, http_only=True)
+    assert conf.exists() is existing_tls
+    if existing_tls:
+        assert conf.read_text() == original
+        assert not reloads
+    else:
+        assert reloads == [True]

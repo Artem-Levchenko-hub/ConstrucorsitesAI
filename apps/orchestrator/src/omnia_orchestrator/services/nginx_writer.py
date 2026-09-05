@@ -476,7 +476,8 @@ async def publish_http(
 ) -> None:
     """Write the HTTP(:80) block for `host` and reload nginx (fast, ~1-2s).
 
-    Makes the site reachable over HTTP immediately and able to answer the
+    Preserves HTTPS for an already upgraded site, including upstream changes.
+    Makes a new site reachable over HTTP immediately and able to answer the
     ACME http-01 challenge. Raises (after rolling back) only if our own block
     breaks the shared nginx config — we never leave the box in a failing state.
     """
@@ -484,13 +485,18 @@ async def publish_http(
     upstream_host = _validate_upstream_host(upstream_host)
     path = _site_path(host)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        _http_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
-        encoding="utf-8",
-    )
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
+    render = _https_block if previous and "listen 443" in previous else _http_block
+    desired = render(host, port, upstream_host=upstream_host, private_cell=private_cell)
+    if desired == previous:
+        return
+    path.write_text(desired, encoding="utf-8")
     res = await _reload()
     if not res.ok:
-        path.unlink(missing_ok=True)
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(previous, encoding="utf-8")
         await _reload()
         raise OrchestratorError(
             code="container_failure",
@@ -505,8 +511,8 @@ async def ensure_tls(
 ) -> bool:
     """Issue/refresh a cert and swap the site to HTTPS. Returns True iff live.
 
-    Slow (cert issuance is ~30-60s). Fail-soft: any failure leaves the HTTP
-    block in place. Safe to call repeatedly (cert reuse via certbot).
+    Slow (cert issuance is ~30-60s). Fail-soft: a reload failure restores the
+    previous block, preserving any existing HTTPS site. Safe to call repeatedly.
     """
     _validate_host(host)
     upstream_host = _validate_upstream_host(upstream_host)
@@ -515,6 +521,8 @@ async def ensure_tls(
     if not await _issue_cert(host):
         return False
     path = _site_path(host)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
     path.write_text(
         _https_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
         encoding="utf-8",
@@ -523,10 +531,12 @@ async def ensure_tls(
     if res.ok:
         log.info("nginx.published_https", host=host, port=port)
         return True
-    # Cert exists but the HTTPS block won't load — revert to HTTP.
+    # Never downgrade a previously working HTTPS site on a failed refresh.
     log.warning("nginx.https_reload_failed", host=host, stderr=res.stderr[-300:])
     path.write_text(
-        _http_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
+        previous if previous is not None else _http_block(
+            host, port, upstream_host=upstream_host, private_cell=private_cell,
+        ),
         encoding="utf-8",
     )
     await _reload()
@@ -656,10 +666,12 @@ async def refresh_vhosts() -> int:
     return 0
 
 
-async def unpublish(host: str) -> None:
-    """Remove a site and reload nginx. Missing site is a no-op."""
+async def unpublish(host: str, *, http_only: bool = False) -> None:
+    """Remove a site; HTTP-only cleanup preserves previously working TLS."""
     path = _site_path(host)
     if path.exists():
+        if http_only and "listen 443" in path.read_text(encoding="utf-8"):
+            return
         path.unlink(missing_ok=True)
         await _reload()
         log.info("nginx.unpublished", host=host)

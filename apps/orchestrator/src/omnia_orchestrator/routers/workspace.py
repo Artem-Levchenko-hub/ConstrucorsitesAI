@@ -864,6 +864,10 @@ async def _draft_preview_session(
             raise OrchestratorError(
                 code="conflict", message="draft runtime is not running", status_code=409
             )
+        # A coordinator full build starts the gateway without the legacy draft
+        # apply path. Reconcile ingress before minting a URL for runtime proof;
+        # an internal running container alone does not make this origin live.
+        await _publish_draft_preview(manager, workspace_id)
         auth_secret = runtime.secret(workspace_id)
     else:
         draft = await manager.inspect_draft_runtime(workspace_id)
@@ -1157,7 +1161,7 @@ async def _publish_draft_preview(
         if not await nginx_writer.ensure_tls(
             host, 3000, upstream_host=preview[1], private_cell=True
         ):
-            await nginx_writer.unpublish(host)
+            await nginx_writer.unpublish(host, http_only=True)
             raise OrchestratorError(
                 code="container_failure",
                 message="draft preview TLS provisioning failed",
@@ -1192,7 +1196,7 @@ async def _publish_draft_preview(
         )
         is False
     ):
-        await nginx_writer.unpublish(host)
+        await nginx_writer.unpublish(host, http_only=True)
         raise OrchestratorError(
             code="container_failure",
             message="draft preview TLS provisioning failed",

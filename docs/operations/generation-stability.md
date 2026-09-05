@@ -82,6 +82,10 @@ API/worker/web/orchestrator revision and health before running acceptance.
 - Portable coordinator mode exposes fast `build` checks and a `done` handoff.
   It does not ask the model to run the runtime proof that is reserved for the
   coordinator after full build; legacy runtime verification remains unchanged.
+- Portable signed preview sessions reconcile nginx/TLS ingress before returning
+  a bootstrap URL, including the coordinator path that does not apply a legacy
+  draft. Negative authentication proof remains mandatory; HTTP 502 and other
+  unexpected responses report their status instead of claiming an auth bypass.
 
 ## Remaining delivery slices
 
