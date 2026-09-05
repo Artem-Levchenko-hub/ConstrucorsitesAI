@@ -1264,7 +1264,10 @@ async def project_cell_start_owner_preview(
         "POST",
         f"/internal/workspaces/{workspace_id}/draft/owner-start",
         json={"project_id": str(project_id), "owner_id": str(owner_id)},
-        timeout=120.0,
+        # Retained portable previews restore their environment, database and
+        # services before publishing TLS. The observed cold start exceeded 120s;
+        # keep a bounded restoration budget instead of returning a false 503.
+        timeout=300.0,
     )
     response = ProjectCellPreviewSession.from_json(payload)
     if response.workspace_id != workspace_id:
