@@ -108,3 +108,5 @@ advisory lock, whereas recovery acquires the advisory lock first. Concurrent
 transactions can deadlock; PostgreSQL aborts one transaction rather than allowing
 conflicting lifecycle effects. Standardizing this lock order across callers is a
 follow-up. This release does not claim that every concurrent retry is error-free.
+
+- Opening a released cell after capacity hibernation first performs a durable `wake`, then starts the retained preview. Retries replay an uncertain wake with the same operation and fence, including when the remote wake already succeeded. Each later pause/wake cycle gets a new key. No generation lease or source bootstrap is created.

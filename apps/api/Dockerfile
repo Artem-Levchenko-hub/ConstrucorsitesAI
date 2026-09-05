@@ -44,8 +44,12 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project
 
+# Browser dependencies depend on the lockfile, not application source. Keep
+# this expensive layer cached when shipping a Python-only runtime fix.
+RUN .venv/bin/playwright install chromium --with-deps || .venv/bin/playwright install chromium
+
 COPY . ./
-RUN uv sync --frozen && uv run playwright install chromium --with-deps || uv run playwright install chromium
+RUN uv sync --frozen
 
 ENV PATH="/app/.venv/bin:${PATH}"
 

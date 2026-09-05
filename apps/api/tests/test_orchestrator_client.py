@@ -578,7 +578,7 @@ async def test_control_client_sends_only_fenced_envelope(
                 "fencing_epoch": 4,
                 "request_digest": "a" * 64,
             },
-            "timeout": 30.0,
+            "timeout": 300.0,
         }
     ]
 

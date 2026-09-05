@@ -89,6 +89,7 @@ jobs:
           tests/test_telegram_reporting_removed.py
           tests/test_orchestrator_client.py
           tests/test_project_cell_lifecycle.py
+          tests/test_project_cell_runtime_api.py
           tests/test_project_cell_wire_contract.py
           tests/test_messages_project_cell.py
           tests/test_max_generation_contract.py

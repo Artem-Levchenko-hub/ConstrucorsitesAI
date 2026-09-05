@@ -262,3 +262,85 @@ async def test_dark_cell_has_no_public_source_redirect_or_anonymous_fork(
     response = await client.post(f"/api/projects/{project.id}/fork")
     assert response.status_code == 404, response.text
     assert "set-cookie" not in response.headers
+
+
+@pytest.mark.parametrize("paused_state", ["resources_paused", "retained"])
+@pytest.mark.parametrize("lost_wake_response", [False, True])
+async def test_owner_start_wakes_paused_cell_with_durable_retry_and_no_agent_lease(
+    client, db_session, monkeypatch, paused_state, lost_wake_response,
+):
+    from sqlalchemy import select
+
+    from omnia_api.models.project_cell import ProjectCellOperation
+
+    _owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    snapshot_id = project.current_snapshot_id
+    woke = False
+    expected_fence = 8
+    wake_envelopes = []
+
+    async def request(method, path, **kwargs):
+        nonlocal woke
+        if path.endswith("/control"):
+            payload = kwargs["json"]
+            assert payload["kind"] == "wake"
+            assert payload["fencing_epoch"] == expected_fence
+            wake_envelopes.append(payload)
+            woke = True
+            if lost_wake_response and len(wake_envelopes) == 1:
+                raise oc.OrchestratorUnavailable("wake response lost after effect")
+        result = _resources(workspace, running=woke and lost_wake_response)
+        result.update(state="resources_ready" if woke else paused_state,
+                      fencing_epoch=expected_fence if woke else expected_fence - 1)
+        return result
+
+    async def owner_start(*args, **kwargs):
+        assert woke, "owner-start reached a paused bundle without waking it"
+        return SimpleNamespace(preview_url=_origin(workspace.id))
+
+    _deny_legacy(monkeypatch)
+    monkeypatch.setattr(oc, "_request", request)
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", owner_start)
+    bootstrap = AsyncMock(side_effect=AssertionError("owner wake must preserve generated source"))
+    monkeypatch.setattr(oc, "project_cell_agent_bootstrap", bootstrap)
+    if lost_wake_response:
+        first = await client.post(f"/api/projects/{project.id}/runtime/start")
+        assert first.status_code == 503, first.text
+    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "running"
+    assert len(wake_envelopes) == (2 if lost_wake_response else 1)
+    assert all(envelope == wake_envelopes[0] for envelope in wake_envelopes)
+    await db_session.refresh(workspace)
+    await db_session.refresh(project)
+    assert workspace.generation_run_id is None
+    assert workspace.fencing_epoch == 8
+    assert workspace.state == "ready"
+    assert project.current_snapshot_id == snapshot_id
+    operations = (await db_session.scalars(select(ProjectCellOperation).where(
+        ProjectCellOperation.workspace_id == workspace.id,
+    ))).all()
+    assert len(operations) == 1
+    assert operations[0].kind == "wake"
+    assert operations[0].status == "completed"
+    assert operations[0].generation_run_id is None
+    bootstrap.assert_not_awaited()
+
+    # A later capacity pause advances the durable fence. Reopening must not
+    # replay the completed wake from the previous pause/wake cycle.
+    workspace.fencing_epoch = 9
+    workspace.state = "stopped"
+    await db_session.commit()
+    woke = False
+    expected_fence = 10
+    previous_count = len(wake_envelopes)
+    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    assert response.status_code == 200, response.text
+    assert len(wake_envelopes) == previous_count + 1
+    assert wake_envelopes[-1]["operation_id"] != wake_envelopes[0]["operation_id"]
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 10
+    assert workspace.generation_run_id is None

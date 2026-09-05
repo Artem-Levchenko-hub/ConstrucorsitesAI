@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID
 
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
+from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
 from omnia_api.schemas.runtime import RuntimeStatus
 from omnia_api.services import orchestrator_client
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from omnia_api.services.project_cell_access import decide_project_cell_access
+from omnia_api.services.project_cell_lifecycle import (
+    execute_cell_operation,
+    replay_indeterminate_cell_operation,
+)
+from omnia_api.services.project_cells import ProjectCellBusy, reserve_cell_operation
 
 _CELL_ACTION_UNAVAILABLE = (
     "Для owner-only Project Cell это действие пока недоступно в публичном runtime"
@@ -135,6 +141,27 @@ async def start_project_cell_runtime(
         raise ApiError("conflict", _CELL_FIRST_BUILD_REQUIRED, 409)
     _require_workspace_identity(locked_project, selection)
     resources = await _get_cell_resources(selection.workspace.id)
+    if selection.workspace.generation_run_id is None and active_generation is None:
+        wake = await _unfinished_owner_wake(session, selection.workspace.id)
+        if resources.state in {"resources_paused", "retained"} or wake is not None:
+            await _wake_owner_workspace(session, selection.workspace, operation=wake)
+            # Wake commits before dispatch. Reacquire the project lock and check
+            # that a concurrent generation has not acquired mutation authority.
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+                {"project_id": str(project.id)},
+            )
+            await session.refresh(selection.workspace)
+            if (
+                selection.workspace.generation_run_id is not None
+                or await _active_generation(session, project.id) is not None
+            ):
+                return _pending_status(True, workspace=selection.workspace)
+            resources = await _get_cell_resources(selection.workspace.id)
+            if resources.state != "resources_ready":
+                raise ApiError(
+                    "orchestrator_unavailable", "Среда проекта ещё не готова к открытию", 503,
+                )
     status = _runtime_status_from_resources(
         selection.workspace,
         resources,
@@ -183,6 +210,73 @@ async def start_project_cell_runtime(
         hibernate_after_seconds=None,
         keep_alive=False,
     )
+
+
+async def _unfinished_owner_wake(
+    session: AsyncSession, workspace_id: UUID,
+) -> ProjectCellOperation | None:
+    latest = await session.scalar(
+        select(ProjectCellOperation)
+        .where(ProjectCellOperation.workspace_id == workspace_id)
+        .order_by(ProjectCellOperation.created_at.desc())
+        .limit(1)
+    )
+    if (
+        latest is not None and latest.kind == "wake"
+        and latest.idempotency_key.startswith(f"owner-preview:wake:{workspace_id}:")
+        and latest.status in {"pending", "running", "waiting_capacity", "indeterminate"}
+    ):
+        return latest
+    return None
+
+
+async def _wake_owner_workspace(
+    session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    *,
+    operation: ProjectCellOperation | None,
+) -> None:
+    """Wake retained resources through the durable lifecycle, without an agent lease."""
+    prefix = f"owner-preview:wake:{workspace.id}:"
+    if operation is None:
+        try:
+            operation, _ = await reserve_cell_operation(
+                session, workspace_id=workspace.id, generation_run_id=None, kind="wake",
+                idempotency_key=f"{prefix}{workspace.fencing_epoch}", request={},
+            )
+        except ProjectCellBusy as exc:
+            raise ApiError("conflict", "Операция со средой проекта ещё выполняется", 409) from exc
+    operation_id = operation.id
+    workspace_id = workspace.id
+    replay = operation.status == "indeterminate"
+    factory = async_sessionmaker(session.bind, expire_on_commit=False)
+    await session.commit()
+    client = orchestrator_client.HttpProjectCellOrchestratorClient()
+    outcome = await (
+        replay_indeterminate_cell_operation(factory, operation_id, client)
+        if replay else execute_cell_operation(factory, operation_id, client)
+    )
+    if (
+        outcome.status != "completed" or outcome.response is None
+        or outcome.response.state != "resources_ready"
+    ):
+        raise ApiError(
+            "orchestrator_unavailable", "Не удалось подтвердить пробуждение среды проекта", 503,
+        )
+    async with factory() as update_session:
+        current = await update_session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == workspace_id)
+            .with_for_update()
+        )
+        if (
+            current is not None and current.generation_run_id is None
+            and current.fencing_epoch == outcome.fencing_epoch
+            and current.deleted_at is None
+        ):
+            current.state = "ready"
+            current.ready_at = datetime.now(UTC)
+            await update_session.commit()
 
 
 async def create_project_cell_preview_session(

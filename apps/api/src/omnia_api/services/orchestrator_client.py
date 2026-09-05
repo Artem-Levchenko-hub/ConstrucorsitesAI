@@ -918,7 +918,8 @@ class HttpProjectCellOrchestratorClient:
     ) -> ProjectCellResourceResponse:
         # Portable release halts/checkpoints the guest just like pause.
         timeout = (
-            930.0 if request.kind in {"pause", "stop", "destroy", "restore", "release"} else 30.0
+            930.0 if request.kind in {"pause", "stop", "destroy", "restore", "release"}
+            else 300.0 if request.kind == "wake" else 30.0
         )
         payload = await _request(
             "POST",
