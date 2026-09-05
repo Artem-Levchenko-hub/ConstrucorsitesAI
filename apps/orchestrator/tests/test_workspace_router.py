@@ -1911,6 +1911,88 @@ async def test_owner_preview_rejects_invalid_identity_or_runtime(
     assert "bootstrap_url" not in response.text
 
 
+@pytest.mark.parametrize("initially_running", [False, True])
+async def test_portable_owner_start_retries_do_not_restart_healthy_services(
+    monkeypatch, tmp_path, initially_running,
+):
+    workspace_id = uuid4()
+    provider, manager, _, run_id = await _ready_provider(tmp_path, workspace_id)
+    await manager.release_generation(
+        workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+        generation_run_id=run_id,
+    )
+    before = manager.state_store.load(workspace_id)
+    spec = _default_workspace_spec(workspace_id)
+    running = initially_running
+    resumes = []
+    publishes = []
+
+    async def resume(state):
+        nonlocal running
+        resumes.append(state.workspace_id)
+        running = True
+
+    async def publish(_manager, current_id):
+        publishes.append(current_id)
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+    monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+        preview=lambda _: ("running" if running else "stopped", "172.30.0.2"),
+        secret=lambda _: "test-secret", resume_preview=resume,
+    ))
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+    async with _client() as client:
+        for _ in range(2):
+            response = await client.post(
+                f"/internal/workspaces/{workspace_id}/draft/owner-start",
+                headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+                json={"project_id": str(spec.project_id), "owner_id": str(spec.owner_id)},
+            )
+            assert response.status_code == 200, response.text
+    assert resumes == ([] if initially_running else [workspace_id])
+    assert publishes == [workspace_id, workspace_id]
+    assert manager.state_store.load(workspace_id) == before
+
+
+@pytest.mark.parametrize("failure", [None, "owner", "project", "active", "token"])
+async def test_owner_business_config_has_no_generation_write_authority(
+    monkeypatch, tmp_path, failure,
+):
+    from unittest.mock import AsyncMock
+
+    workspace_id = uuid4()
+    provider, manager, _, run_id = await _ready_provider(tmp_path, workspace_id)
+    if failure != "active":
+        await manager.release_generation(
+            workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+            generation_run_id=run_id,
+        )
+    before = manager.state_store.load(workspace_id)
+    spec = _default_workspace_spec(workspace_id)
+    apply = AsyncMock()
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+    monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+        apply_owner_business_config=apply,
+    ))
+    monkeypatch.setattr(workspace, "_publish_draft_preview", AsyncMock())
+    async with _client() as client:
+        response = await client.put(
+            f"/internal/workspaces/{workspace_id}/owner-business-config",
+            headers={} if failure == "token" else {
+                "X-Internal-Token": "test-internal-token-not-a-real-secret",
+            },
+            json={"project_id": str(uuid4() if failure == "project" else spec.project_id),
+                  "owner_id": str(uuid4() if failure == "owner" else spec.owner_id),
+                  "version": 1, "config": {"app_name": "QA"}},
+        )
+    assert response.status_code == (200 if failure is None else 401 if failure == "token" else 409)
+    assert apply.await_count == (1 if failure is None else 0)
+    assert manager.state_store.load(workspace_id) == before
+
+
 def test_bounded_redacted_text_redacts_signature_and_token_query_values() -> None:
     text = (
         "bootstrap=https://cell.preview.example/api/omnia/preview-session"

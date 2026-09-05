@@ -152,7 +152,12 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
             return self._reply(400)
         if not 0 <= length <= 8 * 1024**2:
             return self._reply(413)
-        managed = any(
+        legal_page = path in {"/legal/privacy", "/legal/terms", "/support"}
+        core_assets = "/api/omnia/core-assets/"
+        upstream_path = self.path
+        if path.startswith(core_assets):
+            upstream_path = "/_next/" + self.path[len(core_assets) :]
+        managed = legal_page or any(
             path == prefix or path.startswith(prefix + "/") for prefix in ("/api/omnia", "/api/max")
         )
         if managed:
@@ -162,6 +167,12 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                 for key, value in self.headers.items()
                 if key.casefold() not in _HOP and not key.casefold().startswith("x-omnia-")
             }
+            if legal_page:
+                headers = {
+                    k: v
+                    for k, v in headers.items()
+                    if k.casefold() not in {"accept-encoding", "rsc", "next-router-state-tree"}
+                }
         else:
             cookies = http.cookies.SimpleCookie()
             try:
@@ -198,11 +209,15 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         connection = http.client.HTTPConnection(target, port, timeout=120)
         try:
             body = self.rfile.read(length) if length else None
-            connection.request(self.command, self.path, body=body, headers=headers)
+            connection.request(self.command, upstream_path, body=body, headers=headers)
             response = connection.getresponse()
             data = response.read(16 * 1024**2 + 1)
             if len(data) > 16 * 1024**2:
                 return self._reply(502)
+            if legal_page and "text/html" in (response.getheader("Content-Type") or ""):
+                # The core and project have independent Next builds. Keep legal
+                # assets in the managed namespace rather than loading project JS.
+                data = data.replace(b"/_next/", core_assets.encode())
             self.send_response(response.status)
             for key, value in response.getheaders():
                 if key.casefold() not in _HOP and (managed or key.casefold() != "set-cookie"):

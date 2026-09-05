@@ -653,6 +653,7 @@ export type MaxProjectConfig = {
   config: MaxProjectConfigPayload;
   synced_snapshot_id: Uuid | null;
   updated_at: IsoDateTime | null;
+  application_mode?: "source" | "runtime";
 };
 
 export type MaxReadiness = {

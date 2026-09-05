@@ -72,6 +72,7 @@ class MaxProjectConfigPublic(BaseModel):
     config: MaxProjectConfigPayload
     synced_snapshot_id: UUID | None = None
     updated_at: datetime | None = None
+    application_mode: Literal["source", "runtime"] = "source"
 
 
 class MaxUrlAttachedPayload(BaseModel):

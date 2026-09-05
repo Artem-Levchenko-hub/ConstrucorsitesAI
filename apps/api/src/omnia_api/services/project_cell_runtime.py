@@ -119,10 +119,12 @@ async def start_project_cell_runtime(
     *,
     owner: User | None = None,
 ) -> RuntimeStatus | None:
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-        {"project_id": str(project.id)},
-    )
+    # Do not queue browser requests behind a minutes-long cold start. Keep the
+    # same transaction/fencing boundary, but let a competing viewer retry.
+    selection = await resolve_project_cell_public_selection(session, project, owner=owner)
+    if not selection.selected:
+        return None
+    await _try_preview_project_lock(session, project.id)
     locked_project = await session.get(Project, project.id, populate_existing=True)
     if locked_project is None:
         raise ApiError("not_found", "project not found", 404)
@@ -147,10 +149,7 @@ async def start_project_cell_runtime(
             await _wake_owner_workspace(session, selection.workspace, operation=wake)
             # Wake commits before dispatch. Reacquire the project lock and check
             # that a concurrent generation has not acquired mutation authority.
-            await session.execute(
-                text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-                {"project_id": str(project.id)},
-            )
+            await _try_preview_project_lock(session, project.id)
             await session.refresh(selection.workspace)
             if (
                 selection.workspace.generation_run_id is not None
@@ -210,6 +209,19 @@ async def start_project_cell_runtime(
         hibernate_after_seconds=None,
         keep_alive=False,
     )
+
+
+async def _try_preview_project_lock(session: AsyncSession, project_id: UUID) -> None:
+    acquired = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    if not acquired:
+        raise ApiError(
+            "orchestrator_unavailable",
+            "Среда проекта ещё подготавливается. Превью подключится автоматически.",
+            503,
+        )
 
 
 async def _unfinished_owner_wake(

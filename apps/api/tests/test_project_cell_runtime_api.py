@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -154,11 +155,65 @@ async def test_unsupported_cell_actions_fail_closed(client, db_session, monkeypa
     ):
         response = await client.request(method, base + path, json=body)
         assert response.status_code == 409, (path, response.text)
-    config = (await client.get(base + "/max/config")).json()["config"]
-    response = await client.put(base + "/max/config", json=config)
-    assert response.status_code == 409, response.text
     await db_session.refresh(project)
     assert project.current_snapshot_id == before
+
+
+@pytest.mark.parametrize("first_apply_fails", [False, True])
+async def test_cell_config_save_applies_without_generation_or_source_changes(
+    client, db_session, monkeypatch, first_apply_fails,
+):
+    from omnia_api.models.max_project_config import MaxProjectConfig
+
+    _, project, run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+    monkeypatch.setattr(oc, "_request", AsyncMock(return_value=_resources(workspace)))
+    apply = AsyncMock(return_value=True)
+    if first_apply_fails:
+        apply.side_effect = [oc.OrchestratorUnavailable("test outage"), True, True]
+    monkeypatch.setattr(oc, "project_cell_apply_business_config", apply)
+    before = project.current_snapshot_id
+    base = f"/api/projects/{project.id}/max/config"
+    config = (await client.get(base)).json()["config"]
+    config["operator"]["legal_name"] = "Example owner"
+    config["support"]["response_time"] = "Within one working day"
+    first = await client.put(base, json=config)
+    assert first.status_code == (503 if first_apply_fails else 200), first.text
+    saved = await client.get(base)
+    assert saved.json()["config"] == config
+    assert saved.json()["application_mode"] == "runtime"
+    assert saved.json()["config_version"] == 1
+    if first_apply_fails:
+        assert "Данные сохранены" in first.json()["error"]["message"]
+        assert saved.json()["synced_snapshot_id"] is None
+    for _ in range(2):
+        response = await client.put(base, json=config)
+        assert response.status_code == 200, response.text
+        assert response.json()["config_version"] == 1
+        assert response.json()["application_mode"] == "runtime"
+    record = await db_session.get(MaxProjectConfig, project.id, populate_existing=True)
+    assert record.synced_snapshot_id == before
+    await db_session.refresh(workspace)
+    await db_session.refresh(project)
+    await db_session.refresh(run)
+    assert workspace.generation_run_id is None and workspace.fencing_epoch == 7
+    assert project.current_snapshot_id == before
+    assert run.status == "completed"
+    for call in apply.await_args_list:
+        assert call.kwargs["version"] == 1
+        assert "max_url_attached" not in call.kwargs["config"]
+
+
+async def test_cell_config_does_not_mutate_during_generation(client, db_session, monkeypatch):
+    from omnia_api.models.max_project_config import MaxProjectConfig
+
+    _, project, _, _ = await _seed(db_session, monkeypatch, active=True)
+    base = f"/api/projects/{project.id}/max/config"
+    config = (await client.get(base)).json()["config"]
+    assert (await client.put(base, json=config)).status_code == 409
+    assert await db_session.get(MaxProjectConfig, project.id) is None
 
 
 async def test_non_owner_cannot_access_cell_preview(client, db_session, monkeypatch):
@@ -172,6 +227,28 @@ async def test_non_owner_cannot_access_cell_preview(client, db_session, monkeypa
                          ("POST", "/max/preview-session")):
         response = await client.request(method, f"/api/projects/{project.id}" + path)
         assert response.status_code in {403, 404}
+
+
+async def test_competing_preview_start_returns_retryable_busy_without_waiting(
+    client, db_session, monkeypatch,
+):
+    _, project, _, workspace = await _seed(db_session, monkeypatch)
+    _deny_legacy(monkeypatch)
+    request = AsyncMock(side_effect=AssertionError("busy start must not call controller"))
+    monkeypatch.setattr(oc, "_request", request)
+    async with db_session.bind.connect() as blocker:
+        await blocker.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project.id)},
+        )
+        response = await asyncio.wait_for(
+            client.post(f"/api/projects/{project.id}/runtime/start"), timeout=2,
+        )
+        assert response.status_code == 503, response.text
+        assert response.json()["error"]["code"] == "orchestrator_unavailable"
+    request.assert_not_awaited()
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 7
 
 
 async def test_unselected_project_keeps_legacy_runtime(client, db_session, monkeypatch):

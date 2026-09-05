@@ -45,9 +45,6 @@ from omnia_api.services.max_project_kit import (
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
 log = structlog.get_logger(__name__)
-_CELL_MAX_CONFIG_READ_ONLY = (
-    "Для owner-only Project Cell MAX config пока только read-only"
-)
 
 
 def _coerce_preview_expiry(value: str) -> datetime:
@@ -166,7 +163,13 @@ async def get_max_config(
 ) -> MaxProjectConfigPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
     record = await session.get(MaxProjectConfig, project_id)
-    return _public(project, record)
+    result = _public(project, record)
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session, project, owner=current_user,
+    )
+    if selection.selected:
+        result.application_mode = "runtime"
+    return result
 
 
 @router.post(
@@ -244,13 +247,10 @@ async def put_max_config(
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> MaxProjectConfigPublic:
-    # Share the same per-project transaction lock as prompt reservation. This
-    # prevents a no-code config commit and an LLM commit from branching off the
-    # same parent and making one another disappear from the current timeline.
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
-        {"project_id": str(project_id)},
-    )
+    # Same project serialization as generation, without waiting behind a cold
+    # preview start until the request/DB timeout turns a busy state into a 500.
+    await _owned_max_project(session, project_id, current_user.id)
+    await project_cell_runtime._try_preview_project_lock(session, project_id)
     project = await _owned_max_project(session, project_id, current_user.id, lock=True)
     cell_selection = await project_cell_runtime.resolve_project_cell_public_selection(
         session,
@@ -267,11 +267,8 @@ async def put_max_config(
                 or workspace.owner_id != current_user.id
             ):
                 raise ApiError("conflict", "Project Cell workspace identity mismatch", 409)
-            project_cell_runtime.require_project_cell_runtime_lease(workspace)
-        raise ApiError(
-            "conflict",
-            _CELL_MAX_CONFIG_READ_ONLY,
-            status.HTTP_409_CONFLICT,
+        return await _save_cell_business_config(
+            project, payload, session, current_user, cell_selection,
         )
     active_generation = (
         await session.execute(
@@ -366,6 +363,72 @@ async def put_max_config(
     return _public(project, record)
 
 
+async def _save_cell_business_config(
+    project: Project,
+    payload: MaxProjectConfigPayload,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+    selection: project_cell_runtime.ProjectCellPublicSelection,
+) -> MaxProjectConfigPublic:
+    """Metadata has its own version, not a generation or source/build snapshot."""
+    if await project_cell_runtime._active_generation(session, project.id) is not None:
+        raise ApiError("conflict", "Дождитесь завершения сборки и сохраните данные ещё раз", 409)
+    config_data = payload.model_dump(mode="json")
+    record = await session.get(MaxProjectConfig, project.id)
+    if record is not None and record.owner_id != current_user.id:
+        raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
+    if record is None:
+        record = MaxProjectConfig(
+            project_id=project.id, owner_id=current_user.id, config=config_data,
+            config_version=1, managed_kit_version=MAX_MANAGED_KIT_VERSION,
+        )
+        session.add(record)
+    elif record.config != config_data:
+        record.config = config_data
+        record.config_version += 1
+        record.synced_snapshot_id = None
+    version = record.config_version
+    record.synced_snapshot_id = None
+    # A preview outage cannot erase entered data. An unconfirmed application
+    # keeps synced_snapshot_id empty, and the next save reuses the same version.
+    await session.commit()
+    await session.refresh(record)
+    if selection.workspace is not None and project.current_snapshot_id is not None:
+        try:
+            await project_cell_runtime.start_project_cell_runtime(
+                session, project, owner=current_user,
+            )
+            await project_cell_runtime._try_preview_project_lock(session, project.id)
+            await session.refresh(record)
+            if record.config_version != version or record.config != config_data:
+                raise ApiError("conflict", "Данные изменены в другом окне. Обновите вкладку", 409)
+            if await project_cell_runtime._active_generation(session, project.id) is not None:
+                raise ApiError("conflict", "Данные сохранены. Примените их после сборки", 409)
+            applied = await orchestrator_client.project_cell_apply_business_config(
+                selection.workspace.id, project_id=project.id, owner_id=current_user.id,
+                version=version,
+                config=payload.model_dump(mode="json", exclude={"max_url_attached"}),
+            )
+            if not applied:
+                raise ApiError("orchestrator_unavailable", "Применение данных не подтверждено", 503)
+        except Exception as exc:
+            if isinstance(exc, ApiError) and exc.status_code < 500:
+                raise
+            log.warning("max_config_cell_sync_failed", project_id=str(project.id), version=version)
+            raise ApiError(
+                "orchestrator_unavailable",
+                "Данные сохранены на сервере, но ещё не применены. "
+                "Повторите сохранение — генерация не нужна.",
+                503,
+            ) from exc
+        record.synced_snapshot_id = project.current_snapshot_id
+        await session.commit()
+        await session.refresh(record)
+    result = _public(project, record)
+    result.application_mode = "runtime"
+    return result
+
+
 @router.post("/{project_id}/max/sync-kit", response_model=MaxProjectConfigPublic)
 async def sync_max_managed_kit(
     project_id: UUID,
@@ -385,7 +448,7 @@ async def sync_max_managed_kit(
         project,
         owner=current_user,
     )
-    if selection.selected:
+    if selection.selected and record is None:
         return _public(project, record)
     return await put_max_config(project_id, payload, session, current_user)
 

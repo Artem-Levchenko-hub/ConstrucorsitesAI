@@ -70,6 +70,7 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceEnsureRequest,
     WorkspaceIdentityDigest,
     WorkspaceObserveRequest,
+    WorkspaceOwnerBusinessConfigRequest,
     WorkspaceOwnerPreviewSessionRequest,
     WorkspaceResourceResponse,
 )
@@ -944,8 +945,11 @@ async def start_workspace_owner_preview(
             )
         if _portable_active(manager, workspace_id):
             runtime = _require_portable_runtime(manager)
-            await runtime.resume_preview(state)
-            await _publish_draft_preview(manager, workspace_id)
+            # A previous owner-start may have finished after its HTTP caller
+            # timed out. Retrying must not replace a healthy gateway/services.
+            preview = runtime.preview(state)
+            if preview is None or preview[0] != "running":
+                await runtime.resume_preview(state)
             response.headers["Cache-Control"] = "no-store"
             return await _draft_preview_session(manager, state)
         draft = await manager.inspect_draft_runtime(workspace_id)
@@ -968,6 +972,39 @@ async def start_workspace_owner_preview(
             ) from exc
         response.headers["Cache-Control"] = "no-store"
         return await _draft_preview_session(manager, state)
+
+
+@router.put("/workspaces/{workspace_id}/owner-business-config")
+async def apply_workspace_owner_business_config(
+    workspace_id: UUID,
+    request: WorkspaceOwnerBusinessConfigRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    verify_internal_token(x_internal_token)
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    if len(json.dumps(request.config).encode()) > 1024 * 1024:
+        raise OrchestratorError(
+            code="conflict", message="MAX configuration too large", status_code=413,
+        )
+    async with manager.operation_lock.hold(workspace_id):
+        state, _ = await _workspace_volume_identity(manager, workspace_id)
+        if state.project_id != request.project_id or state.owner_id != request.owner_id:
+            raise OrchestratorError(
+                code="conflict", message="workspace owner identity mismatch", status_code=409,
+            )
+        if state.phase != "completed" or state.active_generation_run_id is not None:
+            raise OrchestratorError(
+                code="conflict", message="workspace operation is still active", status_code=409,
+            )
+        if not _portable_active(manager, workspace_id):
+            raise OrchestratorError(
+                code="conflict", message="portable runtime required", status_code=409,
+            )
+        await _require_portable_runtime(manager).apply_owner_business_config(
+            state, version=request.version, config=request.config,
+        )
+        await _publish_draft_preview(manager, workspace_id)
+        return {"workspace_id": str(workspace_id), "version": request.version, "applied": True}
 
 
 async def _resource_response(

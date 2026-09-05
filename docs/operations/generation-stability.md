@@ -50,6 +50,31 @@ reply alone must not trigger hibernation.
 
 ## No-model resource acceptance
 
+### Owner preview and business profile
+
+Completed cells open through owner-preview access, never a recreated generation
+lease. Concurrent starts return retryable busy responses instead of waiting on
+the project advisory lock. Repeated starts retain an already-running gateway.
+
+For portable MAX cells the Studio business profile has an independent config
+version. Saving does not invoke an agent, build tasks, dependency installation,
+source replacement, project SQL or environment restore. The API persists the
+profile before applying it; failed application is reported and the same version
+can be retried. Active generations remain protected by project/workspace locks.
+
+The trusted MAX core exposes the current `/api/omnia/config`, `/support`,
+`/legal/privacy` and `/legal/terms`. Its legal-page assets use a separate managed
+prefix so they cannot collide with the generated application's build. Only the
+core's fixed configuration/HTTP adapter and the preview gateway are updated;
+project code, services and data are retained. Agent-owned screens with hardcoded
+labels are not rewritten by a profile update. Those screens should consume the
+configuration API when they need live profile/content fields.
+
+Desired metadata is recorded in the controller's private `business-config.json`
+and reapplied when the core is recreated. It is platform metadata, not a product
+DB backup or an LLM/source snapshot. Confirmed config readback and successful
+legal-page responses are required before the save is acknowledged as applied.
+
 Run the explicit opt-in harness inside the deployed API image:
 
 ```sh

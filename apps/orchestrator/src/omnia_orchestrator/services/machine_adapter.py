@@ -602,13 +602,32 @@ class MachineAdapter:
         core.reload()
         core_ip = core.attrs["NetworkSettings"]["Networks"][names.internal_network]["IPAddress"]
         self._wait_http(core, core_ip, "/api/health", expected=200, timeout=120)
+        from omnia_orchestrator.services.machine_business_config import (
+            apply_core_config,
+            boundary_source,
+        )
+
+        business_config_path = self.parts(state)[0].path.parent / "business-config.json"
+        business_config = (
+            json.loads(business_config_path.read_text(encoding="utf-8"))
+            if business_config_path.exists() else None
+        )
+        if business_config is not None:
+            if (business_config["project_id"] != str(state.project_id)
+                    or business_config["owner_id"] != str(state.owner_id)):
+                raise CellResourceError("MAX configuration ownership mismatch")
+            apply_core_config(core, core_ip, business_config["config"])
         gateway_name = backend.stem + "-gateway"
         old = backend._lookup(client.containers, gateway_name, "max-gateway")
         if old is not None:
             old.remove(force=True)
         gateway = client.containers.create(
             backend.guard_image,
-            ["python3", "/opt/omnia/machine_boundary.py"],
+            (["python3", "-c", "import os,time,runpy; "
+              "p='/run/omnia-boundary/server.py'; "
+              "exec('while not os.path.isfile(p): time.sleep(0.1)'); "
+              "runpy.run_path(p,run_name='__main__')"]
+             if business_config is not None else ["python3", "/opt/omnia/machine_boundary.py"]),
             name=gateway_name,
             labels=backend.labels("max-gateway"),
             detach=True,
@@ -641,11 +660,22 @@ class MachineAdapter:
             "p='/run/omnia-boundary/.next'; open(p,'wb').write(data); "
             "os.replace(p,'/run/omnia-boundary/config.json')"
         )
+        wire_config: dict[str, Any] = config
+        if business_config is not None:
+            # Existing pinned guard images stay unchanged. Seed only trusted
+            # controller code into gateway tmpfs; no project executable input.
+            wire_config = {"config": config, "server": boundary_source()}
+            script = (
+                "import os,sys,json; v=json.load(sys.stdin); "
+                "open('/run/omnia-boundary/config.json','w').write(json.dumps(v['config'])); "
+                "p='/run/omnia-boundary/.server'; open(p,'w').write(v['server']); "
+                "os.replace(p,'/run/omnia-boundary/server.py')"
+            )
         execution = client.api.exec_create(gateway.id, ["python3", "-c", script], stdin=True)
         connection = client.api.exec_start(execution["Id"], socket=True)
         try:
             connection._sock.settimeout(machine_remaining_seconds(15))
-            connection._sock.sendall(json.dumps(config).encode())
+            connection._sock.sendall(json.dumps(wire_config).encode())
             connection._sock.shutdown(socket.SHUT_WR)
             # Drain completion, not a fire-and-forget half-written secret file.
             while connection._sock.recv(4096):
@@ -748,6 +778,42 @@ class MachineAdapter:
             )
             if network is not None:
                 await machine_effect(network.remove)
+
+    async def apply_owner_business_config(
+        self, state: Any, *, version: int, config: dict[str, Any],
+    ) -> None:
+        machine, backend = self.parts(state)
+        path = machine.path.parent / "business-config.json"
+        previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        if previous is not None and (
+            previous["project_id"] != str(state.project_id)
+            or previous["owner_id"] != str(state.owner_id)
+        ):
+            raise CellResourceError("MAX configuration ownership mismatch")
+        if previous is not None and (
+            previous["version"] > version
+            or (previous["version"] == version and previous["config"] != config)
+        ):
+            raise CellResourceError("stale MAX configuration version")
+        preview = self.preview(state)
+        if (previous is not None and previous["config"] == config
+                and previous.get("applied") is True and preview and preview[0] == "running"):
+            # Repeated save must not bounce a working gateway.
+            if previous["version"] != version:
+                write_controller_json(path, {**previous, "version": version})
+            return
+        manifest = MachineManifest.model_validate(machine.state()["manifest"])
+        # Persist desired metadata before any runtime effect. Retrying or waking
+        # replays the same data. No project source, DB or environment restore.
+        write_controller_json(path, {
+            "project_id": str(state.project_id), "owner_id": str(state.owner_id),
+            "version": version, "config": config,
+        })
+        await machine_effect(self._start_boundary, state, manifest, backend, state.fencing_epoch)
+        write_controller_json(path, {
+            "project_id": str(state.project_id), "owner_id": str(state.owner_id),
+            "version": version, "config": config, "applied": True,
+        })
 
     async def resume_preview(self, state: Any, *, epoch: int | None = None) -> None:
         machine, backend = self.parts(state)

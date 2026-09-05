@@ -426,6 +426,22 @@ describe("MAX live preview recovery", () => {
     expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
   });
 
+  it("automatically recovers a busy cold start without user clicks", async () => {
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    startRuntime.mockRejectedValueOnce(new ApiError(503, {
+      code: "orchestrator_unavailable", message: "preparing",
+    })).mockResolvedValueOnce(runtime());
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://recovered.example"));
+    renderPreview("snapshot-1");
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>(
+      "[data-testid='max-live-iframe']",
+    ), { timeoutMs: 4000 });
+    expect(frame.getAttribute("src")).toBe("https://recovered.example");
+    expect(startRuntime).toHaveBeenCalledTimes(2);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
   it("shows a toast when manual preview refresh fails", async () => {
     createMaxPreviewSession
       .mockResolvedValueOnce(session("https://preview-1.example"))

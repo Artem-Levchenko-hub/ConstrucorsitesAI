@@ -46,8 +46,10 @@ const STATUS_BAR_HEIGHT = 38;
 const DEVICE_BEZEL = 10;
 const DEVICE_WIDTH = SCREEN_WIDTH + DEVICE_BEZEL * 2;
 const DEVICE_HEIGHT = SCREEN_HEIGHT + STATUS_BAR_HEIGHT + DEVICE_BEZEL * 2;
-const PREVIEW_RETRY_LIMIT = 2;
+const PREVIEW_RETRY_LIMIT = 8;
 const PREVIEW_RETRY_DELAY_MS = 1_500;
+const previewRetryDelay = (attempt: number) =>
+  Math.min(PREVIEW_RETRY_DELAY_MS * 2 ** attempt, 10_000);
 
 function isTransientPreviewError(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true;
@@ -105,6 +107,11 @@ export function MaxLivePreview({
   });
   const start = useMutation({
     mutationFn: () => startRuntime(project.id),
+    // Cold restoration is bounded by the server. A competing start or a lost
+    // response is retryable; auth/ownership failures are not.
+    retry: (failureCount, error) =>
+      failureCount < 20 && isTransientPreviewError(error),
+    retryDelay: previewRetryDelay,
     onSuccess: (value) => queryClient.setQueryData(["runtime", project.id], value),
   });
   const runtimeRunning = runtime.data?.state === "running";
@@ -114,7 +121,7 @@ export function MaxLivePreview({
     enabled: runtimeRunning,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
-    retryDelay: PREVIEW_RETRY_DELAY_MS,
+    retryDelay: previewRetryDelay,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -131,7 +138,7 @@ export function MaxLivePreview({
     enabled: runtimeRunning && managedKit.isSuccess,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
-    retryDelay: PREVIEW_RETRY_DELAY_MS,
+    retryDelay: previewRetryDelay,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -148,6 +155,11 @@ export function MaxLivePreview({
         ["stopped", "paused", "failed"].includes(activeRuntime.state)
       ) {
         activeRuntime = await start.mutateAsync();
+      }
+      if (activeRuntime.state !== "running") {
+        // Polling below will connect once preparation completes. Do not mint
+        // sessions (or show a false failure) while a generation/wake is active.
+        return null;
       }
       const managedKitResult = await managedKit.refetch();
       if (!managedKitResult.data) {
@@ -167,7 +179,7 @@ export function MaxLivePreview({
         queryFn: () => createMaxPreviewSession(project.id),
         retry: (failureCount, error) =>
           failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
-        retryDelay: PREVIEW_RETRY_DELAY_MS,
+        retryDelay: previewRetryDelay,
         staleTime: 0,
       });
     },

@@ -160,6 +160,11 @@ class WorkspaceDraftPreviewSessionResponse(BaseModel):
     expires_at: str
 
 
+class WorkspaceOwnerBusinessConfigRequest(WorkspaceOwnerPreviewSessionRequest):
+    version: int = Field(gt=0)
+    config: dict[str, object]
+
+
 class WorkspaceAgentExecRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

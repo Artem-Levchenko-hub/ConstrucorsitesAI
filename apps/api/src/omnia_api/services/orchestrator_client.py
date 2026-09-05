@@ -1276,6 +1276,20 @@ async def project_cell_start_owner_preview(
     return response
 
 
+async def project_cell_apply_business_config(
+    workspace_id: UUID, *, project_id: UUID, owner_id: UUID,
+    version: int, config: dict[str, Any],
+) -> bool:
+    payload = await _request(
+        "PUT", f"/internal/workspaces/{workspace_id}/owner-business-config",
+        json={"project_id": str(project_id), "owner_id": str(owner_id),
+              "version": version, "config": config},
+        timeout=300.0,
+    )
+    return (payload.get("workspace_id") == str(workspace_id)
+            and payload.get("version") == version and payload.get("applied") is True)
+
+
 async def wake(project_id: UUID) -> dict[str, Any]:
     """POST /internal/projects/wake — start (or unpause) a previously provisioned project."""
     return await _request("POST", "/internal/projects/wake", json={"project_id": str(project_id)})

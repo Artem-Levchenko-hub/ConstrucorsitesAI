@@ -81,6 +81,8 @@ export function MaxProjectSetupDialog({
   });
 
   const current = draft ?? config.data?.config ?? null;
+  const pendingApplication = config.data?.application_mode === "runtime"
+    && config.data.config_version > 0 && !config.data.synced_snapshot_id;
 
   const save = useMutation({
     mutationFn: (payload: MaxProjectConfigPayload) =>
@@ -89,8 +91,14 @@ export function MaxProjectSetupDialog({
       qc.setQueryData(["max-config", projectId], data);
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
-      toast.success("Настройки применены без генерации", {
-        description: "Контент и юридические страницы сохранены в новой версии.",
+      void qc.invalidateQueries({ queryKey: ["max-preview-session", projectId] });
+      toast.success(data.application_mode === "runtime" && !data.synced_snapshot_id
+        ? "Настройки сохранены на сервере" : "Настройки применены без генерации", {
+        description: data.application_mode === "runtime"
+          ? (data.synced_snapshot_id
+            ? "Конфигурация, поддержка и юридические страницы обновлены. Сборка и данные приложения не изменены."
+            : "Они будут использованы при создании приложения.")
+          : "Контент и юридические страницы сохранены в новой версии.",
       });
       setOpen(false);
       setDraft(null);
@@ -174,8 +182,8 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <DialogDescription className="text-[#9fa1b1]">
-              Заполните четыре раздела. Изменения применяются одной безопасной
-              версией и не запускают повторную генерацию.
+              Заполните четыре раздела. Настройки сохраняются на сервере и
+              применяются без повторной генерации.
             </DialogDescription>
           </DialogHeader>
 
@@ -769,7 +777,7 @@ export function MaxProjectSetupDialog({
                   className="h-11 w-full sm:w-auto sm:min-w-[220px]"
                   disabled={
                     save.isPending ||
-                    changedSections === 0 ||
+                    (changedSections === 0 && !pendingApplication) ||
                     current.app_name.trim().length < 1 ||
                     current.summary.trim().length < 1
                   }
