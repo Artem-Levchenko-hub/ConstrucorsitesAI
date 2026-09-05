@@ -212,7 +212,6 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "max_segments=_native_max_segments" in source
     assert "_agent_res.segments" in source
     assert '"autonomous_recovery"' not in source
-    assert "max_source_completion_gap" not in source
     assert "_seg < 2" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
@@ -1440,7 +1439,7 @@ async def test_native_hard_clamps_legacy_limit_and_forwards_trace_ids(
 
 
 @pytest.mark.asyncio
-async def test_provider_limit_stops_immediately_and_keeps_green_tree(
+async def test_provider_limit_does_not_accept_untouched_green_tree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = {"n": 0}
@@ -1454,14 +1453,54 @@ async def test_provider_limit_stops_immediately_and_keeps_green_tree(
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
     async def execute(action: Any) -> dict[str, Any]:
-        assert action.name == "build"
-        return {"ok": True, "detail": "clean"}
+        pytest.fail("provider failure must not execute build or other tools")
 
     res = await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=120)
 
     assert calls["n"] == 1
-    assert res.done is True
-    assert res.stop_reason == "provider_stopped_green"
+    assert res.done is False
+    assert res.stop_reason == "provider_error"
+    assert "PAYMENT_REQUIRED" in res.summary
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(401, json={"error": {"message": "Key is blocked"}})
+
+    async def no_sleep(_delay):
+        pytest.fail("permanent auth failure must not back off and retry")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError, match="PROVIDER_AUTH_FAILED"):
+            await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_portable_provider_failure_preserves_cause_without_proof_work(monkeypatch):
+    monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
+    from omnia_api.core.config import get_settings
+    get_settings.cache_clear()
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("PROVIDER_AUTH_FAILED")
+
+    async def execute(action):
+        pytest.fail("no bootstrap, fast check or finalization after provider failure")
+
+    monkeypatch.setattr(agent_native, "_call_messages", fail)
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE", task="Склад", execute=execute,
+        portable_cell=True, max_segments=3,
+    )
+    assert result.stop_reason == "provider_error"
+    assert "PROVIDER_AUTH_FAILED" in result.summary
+    assert not result.done and not result.needs_finalization
 
 
 @pytest.mark.asyncio

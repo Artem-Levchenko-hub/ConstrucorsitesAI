@@ -278,12 +278,38 @@ def _fake_user_data_paths(files: Mapping[str, str]) -> list[str]:
     return sorted(hits)
 
 
+def _explicit_capability_mentions(prompt: str, pattern: str) -> bool:
+    # Match word beginnings, not arbitrary substrings: демонстрационные and
+    # интеграционные are not requests for рацион (nutrition).
+    for match in re.finditer(r"\b(?:" + pattern + r")\w*", prompt, re.IGNORECASE):
+        before = re.split(
+            r"[.!?;\n]|\b(?:но|зато|but)\b|,\s*(?=(?:нужен|нужна|нужны|нужно|"
+            r"добавь|добавьте|сделай|реализуй|покажи|add|include)\b)",
+            prompt[:match.start()], flags=re.IGNORECASE,
+        )[-1]
+        after = re.split(r"[.!?;,\n]", prompt[match.end():], maxsplit=1)[0]
+        # Deliberately narrow negation handling: no inferred requirements from
+        # explicit exclusions. A later positive mention can still request it.
+        negated_before = re.search(
+            r"\b(?:без|without|no|не\s+(?!только\b)(?:нуж\w*|добав\w*|дела\w*|"
+            r"показыв\w*|требу\w*)|do\s+not\s+(?:add|include))\b[^.!?;\n]*$",
+            before, re.IGNORECASE,
+        )
+        negated_after = re.match(
+            r"\s+(?:не\s+(?:нуж\w*|требу\w*)|is\s+not\s+required)\b",
+            after, re.IGNORECASE,
+        )
+        if not negated_before and not negated_after:
+            return True
+    return False
+
+
 def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, ...]]]:
     """Return only explicitly named product capabilities, in stable order."""
 
     found: list[tuple[str, str, tuple[str, ...]]] = []
     for key, label, prompt_patterns, source_needles in _CAPABILITIES:
-        if any(re.search(pattern, prompt, re.IGNORECASE) for pattern in prompt_patterns):
+        if any(_explicit_capability_mentions(prompt, pattern) for pattern in prompt_patterns):
             found.append((key, label, source_needles))
     return found
 

@@ -19,6 +19,21 @@ COMPLEX_BRIEF = """
 """
 
 
+@pytest.mark.parametrize("brief, expected", [
+    ("Склад: демонстрационные данные и интеграционные тесты.", []),
+    ("Удаление товара без истории операций.", ["catalog"]),
+    ("Не нужны история и питание. Нужен каталог.", ["catalog"]),
+    ("История не нужна. Нужны поиск и фильтры.", ["search", "filters"]),
+    ("Без истории, но с графиками.", ["statistics"]),
+    ("Без истории, добавь каталог и поиск.", ["search", "catalog"]),
+    ("Не нужны уведомления, нужен каталог.", ["catalog"]),
+    ("Не только питание, но и история.", ["nutrition", "history"]),
+    ("Нужны рацион питания и история приёмов пищи.", ["nutrition", "history"]),
+])
+def test_capabilities_match_explicit_words_and_respect_negation(brief, expected):
+    assert [key for key, _, _ in requested_max_capabilities(brief)] == expected
+
+
 def test_portable_completion_requires_manifest_tests_and_runtime():
     files = {
         ".omnia/cell.json": json.dumps(

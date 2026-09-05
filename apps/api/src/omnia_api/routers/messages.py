@@ -1406,6 +1406,18 @@ def _split_project_cell_preview_patch(
     return writes, tuple(sorted(set(deletes))), explicit_empty
 
 
+async def _restore_project_cell_source(
+    handle: ProjectCellExecutorHandle, baseline: Mapping[str, str],
+) -> None:
+    changed = await handle.export_files()
+    writes = {path: baseline[path] for path in changed if path in baseline}
+    deletes = tuple(path for path in changed if path not in baseline)
+    await handle.stage_patch(writes, deletes)
+    restored = await handle.sync_preview()
+    if restored.failure is not None:
+        raise RuntimeError(restored.failure)
+
+
 async def _apply_project_cell_preview_files(
     *,
     project_id: UUID,
@@ -5110,6 +5122,7 @@ async def _process_prompt(
                 if project_template == "max_miniapp" and not _is_edit:
                     from omnia_api.services.max_generation_contract import (
                         max_completion_gap,
+                        max_source_completion_gap,
                     )
 
                     # A service/config snapshot may predate the first real product
@@ -5127,6 +5140,10 @@ async def _process_prompt(
                             **_max_seed_files,
                             **written,
                         }
+                        if _max_finalization_coordinator is not None:
+                            return max_source_completion_gap(
+                                prompt_text, effective_files, portable=True,
+                            )
                         return max_completion_gap(
                             prompt_text,
                             effective_files,
@@ -5181,6 +5198,13 @@ async def _process_prompt(
                     edit_mode=_is_edit,
                     bare_mode=_bare_stack,
                 )
+            _provider_failure = (
+                _agent_res.summary if _agent_res.stop_reason == "provider_error" else None
+            )
+            if _provider_failure and not (
+                current_sha and (project_template != "max_miniapp" or _max_has_generated_snapshot)
+            ):
+                raise RuntimeError(_provider_failure)
             if _project_cell_executor_handle is not None:
                 _agent_res.files = await _project_cell_executor_handle.export_files()
             # A green starter is not proof that the user's request was generated.
@@ -5390,6 +5414,11 @@ async def _process_prompt(
                         flush=True,
                     )
 
+            # Existing products must traverse restoration above before surfacing
+            # a failed provider call. Keep the original cause even if rollback
+            # replaces the agent result with its own status message.
+            if _provider_failure:
+                raise RuntimeError(_provider_failure)
             _all_files = _merge_seeded_agent_files(_max_seed_files, _agent_res.files)
             _total_steps = _agent_res.steps
 
@@ -6400,20 +6429,65 @@ async def _process_prompt(
                 from omnia_api.services.max_finalization import MaxFinalizationStatus
 
                 assert _project_cell_executor_handle is not None
-                _finalization = await _max_finalization_coordinator.finalize(
-                    files=await _project_cell_executor_handle.snapshot_files(),
-                    prompt=prompt_text,
-                )
+                async def _repair_finalization_source(detail: str) -> None:
+                    from omnia_api.services import agent_native
+                    from omnia_api.services.max_generation_contract import max_source_completion_gap
+
+                    assert _project_cell_executor_handle is not None
+                    baseline = await _project_cell_executor_handle.snapshot_files()
+                    await _agent_emit("agent.step", {
+                        "action": "source_repair", "human": "Дорабатываю по замечаниям проверки",
+                        "detail": detail, "ok": False, "path": "",
+                    })
+                    result = await agent_native.run_native_build(
+                        system=agent_native.native_system_prompt(_stack_guide or "", _skills),
+                        task=(f"{_agent_user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}\n"
+                              "Fix the existing product in this same workspace. Preserve working "
+                              "features and data. Do not repeat SQL effects already completed. "
+                              "Make real source changes, run build, then done."),
+                        execute=_agent_executor,
+                        user_id=str(user_id), project_id=str(project_id), run_id=str(run_id),
+                        message_id=str(assistant_message_id), free=is_free, emit=_agent_emit,
+                        max_steps=_agent_steps, max_segments=1,
+                        allow_max_bash=_max_shell_enabled, portable_cell=True,
+                        initial_files=baseline,
+                        completion_check=lambda written, evidence: max_source_completion_gap(
+                            prompt_text, {**baseline, **written}, portable=True,
+                        ),
+                    )
+                    if result.stop_reason in {"provider_error", "infra_error", "error"}:
+                        raise RuntimeError(result.summary)
+
+                try:
+                    _finalization = await _max_finalization_coordinator.finalize_with_repair(
+                        prompt=prompt_text, repair=_repair_finalization_source,
+                    )
+                    if _finalization.status is not MaxFinalizationStatus.COMPLETE:
+                        raise RuntimeError(
+                            "MAX_FINALIZATION_FAILED: " + _finalization.redacted_detail
+                        )
+                except Exception:
+                    if current_sha and _max_has_generated_snapshot:
+                        try:
+                            _published_source = await asyncio.to_thread(
+                                repo_svc.read_files, project_id, current_sha,
+                            )
+                            await _restore_project_cell_source(
+                                _project_cell_executor_handle, _published_source,
+                            )
+                        except Exception as _repair_rollback_exc:
+                            _log.warning(
+                                "MAX repair source restore failed", exc_info=_repair_rollback_exc,
+                            )
+                    raise
                 if _finalization.status is MaxFinalizationStatus.COMPLETE:
                     _max_finalization_proof = _finalization.proof
+                    files = await _project_cell_executor_handle.export_files()
                     accumulated = (
                         "Готово — правка применена и проверена."
                         if _is_edit
                         else "Готово — приложение собрано и проверено."
                     )
-                else:
-                    accumulated += "\n\n⚠️ " + _finalization.redacted_detail
-                    files = {}
 
             # Universal release proof. The specialised realtime/isolation gates
             # above cover only two stacks; every container build (including MAX)
@@ -9055,6 +9129,7 @@ async def _process_prompt(
         # spinning forever; otherwise tokens_out stays NULL and ChatPanel
         # treats the message as still-streaming.
         try:
+            await set_generation_run_status(run_id, "failed", error=str(e))
             async with factory() as session:
                 m = await session.get(Message, assistant_message_id)
                 if m is not None and m.tokens_out is None:

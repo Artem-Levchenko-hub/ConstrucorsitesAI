@@ -52,6 +52,25 @@ Use only the production `full` compose project and host orchestrator described i
 has `finished_at IS NULL`, back up, deploy the exact pushed revision, and verify
 API/worker/web/orchestrator revision and health before running acceptance.
 
+## Model failure and MAX source feedback (2026-09-05)
+
+- Native provider authentication failures (401/403) fail immediately; exhausted
+  provider calls do not hand an untouched starter to verification. The durable
+  run and assistant message retain the primary failure instead of replacing it
+  with a missing-snapshot or missing-capability diagnosis.
+- Existing published edits retain source rollback before reporting provider
+  failure, including failures during finalization repair. This is source rollback,
+  not reversal of arbitrary SQL or installed package effects.
+- Capability detection uses word beginnings and explicit exclusion clauses;
+  demonstration/integration wording must not request nutrition. This remains a
+  bounded lexical check, not a semantic proof of product behavior.
+- Only `needs_edit` source feedback returns to the same workspace editor, with
+  at most two repairs and the original generation deadline. No-change repairs
+  stop. Each changed tree must pass finalization again before snapshot commit.
+  Provider, infrastructure and proof failures do not become blind model retries.
+- CI includes source-contract and finalization integration regressions. Resource
+  acceptance still does not replace a real model-to-product canary.
+
 ## Remaining delivery slices
 
 1. Preserve the full prompt in the UI and durable dispatch.

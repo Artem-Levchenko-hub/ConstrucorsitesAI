@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -337,6 +338,41 @@ class MaxFinalizationCoordinator:
         )
         await self._log_terminal(outcome)
         return outcome
+
+    async def finalize_with_repair(
+        self,
+        *,
+        prompt: str,
+        repair: Callable[[str], Awaitable[None]],
+    ) -> MaxFinalizationOutcome:
+        """Return source feedback to the same editor, at most twice.
+
+        Only NEEDS_EDIT is repairable here. Infrastructure/proof failures and
+        cancellation stay terminal. Every pass observes the actual workspace;
+        unchanged source cannot earn another build or an infinite model loop.
+        """
+        files = await self.executor.snapshot_files()
+        for attempt in range(3):
+            outcome = await self.finalize(files=files, prompt=prompt)
+            if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT or attempt == 2:
+                return outcome
+            async with self.session_factory() as session:
+                run = await self._locked_run(session)
+                if run.status == "cancel_requested":
+                    raise asyncio.CancelledError
+                deadline = (run.started_at or run.created_at) + timedelta(
+                    seconds=get_settings().max_generation_deadline_seconds
+                )
+            remaining = (deadline - datetime.now(UTC)).total_seconds()
+            if remaining <= 0:
+                raise TimeoutError("generation deadline exceeded before source repair")
+            async with asyncio.timeout(remaining):
+                await repair(outcome.redacted_detail)
+            updated = await self.executor.snapshot_files()
+            if updated == files:
+                return outcome
+            files = updated
+        raise AssertionError("bounded finalization loop exhausted")
 
     async def resume(
         self,

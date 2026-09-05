@@ -98,6 +98,45 @@ async def _owner_and_project(
     return owner, project
 
 
+async def test_process_failure_preserves_primary_error_after_finalization(
+    db_session, test_engine, monkeypatch,
+):
+    from omnia_api.core import db
+    from omnia_api.core.config import get_settings
+
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(project_id=project.id, role="assistant", content="")
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(
+        project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
+        idempotency_key="primary-error", prompt_hash="a" * 64,
+        status="running", response_mode="build",
+    )
+    db_session.add(run)
+    await db_session.commit()
+    monkeypatch.setenv("USE_PROJECT_MEMORY", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(db, "get_engine", lambda: test_engine)
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("PROVIDER_AUTH_FAILED: access denied")
+
+    monkeypatch.setattr(messages, "render_project_memory_context", fail)
+    await messages._process_prompt(
+        run.id, project.id, owner.id, uuid.uuid4(), assistant.id, None,
+        "Build a catalog", "test-model",
+    )
+    await finalize_generation_run(run.id)
+    await db_session.refresh(run)
+    await db_session.refresh(assistant)
+    assert run.status == "failed"
+    assert run.error == "PROVIDER_AUTH_FAILED: access denied"
+    assert assistant.tokens_out == 0
+    assert "PROVIDER_AUTH_FAILED" in assistant.content
+
+
 async def test_same_idempotency_key_replays_and_other_key_is_blocked(
     db_session: AsyncSession,
 ) -> None:

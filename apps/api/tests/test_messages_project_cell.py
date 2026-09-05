@@ -17,6 +17,27 @@ from omnia_api.services.agent_builder import Action
 from omnia_api.services.generation_runs import promote_generation_after_admission
 
 
+async def test_failed_repair_restores_changed_deleted_and_empty_source_files():
+    baseline = {"page.tsx": "published", "empty.ts": "", "deleted.ts": "restore me"}
+    tree = {"page.tsx": "broken", "new.ts": "unfinished"}
+
+    async def export():
+        return {"page.tsx": "broken", "new.ts": "unfinished", "empty.ts": "", "deleted.ts": ""}
+
+    async def stage(writes, deletes):
+        tree.update(writes)
+        for path in deletes:
+            tree.pop(path, None)
+
+    async def sync():
+        assert tree == baseline
+        return SimpleNamespace(failure=None)
+
+    handle = SimpleNamespace(export_files=export, stage_patch=stage, sync_preview=sync)
+    await messages._restore_project_cell_source(handle, baseline)
+    assert tree == baseline
+
+
 def test_cancel_protocol_signals_only_genuinely_running_generation() -> None:
     assert messages._generation_cancel_protocol("pending") == "terminal_without_signal"
     assert (

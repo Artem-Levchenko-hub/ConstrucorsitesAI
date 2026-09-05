@@ -91,6 +91,9 @@ jobs:
           tests/test_project_cell_lifecycle.py
           tests/test_project_cell_wire_contract.py
           tests/test_messages_project_cell.py
+          tests/test_max_generation_contract.py
+          tests/test_max_finalization.py
+          tests/test_max_finalization_integration.py
       - name: Run MAX portable starter contract
         working-directory: apps/api
         run: >-

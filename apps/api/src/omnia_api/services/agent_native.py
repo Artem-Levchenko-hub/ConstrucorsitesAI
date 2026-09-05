@@ -770,6 +770,11 @@ async def _call_messages(
             # 402 = provider key out of balance. Retrying can't fix it, so fail
             # FAST with a human cause instead of grinding 8 backoff retries and
             # surfacing an opaque "соединение потеряно" 3+ minutes later.
+            if r.status_code in {401, 403}:
+                raise RuntimeError(
+                    "PROVIDER_AUTH_FAILED: провайдер модели отклонил ключ доступа; "
+                    "проверьте блокировку и разрешения ключа."
+                )
             if r.status_code == 402:
                 raise RuntimeError(
                     "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
@@ -872,10 +877,10 @@ async def _run_native_segment(
             )
 
             effective_files = {**baseline_files, **written}
-            source_gap = max_source_completion_gap(
-                task,
-                effective_files,
-                portable=".omnia/cell.json" in effective_files,
+            source_gap = (
+                _completion_gap() if completion_check is not None else max_source_completion_gap(
+                    task, effective_files, portable=".omnia/cell.json" in effective_files,
+                )
             )
             source_complete = source_gap is None
             return AgentResult(
@@ -1038,10 +1043,17 @@ async def _run_native_segment(
                     tool_choice=(_MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None),
                 )
             except Exception as exc:
-                return await _finish_without_provider(
-                    steps=step,
-                    reason="provider_stopped",
-                    detail=f"gateway error: {exc}",
+                # A provider failure is not a model handoff to verification.
+                # Do not build/accept a starter or overwrite the primary cause
+                # with a source-completion gap after failed model traffic.
+                safe_reason = (
+                    str(exc) if str(exc).startswith(("PROVIDER_AUTH_FAILED", "PAYMENT_REQUIRED"))
+                    else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
+                )
+                log.warning("agent_native.provider_failed", error_type=type(exc).__name__)
+                return AgentResult(
+                    done=False, summary=safe_reason, files=written, steps=step,
+                    transcript=convo, stop_reason="provider_error", evidence=_evidence(),
                 )
 
             content = resp.get("content")
@@ -1384,7 +1396,9 @@ NativeSegmentRunner = Callable[
     Awaitable[AgentResult],
 ]
 
-_CONTINUATION_TERMINAL_REASONS = frozenset({"error", "infra_error", "provider_stopped_red"})
+_CONTINUATION_TERMINAL_REASONS = frozenset(
+    {"error", "infra_error", "provider_error", "provider_stopped_red"}
+)
 
 
 def _merge_segment_evidence(
@@ -1434,6 +1448,7 @@ async def _run_native_segments(
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
     max_segments: int,
     run_segment: NativeSegmentRunner,
+    initial_files: Mapping[str, str] | None = None,
 ) -> AgentResult:
     """Continue one native build without creating another run or workspace.
 
@@ -1459,14 +1474,16 @@ async def _run_native_segments(
         segment_completion_check = (
             _cumulative_completion_check(
                 completion_check,
-                files_before,
+                {**(initial_files or {}), **files_before},
                 evidence_before,
             )
             if completion_check is not None
             else None
         )
 
-        result = await run_segment(segment_task, segment_completion_check, files_before)
+        result = await run_segment(
+            segment_task, segment_completion_check, {**(initial_files or {}), **files_before}
+        )
         last_result = result
         total_steps += result.steps
         cumulative_transcript.extend(result.transcript)
@@ -1548,6 +1565,7 @@ async def run_native_build(
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
+    initial_files: Mapping[str, str] | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
 
@@ -1581,4 +1599,5 @@ async def run_native_build(
         completion_check=completion_check,
         max_segments=max_segments,
         run_segment=run_segment,
+        initial_files=initial_files,
     )
