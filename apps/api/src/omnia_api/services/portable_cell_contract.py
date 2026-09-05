@@ -42,6 +42,11 @@ Default manifest (extend only when a real helper/service is necessary):
 
 argv is explicit, cwd is relative to /workspace. Use sh -lc explicitly if needed.
 Each role runs only its declared tasks; full_build requires a real final test.
+Final tests must preserve production build output. Never run next dev against
+.next after next build: it erases the production build. Use a separate distDir
+for a test dev server, or test next start on a separate port and terminate it.
+For small database features, direct SQL integration tests avoid rebuilding a
+second web server. Do not weaken or skip actual persistence/isolation checks.
 bash executes in this same machine. Never use a fake
 test exit or claim build success without exercising product behavior. Services
 are controller-supervised after runtime_check applies the checked manifest;

@@ -952,8 +952,21 @@ class MaxFinalizationCoordinator:
         *,
         bundle: ProofBundle | None = None,
     ) -> MaxFinalizationOutcome:
+        missing_build = (
+            phase is GenerationPhase.FINAL_BUILD
+            and "readiness failed:" in detail
+            and "Could not find a production build" in detail
+        )
+        if missing_build:
+            detail = (
+                "Repair the test/manifest that removed the production build. "
+                "Do not run next dev against the production .next directory after building. "
+                "Use an isolated test distDir or test next start on a separate port, "
+                "and terminate the test server. Then the coordinator will rebuild.\n"
+                + detail
+            )
         outcome = await self._outcome(
-            MaxFinalizationStatus.FAILED,
+            MaxFinalizationStatus.NEEDS_EDIT if missing_build else MaxFinalizationStatus.FAILED,
             self._checkpoint(identity, phase, result.operation_id),
             bundle or ProofBundle(identity=proof),
             detail,

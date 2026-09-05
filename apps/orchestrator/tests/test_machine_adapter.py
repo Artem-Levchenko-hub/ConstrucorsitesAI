@@ -64,7 +64,8 @@ async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tm
     ]
 
 
-async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path):
+@pytest.mark.parametrize("activation_fails", [False, True])
+async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activation_fails):
     from unittest.mock import AsyncMock
 
     api = module()
@@ -88,11 +89,16 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path):
             return str(mutation.operation_id)
 
         async def exec_status(self, operation, mutation):
-            return SimpleNamespace(state="completed", exit_code=0, output="passed")
+            return SimpleNamespace(state="completed", exit_code=0, output="passed" + "x" * 16000)
 
     runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
     runtime.parts = lambda state: (Machine(), object())
-    runtime._activate_runtime = AsyncMock()
+    from omnia_orchestrator.services.machine_services import MachineServiceFailed
+
+    runtime._activate_runtime = AsyncMock(
+        side_effect=MachineServiceFailed("service web readiness failed: missing build")
+        if activation_fails else None
+    )
     value = payload()
     value["tasks"] = [
         {"name": "install", "role": "bootstrap", "argv": ["pnpm", "install"]},
@@ -112,7 +118,11 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path):
         SimpleNamespace(), MachineManifest.model_validate(value), request
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == (1 if activation_fails else 0)
+    if activation_fails:
+        assert "[final-test] passed" in result.output
+        assert result.output.startswith("service web readiness failed: missing build")
+        assert 4096 < len(result.output) <= 24000
     assert commands == [["pnpm", "build"], ["pnpm", "test"]]
     runtime._activate_runtime.assert_awaited_once()
 

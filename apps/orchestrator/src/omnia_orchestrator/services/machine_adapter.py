@@ -26,7 +26,7 @@ from omnia_orchestrator.services.machine_environment import (
     MachineEnvironmentRef,
     MachineEnvironmentStore,
 )
-from omnia_orchestrator.services.machine_services import MachineServices
+from omnia_orchestrator.services.machine_services import MachineServiceFailed, MachineServices
 from omnia_orchestrator.services.project_machine import (
     MachineOperationResult,
     ProjectMachine,
@@ -397,7 +397,16 @@ class MachineAdapter:
                     break
                 await asyncio.sleep(0.2)
         if role == "full_build":
-            await self._activate_runtime(state, manifest, request)
+            try:
+                await self._activate_runtime(state, manifest, request)
+            except MachineServiceFailed as exc:
+                # A failed product start is command evidence, not a transport
+                # rejection. Finish the durable request and retain task logs.
+                # finish() keeps the last 24k characters; bound this payload
+                # first so successful task logs cannot displace the diagnosis.
+                failure = str(exc)[:4000]
+                task_tail = "\n".join(output)[-19000:]
+                return await finish(exit_code=1, output=f"{failure}\n{task_tail}")
         return await finish(exit_code=0, output="\n".join(output))
 
     async def _activate_runtime(self, state: Any, manifest: MachineManifest, request: Any) -> None:

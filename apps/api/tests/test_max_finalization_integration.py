@@ -153,3 +153,74 @@ async def test_authored_max_finalization_is_single_pass_and_terminal(
     ]
     assert candidate_count == accepted_count == 1
     assert active_leases == 0
+
+
+@pytest.mark.parametrize("change_source", [False, True])
+async def test_missing_production_build_repairs_test_in_same_workspace(
+    db_session, test_engine, change_source,
+):
+    harness = await _new_harness(db_session, test_engine)
+    executor = harness.coordinator.executor
+    identity = await executor.current_identity()
+    tree = _files()
+    feedback = []
+    original_role = executor.run_role
+
+    async def snapshot():
+        return dict(tree)
+
+    async def current_identity():
+        return identity
+
+    async def run_role(role, operation_id):
+        result = await original_role(role, operation_id)
+        result = replace(result, before=identity, after=identity)
+        if role is ProjectCellCommandRole.FULL_BUILD and not feedback:
+            return replace(result, ok=False, redacted_detail=(
+                "service web readiness failed: Could not find a production build "
+                "in the '.next' directory. Tests ran next dev after next build."
+                + "\n[successful task log] " + "x" * 8000
+            ))
+        return result
+
+    async def repair(detail):
+        nonlocal identity
+        feedback.append(detail)
+        if change_source:
+            tree["tests/runtime.test.mjs"] = "// test production server in an isolated port"
+            identity = replace(identity, workspace_revision="a" * 64)
+
+    harness.coordinator.executor = replace(
+        executor, snapshot_files=snapshot, current_identity=current_identity, run_role=run_role,
+    )
+    outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
+    assert len(feedback) == 1
+    assert "Could not find a production build" in feedback[0]
+    assert "Repair the test/manifest" in feedback[0]
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == (2 if change_source else 1)
+    expected = MaxFinalizationStatus.COMPLETE if change_source else MaxFinalizationStatus.NEEDS_EDIT
+    assert outcome.status is expected
+    async with async_sessionmaker(test_engine)() as session:
+        red_builds = await session.scalar(select(func.count(ProjectCellProofResult.id)).where(
+            ProjectCellProofResult.dimension == "full_build",
+            ProjectCellProofResult.outcome == "red",
+        ))
+        assert red_builds == 1
+
+
+async def test_unclassified_service_failure_does_not_trigger_model_repair(db_session, test_engine):
+    harness = await _new_harness(db_session, test_engine)
+    original_role = harness.coordinator.executor.run_role
+
+    async def run_role(role, operation_id):
+        result = await original_role(role, operation_id)
+        if role is ProjectCellCommandRole.FULL_BUILD:
+            return replace(result, ok=False, redacted_detail="service web readiness failed: 502")
+        return result
+
+    async def repair(detail):
+        raise AssertionError("infrastructure failure must not trigger speculative editing")
+
+    harness.coordinator.executor = replace(harness.coordinator.executor, run_role=run_role)
+    outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
+    assert outcome.status is MaxFinalizationStatus.FAILED
