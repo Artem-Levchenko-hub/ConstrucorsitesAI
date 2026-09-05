@@ -4985,6 +4985,15 @@ async def _process_prompt(
                             project_cell_handle=_project_cell_executor_handle,
                         )
                     _max_seed_files = _starter_files
+                    if (
+                        _project_cell_executor_handle is not None
+                        and _project_cell_executor_handle.is_portable()
+                    ):
+                        from omnia_api.services.max_project_kit import include_portable_manifest
+
+                        _max_seed_files = include_portable_manifest(
+                            _starter_files, await _project_cell_executor_handle.snapshot_files(),
+                        )
                     _starter_build = (
                         {"ok": True, "detail": "platform core staged"}
                         if _max_finalization_coordinator is not None

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
 
@@ -556,6 +557,16 @@ disabled. Managed MAX files stay locked even when shell is available. If shell
 is unavailable, fall back to read_file/edit_file/write_file. On a later surgical
 edit, preserve working behaviour and change only the relevant product files.
 """.strip()
+
+
+def include_portable_manifest(
+    starter_files: Mapping[str, str], workspace_files: Mapping[str, str],
+) -> dict[str, str]:
+    """Preserve platform runtime metadata without adopting pre-existing product code."""
+    files = dict(starter_files)
+    if ".omnia/cell.json" in workspace_files:
+        files[".omnia/cell.json"] = workspace_files[".omnia/cell.json"]
+    return files
 
 
 def render_portable_max_session(project_id: UUID | str) -> str:

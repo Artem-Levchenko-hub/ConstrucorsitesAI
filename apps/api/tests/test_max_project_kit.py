@@ -602,3 +602,35 @@ const exportsFor = {
 def test_portable_starter_requires_project_identity() -> None:
     with pytest.raises(ValueError, match="requires a project identity"):
         render_max_starter_files(_config(), portable=True)
+
+
+def test_preseeded_portable_manifest_satisfies_real_completion_without_agent_rewrite():
+    from omnia_api.services.max_generation_contract import max_source_completion_gap
+
+    starter = render_max_starter_files(_config(), uuid4(), portable=True)
+    manifest = json.dumps({
+        "version": 1,
+        "tasks": [{"name": "final-test", "role": "full_build", "argv": ["pnpm", "test"]}],
+        "services": [{"name": "web"}],
+        "routes": [{"path": "/", "service": "web", "port": 3000}],
+    })
+    old_page = "export default function Page(){return <main>Old user interface</main>}"
+    workspace = {".omnia/cell.json": manifest, "src/app/page.tsx": old_page,
+                 "src/app/api/old/route.ts": "export const GET = () => new Response('old')"}
+    seed = max_project_kit_svc.include_portable_manifest(starter, workspace)
+    assert "src/app/page.tsx" not in seed
+    assert "src/app/api/old/route.ts" not in seed
+    authored = {"src/app/page.tsx": (
+        "export default function Page(){return <main>Authored warehouse product</main>}"
+    )}
+    assert max_source_completion_gap("Build warehouse", {**seed, **authored}, portable=True) is None
+    for changed_manifest in ("", "{}", "broken"):
+        assert max_source_completion_gap(
+            "Build warehouse", {**seed, **authored, ".omnia/cell.json": changed_manifest},
+            portable=True,
+        ) is not None
+    missing_seed = max_project_kit_svc.include_portable_manifest(starter, {})
+    assert ".omnia/cell.json" not in missing_seed
+    assert max_source_completion_gap(
+        "Build warehouse", {**missing_seed, **authored}, portable=True,
+    ) is not None
