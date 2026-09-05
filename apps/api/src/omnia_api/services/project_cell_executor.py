@@ -589,7 +589,10 @@ async def maybe_create_project_cell_executor(
             )
         )
     ):
-        raise ProjectCellExecutorUnavailable(f"Project Cell ensure failed: {outcome.status}")
+        resource_state = response.state if response is not None else "no_response"
+        raise ProjectCellExecutorUnavailable(
+            f"Project Cell ensure failed: operation={outcome.status}, resources={resource_state}"
+        )
     admission = await promote_generation_after_admission(
         session_factory,
         run_id=generation_run_id,

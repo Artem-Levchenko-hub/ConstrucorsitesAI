@@ -201,15 +201,19 @@ async def test_cancelled_reconcile_is_reconciled_at_a_higher_fence(
     assert operations[0].status == "indeterminate"
 
 
+@pytest.mark.parametrize("observed_state", ["partial", "retained", "resources_paused"])
 async def test_partial_observation_runs_canonical_repair_ensure(
     test_engine: AsyncEngine,
+    observed_state: str,
 ) -> None:
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     workspace, run, original = await _unknown_ensure(factory, label="partial")
     client = ClientHarness(
         ensure=AsyncMock(return_value=_response(workspace.id, fence=3, state="resources_ready")),
         control=AsyncMock(),
-        observe_resources=AsyncMock(return_value=_response(workspace.id, fence=2, state="partial")),
+        observe_resources=AsyncMock(
+            return_value=_response(workspace.id, fence=2, state=observed_state),
+        ),
     )
 
     outcome = await recover_ensure_operation(factory, original.id, client)

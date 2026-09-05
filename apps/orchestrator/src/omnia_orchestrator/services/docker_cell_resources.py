@@ -526,7 +526,10 @@ class DockerCellResourceManager:
                 )
                 return CellBundleObservation(
                     state="retained",
-                    identity_valid=False,
+                    # No state is an uncreated cell, not a proven ownership
+                    # conflict. A repair ensure still preflights every named
+                    # Docker resource before it can create or adopt anything.
+                    identity_valid=True,
                     containers={},
                     networks={},
                     volumes={},

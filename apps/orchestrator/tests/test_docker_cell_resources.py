@@ -33,6 +33,7 @@ from omnia_orchestrator.services.docker_cell_resources import (
     DockerContainerSpec,
     DockerNetworkRecord,
 )
+from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from tests._cell_fakes import FakeDockerBackend, SimulatedProcessCrash
 
 
@@ -113,6 +114,21 @@ def _make_manager(
         draft_port_registry_path=str(tmp_path / "runtime-state" / ".cell-port-registry.json"),
     )
     return manager, docker_backend, state_store, lock
+
+
+async def test_observe_before_first_ensure_allows_canonical_recovery(tmp_path: Path) -> None:
+    manager, _, state_store, _ = _make_manager(tmp_path)
+    provider = DockerOwnerCanaryProvider(resource_manager=manager)
+    workspace_id = uuid4()
+    # Transport failed before the first ensure wrote any durable cell state.
+    response = await provider.observe_resources(workspace_id, _mutation("a", 2))
+    assert response.state == "retained"
+    assert response.has_workspace is False
+    assert response.has_postgres is False
+    assert state_store.load(workspace_id) is None
+    await provider.ensure(_spec(workspace_id), _mutation("b", 3))
+    ready = await provider.inspect_resources(workspace_id)
+    assert ready.state == "resources_ready"
 
 
 @pytest.mark.asyncio
