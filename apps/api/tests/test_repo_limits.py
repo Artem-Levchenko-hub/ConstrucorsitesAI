@@ -93,3 +93,28 @@ def test_initial_import_enforces_project_wide_byte_quota(
 
     with pytest.raises(ValueError, match="repository text exceeds"):
         repo.init_from_files(PROJECT_ID, {"a.ts": "abc", "b.ts": "def"}, "seed")
+
+
+def test_exact_commit_preserves_verified_tree_despite_different_git_baseline() -> None:
+    parent = repo.init_from_files(
+        PROJECT_ID, {"src/page.tsx": "old", "removed.ts": "obsolete"}, "seed",
+    )
+    # Another detached commit leaves unrelated paths in the persisted index.
+    repo.commit_files(PROJECT_ID, {"other-branch.ts": "unrelated"}, "other", parent)
+    verified = {
+        "src/page.tsx": "new",
+        ".omnia/cell.json": '{"version": 1}',
+        "src/helper.ts": "already existed in the live workspace",
+        "empty.txt": "",
+    }
+    sha = repo.commit_files(PROJECT_ID, verified, "verified", parent, exact_tree=True)
+    assert repo.read_files(PROJECT_ID, sha) == verified
+    assert repo.read_files(PROJECT_ID, parent) == {
+        "src/page.tsx": "old", "removed.ts": "obsolete",
+    }
+
+
+def test_exact_commit_can_remove_all_files() -> None:
+    parent = repo.init_from_files(PROJECT_ID, {"old.txt": "old"}, "seed")
+    sha = repo.commit_files(PROJECT_ID, {}, "empty tree", parent, exact_tree=True)
+    assert repo.read_files(PROJECT_ID, sha) == {}

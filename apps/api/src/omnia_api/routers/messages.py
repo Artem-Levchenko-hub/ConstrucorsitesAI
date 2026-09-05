@@ -6509,7 +6509,7 @@ async def _process_prompt(
                     raise
                 if _finalization.status is MaxFinalizationStatus.COMPLETE:
                     _max_finalization_proof = _finalization.proof
-                    files = await _project_cell_executor_handle.export_files()
+                    files = await _project_cell_executor_handle.snapshot_files()
                     accumulated = (
                         "Готово — правка применена и проверена."
                         if _is_edit
@@ -6544,6 +6544,7 @@ async def _process_prompt(
                     files,
                     f"AI(agent): {prompt_text[:50]}",
                     current_sha,
+                    exact_tree=_max_finalization_proof is not None,
                 )
                 async with factory() as session:
                     snapshot = Snapshot(

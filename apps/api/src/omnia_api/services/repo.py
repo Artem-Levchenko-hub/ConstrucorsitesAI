@@ -228,15 +228,22 @@ def commit_files(
     files: dict[str, str],
     message: str,
     parent_sha: str | None = None,
+    *,
+    exact_tree: bool = False,
 ) -> str:
+    """Commit a patch, or the complete verified source tree including empty files."""
     _validate_file_batch(files)
 
     with _open_workdir(project_id, must_exist=True) as workdir:
         repo = pygit2.Repository(str(workdir))
         index = repo.index
+        if exact_tree:
+            # The live workspace baseline can differ from both Git's parent
+            # and persisted index. Build precisely the supplied tree.
+            index.clear()
         for path, content in files.items():
             full = workdir / path
-            if content == "":
+            if content == "" and not exact_tree:
                 if full.exists():
                     full.unlink()
                 try:
@@ -247,8 +254,9 @@ def commit_files(
                     # Nothing to delete — a no-op, never fatal to the commit.
                     pass
                 continue
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(content, encoding="utf-8")
+            if not exact_tree:
+                full.parent.mkdir(parents=True, exist_ok=True)
+                full.write_text(content, encoding="utf-8")
             blob_oid = repo.create_blob(content.encode("utf-8"))
             index.add(
                 pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB)
