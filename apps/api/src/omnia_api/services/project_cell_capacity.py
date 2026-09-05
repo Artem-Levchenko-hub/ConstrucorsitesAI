@@ -283,6 +283,7 @@ async def release_one_stale_generation_lease(
     requesting_run_id: UUID,
     client: ProjectCellOrchestratorClient,
     workspace_id: UUID | None = None,
+    reclaim_for_repair: bool = False,
 ) -> bool:
     """Fence and release one terminal run without stopping ready compute."""
 
@@ -424,6 +425,15 @@ async def release_one_stale_generation_lease(
             if outcome.status == "waiting_capacity":
                 async with session_factory() as cancel_session:
                     await _cancel_waiting_operation(cancel_session, outcome.operation_id)
+                if reclaim_for_repair:
+                    # A same-project retry cannot reach normal admission until
+                    # this old lease is reconciled. Reclaim only on a proven
+                    # capacity rejection, never merely on a lost response.
+                    await hibernate_one_idle_workspace(
+                        session_factory,
+                        requesting_run_id=requesting_run_id,
+                        client=client,
+                    )
             response = outcome.response
             if (
                 outcome.status == "completed"

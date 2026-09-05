@@ -25,7 +25,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
 from omnia_api.routers import messages
-from omnia_api.services import project_cell_executor
+from omnia_api.services import project_cell_capacity, project_cell_executor
 from omnia_api.services.agent_builder import Action
 from omnia_api.services.generation_runs import (
     finalize_generation_run,
@@ -38,6 +38,8 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellAgentExecResponse,
     ProjectCellAgentWorkspaceSnapshot,
     ProjectCellAgentWriteResponse,
+    ProjectCellCapacityRejection,
+    ProjectCellCapacityWait,
     ProjectCellDraftApplyResponse,
     ProjectCellPreviewSession,
     ProjectCellResourceResponse,
@@ -708,7 +710,7 @@ async def test_immediate_ensure_with_dispatch_token_bootstraps_without_queueing(
     ]
 
 
-@pytest.mark.parametrize("old_ensure_status", ["completed", "indeterminate"])
+@pytest.mark.parametrize("old_ensure_status", ["completed", "indeterminate", "absent"])
 @pytest.mark.parametrize("release_response_lost", [False, True])
 async def test_same_project_recovers_terminal_binding_before_new_ensure(
     monkeypatch: pytest.MonkeyPatch,
@@ -748,6 +750,7 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
             await mark_cell_operation_indeterminate(session, operation.id, "response lost")
         await session.commit()
     calls = []
+    capacity_available = old_ensure_status != "absent"
 
     def response(request):
         return ProjectCellResourceResponse(
@@ -764,7 +767,20 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
 
     async def observe(request):
         calls.append("reconcile")
+        if old_ensure_status == "absent":
+            return replace(
+                response(request), state="retained", has_workspace=False,
+                has_agent_home=False, has_postgres=False, has_redis=False,
+            )
         return response(request)
+
+    async def hibernate(_factory, *, requesting_run_id, client):
+        nonlocal capacity_available
+        assert requesting_run_id == new_run.id
+        assert not capacity_available, "must not hibernate without capacity rejection"
+        calls.append("hibernate")
+        capacity_available = True
+        return True
 
     async def control(request):
         assert request.kind == "release"
@@ -777,6 +793,16 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         return response(request)
 
     async def ensure(request):
+        if request.generation_run_id == old_run.id:
+            calls.append("repair")
+            if not capacity_available:
+                raise ProjectCellCapacityWait(ProjectCellCapacityRejection(
+                    operation_id=request.operation_id,
+                    fencing_epoch=request.fencing_epoch,
+                    request_digest=request.request_digest,
+                    effect_applied=False, reason="insufficient_cpu", retry_after_seconds=1,
+                ))
+            return response(request)
         assert request.generation_run_id == new_run.id
         assert calls[-1] == "release"
         calls.append("ensure")
@@ -792,7 +818,9 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
 
     async def bootstrap(_workspace_id, *, generation_run_id, fencing_epoch):
         assert generation_run_id == new_run.id
-        assert fencing_epoch == (3 if old_ensure_status == "completed" else 4)
+        assert fencing_epoch == {"completed": 3, "indeterminate": 4, "absent": 6}[
+            old_ensure_status
+        ]
         raise RuntimeError("test reached new bootstrap")
 
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
@@ -803,6 +831,9 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         lambda: SimpleNamespace(ensure=ensure, control=control, observe_resources=observe),
     )
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", bootstrap)
+    monkeypatch.setattr(
+        project_cell_capacity, "hibernate_one_idle_workspace", hibernate,
+    )
     with pytest.raises(RuntimeError, match="test reached new bootstrap"):
         await project_cell_executor.maybe_create_project_cell_executor(
             project_id=project.id,
@@ -813,7 +844,11 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
             legacy_execute=ensure,
         )
     assert calls == (
-        (["reconcile"] if old_ensure_status == "indeterminate" else [])
+        (
+            ["reconcile", "repair", "hibernate", "repair"]
+            if old_ensure_status == "absent"
+            else ["reconcile"] if old_ensure_status == "indeterminate" else []
+        )
         + ["release"] * (2 if release_response_lost else 1)
         + ["ensure"]
     )

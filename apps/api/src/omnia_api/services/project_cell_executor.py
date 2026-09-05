@@ -508,12 +508,16 @@ async def maybe_create_project_cell_executor(
                     # Preserve the old terminal run's identity until its resources
                     # are reconciled and the physical lease is released.
                     await session.commit()
-                    for _attempt in range(3):
+                    # Recovery may need capacity before it can release the old
+                    # lease. Reclaim another idle cell just as admission does;
+                    # otherwise all retries fail before reaching that queue.
+                    for _attempt in range(4):
                         if await release_one_stale_generation_lease(
                             session_factory,
                             requesting_run_id=run.id,
                             client=HttpProjectCellOrchestratorClient(),
                             workspace_id=workspace.id,
+                            reclaim_for_repair=_attempt < 3,
                         ):
                             break
                     await session.refresh(workspace)
