@@ -150,8 +150,6 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValueError("message content must be text or an array")
 
         text = _openai_text_content(content)
-        if text:
-            out.append({"role": "user", "content": text})
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
@@ -166,6 +164,11 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(block.get("cache_control"), dict):
                 tool_result["cache_control"] = dict(block["cache_control"])
             out.append(tool_result)
+        # Resolve every preceding assistant tool call before adding feedback.
+        # Native turns append loop/repair guidance after tool_result blocks;
+        # putting that user message first breaks the OpenAI tool-call sequence.
+        if text:
+            out.append({"role": "user", "content": text})
     return out
 
 

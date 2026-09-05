@@ -172,6 +172,32 @@ def test_openai_messages_preserve_tool_turns() -> None:
     }
 
 
+def test_openai_tool_results_precede_mixed_user_feedback() -> None:
+    cache = {"type": "ephemeral"}
+    adapted = messages_native._openai_messages({
+        "messages": [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": call_id, "name": "read_file", "input": {}}
+                for call_id in ("one", "two")
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "one", "content": "first"},
+                {"type": "tool_result", "tool_use_id": "two", "content": "second",
+                 "cache_control": cache},
+                {"type": "text", "text": "Stop exploring and implement the missing API.",
+                 "cache_control": cache},
+            ]},
+        ],
+    })
+    assert [message["role"] for message in adapted] == ["assistant", "tool", "tool", "user"]
+    assert [message["tool_call_id"] for message in adapted[1:3]] == ["one", "two"]
+    assert adapted[2]["cache_control"] == cache
+    assert adapted[3]["content"] == [{
+        "type": "text", "text": "Stop exploring and implement the missing API.",
+        "cache_control": cache,
+    }]
+
+
 def test_openai_adapter_preserves_prompt_cache_breakpoints() -> None:
     cache = {"type": "ephemeral"}
     body = {
