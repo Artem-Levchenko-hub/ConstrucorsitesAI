@@ -100,7 +100,7 @@ jobs:
         working-directory: apps/api
         run: >-
           uv run pytest -q
-          tests/test_max_project_kit.py::test_every_max_starter_overlay_keeps_portable_machine_tasks_executable
+          tests/test_max_project_kit.py
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest

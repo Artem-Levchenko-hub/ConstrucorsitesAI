@@ -4937,7 +4937,13 @@ async def _process_prompt(
                             summary=prompt_text[:1000] or "Сервис внутри MAX",
                         )
                     )
-                    _starter_files = render_max_starter_files(_max_config, project_id)
+                    _starter_files = render_max_starter_files(
+                        _max_config, project_id,
+                        portable=bool(
+                            _project_cell_executor_handle is not None
+                            and _project_cell_executor_handle.is_portable()
+                        ),
+                    )
                     if _design_contract:
                         from omnia_api.services.design_plugin import seed_design_memory
 
@@ -5354,7 +5360,13 @@ async def _process_prompt(
                             summary=prompt_text[:1000] or "Сервис внутри MAX",
                         )
                     )
-                    _safe_files = render_max_starter_files(_max_config, project_id)
+                    _safe_files = render_max_starter_files(
+                        _max_config, project_id,
+                        portable=bool(
+                            _project_cell_executor_handle is not None
+                            and _project_cell_executor_handle.is_portable()
+                        ),
+                    )
                     _new_paths = sorted(
                         {path for path in _agent_res.files if path not in _safe_files}
                         | {"src/app/page.tsx"}
@@ -5927,7 +5939,13 @@ async def _process_prompt(
                                 summary=prompt_text[:1000] or "Сервис внутри MAX",
                             )
                         )
-                        _safe_files = render_max_starter_files(_max_config, project_id)
+                        _safe_files = render_max_starter_files(
+                            _max_config, project_id,
+                            portable=bool(
+                                _project_cell_executor_handle is not None
+                                and _project_cell_executor_handle.is_portable()
+                            ),
+                        )
                         _new_paths = sorted(
                             {path for path in files if path not in _safe_files}
                             | {"src/app/page.tsx"}

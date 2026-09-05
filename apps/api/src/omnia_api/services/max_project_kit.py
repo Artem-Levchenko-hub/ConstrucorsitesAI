@@ -558,8 +558,34 @@ edit, preserve working behaviour and change only the relevant product files.
 """.strip()
 
 
+def render_portable_max_session(project_id: UUID | str) -> str:
+    """Adapt the product helper to the secretless, gateway-authenticated runtime."""
+    source = _template_file("src/lib/max/session.ts")
+    start = source.index("export async function getMaxUser()")
+    end = source.index("export async function requireMaxUser()", start)
+    helper = """export async function getMaxUser(): Promise<MaxSessionUser | null> {
+  // Only the portable product server uses this adapter. Its gateway strips
+  // incoming identity headers and injects the authenticated session identity.
+  const incoming = await headers();
+  const id = incoming.get("x-omnia-user-id");
+  const projectId = incoming.get("x-omnia-project-id");
+  const epoch = incoming.get("x-omnia-session-epoch");
+  if (!id?.trim() || projectId !== __PROJECT_ID__ || !epoch || !/^[0-9]+$/.test(epoch)) {
+    return null;
+  }
+  return {
+    id, firstName: "", lastName: null, username: null,
+    languageCode: null, photoUrl: null,
+  };
+}
+
+""".replace("__PROJECT_ID__", json.dumps(str(project_id)))
+    return source[:start] + helper + source[end:]
+
+
 def render_max_starter_files(
-    config: MaxProjectConfigPayload, project_id: UUID | str | None = None
+    config: MaxProjectConfigPayload, project_id: UUID | str | None = None,
+    *, portable: bool = False,
 ) -> dict[str, str]:
     """Buildable MAX platform core with no generated product UI.
 
@@ -567,7 +593,7 @@ def render_max_starter_files(
     feature architecture do not: the Google agent must create the home page and
     product styling from scratch instead of inheriting a deceptively finished UI.
     """
-    return {
+    files = {
         # Seed-only project-owned files. Config saves and managed-kit upgrades
         # must never overwrite dependencies or a relational schema the agent
         # has evolved after the first build.
@@ -578,3 +604,8 @@ def render_max_starter_files(
         **render_max_managed_files(config, project_id),
         "src/app/globals.css": _template_file("src/app/globals.css"),
     }
+    if portable:
+        if project_id is None:
+            raise ValueError("portable MAX starter requires a project identity")
+        files["src/lib/max/session.ts"] = render_portable_max_session(project_id)
+    return files

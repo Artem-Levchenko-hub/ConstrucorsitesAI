@@ -209,7 +209,7 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
     template_files = {
         path.relative_to(template).as_posix(): path.read_text(encoding="utf-8")
         for path in template.rglob("*")
-        if path.is_file()
+        if path.is_file() and not {"node_modules", ".next", ".git"}.intersection(path.parts)
     }
     machine_defaults_path = (
         orchestrator_source / "omnia_orchestrator" / "services" / "machine_defaults.py"
@@ -233,7 +233,8 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
                 app_name="Portable MAX",
                 app_type=app_type,
                 summary="Contract fixture",
-            )
+            ),
+            uuid4(), portable=True,
         ),
     }
     manifest = machine_defaults.MachineManifest.from_files(final_files)
@@ -540,3 +541,64 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
     assert stages["build_plan"].cache_read_tokens == 600
     assert stages["native_agent"].calls == 1
     assert stages["native_agent"].retries == 2
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_starter_session_uses_only_its_runtime_auth_boundary(portable: bool) -> None:
+    """Execute the shipped TypeScript helper without a signing key or browser cookie."""
+    project_id = uuid4()
+    files = render_max_starter_files(_config(), project_id, portable=portable)
+    source = files["src/lib/max/session.ts"]
+    script = r"""
+const {stripTypeScriptTypes} = require('node:module');
+const vm = require('node:vm');
+const crypto = require('node:crypto');
+const assert = require('node:assert/strict');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+let incoming = new Headers();
+const exportsFor = {
+ 'node:crypto': {createHmac: crypto.createHmac, timingSafeEqual: crypto.timingSafeEqual},
+ 'next/headers': {headers: async () => incoming, cookies: async () => ({get: () => undefined})},
+ '@/lib/max/validate-init-data': {validateMaxInitData: () => {
+  throw Error('unexpected MAX token validation')
+ }}
+};
+(async () => {
+ const context = vm.createContext({Buffer, process: {env: {}}, console});
+ const mod = new vm.SourceTextModule(stripTypeScriptTypes(input.source), {context});
+ await mod.link(async name => {
+  const values = exportsFor[name];
+  assert.ok(values, name);
+  return new vm.SyntheticModule(Object.keys(values), function() {
+   for (const [key, value] of Object.entries(values)) this.setExport(key, value);
+  }, {context});
+ });
+ await mod.evaluate();
+ const trusted = {'x-omnia-user-id':'owner-123','x-omnia-project-id':input.project,
+                  'x-omnia-session-epoch':'7'};
+ incoming = new Headers(trusted);
+ const user = await mod.namespace.getMaxUser();
+ if (input.portable) assert.equal(user.id, 'owner-123');
+ else assert.equal(user, null); // Legacy routes must never trust client-supplied identity.
+ for (const changes of [
+  {'x-omnia-user-id':''}, {'x-omnia-project-id':'another-project'},
+  {'x-omnia-session-epoch':''}, {'x-omnia-session-epoch':'invalid'},
+  {'x-omnia-session-epoch':'-1'}
+ ]) {
+  incoming = new Headers({...trusted, ...changes});
+  assert.equal(await mod.namespace.getMaxUser(), null);
+ }
+ incoming = new Headers();
+ assert.equal(await mod.namespace.getMaxUser(), null);
+})().catch(error => {console.error(error); process.exitCode = 1});
+"""
+    result = run(
+        ["node", "--experimental-vm-modules", "-e", script],
+        input=json.dumps({"source": source, "project": str(project_id), "portable": portable}),
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_portable_starter_requires_project_identity() -> None:
+    with pytest.raises(ValueError, match="requires a project identity"):
+        render_max_starter_files(_config(), portable=True)

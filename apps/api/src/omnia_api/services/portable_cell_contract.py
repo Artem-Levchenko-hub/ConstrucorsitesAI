@@ -69,7 +69,9 @@ The browser uses same-origin authenticated fetch for the existing managed MAX
 APIs. Keep MAX Bridge/session initialization for real MAX launches; signed owner
 preview is supplied by the platform. Product servers receive trusted
 X-Omnia-User-ID, X-Omnia-Project-ID and X-Omnia-Session-Epoch from the gateway,
-not a signing key or managed PostgreSQL password. Never trust a user id in a
+not a signing key or managed PostgreSQL password. For Next.js product routes,
+getMaxUser from @/lib/max/session is preconfigured to read this trusted identity;
+use it rather than implementing cookie validation in the product. Never trust a user id in a
 request body. Product-owned storage must scope records by the trusted user id.
 Managed actions are GET/POST /api/omnia/actions; existing MAX client source can
 be read for exact request shapes. Managed integrations use the reserved browser

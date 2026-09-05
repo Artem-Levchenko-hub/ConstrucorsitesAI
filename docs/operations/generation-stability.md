@@ -110,3 +110,5 @@ conflicting lifecycle effects. Standardizing this lock order across callers is a
 follow-up. This release does not claim that every concurrent retry is error-free.
 
 - Opening a released cell after capacity hibernation first performs a durable `wake`, then starts the retained preview. Retries replay an uncertain wake with the same operation and fence, including when the remote wake already succeeded. Each later pause/wake cycle gets a new key. No generation lease or source bootstrap is created.
+
+- Portable MAX starter renders `getMaxUser()` against the gateway's trusted user/project/epoch headers, bound to the actual project ID. The legacy runtime retains cookie/initData authentication. The final API overlay must not restore the legacy cookie helper into the portable product server: the gateway deliberately strips browser cookies before forwarding product requests. Existing generated files are not silently rewritten by this release.
