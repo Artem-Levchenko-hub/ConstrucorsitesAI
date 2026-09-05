@@ -201,6 +201,11 @@ def _project_workspace_lock(project_id: str) -> asyncio.Lock:
 def _workspace_revision(files: dict[str, str]) -> str:
     digest = sha256()
     for path, content in sorted(files.items()):
+        # Next and TypeScript regenerate these during verification. Preserve
+        # next-env.d.ts in snapshots for cold restores, but do not let compiler
+        # bookkeeping create a new source identity on every check/build.
+        if Path(path).name == "next-env.d.ts" or path.endswith(".tsbuildinfo"):
+            continue
         path_bytes = path.encode("utf-8")
         content_bytes = content.encode("utf-8")
         digest.update(len(path_bytes).to_bytes(8, "big"))

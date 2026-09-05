@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+import subprocess
 import tarfile
 import threading
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -13,7 +15,41 @@ import pytest
 
 from omnia_orchestrator.core.cell_resources import CellResourceError
 from omnia_orchestrator.services.docker_cell_resources import DockerContainerSpec
-from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
+from omnia_orchestrator.services.docker_py_cell_backend import (
+    _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES,
+    DockerPyCellBackend,
+)
+
+
+def test_source_archive_ignores_compiler_outputs_but_keeps_application_source(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    entries = {
+        "tsconfig.tsbuildinfo": "incremental compiler cache",
+        "next-env.d.ts": "generated Next declarations",
+        "nested/build.tsbuildinfo": "nested cache",
+        "nested/next-env.d.ts": "nested generated declarations",
+        "src/app/page.tsx": "export default function Page() {}",
+        "src/env.d.ts": "declare const application: string",
+    }
+    for path, content in entries.items():
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    archive_path = tmp_path / "source.tar"
+    subprocess.run([
+        "tar", "-C", str(root),
+        *(f"--exclude={item}" for item in _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES),
+        "-cf", str(archive_path), ".",
+    ], check=True, env={**os.environ, "COPYFILE_DISABLE": "1"})
+    with tarfile.open(archive_path) as archive:
+        names = {member.name.removeprefix("./") for member in archive if member.isfile()}
+    # Next declarations must remain available in a cold restored workspace.
+    assert names == {
+        "src/app/page.tsx", "src/env.d.ts", "next-env.d.ts", "nested/next-env.d.ts",
+    }
 
 
 def _labels(kind: str) -> dict[str, str]:

@@ -308,7 +308,9 @@ _MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def _build_max_tools(*, allow_bash: bool, portable: bool = False) -> list[dict[str, Any]]:
+def _build_max_tools(
+    *, allow_bash: bool, portable: bool = False, coordinator: bool = False,
+) -> list[dict[str, Any]]:
     descriptions = dict(_MAX_TOOL_DESCRIPTIONS)
     if portable:
         descriptions["bash"] = (
@@ -321,6 +323,15 @@ def _build_max_tools(*, allow_bash: bool, portable: bool = False) -> list[dict[s
             "Use lightweight checks during implementation; final build and runtime "
             "verification are managed by the finalization coordinator."
         )
+    if coordinator:
+        descriptions["build"] = (
+            "Run bootstrap and fast source checks. Fix reported compiler/test errors. "
+            "This is not the final production build; call done after source checks pass."
+        )
+        descriptions["done"] = (
+            "Hand the completed source to the finalization coordinator after green fast checks. "
+            "The coordinator performs the production build, signed runtime checks and release."
+        )
     return [
         {
             **tool,
@@ -328,6 +339,7 @@ def _build_max_tools(*, allow_bash: bool, portable: bool = False) -> list[dict[s
         }
         for tool in _TOOLS
         if tool["name"] not in {"probe", "verify_isolation"}
+        and (not coordinator or tool["name"] != "runtime_check")
         and (allow_bash or tool["name"] != "bash")
     ]
 
@@ -342,6 +354,12 @@ _MAX_TOOLS_CACHED: list[dict[str, Any]] = _cache_toolset(_MAX_TOOLS)
 _MAX_TOOLS_WITH_BASH_CACHED: list[dict[str, Any]] = _cache_toolset(_MAX_TOOLS_WITH_BASH)
 _MAX_PORTABLE_TOOLS_CACHED: list[dict[str, Any]] = _cache_toolset(
     _build_max_tools(allow_bash=True, portable=True)
+)
+_MAX_COORDINATOR_TOOLS_CACHED = _cache_toolset(
+    _build_max_tools(allow_bash=False, portable=True, coordinator=True)
+)
+_MAX_COORDINATOR_BASH_TOOLS_CACHED = _cache_toolset(
+    _build_max_tools(allow_bash=True, portable=True, coordinator=True)
 )
 
 # Once MAX discovery is exhausted, a warning alone is not a constraint: the
@@ -693,6 +711,14 @@ _MAX_NATIVE_VERIFICATION_OVERRIDE = (
     "write; the executor supplies a signed MAX preview session. Fix concrete runtime "
     "failures, rerun build/runtime_check after a source change, then call done."
 )
+_MAX_COORDINATOR_HANDOFF = (
+    "COORDINATOR HANDOFF (overrides all earlier build/runtime instructions): "
+    "Implement the full requested source, data schema and tests. The build tool runs "
+    "bootstrap and fast checks only. Fix its errors, then call done when the source "
+    "is complete. Do not call runtime_check or wait for a running preview: production "
+    "build, signed runtime proof and release happen only after your handoff. "
+    "Do not claim the product is released; the coordinator decides final success."
+)
 
 
 def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
@@ -857,6 +883,9 @@ async def _run_native_segment(
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
+    coordinated_max = max_runtime and portable_cell and settings.use_max_finalization_coordinator
+    if coordinated_max:
+        system += "\n\n" + _MAX_COORDINATOR_HANDOFF
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
@@ -1042,6 +1071,10 @@ async def _run_native_segment(
                     tools=(
                         _MAX_ENTRY_WRITE_TOOLS
                         if force_max_entry_write
+                        else _MAX_COORDINATOR_BASH_TOOLS_CACHED
+                        if coordinated_max and allow_max_bash
+                        else _MAX_COORDINATOR_TOOLS_CACHED
+                        if coordinated_max
                         else _MAX_PORTABLE_TOOLS_CACHED
                         if max_runtime and allow_max_bash and portable_cell
                         else _MAX_TOOLS_WITH_BASH_CACHED
@@ -1177,6 +1210,8 @@ async def _run_native_segment(
                 obs: dict[str, Any]
                 if name not in _KNOWN_ACTIONS:
                     obs = {"ok": False, "error": f"unknown action {name}"}
+                elif coordinated_max and name == "runtime_check":
+                    obs = {"ok": False, "error": _MAX_COORDINATOR_HANDOFF}
                 elif _max_entry_required and not (
                     name in {"write_file", "edit_file"}
                     and _normalize_agent_path(action.path) == _MAX_PRODUCT_ENTRY_PATH
@@ -1351,7 +1386,9 @@ async def _run_native_segment(
                                 _MAX_PREWRITE_LOCK_RESULT
                                 if max_entry_write_required
                                 else (
-                                    _MAX_DONE_WHEN_GREEN_NUDGE
+                                    _MAX_COORDINATOR_HANDOFF
+                                    if coordinated_max
+                                    else _MAX_DONE_WHEN_GREEN_NUDGE
                                     if max_runtime
                                     else _DONE_WHEN_GREEN_NUDGE
                                 )

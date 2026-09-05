@@ -91,6 +91,9 @@ _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES = tuple(
         (
             *(f"./{item}" for item in _WORKSPACE_SYNC_PRESERVE_PATTERNS),
             *(f"*/{item}" for item in _WORKSPACE_SYNC_PRESERVE_PATTERNS),
+            # TypeScript writes this cache during checks. Keep it on disk,
+            # outside source snapshots and their bounded payload budget.
+            "*.tsbuildinfo",
         )
     )
 )

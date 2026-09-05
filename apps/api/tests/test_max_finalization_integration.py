@@ -75,6 +75,27 @@ async def test_finalization_does_not_hide_editor_provider_failure(db_session, te
     assert harness.roles == []
 
 
+async def test_identity_mutation_keeps_compiler_diagnostics(db_session, test_engine):
+    harness = await _new_harness(db_session, test_engine)
+    original = harness.coordinator.executor.run_role
+
+    async def run_role(role, operation_id):
+        result = await original(role, operation_id)
+        if role is ProjectCellCommandRole.FAST_CHECK:
+            return replace(
+                result, ok=False,
+                after=replace(result.after, workspace_revision="a" * 64),
+                redacted_detail="src/Stock.tsx(12,3): TS2322: label is not an Input prop",
+            )
+        return result
+
+    harness.coordinator.executor = replace(harness.coordinator.executor, run_role=run_role)
+    result = await harness.coordinator.fast_check()
+    assert result.outcome == "red"
+    assert "frozen proof identity" in result.redacted_detail
+    assert "src/Stock.tsx(12,3): TS2322" in result.redacted_detail
+
+
 async def test_authored_max_finalization_is_single_pass_and_terminal(
     db_session: AsyncSession,
     test_engine: AsyncEngine,

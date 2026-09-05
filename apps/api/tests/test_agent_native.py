@@ -1515,6 +1515,40 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monkeypatch):
+    monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
+    from omnia_api.core.config import get_settings
+    get_settings.cache_clear()
+    calls = 0
+
+    async def fake_call(client, url, convo, system, **kwargs):
+        nonlocal calls
+        calls += 1
+        names = {tool["name"] for tool in kwargs["tools"]}
+        assert "runtime_check" not in names
+        assert {"bash", "build", "done"} <= names
+        assert "COORDINATOR HANDOFF" in system
+        if calls == 1:
+            return _turn(("write_file", {"path": "src/app/page.tsx", "content": "product"}))
+        if calls == 2:
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "source ready"}))
+
+    async def execute(action):
+        assert action.name in {"write_file", "build"}
+        return {"ok": True, "content": action.args.get("content", "green")}
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE", task="Склад", execute=execute,
+        portable_cell=True, allow_max_bash=True,
+        completion_check=lambda files, evidence: None, max_steps=6,
+    )
+    assert result.done
+    assert calls == 3
+
+
+@pytest.mark.asyncio
 async def test_portable_provider_failure_preserves_cause_without_proof_work(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
     from omnia_api.core.config import get_settings

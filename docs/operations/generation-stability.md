@@ -70,6 +70,18 @@ API/worker/web/orchestrator revision and health before running acceptance.
   Provider, infrastructure and proof failures do not become blind model retries.
 - CI includes source-contract and finalization integration regressions. Resource
   acceptance still does not replace a real model-to-product canary.
+- Mixed tool-result/feedback turns reach the provider as assistant tool calls,
+  all corresponding tool replies, then user feedback.
+- Changed backend, schema and test source counts as implementation progress;
+  identical writes and non-source notes do not reset the stall guard.
+- TypeScript incremental caches are excluded from source archives. Generated
+  `next-env.d.ts` remains in snapshots for cold restores, but generated Next/TS
+  bookkeeping does not change the source proof revision. Application source and
+  custom declarations still invalidate proof. Identity mismatches remain red
+  and retain the underlying compiler/test diagnostics.
+- Portable coordinator mode exposes fast `build` checks and a `done` handoff.
+  It does not ask the model to run the runtime proof that is reserved for the
+  coordinator after full build; legacy runtime verification remains unchanged.
 
 ## Remaining delivery slices
 

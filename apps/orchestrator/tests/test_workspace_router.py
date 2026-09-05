@@ -33,6 +33,19 @@ from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwner
 from tests._cell_fakes import FakeDockerBackend
 from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
 
+
+def test_generated_next_declarations_do_not_invalidate_source_proof() -> None:
+    source = {"src/app/page.tsx": "export default function Page() {}"}
+    revision = workspace._workspace_revision(source)
+    generated = {
+        **source, "next-env.d.ts": "generated declarations",
+        "nested/next-env.d.ts": "generated nested declarations",
+        "tsconfig.tsbuildinfo": "cache",
+    }
+    assert workspace._workspace_revision(generated) == revision
+    assert workspace._workspace_revision({**generated, "src/app/page.tsx": "changed"}) != revision
+    assert workspace._workspace_revision({**generated, "src/env.d.ts": "custom types"}) != revision
+
 _DEFAULT_GENERATION_RUN_ID = UUID("00000000-0000-0000-0000-000000000094")
 
 

@@ -497,6 +497,8 @@ class MaxFinalizationCoordinator:
         )
         if observation.after.proof_key != identity.proof_key:
             detail = "command changed the frozen proof identity"
+            if observation.redacted_detail:
+                detail += "\n" + observation.redacted_detail
             outcome = ProofOutcome.RED
         else:
             detail = observation.redacted_detail
