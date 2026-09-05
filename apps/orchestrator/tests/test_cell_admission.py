@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -234,3 +235,34 @@ def test_admission_uses_total_quota_without_double_counting_running_usage() -> N
     assert full.cpu_cores == 2.5
     assert full.memory_bytes == 5 * 1024**3
     assert decision == AdmissionDecision(True, "admitted")
+
+
+@pytest.mark.parametrize("load_1m", [2.31, 8.0, 32.0])
+def test_v2_cpu_admission_uses_reserved_envelope_not_load_average(load_1m: float) -> None:
+    profile = replace(_profile(), profile_version="docker-owner-cell-resources-v2")
+    full = ReservedCapacity.from_profile(profile)
+    snapshot = HostCapacitySnapshot(
+        cpu_count=8,
+        load_1m=load_1m,
+        memory_available_bytes=12 * 1024**3,
+        memory_total_bytes=16 * 1024**3,
+        disk_free_bytes=200 * 1024**3,
+        disk_free_inodes=1_000_000,
+        active_bundle_count=0,
+        disk_path="/var/lib/docker",
+    )
+    gate = CellAdmissionGate(profile)
+    assert full.cpu_cores == pytest.approx(4.2)
+    assert gate.check(snapshot, existing_bundle=False, running_bundle=False) == AdmissionDecision(
+        True, "admitted"
+    )
+    # Confirmed and provisional claims both remain in the aggregate reservation.
+    # A busy host never permits a second 4.2-core cell to consume protected CPU.
+    for provisional in (ReservedCapacity(), full):
+        assert gate.check(
+            snapshot,
+            existing_bundle=False,
+            running_bundle=False,
+            reserved=full,
+            provisional=provisional,
+        ) == AdmissionDecision(False, "insufficient_cpu")

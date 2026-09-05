@@ -14,7 +14,8 @@ import json
 import re
 import sys
 import time
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, NoReturn
@@ -29,11 +30,14 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
+from omnia_api.routers.messages import _wait_for_capacity_dispatch_lease_loss
 from omnia_api.services.agent_builder import Action
 from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
 from omnia_api.services.project_cell_access import decide_project_cell_access
 from omnia_api.services.project_cell_capacity import (
+    capacity_admission_event,
     claim_idle_hibernation_victim,
+    clear_capacity_admission_event,
     hibernate_one_idle_workspace,
     release_one_stale_generation_lease,
 )
@@ -59,6 +63,7 @@ class AcceptanceFailure(RuntimeError):
 @dataclass(slots=True)
 class AcceptanceContext:
     label: str
+    capacity_dispatch_token: UUID = field(default_factory=uuid4)
     stage: str = "guard"
     owner_id: UUID | None = None
     project_id: UUID | None = None
@@ -128,6 +133,12 @@ def _fail(code: str) -> NoReturn:
 def _require(condition: bool, code: str) -> None:
     if not condition:
         _fail(code)
+
+
+def _terminal_error(existing: str | None, *, status: str, stage: str) -> str | None:
+    if status == "completed":
+        return None
+    return existing or f"acceptance_failed:{stage}"
 
 
 def _portable_probe_source(probe_id: UUID) -> str:
@@ -319,7 +330,7 @@ async def _terminalize_runs(
             run.status = status
             run.started_at = run.started_at or now
             run.finished_at = now
-            run.error = None if status == "completed" else f"acceptance_failed:{context.stage}"
+            run.error = _terminal_error(run.error, status=status, stage=context.stage)
             run.response_payload = {
                 "kind": "no_model_resource_acceptance",
                 "status": status,
@@ -572,6 +583,62 @@ async def _timed(
     )
 
 
+async def _create_executor_with_capacity_claim(
+    context: AcceptanceContext,
+    *,
+    agent_emit: Callable[[dict[str, object]], Awaitable[None]],
+) -> ProjectCellExecutorHandle | None:
+    """Mirror production queue ownership without starting a model prompt."""
+
+    assert context.project_id is not None
+    assert context.run_id is not None
+    assert context.owner_id is not None
+    work_task = asyncio.create_task(
+        maybe_create_project_cell_executor(
+            project_id=context.project_id,
+            project_slug=context.label,
+            project_template="max_miniapp",
+            user_id=context.owner_id,
+            generation_run_id=context.run_id,
+            legacy_execute=_legacy_execute,
+            capacity_dispatch_token=context.capacity_dispatch_token,
+            agent_emit=agent_emit,
+        )
+    )
+    lease_task = asyncio.create_task(
+        _wait_for_capacity_dispatch_lease_loss(
+            context.run_id,
+            context.capacity_dispatch_token,
+        )
+    )
+    admission_task = asyncio.create_task(capacity_admission_event(context.run_id).wait())
+    try:
+        while True:
+            done, _pending = await asyncio.wait(
+                {work_task, lease_task, admission_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if admission_task in done:
+                lease_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await lease_task
+                return await work_task
+            if lease_task in done:
+                if await lease_task == "lost":
+                    work_task.cancel()
+                    await asyncio.gather(work_task, return_exceptions=True)
+                    _fail("capacity_dispatch_lease_lost")
+                return await work_task
+            if work_task in done:
+                return await work_task
+    finally:
+        for task in (work_task, lease_task, admission_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(work_task, lease_task, admission_task, return_exceptions=True)
+        clear_capacity_admission_event(context.run_id)
+
+
 async def _execute_acceptance() -> int:
     context = AcceptanceContext(label=f"{_LABEL_PREFIX}-{uuid4().hex}")
     session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
@@ -588,16 +655,8 @@ async def _execute_acceptance() -> int:
             _emit("capacity_wait", "running", ids=context.ids())
 
         async def create_executor() -> None:
-            assert context.project_id is not None
-            assert context.run_id is not None
-            assert context.owner_id is not None
-            handle = await maybe_create_project_cell_executor(
-                project_id=context.project_id,
-                project_slug=context.label,
-                project_template="max_miniapp",
-                user_id=context.owner_id,
-                generation_run_id=context.run_id,
-                legacy_execute=_legacy_execute,
+            handle = await _create_executor_with_capacity_claim(
+                context,
                 agent_emit=collect_progress,
             )
             _require(handle is not None, "project_cell_executor_not_selected")

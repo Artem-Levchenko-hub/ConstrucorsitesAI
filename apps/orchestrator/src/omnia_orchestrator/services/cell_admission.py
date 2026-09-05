@@ -229,27 +229,31 @@ class CellAdmissionGate:
             reserved if isinstance(reserved, ReservedCapacity) else ReservedCapacity()
         )
         provisional_capacity = (
-            provisional
-            if isinstance(provisional, ReservedCapacity)
-            else ReservedCapacity()
+            provisional if isinstance(provisional, ReservedCapacity) else ReservedCapacity()
         )
         required = ReservedCapacity.from_profile(self.profile)
         if snapshot.failure_reason:
             return AdmissionDecision(False, snapshot.failure_reason)
         if running_bundle:
             return AdmissionDecision(True, "running_bundle_reuse")
+        # Load average includes runnable work and I/O wait; it is not an amount
+        # of allocated CPU. Adding host reserve to that load blocks even the
+        # first v2 cell on an otherwise unreserved eight-core host. Protect CPU
+        # using the atomic full-envelope ledger, which includes provisional
+        # claims, and leave the explicit host reserve outside cell allocation.
         if snapshot.cpu_count - reserved_capacity.cpu_cores - required.cpu_cores < (
             self.profile.host_cpu_reserve_cores
-        ) or snapshot.cpu_count - snapshot.load_1m - provisional_capacity.cpu_cores - (
-            required.cpu_cores
-        ) < self.profile.host_cpu_reserve_cores:
+        ):
             return AdmissionDecision(False, "insufficient_cpu")
         memory_total = snapshot.memory_total_bytes or snapshot.memory_available_bytes
-        if memory_total - reserved_capacity.memory_bytes - required.memory_bytes < (
-            self.profile.host_memory_reserve_bytes
-        ) or snapshot.memory_available_bytes - provisional_capacity.memory_bytes - (
-            required.memory_bytes
-        ) < self.profile.host_memory_reserve_bytes:
+        if (
+            memory_total - reserved_capacity.memory_bytes - required.memory_bytes
+            < (self.profile.host_memory_reserve_bytes)
+            or snapshot.memory_available_bytes
+            - provisional_capacity.memory_bytes
+            - (required.memory_bytes)
+            < self.profile.host_memory_reserve_bytes
+        ):
             return AdmissionDecision(False, "insufficient_memory")
         disk_total = snapshot.disk_total_bytes or snapshot.disk_free_bytes
         if disk_total - reserved_capacity.disk_bytes - required.disk_bytes < (
