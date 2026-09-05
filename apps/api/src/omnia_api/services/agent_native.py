@@ -112,9 +112,19 @@ _MAX_PRODUCT_ENTRY_REQUIRED_RESULT = (
 
 
 def _is_max_product_surface(path: str) -> bool:
-    """True only for files that can visibly advance the generated product."""
+    """Implementation progress includes data, server behavior and its tests.
+
+    The entry gate separately prevents backend-only scaffolding from replacing
+    the first screen. After that, ignoring backend writes aborts real full-stack
+    work. Repeated identical writes and non-source notes still make no progress;
+    the hard turn limit bounds semantic churn we cannot infer from paths.
+    """
 
     normalized = _normalize_agent_path(path)
+    if normalized.startswith(("src/", "tests/", "test/", "drizzle/", "migrations/")) and (
+        normalized.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sql"))
+    ):
+        return True
     if normalized == _MAX_PRODUCT_ENTRY_PATH:
         return True
     if normalized.startswith("src/components/"):

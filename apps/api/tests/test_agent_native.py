@@ -1105,7 +1105,7 @@ async def test_max_auxiliary_rewrites_are_not_product_progress(
         return _turn(
             (
                 "write_file",
-                {"path": "src/lib/helper.ts", "content": f"export const n={calls['n']}"},
+                {"path": ".omnia/notes.md", "content": f"note {calls['n']}"},
             )
         )
 
@@ -1125,6 +1125,39 @@ async def test_max_auxiliary_rewrites_are_not_product_progress(
     assert res.stop_reason == "exploring"
     assert "without user-facing product progress" in res.summary
     assert calls["n"] == 1 + agent_native._NO_WRITE_ABORT_AT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", [
+    "src/app/api/products/route.ts", "src/lib/db/schema.ts",
+    "src/lib/warehouse.ts", "tests/warehouse.test.mjs", "drizzle/0001_stock.sql",
+])
+async def test_max_backend_implementation_resets_stall_guard(
+    monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    calls = 0
+
+    async def fake_call(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(("write_file", {"path": "src/app/page.tsx", "content": "page"}))
+        if calls in (6, 11, 16):
+            return _turn(("write_file", {"path": path, "content": f"implementation {calls}"}))
+        return _turn(("read_file", {"path": path}))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": action.args.get("content", "source")}
+
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE", task="build warehouse", execute=execute,
+        completion_check=lambda files, evidence: None, max_steps=17,
+    )
+    assert calls == 17
+    assert result.stop_reason != "exploring"
+    assert result.files[path] == "implementation 16"
 
 
 @pytest.mark.asyncio
