@@ -26,9 +26,12 @@ export function verifyMaxIntegration(projectId: Uuid): Promise<MaxIntegration> {
 
 export function activateMaxIntegration(
   projectId: Uuid,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<MaxIntegration> {
   return apiFetch<MaxIntegration>(`${path(projectId)}/activate`, {
     method: "POST",
+    timeoutMs: 30_000,
+    ...options,
   });
 }
 

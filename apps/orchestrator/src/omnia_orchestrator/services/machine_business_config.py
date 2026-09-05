@@ -74,3 +74,20 @@ def apply_core_config(core: Any, address: str, config: dict[str, Any]) -> None:
 
 def boundary_source() -> str:
     return Path(__file__).with_name("machine_boundary.py").read_text(encoding="utf-8")
+
+
+def apply_public_core_overlay(core: Any) -> None:
+    """Deliver trusted current auth-facing code even when the pinned kit is older."""
+    from omnia_orchestrator.core.stack_registry import get_stack
+    from omnia_orchestrator.services.provisioner import _template_source_dir
+
+    template = _template_source_dir(get_stack("max-miniapp-nextjs").template_dir)
+    relative = "src/app/api/max/webhook/route.ts"
+    source = (template / relative).read_bytes()
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as output:
+        entry = tarfile.TarInfo(relative)
+        entry.size, entry.mode, entry.uid, entry.gid = len(source), 0o644, 1000, 1000
+        output.addfile(entry, io.BytesIO(source))
+    if core.put_archive("/app", archive.getvalue()) is False:
+        raise CellResourceError("public MAX core update failed")

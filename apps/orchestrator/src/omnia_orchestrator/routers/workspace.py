@@ -532,7 +532,7 @@ async def exec_workspace_agent_command(
                 after_identity=legacy_identity,
                 environment_mutated=False,
             )
-        exec_spec = _workspace_exec_spec(state)
+        exec_spec = _workspace_exec_spec(state, state_path=manager.profile.state_path)
         names = exec_spec.resource_names
         credentials = manager.credential_store.load_or_create(workspace_id)
         had_draft_runtime = await manager.inspect_draft_runtime(workspace_id) is not None
@@ -757,7 +757,7 @@ async def apply_workspace_draft(
                 package_stderr_tail=_bounded_redacted_text(result.output),
                 migration_exit_code=result.exit_code,
             )
-        exec_spec = _workspace_exec_spec(state)
+        exec_spec = _workspace_exec_spec(state, state_path=manager.profile.state_path)
         names = exec_spec.resource_names
         credentials = manager.credential_store.load_or_create(workspace_id)
         await manager.docker.remove_container(names.draft_container_name())
@@ -857,7 +857,7 @@ async def _draft_preview_session(
 ) -> WorkspaceDraftPreviewSessionResponse:
     """Caller holds the operation lock and has verified viewing authority."""
     workspace_id = state.workspace_id
-    exec_spec = _workspace_exec_spec(state)
+    exec_spec = _workspace_exec_spec(state, state_path=manager.profile.state_path)
     if _portable_active(manager, workspace_id):
         runtime = _require_portable_runtime(manager)
         preview = runtime.preview(state)
@@ -936,7 +936,7 @@ async def start_workspace_owner_preview(
                 message="workspace owner identity mismatch",
                 status_code=409,
             )
-        _workspace_exec_spec(state)
+        _workspace_exec_spec(state, state_path=manager.profile.state_path)
         if state.phase != "completed" or state.active_generation_run_id is not None:
             raise OrchestratorError(
                 code="conflict",
@@ -1377,7 +1377,13 @@ def _workspace_agent_exec_env(
     }
 
 
-def _workspace_exec_spec(state: CellWorkspaceState) -> _WorkspaceExecSpec:
+def _workspace_exec_spec(state: CellWorkspaceState, *, state_path: str) -> _WorkspaceExecSpec:
+    from omnia_orchestrator.services.cell_deletion import is_workspace_deleted
+
+    if is_workspace_deleted(state_path, state.workspace_id):
+        raise OrchestratorError(
+            code="conflict", message="workspace deletion is permanent", status_code=409,
+        )
     if state.project_id is None or state.owner_id is None or state.resource_names is None:
         raise OrchestratorError(
             code="not_found",
@@ -1460,6 +1466,12 @@ async def _workspace_volume_identity(
     manager: DockerCellResourceManager,
     workspace_id: UUID,
 ) -> tuple[CellWorkspaceState, str]:
+    from omnia_orchestrator.services.cell_deletion import is_workspace_deleted
+
+    if is_workspace_deleted(manager.profile.state_path, workspace_id):
+        raise OrchestratorError(
+            code="conflict", message="workspace deletion is permanent", status_code=409,
+        )
     state = manager.state_store.load(workspace_id)
     if (
         state is None

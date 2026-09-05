@@ -395,6 +395,11 @@ async def _save_cell_business_config(
     await session.refresh(record)
     if selection.workspace is not None and project.current_snapshot_id is not None:
         try:
+            await orchestrator_client.configure_published_cell(project.id, {
+                "owner_id": str(current_user.id),
+                "business_config": payload.model_dump(mode="json", exclude={"max_url_attached"}),
+                "business_config_version": version,
+            })
             await project_cell_runtime.start_project_cell_runtime(
                 session, project, owner=current_user,
             )
@@ -497,6 +502,28 @@ async def get_max_readiness(
         and current_snapshot
         and deployed_at >= current_snapshot.created_at
     )
+    build_ready = generated_count > 0
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(
+        session, project, owner=current_user,
+    )
+    if selection.selected:
+        from omnia_api.services.cell_publication import load_publication_evidence
+
+        build_ready = False
+        if selection.workspace is not None:
+            try:
+                await load_publication_evidence(session, project, selection.workspace)
+                build_ready = True
+            except ApiError:
+                pass
+        # Timestamps do not prove WHICH version reached the public runtime.
+        published = bool(
+            deployment.get("phase") == "done"
+            and deployment.get("prod_url")
+            and current_snapshot
+            and deployment.get("snapshot_id") == str(current_snapshot.id)
+            and deployment.get("commit_sha") == current_snapshot.commit_sha
+        )
     configured = bool(
         config
         and config.app_name
@@ -521,7 +548,7 @@ async def get_max_readiness(
         MaxReadinessItem(
             id="build",
             label="Рабочая версия приложения собрана",
-            done=generated_count > 0,
+            done=build_ready,
             action="Завершить сборку",
         ),
         MaxReadinessItem(

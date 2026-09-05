@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
 import socket
 import time
 from datetime import UTC, datetime, timedelta
@@ -559,12 +560,49 @@ class MachineAdapter:
             return result
         return result
 
+    def _public_auth_secret(
+        self, state: Any, backend: DockerMachineBackend, runtime_env: dict[str, str],
+    ) -> str:
+        """Rotate only the public cookie key on bot change/revoke, before reopening ingress."""
+        path = self.root / "public-boundary-auth" / f"{state.workspace_id}.json"
+        if path.is_symlink():
+            raise CellResourceError("unsafe public auth configuration")
+        old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        digest = hashlib.sha256(json.dumps(runtime_env, sort_keys=True).encode()).hexdigest()
+        secret = self.secret(state.workspace_id)
+        core = backend._lookup(backend.client.containers, backend.stem + "-max-core",
+                               "managed-max-core")
+        changed = old.get("digest") != digest
+        mismatched = False
+        if core is not None:
+            env = dict(item.split("=", 1) for item in core.attrs.get("Config", {}).get("Env", [])
+                       if "=" in item)
+            mismatched = env.get("AUTH_SECRET") != secret
+        if changed or mismatched:
+            gateway = backend._lookup(backend.client.containers, backend.stem + "-gateway",
+                                      "max-gateway")
+            if gateway is not None:
+                gateway.remove(force=True)
+            if core is not None:
+                core.remove(force=True)
+            if old and changed:
+                secret = secrets.token_urlsafe(32)
+                write_controller_json(
+                    self.root / "boundary-secrets" / f"{state.workspace_id}.json",
+                    {"postgres_password": secret},
+                )
+            write_controller_json(path, {"digest": digest})
+        return secret
+
     def _start_boundary(
-        self, state: Any, manifest: MachineManifest, backend: DockerMachineBackend, epoch: int
+        self, state: Any, manifest: MachineManifest, backend: DockerMachineBackend, epoch: int,
+        *, public_mode: bool = False, runtime_env: dict[str, str] | None = None,
+        business_config_override: dict[str, Any] | None = None,
     ) -> None:
         client = backend.client
         names = state.resource_names
-        secret = self.secret(state.workspace_id)
+        secret = (self._public_auth_secret(state, backend, runtime_env or {})
+                  if public_mode else self.secret(state.workspace_id))
         core_name = backend.stem + "-max-core"
         core = backend._lookup(client.containers, core_name, "managed-max-core")
         if core is None:
@@ -587,6 +625,7 @@ class MachineAdapter:
                     "DATABASE_URL": f"postgresql://postgres:{credentials.postgres_password}"
                     f"@{names.postgres_container}:5432/postgres",
                     "REDIS_URL": f"redis://{names.redis_container}:6379/0",
+                    **(runtime_env or {}),
                 },
                 mem_limit=self._max_core_memory_bytes(),
                 memswap_limit=self._max_core_memory_bytes(),
@@ -601,6 +640,12 @@ class MachineAdapter:
             core.start()
         core.reload()
         core_ip = core.attrs["NetworkSettings"]["Networks"][names.internal_network]["IPAddress"]
+        if public_mode:
+            from omnia_orchestrator.services.machine_business_config import (
+                apply_public_core_overlay,
+            )
+
+            apply_public_core_overlay(core)
         self._wait_http(core, core_ip, "/api/health", expected=200, timeout=120)
         from omnia_orchestrator.services.machine_business_config import (
             apply_core_config,
@@ -612,13 +657,37 @@ class MachineAdapter:
             json.loads(business_config_path.read_text(encoding="utf-8"))
             if business_config_path.exists() else None
         )
+        if business_config_override is not None:
+            business_config = {
+                "project_id": str(state.project_id), "owner_id": str(state.owner_id),
+                "config": business_config_override,
+            }
         if business_config is not None:
             if (business_config["project_id"] != str(state.project_id)
                     or business_config["owner_id"] != str(state.owner_id)):
                 raise CellResourceError("MAX configuration ownership mismatch")
             apply_core_config(core, core_ip, business_config["config"])
         gateway_name = backend.stem + "-gateway"
+        config = {
+            "secret": secret, "project_id": str(state.project_id), "epoch": epoch,
+            "core_host": core_ip, "machine_host": backend.address(),
+            "routes": [route.model_dump() for route in manifest.routes],
+            **({"public_mode": True} if public_mode else {}),
+        }
+        public_stamp = self.root / "public-boundary-runtime" / f"{state.workspace_id}.json"
+        config_digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
         old = backend._lookup(client.containers, gateway_name, "max-gateway")
+        if public_mode and old is not None and public_stamp.is_file():
+            if public_stamp.is_symlink():
+                raise CellResourceError("unsafe public boundary state")
+            stamp = json.loads(public_stamp.read_text(encoding="utf-8"))
+            old.reload()
+            if stamp.get("digest") == config_digest and old.status == "running":
+                address = old.attrs["NetworkSettings"]["Networks"][names.internal_network][
+                    "IPAddress"
+                ]
+                self._wait_http(old, address, "/__omnia/identity", expected=401, timeout=30)
+                return
         if old is not None:
             old.remove(force=True)
         gateway = client.containers.create(
@@ -627,7 +696,8 @@ class MachineAdapter:
               "p='/run/omnia-boundary/server.py'; "
               "exec('while not os.path.isfile(p): time.sleep(0.1)'); "
               "runpy.run_path(p,run_name='__main__')"]
-             if business_config is not None else ["python3", "/opt/omnia/machine_boundary.py"]),
+             if business_config is not None or public_mode
+             else ["python3", "/opt/omnia/machine_boundary.py"]),
             name=gateway_name,
             labels=backend.labels("max-gateway"),
             detach=True,
@@ -644,14 +714,6 @@ class MachineAdapter:
             pids_limit=32,
         )
         gateway.start()
-        config = {
-            "secret": secret,
-            "project_id": str(state.project_id),
-            "epoch": epoch,
-            "core_host": core_ip,
-            "machine_host": backend.address(),
-            "routes": [route.model_dump() for route in manifest.routes],
-        }
         # Runtime tmpfs is invisible to Docker29/containerd archive APIs. Send
         # secrets through exec stdin and atomically publish inside the tmpfs;
         # neither image/rootfs nor Docker command arguments contain this config.
@@ -661,7 +723,7 @@ class MachineAdapter:
             "os.replace(p,'/run/omnia-boundary/config.json')"
         )
         wire_config: dict[str, Any] = config
-        if business_config is not None:
+        if business_config is not None or public_mode:
             # Existing pinned guard images stay unchanged. Seed only trusted
             # controller code into gateway tmpfs; no project executable input.
             wire_config = {"config": config, "server": boundary_source()}
@@ -690,6 +752,8 @@ class MachineAdapter:
             "IPAddress"
         ]
         self._wait_http(gateway, gateway_ip, "/__omnia/identity", expected=401, timeout=30)
+        if public_mode:
+            write_controller_json(public_stamp, {"digest": config_digest})
 
     @staticmethod
     def _wait_http(container: Any, address: str, path: str, *, expected: int, timeout: int) -> None:

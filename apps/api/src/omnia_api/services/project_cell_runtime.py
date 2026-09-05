@@ -63,6 +63,10 @@ async def resolve_project_cell_public_selection(
     if populate_existing:
         statement = statement.execution_options(populate_existing=True)
     workspace = await session.scalar(statement)
+    if workspace is not None and (
+        workspace.deleted_at is not None or workspace.state in {"deleting", "deleted"}
+    ):
+        raise ApiError("conflict", "Проект удаляется; запуск среды недоступен", 409)
     if workspace is not None and workspace.provider == "docker_owner_canary":
         return ProjectCellPublicSelection(
             selected=True,

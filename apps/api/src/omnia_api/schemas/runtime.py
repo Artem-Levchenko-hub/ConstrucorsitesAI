@@ -10,11 +10,13 @@ live inside the internal contract between api and orchestrator.
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
 DeployPhase = Literal[
+    "idle",
     "queued",
     "building",
     "pushing",
@@ -66,6 +68,8 @@ class DeployRequest(BaseModel):
 
 class DeployStatus(BaseModel):
     run_id: str | None = None
+    snapshot_id: UUID | None = None
+    commit_sha: str | None = None
     phase: DeployPhase
     started_at: str | None = None
     finished_at: str | None = None

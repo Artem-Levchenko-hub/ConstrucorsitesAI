@@ -490,13 +490,89 @@ class DockerCellResourceManager:
         *,
         checkpoint_ref: str | None,
         record_operation: bool,
+        capture: bool = True,
     ) -> None:
         await self._destroy_compute_locked(
             workspace_id,
             mutation,
             checkpoint_ref=checkpoint_ref,
             record_operation=record_operation,
+            capture=capture,
         )
+
+    async def assert_uncreated_workspace(self, workspace_id: UUID) -> None:
+        """Prove absence without fabricating controller identity or adopting resources."""
+        if self.state_store.load(workspace_id) is not None:
+            raise CellIdentityConflict("workspace controller state unexpectedly exists")
+        if self._capacity_reservation_store().load(workspace_id) is not None:
+            raise CellIdentityConflict("uncreated workspace retains capacity reservation")
+        for records in (
+            await self.docker.list_workspace_containers(workspace_id),
+            await self.docker.list_workspace_volumes(workspace_id),
+            await self.docker.list_workspace_networks(workspace_id),
+        ):
+            if records:
+                raise CellIdentityConflict("workspace resources exist without controller identity")
+        # Labels may be absent on a conflicting object. Check both known namespaces.
+        for namespace in ("prod", "test"):
+            names = CellResourceNames.for_workspace(workspace_id, namespace=namespace)
+            stem = (
+                "omnia-machine-test-" if namespace == "test" else "omnia-machine-"
+            ) + workspace_id.hex
+            for name in (
+                names.workspace_volume,
+                names.agent_home_volume,
+                names.postgres_volume,
+                names.redis_volume,
+                names.checkpoint_volume,
+                stem + "-app-postgres-data",
+                stem + "-home",
+                stem + "-logs",
+            ):
+                if await self.docker.get_volume(name) is not None:
+                    raise CellIdentityConflict(
+                        "named workspace volume exists without controller identity"
+                    )
+            for name in (
+                names.postgres_container,
+                names.redis_container,
+                names.draft_container_name(),
+                *[
+                    stem + "-" + suffix
+                    for suffix in (
+                        "dev",
+                        "project-postgres",
+                        "guard",
+                        "proxy",
+                        "gateway",
+                        "max-core",
+                    )
+                ],
+            ):
+                if await self.docker.get_container(name) is not None:
+                    raise CellIdentityConflict(
+                        "named workspace compute exists without controller identity"
+                    )
+            for name in (names.internal_network, names.egress_network, stem + "-public"):
+                if await self.docker.get_network(name) is not None:
+                    raise CellIdentityConflict(
+                        "named workspace network exists without controller identity"
+                    )
+        if self.machine_runtime is not None and self.machine_runtime.exists(workspace_id):
+            raise CellIdentityConflict("portable machine exists without controller identity")
+
+    async def inspect_by_workspace(self, workspace_id: UUID) -> CellBundleObservation:
+        state = self.state_store.load(workspace_id)
+        if state is None or state.resource_names is None:
+            return CellBundleObservation(
+                state="retained",
+                identity_valid=False,
+                containers={},
+                networks={},
+                volumes={},
+                detail="workspace state not found",
+            )
+        return await self._observe_state(state)
 
     async def inspect_by_project(self, project_id: UUID) -> CellBundleObservation:
         state = next(
@@ -627,6 +703,9 @@ class DockerCellResourceManager:
         *,
         wake_only: bool,
     ) -> CellBundleHandle:
+        from omnia_orchestrator.services.cell_deletion import require_workspace_not_deleted
+
+        require_workspace_not_deleted(self.profile.state_path, spec.workspace_id)
         await self._recover_capacity_reservations_locked(now=datetime.now(UTC))
         self._assert_profile_version(spec.profile_version)
         state = self._prepared_state(
@@ -865,6 +944,14 @@ class DockerCellResourceManager:
             if workspace_id is not None and reservation.workspace_id != workspace_id:
                 continue
             if self.state_store.load(reservation.workspace_id) is not None:
+                continue
+            marker = (
+                Path(self.profile.state_path).parent
+                / "cell-publications"
+                / "identities"
+                / f"{reservation.workspace_id}.json"
+            )
+            if marker.exists() or marker.is_symlink():
                 continue
             containers = await self.docker.list_workspace_containers(reservation.workspace_id)
             if containers:
@@ -1664,6 +1751,7 @@ class DockerCellResourceManager:
         *,
         checkpoint_ref: str | None,
         record_operation: bool,
+        capture: bool = True,
     ) -> None:
         state = self._prepared_state(
             workspace_id,
@@ -1695,7 +1783,10 @@ class DockerCellResourceManager:
                     phase="containers_removed",
                 )
             if self.machine_runtime is not None:
-                await self.machine_runtime.halt(state, remove_network=True)
+                if capture:
+                    await self.machine_runtime.halt(state, remove_network=True)
+                else:
+                    await self.machine_runtime.halt(state, remove_network=True, capture=False)
             await self._remove_container_if_present(names.draft_container_name())
             await self._remove_container_if_present(names.postgres_container)
             await self._remove_container_if_present(names.redis_container)

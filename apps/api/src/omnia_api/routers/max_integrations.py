@@ -16,7 +16,7 @@ from omnia_api.core.errors import ApiError
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.schemas.max_integration import MaxConnectRequest, MaxIntegrationPublic
-from omnia_api.services import max_client, orchestrator_client
+from omnia_api.services import max_client, orchestrator_client, project_cell_runtime
 
 router = APIRouter(prefix="/api/projects", tags=["max-integrations"])
 
@@ -81,6 +81,29 @@ def _map_client_error(exc: max_client.MaxClientError) -> ApiError:
     return ApiError("max_webhook_failed", str(exc), status.HTTP_502_BAD_GATEWAY)
 
 
+async def _lock_public_cell_auth(session: SessionDep, project: Project) -> bool:
+    selection = await project_cell_runtime.resolve_project_cell_public_selection(session, project)
+    if selection.selected:
+        await project_cell_runtime._try_preview_project_lock(session, project.id)
+    return selection.selected
+
+
+async def _sync_public_cell_auth(
+    session: SessionDep, project: Project, integration: MaxIntegration | None,
+) -> None:
+    if await _lock_public_cell_auth(session, project):
+        from omnia_api.services.cell_publication import update_public_credentials
+
+        if integration is not None:
+            # connect commits before the external sync. Another request can
+            # revoke/rotate during that gap: never restore its stale ORM token.
+            integration = await session.scalar(
+                select(MaxIntegration).where(MaxIntegration.project_id == project.id)
+                .execution_options(populate_existing=True)
+            )
+        await update_public_credentials(project.id, project.owner_id, integration)
+
+
 @router.get("/{project_id}/integrations/max", response_model=MaxIntegrationPublic)
 async def get_max_integration(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
@@ -98,6 +121,7 @@ async def connect_max(
 ) -> MaxIntegrationPublic:
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
+    await _lock_public_cell_auth(session, project)
     token = payload.token.strip()
     try:
         bot = await max_client.get_me(token)
@@ -137,6 +161,7 @@ async def connect_max(
     integration.verified_at = now
     await session.commit()
     await session.refresh(integration)
+    await _sync_public_cell_auth(session, project, integration)
     return _public(project, integration)
 
 
@@ -146,6 +171,7 @@ async def verify_max(
 ) -> MaxIntegrationPublic:
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
+    await _lock_public_cell_auth(session, project)
     integration = await _integration(session, project_id)
     if integration is None:
         raise ApiError(
@@ -177,6 +203,7 @@ async def activate_max(
 ) -> MaxIntegrationPublic:
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
+    await _lock_public_cell_auth(session, project)
     integration = await _integration(session, project_id)
     if integration is None:
         raise ApiError(
@@ -194,6 +221,9 @@ async def activate_max(
             status.HTTP_409_CONFLICT,
         )
     webhook_url = f"{app_url}/api/max/webhook"
+    # A public Cell owns a different trusted core from the private preview.
+    # Confirm its current credentials before enabling the real MAX webhook.
+    await _sync_public_cell_auth(session, project, integration)
     token = decrypt_strong(integration.bot_token_enc)
     webhook_secret = decrypt_strong(integration.webhook_secret_enc)
     try:
@@ -225,10 +255,15 @@ async def activate_max(
 async def disconnect_max(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> Response:
-    await _owned_project(session, project_id, current_user.id)
+    project = await _owned_project(session, project_id, current_user.id)
+    await _lock_public_cell_auth(session, project)
     integration = await _integration(session, project_id)
     if integration is None:
+        await _sync_public_cell_auth(session, project, None)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Fail closed if public session invalidation cannot be confirmed. The
+    # integration remains persisted so the same disconnect can be retried.
+    await _sync_public_cell_auth(session, project, None)
     if integration.webhook_url:
         try:
             await max_client.unsubscribe(

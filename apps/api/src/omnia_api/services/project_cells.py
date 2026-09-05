@@ -315,6 +315,8 @@ async def get_or_create_workspace(
     if existing is not None:
         if existing.owner_id != user.id or existing.owner_id != project.owner_id:
             raise ProjectCellOwnershipError("existing workspace belongs to another owner")
+        if existing.deleted_at is not None or existing.state in {"deleting", "deleted"}:
+            raise ProjectCellStateConflict("workspace deletion has started")
         return existing, False
 
     workspace = ProjectCellWorkspace(
@@ -402,9 +404,13 @@ async def reserve_cell_operation(
     _validate_operation_request(kind, request)
     await _advisory_lock(session, workspace_id)
 
-    workspace = await session.get(ProjectCellWorkspace, workspace_id)
+    workspace = await session.get(ProjectCellWorkspace, workspace_id, populate_existing=True)
     if workspace is None:
         raise ProjectCellNotFound("Project Cell workspace was not found")
+    if (
+        workspace.deleted_at is not None or workspace.state in {"deleting", "deleted"}
+    ) and kind not in {"destroy", "status", "reconcile"}:
+        raise ProjectCellStateConflict("workspace deletion has started")
 
     if generation_run_id is not None:
         generation_run = await session.get(GenerationRun, generation_run_id)

@@ -17,6 +17,23 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function appOrigin(request: NextRequest): string | null {
+  // Portable public cores receive this controller-owned origin. Their upstream
+  // Host is an internal service address; forwarded client headers are untrusted.
+  const configured = process.env.OMNIA_PUBLIC_APP_ORIGIN;
+  if (configured === undefined) return request.nextUrl.origin;
+  try {
+    const url = new URL(configured);
+    if (
+      url.protocol !== "https:" || !url.hostname || url.username || url.password ||
+      url.pathname !== "/" || url.search || url.hash
+    ) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
 function userIdFrom(event: Record<string, unknown>): string | null {
   const user = record(event.user);
   const message = record(event.message);
@@ -40,6 +57,10 @@ export async function POST(request: NextRequest) {
   const provided = request.headers.get("x-max-bot-api-secret") || "";
   if (!expected || !secretMatches(provided, expected)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const publicOrigin = appOrigin(request);
+  if (!publicOrigin) {
+    return NextResponse.json({ error: "Public app origin is not configured" }, { status: 503 });
   }
   const declaredLength = Number(request.headers.get("content-length") || "0");
   if (declaredLength > MAX_BODY_BYTES) {
@@ -72,7 +93,7 @@ export async function POST(request: NextRequest) {
     if (eventType === "bot_started") {
       const userId = userIdFrom(event);
       if (userId) {
-        await sendMaxWelcome(userId, request.nextUrl.origin);
+        await sendMaxWelcome(userId, publicOrigin);
       }
     } else if (eventType === "message_created") {
       const message = record(event.message);
@@ -83,7 +104,7 @@ export async function POST(request: NextRequest) {
         userId &&
         ["/start", "старт", "помощь", "/help", "открыть", "приложение"].includes(text)
       ) {
-        await sendMaxHelp(userId, request.nextUrl.origin);
+        await sendMaxHelp(userId, publicOrigin);
       }
     }
   } catch {

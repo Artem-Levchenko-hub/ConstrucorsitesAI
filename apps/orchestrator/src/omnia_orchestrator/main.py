@@ -20,7 +20,15 @@ from omnia_orchestrator.core.errors import (
     unhandled_error_handler,
 )
 from omnia_orchestrator.core.sentry import init_sentry
-from omnia_orchestrator.routers import build_exe, byo, health, ingress, runtime, workspace
+from omnia_orchestrator.routers import (
+    build_exe,
+    byo,
+    cell_publication,
+    health,
+    ingress,
+    runtime,
+    workspace,
+)
 from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.cell_reservation_recovery import (
     recover_workspace_provider_capacity,
@@ -48,9 +56,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # admission will continue to account for it.
         _log.warning("startup.capacity_reservation_recovery_failed", err=str(exc))
     await start_hibernate_loop()
+    from omnia_orchestrator.services.cell_publication import start_publication_recovery
+
+    publication_recovery = start_publication_recovery()
     try:
         yield
     finally:
+        publication_recovery.cancel()
+        import asyncio
+
+        await asyncio.gather(publication_recovery, return_exceptions=True)
         await stop_hibernate_loop()
 
 
@@ -78,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(build_exe.router)
     app.include_router(byo.router)
     app.include_router(workspace.router)
+    app.include_router(cell_publication.router)
 
     return app
 

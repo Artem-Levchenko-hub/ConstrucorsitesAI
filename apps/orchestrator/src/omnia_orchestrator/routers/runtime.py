@@ -1378,9 +1378,14 @@ async def get_deploy(
     _verify_token(x_internal_token)
     from uuid import UUID
 
+    from omnia_orchestrator.services.cell_publication import get_cell_publication_service
+
+    public = get_cell_publication_service().get(UUID(project_id))
+    if public is not None:
+        return public
     rec = deploy_state.get(project_id)
     if rec is None:
-        return DeployResponse(project_id=UUID(project_id), phase="queued")
+        return DeployResponse(project_id=UUID(project_id), phase="idle")
     return _deploy_record_to_response(rec)
 
 
@@ -1390,6 +1395,13 @@ async def get_deploy_history(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> list[DeployResponse]:
     _verify_token(x_internal_token)
+    from uuid import UUID
+
+    from omnia_orchestrator.services.cell_publication import get_cell_publication_service
+
+    public = get_cell_publication_service().history(UUID(project_id))
+    if public:
+        return public
     return [
         _deploy_record_to_response(record) for record in reversed(deploy_state.history(project_id))
     ]
@@ -1622,6 +1634,12 @@ async def destroy(
     from uuid import UUID
 
     pid = UUID(project_id)
+
+    # Public Cell recovery must be durably disabled before the API deletes its
+    # owner/bot rows. Keep retained business data, but never resurrect ingress.
+    from omnia_orchestrator.services.cell_publication import get_cell_publication_service
+
+    await get_cell_publication_service().disable(pid, slug)
 
     # 1. Containers — dev + prod. Missing is a no-op.
     await destroy_container(f"omnia-dev-{slug}")

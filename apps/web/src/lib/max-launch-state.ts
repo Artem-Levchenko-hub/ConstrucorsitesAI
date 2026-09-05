@@ -8,16 +8,17 @@ const ACTIVE_DEPLOY_PHASES = new Set<DeployPhase>([
   "cancelling",
 ]);
 
-export function isMaxDeployActive(phase: DeployPhase): boolean {
-  return ACTIVE_DEPLOY_PHASES.has(phase);
+export function isMaxDeployActive(phase: DeployPhase, runId?: string | null): boolean {
+  return Boolean(runId) && ACTIVE_DEPLOY_PHASES.has(phase);
 }
 
 export function shouldStartMaxDeploy(
   savedPhase: string,
   deploymentPhase: DeployPhase,
+  runId?: string | null,
 ): boolean {
   return (
     savedPhase === "new" &&
-    !isMaxDeployActive(deploymentPhase)
+    !isMaxDeployActive(deploymentPhase, runId)
   );
 }

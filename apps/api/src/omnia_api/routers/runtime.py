@@ -132,7 +132,9 @@ def _to_runtime_status(payload: dict[str, Any]) -> RuntimeStatus:
 def _to_deploy_status(payload: dict[str, Any]) -> DeployStatus:
     return DeployStatus(
         run_id=payload.get("run_id"),
-        phase=payload.get("phase", "queued"),
+        snapshot_id=payload.get("snapshot_id"),
+        commit_sha=payload.get("commit_sha"),
+        phase=payload.get("phase", "idle"),
         started_at=payload.get("started_at"),
         finished_at=payload.get("finished_at"),
         prod_url=payload.get("prod_url"),
@@ -429,7 +431,14 @@ async def trigger_deploy(
         owner=current_user,
     )
     if selection.selected:
-        project_cell_runtime.raise_project_cell_public_action_unavailable()
+        from omnia_api.services.cell_publication import submit_publication
+
+        payload = await submit_publication(
+            session, project, selection.workspace,
+            requested_sha=body.commit_sha if body else None,
+            idempotency_key=body.idempotency_key if body else None,
+        )
+        return _to_deploy_status(payload)
     sha = body.commit_sha if body is not None else None
     idempotency_key = body.idempotency_key if body is not None else None
     # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем
@@ -532,12 +541,9 @@ async def get_last_deploy(
 ) -> DeployStatus:
     """Last-deploy info, proxied from the orchestrator's persisted record.
 
-    The orchestrator's `DeployResponse` shape mirrors `DeployStatus` 1-1, so
-    `_to_deploy_status` projects it without massaging. If the orchestrator is
-    unreachable OR has never recorded a deploy for this project, we fall back
-    to `phase=queued` so the frontend's ON/OFF render path stays alive — same
-    contract the placeholder used to enforce, without the lie that we
-    "haven't implemented this yet".
+    No saved deployment is idle, never a queued operation. An unreachable
+    controller is an error, not a successful status. Snapshot identity is
+    preserved so readiness can identify the exact published version.
     """
     project = await _project_owned_by(session, project_id, current_user.id)
     payload = await orchestrator_client.get_deploy(project_id)

@@ -36,6 +36,7 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.usage import Usage
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
+from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.project import (
     ProjectCreate,
     ProjectImportRequest,
@@ -49,6 +50,7 @@ from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.max_access import require_max_studio_access
 from omnia_api.services.preset_classifier import classify_preset_sync
+from omnia_api.services.project_cell_deletion import teardown_project_cell
 from omnia_api.services.queue import enqueue_build_exe, enqueue_preview
 from omnia_api.services.run_bundle import build_launchers
 
@@ -756,6 +758,8 @@ async def delete_project(
     if project.owner_id != current_user.id:
         raise ApiError("forbidden", "not your project", status.HTTP_403_FORBIDDEN)
 
+    await teardown_project_cell(session, project)
+
     max_integration = (
         await session.execute(
             select(MaxIntegration).where(MaxIntegration.project_id == project.id)
@@ -817,6 +821,12 @@ async def delete_project(
         GenerationRun.project_id == project.id
     )
     project_message_ids = select(Message.id).where(Message.project_id == project.id)
+    await session.execute(
+        update(WalletCharge)
+        .where(WalletCharge.message_id.in_(project_message_ids))
+        .values(message_id=None)
+        .execution_options(synchronize_session=False)
+    )
     await session.execute(
         update(Usage)
         .where(

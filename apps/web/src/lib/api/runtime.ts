@@ -11,6 +11,8 @@
 import { apiFetch } from "./client";
 import type { DeployStatus, RuntimeStatus, Uuid } from "./types";
 
+type DeployRequestOptions = { signal?: AbortSignal; timeoutMs?: number };
+
 export type RuntimeLogs = {
   container_name: string | null;
   tail: number;
@@ -64,15 +66,21 @@ export async function deployProject(
   projectId: Uuid,
   commitSha?: string,
   idempotencyKey: string = crypto.randomUUID(),
+  options: DeployRequestOptions = {},
 ): Promise<DeployStatus> {
   return apiFetch<DeployStatus>(`/api/projects/${projectId}/deploy`, {
     method: "POST",
     json: { commit_sha: commitSha, idempotency_key: idempotencyKey },
+    timeoutMs: 30_000,
+    ...options,
   });
 }
 
-export async function getLastDeploy(projectId: Uuid): Promise<DeployStatus> {
-  return apiFetch<DeployStatus>(`/api/projects/${projectId}/deploy`);
+export async function getLastDeploy(projectId: Uuid, options: DeployRequestOptions = {}): Promise<DeployStatus> {
+  return apiFetch<DeployStatus>(`/api/projects/${projectId}/deploy`, {
+    timeoutMs: 30_000,
+    ...options,
+  });
 }
 
 export async function cancelDeploy(projectId: Uuid): Promise<DeployStatus> {

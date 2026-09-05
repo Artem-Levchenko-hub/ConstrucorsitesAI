@@ -18,8 +18,8 @@ describe("MAX launch resume state", () => {
   );
 
   it("does not duplicate an active deployment", () => {
-    expect(shouldStartMaxDeploy("new", "building")).toBe(false);
-    expect(shouldStartMaxDeploy("new", "queued")).toBe(false);
+    expect(shouldStartMaxDeploy("new", "building", "run-1")).toBe(false);
+    expect(shouldStartMaxDeploy("new", "queued", "run-1")).toBe(false);
   });
 
   it("publishes fresh edits even when the previous deployment is done", () => {

@@ -22,8 +22,8 @@ import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy, getRuntime } from "@/lib/api/runtime";
 import { getMaxJourney } from "@/lib/max-journey";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
+import { isMaxDeployActive } from "@/lib/max-launch-state";
 
-const activePhases = new Set(["queued", "building", "pushing", "swapping", "cancelling"]);
 
 const phaseSteps = [
   ["queued", "Задача поставлена в очередь"],
@@ -36,7 +36,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
   const deploy = useQuery({
     queryKey: ["deploy", projectId],
     queryFn: () => getLastDeploy(projectId),
-    refetchInterval: (query) => activePhases.has(query.state.data?.phase ?? "") ? 1_500 : false,
+    refetchInterval: (query) => isMaxDeployActive(query.state.data?.phase ?? "idle", query.state.data?.run_id) ? 1_500 : false,
     retry: false,
   });
   const runtime = useQuery({
@@ -52,7 +52,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
   });
 
   const phase = deploy.data?.phase;
-  const inProgress = activePhases.has(phase ?? "");
+  const inProgress = isMaxDeployActive(phase ?? "idle", deploy.data?.run_id);
   const publicationState = getMaxPublicationState(readiness.data, phase);
   const complete = publicationState === "published";
   const outdated = publicationState === "outdated";
@@ -70,6 +70,7 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
       title="Публикация"
       lead="Публикация заменяет версию за тем же постоянным HTTPS-адресом: Studio фиксирует зелёный snapshot, собирает production-образ и только потом переключает трафик."
     >
+      <div className="mt-6 max-w-md"><MaxLaunchButton projectId={projectId} /></div>
       {checkingPublication && (
         <section className="mt-8 flex items-center gap-4 rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
           <Loader2 className="size-5 shrink-0 animate-spin text-[#4f81f7]" />
@@ -104,7 +105,6 @@ export function MaxPublishWorkspace({ projectId, projectName }: { projectId: str
               <div className="mt-6 space-y-3 text-xs text-[#9fa1b1]">
                 {["Не нужно настраивать сервер", "Контейнер можно оставить активным всегда", "Версии и откат доступны из кабинета"].map((item) => <p key={item} className="flex items-center gap-2"><Check className="size-3.5 text-success-fg" />{item}</p>)}
               </div>
-              <div className="mt-7"><MaxLaunchButton projectId={projectId} /></div>
             </article>
             <article className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 sm:p-8">
               <span className="grid size-11 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]"><Server className="size-5" /></span>

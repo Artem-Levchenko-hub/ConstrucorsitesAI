@@ -1436,6 +1436,21 @@ async def publish_custom_domain(payload: dict[str, Any]) -> dict[str, Any]:
     return await _request("POST", "/internal/domains/publish", json=payload, timeout=120.0)
 
 
+async def publish_project_cell(project_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    """Submit durable public release; private payload is never logged."""
+    return await _request(
+        "POST", f"/internal/projects/{project_id}/cell-deploy", json=payload, timeout=30.0,
+    )
+
+
+async def configure_published_cell(project_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
+    """Update only controller-owned public MAX configuration, not generated code."""
+    return await _request(
+        "PUT", f"/internal/projects/{project_id}/cell-deploy/config",
+        json=payload, timeout=120.0,
+    )
+
+
 async def get_deploy(project_id: UUID) -> dict[str, Any]:
     """GET /internal/projects/<uuid>/deploy — last-known deploy record.
 

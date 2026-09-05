@@ -1,5 +1,8 @@
 import importlib
 import importlib.util
+import os
+import stat
+import subprocess
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -98,9 +101,7 @@ def test_v2_active_machine_uses_two_cpu_two_gib_and_project_caches(tmp_path):
     assert options["volumes"][runtime.corepack_cache_volume]["bind"] == (
         "/root/.cache/node/corepack"
     )
-    assert options["volumes"][runtime.next_cache_volume]["bind"] == (
-        "/workspace/.next/cache"
-    )
+    assert options["volumes"][runtime.next_cache_volume]["bind"] == ("/workspace/.next/cache")
     assert all(not name.startswith("/") for name in options["volumes"])
 
 
@@ -297,6 +298,52 @@ def test_project_postgres_ownership_helper_can_traverse_restored_pgdata(tmp_path
             "mode": "rw",
         }
     }
+
+
+@pytest.mark.skipif(os.name != "posix", reason="PGDATA mode contract requires a POSIX filesystem")
+def test_project_postgres_seed_start_repairs_only_pgdata_root_mode_without_reinitializing(tmp_path):
+    runtime = backend(tmp_path)
+    pgdata = tmp_path / "seeded-pgdata"
+    pgdata.mkdir(mode=0o755)
+    pgdata.chmod(0o755)
+    (pgdata / "PG_VERSION").write_text("17\n")
+    customer_file = pgdata / "retained-business-data"
+    customer_file.write_bytes(b"created-after-last-release")
+    customer_file.chmod(0o640)
+    assert stat.S_IMODE(pgdata.stat().st_mode) == 0o755
+
+    class Helper:
+        def __init__(self, command, environment):
+            self.command = command
+            self.environment = environment
+
+        def start(self):
+            # Execute the actual controller-emitted init command, substituting
+            # only the isolated mountpoint. PG_VERSION must prevent initdb.
+            self.result = subprocess.run(
+                self.command,
+                check=False,
+                capture_output=True,
+                env={"PATH": os.defpath, **self.environment, "PGDATA": str(pgdata)},
+            )
+
+        def wait(self, **_options):
+            return {"StatusCode": self.result.returncode}
+
+        def remove(self, **_options):
+            pass
+
+    class Containers:
+        def create(self, *args, **options):
+            return Helper(args[1], options["environment"])
+
+    runtime.client = SimpleNamespace(containers=Containers())
+    runtime._lookup = lambda *_args: None
+    runtime._initialize_project_postgres_volume()
+    assert stat.S_IMODE(pgdata.stat().st_mode) == 0o700
+    assert (pgdata / "PG_VERSION").read_text() == "17\n"
+    assert customer_file.read_bytes() == b"created-after-last-release"
+    assert stat.S_IMODE(customer_file.stat().st_mode) == 0o640
 
 
 def test_restore_reference_allows_legacy_machine_artifact_without_project_postgres_volume(tmp_path):

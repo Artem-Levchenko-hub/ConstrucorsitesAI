@@ -1567,7 +1567,7 @@ async def test_stale_wake_sync_does_not_republish_after_newer_destroy(
     assert republished == []
 
 
-async def test_stale_destroy_sync_does_not_unpublish_after_newer_wake(
+async def test_destroy_tombstone_rejects_newer_wake_and_still_unpublishes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -1581,11 +1581,12 @@ async def test_stale_destroy_sync_does_not_unpublish_after_newer_wake(
         stale_destroy,
     )
     newer_wake = workspace.LifecycleMutation(uuid4(), 6, "c" * 64)
-    await provider.execute_control(
-        workspace_id,
-        workspace.ControlAction(kind="wake", checkpoint_ref=None),
-        newer_wake,
-    )
+    with pytest.raises(workspace.CellFenceRejected, match="deletion"):
+        await provider.execute_control(
+            workspace_id,
+            workspace.ControlAction(kind="wake", checkpoint_ref=None),
+            newer_wake,
+        )
     unpublished: list[str] = []
 
     async def unpublish(host: str) -> None:
@@ -1602,9 +1603,9 @@ async def test_stale_destroy_sync_does_not_unpublish_after_newer_wake(
 
     state = manager.state_store.load(workspace_id)
     assert state is not None
-    assert state.fencing_epoch == 6
-    assert state.last_operation_id == newer_wake.operation_id
-    assert unpublished == []
+    assert state.fencing_epoch == 5
+    assert state.last_operation_id == stale_destroy.operation_id
+    assert unpublished == [workspace._draft_preview_host(workspace_id)]
 
 
 async def test_wake_publish_holds_operation_lock_until_publication_finishes(

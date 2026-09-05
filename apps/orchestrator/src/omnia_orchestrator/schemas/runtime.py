@@ -167,6 +167,7 @@ class DeployRequest(BaseModel):
 
 # Phases match apps/api DeployStatus so the api forwards them unchanged.
 DeployPhase = Literal[
+    "idle",
     "queued",
     "building",
     "pushing",
@@ -181,6 +182,8 @@ DeployPhase = Literal[
 class DeployResponse(BaseModel):
     project_id: UUID
     run_id: str | None = None
+    snapshot_id: UUID | None = None
+    commit_sha: str | None = None
     phase: DeployPhase
     prod_url: str | None = None
     image_tag: str | None = None

@@ -27,6 +27,7 @@ import {
   copyMaxLaunchUrl,
 } from "@/lib/max-launch-steps";
 import { getMaxJourney, getMaxJourneyItemHref } from "@/lib/max-journey";
+import { isMaxDeployActive } from "@/lib/max-launch-state";
 import { cn } from "@/lib/utils";
 
 export function MaxLaunchPanel({
@@ -47,9 +48,7 @@ export function MaxLaunchPanel({
     queryFn: () => getLastDeploy(project.id),
     retry: false,
     refetchInterval: (query) =>
-      ["building", "pushing", "swapping", "cancelling"].includes(
-        query.state.data?.phase ?? "",
-      )
+      isMaxDeployActive(query.state.data?.phase ?? "idle", query.state.data?.run_id)
         ? 1_500
         : false,
   });
@@ -64,9 +63,7 @@ export function MaxLaunchPanel({
       : 10_000,
   });
 
-  const busyDeploy = ["building", "pushing", "swapping", "cancelling"].includes(
-    deploy.data?.phase ?? "",
-  );
+  const busyDeploy = isMaxDeployActive(deploy.data?.phase ?? "idle", deploy.data?.run_id);
   const productionUrl = deploy.data?.prod_url ?? integration.data?.app_url ?? null;
   const items = readiness.data?.items ?? [];
   const readinessAvailable = readiness.isSuccess && items.length > 0;

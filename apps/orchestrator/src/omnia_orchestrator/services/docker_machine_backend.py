@@ -731,6 +731,10 @@ class DockerMachineBackend:
             helper.remove(force=True)
         script = " ".join(
             [
+                # Docker put_archive preserves entries but can leave a newly
+                # mounted volume root at 0755. PostgreSQL requires 0700/0750;
+                # repair only PGDATA as its owner, including an existing seed.
+                'chmod 0700 "$PGDATA";',
                 "if [ ! -f \"$PGDATA/PG_VERSION\" ]; then",
                 "umask 077;",
                 "printf '%s' \"$POSTGRES_PASSWORD\" > /tmp/postgres-password;",

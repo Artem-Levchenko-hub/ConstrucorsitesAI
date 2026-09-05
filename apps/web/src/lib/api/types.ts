@@ -735,6 +735,7 @@ export type RuntimeStatus = {
 };
 
 export type DeployPhase =
+  | "idle"
   | "queued"
   | "building"
   | "pushing"
@@ -746,6 +747,8 @@ export type DeployPhase =
 
 export type DeployStatus = {
   run_id: string | null;
+  snapshot_id?: Uuid | null;
+  commit_sha?: string | null;
   phase: DeployPhase;
   started_at: IsoDateTime | null;
   finished_at: IsoDateTime | null;
