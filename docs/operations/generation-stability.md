@@ -27,6 +27,27 @@ claim resumable model execution or a complete product-database acceptance gate.
 - Keep data and dependencies during hibernation. Release CPU/memory reservations
   only when the controller has evidence that compute is stopped or absent.
 
+## Production headroom on the 16 GiB host (2026-09-05)
+
+The production host uses `CELL_HOST_MEMORY_RESERVE_BYTES=3221225472` (3 GiB)
+in the host orchestrator environment. The v2 project envelope remains 6.125 GiB;
+CPU, isolation and admission checks remain enabled. This is a host-specific
+override, not a reduction of the default for other deployments.
+
+Measured after all Project Cells were paused: the reservation ledger was empty,
+but available memory was approximately 9.87 GiB. The previous 4 GiB *additional
+free-memory* reserve plus the 6.125 GiB project envelope rejected even the first
+cell (`insufficient_memory`). A settings-only dry run with 3 GiB headroom admits
+one cell while retaining that free-memory floor. Existing non-cell applications
+were not stopped. Re-evaluate this override when host services or quotas change;
+more simultaneous full v2 cells still require additional host capacity.
+
+An interrupted first ensure with no controller state is observed as retained,
+then repaired through canonical ensure with normal resource ownership preflight.
+For a terminal generation, repair can reclaim a different idle cell only on a
+confirmed capacity rejection and while another recovery attempt remains. A lost
+reply alone must not trigger hibernation.
+
 ## No-model resource acceptance
 
 Run the explicit opt-in harness inside the deployed API image:
