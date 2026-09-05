@@ -20,10 +20,13 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_engine
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
+from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
 from omnia_api.services.agent_builder import Action, Executor
-from omnia_api.services.generation_runs import promote_generation_after_admission
+from omnia_api.services.generation_runs import (
+    ACTIVE_GENERATION_STATUSES,
+    promote_generation_after_admission,
+)
 from omnia_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
@@ -39,7 +42,11 @@ from omnia_api.services.orchestrator_client import (
     project_cell_apply_draft,
     project_cell_create_preview_session,
 )
-from omnia_api.services.project_cell_capacity import signal_capacity_admitted, wait_for_capacity
+from omnia_api.services.project_cell_capacity import (
+    release_one_stale_generation_lease,
+    signal_capacity_admitted,
+    wait_for_capacity,
+)
 from omnia_api.services.project_cell_control import inspect_project_cell_control
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
 from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
@@ -51,6 +58,7 @@ from omnia_api.services.project_cells import (
     ProjectCellValidationError,
     get_or_create_workspace,
     reserve_cell_operation,
+    resolve_workspace_profile,
 )
 
 _PROJECT_CELL_PROFILE_V1 = "docker-owner-cell-resources-v1"
@@ -146,9 +154,7 @@ def _project_cell_dependency_reuse_error(
 
 
 def _build_project_cell_build_cmd() -> str:
-    dependency_fields_json = json.dumps(
-        list(_PROJECT_CELL_DEPENDENCY_METADATA_FIELDS)
-    )
+    dependency_fields_json = json.dumps(list(_PROJECT_CELL_DEPENDENCY_METADATA_FIELDS))
     return "\n".join(
         [
             "set -eu",
@@ -393,9 +399,7 @@ async def _release_generation_lease(
             workspace_id=workspace_id,
             generation_run_id=generation_run_id,
             kind="release",
-            idempotency_key=(
-                f"generation:{generation_run_id}:release:{profile_version}"
-            ),
+            idempotency_key=(f"generation:{generation_run_id}:release:{profile_version}"),
             request={},
         )
         await session.commit()
@@ -412,9 +416,7 @@ async def _release_generation_lease(
         or response.fencing_epoch is None
         or response.state != "resources_ready"
     ):
-        raise ProjectCellExecutorUnavailable(
-            f"Project Cell release failed: {outcome.status}"
-        )
+        raise ProjectCellExecutorUnavailable(f"Project Cell release failed: {outcome.status}")
     async with session_factory() as session:
         workspace = await session.scalar(
             select(ProjectCellWorkspace)
@@ -489,7 +491,52 @@ async def maybe_create_project_cell_executor(
                 user=user,
                 run=run,
             )
+            if workspace.generation_run_id not in {None, run.id}:
+                previous_run = await session.get(GenerationRun, workspace.generation_run_id)
+                if previous_run is None or previous_run.status in ACTIVE_GENERATION_STATUSES:
+                    raise ProjectCellBusy("Project Cell still belongs to an active generation")
+                prior_ensure_effect = await session.scalar(
+                    select(ProjectCellOperation.id)
+                    .where(
+                        ProjectCellOperation.workspace_id == workspace.id,
+                        ProjectCellOperation.kind == "ensure",
+                        ProjectCellOperation.status.not_in(("failed", "cancelled")),
+                    )
+                    .limit(1)
+                )
+                if prior_ensure_effect is not None:
+                    # Preserve the old terminal run's identity until its resources
+                    # are reconciled and the physical lease is released.
+                    await session.commit()
+                    for _attempt in range(3):
+                        if await release_one_stale_generation_lease(
+                            session_factory,
+                            requesting_run_id=run.id,
+                            client=HttpProjectCellOrchestratorClient(),
+                            workspace_id=workspace.id,
+                        ):
+                            break
+                    await session.refresh(workspace)
+                    if workspace.generation_run_id is not None:
+                        remaining_effect = await session.scalar(
+                            select(ProjectCellOperation.id)
+                            .where(
+                                ProjectCellOperation.workspace_id == workspace.id,
+                                ProjectCellOperation.generation_run_id == previous_run.id,
+                                ProjectCellOperation.kind == "ensure",
+                                ProjectCellOperation.status.not_in(("failed", "cancelled")),
+                            )
+                            .limit(1)
+                        )
+                        if remaining_effect is not None:
+                            raise ProjectCellStateConflict(
+                                "Previous Project Cell ensure needs reconciliation"
+                            )
+                    await session.refresh(run)
+            if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
+                raise ProjectCellStateConflict("Generation is no longer active")
             workspace.generation_run_id = run.id
+            profile_version = await resolve_workspace_profile(session, workspace, profile_version)
             operation, _ = await reserve_cell_operation(
                 session,
                 workspace_id=workspace.id,
@@ -509,23 +556,22 @@ async def maybe_create_project_cell_executor(
             raise ProjectCellExecutorUnavailable(str(exc)) from exc
         workspace_id = workspace.id
 
-    outcome = await execute_cell_operation(
-        session_factory,
-        operation.id,
-        HttpProjectCellOrchestratorClient(),
-    )
-    if outcome.status == "waiting_capacity":
-        async def _discard_progress(_payload: dict[str, object]) -> None:
-            return None
+    async def _discard_progress(_payload: dict[str, object]) -> None:
+        return None
 
-        outcome = await wait_for_capacity(
+    outcome = await wait_for_capacity(
+        session_factory,
+        run_id=generation_run_id,
+        operation_id=operation.id,
+        client=HttpProjectCellOrchestratorClient(),
+        emit=agent_emit or _discard_progress,
+        dispatch_token=capacity_dispatch_token,
+        initial_attempt=lambda: execute_cell_operation(
             session_factory,
-            run_id=generation_run_id,
-            operation_id=operation.id,
-            client=HttpProjectCellOrchestratorClient(),
-            emit=agent_emit or _discard_progress,
-            dispatch_token=capacity_dispatch_token,
-        )
+            operation.id,
+            HttpProjectCellOrchestratorClient(),
+        ),
+    )
     response = outcome.response
     if (
         outcome.status != "completed"
@@ -543,9 +589,7 @@ async def maybe_create_project_cell_executor(
             )
         )
     ):
-        raise ProjectCellExecutorUnavailable(
-            f"Project Cell ensure failed: {outcome.status}"
-        )
+        raise ProjectCellExecutorUnavailable(f"Project Cell ensure failed: {outcome.status}")
     admission = await promote_generation_after_admission(
         session_factory,
         run_id=generation_run_id,
@@ -567,9 +611,16 @@ async def maybe_create_project_cell_executor(
                 await release_task
                 raise
             raise ProjectCellExecutorUnavailable("generation cancelled during admission")
-        raise ProjectCellExecutorUnavailable(
-            f"Project Cell admission ownership lost: {admission}"
-        )
+        raise ProjectCellExecutorUnavailable(f"Project Cell admission ownership lost: {admission}")
+    # Resource readiness is proven by ensure, not by the later agent bootstrap.
+    # Persist it now so a failed bootstrap remains reclaimable.
+    await _mark_workspace_ready(
+        session_factory=session_factory,
+        workspace_id=workspace_id,
+        generation_run_id=generation_run_id,
+        provider_ref=response.provider_ref,
+        fencing_epoch=response.fencing_epoch,
+    )
     signal_capacity_admitted(generation_run_id)
     try:
         snapshot = await project_cell_agent_bootstrap(
@@ -584,18 +635,7 @@ async def maybe_create_project_cell_executor(
         or snapshot.fencing_epoch != response.fencing_epoch
     ):
         raise ProjectCellExecutorUnavailable("Project Cell active lease does not match the run")
-    await _mark_workspace_ready(
-        session_factory=session_factory,
-        workspace_id=workspace_id,
-        generation_run_id=generation_run_id,
-        provider_ref=response.provider_ref,
-        fencing_epoch=response.fencing_epoch,
-    )
-
-    workspace_files = {
-        _normalize_path(path): content
-        for path, content in snapshot.files.items()
-    }
+    workspace_files = {_normalize_path(path): content for path, content in snapshot.files.items()}
     leased_run_id = generation_run_id
     fencing_epoch = response.fencing_epoch
     workspace_revision = snapshot.workspace_revision
@@ -797,7 +837,9 @@ async def maybe_create_project_cell_executor(
         if not dirty and preview_synced:
             try:
                 await project_cell_create_preview_session(
-                    workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+                    workspace_id,
+                    generation_run_id=leased_run_id,
+                    fencing_epoch=fencing_epoch,
                 )
             except OrchestratorBadRequest as exc:
                 # A stopped draft needs the normal fenced apply/recovery path.
@@ -838,12 +880,14 @@ async def maybe_create_project_cell_executor(
         runtime_log_tail = draft.runtime_log_tail
         # Install/migration steps may generate files even on failure.
         generated_files = await _refresh_workspace_from_cell()
-        failure = _sync_failure_detail({
-            "package_exit_code": draft.package_exit_code,
-            "package_stderr_tail": draft.package_stderr_tail,
-            "migration_exit_code": draft.migration_exit_code,
-            "migration_stderr_tail": draft.migration_stderr_tail,
-        })
+        failure = _sync_failure_detail(
+            {
+                "package_exit_code": draft.package_exit_code,
+                "package_stderr_tail": draft.package_stderr_tail,
+                "migration_exit_code": draft.migration_exit_code,
+                "migration_stderr_tail": draft.migration_stderr_tail,
+            }
+        )
         if failure is not None:
             return ProjectCellPreviewSyncResult(
                 generated_files=generated_files,
@@ -862,7 +906,9 @@ async def maybe_create_project_cell_executor(
         if sync.failure:
             raise ProjectCellExecutorUnavailable(sync.failure)
         return await project_cell_create_preview_session(
-            workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+            workspace_id,
+            generation_run_id=leased_run_id,
+            fencing_epoch=fencing_epoch,
         )
 
     async def _execute_action(action: Action) -> dict[str, Any]:
@@ -909,8 +955,7 @@ async def maybe_create_project_cell_executor(
                     return {
                         "ok": False,
                         "error": (
-                            "search text not found exactly; read the file and copy it "
-                            "byte-for-byte"
+                            "search text not found exactly; read the file and copy it byte-for-byte"
                         ),
                     }
                 if current.count(search) > 1:
@@ -981,9 +1026,7 @@ async def maybe_create_project_cell_executor(
                 }
                 if _is_portable() and result.before_identity and result.after_identity:
                     observation = _command_observation(result, None)
-                    response["environment_mutated"] = bool(
-                        observation.invalidated_dimensions
-                    )
+                    response["environment_mutated"] = bool(observation.invalidated_dimensions)
                     response["invalidated_dimensions"] = sorted(
                         item.value for item in observation.invalidated_dimensions
                     )
@@ -1022,11 +1065,7 @@ async def maybe_create_project_cell_executor(
                 "probe",
                 "verify_isolation",
             }:
-                if (
-                    _is_portable()
-                    and get_settings().use_max_finalization_coordinator
-                    and dirty
-                ):
+                if _is_portable() and get_settings().use_max_finalization_coordinator and dirty:
                     return {
                         "ok": False,
                         "error": "runtime proof is reserved until the green full build",
@@ -1044,17 +1083,20 @@ async def maybe_create_project_cell_executor(
                     }
                 if action.name == "read_logs":
                     runtime_result: dict[str, Any] = {
-                        "ok": True, "detail": runtime_log_tail.strip() or "(no logs yet)",
+                        "ok": True,
+                        "detail": runtime_log_tail.strip() or "(no logs yet)",
                     }
                 elif action.name == "verify_isolation":
                     runtime_result = {
                         "ok": False,
                         "error": "Cell MAX isolation requires two signed tenant identities; "
-                                 "legacy email-auth isolation is not applicable.",
+                        "legacy email-auth isolation is not applicable.",
                     }
                 else:
                     preview = await project_cell_create_preview_session(
-                        workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+                        workspace_id,
+                        generation_run_id=leased_run_id,
+                        fencing_epoch=fencing_epoch,
                     )
                     if action.name == "runtime_check":
                         from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
@@ -1086,8 +1128,10 @@ async def maybe_create_project_cell_executor(
                         from omnia_api.services import agent_probe
 
                         runtime_result = await agent_probe.run_probe(
-                            project_id, method=str(action.args.get("method") or "GET"),
-                            path=action.path or "/", body=action.args.get("body"),
+                            project_id,
+                            method=str(action.args.get("method") or "GET"),
+                            path=action.path or "/",
+                            body=action.args.get("body"),
                             cell_preview=preview,
                         )
                 if sync_result.generated_files:

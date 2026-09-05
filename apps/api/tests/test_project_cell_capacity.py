@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,6 +17,7 @@ from omnia_api.models.project_cell import (
 )
 from omnia_api.models.user import User
 from omnia_api.services.orchestrator_client import (
+    OrchestratorBadRequest,
     OrchestratorUnavailable,
     ProjectCellResourceResponse,
 )
@@ -31,7 +33,9 @@ from omnia_api.services.project_cell_capacity import (
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
 from omnia_api.services.project_cells import (
     claim_cell_operation_committed,
+    complete_cell_operation,
     fail_cell_operation,
+    mark_cell_operation_indeterminate,
     park_cell_operation_for_capacity,
     reserve_cell_operation,
 )
@@ -90,10 +94,7 @@ async def test_capacity_turn_is_fifo_by_created_at_then_id(db_session: AsyncSess
     )
     _, third, _ = await _project_run(db_session, owner, created_at=now, label="c")
 
-    turns = [
-        await claim_capacity_turn(db_session, run.id)
-        for run in (first, second, third)
-    ]
+    turns = [await claim_capacity_turn(db_session, run.id) for run in (first, second, third)]
 
     assert [(turn.is_head, turn.position) for turn in turns] == [
         (True, 1),
@@ -226,6 +227,406 @@ async def test_terminal_generation_lease_is_recoverable_but_active_is_not(
     assert claimed[1] == terminal_run.id
 
 
+@pytest.mark.parametrize("api_state", ["provisioning", "failed"])
+async def test_completed_ensure_makes_bootstrap_orphan_reclaimable(
+    test_engine: AsyncEngine,
+    api_state: str,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"orphan-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        now = datetime.now(UTC)
+        _, requesting, _ = await _project_run(session, owner, created_at=now, label="request")
+        _, terminal, workspace = await _project_run(
+            session,
+            owner,
+            created_at=now - timedelta(minutes=1),
+            label="orphan",
+        )
+        terminal.status = "failed"
+        workspace.state = api_state
+        workspace.generation_run_id = terminal.id
+        await session.flush()
+        assert await claim_stale_generation_lease(session, requesting_run_id=requesting.id) is None
+        ensure, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=terminal.id,
+            kind="ensure",
+            idempotency_key=f"orphan-ensure:{workspace.id}",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+    await claim_cell_operation_committed(factory, ensure.id)
+    async with factory() as session:
+        await complete_cell_operation(session, ensure.id, {})
+        failed, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=terminal.id,
+            kind="release",
+            idempotency_key=f"capacity:release:{workspace.id}:{terminal.id}",
+            request={},
+        )
+        await session.commit()
+    await claim_cell_operation_committed(factory, failed.id)
+    async with factory() as session:
+        await fail_cell_operation(session, failed.id, "confirmed pre-effect profile rejection")
+        await session.commit()
+
+    calls = []
+
+    async def control(request):
+        calls.append(request)
+        return ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref="cell-orphan",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    assert await release_one_stale_generation_lease(
+        factory,
+        requesting_run_id=requesting.id,
+        client=SimpleNamespace(control=control),
+    )
+    assert len(calls) == 1
+    assert calls[0].operation_id != failed.id
+    assert calls[0].fencing_epoch == 3
+    async with factory() as session:
+        recovered = await session.get(ProjectCellWorkspace, workspace.id)
+        assert recovered.state == "ready"
+        assert recovered.generation_run_id is None
+
+
+@pytest.mark.parametrize("terminal_status", ["failed", "completed", "cancelled"])
+async def test_capacity_wait_never_resurrects_terminal_generation(
+    test_engine: AsyncEngine,
+    terminal_status: str,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"terminal-queue-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        _, run, workspace = await _project_run(
+            session,
+            owner,
+            created_at=datetime.now(UTC),
+            label="terminal-queue",
+        )
+        run.status = terminal_status
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            kind="ensure",
+            idempotency_key=f"terminal-queue:{run.id}",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+
+    async def forbidden(*_args):
+        pytest.fail("terminal run must not dispatch or emit running progress")
+
+    outcome = await wait_for_capacity(
+        factory,
+        run_id=run.id,
+        operation_id=operation.id,
+        client=SimpleNamespace(ensure=forbidden),
+        emit=forbidden,
+    )
+    assert outcome.status == "cancelled"
+    async with factory() as session:
+        assert (await session.get(GenerationRun, run.id)).status == terminal_status
+
+
+async def test_queue_deadline_precedes_runtime_creation(test_engine: AsyncEngine) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"deadline-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        _, run, workspace = await _project_run(
+            session,
+            owner,
+            created_at=datetime.now(UTC) - timedelta(hours=3),
+            label="deadline",
+        )
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            kind="ensure",
+            idempotency_key=f"deadline:{run.id}",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+
+    async def forbidden(*_args):
+        pytest.fail("expired queue must not dispatch")
+
+    with pytest.raises(TimeoutError, match="capacity queue deadline exceeded"):
+        await wait_for_capacity(
+            factory,
+            run_id=run.id,
+            operation_id=operation.id,
+            client=SimpleNamespace(ensure=forbidden),
+            emit=forbidden,
+        )
+    async with factory() as session:
+        assert (await session.get(ProjectCellOperation, operation.id)).status == "cancelled"
+
+
+@pytest.mark.parametrize("initial_attempt", [False, True])
+async def test_queue_deadline_interrupts_slow_provider_but_preserves_unknown_effect(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_attempt: bool,
+) -> None:
+    from omnia_api.services import project_cell_capacity
+
+    monkeypatch.setattr(
+        project_cell_capacity,
+        "get_settings",
+        lambda: SimpleNamespace(project_cell_capacity_wait_seconds=2),
+    )
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"slow-queue-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        _, run, workspace = await _project_run(
+            session,
+            owner,
+            created_at=datetime.now(UTC),
+            label="slow-queue",
+        )
+        operation, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=run.id,
+            kind="ensure",
+            idempotency_key=f"slow-queue:{run.id}",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+    calls = []
+
+    async def ensure(request):
+        calls.append(request)
+        await asyncio.Event().wait()
+
+    async def emit(_payload):
+        return None
+
+    with pytest.raises(TimeoutError, match="capacity queue deadline exceeded"):
+        await wait_for_capacity(
+            factory,
+            run_id=run.id,
+            operation_id=operation.id,
+            client=SimpleNamespace(ensure=ensure),
+            emit=emit,
+            initial_attempt=(
+                (
+                    lambda: execute_cell_operation(
+                        factory,
+                        operation.id,
+                        SimpleNamespace(ensure=ensure),
+                    )
+                )
+                if initial_attempt
+                else None
+            ),
+        )
+    assert len(calls) == 1
+    async with factory() as session:
+        persisted = await session.get(ProjectCellOperation, operation.id)
+        assert persisted.status == "indeterminate"
+        assert persisted.fencing_epoch == calls[0].fencing_epoch
+
+
+@pytest.mark.parametrize("same_project", [False, True])
+async def test_unknown_ensure_reconciles_at_higher_fence_then_releases(
+    test_engine: AsyncEngine,
+    same_project: bool,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"reconcile-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        project, terminal, workspace = await _project_run(
+            session,
+            owner,
+            created_at=datetime.now(UTC),
+            label="unknown",
+        )
+        terminal.status = "failed"
+        workspace.state = "provisioning"
+        workspace.generation_run_id = terminal.id
+        if same_project:
+            requesting = GenerationRun(
+                project_id=project.id,
+                user_id=owner.id,
+                idempotency_key=f"retry-{uuid4()}",
+                prompt_hash="a" * 64,
+                status="queued_for_capacity",
+            )
+            session.add(requesting)
+            await session.flush()
+        else:
+            _, requesting, _ = await _project_run(
+                session,
+                owner,
+                created_at=datetime.now(UTC),
+                label="request",
+            )
+        ensure, _ = await reserve_cell_operation(
+            session,
+            workspace_id=workspace.id,
+            generation_run_id=terminal.id,
+            kind="ensure",
+            idempotency_key=f"unknown:{terminal.id}",
+            request={"profile_version": "docker-owner-cell-resources-v1"},
+        )
+        await session.commit()
+    await claim_cell_operation_committed(factory, ensure.id)
+    async with factory() as session:
+        await mark_cell_operation_indeterminate(session, ensure.id, "cancelled_after_dispatch")
+        await session.commit()
+    calls = []
+
+    def response(request, *, state="resources_ready"):
+        return ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state=state,
+            provider_ref="reconciled-cell",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=getattr(request, "checkpoint_ref", None),
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    async def observe(request):
+        calls.append(("observe", request))
+        if len(calls) == 1:
+            raise OrchestratorUnavailable("observation response lost")
+        return response(request)
+
+    async def control(request):
+        calls.append((request.kind, request))
+        return response(
+            request,
+            state="resources_paused" if request.kind == "pause" else "resources_ready",
+        )
+
+    client = SimpleNamespace(observe_resources=observe, control=control)
+    kwargs = {"workspace_id": workspace.id} if same_project else {}
+    results = [
+        await release_one_stale_generation_lease(
+            factory,
+            requesting_run_id=requesting.id,
+            client=client,
+            **kwargs,
+        )
+        for _ in range(3)
+    ]
+    assert results == [False, False, True]
+    assert [kind for kind, _ in calls] == ["observe", "observe", "release"]
+    assert [request.fencing_epoch for _, request in calls] == [2, 3, 4]
+    async with factory() as session:
+        recovered = await session.get(ProjectCellWorkspace, workspace.id)
+        assert recovered.state == "ready"
+        assert recovered.generation_run_id is None
+        assert (await session.get(ProjectCellOperation, ensure.id)).status == "indeterminate"
+        assert (await session.get(GenerationRun, terminal.id)).status == "failed"
+    if not same_project:
+        assert await hibernate_one_idle_workspace(
+            factory,
+            requesting_run_id=requesting.id,
+            client=client,
+        )
+        async with factory() as session:
+            assert (await session.get(ProjectCellWorkspace, workspace.id)).state == "stopped"
+
+
+async def test_failed_reclamation_is_bounded_and_does_not_starve_other_cells(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        owner = User(email=f"bounded-{uuid4().hex}@example.test", password_hash="x")
+        session.add(owner)
+        await session.flush()
+        now = datetime.now(UTC)
+        _, requesting, _ = await _project_run(session, owner, created_at=now, label="request")
+        _, failed_run, failed_cell = await _project_run(
+            session,
+            owner,
+            created_at=now - timedelta(minutes=2),
+            label="bad-cell",
+        )
+        _, other_run, other_cell = await _project_run(
+            session,
+            owner,
+            created_at=now - timedelta(minutes=1),
+            label="other-cell",
+        )
+        failed_run.status = other_run.status = "completed"
+        failed_cell.generation_run_id = failed_run.id
+        other_cell.generation_run_id = other_run.id
+        await session.commit()
+
+    calls = []
+
+    async def control(request):
+        calls.append(request)
+        if request.workspace_id == failed_cell.id:
+            raise OrchestratorBadRequest(
+                "confirmed rejection",
+                status_code=409,
+                details={
+                    "operation_id": str(request.operation_id),
+                    "fencing_epoch": request.fencing_epoch,
+                    "request_digest": request.request_digest,
+                    "effect_applied": False,
+                },
+            )
+        return ProjectCellResourceResponse(
+            workspace_id=request.workspace_id,
+            state="resources_ready",
+            provider_ref="other-cell",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    results = [
+        await release_one_stale_generation_lease(
+            factory,
+            requesting_run_id=requesting.id,
+            client=SimpleNamespace(control=control),
+        )
+        for _ in range(5)
+    ]
+    assert results == [False, True, False, False, False]
+    assert [request.workspace_id for request in calls] == [failed_cell.id, other_cell.id]
+    assert len({request.operation_id for request in calls}) == 2
+
+
 async def test_capacity_replays_indeterminate_release_before_hibernation(
     test_engine: AsyncEngine,
 ) -> None:
@@ -327,7 +728,7 @@ async def test_capacity_replays_indeterminate_release_before_hibernation(
         assert refreshed_release.status == "completed"
 
 
-async def test_capacity_wait_replays_same_ensure_after_orchestrator_restart(
+async def test_capacity_wait_reconciles_ensure_after_orchestrator_restart(
     test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -380,11 +781,15 @@ async def test_capacity_wait_replays_same_ensure_after_orchestrator_restart(
     )
 
     requests: list[object] = []
+    observations: list[object] = []
 
     async def ensure(request: object) -> ProjectCellResourceResponse:
         requests.append(request)
-        if len(requests) == 1:
-            raise OrchestratorUnavailable("orchestrator restarted during dispatch")
+        assert len(requests) == 1, "unknown ensure must not be blindly replayed"
+        raise OrchestratorUnavailable("orchestrator restarted during dispatch")
+
+    async def observe(request: object) -> ProjectCellResourceResponse:
+        observations.append(request)
         return ProjectCellResourceResponse(
             workspace_id=workspace.id,
             state="resources_ready",
@@ -399,6 +804,7 @@ async def test_capacity_wait_replays_same_ensure_after_orchestrator_restart(
 
     client = type("RestartingClient", (), {})()
     client.ensure = ensure
+    client.observe_resources = observe
 
     outcome = await wait_for_capacity(
         factory,
@@ -409,15 +815,15 @@ async def test_capacity_wait_replays_same_ensure_after_orchestrator_restart(
     )
 
     assert outcome.status == "completed"
-    assert len(requests) == 2
+    assert len(requests) == len(observations) == 1
     assert requests[0].operation_id == operation.id
-    assert requests[1].operation_id == operation.id
-    assert requests[1].fencing_epoch == requests[0].fencing_epoch
+    assert observations[0].operation_id != operation.id
+    assert observations[0].fencing_epoch > requests[0].fencing_epoch
     async with factory() as session:
         persisted = await session.get(ProjectCellOperation, operation.id)
         assert persisted is not None
-        assert persisted.status == "completed"
-        assert persisted.attempt_count == 3
+        assert persisted.status == "indeterminate"
+        assert persisted.attempt_count == 2
 
 
 async def test_capacity_retries_pause_after_confirmed_terminal_failure(

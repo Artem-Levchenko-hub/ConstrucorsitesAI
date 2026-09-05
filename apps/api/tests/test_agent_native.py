@@ -59,6 +59,18 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
 
+def test_portable_tools_describe_real_install_and_database_capabilities() -> None:
+    tools = agent_native._MAX_PORTABLE_TOOLS_CACHED
+    bash = next(tool for tool in tools if tool["name"] == "bash")
+    assert "Install required public libraries" in bash["description"]
+    assert "dedicated PostgreSQL" in bash["description"]
+    assert "never to the host" in bash["description"]
+    assert "has no network" not in bash["description"]
+    assert "lifecycle scripts disabled" not in bash["description"]
+    legacy = next(tool for tool in agent_native._MAX_TOOLS_WITH_BASH if tool["name"] == "bash")
+    assert "has no network" in legacy["description"]
+
+
 def test_native_agent_uses_sonnet_while_autoheal_keeps_gemini() -> None:
     from omnia_api.services import autoheal
 
@@ -185,11 +197,7 @@ def test_max_native_toolset_can_opt_into_project_shell() -> None:
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
     """The verified core is a seed, never a replacement for the Google agent."""
     source = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "omnia_api"
-        / "routers"
-        / "messages.py"
+        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "routers" / "messages.py"
     ).read_text(encoding="utf-8")
 
     assert 'stop_reason="deterministic_template"' not in source
@@ -232,11 +240,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
 
 def test_first_max_native_build_has_bounded_automatic_continuation_default() -> None:
     config_source = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "omnia_api"
-        / "core"
-        / "config.py"
+        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "core" / "config.py"
     ).read_text(encoding="utf-8")
 
     assert "agent_max_segments: int = Field(default=4, ge=1, le=8)" in config_source
@@ -244,15 +248,11 @@ def test_first_max_native_build_has_bounded_automatic_continuation_default() -> 
 
 def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None:
     source = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "omnia_api"
-        / "routers"
-        / "messages.py"
+        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "routers" / "messages.py"
     ).read_text(encoding="utf-8")
 
     assert "for path, content in {**current_files, **files}.items()" in source
-    assert "path: current_files.get(path, \"\") for path in rollback_paths" in source
+    assert 'path: current_files.get(path, "") for path in rollback_paths' in source
     assert "await orchestrator_client.hot_reload(" in source
     assert "files.clear()" in source
     assert "files.update(rollback_files)" in source
@@ -357,11 +357,7 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
 
 def _load_messages_helpers(*function_names: str) -> dict[str, Any]:
     source = (
-        Path(__file__).resolve().parents[1]
-        / "src"
-        / "omnia_api"
-        / "routers"
-        / "messages.py"
+        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "routers" / "messages.py"
     ).read_text(encoding="utf-8")
     tree = ast.parse(source, filename="messages.py")
     body: list[ast.stmt] = []
@@ -421,9 +417,9 @@ def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
 
 
 def test_seeded_max_files_are_committed_with_agent_customisations() -> None:
-    _merge_seeded_agent_files = _load_messages_helpers(
+    _merge_seeded_agent_files = _load_messages_helpers("_merge_seeded_agent_files")[
         "_merge_seeded_agent_files"
-    )["_merge_seeded_agent_files"]
+    ]
 
     starter = {"src/app/page.tsx": "starter", "src/app/globals.css": "safe css"}
     generated = {"src/app/page.tsx": "google agent result", "src/components/Profile.tsx": "ui"}
@@ -494,10 +490,13 @@ async def test_native_segments_preserve_files_and_completion_evidence() -> None:
     async def run_segment(task: str, check: Any, _initial_files: Mapping[str, str]) -> AgentResult:
         calls.append(task)
         if len(calls) == 1:
-            assert check(
-                {"src/app/page.tsx": "export default function Page() { return <main /> }"},
-                {"runtime_check_after_write": 1},
-            ) == "missing signed preview"
+            assert (
+                check(
+                    {"src/app/page.tsx": "export default function Page() { return <main /> }"},
+                    {"runtime_check_after_write": 1},
+                )
+                == "missing signed preview"
+            )
             return AgentResult(
                 done=False,
                 summary="missing signed preview",
@@ -561,14 +560,17 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
         calls += 1
         if calls == 1:
             page = {"src/app/page.tsx": "export default function Page() { return <main /> }"}
-            assert check(
-                page,
-                {
-                    "build_after_write": 1,
-                    "runtime_check_after_write": 1,
-                    "probe_after_write": 1,
-                },
-            ) == "missing product file"
+            assert (
+                check(
+                    page,
+                    {
+                        "build_after_write": 1,
+                        "runtime_check_after_write": 1,
+                        "probe_after_write": 1,
+                    },
+                )
+                == "missing product file"
+            )
             return AgentResult(
                 done=False,
                 summary="product breadth remains incomplete",
@@ -587,10 +589,13 @@ async def test_native_segment_write_invalidates_all_prior_after_write_proof() ->
         }
         assert check(component, {}) == "missing fresh build"
         assert check(component, {"build_after_write": 1}) == "missing fresh runtime"
-        assert check(
-            component,
-            {"build_after_write": 1, "runtime_check_after_write": 1},
-        ) == "missing fresh signed preview"
+        assert (
+            check(
+                component,
+                {"build_after_write": 1, "runtime_check_after_write": 1},
+            )
+            == "missing fresh signed preview"
+        )
         fresh_proof = {
             "build_after_write": 1,
             "runtime_check_after_write": 1,
@@ -1493,9 +1498,7 @@ async def test_native_build_allows_injected_messages_url_and_headers(
     )
 
     assert res.done is True
-    assert all(
-        call["url"] == "http://gateway.internal/v1/project-cell/messages" for call in calls
-    )
+    assert all(call["url"] == "http://gateway.internal/v1/project-cell/messages" for call in calls)
     assert all(
         call["headers"] == {"Authorization": "Bearer runner-token", "X-Trace": "abc"}
         for call in calls

@@ -248,9 +248,7 @@ async def _renew_capacity_dispatch_claim(run_id: UUID, token: UUID) -> str:
     async with factory() as session:
         run = (
             await session.execute(
-                select(GenerationRun)
-                .where(GenerationRun.id == run_id)
-                .with_for_update()
+                select(GenerationRun).where(GenerationRun.id == run_id).with_for_update()
             )
         ).scalar_one_or_none()
         if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
@@ -284,9 +282,7 @@ async def _wait_for_capacity_dispatch_lease_loss(run_id: UUID, token: UUID) -> s
             return "closed"
         if state == "renewed":
             entered_queue = True
-            valid_until = (
-                asyncio.get_running_loop().time() + _CAPACITY_DISPATCH_LEASE_SECONDS
-            )
+            valid_until = asyncio.get_running_loop().time() + _CAPACITY_DISPATCH_LEASE_SECONDS
 
 
 async def _wait_for_generation_cancel(run_id: UUID) -> None:
@@ -309,9 +305,7 @@ async def _finalize_cancelled_generation(
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
         run = await session.scalar(
-            select(GenerationRun)
-            .where(GenerationRun.id == run_id)
-            .with_for_update()
+            select(GenerationRun).where(GenerationRun.id == run_id).with_for_update()
         )
         if run is not None:
             await _apply_cancelled_generation_locked(session, run)
@@ -399,9 +393,7 @@ async def _run_tracked_prompt(
     work_task = asyncio.create_task(work)
     cancel_task = asyncio.create_task(_wait_for_generation_cancel(run_id))
     lease_task = (
-        asyncio.create_task(
-            _wait_for_capacity_dispatch_lease_loss(run_id, capacity_dispatch_token)
-        )
+        asyncio.create_task(_wait_for_capacity_dispatch_lease_loss(run_id, capacity_dispatch_token))
         if capacity_dispatch_token is not None
         else None
     )
@@ -776,16 +768,13 @@ async def _prepare_max_runtime_context(
             await ensure_legacy_runtime_ready()
             if max_shell_requested:
                 try:
-                    max_sandbox_capabilities = (
-                        await orchestrator_client.agent_sandbox_capabilities(
-                            project_id,
-                            project_slug,
-                        )
+                    max_sandbox_capabilities = await orchestrator_client.agent_sandbox_capabilities(
+                        project_id,
+                        project_slug,
                     )
                 except Exception as sandbox_cap_exc:
                     print(
-                        "[PP] MAX sandbox attestation unavailable: "
-                        f"{sandbox_cap_exc!r}",
+                        f"[PP] MAX sandbox attestation unavailable: {sandbox_cap_exc!r}",
                         flush=True,
                     )
             max_sandbox_attested = bool(max_sandbox_capabilities.get("ready"))
@@ -795,9 +784,7 @@ async def _prepare_max_runtime_context(
                 project_cell_handle=None,
             )
             active_max_locked_files = (
-                max_security_locked_files
-                if max_shell_enabled
-                else max_model_locked_files
+                max_security_locked_files if max_shell_enabled else max_model_locked_files
             )
     return {
         "project_cell_handle": project_cell_handle,
@@ -868,17 +855,11 @@ async def _execute_max_agent_action(
         except Exception as probe_exc:
             return {
                 "ok": False,
-                "detail": (
-                    "MAX data-plane proof crashed: "
-                    f"{type(probe_exc).__name__}"
-                ),
+                "detail": (f"MAX data-plane proof crashed: {type(probe_exc).__name__}"),
             }
         return {
             "ok": max_probe.ok,
-            "detail": (
-                f"{runtime.get('detail') or 'runtime route passed'}; "
-                f"{max_probe.detail}"
-            ),
+            "detail": (f"{runtime.get('detail') or 'runtime route passed'}; {max_probe.detail}"),
         }
     if action.name == "bash":
         return await _run_max_shell_action(
@@ -1066,11 +1047,7 @@ async def _probe_app_error(
         if runtime.get("ok", True):
             return None, ""
         return {
-            "error": str(
-                runtime.get("error")
-                or runtime.get("detail")
-                or "runtime failed"
-            ),
+            "error": str(runtime.get("error") or runtime.get("detail") or "runtime failed"),
             "file": runtime.get("file"),
         }, "runtime"
 
@@ -1365,9 +1342,7 @@ async def _abort_unsafe_max_backend(
     # Restore every touched path atomically from the last known-safe tree;
     # empty content is the orchestrator's explicit delete intent for new files.
     rollback_paths = sorted({path for path in files if path})
-    rollback_files = {
-        path: current_files.get(path, "") for path in rollback_paths
-    }
+    rollback_files = {path: current_files.get(path, "") for path in rollback_paths}
     files.clear()
     files.update(rollback_files)
     rollback_failed = False
@@ -1585,8 +1560,7 @@ async def _run_max_shell_action(
             return await _reject(
                 "Direct DB access is forbidden in MAX product "
                 "files until row isolation is DB-enforced. "
-                "Use createMaxAction/getMaxActions. Unsafe: "
-                + ", ".join(unsafe_shell_paths)
+                "Use createMaxAction/getMaxActions. Unsafe: " + ", ".join(unsafe_shell_paths)
             )
 
         cell_shell_sync = await project_cell_handle.sync_preview()
@@ -1599,9 +1573,7 @@ async def _run_max_shell_action(
                 **({"files": result_files} if result_files else {}),
             }
 
-        detail = str(
-            shell_result.get("detail") or shell_result.get("error") or "(no output)"
-        )
+        detail = str(shell_result.get("detail") or shell_result.get("error") or "(no output)")
         if result_files:
             listed = ", ".join(sorted(result_files)[:12])
             suffix = "…" if len(result_files) > 12 else ""
@@ -1649,8 +1621,7 @@ async def _run_max_shell_action(
                 "error": (
                     "Direct DB access is forbidden in MAX product "
                     "files until row isolation is DB-enforced. "
-                    "Use createMaxAction/getMaxActions. Unsafe: "
-                    + ", ".join(unsafe_shell_paths)
+                    "Use createMaxAction/getMaxActions. Unsafe: " + ", ".join(unsafe_shell_paths)
                 ),
             }
         base_revision = str(sandbox.get("base_workspace_revision") or "")
@@ -3137,9 +3108,7 @@ async def post_prompt(
                 selected_elements=selected_dump,
             ),
         )
-        capacity_dispatch_token = (
-            uuid4() if project.template == "max_miniapp" else None
-        )
+        capacity_dispatch_token = uuid4() if project.template == "max_miniapp" else None
         await session.commit()
         _spawn_process_prompt(
             run_id=generation_run.id,
@@ -3310,9 +3279,7 @@ async def cancel_active_generation(
                 {
                     "run_id": str(run.id),
                     "message_id": (
-                        str(run.assistant_message_id)
-                        if run.assistant_message_id
-                        else None
+                        str(run.assistant_message_id) if run.assistant_message_id else None
                     ),
                 },
             )
@@ -4207,9 +4174,7 @@ async def _process_prompt(
     project_memory_context = ""
     project_language: str = "ru"
     project_is_imported: bool = False
-    _project_cell_executor_handle: (
-        project_cell_executor.ProjectCellExecutorHandle | None
-    ) = None
+    _project_cell_executor_handle: project_cell_executor.ProjectCellExecutorHandle | None = None
     _max_finalization_coordinator: Any = None
     _max_finalization_proof: Any = None
     _max_generation_deadline_task: asyncio.Task[None] | None = None
@@ -4266,9 +4231,7 @@ async def _process_prompt(
             and not project_is_imported
             and (orchestrate or surgical)
         )
-        _defer_max_runtime_provision = (
-            _agentic_container_turn and project_template == "max_miniapp"
-        )
+        _defer_max_runtime_provision = _agentic_container_turn and project_template == "max_miniapp"
 
         # Auto stack-routing, part 2: container-backed stacks need a live dev
         # container for the post-build hot_reload to land in. Provision it now —
@@ -4493,8 +4456,7 @@ async def _process_prompt(
             )
             _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
             _max_shell_requested = (
-                project_template == "max_miniapp"
-                and get_settings().max_project_shell_enabled
+                project_template == "max_miniapp" and get_settings().max_project_shell_enabled
             )
             _max_sandbox_capabilities: dict[str, Any] = {}
             _max_sandbox_attested = False
@@ -4569,9 +4531,7 @@ async def _process_prompt(
                     return _preview.preview_url
                 _status_payload = await orchestrator_client.get_status(project_id)
                 _raw_base = (
-                    _status_payload.get("dev_url")
-                    if isinstance(_status_payload, dict)
-                    else None
+                    _status_payload.get("dev_url") if isinstance(_status_payload, dict) else None
                 )
                 return str(_raw_base) if _raw_base else None
 
@@ -4648,9 +4608,7 @@ async def _process_prompt(
                             )
                             if _deadline_run is None:
                                 return
-                            _deadline_started = (
-                                _deadline_run.started_at or _deadline_run.created_at
-                            )
+                            _deadline_started = _deadline_run.started_at or _deadline_run.created_at
                         _deadline_at = _deadline_started + timedelta(
                             seconds=get_settings().max_generation_deadline_seconds
                         )
@@ -4678,6 +4636,7 @@ async def _process_prompt(
                                 "detail": _proof_result.redacted_detail,
                             }
                         return await _direct_max_agent_executor(action)
+
             # Seed the agent with the project layout + the CrudResource component
             # up-front so it does NOT burn steps re-discovering the fixed template
             # (the #1 latency sink observed in the first live runs). Fail-soft.
@@ -4913,8 +4872,7 @@ async def _process_prompt(
                             "Create src/app/page.tsx and real product tests. Install needed "
                             "libraries/tools in the project machine; extend .omnia/cell.json "
                             "only for necessary helpers. The trusted MAX boundary remains "
-                            "platform-owned; no product UI is supplied.\n\n"
-                            + _max_product_contract
+                            "platform-owned; no product UI is supplied.\n\n" + _max_product_contract
                         )
                     # The final envelope below restores the proven 40-turn MAX
                     # single pass after this branch assembles the product prompt.
@@ -4994,8 +4952,8 @@ async def _process_prompt(
                     _starter_patch = {**_starter_files, "src/app/page.tsx": ""}
                     if _max_finalization_coordinator is not None:
                         assert _project_cell_executor_handle is not None
-                        _starter_writes, _starter_deletes, _ = (
-                            _split_project_cell_preview_patch(_starter_patch)
+                        _starter_writes, _starter_deletes, _ = _split_project_cell_preview_patch(
+                            _starter_patch
                         )
                         await _project_cell_executor_handle.stage_patch(
                             _starter_writes,
@@ -5080,9 +5038,7 @@ async def _process_prompt(
                                 {
                                     **payload,
                                     "action": "capacity_wait",
-                                    "human": payload.get(
-                                        "action", "Ожидаю ресурсы сервера"
-                                    ),
+                                    "human": payload.get("action", "Ожидаю ресурсы сервера"),
                                     "ok": True,
                                 },
                             ),
@@ -5202,6 +5158,10 @@ async def _process_prompt(
                     max_steps=_agent_steps,
                     max_segments=_native_max_segments,
                     allow_max_bash=_max_shell_enabled,
+                    portable_cell=bool(
+                        _project_cell_executor_handle is not None
+                        and _project_cell_executor_handle.is_portable()
+                    ),
                 )
             elif _agent_res is None:
                 _agent_res = await agent_builder.run_agent_build(
@@ -5279,9 +5239,7 @@ async def _process_prompt(
             # stacks preserve the historical conservative rollback policy.
             _must_restore_previous = (
                 not _agent_res.done and not _agent_res.needs_finalization
-            ) or (
-                _bounded_stop and project_template != "max_miniapp"
-            )
+            ) or (_bounded_stop and project_template != "max_miniapp")
             _first_max_without_product = (
                 project_template == "max_miniapp" and not _max_has_generated_snapshot
             )
@@ -5634,10 +5592,7 @@ async def _process_prompt(
                             # restores the core instead of deleting it.
                             current_files={**current_files, **_max_seed_files},
                             files=files,
-                            unsafe_paths=[
-                                violation.path
-                                for violation in _final_guard.violations
-                            ],
+                            unsafe_paths=[violation.path for violation in _final_guard.violations],
                             project_cell_handle=_project_cell_executor_handle,
                         )
                 # SAST advisory log — operators SEE injection/secret findings even
@@ -5747,6 +5702,7 @@ async def _process_prompt(
                     # background, so the pages are WARM when they land. Best-effort
                     # — never blocks the response, never fails the build.
                     if _project_cell_executor_handle is None:
+
                         async def _warm_bg() -> None:
                             try:
                                 _w = await orchestrator_client.warm_routes(project_id, project_slug)
@@ -6463,10 +6419,7 @@ async def _process_prompt(
             # above cover only two stacks; every container build (including MAX)
             # must still prove that its FINAL live tree typechecks, serves and has
             # safe transport headers before its exact commit can be deployed.
-            if (
-                files
-                and get_settings().use_build_attestation
-            ):
+            if files and get_settings().use_build_attestation:
                 from omnia_api.services.release_proof import run_release_proof
 
                 _release_verdict = await run_release_proof(

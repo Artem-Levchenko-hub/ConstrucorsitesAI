@@ -5,10 +5,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import cast
+from uuid import UUID
+
+from pydantic import ValidationError
 
 from omnia_orchestrator.core.cell_resources import CellResourceProfile, CellResourceSettings
 from omnia_orchestrator.core.config import Settings
-from omnia_orchestrator.core.workspace_provider import WorkspaceProvider
+from omnia_orchestrator.core.workspace_provider import (
+    WorkspaceProvider,
+    WorkspaceProviderUnavailable,
+)
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from omnia_orchestrator.services.cell_checkpoint import CellCheckpointManager
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
@@ -19,6 +25,41 @@ from omnia_orchestrator.services.docker_cell_resources import DockerCellResource
 from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 from omnia_orchestrator.services.machine_adapter import MachineAdapter
+
+
+def settings_for_workspace(settings: Settings, workspace_id: UUID) -> Settings:
+    """Retain a cell's immutable quota/identity across default-profile rollouts.
+
+    The deployment default applies only to new cells. Never relabel an existing
+    cell, or account its containers with the new default's different quota.
+    """
+    if (
+        settings.workspace_provider != "docker_owner_canary"
+        or settings.docker_owner_canary_enabled is not True
+    ):
+        return settings
+    state = CellStateStore(settings.cell_state_path).load(workspace_id)
+    if state is None or state.profile_version == settings.cell_profile_version:
+        return settings
+    if state.profile_version not in {
+        "docker-owner-cell-resources-v1",
+        "docker-owner-cell-resources-v2",
+    }:
+        raise WorkspaceProviderUnavailable("stored workspace profile is unsupported")
+    # Revalidate cross-field CPU constraints too: a v2 deployment may have a
+    # legacy bundle budget that is invalid for v1. Never under-account a cell.
+    try:
+        return Settings.model_validate(
+            {
+                **settings.model_dump(),
+                "cell_profile_version": state.profile_version,
+            }
+        )
+    except ValidationError:
+        # Settings validation can contain connection data; do not log its input.
+        raise WorkspaceProviderUnavailable(
+            "stored workspace profile is incompatible with deployment quotas"
+        ) from None
 
 
 def build_workspace_provider(settings: Settings) -> WorkspaceProvider:

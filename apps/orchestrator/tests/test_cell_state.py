@@ -161,6 +161,65 @@ def test_release_generation_rejects_wrong_run_without_state_change(tmp_path: Pat
     assert state.active_generation_run_id == spec.generation_run_id
 
 
+def test_ready_reconcile_adopts_recoverable_generation_at_current_fence(
+    tmp_path: Path,
+) -> None:
+    store = CellStateStore(tmp_path / "project-cells.json")
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    ensure = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    store.begin(spec, ensure, kind="ensure", phase="planned", resource_names=names)
+    store.mark_indeterminate(workspace_id, mutation=ensure, detail="response unknown")
+    reconcile = _mutation("b", 2)
+    store.begin(
+        spec,
+        reconcile,
+        kind="reconcile",
+        phase="planned",
+        resource_names=names,
+    )
+
+    completed = store.complete(
+        workspace_id,
+        reconcile,
+        bundle_state="resources_ready",
+    )
+
+    assert completed.active_generation_run_id == spec.generation_run_id
+    assert completed.active_generation_fencing_epoch == reconcile.fencing_epoch
+    assert completed.operation(reconcile.operation_id).generation_run_id == (spec.generation_run_id)
+
+
+def test_reconcile_cannot_resurrect_generation_after_completed_release(tmp_path: Path) -> None:
+    store = CellStateStore(tmp_path / "project-cells.json")
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    ensure = _mutation("a", 1)
+    store.begin(spec, ensure, kind="ensure", phase="planned", resource_names=names)
+    store.complete(workspace_id, ensure, bundle_state="resources_ready")
+    release = _mutation("b", 2)
+    store.begin(spec, release, kind="release", phase="planned", resource_names=names)
+    store.release_generation(
+        workspace_id,
+        release,
+        generation_run_id=spec.generation_run_id,
+    )
+    before = store.load(workspace_id)
+
+    with pytest.raises(RuntimeError, match="reconcile generation lease is not recoverable"):
+        store.begin(
+            spec,
+            _mutation("c", 3),
+            kind="reconcile",
+            phase="planned",
+            resource_names=names,
+        )
+
+    assert store.load(workspace_id) == before
+
+
 def test_begin_rejects_immutable_identity_mismatch_without_mutating_state(tmp_path: Path) -> None:
     store = CellStateStore(tmp_path / "project-cells.json")
     workspace_id = uuid4()

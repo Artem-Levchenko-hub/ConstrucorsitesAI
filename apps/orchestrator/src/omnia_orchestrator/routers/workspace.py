@@ -35,6 +35,7 @@ from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.core.workspace_provider import (
     ControlAction,
+    WorkspaceProvider,
     WorkspaceProviderUnavailable,
     WorkspaceResourceStatus,
     WorkspaceSpec,
@@ -81,7 +82,10 @@ from omnia_orchestrator.services.cell_state import CellWorkspaceState
 from omnia_orchestrator.services.docker_cell_resources import DockerCellResourceManager
 from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from omnia_orchestrator.services.project_machine import machine_effect
-from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
+from omnia_orchestrator.services.workspace_provider_factory import (
+    build_workspace_provider,
+    settings_for_workspace,
+)
 
 router = APIRouter(prefix="/internal", tags=["workspace"])
 _MAX_AGENT_FILES = 5_000
@@ -91,6 +95,18 @@ _MAX_AGENT_EXEC_OUTPUT = 24_000
 _MAX_DRAFT_LOG_TAIL = 8_000
 _PROJECT_CELL_EXEC_IMAGE = get_stack("max-miniapp-nextjs").image_tag
 _PROJECT_CELL_TEMPLATE_DIR = get_stack("max-miniapp-nextjs").template_dir
+
+
+def _workspace_provider(workspace_id: UUID) -> WorkspaceProvider:
+    try:
+        settings = settings_for_workspace(get_settings(), workspace_id)
+        return build_workspace_provider(settings)
+    except WorkspaceProviderUnavailable as exc:
+        raise OrchestratorError(
+            code="docker_unavailable",
+            message=str(exc),
+            status_code=503,
+        ) from exc
 
 
 @router.get(
@@ -120,7 +136,7 @@ async def ensure_workspace(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceResourceResponse:
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(request.workspace_id)
     mutation = LifecycleMutation(
         request.operation_id,
         request.fencing_epoch,
@@ -193,7 +209,7 @@ async def control_workspace(
 ) -> WorkspaceResourceResponse:
     verify_internal_token(x_internal_token)
     _require_matching_workspace_id(workspace_id, request.workspace_id)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     mutation = LifecycleMutation(
         request.operation_id,
         request.fencing_epoch,
@@ -228,7 +244,10 @@ async def control_workspace(
         manager = _maybe_docker_resource_manager(provider)
         if manager is not None:
             await _sync_lifecycle_draft_preview(
-                manager, workspace_id, mutation, remove=request.kind == "destroy",
+                manager,
+                workspace_id,
+                mutation,
+                remove=request.kind == "destroy",
             )
     return await _resource_response(status, provider=provider)
 
@@ -244,7 +263,7 @@ async def observe_workspace_resources(
 ) -> WorkspaceResourceResponse:
     verify_internal_token(x_internal_token)
     _require_matching_workspace_id(workspace_id, request.workspace_id)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     mutation = LifecycleMutation(
         request.operation_id,
         request.fencing_epoch,
@@ -278,7 +297,7 @@ async def get_workspace_resources(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceResourceResponse:
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     try:
         status = await provider.inspect_resources(workspace_id)
     except WorkspaceProviderUnavailable as exc:
@@ -301,7 +320,7 @@ async def bootstrap_workspace_agent(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceAgentBootstrapResponse:
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, volume_name = await _workspace_volume_identity(manager, workspace_id)
@@ -339,7 +358,7 @@ async def write_workspace_agent_files(
     writes = _normalize_agent_write_files(request.files)
     deletes = _normalize_agent_delete_paths(request.deletes, writes)
     _require_agent_patch_budget(writes, deletes)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, volume_name = await _workspace_volume_identity(manager, workspace_id)
@@ -402,7 +421,7 @@ async def exec_workspace_agent_command(
             message="empty cmd",
             status_code=400,
         )
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, volume_name = await _workspace_volume_identity(manager, workspace_id)
@@ -556,8 +575,10 @@ async def exec_workspace_agent_command(
         ok = False
         restart_detail = _bounded_redacted_text(str(restore_failure))
         detail = (
-            f"{detail}\n\n" if detail else ""
-        ) + "Command effects were saved, but the draft runtime restart failed: " + restart_detail
+            (f"{detail}\n\n" if detail else "")
+            + "Command effects were saved, but the draft runtime restart failed: "
+            + restart_detail
+        )
     return WorkspaceAgentExecResponse(
         ok=ok,
         exit_code=result.exit_code,
@@ -586,7 +607,7 @@ async def get_workspace_agent_identity(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceIdentityDigest:
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, volume_name = await _workspace_volume_identity(manager, workspace_id)
@@ -621,7 +642,7 @@ async def get_workspace_agent_operation(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceAgentOperationStatusResponse:
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     # Journal reads must remain available while the mutating request owns the
     # workspace lock. The controller file is replaced atomically, so this path
@@ -671,7 +692,7 @@ async def apply_workspace_draft(
     writes = _normalize_agent_write_files(request.files)
     deletes = _normalize_agent_delete_paths(request.deletes, writes)
     _require_agent_patch_budget(writes, deletes)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, volume_name = await _workspace_volume_identity(manager, workspace_id)
@@ -689,10 +710,7 @@ async def apply_workspace_draft(
         desired_files = _apply_agent_workspace_patch(current_files, writes, deletes)
         _require_agent_workspace_budget(desired_files)
         desired_revision = _workspace_revision(desired_files)
-        if (
-            current_revision != request.expected_revision
-            and desired_revision != current_revision
-        ):
+        if current_revision != request.expected_revision and desired_revision != current_revision:
             _raise_agent_stale_conflict(
                 expected_revision=request.expected_revision,
                 current_revision=current_revision,
@@ -794,7 +812,7 @@ async def create_workspace_draft_preview_session(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> WorkspaceDraftPreviewSessionResponse:
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
@@ -818,13 +836,15 @@ async def create_workspace_owner_preview_session(
 ) -> WorkspaceDraftPreviewSessionResponse:
     """View the retained app after release without reviving agent write access."""
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
         if state.project_id != request.project_id or state.owner_id != request.owner_id:
             raise OrchestratorError(
-                code="conflict", message="workspace owner identity mismatch", status_code=409,
+                code="conflict",
+                message="workspace owner identity mismatch",
+                status_code=409,
             )
         response.headers["Cache-Control"] = "no-store"
         return await _draft_preview_session(manager, state)
@@ -864,7 +884,8 @@ async def _draft_preview_session(
     if not preview_url.startswith("https://"):
         raise OrchestratorError(
             code="container_failure",
-            message="draft preview requires an HTTPS development origin", status_code=503,
+            message="draft preview requires an HTTPS development origin",
+            status_code=503,
         )
     expires_at = datetime.now(UTC) + _MAX_PREVIEW_BOOTSTRAP_TTL
     expires = int(expires_at.timestamp())
@@ -874,7 +895,10 @@ async def _draft_preview_session(
         expires,
     )
     bootstrap_url = signed_preview_session_url(
-        preview_url, _MAX_PREVIEW_BOOTSTRAP_PATH, expires=expires, signature=signature,
+        preview_url,
+        _MAX_PREVIEW_BOOTSTRAP_PATH,
+        expires=expires,
+        signature=signature,
     )
     return WorkspaceDraftPreviewSessionResponse(
         workspace_id=workspace_id,
@@ -897,18 +921,22 @@ async def start_workspace_owner_preview(
 ) -> WorkspaceDraftPreviewSessionResponse:
     """Restart only the retained draft; never seed files or acquire an agent lease."""
     verify_internal_token(x_internal_token)
-    provider = build_workspace_provider(get_settings())
+    provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
     async with manager.operation_lock.hold(workspace_id):
         state, _volume_name = await _workspace_volume_identity(manager, workspace_id)
         if state.project_id != request.project_id or state.owner_id != request.owner_id:
             raise OrchestratorError(
-                code="conflict", message="workspace owner identity mismatch", status_code=409,
+                code="conflict",
+                message="workspace owner identity mismatch",
+                status_code=409,
             )
         _workspace_exec_spec(state)
         if state.phase != "completed" or state.active_generation_run_id is not None:
             raise OrchestratorError(
-                code="conflict", message="workspace operation is still active", status_code=409,
+                code="conflict",
+                message="workspace operation is still active",
+                status_code=409,
             )
         if _portable_active(manager, workspace_id):
             runtime = _require_portable_runtime(manager)
@@ -919,7 +947,9 @@ async def start_workspace_owner_preview(
         draft = await manager.inspect_draft_runtime(workspace_id)
         if draft is None:
             raise OrchestratorError(
-                code="conflict", message="retained draft runtime is missing", status_code=409,
+                code="conflict",
+                message="retained draft runtime is missing",
+                status_code=409,
             )
         try:
             manager._verify_draft_container_record(draft, state)
@@ -928,7 +958,9 @@ async def start_workspace_owner_preview(
             await _publish_draft_preview(manager, workspace_id)
         except CellResourceError as exc:
             raise OrchestratorError(
-                code="conflict", message="retained draft runtime could not start", status_code=409,
+                code="conflict",
+                message="retained draft runtime could not start",
+                status_code=409,
             ) from exc
         response.headers["Cache-Control"] = "no-store"
         return await _draft_preview_session(manager, state)
@@ -979,10 +1011,7 @@ async def _resource_response(
 
 
 def _maybe_docker_resource_manager(provider: object | None) -> DockerCellResourceManager | None:
-    if (
-        isinstance(provider, DockerOwnerCanaryProvider)
-        and provider.resource_manager is not None
-    ):
+    if isinstance(provider, DockerOwnerCanaryProvider) and provider.resource_manager is not None:
         return provider.resource_manager
     return None
 
@@ -1075,9 +1104,7 @@ async def _draft_runtime_log_tail(
     draft = await manager.inspect_draft_runtime(workspace_id)
     if draft is None:
         return ""
-    return _bounded_redacted_text(
-        await manager.docker.read_container_logs(draft.name, tail=200)
-    )
+    return _bounded_redacted_text(await manager.docker.read_container_logs(draft.name, tail=200))
 
 
 async def _sync_lifecycle_draft_preview(
@@ -1140,7 +1167,9 @@ async def _publish_draft_preview(
     draft = await manager.inspect_draft_runtime(workspace_id)
     if state is None or state.resource_names is None or draft is None or draft.state != "running":
         raise OrchestratorError(
-            code="container_failure", message="draft runtime is not running", status_code=503,
+            code="container_failure",
+            message="draft runtime is not running",
+            status_code=503,
         )
     manager._verify_draft_container_record(draft, state)
     # Docker 29 does not activate published ports on internal-only networks.
@@ -1154,9 +1183,15 @@ async def _publish_draft_preview(
         )
     host = _draft_preview_host(workspace_id)
     await nginx_writer.publish_http(host, 3000, upstream_host=upstream_host, private_cell=True)
-    if await nginx_writer.ensure_tls(
-        host, 3000, upstream_host=upstream_host, private_cell=True,
-    ) is False:
+    if (
+        await nginx_writer.ensure_tls(
+            host,
+            3000,
+            upstream_host=upstream_host,
+            private_cell=True,
+        )
+        is False
+    ):
         await nginx_writer.unpublish(host)
         raise OrchestratorError(
             code="container_failure",
@@ -1243,10 +1278,7 @@ def _require_matching_workspace_id(path_workspace_id: UUID, body_workspace_id: U
 
 
 def _require_docker_resource_manager(provider: object) -> DockerCellResourceManager:
-    if (
-        not isinstance(provider, DockerOwnerCanaryProvider)
-        or provider.resource_manager is None
-    ):
+    if not isinstance(provider, DockerOwnerCanaryProvider) or provider.resource_manager is None:
         raise OrchestratorError(
             code="docker_unavailable",
             message="docker owner canary agent workspace is unavailable",
@@ -1285,9 +1317,7 @@ def _workspace_agent_exec_env(
     redis_container: str,
     postgres_password: str,
 ) -> dict[str, str]:
-    database_url = (
-        f"postgresql://postgres:{postgres_password}@{postgres_container}:5432/postgres"
-    )
+    database_url = f"postgresql://postgres:{postgres_password}@{postgres_container}:5432/postgres"
     return {
         "HOME": "/root",
         "CI": "1",
@@ -1307,11 +1337,7 @@ def _workspace_agent_exec_env(
 
 
 def _workspace_exec_spec(state: CellWorkspaceState) -> _WorkspaceExecSpec:
-    if (
-        state.project_id is None
-        or state.owner_id is None
-        or state.resource_names is None
-    ):
+    if state.project_id is None or state.owner_id is None or state.resource_names is None:
         raise OrchestratorError(
             code="not_found",
             message="workspace identity is incomplete",
@@ -1342,10 +1368,7 @@ def _require_active_generation_lease(state: CellWorkspaceState) -> tuple[UUID, i
             message="workspace resources are not ready",
             status_code=409,
         )
-    if (
-        state.active_generation_run_id is None
-        or state.active_generation_fencing_epoch is None
-    ):
+    if state.active_generation_run_id is None or state.active_generation_fencing_epoch is None:
         raise OrchestratorError(
             code="conflict",
             message="workspace generation lease is not active",
@@ -1361,10 +1384,7 @@ def _require_generation_lease_match(
     fencing_epoch: int,
 ) -> tuple[UUID, int]:
     active_generation_run_id, active_fencing_epoch = _require_active_generation_lease(state)
-    if (
-        generation_run_id != active_generation_run_id
-        or fencing_epoch != active_fencing_epoch
-    ):
+    if generation_run_id != active_generation_run_id or fencing_epoch != active_fencing_epoch:
         raise OrchestratorError(
             code="conflict",
             message="workspace generation lease mismatch",
@@ -1461,9 +1481,7 @@ _BUILD_CONFIG_PATHS = (
 
 def _digest_json(value: object) -> str:
     return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-            "utf-8"
-        )
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
 
 
@@ -1499,13 +1517,12 @@ def _workspace_identity_digest(
         schema_data_digest=_selected_files_digest(
             files,
             fixed_paths=("drizzle.config.ts", "prisma/schema.prisma"),
-            include=lambda path: path.endswith(".sql")
-            or bool(schema_markers.intersection(path.lower().split("/"))),
+            include=lambda path: (
+                path.endswith(".sql") or bool(schema_markers.intersection(path.lower().split("/")))
+            ),
         ),
         cell_manifest_digest=(
-            manifest.digest()
-            if manifest is not None
-            else _digest_json({"portable_manifest": None})
+            manifest.digest() if manifest is not None else _digest_json({"portable_manifest": None})
         ),
         environment_digest=environment_digest,
         build_config_digest=_selected_files_digest(

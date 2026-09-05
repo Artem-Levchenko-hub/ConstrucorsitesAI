@@ -34,6 +34,7 @@ from omnia_api.services.generation_runs import (
 )
 from omnia_api.services.orchestrator_client import (
     OrchestratorBadRequest,
+    OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
     ProjectCellAgentWorkspaceSnapshot,
     ProjectCellAgentWriteResponse,
@@ -47,6 +48,8 @@ from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 from omnia_api.services.project_cells import (
     claim_cell_operation_committed,
     complete_cell_operation,
+    mark_cell_operation_indeterminate,
+    reserve_cell_operation,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -573,10 +576,14 @@ async def _prepare_executor(
             if result.get("migration_exit_code") not in {None, 0}
             else "draft_running"
         )
-        return ProjectCellDraftApplyResponse.from_json({
-            **result, "state": draft_state, "workspace_revision": _current_revision(),
-            "preview_url": "https://cell.preview.example.test",
-        })
+        return ProjectCellDraftApplyResponse.from_json(
+            {
+                **result,
+                "state": draft_state,
+                "workspace_revision": _current_revision(),
+                "preview_url": "https://cell.preview.example.test",
+            }
+        )
 
     async def fake_preview(workspace_id: UUID, *, generation_run_id: UUID, fencing_epoch: int):
         assert generation_run_id == expected_run_id
@@ -701,6 +708,117 @@ async def test_immediate_ensure_with_dispatch_token_bootstraps_without_queueing(
     ]
 
 
+@pytest.mark.parametrize("old_ensure_status", ["completed", "indeterminate"])
+@pytest.mark.parametrize("release_response_lost", [False, True])
+async def test_same_project_recovers_terminal_binding_before_new_ensure(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+    old_ensure_status: str,
+    release_response_lost: bool,
+) -> None:
+    owner = await _new_user(db_session, "same-project")
+    project = await _new_project(db_session, owner)
+    old_run = await _new_run(db_session, project, owner, label="old", status="failed")
+    new_run = await _new_run(db_session, project, owner, label="new")
+    workspace = ProjectCellWorkspace(
+        project_id=project.id,
+        owner_id=owner.id,
+        provider="docker_owner_canary",
+        state="provisioning",
+        generation_run_id=old_run.id,
+    )
+    db_session.add(workspace)
+    await db_session.flush()
+    operation, _ = await reserve_cell_operation(
+        db_session,
+        workspace_id=workspace.id,
+        generation_run_id=old_run.id,
+        kind="ensure",
+        idempotency_key=f"old-ensure:{old_run.id}",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+    )
+    await db_session.commit()
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    await claim_cell_operation_committed(factory, operation.id)
+    async with factory() as session:
+        if old_ensure_status == "completed":
+            await complete_cell_operation(session, operation.id, {})
+        else:
+            await mark_cell_operation_indeterminate(session, operation.id, "response lost")
+        await session.commit()
+    calls = []
+
+    def response(request):
+        return ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref="same-project",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    async def observe(request):
+        calls.append("reconcile")
+        return response(request)
+
+    async def control(request):
+        assert request.kind == "release"
+        async with factory() as session:
+            bound = await session.get(ProjectCellWorkspace, workspace.id)
+            assert bound.generation_run_id == old_run.id
+        calls.append("release")
+        if release_response_lost and calls.count("release") == 1:
+            raise OrchestratorUnavailable("release response lost")
+        return response(request)
+
+    async def ensure(request):
+        assert request.generation_run_id == new_run.id
+        assert calls[-1] == "release"
+        calls.append("ensure")
+        return response(request)
+
+    async def readiness(*_args):
+        return ProjectCellControlReadiness(
+            selected=True,
+            ready=True,
+            provider="docker_owner_canary",
+            reason="ready",
+        )
+
+    async def bootstrap(_workspace_id, *, generation_run_id, fencing_epoch):
+        assert generation_run_id == new_run.id
+        assert fencing_epoch == (3 if old_ensure_status == "completed" else 4)
+        raise RuntimeError("test reached new bootstrap")
+
+    monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", readiness)
+    monkeypatch.setattr(
+        project_cell_executor,
+        "HttpProjectCellOrchestratorClient",
+        lambda: SimpleNamespace(ensure=ensure, control=control, observe_resources=observe),
+    )
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", bootstrap)
+    with pytest.raises(RuntimeError, match="test reached new bootstrap"):
+        await project_cell_executor.maybe_create_project_cell_executor(
+            project_id=project.id,
+            project_slug=project.slug,
+            project_template="max_miniapp",
+            user_id=owner.id,
+            generation_run_id=new_run.id,
+            legacy_execute=ensure,
+        )
+    assert calls == (
+        (["reconcile"] if old_ensure_status == "indeterminate" else [])
+        + ["release"] * (2 if release_response_lost else 1)
+        + ["ensure"]
+    )
+
+
 async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
     db_session: AsyncSession,
     test_engine: AsyncEngine,
@@ -802,9 +920,7 @@ async def test_ready_owner_executor_bootstraps_workspace_and_syncs_preview(
         cell_exec_result={"ok": True, "exit_code": 0, "detail": "cell:build", "timed_out": False},
     )
 
-    read = await harness.handle.execute(
-        Action(name="read_file", args={"path": "src/app/page.tsx"})
-    )
+    read = await harness.handle.execute(Action(name="read_file", args={"path": "src/app/page.tsx"}))
     listed = await harness.handle.execute(Action(name="list_dir", args={"path": "src/app"}))
     grep = await harness.handle.execute(
         Action(name="grep", args={"pattern": "Page", "path": "src"})
@@ -889,9 +1005,7 @@ async def test_apply_external_files_updates_local_state_without_extra_sync(
             "obsolete.txt": "",
         }
     )
-    added = await harness.handle.execute(
-        Action(name="read_file", args={"path": "src/app/api.ts"})
-    )
+    added = await harness.handle.execute(Action(name="read_file", args={"path": "src/app/api.ts"}))
     removed = await harness.handle.execute(Action(name="read_file", args={"path": "obsolete.txt"}))
     build = await harness.handle.execute(Action(name="build", args={}))
 
@@ -950,7 +1064,9 @@ async def test_sync_failure_blocks_runtime_actions_before_legacy_executor(
 
 
 async def test_repeated_preview_checks_preserve_healthy_draft_until_source_changes(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
     for _ in range(3):
@@ -963,7 +1079,9 @@ async def test_repeated_preview_checks_preserve_healthy_draft_until_source_chang
 
 
 async def test_preview_checks_recover_stopped_draft_but_never_replay_auth_failure(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     from omnia_api.services.orchestrator_client import OrchestratorBadRequest
 
@@ -1069,15 +1187,21 @@ async def test_sync_preview_marks_zero_byte_files_as_explicit_empty_paths(
 
 
 async def test_cell_preview_starts_without_edits_and_refreshes_generated_files(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     harness = await _prepare_executor(
-        monkeypatch, db_session, test_engine,
+        monkeypatch,
+        db_session,
+        test_engine,
         hot_reload_result={"pnpm_lockfile": "generated lock", "runtime_log_tail": "cell ready"},
     )
     result = await harness.handle.execute(Action(name="read_logs", args={}))
     assert result == {
-        "ok": True, "detail": "cell ready", "files": {"pnpm-lock.yaml": "generated lock"},
+        "ok": True,
+        "detail": "cell ready",
+        "files": {"pnpm-lock.yaml": "generated lock"},
     }
     assert harness.hot_reload_calls == [{}]
     assert harness.write_calls == []  # Generated files already belong to the cell volume.
@@ -1086,7 +1210,9 @@ async def test_cell_preview_starts_without_edits_and_refreshes_generated_files(
 
 
 async def test_cell_rejects_removed_visual_tool_without_preview_or_legacy_io(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     from omnia_api.services import agent_vision
 
@@ -1105,21 +1231,28 @@ async def test_cell_rejects_removed_visual_tool_without_preview_or_legacy_io(
 
 
 async def test_cell_migration_failure_cannot_be_reported_as_ready(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     harness = await _prepare_executor(
-        monkeypatch, db_session, test_engine,
+        monkeypatch,
+        db_session,
+        test_engine,
         hot_reload_result={"migration_exit_code": 1, "migration_stderr_tail": "schema conflict"},
     )
     with pytest.raises(
-        project_cell_executor.ProjectCellExecutorUnavailable, match="schema conflict",
+        project_cell_executor.ProjectCellExecutorUnavailable,
+        match="schema conflict",
     ):
         await harness.handle.create_preview_session()
     assert harness.legacy_actions == []
 
 
 async def test_cell_runtime_check_uses_workspace_session_not_legacy(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     from omnia_api.services import max_runtime_probe
 
@@ -1137,7 +1270,9 @@ async def test_cell_runtime_check_uses_workspace_session_not_legacy(
 
 
 async def test_portable_cell_runtime_check_falls_back_when_home_page_is_missing(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     from omnia_api.services import max_runtime_probe
 
@@ -1174,7 +1309,9 @@ async def test_portable_cell_runtime_check_falls_back_when_home_page_is_missing(
 
 
 async def test_ready_mark_cannot_steal_a_newer_workspace_lease(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
     project = await db_session.get(Project, harness.project_id)
@@ -1194,11 +1331,15 @@ async def test_ready_mark_cannot_steal_a_newer_workspace_lease(
     await db_session.commit()
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     with pytest.raises(
-        project_cell_executor.ProjectCellExecutorUnavailable, match="lease changed",
+        project_cell_executor.ProjectCellExecutorUnavailable,
+        match="lease changed",
     ):
         await project_cell_executor._mark_workspace_ready(
-            session_factory=factory, workspace_id=harness.workspace_id,
-            generation_run_id=harness.run_id, provider_ref="stale", fencing_epoch=1,
+            session_factory=factory,
+            workspace_id=harness.workspace_id,
+            generation_run_id=harness.run_id,
+            provider_ref="stale",
+            fencing_epoch=1,
         )
     db_session.expire_all()
     preserved = await db_session.get(ProjectCellWorkspace, harness.workspace_id)
@@ -1209,7 +1350,9 @@ async def test_ready_mark_cannot_steal_a_newer_workspace_lease(
 
 
 async def test_ready_mark_reloads_cancellation_from_another_session(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ) -> None:
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
     workspace = await db_session.get(ProjectCellWorkspace, harness.workspace_id)
@@ -1219,16 +1362,16 @@ async def test_ready_mark_reloads_cancellation_from_another_session(
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as cancel_session:
         run = await cancel_session.scalar(
-            select(GenerationRun)
-            .where(GenerationRun.id == harness.run_id)
-            .with_for_update()
+            select(GenerationRun).where(GenerationRun.id == harness.run_id).with_for_update()
         )
         assert run is not None
         run.status = "cancel_requested"
         activation = asyncio.create_task(
             project_cell_executor._mark_workspace_ready(
-                session_factory=factory, workspace_id=harness.workspace_id,
-                generation_run_id=harness.run_id, provider_ref="stale",
+                session_factory=factory,
+                workspace_id=harness.workspace_id,
+                generation_run_id=harness.run_id,
+                provider_ref="stale",
                 fencing_epoch=1,
             )
         )
@@ -1236,7 +1379,8 @@ async def test_ready_mark_reloads_cancellation_from_another_session(
         assert not activation.done(), "activation did not wait for the run-row fence"
         await cancel_session.commit()
         with pytest.raises(
-            project_cell_executor.ProjectCellExecutorUnavailable, match="lease changed",
+            project_cell_executor.ProjectCellExecutorUnavailable,
+            match="lease changed",
         ):
             await activation
     db_session.expire_all()
@@ -1303,9 +1447,7 @@ async def test_bash_runs_inside_cell_and_returns_remote_diff(
         },
     )
 
-    result = await harness.handle.execute(
-        Action(name="bash", args={"cmd": "pnpm test"})
-    )
+    result = await harness.handle.execute(Action(name="bash", args={"cmd": "pnpm test"}))
 
     assert result == {
         "ok": False,
@@ -1343,16 +1485,25 @@ async def test_disabled_routing_never_falls_back_for_a_durable_cell(
     project = await _new_project(db_session, owner, label="disabled")
     run = await _new_run(db_session, project, owner, label="disabled")
     if existing_cell:
-        db_session.add(ProjectCellWorkspace(
-            project_id=project.id, owner_id=owner.id, provider="docker_owner_canary",
-            state="ready", generation_run_id=run.id, fencing_epoch=1,
-        ))
+        db_session.add(
+            ProjectCellWorkspace(
+                project_id=project.id,
+                owner_id=owner.id,
+                provider="docker_owner_canary",
+                state="ready",
+                generation_run_id=run.id,
+                fencing_epoch=1,
+            )
+        )
     await db_session.commit()
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
 
     async def disabled_readiness(_user, _project_id):
         return ProjectCellControlReadiness(
-            selected=False, ready=False, provider="legacy", reason="feature_disabled",
+            selected=False,
+            ready=False,
+            provider="legacy",
+            reason="feature_disabled",
         )
 
     monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", disabled_readiness)
@@ -1361,12 +1512,18 @@ async def test_disabled_routing_never_falls_back_for_a_durable_cell(
         pytest.fail("must not execute legacy commands")
 
     kwargs = dict(
-        project_id=project.id, project_slug=project.slug, project_template="max_miniapp",
-        user_id=owner.id, generation_run_id=run.id, legacy_execute=forbidden_legacy,
+        project_id=project.id,
+        project_slug=project.slug,
+        project_template="max_miniapp",
+        user_id=owner.id,
+        generation_run_id=run.id,
+        legacy_execute=forbidden_legacy,
     )
     if existing_cell:
-        with pytest.raises(project_cell_executor.ProjectCellExecutorUnavailable,
-                           match="legacy execution is disabled"):
+        with pytest.raises(
+            project_cell_executor.ProjectCellExecutorUnavailable,
+            match="legacy execution is disabled",
+        ):
             await project_cell_executor.maybe_create_project_cell_executor(**kwargs)
     else:
         assert await project_cell_executor.maybe_create_project_cell_executor(**kwargs) is None
@@ -1412,7 +1569,7 @@ async def test_selected_but_unready_project_cell_raises_unavailable(
 
 
 @pytest.mark.parametrize("mismatch", ["run_id", "fencing_epoch"])
-async def test_bootstrap_rejects_mismatched_active_lease_before_ready(
+async def test_bootstrap_rejects_mismatched_active_lease_before_agent_activation(
     monkeypatch: pytest.MonkeyPatch,
     db_session: AsyncSession,
     test_engine: AsyncEngine,
@@ -1434,9 +1591,7 @@ async def test_bootstrap_rejects_mismatched_active_lease_before_ready(
 
     async def fake_execute_cell_operation(_session_factory, operation_id, _client):
         workspace = await db_session.scalar(
-            select(ProjectCellWorkspace).where(
-                ProjectCellWorkspace.generation_run_id == run.id
-            )
+            select(ProjectCellWorkspace).where(ProjectCellWorkspace.generation_run_id == run.id)
         )
         assert workspace is not None
         workspace.fencing_epoch = 1
@@ -1495,12 +1650,12 @@ async def test_bootstrap_rejects_mismatched_active_lease_before_ready(
     assert "active lease does not match the run" in str(caught.value)
     db_session.expire_all()
     workspace = await db_session.scalar(
-        select(ProjectCellWorkspace).where(
-            ProjectCellWorkspace.generation_run_id == run_id
-        )
+        select(ProjectCellWorkspace).where(ProjectCellWorkspace.generation_run_id == run_id)
     )
     assert workspace is not None
-    assert workspace.state != "ready"
+    # Ensure proved physical resources ready, but a mismatched bootstrap must
+    # still raise instead of returning an executor with agent write authority.
+    assert workspace.state == "ready"
 
 
 async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
@@ -1523,11 +1678,11 @@ async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
 
     async def fake_execute_cell_operation(_session_factory, operation_id, _client):
         workspace = await db_session.scalar(
-            select(ProjectCellWorkspace).where(
-                ProjectCellWorkspace.generation_run_id == run.id
-            )
+            select(ProjectCellWorkspace).where(ProjectCellWorkspace.generation_run_id == run.id)
         )
         assert workspace is not None
+        workspace.fencing_epoch = 1
+        await db_session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
             status="completed",

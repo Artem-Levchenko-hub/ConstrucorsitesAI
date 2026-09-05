@@ -391,9 +391,7 @@ async def test_draft_port_registry_save_is_atomic(tmp_path: Path) -> None:
     registry_path = tmp_path / "runtime-state" / ".cell-port-registry.json"
 
     assert await manager.acquire_draft_preview_port(workspace_id) == 3200
-    assert json.loads(registry_path.read_text(encoding="utf-8")) == {
-        str(workspace_id): 3200
-    }
+    assert json.loads(registry_path.read_text(encoding="utf-8")) == {str(workspace_id): 3200}
     assert list(registry_path.parent.glob(f".{registry_path.name}.*.tmp")) == []
 
 
@@ -658,6 +656,182 @@ async def test_reconcile_records_completed_operation_on_healthy_bundle(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_higher_reconcile_recovers_generation_through_unknown_reconcile_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager, _, state_store, _ = _make_manager(tmp_path)
+    workspace_id = uuid4()
+    run_id = uuid4()
+    base_spec = _spec(workspace_id)
+    await manager.ensure(base_spec, _mutation("a", 1))
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    unknown_ensure = _mutation("b", 2)
+    generation_spec = replace(base_spec, generation_run_id=run_id)
+    state_store.begin(
+        generation_spec,
+        unknown_ensure,
+        kind="ensure",
+        phase="planned",
+        resource_names=names,
+    )
+    state_store.mark_indeterminate(
+        workspace_id,
+        mutation=unknown_ensure,
+        detail="ensure response unknown",
+    )
+    original_observe = DockerCellResourceManager._observe_state
+    observe_started = asyncio.Event()
+    keep_observing = asyncio.Event()
+
+    async def blocked_observe(
+        resource_manager: DockerCellResourceManager,
+        state,
+    ):
+        observe_started.set()
+        await keep_observing.wait()
+        return await original_observe(resource_manager, state)
+
+    monkeypatch.setattr(DockerCellResourceManager, "_observe_state", blocked_observe)
+    first_reconcile = _mutation("c", 3)
+    task = asyncio.create_task(manager.reconcile(workspace_id, first_reconcile))
+    await observe_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    monkeypatch.setattr(DockerCellResourceManager, "_observe_state", original_observe)
+
+    recovered = await manager.reconcile(workspace_id, _mutation("d", 4))
+
+    state = state_store.load(workspace_id)
+    assert recovered.state == "resources_ready"
+    assert state is not None
+    assert state.active_generation_run_id == run_id
+    assert state.active_generation_fencing_epoch == 4
+    first_operation = state.operation(first_reconcile.operation_id)
+    assert first_operation is not None
+    assert first_operation.status == "indeterminate"
+    assert first_operation.generation_run_id == run_id
+    latest = state.operation(state.last_operation_id)
+    assert latest is not None
+    assert latest.kind == "reconcile"
+    assert latest.generation_run_id == run_id
+
+
+@pytest.mark.asyncio
+async def test_partial_reconcile_keeps_confirmed_capacity_reservation(tmp_path: Path) -> None:
+    manager, docker, state_store, _ = _make_manager(tmp_path)
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    await manager.ensure(spec, _mutation("a", 1))
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    unknown_ensure = _mutation("b", 2)
+    state_store.begin(
+        replace(spec, generation_run_id=uuid4()),
+        unknown_ensure,
+        kind="ensure",
+        phase="planned",
+        resource_names=names,
+    )
+    state_store.mark_indeterminate(workspace_id, mutation=unknown_ensure)
+    await docker.remove_container(names.postgres_container)
+    reconcile = _mutation("c", 3)
+
+    observation = await manager.reconcile(workspace_id, reconcile)
+
+    reservation = manager._capacity_reservation_store().load(workspace_id)
+    assert observation.state == "partial"
+    assert reservation is not None
+    assert reservation.status == "confirmed"
+    assert reservation.operation_id == reconcile.operation_id
+    assert reservation.fencing_epoch == reconcile.fencing_epoch
+
+
+@pytest.mark.asyncio
+async def test_zero_effect_partial_reconcile_releases_capacity_reservation(
+    tmp_path: Path,
+) -> None:
+    manager, _, state_store, _ = _make_manager(tmp_path)
+    workspace_id = uuid4()
+    spec = replace(_spec(workspace_id), generation_run_id=uuid4())
+    unknown_ensure = _mutation("a", 1)
+    state_store.begin(
+        spec,
+        unknown_ensure,
+        kind="ensure",
+        phase="planned",
+        resource_names=CellResourceNames.for_workspace(workspace_id, namespace="test"),
+    )
+    state_store.mark_indeterminate(workspace_id, mutation=unknown_ensure)
+    manager._capacity_reservation_store().reserve(
+        workspace_id,
+        unknown_ensure,
+        profile=manager.profile,
+        snapshot=manager.capacity_reader.read(),
+        admission_gate=manager.admission_gate,
+        running_bundle=False,
+    )
+
+    observation = await manager.reconcile(workspace_id, _mutation("b", 2))
+
+    assert observation.state == "partial"
+    assert not any(observation.containers.values())
+    assert not any(observation.networks.values())
+    assert not any(observation.volumes.values())
+    assert manager._capacity_reservation_store().load(workspace_id) is None
+
+
+@pytest.mark.asyncio
+async def test_repair_ensure_rebinds_matching_reconciled_capacity(tmp_path: Path) -> None:
+    manager, docker, state_store, _ = _make_manager(tmp_path)
+    workspace_id = uuid4()
+    run_id = uuid4()
+    spec = _spec(workspace_id)
+    await manager.ensure(spec, _mutation("a", 1))
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    unknown_ensure = _mutation("b", 2)
+    repair_spec = replace(spec, generation_run_id=run_id)
+    state_store.begin(
+        repair_spec,
+        unknown_ensure,
+        kind="ensure",
+        phase="planned",
+        resource_names=names,
+    )
+    state_store.mark_indeterminate(workspace_id, mutation=unknown_ensure)
+    await docker.remove_container(names.postgres_container)
+    await manager.reconcile(workspace_id, _mutation("c", 3))
+    capacity = manager.capacity_reader.read()
+    manager.capacity_reader = SimpleNamespace(
+        read=lambda: replace(capacity, cpu_count=0),
+    )
+
+    with pytest.raises(CellCapacityUnavailable):
+        await manager.ensure(
+            replace(spec, generation_run_id=uuid4()),
+            _mutation("d", 4),
+        )
+
+    def unexpected_capacity_read():
+        raise AssertionError("repair must reuse confirmed capacity")
+
+    manager.capacity_reader = SimpleNamespace(read=unexpected_capacity_read)
+    repair = _mutation("e", 5)
+    handle = await manager.ensure(repair_spec, repair)
+
+    reservation = manager._capacity_reservation_store().load(workspace_id)
+    state = state_store.load(workspace_id)
+    assert handle.state == "resources_ready"
+    assert reservation is not None
+    assert reservation.status == "confirmed"
+    assert reservation.operation_id == repair.operation_id
+    assert reservation.fencing_epoch == repair.fencing_epoch
+    assert state is not None
+    assert state.active_generation_run_id == run_id
+    assert state.active_generation_fencing_epoch == repair.fencing_epoch
+
+
+@pytest.mark.asyncio
 async def test_reconcile_cleanup_removes_only_expected_ephemera(tmp_path: Path) -> None:
     manager, docker, _, _ = _make_manager(tmp_path)
     spec = _spec(uuid4())
@@ -730,7 +904,8 @@ async def test_reconcile_cleanup_removes_only_expected_ephemera(tmp_path: Path) 
     "kind", ["volume-read", "volume-write", "volume-delete", "volume-promote", "volume-clear"]
 )
 async def test_reconcile_recognizes_request_helpers_without_widening_ownership(
-    tmp_path: Path, kind: str,
+    tmp_path: Path,
+    kind: str,
 ) -> None:
     manager, docker, _, _ = _make_manager(tmp_path)
     spec = _spec(uuid4())
@@ -739,23 +914,39 @@ async def test_reconcile_recognizes_request_helpers_without_widening_ownership(
     stem = f"{volume_name[:48].rstrip('-')}-{kind}"
     labels = {**identity_labels(spec, kind), "omnia.helper": "true"}
     template = DockerContainerSpec(
-        name=stem, image=manager.profile.backup_image, labels=labels,
-        user="0:0", cap_add=[], cap_drop=["ALL"], read_only=True,
-        privileged=False, security_opt=["no-new-privileges:true"], ports={},
-        env={}, volumes=(volume_name,), mounts=(), network_names=(), helper=True,
+        name=stem,
+        image=manager.profile.backup_image,
+        labels=labels,
+        user="0:0",
+        cap_add=[],
+        cap_drop=["ALL"],
+        read_only=True,
+        privileged=False,
+        security_opt=["no-new-privileges:true"],
+        ports={},
+        env={},
+        volumes=(volume_name,),
+        mounts=(),
+        network_names=(),
+        helper=True,
     )
     valid_names = [stem, f"{stem}-{uuid4().hex}"]
     foreign_owner_name = f"{stem}-{uuid4().hex}"
     invalid_names = [
-        f"{stem}-{'a' * 31}", f"{stem}-{'z' * 32}",
-        f"{stem}-extra-{'a' * 32}", f"foreign-{kind}-{uuid4().hex}",
+        f"{stem}-{'a' * 31}",
+        f"{stem}-{'z' * 32}",
+        f"{stem}-extra-{'a' * 32}",
+        f"foreign-{kind}-{uuid4().hex}",
     ]
     for name in [*valid_names, *invalid_names]:
         await docker.create_container(replace(template, name=name))
-    await docker.create_container(replace(
-        template, name=foreign_owner_name,
-        labels={**labels, "omnia.owner_id": str(uuid4())},
-    ))
+    await docker.create_container(
+        replace(
+            template,
+            name=foreign_owner_name,
+            labels={**labels, "omnia.owner_id": str(uuid4())},
+        )
+    )
 
     observation = await manager.reconcile(spec.workspace_id, _mutation("b", 2))
 

@@ -298,11 +298,23 @@ _MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def _build_max_tools(*, allow_bash: bool) -> list[dict[str, Any]]:
+def _build_max_tools(*, allow_bash: bool, portable: bool = False) -> list[dict[str, Any]]:
+    descriptions = dict(_MAX_TOOL_DESCRIPTIONS)
+    if portable:
+        descriptions["bash"] = (
+            "Run a shell command inside this project's portable Linux machine. "
+            "Root applies only inside this isolated guest, never to the host. "
+            "Install required public libraries and system packages using the "
+            "configured egress proxy; keep dependency manifests and lockfiles in sync. "
+            "Use the project's dedicated PostgreSQL for schemas, migrations and real "
+            "data; do not access platform or other projects' databases. "
+            "Use lightweight checks during implementation; final build and runtime "
+            "verification are managed by the finalization coordinator."
+        )
     return [
         {
             **tool,
-            "description": _MAX_TOOL_DESCRIPTIONS.get(tool["name"], tool["description"]),
+            "description": descriptions.get(tool["name"], tool["description"]),
         }
         for tool in _TOOLS
         if tool["name"] not in {"probe", "verify_isolation"}
@@ -318,6 +330,9 @@ _MAX_TOOLS: list[dict[str, Any]] = _build_max_tools(allow_bash=False)
 _MAX_TOOLS_WITH_BASH: list[dict[str, Any]] = _build_max_tools(allow_bash=True)
 _MAX_TOOLS_CACHED: list[dict[str, Any]] = _cache_toolset(_MAX_TOOLS)
 _MAX_TOOLS_WITH_BASH_CACHED: list[dict[str, Any]] = _cache_toolset(_MAX_TOOLS_WITH_BASH)
+_MAX_PORTABLE_TOOLS_CACHED: list[dict[str, Any]] = _cache_toolset(
+    _build_max_tools(allow_bash=True, portable=True)
+)
 
 # Once MAX discovery is exhausted, a warning alone is not a constraint: the
 # provider can keep selecting read/helper tools from the full schema and the
@@ -793,6 +808,7 @@ async def _run_native_segment(
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
     max_steps: int = 24,
     allow_max_bash: bool = False,
+    portable_cell: bool = False,
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
@@ -1011,6 +1027,8 @@ async def _run_native_segment(
                     tools=(
                         _MAX_ENTRY_WRITE_TOOLS
                         if force_max_entry_write
+                        else _MAX_PORTABLE_TOOLS_CACHED
+                        if max_runtime and allow_max_bash and portable_cell
                         else _MAX_TOOLS_WITH_BASH_CACHED
                         if max_runtime and allow_max_bash
                         else _MAX_TOOLS_CACHED
@@ -1366,9 +1384,7 @@ NativeSegmentRunner = Callable[
     Awaitable[AgentResult],
 ]
 
-_CONTINUATION_TERMINAL_REASONS = frozenset(
-    {"error", "infra_error", "provider_stopped_red"}
-)
+_CONTINUATION_TERMINAL_REASONS = frozenset({"error", "infra_error", "provider_stopped_red"})
 
 
 def _merge_segment_evidence(
@@ -1528,6 +1544,7 @@ async def run_native_build(
     max_steps: int = 24,
     max_segments: int = 1,
     allow_max_bash: bool = False,
+    portable_cell: bool = False,
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
@@ -1552,6 +1569,7 @@ async def run_native_build(
             completion_check=segment_check,
             max_steps=max_steps,
             allow_max_bash=allow_max_bash,
+            portable_cell=portable_cell,
             messages_url=messages_url,
             messages_headers=messages_headers,
             messages_auth_factory=messages_auth_factory,

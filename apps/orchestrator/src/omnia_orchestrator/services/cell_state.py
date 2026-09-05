@@ -262,11 +262,17 @@ class CellStateStore:
         if workspace is not None:
             if workspace.matches_spec_identity(spec) is False:
                 raise RuntimeError("workspace immutable identity mismatch")
-            if (
-                workspace.resource_names is not None
-                and workspace.resource_names != resource_names
-            ):
+            if workspace.resource_names is not None and workspace.resource_names != resource_names:
                 raise RuntimeError("existing workspace resource_names mismatch")
+            if (
+                kind == "reconcile"
+                and spec.generation_run_id is not None
+                and not self._can_reconcile_generation_lease(
+                    workspace,
+                    spec.generation_run_id,
+                )
+            ):
+                raise RuntimeError("reconcile generation lease is not recoverable")
         operations = list(workspace.operations if workspace is not None else ())
         operations = [item for item in operations if item.operation_id != mutation.operation_id]
         operations.append(
@@ -394,8 +400,11 @@ class CellStateStore:
         active_generation_fencing_epoch = workspace.active_generation_fencing_epoch
         if (
             completed_operation is not None
-            and completed_operation.kind == "ensure"
             and completed_operation.generation_run_id is not None
+            and (
+                completed_operation.kind == "ensure"
+                or (completed_operation.kind == "reconcile" and bundle_state == "resources_ready")
+            )
         ):
             active_generation_run_id = completed_operation.generation_run_id
             active_generation_fencing_epoch = mutation.fencing_epoch
@@ -416,6 +425,22 @@ class CellStateStore:
         )
         self._persist_state(next_state)
         return next_state
+
+    @staticmethod
+    def _can_reconcile_generation_lease(
+        workspace: CellWorkspaceState,
+        generation_run_id: UUID,
+    ) -> bool:
+        if workspace.active_generation_run_id == generation_run_id:
+            return True
+        latest = workspace.operation(workspace.last_operation_id)
+        return (
+            workspace.phase == "indeterminate"
+            and latest is not None
+            and latest.status == "indeterminate"
+            and latest.kind in {"ensure", "reconcile"}
+            and latest.generation_run_id == generation_run_id
+        )
 
     def release_generation(
         self,

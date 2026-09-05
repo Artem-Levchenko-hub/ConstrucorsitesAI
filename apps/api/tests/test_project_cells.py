@@ -41,6 +41,7 @@ from omnia_api.services.project_cells import (
     mark_cell_operation_indeterminate,
     recover_interrupted_cell_operations,
     reserve_cell_operation,
+    resolve_workspace_profile,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -55,6 +56,28 @@ ALLOWED_KINDS = (
     "restore",
     "reconcile",
 )
+
+
+async def test_existing_workspace_profile_is_not_changed_by_deployment_default(
+    db_session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    run: GenerationRun,
+) -> None:
+    v1, v2 = "docker-owner-cell-resources-v1", "docker-owner-cell-resources-v2"
+    await reserve_cell_operation(
+        db_session,
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        kind="ensure",
+        idempotency_key="profile-pin-original",
+        request={"profile_version": v1},
+    )
+    assert await resolve_workspace_profile(db_session, workspace, v2) == v1
+    assert workspace.provider_metadata["profile_version"] == v1
+    assert await resolve_workspace_profile(db_session, workspace, v2) == v1
+    workspace.provider_metadata = {"profile_version": "unknown"}
+    with pytest.raises(ProjectCellValidationError, match="profile is unsupported"):
+        await resolve_workspace_profile(db_session, workspace, v2)
 
 
 async def test_candidate_promotion_is_atomic_compare_and_swap(
@@ -142,9 +165,7 @@ async def test_candidate_requires_complete_safe_immutable_evidence(
             fencing_epoch=1,
             source_revision="a" * 40,
             migration_digest="b" * 64,
-            database_backup_ref=_content_addressed_ref(
-                "database-backup", "backup-ok"
-            ),
+            database_backup_ref=_content_addressed_ref("database-backup", "backup-ok"),
             build_ref="build/main",
             verification_ref=_content_addressed_ref("verification", "verify-ok"),
         )
@@ -236,18 +257,21 @@ async def test_prepare_candidate_replays_exact_request_and_allows_terminal_rerun
     )
     assert rerun_after_reject.id != base.id
 
-    assert await _matching_candidate(
-        db_session,
-        workspace_id=workspace.id,
-        generation_run_id=base.generation_run_id,
-        fencing_epoch=base.fencing_epoch,
-        source_revision=base.source_revision,
-        migration_digest=base.migration_digest,
-        database_backup_ref=base.database_backup_ref,
-        build_ref=base.build_ref,
-        verification_ref=base.verification_ref,
-        expected_accepted_candidate_id=base.expected_accepted_candidate_id,
-    ) is None
+    assert (
+        await _matching_candidate(
+            db_session,
+            workspace_id=workspace.id,
+            generation_run_id=base.generation_run_id,
+            fencing_epoch=base.fencing_epoch,
+            source_revision=base.source_revision,
+            migration_digest=base.migration_digest,
+            database_backup_ref=base.database_backup_ref,
+            build_ref=base.build_ref,
+            verification_ref=base.verification_ref,
+            expected_accepted_candidate_id=base.expected_accepted_candidate_id,
+        )
+        is None
+    )
 
 
 async def test_cancel_candidate_requires_current_lease_and_active_run(
@@ -571,9 +595,7 @@ def _enveloped_payload_with_serialized_size(
     payload: dict[str, object] = {"text": prefix + ("x" * filler_size)}
     envelope: dict[str, object] = {
         "workspace_id": str(workspace_id),
-        "generation_run_id": (
-            str(generation_run_id) if generation_run_id is not None else None
-        ),
+        "generation_run_id": (str(generation_run_id) if generation_run_id is not None else None),
         "kind": kind,
         "request": payload,
     }
@@ -1028,14 +1050,17 @@ async def test_payload_serialized_utf8_boundaries_are_exact(
         idempotency_key="ensure:request-65536",
         request=request_at_limit,
     )
-    assert len(
-        json.dumps(
-            accepted.request_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ) == 65_536
+    assert (
+        len(
+            json.dumps(
+                accepted.request_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        == 65_536
+    )
     await claim_cell_operation(db_session, accepted.id)
     await complete_cell_operation(db_session, accepted.id, {})
 
@@ -1062,14 +1087,17 @@ async def test_payload_serialized_utf8_boundaries_are_exact(
     await claim_cell_operation(db_session, result_operation.id)
     await complete_cell_operation(db_session, result_operation.id, result_at_limit)
     assert result_operation.result_payload is not None
-    assert len(
-        json.dumps(
-            result_operation.result_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        ).encode("utf-8")
-    ) == 65_536
+    assert (
+        len(
+            json.dumps(
+                result_operation.result_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        )
+        == 65_536
+    )
 
     oversized_result, _ = await reserve_cell_operation(
         db_session,
@@ -1166,9 +1194,7 @@ async def test_compact_and_mixed_case_result_keys_are_redacted(
     await complete_cell_operation(db_session, operation.id, {"nested": [raw_values]})
     await db_session.refresh(operation)
 
-    assert operation.result_payload == {
-        "nested": [{key: "[REDACTED]" for key in unsafe_keys}]
-    }
+    assert operation.result_payload == {"nested": [{key: "[REDACTED]" for key in unsafe_keys}]}
     stored = json.dumps(operation.result_payload, ensure_ascii=False)
     assert "dummy-result-" not in stored
 
@@ -1482,8 +1508,7 @@ async def test_claim_complete_and_fail_enforce_row_locked_transitions(
     await fail_cell_operation(db_session, failed.id, "dummy provider failure")
     assert failed.status == "failed"
     assert failed.error == (
-        "provider_error:"
-        + hashlib.sha256(b"dummy provider failure").hexdigest()
+        "provider_error:" + hashlib.sha256(b"dummy provider failure").hexdigest()
     )
     assert failed.finished_at is not None
 

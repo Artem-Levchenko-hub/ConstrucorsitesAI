@@ -19,14 +19,19 @@ from omnia_api.models.user import User
 
 ALLOWED_OPERATION_KINDS = frozenset(
     {
-        "ensure", "wake", "pause", "stop", "destroy", "status", "restore", "reconcile",
+        "ensure",
+        "wake",
+        "pause",
+        "stop",
+        "destroy",
+        "status",
+        "restore",
+        "reconcile",
         "release",
     }
 )
 ACTIVE_OPERATION_STATUSES = ("pending", "waiting_capacity", "running")
-TERMINAL_OPERATION_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "indeterminate"}
-)
+TERMINAL_OPERATION_STATUSES = frozenset({"completed", "failed", "cancelled", "indeterminate"})
 MAX_STORED_PAYLOAD_BYTES = 64 * 1024
 REDACTED_VALUE = "[REDACTED]"
 
@@ -324,6 +329,39 @@ async def get_or_create_workspace(
     return workspace, True
 
 
+async def resolve_workspace_profile(
+    session: AsyncSession,
+    workspace: ProjectCellWorkspace,
+    default: str,
+) -> str:
+    """Pin an existing workspace to its original canonical ensure contract."""
+    profile = (workspace.provider_metadata or {}).get("profile_version")
+    if profile is None:
+        prior = await session.scalar(
+            select(ProjectCellOperation)
+            .where(
+                ProjectCellOperation.workspace_id == workspace.id,
+                ProjectCellOperation.kind == "ensure",
+                ProjectCellOperation.status.not_in(("failed", "cancelled")),
+            )
+            .order_by(ProjectCellOperation.created_at)
+            .limit(1)
+        )
+        profile = (
+            _stored_request_payload(prior).get("profile_version") if prior is not None else default
+        )
+    if type(profile) is not str or profile not in {
+        "docker-owner-cell-resources-v1",
+        "docker-owner-cell-resources-v2",
+    }:
+        raise ProjectCellValidationError("stored workspace profile is unsupported")
+    workspace.provider_metadata = {
+        **(workspace.provider_metadata or {}),
+        "profile_version": profile,
+    }
+    return str(profile)
+
+
 def _validate_reservation(kind: str, idempotency_key: str) -> None:
     if kind not in ALLOWED_OPERATION_KINDS:
         raise ProjectCellValidationError(f"unsupported Project Cell operation kind {kind!r}")
@@ -517,9 +555,7 @@ async def park_cell_operation_for_capacity(
         raise ProjectCellValidationError("retry_after_seconds must be between 1 and 10")
     operation = await _locked_operation(session, operation_id)
     if operation.status != "running":
-        raise ProjectCellStateConflict(
-            f"cannot park operation in state {operation.status!r}"
-        )
+        raise ProjectCellStateConflict(f"cannot park operation in state {operation.status!r}")
     operation.status = "waiting_capacity"
     operation.capacity_reason = reason
     operation.next_attempt_at = datetime.now(UTC) + timedelta(seconds=retry_after_seconds)

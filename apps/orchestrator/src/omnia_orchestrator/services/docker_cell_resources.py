@@ -534,6 +534,7 @@ class DockerCellResourceManager:
                 )
             self._assert_profile_version(state.profile_version)
             self._reject_unless_allowed(state, mutation, allow_reconcile=True)
+            reconcile_generation_run_id = self._reconcile_generation_run_id(state)
             capacity_lock = self.capacity_lock or self.operation_lock
             async with capacity_lock.hold_named("host-capacity-admission"):
                 reservation = self._capacity_reservation_store().load(workspace_id)
@@ -549,7 +550,10 @@ class DockerCellResourceManager:
                         running_bundle=True,
                     )
             await self.stateful_begin_or_replay(
-                self._spec_from_state(state),
+                self._spec_from_state(
+                    state,
+                    generation_run_id=reconcile_generation_run_id,
+                ),
                 mutation,
                 kind="reconcile",
                 names=state.resource_names,
@@ -570,8 +574,10 @@ class DockerCellResourceManager:
                     kind="reconcile",
                     detail=detail or "ready bundle missing compute",
                 )
-                if not any(observation.containers.values()):
-                    async with capacity_lock.hold_named("host-capacity-admission"):
+                async with capacity_lock.hold_named("host-capacity-admission"):
+                    if self._observation_has_material_resources(observation):
+                        self._confirm_or_restore_capacity(workspace_id, mutation)
+                    else:
                         self._release_capacity(workspace_id, mutation)
                 return CellBundleObservation(
                     state="degraded",
@@ -590,8 +596,11 @@ class DockerCellResourceManager:
                 detail=detail,
             )
             async with capacity_lock.hold_named("host-capacity-admission"):
-                if observation.state == "resources_ready":
-                    self._capacity_reservation_store().confirm(workspace_id, mutation)
+                if observation.state == "resources_ready" or (
+                    observation.state == "partial"
+                    and self._observation_has_material_resources(observation)
+                ):
+                    self._confirm_or_restore_capacity(workspace_id, mutation)
                 else:
                     self._release_capacity(workspace_id, mutation)
             return observation
@@ -632,14 +641,34 @@ class DockerCellResourceManager:
                 self._reject_unless_allowed(state, mutation, allow_reconcile=False)
         existing_bundle = await self._bundle_exists(names)
         running_bundle = await self._bundle_running(names)
-        self._capacity_reservation_store().reserve(
-            spec.workspace_id,
-            mutation,
-            profile=self.profile,
-            snapshot=self.capacity_reader.read(),
-            admission_gate=self.admission_gate,
-            running_bundle=running_bundle,
+        reservation_store = self._capacity_reservation_store()
+        reservation = reservation_store.load(spec.workspace_id)
+        latest = state.operation(state.last_operation_id) if state is not None else None
+        recovered_capacity = (
+            not wake_only
+            and state is not None
+            and state.phase == "completed"
+            and state.bundle_state in {"partial", "degraded"}
+            and latest is not None
+            and latest.kind == "reconcile"
+            and latest.fencing_epoch == state.fencing_epoch
+            and latest.generation_run_id == spec.generation_run_id
+            and spec.generation_run_id is not None
+            and reservation is not None
+            and reservation.status == "confirmed"
+            and reservation.fencing_epoch == state.fencing_epoch
         )
+        if recovered_capacity:
+            reservation_store.rebind(spec.workspace_id, mutation)
+        else:
+            reservation_store.reserve(
+                spec.workspace_id,
+                mutation,
+                profile=self.profile,
+                snapshot=self.capacity_reader.read(),
+                admission_gate=self.admission_gate,
+                running_bundle=running_bundle,
+            )
         if replay is not None:
             return replay
 
@@ -786,10 +815,27 @@ class DockerCellResourceManager:
     def _capacity_reservation_store(self) -> CellCapacityReservationStore:
         if self.capacity_reservations is None:
             self.capacity_reservations = CellCapacityReservationStore(
-                self.state_store.root.parent
-                / f"{self.state_store.root.name}-capacity-reservations"
+                self.state_store.root.parent / f"{self.state_store.root.name}-capacity-reservations"
             )
         return self.capacity_reservations
+
+    def _confirm_or_restore_capacity(
+        self,
+        workspace_id: UUID,
+        mutation: LifecycleMutation,
+    ) -> None:
+        store = self._capacity_reservation_store()
+        if store.load(workspace_id) is None:
+            store.reserve(
+                workspace_id,
+                mutation,
+                profile=self.profile,
+                snapshot=self.capacity_reader.read(),
+                admission_gate=self.admission_gate,
+                running_bundle=True,
+            )
+            return
+        store.confirm(workspace_id, mutation)
 
     async def recover_capacity_reservations(
         self,
@@ -817,9 +863,7 @@ class DockerCellResourceManager:
                 continue
             if self.state_store.load(reservation.workspace_id) is not None:
                 continue
-            containers = await self.docker.list_workspace_containers(
-                reservation.workspace_id
-            )
+            containers = await self.docker.list_workspace_containers(reservation.workspace_id)
             if containers:
                 continue
             store.release(reservation.workspace_id, reservation.mutation)
@@ -1217,9 +1261,7 @@ class DockerCellResourceManager:
 
     @staticmethod
     def _draft_auth_secret(postgres_password: str) -> str:
-        return sha256(
-            f"omnia-cell-draft-auth:{postgres_password}".encode()
-        ).hexdigest()
+        return sha256(f"omnia-cell-draft-auth:{postgres_password}".encode()).hexdigest()
 
     def _draft_env_file_content(
         self,
@@ -1245,9 +1287,7 @@ class DockerCellResourceManager:
             "PGDATABASE": "postgres",
             "REDIS_URL": f"redis://{redis_container}:6379/0",
         }
-        return "".join(
-            f"export {key}={shlex.quote(value)}\n" for key, value in payload.items()
-        )
+        return "".join(f"export {key}={shlex.quote(value)}\n" for key, value in payload.items())
 
     async def _stop_if_present(self, name: str) -> None:
         if await self.docker.get_container(name) is not None:
@@ -1497,7 +1537,12 @@ class DockerCellResourceManager:
             return state.resource_names
         return names
 
-    def _spec_from_state(self, state: CellWorkspaceState) -> WorkspaceSpec:
+    def _spec_from_state(
+        self,
+        state: CellWorkspaceState,
+        *,
+        generation_run_id: UUID | None = None,
+    ) -> WorkspaceSpec:
         if state.project_id is None or state.owner_id is None:
             raise CellResourceError("workspace state missing immutable identity")
         return WorkspaceSpec(
@@ -1505,6 +1550,32 @@ class DockerCellResourceManager:
             project_id=state.project_id,
             owner_id=state.owner_id,
             profile_version=state.profile_version,
+            generation_run_id=generation_run_id,
+        )
+
+    @staticmethod
+    def _reconcile_generation_run_id(state: CellWorkspaceState) -> UUID | None:
+        if state.active_generation_run_id is not None:
+            return state.active_generation_run_id
+        latest = state.operation(state.last_operation_id)
+        if (
+            state.phase == "indeterminate"
+            and latest is not None
+            and latest.status == "indeterminate"
+            and latest.kind in {"ensure", "reconcile"}
+        ):
+            return latest.generation_run_id
+        return None
+
+    @staticmethod
+    def _observation_has_material_resources(observation: CellBundleObservation) -> bool:
+        return any(
+            any(resources.values())
+            for resources in (
+                observation.containers,
+                observation.networks,
+                observation.volumes,
+            )
         )
 
     def _state_labels(self, state: CellWorkspaceState, resource_kind: str) -> dict[str, str]:
@@ -1810,9 +1881,7 @@ class DockerCellResourceManager:
             raise CellIdentityConflict("resource identity mismatch:ports")
         if any(record.env.get(key) != value for key, value in expected.env.items()):
             raise CellIdentityConflict("resource identity mismatch:env")
-        if any(
-            _is_sensitive_env_key(key) for key in (set(record.env) - set(expected.env))
-        ):
+        if any(_is_sensitive_env_key(key) for key in (set(record.env) - set(expected.env))):
             raise CellIdentityConflict("resource identity mismatch:env")
         if sorted(record.volumes) != sorted(expected.volumes):
             raise CellIdentityConflict("resource identity mismatch:volumes")

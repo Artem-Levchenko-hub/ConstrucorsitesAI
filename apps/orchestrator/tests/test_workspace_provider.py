@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -39,7 +39,10 @@ from omnia_orchestrator.services.docker_owner_canary_provider import (
     DockerOwnerCanaryProvider,
 )
 from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
-from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
+from omnia_orchestrator.services.workspace_provider_factory import (
+    build_workspace_provider,
+    settings_for_workspace,
+)
 from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
 
 _FORBIDDEN_FOUNDATION_IMPORT_FRAGMENTS = (
@@ -99,8 +102,7 @@ def _foundation_boundary_violations(tree: ast.AST) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imports = (
-                (alias.name, alias.asname or alias.name.rsplit(".", 1)[-1])
-                for alias in node.names
+                (alias.name, alias.asname or alias.name.rsplit(".", 1)[-1]) for alias in node.names
             )
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
@@ -315,19 +317,109 @@ def test_enabled_factory_builds_live_resource_dependencies(
     assert provider.resource_manager.profile.full_quota.memory_bytes == 5 * 1024**3
     assert provider.resource_manager.profile.full_quota.cpu_cores == 2.5
     assert provider.resource_manager.docker is provider.checkpoint_manager.docker
+    assert provider.resource_manager.state_store is provider.checkpoint_manager.state_store
     assert (
-        provider.resource_manager.state_store
-        is provider.checkpoint_manager.state_store
-    )
-    assert (
-        provider.resource_manager.credential_store
-        is provider.checkpoint_manager.credential_store
+        provider.resource_manager.credential_store is provider.checkpoint_manager.credential_store
     )
     assert provider.resource_manager.state_store.path == state_path
     assert provider.resource_manager.credential_store.root == (
         tmp_path / "runtime-state" / "project-cells-credentials"
     )
     assert provider.resource_manager.operation_lock.root == tmp_path / "runtime-state"
+
+
+async def test_stored_profile_survives_default_rollout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, checkpoints, _docker = _make_checkpoint_fixture(tmp_path)
+    spec = WorkspaceSpec(
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        owner_id=uuid4(),
+        profile_version="docker-owner-cell-resources-v1",
+    )
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=checkpoints,
+    )
+    await provider.ensure(spec, LifecycleMutation(uuid4(), 1, "a" * 64))
+    settings = _settings(
+        workspace_provider="docker_owner_canary",
+        docker_owner_canary_enabled=True,
+        cell_profile_version="docker-owner-cell-resources-v2",
+        cell_state_path=str(manager.state_store.path),
+    )
+    effective = settings_for_workspace(settings, spec.workspace_id)
+    assert effective.cell_profile_version == spec.profile_version
+    assert settings.cell_profile_version == "docker-owner-cell-resources-v2"
+    assert settings_for_workspace(settings, uuid4()) is settings
+    unsafe_settings = settings.model_copy(update={"cell_bundle_cpu_cores": 0.5})
+    with pytest.raises(WorkspaceProviderUnavailable, match="incompatible with deployment quotas"):
+        settings_for_workspace(unsafe_settings, spec.workspace_id)
+    state = manager.state_store.load(spec.workspace_id)
+    assert state is not None
+    monkeypatch.setattr(
+        type(manager.state_store),
+        "load",
+        lambda _store, _id: replace(state, profile_version="unknown-profile"),
+    )
+    with pytest.raises(WorkspaceProviderUnavailable, match="profile is unsupported"):
+        settings_for_workspace(settings, spec.workspace_id)
+
+
+async def test_old_profile_release_and_pause_work_after_v2_rollout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
+    workspace_id, run_id = uuid4(), uuid4()
+    provider = DockerOwnerCanaryProvider(
+        resource_manager=manager,
+        checkpoint_manager=checkpoints,
+    )
+    await provider.ensure(
+        WorkspaceSpec(
+            workspace_id=workspace_id,
+            project_id=uuid4(),
+            owner_id=uuid4(),
+            profile_version="docker-owner-cell-resources-v1",
+            generation_run_id=run_id,
+        ),
+        LifecycleMutation(uuid4(), 1, "a" * 64),
+    )
+    monkeypatch.setattr(
+        workspace_provider_factory,
+        "_host_supports_live_docker_provider",
+        lambda: True,
+    )
+    monkeypatch.setattr(workspace_provider_factory, "DockerPyCellBackend", lambda **_kwargs: docker)
+    settings = _settings(
+        workspace_provider="docker_owner_canary",
+        docker_owner_canary_enabled=True,
+        cell_state_path=str(manager.state_store.path),
+        cell_profile_version="docker-owner-cell-resources-v2",
+        cell_postgres_image=manager.profile.postgres_image,
+        cell_redis_image=manager.profile.redis_image,
+        cell_backup_image=manager.profile.backup_image,
+    )
+    rolled_out = build_workspace_provider(settings_for_workspace(settings, workspace_id))
+    released = await rolled_out.execute_control(
+        workspace_id,
+        ControlAction(kind="release"),
+        LifecycleMutation(uuid4(), 2, "b" * 64),
+    )
+    assert released.state == "resources_ready"
+    paused = await rolled_out.execute_control(
+        workspace_id,
+        ControlAction(kind="pause", checkpoint_ref="profile-rollout"),
+        LifecycleMutation(uuid4(), 3, "c" * 64),
+    )
+    assert paused.state == "resources_paused"
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.active_generation_run_id is None
+    assert state.profile_version == "docker-owner-cell-resources-v1"
+    assert all(container.state != "running" for container in docker.containers.values())
 
 
 async def test_enabled_factory_fails_closed_on_windows_host(
@@ -676,12 +768,7 @@ def test_main_registers_workspace_router_without_importing_provider_implementati
     monkeypatch.setenv("INTERNAL_TOKEN", "test-internal-token-not-a-real-secret")
     get_settings.cache_clear()
     try:
-        main_path = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "omnia_orchestrator"
-            / "main.py"
-        )
+        main_path = Path(__file__).resolve().parents[1] / "src" / "omnia_orchestrator" / "main.py"
         tree = ast.parse(main_path.read_text(encoding="utf-8"))
 
         assert _workspace_registration_count(tree) == 1

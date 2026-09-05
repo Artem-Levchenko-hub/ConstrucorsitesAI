@@ -576,9 +576,7 @@ class ProjectCellAgentExecResponse:
                     else None
                 ),
                 after_identity=(
-                    ProjectCellWorkspaceIdentity.from_json(after_identity)
-                    if is_transport
-                    else None
+                    ProjectCellWorkspaceIdentity.from_json(after_identity) if is_transport else None
                 ),
                 environment_mutated=cast(bool, environment_mutated),
             )
@@ -918,7 +916,10 @@ class HttpProjectCellOrchestratorClient:
         self,
         request: ControlProjectCellResourcesRequest,
     ) -> ProjectCellResourceResponse:
-        timeout = 930.0 if request.kind in {"pause", "stop", "destroy", "restore"} else 30.0
+        # Portable release halts/checkpoints the guest just like pause.
+        timeout = (
+            930.0 if request.kind in {"pause", "stop", "destroy", "restore", "release"} else 30.0
+        )
         payload = await _request(
             "POST",
             f"/internal/workspaces/{request.workspace_id}/control",

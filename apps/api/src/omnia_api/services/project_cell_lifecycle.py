@@ -38,9 +38,7 @@ from omnia_api.services.project_cells import (
 )
 
 _CHECKPOINT_KINDS = frozenset({"pause", "stop", "restore"})
-_STATEFUL_CONTROL_KINDS = frozenset(
-    {"wake", "pause", "stop", "destroy", "restore", "release"}
-)
+_STATEFUL_CONTROL_KINDS = frozenset({"wake", "pause", "stop", "destroy", "restore", "release"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +73,12 @@ async def execute_cell_operation(
         return replay
 
     try:
-        claimed = await claim_cell_operation_committed(session_factory, operation_id)
+        claimed = await _claim_for_dispatch_cancellation_safe(
+            session_factory,
+            operation_id,
+            claim_cell_operation_committed,
+            cancellation_error="cancelled_after_claim",
+        )
     except (ProjectCellBusy, ProjectCellStateConflict):
         return await _load_operation_outcome(session_factory, operation_id)
 
@@ -90,19 +93,28 @@ async def replay_indeterminate_cell_operation(
     """Redrive the exact durable envelope so provider idempotency proves its effect."""
 
     try:
-        claimed = await reclaim_indeterminate_cell_operation_committed(
+        claimed = await _claim_for_dispatch_cancellation_safe(
             session_factory,
             operation_id,
+            reclaim_indeterminate_cell_operation_committed,
+            cancellation_error="cancelled_after_reclaim",
         )
     except (ProjectCellBusy, ProjectCellStateConflict):
         return await _load_operation_outcome(session_factory, operation_id)
-    return await _dispatch_claimed_cell_operation(session_factory, claimed, client)
+    return await _dispatch_claimed_cell_operation(
+        session_factory,
+        claimed,
+        client,
+        replaying_indeterminate=True,
+    )
 
 
 async def _dispatch_claimed_cell_operation(
     session_factory: async_sessionmaker[AsyncSession],
     claimed: ClaimedCellOperation,
     client: ProjectCellOrchestratorClient,
+    *,
+    replaying_indeterminate: bool = False,
 ) -> ProjectCellOperationOutcome:
 
     try:
@@ -124,6 +136,12 @@ async def _dispatch_claimed_cell_operation(
         )
     except OrchestratorBadRequest as exc:
         if _is_confirmed_pre_effect_rejection(claimed, exc):
+            if replaying_indeterminate:
+                return await _persist_indeterminate_outcome(
+                    session_factory,
+                    claimed.operation_id,
+                    f"replay_rejected_pre_effect:{exc.status_code}",
+                )
             return await _persist_failed_outcome(
                 session_factory,
                 claimed.operation_id,
@@ -186,7 +204,12 @@ async def reconcile_indeterminate_cell_operation(
         return replay
 
     try:
-        claimed = await claim_cell_operation_committed(session_factory, reconcile_operation_id)
+        claimed = await _claim_for_dispatch_cancellation_safe(
+            session_factory,
+            reconcile_operation_id,
+            claim_cell_operation_committed,
+            cancellation_error="cancelled_after_reconcile_claim",
+        )
     except ProjectCellStateConflict:
         return await _load_operation_outcome(session_factory, reconcile_operation_id)
 
@@ -347,9 +370,7 @@ def _validate_reconcile_preconditions(
     if claimed.kind != "reconcile":
         raise ProjectCellValidationError("reconcile executor requires a reconcile operation")
     if target.status != "indeterminate":
-        raise ProjectCellStateConflict(
-            f"cannot reconcile operation in state {target.status!r}"
-        )
+        raise ProjectCellStateConflict(f"cannot reconcile operation in state {target.status!r}")
     if target.workspace_id != claimed.workspace_id:
         raise ProjectCellStateConflict("reconcile operation must target the same workspace")
     if target.fencing_epoch is None or claimed.fencing_epoch <= target.fencing_epoch:
@@ -549,15 +570,61 @@ async def _persist_capacity_wait(
             claimed.operation_id,
             "capacity_identity_mismatch",
         )
-    async with session_factory() as session:
-        await park_cell_operation_for_capacity(
-            session,
+    try:
+        async with session_factory() as session:
+            await park_cell_operation_for_capacity(
+                session,
+                claimed.operation_id,
+                reason=rejection.reason,
+                retry_after_seconds=rejection.retry_after_seconds,
+            )
+            await session.commit()
+    except asyncio.CancelledError:
+        await _ensure_capacity_wait_persisted_or_indeterminate(
+            session_factory,
             claimed.operation_id,
-            reason=rejection.reason,
-            retry_after_seconds=rejection.retry_after_seconds,
+            "capacity_wait_commit_cancelled",
         )
-        await session.commit()
+        raise
+    except Exception:
+        await _ensure_capacity_wait_persisted_or_indeterminate(
+            session_factory,
+            claimed.operation_id,
+            "capacity_wait_commit_failed",
+        )
     return await _load_operation_outcome(session_factory, claimed.operation_id)
+
+
+async def _claim_for_dispatch_cancellation_safe(
+    session_factory: async_sessionmaker[AsyncSession],
+    operation_id: UUID,
+    claim: Callable[
+        [async_sessionmaker[AsyncSession], UUID],
+        Awaitable[ClaimedCellOperation],
+    ],
+    *,
+    cancellation_error: str,
+) -> ClaimedCellOperation:
+    """Finish our claim before classifying cancellation; never infer foreign ownership."""
+
+    async def _claim() -> ClaimedCellOperation:
+        return await claim(session_factory, operation_id)
+
+    claim_task: asyncio.Task[ClaimedCellOperation] = asyncio.create_task(_claim())
+    try:
+        return await asyncio.shield(claim_task)
+    except asyncio.CancelledError as cancelled:
+        try:
+            claimed = await asyncio.shield(claim_task)
+        except (asyncio.CancelledError, Exception):
+            # Without our own claim receipt, a concurrent worker may own `running`.
+            raise cancelled from None
+        await _ensure_running_operation_indeterminate(
+            session_factory,
+            claimed.operation_id,
+            cancellation_error,
+        )
+        raise cancelled
 
 
 async def _persist_indeterminate_outcome(
@@ -621,4 +688,32 @@ async def _ensure_running_operation_indeterminate(
             return
         raise ProjectCellStateConflict(
             f"cannot persist terminal fallback from state {operation.status!r}"
+        )
+
+
+async def _ensure_capacity_wait_persisted_or_indeterminate(
+    session_factory: async_sessionmaker[AsyncSession],
+    operation_id: UUID,
+    error: str,
+) -> None:
+    async with session_factory() as session:
+        operation = await session.scalar(
+            select(ProjectCellOperation)
+            .where(ProjectCellOperation.id == operation_id)
+            .with_for_update()
+        )
+        if operation is None:
+            raise ProjectCellNotFound("Project Cell operation was not found")
+        if operation.status == "running":
+            await mark_cell_operation_indeterminate(session, operation_id, error)
+            await session.commit()
+            return
+        if (
+            operation.status in {"waiting_capacity", "indeterminate"}
+            or operation.status in TERMINAL_OPERATION_STATUSES
+        ):
+            await session.rollback()
+            return
+        raise ProjectCellStateConflict(
+            f"cannot persist capacity fallback from state {operation.status!r}"
         )

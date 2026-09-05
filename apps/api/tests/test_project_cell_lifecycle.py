@@ -25,9 +25,13 @@ from omnia_api.services.orchestrator_client import (
 from omnia_api.services.project_cell_lifecycle import (
     execute_cell_operation,
     reconcile_indeterminate_cell_operation,
+    replay_indeterminate_cell_operation,
 )
 from omnia_api.services.project_cells import (
+    ClaimedCellOperation,
     claim_cell_operation_committed,
+    mark_cell_operation_indeterminate,
+    reclaim_indeterminate_cell_operation_committed,
     reserve_cell_operation,
 )
 
@@ -292,6 +296,125 @@ async def test_cancellation_during_terminal_commit_becomes_indeterminate(
     assert stored.fencing_epoch == 1
 
 
+@pytest.mark.parametrize("replay", [False, True])
+async def test_cancellation_after_own_claim_receipt_becomes_indeterminate(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    replay: bool,
+) -> None:
+    from omnia_api.services import project_cell_lifecycle
+
+    factory = _factory(test_engine)
+    workspace, operation = await _reserve_operation(
+        factory,
+        kind="ensure",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+        idempotency_key=f"ensure:cancel-after-{'reclaim' if replay else 'claim'}",
+        with_generation_run=True,
+    )
+    if replay:
+        await claim_cell_operation_committed(factory, operation.id)
+        async with factory() as session:
+            await mark_cell_operation_indeterminate(session, operation.id, "unknown")
+            await session.commit()
+
+    claim = (
+        reclaim_indeterminate_cell_operation_committed if replay else claim_cell_operation_committed
+    )
+    claim_name = (
+        "reclaim_indeterminate_cell_operation_committed"
+        if replay
+        else "claim_cell_operation_committed"
+    )
+    claimed = asyncio.Event()
+    release_receipt = asyncio.Event()
+
+    async def delayed_claim(
+        session_factory: async_sessionmaker[AsyncSession],
+        operation_id: UUID,
+    ) -> ClaimedCellOperation:
+        receipt = await claim(session_factory, operation_id)
+        claimed.set()
+        await release_receipt.wait()
+        return receipt
+
+    monkeypatch.setattr(project_cell_lifecycle, claim_name, delayed_claim)
+    client = ClientHarness.with_default_response(workspace.id, fence=1)
+    execute = replay_indeterminate_cell_operation if replay else execute_cell_operation
+    task = asyncio.create_task(execute(factory, operation.id, client))
+    await asyncio.wait_for(claimed.wait(), timeout=1)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    release_receipt.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.ensure.await_count == 0
+    stored = await _read_operation(factory, operation.id)
+    assert stored.status == "indeterminate"
+    assert stored.fencing_epoch == 1
+
+
+@pytest.mark.parametrize("replay", [False, True])
+async def test_cancelled_competing_claim_does_not_reclassify_foreign_running_operation(
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    replay: bool,
+) -> None:
+    from omnia_api.services import project_cell_lifecycle
+
+    factory = _factory(test_engine)
+    workspace, operation = await _reserve_operation(
+        factory,
+        kind="ensure",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+        idempotency_key=f"ensure:foreign-{'reclaim' if replay else 'claim'}",
+        with_generation_run=True,
+    )
+    if replay:
+        await claim_cell_operation_committed(factory, operation.id)
+        async with factory() as session:
+            await mark_cell_operation_indeterminate(session, operation.id, "unknown")
+            await session.commit()
+
+    claim = (
+        reclaim_indeterminate_cell_operation_committed if replay else claim_cell_operation_committed
+    )
+    claim_name = (
+        "reclaim_indeterminate_cell_operation_committed"
+        if replay
+        else "claim_cell_operation_committed"
+    )
+    contender_started = asyncio.Event()
+    let_contender_claim = asyncio.Event()
+
+    async def delayed_claim(
+        session_factory: async_sessionmaker[AsyncSession],
+        operation_id: UUID,
+    ) -> ClaimedCellOperation:
+        contender_started.set()
+        await let_contender_claim.wait()
+        return await claim(session_factory, operation_id)
+
+    monkeypatch.setattr(project_cell_lifecycle, claim_name, delayed_claim)
+    client = ClientHarness.with_default_response(workspace.id, fence=1)
+    execute = replay_indeterminate_cell_operation if replay else execute_cell_operation
+    task = asyncio.create_task(execute(factory, operation.id, client))
+    await asyncio.wait_for(contender_started.wait(), timeout=1)
+
+    await claim(factory, operation.id)
+    task.cancel()
+    let_contender_claim.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert client.ensure.await_count == 0
+    stored = await _read_operation(factory, operation.id)
+    assert stored.status == "running"
+    assert stored.fencing_epoch == 1
+
+
 async def test_timeout_is_indeterminate_and_never_replayed(
     test_engine: AsyncEngine,
 ) -> None:
@@ -393,6 +516,47 @@ async def test_confirmed_4xx_rejection_is_failed(
     assert client.ensure.await_count == 1
 
 
+async def test_confirmed_4xx_during_exact_replay_preserves_original_uncertainty(
+    test_engine: AsyncEngine,
+) -> None:
+    factory = _factory(test_engine)
+    workspace, operation = await _reserve_operation(
+        factory,
+        kind="ensure",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+        idempotency_key="ensure:replay-rejected",
+        with_generation_run=True,
+    )
+    await claim_cell_operation_committed(factory, operation.id)
+    async with factory() as session:
+        await mark_cell_operation_indeterminate(session, operation.id, "original response unknown")
+        await session.commit()
+    stored = await _read_operation(factory, operation.id)
+    client = ClientHarness.with_default_response(workspace.id, fence=1)
+    client.ensure.side_effect = OrchestratorBadRequest(
+        "replay rejected before effect",
+        status_code=409,
+        details={
+            "operation_id": str(operation.id),
+            "fencing_epoch": 1,
+            "request_digest": stored.request_digest,
+            "effect_applied": False,
+        },
+    )
+
+    outcome = await replay_indeterminate_cell_operation(factory, operation.id, client)
+
+    replayed = client.ensure.await_args.args[0]
+    persisted = await _read_operation(factory, operation.id)
+    assert outcome.status == "indeterminate"
+    assert persisted.status == "indeterminate"
+    assert persisted.attempt_count == 2
+    assert persisted.fencing_epoch == 1
+    assert replayed.operation_id == operation.id
+    assert replayed.fencing_epoch == 1
+    assert replayed.request_digest == stored.request_digest
+
+
 async def test_exact_capacity_wait_is_persisted_for_retry(
     test_engine: AsyncEngine,
 ) -> None:
@@ -426,6 +590,43 @@ async def test_exact_capacity_wait_is_persisted_for_retry(
     assert parked.finished_at is None
     assert parked.error is None
     assert parked.attempt_count == 1
+
+
+async def test_cancellation_during_capacity_wait_commit_becomes_indeterminate(
+    test_engine: AsyncEngine,
+) -> None:
+    controller = CommitController(cancel_on_calls={2})
+    setup_factory = _factory(test_engine)
+    workspace, operation = await _reserve_operation(
+        setup_factory,
+        kind="ensure",
+        request={"profile_version": "docker-owner-cell-resources-v1"},
+        idempotency_key="ensure:capacity-wait-commit-cancelled",
+        with_generation_run=True,
+    )
+    factory = _factory(test_engine, controller)
+    stored = await _read_operation(factory, operation.id)
+    client = ClientHarness.with_default_response(workspace.id, fence=1)
+    client.ensure.side_effect = ProjectCellCapacityWait(
+        ProjectCellCapacityRejection(
+            operation_id=operation.id,
+            fencing_epoch=1,
+            request_digest=stored.request_digest,
+            effect_applied=False,
+            reason="insufficient_memory",
+            retry_after_seconds=2,
+        )
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await execute_cell_operation(factory, operation.id, client)
+
+    assert client.ensure.await_count == 1
+    persisted = await _read_operation(factory, operation.id)
+    assert persisted.status == "indeterminate"
+    assert persisted.fencing_epoch == 1
+    assert persisted.capacity_reason is None
+    assert persisted.next_attempt_at is None
 
 
 @pytest.mark.parametrize(
