@@ -1,20 +1,43 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import PricingPage from "@/app/pricing/page";
 import RegisterPage from "@/app/(auth)/register/page";
 import { RegisterForm } from "@/components/auth/RegisterForm";
+
+const { getSessionMock } = vi.hoisted(() => ({
+  getSessionMock: vi.fn(),
+}));
+
+vi.mock("@/lib/auth-mock", () => ({ getSession: getSessionMock }));
 
 vi.mock("next-intl/server", () => ({
   getTranslations: vi.fn(async () => (key: string) => key),
 }));
 
 describe("public MAX routing", () => {
-  it("sends public pricing through login with an explicit safe return", () => {
-    const html = renderToStaticMarkup(<PricingPage />);
+  beforeEach(() => getSessionMock.mockReset());
+
+  it("sends guest pricing through login with an explicit safe return", async () => {
+    getSessionMock.mockResolvedValue(null);
+    const html = renderToStaticMarkup(await PricingPage());
 
     expect(html).toContain('href="/login?next=/billing/plan"');
     expect(html).not.toContain('href="/billing/plan"');
+  });
+
+  it("opens account pricing directly for a valid session", async () => {
+    getSessionMock.mockResolvedValue({
+      id: "user-1",
+      email: "owner@example.test",
+      isAnon: false,
+      emailVerifiedAt: "2026-09-07T00:00:00.000Z",
+      status: "active",
+    });
+    const html = renderToStaticMarkup(await PricingPage());
+
+    expect(html).toContain('href="/billing/plan"');
+    expect(html).not.toContain('href="/login?next=/billing/plan"');
   });
 
   it("sends bare public registration to the consent-enforcing MAX flow", async () => {

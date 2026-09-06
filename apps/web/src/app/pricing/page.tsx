@@ -2,8 +2,12 @@ import { ArrowRight, CreditCard, ReceiptText, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
 import { PublicPageShell } from "@/components/marketing/PublicPageShell";
+import { getSession } from "@/lib/auth-mock";
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const session = await getSession();
+  const pricingHref = session ? "/billing/plan" : "/login?next=/billing/plan";
+
   return (
     <PublicPageShell
       eyebrow="Тарифы"
@@ -24,8 +28,8 @@ export default function PricingPage() {
         ))}
       </div>
       <div className="mt-8 flex flex-col items-start justify-between gap-5 border-t border-border-default pt-8 sm:flex-row sm:items-center">
-        <p className="max-w-[650px] text-sm leading-6 text-fg-secondary">Войдите, чтобы открыть действующий тариф и доступные варианты. Если сессии нет, сервис безопасно вернёт вас в этот раздел после входа.</p>
-        <Link href="/login?next=/billing/plan" className="max-public-button max-public-button--primary">Посмотреть тарифы в аккаунте <ArrowRight className="size-4" /></Link>
+        <p className="max-w-[650px] text-sm leading-6 text-fg-secondary">{session ? "Откройте действующий тариф и доступные вашему аккаунту варианты." : "Войдите, чтобы открыть действующий тариф и доступные варианты. После входа сервис вернёт вас в нужный раздел."}</p>
+        <Link href={pricingHref} className="max-public-button max-public-button--primary">Посмотреть тарифы в аккаунте <ArrowRight className="size-4" /></Link>
       </div>
     </PublicPageShell>
   );
