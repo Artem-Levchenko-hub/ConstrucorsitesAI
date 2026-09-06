@@ -286,8 +286,15 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
             if user is None:
                 if (
                     public and self.command == "GET"
-                    and "text/html" in self.headers.get("Accept", "")
-                    and self.headers.get("Sec-Fetch-Dest", "document") == "document"
+                    # Native MAX webviews need not send browser navigation headers.
+                    # The launch root exposes only this trusted login shell, never
+                    # product HTML or data. Embedded browser pages need it too.
+                    and (path == "/" or (
+                        "text/html" in self.headers.get("Accept", "")
+                        and self.headers.get("Sec-Fetch-Dest", "") in {
+                            "", "document", "iframe", "frame",
+                        }
+                    ))
                     and not path.startswith(("/api/", "/_next/", "/__omnia", "/auth"))
                 ):
                     return self._bootstrap()

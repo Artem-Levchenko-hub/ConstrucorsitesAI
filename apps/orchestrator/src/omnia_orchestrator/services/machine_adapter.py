@@ -675,14 +675,21 @@ class MachineAdapter:
             **({"public_mode": True} if public_mode else {}),
         }
         public_stamp = self.root / "public-boundary-runtime" / f"{state.workspace_id}.json"
-        config_digest = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+        wire_config: dict[str, Any] = config
+        if business_config is not None or public_mode:
+            wire_config = {"config": config, "server": boundary_source()}
+        # Reconcile trusted code updates as well as configuration changes. Reusing
+        # a healthy old gateway must not strand already-published apps on old auth.
+        runtime_digest = hashlib.sha256(
+            json.dumps(wire_config, sort_keys=True).encode(),
+        ).hexdigest()
         old = backend._lookup(client.containers, gateway_name, "max-gateway")
         if public_mode and old is not None and public_stamp.is_file():
             if public_stamp.is_symlink():
                 raise CellResourceError("unsafe public boundary state")
             stamp = json.loads(public_stamp.read_text(encoding="utf-8"))
             old.reload()
-            if stamp.get("digest") == config_digest and old.status == "running":
+            if stamp.get("digest") == runtime_digest and old.status == "running":
                 address = old.attrs["NetworkSettings"]["Networks"][names.internal_network][
                     "IPAddress"
                 ]
@@ -722,11 +729,9 @@ class MachineAdapter:
             "p='/run/omnia-boundary/.next'; open(p,'wb').write(data); "
             "os.replace(p,'/run/omnia-boundary/config.json')"
         )
-        wire_config: dict[str, Any] = config
         if business_config is not None or public_mode:
             # Existing pinned guard images stay unchanged. Seed only trusted
             # controller code into gateway tmpfs; no project executable input.
-            wire_config = {"config": config, "server": boundary_source()}
             script = (
                 "import os,sys,json; v=json.load(sys.stdin); "
                 "open('/run/omnia-boundary/config.json','w').write(json.dumps(v['config'])); "
@@ -753,7 +758,7 @@ class MachineAdapter:
         ]
         self._wait_http(gateway, gateway_ip, "/__omnia/identity", expected=401, timeout=30)
         if public_mode:
-            write_controller_json(public_stamp, {"digest": config_digest})
+            write_controller_json(public_stamp, {"digest": runtime_digest})
 
     @staticmethod
     def _wait_http(container: Any, address: str, path: str, *, expected: int, timeout: int) -> None:

@@ -209,6 +209,41 @@ def test_public_first_navigation_bootstraps_without_exposing_product(public_boun
     assert request("/", {"Accept": "text/html"}, "POST")[0] == 401
 
 
+@pytest.mark.parametrize("headers", [
+    {},
+    {"Accept": "*/*"},
+    {"Accept": "text/html", "Sec-Fetch-Dest": "iframe"},
+    {"Accept": "text/html", "Sec-Fetch-Dest": ""},
+])
+def test_public_root_launch_does_not_require_browser_navigation_headers(public_boundary, headers):
+    request, received = public_boundary
+    status, body, response_headers = request("/", headers)
+    assert status == 200
+    assert response_headers["Content-Type"].startswith("text/html")
+    assert response_headers["Cache-Control"] == "no-store"
+    assert b"/api/max/session" in body and b"max-web-app.js" in body
+    assert not received
+
+
+@pytest.mark.parametrize("destination", ["iframe", "frame", ""])
+def test_public_embedded_page_navigation_can_start_max_login(public_boundary, destination):
+    request, received = public_boundary
+    status, body, _ = request(
+        "/orders?source=menu", {"Accept": "text/html", "Sec-Fetch-Dest": destination},
+    )
+    assert status == 200 and b"/api/max/session" in body
+    assert not received
+
+
+@pytest.mark.parametrize("path", [
+    "/api/orders", "/api/omnia/actions", "/__omnia/identity", "/_next/static/private.js", "/auth",
+])
+def test_public_embedded_navigation_headers_never_authorize_protected_routes(public_boundary, path):
+    request, received = public_boundary
+    assert request(path, {"Accept": "text/html", "Sec-Fetch-Dest": "iframe"})[0] == 401
+    assert not received
+
+
 @pytest.mark.parametrize("path", [
     "/api/omnia/preview-session", "/api/omnia/preview-session?signature=forged",
     "/api/omnia/%70review-session", "/api/omnia/preview-session/",
