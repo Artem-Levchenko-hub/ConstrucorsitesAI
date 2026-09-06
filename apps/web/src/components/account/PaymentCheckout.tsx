@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { createPayment, createSubscriptionCheckout, getPaymentConfig, listPayments } from "@/lib/api/account";
+import { ApiError } from "@/lib/api/client";
 import { money, paymentState } from "./account-presentation";
 
 export type CheckoutSelection = { kind: "topup" | "plan"; code: string; title: string; price: string; credit: string };
@@ -83,16 +84,20 @@ export function usePaymentJourney(email: string) {
   async function pay() {
     if (lock.current || !selection || !config.data?.enabled || storageError) return;
     lock.current = true; setPending(true); setError(null);
+    let submitted: Attempt | null = null;
+    let retrying = false;
     try {
       // Persist BEFORE contacting the backend. A timeout, navigation or reload
       // must never silently turn a retry into a fresh charge.
       const stored = readAttempt(storageKey);
+      retrying = Boolean(stored);
       if (stored && (stored.selection.kind !== selection.kind || stored.selection.code !== selection.code)) {
         setAttempt(stored);
         throw new Error("Есть другой незавершённый заказ. Продолжите его перед новой оплатой.");
       }
       const current = stored ?? { key: crypto.randomUUID(), selection, autoRenew };
       localStorage.setItem(storageKey, JSON.stringify(current)); setAttempt(current);
+      submitted = current;
       const result = current.selection.kind === "topup"
         ? await createPayment(current.selection.code, current.key)
         : await createSubscriptionCheckout(current.selection.code as "pro" | "business", current.autoRenew, current.key);
@@ -103,7 +108,30 @@ export function usePaymentJourney(email: string) {
       if (result.confirmation_url && !paymentState(result.status).terminal) window.location.assign(result.confirmation_url);
       else if (!paymentState(result.status).terminal) setError("Сервер не вернул ссылку для оплаты. Проверяем статус заказа; повторный запрос использует тот же заказ.");
       else setSelection(null);
-    } catch (e) { setError(e instanceof Error ? e.message : "Не удалось начать оплату. Проверьте статус перед повтором."); }
+    } catch (e) {
+      // These 409 codes are emitted before creating a payment. The first two
+      // follow the existing-key lookup, so even a retry proves no such record.
+      // Consent is checked BEFORE that lookup: a rejected retry could still
+      // have an earlier payment, so its durable intent must remain frozen.
+      const rejectedBeforeCreation = submitted?.selection.kind === "plan" && !submitted.paymentId &&
+        e instanceof ApiError && e.status === 409 && (
+          e.code === "subscription_already_active" ||
+          e.code === "subscription_plan_not_purchasable" ||
+          (e.code === "subscription_consent_required" && !retrying)
+        );
+      if (submitted && rejectedBeforeCreation) {
+        try {
+          const saved = readAttempt(storageKey);
+          if (saved?.key === submitted.key) {
+            localStorage.removeItem(storageKey);
+            setAttempt(null);
+          } else setAttempt(saved);
+        } catch {
+          setStorageError("Не удалось обновить сохранённый заказ. Проверьте операции перед новой оплатой.");
+        }
+      }
+      setError(e instanceof Error ? e.message : "Не удалось начать оплату. Проверьте статус перед повтором.");
+    }
     finally { lock.current = false; setPending(false); }
   }
   return {

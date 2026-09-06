@@ -189,3 +189,60 @@ it("keeps every operation labelled and semantically tabular when mobile rows ref
     expect(row.querySelector('[headers="payment-status"]')?.textContent).toContain("Ожидает оплаты");
   } finally { await app.close(); }
 });
+
+it.each(["subscription_already_active", "subscription_plan_not_purchasable", "subscription_consent_required"])("releases a fresh definitively rejected plan intent for correction: %s", async code => {
+  post = async () => Response.json({ error: { code, message: "Заказ отклонён до создания" } }, { status: 409 });
+  const app = await mount("all");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro");
+    await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(document.body.textContent).toContain("Заказ отклонён до создания"));
+    expect(localStorage.length).toBe(0);
+    expect(button("Продолжить незавершённую оплату")).toBeUndefined();
+    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.disabled).toBe(false);
+    const key = requests[0].idempotency_key;
+    post = async () => Response.json(payment);
+    if (code === "subscription_consent_required") {
+      await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
+    } else {
+      await click("Закрыть"); await click("Выбрать");
+    }
+    await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(2));
+    expect(requests[1].idempotency_key).not.toBe(key);
+    expect(requests[1]).toMatchObject(code === "subscription_consent_required" ? { plan_code: "pro", auto_renew: false, consent_version: null } : { package_code: "start" });
+  } finally { await app.close(); }
+});
+
+it.each([["subscription_checkout_in_progress", 409], ["conflict", 409], ["unrecognized_error", 409], ["payment_provider_unavailable", 503]] as const)("retains the same plan intent after uncertain/pending rejection %s", async (code, status) => {
+  post = async () => Response.json({ error: { code, message: "Статус пока неизвестен" } }, { status });
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro"); await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(document.body.textContent).toContain("Статус пока неизвестен"));
+    expect(button("Продолжить незавершённую оплату")).toBeDefined();
+    expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.disabled).toBe(true);
+    await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toEqual(requests[0]);
+  } finally { await app.close(); }
+});
+
+it("does not clear an uncertain earlier payment when a later consent check rejects before idempotency lookup", async () => {
+  post = async () => { throw new Error("Connection lost"); };
+  let app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro");
+    await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
+    await click("Перейти к оплате в ЮKassa"); await wait(() => expect(document.body.textContent).toContain("Connection lost"));
+  } finally { await app.close(); }
+  const first = requests[0];
+  post = async () => Response.json({ error: { code: "subscription_consent_required", message: "Обновились условия" } }, { status: 409 });
+  app = await mount("plan");
+  try {
+    await wait(() => expect(button("Продолжить незавершённую оплату")).toBeDefined()); await click("Продолжить незавершённую оплату"); await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(document.body.textContent).toContain("Обновились условия"));
+    expect(requests[1]).toEqual(first);
+    expect(localStorage.length).toBe(1);
+    expect(button("Продолжить незавершённую оплату")).toBeDefined();
+  } finally { await app.close(); }
+});
