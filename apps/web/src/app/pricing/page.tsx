@@ -25,7 +25,7 @@ export default function PricingPage() {
       </div>
       <div className="mt-8 flex flex-col items-start justify-between gap-5 border-t border-border-default pt-8 sm:flex-row sm:items-center">
         <p className="max-w-[650px] text-sm leading-6 text-fg-secondary">Войдите, чтобы открыть действующий тариф и доступные варианты. Если сессии нет, сервис безопасно вернёт вас в этот раздел после входа.</p>
-        <Link href="/billing/plan" className="max-public-button max-public-button--primary">Посмотреть тарифы в аккаунте <ArrowRight className="size-4" /></Link>
+        <Link href="/login?next=/billing/plan" className="max-public-button max-public-button--primary">Посмотреть тарифы в аккаунте <ArrowRight className="size-4" /></Link>
       </div>
     </PublicPageShell>
   );

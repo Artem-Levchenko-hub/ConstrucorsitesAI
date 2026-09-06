@@ -30,8 +30,8 @@ function Example() {
     <div className="max-example__flow"><Sparkles className="size-4" />MAX Studio</div>
     <div className="max-example__app"><div className="max-example__bar"><strong>Кофе рядом</strong><span>Мобильный предпросмотр</span></div><div className="max-example__body">
       <span className="max-public-kicker">Доброе утро</span><h2>Выберите напиток</h2><p>Пример первого экрана будущего MAX-приложения</p>
-      <div className="max-example__row"><span><strong>Капучино</strong><small>Классический</small></span><strong>от 220 ₽</strong></div>
-      <div className="max-example__row"><span><strong>Флэт уайт</strong><small>Двойной эспрессо</small></span><strong>от 260 ₽</strong></div><div className="max-example__cta">Продолжить заказ</div>
+      <div className="max-example__row"><span><strong>Капучино</strong><small>Классический</small></span><strong>Популярный</strong></div>
+      <div className="max-example__row"><span><strong>Флэт уайт</strong><small>Двойной эспрессо</small></span><strong>Насыщенный</strong></div><div className="max-example__cta">Продолжить заказ</div>
     </div></div>
   </figure>;
 }

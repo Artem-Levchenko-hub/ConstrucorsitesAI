@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
+import { redirect } from "next/navigation";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { RegisterForm } from "@/components/auth/RegisterForm";
 
@@ -9,6 +10,8 @@ export default async function RegisterPage({
   searchParams: Promise<{ next?: string; source?: string; ref?: string }>;
 }) {
   const { next, source, ref } = await searchParams;
+  if (!next && !source && !ref) redirect("/max/register");
+
   const loginHref = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
 
   const t = await getTranslations("auth");
