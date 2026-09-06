@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from docker.errors import NotFound
 
 from omnia_orchestrator.core.cell_resources import CellResourceError
 from omnia_orchestrator.services.machine_adapter import MachineAdapter
@@ -27,6 +28,7 @@ def test_configuration_is_json_data_and_only_trusted_core_files_are_written(monk
     connection.getresponse.return_value = response
     monkeypatch.setattr("http.client.HTTPConnection", lambda *a, **kw: connection)
     core = Mock()
+    core.get_archive.side_effect = NotFound("file absent")
     core.put_archive.return_value = True
     apply_core_config(core, "127.0.0.1", config)
     target, payload = core.put_archive.call_args.args

@@ -325,3 +325,65 @@ def test_browser_login_roundtrip_uses_real_cookie_transport(
             context.close()
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize("delay_ms,has_timeout_api,should_succeed", [
+    (19000, True, True), (0, False, True), (90000, True, False),
+])
+def test_browser_login_handles_cold_response_with_a_bounded_portable_timeout(
+    session_boundary, delay_ms, has_timeout_api, should_succeed,
+):
+    playwright = pytest.importorskip("playwright.sync_api")
+    session = session_boundary
+    with playwright.sync_playwright() as p:
+        browser = p.chromium.launch()
+        try:
+            context = browser.new_context(viewport={"width": 390, "height": 844})
+            context.add_init_script("""
+                window.WebApp = {initData:'disposable-test-launch'};
+                const originalFetch = window.fetch;
+                window.fetch = async (url, options) => {
+                  if (url === '/api/max/session') {
+                    await new Promise((resolve, reject) => {
+                      const timer = setTimeout(resolve, DELAY);
+                      options.signal.addEventListener('abort', () => {
+                        clearTimeout(timer); reject(new Error('timed out'));
+                      }, {once:true});
+                    });
+                  }
+                  return originalFetch(url, options);
+                };
+            """.replace("DELAY", str(delay_ms)) + (
+                "AbortSignal.timeout = undefined;" if not has_timeout_api else ""
+            ))
+
+            def handle(route):
+                if not route.request.url.startswith(ORIGIN + "/"):
+                    return route.abort()
+                status, body, headers = session.request(
+                    route.request.url[len(ORIGIN):], method=route.request.method,
+                    headers=route.request.all_headers(), body=route.request.post_data_buffer,
+                )
+                response_headers = {}
+                for key, value in headers:
+                    key = key.lower()
+                    separator = "\n" if key == "set-cookie" else ", "
+                    response_headers[key] = (response_headers[key] + separator + value
+                                             if key in response_headers else value)
+                route.fulfill(status=status, headers=response_headers, body=body)
+
+            context.route("**/*", handle)
+            page = context.new_page()
+            page.clock.install()
+            page.goto(ORIGIN + "/")
+            page.clock.fast_forward(19001 if should_succeed else 61000)
+            if should_succeed:
+                page.get_by_role("heading", name="Protected application").wait_for(timeout=5000)
+                assert session.product_requests[-1][1]["X-Omnia-User-ID"] == "123"
+            else:
+                assert "Не удалось войти" in page.locator("#status").inner_text()
+                assert page.get_by_role("button", name="Повторить").is_enabled()
+                assert not session.product_requests
+            context.close()
+        finally:
+            browser.close()

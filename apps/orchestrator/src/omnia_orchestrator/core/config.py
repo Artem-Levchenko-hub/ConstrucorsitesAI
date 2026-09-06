@@ -273,6 +273,8 @@ class Settings(BaseSettings):
     cell_public_machine_memory_bytes: int = Field(default=2 * 1024**3, ge=512 * 1024**2)
     cell_public_core_cpu_cores: float = Field(default=0.2, ge=0.1)
     cell_public_core_memory_bytes: int = Field(default=768 * 1024**2, ge=512 * 1024**2)
+    # Immutable precompiled trusted core, distinct from the agent's dev template.
+    cell_public_core_image: str = Field(default="")
     cell_public_helper_cpu_cores: float = Field(default=0.2, ge=0.2)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
     cell_host_memory_reserve_bytes: int = Field(default=4 * 1024**3, ge=0)

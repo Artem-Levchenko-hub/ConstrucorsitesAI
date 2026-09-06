@@ -5,6 +5,7 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from docker.errors import NotFound
 
 from omnia_orchestrator.services.machine_business_config import apply_public_core_overlay
 
@@ -20,6 +21,9 @@ def test_public_overlay_uploads_real_shipped_webhook_from_any_cwd(
     uploads = []
 
     class Core:
+        def get_archive(self, _path):
+            raise NotFound("file absent")
+
         def put_archive(self, destination, archive):
             uploads.append((destination, archive))
             return True

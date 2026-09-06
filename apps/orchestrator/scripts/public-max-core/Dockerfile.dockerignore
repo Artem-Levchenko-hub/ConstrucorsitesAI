@@ -1,0 +1,10 @@
+**
+!scripts/
+!scripts/public-max-core/
+!scripts/public-max-core/prepare.mjs
+!templates/
+!templates/max-miniapp-nextjs/
+!templates/max-miniapp-nextjs/next.config.ts
+!templates/max-miniapp-nextjs/src/**
+!templates/max-miniapp-nextjs/scripts/**
+!templates/max-miniapp-nextjs/drizzle/**

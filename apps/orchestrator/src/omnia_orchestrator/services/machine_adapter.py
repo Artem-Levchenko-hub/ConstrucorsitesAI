@@ -43,6 +43,11 @@ _PROJECT_POSTGRES_MIN_MEMORY_BYTES = 128 * 1024**2
 _PROJECT_POSTGRES_TARGET_MEMORY_BYTES = 256 * 1024**2
 _PROJECT_POSTGRES_MIN_CPU_CORES = 0.1
 _PROJECT_POSTGRES_TARGET_CPU_CORES = 0.15
+_PUBLIC_CORE_COMMAND = (
+    "sh", "-ec",
+    "timeout 45 node scripts/apply-migrations.mjs\n"
+    "exec node server.js",
+)
 
 
 class MachineAdapter:
@@ -601,16 +606,46 @@ class MachineAdapter:
     ) -> None:
         client = backend.client
         names = state.resource_names
+        image_tag = get_stack("max-miniapp-nextjs").image_tag
+        if public_mode:
+            from omnia_orchestrator.services.docker_machine_backend import _PIN
+
+            image_tag = getattr(self.settings, "cell_public_core_image", "")
+            if not _PIN.fullmatch(image_tag):
+                raise CellResourceError("pinned compiled public MAX core image is required")
+            image = client.images.get(image_tag)
+            if image.labels.get("omnia.max-core.protocol") != "1":
+                raise CellResourceError("compiled public MAX core image protocol mismatch")
+            image_tag = image.id
+            # Validate image before any auth rotation or old-core removal.
         secret = (self._public_auth_secret(state, backend, runtime_env or {})
                   if public_mode else self.secret(state.workspace_id))
         core_name = backend.stem + "-max-core"
         core = backend._lookup(client.containers, core_name, "managed-max-core")
+        public_options = ""
+        if public_mode:
+            # No dev compiler or package-manager supervisor in public serving.
+            # Bound V8 from the container, not the host's available memory.
+            heap_mib = max(64, min(384, self._max_core_memory_bytes() // (2 * 1024**2)))
+            public_options = f"--max-old-space-size={heap_mib}"
+            if core is not None:
+                config = core.attrs.get("Config", {})
+                env = dict(item.split("=", 1) for item in config.get("Env", []) if "=" in item)
+                if (env.get("NODE_OPTIONS") != public_options
+                        or config.get("Cmd") != list(_PUBLIC_CORE_COMMAND)
+                        or core.attrs.get("Image") != image_tag):
+                    # Runtime-only upgrade. Keep auth secret, product and all DB
+                    # containers/volumes; this is not a resource-profile change.
+                    core.remove(force=True)
+                    core = None
         if core is None:
             credentials = self.manager.credential_store.load_or_create(state.workspace_id)
             core = client.containers.create(
-                get_stack("max-miniapp-nextjs").image_tag,
+                image_tag,
+                **({"command": list(_PUBLIC_CORE_COMMAND)} if public_mode else {}),
                 name=core_name,
-                labels=backend.labels("managed-max-core"),
+                labels={**backend.labels("managed-max-core"),
+                        **({"omnia.max-core.protocol": "1"} if public_mode else {})},
                 detach=True,
                 network=names.internal_network,
                 cap_drop=["ALL"],
@@ -626,6 +661,8 @@ class MachineAdapter:
                     f"@{names.postgres_container}:5432/postgres",
                     "REDIS_URL": f"redis://{names.redis_container}:6379/0",
                     **(runtime_env or {}),
+                    **({"NODE_OPTIONS": public_options, "NODE_ENV": "production",
+                        "HOSTNAME": "0.0.0.0", "PORT": "3000"} if public_mode else {}),
                 },
                 mem_limit=self._max_core_memory_bytes(),
                 memswap_limit=self._max_core_memory_bytes(),
@@ -667,6 +704,20 @@ class MachineAdapter:
                     or business_config["owner_id"] != str(state.owner_id)):
                 raise CellResourceError("MAX configuration ownership mismatch")
             apply_core_config(core, core_ip, business_config["config"])
+        if public_mode:
+            # A health/legal page does not compile Next's lazy auth/API modules.
+            # Exercise the real rejection paths before publishing/reusing ingress;
+            # empty launch data cannot create a session or write a user record.
+            self._wait_http(
+                core, core_ip, "/api/max/session",
+                expected=401 if (runtime_env or {}).get("MAX_BOT_TOKEN") else 503,
+                timeout=120,
+                method="POST", body=b'{"initData":""}', attempt_timeout=30,
+            )
+            self._wait_http(
+                core, core_ip, "/api/omnia/actions", expected=401, timeout=120,
+                attempt_timeout=30,
+            )
         gateway_name = backend.stem + "-gateway"
         config = {
             "secret": secret, "project_id": str(state.project_id), "epoch": epoch,
@@ -764,7 +815,10 @@ class MachineAdapter:
             write_controller_json(public_stamp, {"digest": runtime_digest})
 
     @staticmethod
-    def _wait_http(container: Any, address: str, path: str, *, expected: int, timeout: int) -> None:
+    def _wait_http(
+        container: Any, address: str, path: str, *, expected: int, timeout: int,
+        method: str = "GET", body: bytes | None = None, attempt_timeout: int = 3,
+    ) -> None:
         import http.client
 
         deadline = time.monotonic() + machine_remaining_seconds(timeout)
@@ -777,11 +831,17 @@ class MachineAdapter:
             connection = http.client.HTTPConnection(
                 address,
                 3000,
-                timeout=machine_remaining_seconds(min(3, deadline - time.monotonic())),
+                timeout=machine_remaining_seconds(
+                    min(attempt_timeout, deadline - time.monotonic()),
+                ),
             )
             try:
-                connection.request("GET", path)
+                connection.request(
+                    method, path, body=body,
+                    headers={"Content-Type": "application/json"} if body is not None else {},
+                )
                 response = connection.getresponse()
+                response.read(4096)
                 if response.status == expected:
                     return
             except (OSError, http.client.HTTPException):

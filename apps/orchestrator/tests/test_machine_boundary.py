@@ -313,7 +313,7 @@ const context = {
     return {ok: calls.length === 1 ? input.session_ok : input.identity_ok,
             json: async () => ({user_id: '123', project_id: 'project-A'})};
   },
-  AbortSignal, setTimeout, clearTimeout, URL,
+  AbortSignal, AbortController, setTimeout, clearTimeout, URL,
 };
 vm.runInNewContext(input.script, context);
 setTimeout(() => process.stdout.write(JSON.stringify({calls, navigation, message})), 30);

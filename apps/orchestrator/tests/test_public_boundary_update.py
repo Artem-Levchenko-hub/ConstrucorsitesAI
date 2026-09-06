@@ -3,13 +3,23 @@ import json
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from omnia_orchestrator.services import machine_business_config
-from omnia_orchestrator.services.machine_adapter import MachineAdapter
+from omnia_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, MachineAdapter
 
 
-def test_public_gateway_reuses_current_code_and_replaces_outdated_code(tmp_path, monkeypatch):
+@pytest.mark.parametrize("configured", [True, False])
+def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
+    tmp_path, monkeypatch, configured,
+):
+    image_id = "sha256:" + "a" * 64
     adapter = MachineAdapter(
-        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "cells")), SimpleNamespace(),
+        SimpleNamespace(
+            state_store=SimpleNamespace(root=tmp_path / "cells"),
+            profile=SimpleNamespace(is_v2=True, managed_core_memory_bytes=768 * 1024**2),
+        ),
+        SimpleNamespace(cell_public_core_image=image_id),
     )
     state = SimpleNamespace(
         workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(),
@@ -18,15 +28,21 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(tmp_path,
     network = {"isolated-public-test": {"IPAddress": "127.0.0.1"}}
     core = SimpleNamespace(
         status="running", reload=lambda: None,
-        attrs={"NetworkSettings": {"Networks": network}},
+        attrs={"NetworkSettings": {"Networks": network}, "Image": image_id,
+               "Config": {"Env": ["NODE_OPTIONS=--max-old-space-size=384"],
+                          "Cmd": list(_PUBLIC_CORE_COMMAND)}},
     )
     containers = {"public-test-max-core": core}
     delivered = []
     removed = []
+    readiness = []
 
     def create(_image, _command, **kwargs):
         # No product or database container may be recreated by a gateway update.
         assert kwargs["name"] == "public-test-gateway"
+        expected = 401 if configured else 503
+        assert ("POST", "/api/max/session", expected, b'{"initData":""}') in readiness
+        assert ("GET", "/api/omnia/actions", 401, None) in readiness
 
         def remove(**_):
             removed.append(containers.pop("public-test-gateway"))
@@ -44,6 +60,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(tmp_path,
         shutdown=lambda _: None, recv=lambda _: b"",
     )
     client = SimpleNamespace(
+        images=SimpleNamespace(get=lambda _: SimpleNamespace(
+            id=image_id, labels={"omnia.max-core.protocol": "1"})),
         containers=SimpleNamespace(create=create),
         api=SimpleNamespace(
             exec_create=lambda *_args, **_kwargs: {"Id": "upload"},
@@ -62,7 +80,11 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(tmp_path,
         model_dump=lambda: {"path": "/", "port": 8080},
     )])
     monkeypatch.setattr(adapter, "_public_auth_secret", lambda *_: "same-test-secret")
-    monkeypatch.setattr(adapter, "_wait_http", lambda *_args, **_kwargs: None)
+    def ready(_core, _address, path, **kwargs):
+        readiness.append((kwargs.get("method", "GET"), path, kwargs["expected"],
+                          kwargs.get("body")))
+
+    monkeypatch.setattr(adapter, "_wait_http", ready)
     monkeypatch.setattr(adapter, "parts", lambda _: (
         SimpleNamespace(path=tmp_path / "machine.json"), backend,
     ))
@@ -70,6 +92,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(tmp_path,
     monkeypatch.setattr(machine_business_config, "boundary_source", lambda: "first trusted server")
 
     runtime_env = {"OMNIA_PUBLIC_APP_ORIGIN": "https://app.example.test"}
+    if configured:
+        runtime_env["MAX_BOT_TOKEN"] = "disposable-test-bot"
     adapter._start_boundary(state, manifest, backend, 7, public_mode=True, runtime_env=runtime_env)
     first = containers["public-test-gateway"]
     assert delivered[-1]["server"] == "first trusted server"

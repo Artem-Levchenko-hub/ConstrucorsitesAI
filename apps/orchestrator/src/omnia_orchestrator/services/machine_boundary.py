@@ -40,6 +40,17 @@ _BOOTSTRAP_SCRIPT = """
   const message = document.getElementById('status');
   const retry = document.getElementById('retry');
   let busy = false;
+  async function fetchWithDeadline(url, options, timeout) {
+    // AbortSignal.timeout is absent in some embedded WebViews. AbortController
+    // gives those clients the same bounded request rather than a JS exception.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      return await fetch(url, {...options, signal: controller.signal});
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   async function authenticate() {
     if (busy) return;
     busy = true;
@@ -63,15 +74,15 @@ _BOOTSTRAP_SCRIPT = """
       }
       app.ready?.();
       app.expand?.();
-      const session = await fetch('/api/max/session', {
+      const session = await fetchWithDeadline('/api/max/session', {
         method: 'POST', credentials: 'include', cache: 'no-store',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({initData: app.initData}), signal: AbortSignal.timeout(15000)
-      });
+        body: JSON.stringify({initData: app.initData})
+      }, 60000);
       if (!session.ok) throw new Error('MAX authentication failed');
-      const identity = await fetch('/__omnia/identity', {
-        credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(10000)
-      });
+      const identity = await fetchWithDeadline('/__omnia/identity', {
+        credentials: 'include', cache: 'no-store'
+      }, 10000);
       if (!identity.ok) {
         message.textContent = 'Не удалось сохранить защищённую сессию. '
           + 'Закройте приложение и откройте снова.';

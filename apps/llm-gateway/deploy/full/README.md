@@ -46,7 +46,23 @@ location /llm/ {
    docker compose config --quiet
    ```
 
-4. Build and test images under temporary tags first.
+4. Build and test images under temporary tags first. Public Project Cells also
+   require a precompiled trusted MAX core, separate from the agent's dev kit:
+
+   ```bash
+   cd /opt/omnia
+   revision=$(git rev-parse HEAD)
+   core_base=$(docker image inspect omnia-template-max-miniapp-nextjs:dev --format '{{.Id}}')
+   bash apps/orchestrator/scripts/build-public-max-core.sh "$core_base" "omnia-max-public-core:$revision"
+   docker image inspect "omnia-max-public-core:$revision" --format '{{.Id}}'
+   ```
+
+   Set `CELL_PUBLIC_CORE_IMAGE` in `/opt/omnia/apps/orchestrator/.env` to that
+   immutable image ID before restarting `omnia-orchestrator.service`. Preserve
+   the old environment/image for rollback. The build reuses the pinned kit's
+   dependencies with no package install; its network is disabled. Its runtime
+   serves the current trusted routes from `server.js`, with metadata updated as
+   atomic JSON data. Do not replace or retag the agent's dev template image.
 5. Deploy the API before the worker. The API command runs
    `alembic upgrade head`, and the worker waits for the API health check.
 6. Verify:

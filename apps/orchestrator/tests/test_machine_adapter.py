@@ -301,11 +301,11 @@ async def test_apply_shielded_readiness_uses_remaining_budget_and_cleanup_reserv
         def __init__(self, *args, **kwargs):
             pass
 
-        def request(self, *args):
+        def request(self, *args, **kwargs):
             pass
 
         def getresponse(self):
-            return SimpleNamespace(status=503)
+            return SimpleNamespace(status=503, read=lambda _: b"")
 
         def close(self):
             pass

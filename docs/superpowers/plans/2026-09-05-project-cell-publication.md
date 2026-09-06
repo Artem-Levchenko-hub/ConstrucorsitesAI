@@ -76,3 +76,66 @@ recovery. Source and public lifecycles therefore remain separate.
 - An interrupted first database seed with ambiguous existing target volumes fails closed. Operator recovery must prove the target was never public before clearing/reseeding; ordinary retries never overwrite these volumes.
 - Project deletion durably fences source mutations and disables public ingress/recovery before deleting owner/bot records. It cancels undispatched owner wakes, retains verified source/database archives, removes source/public containers and networks, and releases CPU/RAM reservations only after compute removal is proven. Retained business volumes and archives still consume disk; there is no automatic destructive purge of backups. Uncertain deletion effects use exact replay, then a higher-fence observation and a bounded destroy retry. New generation/preview wake remains blocked throughout deletion.
 - A real MAX client launch still needs user verification. The automated canary uses disposable signed initData and verifies the same managed authentication and isolation paths without creating a real bot subscription.
+
+## Public MAX core cold-start hardening
+
+Actual canaries rejected both dev-server modes: Turbopack exceeded the cgroup
+limit, and smaller heaps or webpack still triggered implicit Next child restarts.
+Increasing the browser timeout alone therefore cannot repair stable public entry.
+
+The public core is now built once with `scripts/build-public-max-core.sh` from the
+existing immutable kit dependencies and current trusted template sources. No
+package installation/update occurs. The explicit Docker ignore file excludes
+environment files, generated projects and unrelated repository content. The
+build-only overlay changes legal/config reads, not signature/session/API logic.
+
+`CELL_PUBLIC_CORE_IMAGE` must identify a local immutable image carrying
+`omnia.max-core.protocol=1`. `MachineAdapter._start_boundary` checks its presence
+and protocol before any auth rotation or old-core removal. Only the public core
+runs migrations then `node server.js`, with bounded V8 and the SAME Docker CPU/RAM
+quota. Private preview and agent dependency/database access are unchanged. Image
+or command changes replace the core once, preserving the signing key, generated
+product and all databases. Authentication can pause during that short replacement.
+
+`apply_core_config` writes a temporary JSON file and atomically renames it under
+the existing workspace operation lock. The compiled server reads it per request;
+legal bodies and titles use dynamic rendering. Missing/invalid config fails
+closed. Exact config and all legal pages must pass HTTP readback. Metadata changes
+do not rewrite code, compile or restart the public core. Unchanged config is not
+rewritten. Private-core source overlays retain their old behavior, except for
+bounded file comparison that avoids unnecessary rewrites.
+
+Before creating/reusing ingress, startup verifies health, config/legal pages,
+session rejection and unsigned actions rejection. Readiness never creates a
+user; session expects401 with a bot and503 after supported token revocation.
+Unsigned actions remain401 and the private preview-session endpoint remains404.
+
+Delivery: build `omnia-max-public-core:<pushed-SHA>` with the checked local kit
+image ID, set `CELL_PUBLIC_CORE_IMAGE` to its resulting immutable ID in the
+orchestrator environment, then activate the canonical full deployment. Keep the
+previous environment/image for rollback. Never retag the agent's template image.
+
+`scripts/smoke_public_core_startup.py` is the focused regression canary. Use the
+deployed immutable core/PostgreSQL/guard image IDs and a private `--qa-parent`.
+It creates only labelled temporary resources on an internal network, with its
+own tmpfs PostgreSQL and disposable bot secret. It exercises the real adapter,
+one fresh core plus three process restarts, first signed login after readiness,
+data persistence and cross-user isolation, and 20 unchanged reconciliations before
+the restart cycles (to expose memory growth early).
+It also rejects silent Next child restarts during unchanged recovery. It records
+cgroup memory/OOM evidence and verifies config plus legal body/title changes
+without a core restart. It deletes only its own resources. No
+real bot, product data, nginx route or publication journal is changed.
+
+The browser login has a bounded 60-second session request and a 10-second cookie
+roundtrip check using portable AbortController. Cold canary and browser tests are
+required; healthy containers or a warm-only request are not acceptance evidence.
+
+Verified isolated result (2026-09-06, Next 15.5.22, unchanged 768 MiB / 0.2 CPU):
+four first signed logins took 135 / 276 / 294 / 202 ms. Twenty reconciliations
+retained the same Next worker; peak memory was 78.7 MiB with zero OOM events.
+Metadata and legal body/title changes appeared without restart. A saved record
+survived three core restarts and remained inaccessible to another user. The full
+orchestrator gate passed 1070 tests (13 skipped, 15 expected failures); eight
+browser checks and independent read-only review passed. Actual iPhone/MAX launch
+remains a separate device acceptance check after production activation.
