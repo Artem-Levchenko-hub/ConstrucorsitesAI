@@ -41,12 +41,13 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const nextItem = currentStage ? items.find(item => !item.done && getMaxJourneyItemHref(project.id, item.id) === currentStage.href) : undefined;
   const stateError = readiness.isError || deploy.isError;
   const publication = getMaxPublicationState(readiness.isSuccess ? readiness.data : undefined, deploy.data?.phase);
-  const published = !stateError && !busyDeploy && publication === "published";
+  const published = !stateError && deploy.isSuccess && !busyDeploy && publication === "published";
   const failed = !deploy.isError && deploy.data?.phase === "failed";
   const productionUrl = published ? deploy.data?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
   const title = stateError ? "Не удалось проверить готовность"
     : busyDeploy ? "Публикация продолжается"
     : !available ? "Проверяем готовность…"
+    : deploy.isPending ? "Проверяем публикацию…"
     : published ? "Текущая версия опубликована"
     : failed ? "Публикация не завершилась"
     : currentStage?.id === "publish" ? "Всё готово к публикации" : currentStage?.label ?? "Проверьте готовность";
@@ -71,12 +72,13 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
-          <p>{stateError ? "Повторите проверку, чтобы получить актуальный статус сервера." : busyDeploy ? phaseLabels[deploy.data!.phase] : !available ? "Статусы появятся после ответа сервера." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
+          <p>{stateError ? "Повторите проверку, чтобы получить актуальный статус сервера." : busyDeploy ? phaseLabels[deploy.data!.phase] : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
           {!published && publication === "outdated" && !stateError && <p className="max-launch-notice">Текущая версия не опубликована. После последней публикации появились изменения.</p>}
           {failed && <p role="alert" className="text-sm text-danger-fg">{deploy.data?.error ?? "Проверьте настройки и повторите публикацию."}</p>}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">
             {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>Повторить проверку</Button>
+              : deploy.isPending ? <Button disabled><Loader2 className="size-4 animate-spin" />Проверяем публикацию…</Button>
               : published ? productionUrl && <Button asChild><a href={productionUrl} target="_blank" rel="noreferrer">Открыть приложение <ExternalLink className="size-4" /></a></Button>
               : busyDeploy || currentStage?.id === "publish" || !available ? <MaxLaunchButton projectId={project.id} />
               : currentStage && <Button asChild><Link href={currentStage.href}>{currentStage.actionLabel}<ChevronRight className="size-4" /></Link></Button>}

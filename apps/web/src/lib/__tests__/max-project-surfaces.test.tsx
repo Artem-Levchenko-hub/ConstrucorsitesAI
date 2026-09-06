@@ -33,12 +33,13 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
 async function mount(node: ReactNode) {
   await act(async () => root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>));
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 }
+async function settle(check: () => void) { await act(async () => { await vi.waitFor(check); }); }
 const dashboard = () => <MaxPostLaunchDashboard projectId={project.id} projectName={project.name} />;
 
 it("keeps optional services and server actions discoverable outside collapsed readiness details", async () => {
   await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.querySelector('[data-testid="max-one-click-launch"]')).not.toBeNull());
   const server = container.querySelector('a[href="/max/project-surfaces/settings?tab=vps"]');
   expect(server).not.toBeNull();
   expect(server!.closest("details")).toBeNull();
@@ -47,28 +48,41 @@ it("keeps optional services and server actions discoverable outside collapsed re
 });
 it("does not call an older release the current version in launch", async () => {
   await mount(<MaxLaunchPanel project={project} />);
-  expect(container.textContent).toContain("Текущая версия не опубликована");
+  await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
   expect(container.textContent).not.toContain("Production URL готов");
 });
 it("keeps unknown launch readiness distinct from completed preparation", async () => {
   api.readiness.mockImplementation(() => new Promise(() => {}));
   await mount(<MaxLaunchPanel project={project} />);
-  expect(container.textContent).toContain("Проверяем готовность");
+  await settle(() => expect(container.textContent).toContain("Проверяем готовность"));
   expect(container.textContent).not.toContain("Запуск завершён");
   expect(container.querySelector('a[href="/max/project-surfaces/dashboard"]')).toBeNull();
 });
 it("stops showing an in-progress readiness check after the request fails", async () => {
   api.readiness.mockRejectedValue(new Error("offline"));
   await mount(<MaxLaunchPanel project={project} />);
-  expect(container.textContent).toContain("Статус недоступен");
+  await settle(() => expect(container.textContent).toContain("Статус недоступен"));
   expect(container.textContent).not.toContain("Проверяем…");
   expect(container.querySelector("progress")).toBeNull();
   expect(container.querySelector('[data-testid="max-launch-current-step"]')?.getAttribute("role")).toBe("alert");
 });
+it("waits for deployment details before announcing the already-ready version as published", async () => {
+  let resolve!: (status: DeployStatus) => void;
+  client.setQueryData(["max-readiness", project.id], readiness(true));
+  api.deploy.mockImplementation(() => new Promise<DeployStatus>(done => { resolve = done; }));
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.textContent).toContain("Проверяем публикацию"));
+  expect(container.textContent).not.toContain("Текущая версия опубликована");
+  expect(container.textContent).not.toContain("Полностью готово к запуску");
+  expect(container.querySelector('[data-testid="max-launch-app-url"]')).toBeNull();
+  await act(async () => resolve(release));
+  await settle(() => expect(container.textContent).toContain("Текущая версия опубликована"));
+  expect(container.querySelector('[data-testid="max-launch-app-url"]')?.getAttribute("href")).toBe("https://app.example.com");
+});
 it.each([true, false])("reports publication evidence without claiming continuous uptime (published=%s)", async published => {
   api.readiness.mockResolvedValue(readiness(published));
   await mount(dashboard());
-  expect(container.textContent).toContain(published ? "Текущая версия опубликована" : "Текущая версия не опубликована");
+  await settle(() => expect(container.textContent).toContain(published ? "Текущая версия опубликована" : "Текущая версия не опубликована"));
   expect(container.textContent).toContain("Среда разработки");
   expect(container.textContent).toContain("Постоянный мониторинг доступности не подключён");
   expect(container.textContent).not.toContain("Отвечает");
@@ -78,33 +92,32 @@ it("offers a retry for failed status queries without showing stale success", asy
   client.setQueryDefaults(["max-readiness", project.id], { staleTime: 0 });
   api.readiness.mockRejectedValue(new Error("offline"));
   await mount(dashboard());
-  expect(container.textContent).toContain("Не удалось проверить публикацию");
+  await settle(() => expect(container.textContent).toContain("Не удалось проверить публикацию"));
   expect(container.textContent).not.toContain("Текущая версия опубликована");
   api.readiness.mockResolvedValue(readiness(false));
   const retry = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Повторить проверку"));
   expect(retry).toBeDefined();
   await act(async () => retry!.click());
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
-  expect(container.textContent).toContain("Текущая версия не опубликована");
+  await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
 });
 it("distinguishes history loading and failure from an empty history", async () => {
   let reject!: (error: Error) => void;
   api.history.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
   await mount(dashboard());
-  expect(container.textContent).toContain("Загружаем историю");
+  await settle(() => expect(container.textContent).toContain("Загружаем историю"));
   expect(container.textContent).not.toContain("после первой публикации");
   await act(async () => { reject(new Error("offline")); });
-  await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Не удалось загрузить историю")); });
+  await settle(() => expect(container.textContent).toContain("Не удалось загрузить историю"));
   expect(container.textContent).toContain("Не удалось загрузить историю");
   expect(container.textContent).not.toContain("после первой публикации");
 });
 it("shows an explicit empty history after a successful empty response", async () => {
   await mount(dashboard());
-  expect(container.textContent).toContain("История появится после первой публикации");
+  await settle(() => expect(container.textContent).toContain("История появится после первой публикации"));
 });
 it("reports a failed deployment separately from an unpublished draft", async () => {
   api.deploy.mockResolvedValue({ ...release, phase: "failed", error: "Сборка не завершена" });
   await mount(dashboard());
-  expect(container.textContent).toContain("Последняя публикация не завершилась");
+  await settle(() => expect(container.textContent).toContain("Последняя публикация не завершилась"));
   expect(container.textContent).toContain("Сборка не завершена");
 });
