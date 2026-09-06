@@ -7,7 +7,7 @@ import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 export const metadata: Metadata = {
   title: "Реквизиты исполнителя — Omnia",
   description:
-    "Реквизиты самозанятого исполнителя сервиса Omnia и конструктора сайтов.",
+    "Реквизиты самозанятого исполнителя сервиса Omnia MAX Studio.",
 };
 
 export default function RequisitesPage() {
@@ -21,16 +21,16 @@ export default function RequisitesPage() {
       </LegalSection>
 
       <LegalSection title="Идентификационные данные">
-        <dl className="overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
-          <div className="grid gap-1 border-b border-[#2b2d32] p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
-            <dt className="text-sm text-[#828491]">Статус</dt>
-            <dd className="font-medium text-white">
+        <dl className="overflow-hidden rounded-[12px] border border-border-default bg-surface">
+          <div className="grid gap-1 border-b border-border-default p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
+            <dt className="text-sm text-fg-tertiary">Статус</dt>
+            <dd className="font-medium text-fg-primary">
               Самозанятый, плательщик НПД
             </dd>
           </div>
           <div className="grid gap-1 p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
-            <dt className="text-sm text-[#828491]">ИНН</dt>
-            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-white">
+            <dt className="text-sm text-fg-tertiary">ИНН</dt>
+            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-fg-primary">
               220504676540
             </dd>
           </div>
@@ -39,11 +39,11 @@ export default function RequisitesPage() {
 
       <LegalSection title="Услуги">
         <p>
-          Доступ к онлайн-сервису Omnia, создание сайтов и веб-приложений,
+          Доступ к онлайн-сервису Omnia MAX Studio, создание MAX-приложений,
           генерация программного кода, публикация и сопутствующие цифровые
-          услуги. Актуальные пакеты стоят 490 ₽, 1 490 ₽ и 3 990 ₽. Подробный
-          состав и сумма зачисления указаны на странице{" "}
-          <Link className="font-medium text-[#6a95fa]" href="/pricing">
+          услуги. Актуальные условия, состав и сумма показываются из действующей
+          конфигурации в личном кабинете до оплаты. Общий порядок описан на странице{" "}
+          <Link className="font-medium text-accent-secondary" href="/pricing">
             «Тарифы»
           </Link>
           .
@@ -62,13 +62,13 @@ export default function RequisitesPage() {
 
       <LegalSection title="Документы">
         <div className="flex flex-col items-start gap-2">
-          <Link className="font-medium text-[#6a95fa]" href="/legal/offer">
+          <Link className="font-medium text-accent-secondary" href="/legal/offer">
             Публичная оферта
           </Link>
-          <Link className="font-medium text-[#6a95fa]" href="/legal/refunds">
+          <Link className="font-medium text-accent-secondary" href="/legal/refunds">
             Оплата и возвраты
           </Link>
-          <Link className="font-medium text-[#6a95fa]" href="/legal/privacy">
+          <Link className="font-medium text-accent-secondary" href="/legal/privacy">
             Политика конфиденциальности
           </Link>
         </div>
@@ -78,7 +78,7 @@ export default function RequisitesPage() {
         <p>
           По вопросам сервиса, документов и платежей:{" "}
           <a
-            className="font-medium text-[#6a95fa]"
+            className="font-medium text-accent-secondary"
             href="mailto:support@lead-generator.ru"
           >
             support@lead-generator.ru
@@ -89,7 +89,7 @@ export default function RequisitesPage() {
           href="https://npd.nalog.ru/check-status/"
           target="_blank"
           rel="noreferrer"
-          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#6a95fa]"
+          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-accent-secondary"
         >
           Проверить статус самозанятого на сайте ФНС
           <ExternalLink className="size-4" />

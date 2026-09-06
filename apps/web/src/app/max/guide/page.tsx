@@ -29,6 +29,8 @@ import {
 import type { ReactNode } from "react";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import "@/components/max/max-studio.css";
+import "@/components/marketing/max-public.css";
 import {
   BuilderVisual,
   DashboardVisual,
@@ -202,7 +204,7 @@ function Checklist({ title, items }: { title: string; items: string[] }) {
 
 export default function MaxGuidePage() {
   return (
-    <main data-product-shell className="min-h-screen bg-[#121519] text-white">
+    <main data-max-studio className="max-docs min-h-screen">
       <header className="sticky top-0 z-50 border-b border-[#2b2d32] bg-[#191b20]/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-7">
           <div className="flex min-w-0 items-center gap-3"><BrandMark href="/" /><span className="hidden h-5 w-px bg-[#2b2d32] sm:block" /><span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство MAX Studio</span></div>
@@ -278,7 +280,7 @@ export default function MaxGuidePage() {
 
           <GuideSection id="project" number="02" eyebrow="Первый проект" title="Создание MAX Mini App из короткого описания" lead="На этом шаге вы задаёте продуктовую рамку. Чем точнее главное действие и аудитория, тем меньше уточнений потребуется агенту во время первой сборки.">
             <ProjectCreationVisual />
-            <NumberedLegend items={["Нажмите «Новый проект» в правом верхнем углу или на пустой карточке.", "Заполните название, главное действие и выберите ближайший тип приложения.", "Проверьте данные и нажмите «Создать проект». Первая генерация стартует после открытия редактора."]} />
+            <NumberedLegend items={["Нажмите «Создать приложение» в правом верхнем углу или в пустом состоянии.", "Пройдите четыре шага: идея, аудитория, функции и оформление. Кнопки «Назад» и «Далее» сохраняют ответы.", "На финальном обзоре проверьте все данные и нажмите «Создать проект». До этого проект и генерация не запускаются."]} />
             <div className="mt-8 grid gap-6 lg:grid-cols-2">
               <Checklist title="Хорошее описание" items={["Одна понятная аудитория: «постоянные гости кофейни».", "Одно главное действие: «оформить заказ к выдаче».", "3–7 функций первого релиза, без списка на год вперёд.", "Конкретные брендовые цвета или разрешение подобрать стиль.", "Что должно храниться: заказы, баллы, записи, профиль."]} />
               <Checklist title="Чего избегать" items={["«Сделай приложение как у всех» без сценария.", "Несколько несвязанных бизнесов в одном Mini App.", "Требование Telegram/VK внутри проекта MAX.", "Секретные ключи, пароли и паспортные данные в описании.", "Сразу 30 экранов и интеграции, которых нет в MVP."]} />

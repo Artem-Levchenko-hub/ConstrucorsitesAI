@@ -42,7 +42,7 @@ export default function OfferPage() {
       <LegalSection title="4. Стоимость и оплата">
         <p>
           Стоимость пакетов и сумма зачисления опубликованы на странице{" "}
-          <Link className="font-medium text-[#6a95fa]" href="/pricing">
+          <Link className="font-medium text-accent-secondary" href="/pricing">
             «Тарифы»
           </Link>
           . Оплата производится в рублях через ЮKassa. Банковские реквизиты карты
@@ -75,7 +75,7 @@ export default function OfferPage() {
           возвращена тем же способом. Уже выполненные генерации и оплаченные
           внешние услуги учитываются как фактически оказанные. Подробный порядок
           опубликован в разделе{" "}
-          <Link className="font-medium text-[#6a95fa]" href="/legal/refunds">
+          <Link className="font-medium text-accent-secondary" href="/legal/refunds">
             «Оплата и возвраты»
           </Link>
           .
@@ -104,7 +104,7 @@ export default function OfferPage() {
         <p>
           Обработка данных выполняется для регистрации, оказания услуг, платежей
           и поддержки в соответствии с{" "}
-          <Link className="font-medium text-[#6a95fa]" href="/legal/privacy">
+          <Link className="font-medium text-accent-secondary" href="/legal/privacy">
             политикой конфиденциальности
           </Link>
           .
@@ -124,7 +124,7 @@ export default function OfferPage() {
           Исполнитель: самозанятый, плательщик НПД. ИНН 220504676540. Email для
           поддержки, документов и претензий: support@lead-generator.ru. Полные
           актуальные сведения размещены на странице{" "}
-          <Link className="font-medium text-[#6a95fa]" href="/requisites">
+          <Link className="font-medium text-accent-secondary" href="/requisites">
             «Реквизиты»
           </Link>
           .

@@ -26,7 +26,7 @@ export function MaxRegisterForm() {
             autoComplete="email"
             required
             placeholder="name@company.ru"
-            className="h-12 border-[#2b2d32] bg-[#191b20]"
+            className="h-12 border-border-default bg-surface"
           />
         </div>
         <div className="space-y-2">
@@ -38,7 +38,7 @@ export function MaxRegisterForm() {
             autoComplete="new-password"
             required
             minLength={8}
-            className="h-12 border-[#2b2d32] bg-[#191b20]"
+            className="h-12 border-border-default bg-surface"
           />
         </div>
         <div className="space-y-2">
@@ -50,22 +50,22 @@ export function MaxRegisterForm() {
             autoComplete="new-password"
             required
             minLength={8}
-            className="h-12 border-[#2b2d32] bg-[#191b20]"
+            className="h-12 border-border-default bg-surface"
           />
         </div>
       </div>
 
-      <div className="space-y-3 rounded-[10px] border border-[#2b2d32] bg-[#121519] p-4 text-sm">
+      <div className="space-y-3 border-t border-border-default pt-5 text-sm">
         <label className="flex cursor-pointer items-start gap-3">
           <input
             name="terms_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#4f81f7]"
+            className="mt-1 size-4 accent-[#2563eb]"
           />
-          <span className="text-[#9fa1b1]">
+          <span className="text-fg-secondary">
             Принимаю{" "}
-            <Link className="text-[#6a95fa] hover:underline" href="/legal/terms">
+            <Link className="text-accent-secondary hover:underline" href="/legal/terms">
               условия использования
             </Link>
           </span>
@@ -75,11 +75,11 @@ export function MaxRegisterForm() {
             name="privacy_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#4f81f7]"
+            className="mt-1 size-4 accent-[#2563eb]"
           />
-          <span className="text-[#9fa1b1]">
+          <span className="text-fg-secondary">
             Ознакомлен с{" "}
-            <Link className="text-[#6a95fa] hover:underline" href="/legal/privacy">
+            <Link className="text-accent-secondary hover:underline" href="/legal/privacy">
               политикой конфиденциальности
             </Link>
           </span>
@@ -89,12 +89,12 @@ export function MaxRegisterForm() {
             name="personal_data_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#4f81f7]"
+            className="mt-1 size-4 accent-[#2563eb]"
           />
-          <span className="text-[#9fa1b1]">
+          <span className="text-fg-secondary">
             Даю отдельное{" "}
             <Link
-              className="text-[#6a95fa] hover:underline"
+              className="text-accent-secondary hover:underline"
               href="/legal/personal-data"
             >
               согласие на обработку персональных данных
@@ -105,9 +105,9 @@ export function MaxRegisterForm() {
           <input
             name="marketing_accepted"
             type="checkbox"
-            className="mt-1 size-4 accent-[#4f81f7]"
+            className="mt-1 size-4 accent-[#2563eb]"
           />
-          <span className="text-[#828491]">
+          <span className="text-fg-tertiary">
             Получать новости продукта — необязательно
           </span>
         </label>
@@ -121,13 +121,13 @@ export function MaxRegisterForm() {
 
       <Button
         disabled={pending}
-        className="h-12 w-full rounded-lg bg-[#4f81f7] text-base text-[#121519] hover:bg-[#6a95fa]"
+        className="h-12 w-full rounded-lg bg-accent text-base text-fg-on-accent hover:bg-accent-hover"
       >
         {pending ? "Создаём аккаунт…" : "Продолжить"}
         {!pending && <ArrowRight className="ml-2 size-4" />}
       </Button>
 
-      <div className="grid gap-2 text-xs text-[#828491] sm:grid-cols-3">
+      <div className="grid gap-2 text-xs text-fg-tertiary sm:grid-cols-3">
         {[
           [Building2, "Для первого старта нужен только email"],
           [ShieldCheck, "Секреты не передаются агенту"],
@@ -136,7 +136,7 @@ export function MaxRegisterForm() {
           const ItemIcon = Icon as typeof Building2;
           return (
             <div key={String(text)} className="flex items-center gap-2">
-              <ItemIcon className="size-3.5 text-[#4f81f7]" />
+              <ItemIcon className="size-3.5 text-accent" />
               {String(text)}
             </div>
           );

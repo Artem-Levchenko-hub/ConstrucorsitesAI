@@ -2,6 +2,8 @@
 
 import { useActionState } from "react";
 import { useTranslations } from "next-intl";
+import Link from "next/link";
+
 import { registerAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,7 +69,7 @@ export function RegisterForm({
         />
       </div>
 
-      {state.error && <p className="text-xs text-danger">{state.error}</p>}
+      {state.error && <p role="alert" className="text-xs text-danger">{state.error}</p>}
 
       <Button
         type="submit"
@@ -79,7 +81,12 @@ export function RegisterForm({
         {pending ? t("registerPending") : t("registerButton")}
       </Button>
 
-      <p className="text-xs text-fg-tertiary text-center">{t("consent")}</p>
+      <p className="text-center text-xs leading-5 text-fg-tertiary">
+        {t("consent")} Ознакомьтесь с{" "}
+        <Link className="text-accent-secondary hover:underline" href="/legal/privacy">политикой конфиденциальности</Link>
+        {" "}и{" "}
+        <Link className="text-accent-secondary hover:underline" href="/legal/personal-data">обработкой персональных данных</Link>.
+      </p>
     </form>
   );
 }

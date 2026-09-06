@@ -47,7 +47,7 @@ export function LoginForm({ next }: { next?: string }) {
         />
       </div>
 
-      {state.error && <p className="text-xs text-danger">{state.error}</p>}
+      {state.error && <p role="alert" className="text-xs text-danger">{state.error}</p>}
 
       <Button
         type="submit"

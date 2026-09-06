@@ -18,9 +18,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 1.0,
     },
     ...[
-      "web-apps",
-      "landings",
-      "apps",
       "max/product",
       "max/start",
       "max/guide",

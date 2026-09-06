@@ -21,11 +21,11 @@ export function VerifyMaxEmail({ token }: { token: string }) {
   }, [token]);
 
   return (
-    <div className="w-full max-w-md rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center shadow-[0_18px_50px_rgba(23,23,22,.06)]">
-      <div className="mx-auto flex size-12 items-center justify-center rounded-lg bg-[#4f81f7]/10 text-[#4f81f7]">
+    <div className="w-full max-w-md rounded-[12px] border border-border-default bg-surface p-8 text-center shadow-[0_18px_50px_rgba(23,35,53,.07)]">
+      <div className="mx-auto flex size-12 items-center justify-center rounded-lg bg-accent-subtle text-accent">
         {state === "loading" && <Loader2 className="size-5 animate-spin" />}
         {state === "success" && <Check className="size-5" />}
-        {state === "error" && <CircleAlert className="size-5 text-red-300" />}
+        {state === "error" && <CircleAlert className="size-5 text-danger" />}
       </div>
       <h1 className="mt-5 text-2xl font-semibold">
         {state === "loading"
@@ -34,15 +34,15 @@ export function VerifyMaxEmail({ token }: { token: string }) {
             ? "Email подтверждён"
             : "Ссылка не сработала"}
       </h1>
-      <p className="mt-3 text-sm leading-6 text-[#9fa1b1]">
+      <p className="mt-3 text-sm leading-6 text-fg-secondary">
         {state === "loading"
           ? "Это займёт несколько секунд."
           : state === "success"
-            ? "Теперь можно добавить данные владельца приложения."
+            ? "Теперь можно открыть MAX Studio и создать первый проект."
             : "Возможно, ссылка устарела или уже была использована."}
       </p>
       {state !== "loading" && (
-        <Button asChild className="mt-6 h-11 rounded-lg bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
+        <Button asChild className="mt-6 h-11 rounded-lg bg-accent text-fg-on-accent hover:bg-accent-hover">
           <Link href="/max/onboarding">
             {state === "success" ? "Продолжить" : "Вернуться в настройку"}
           </Link>

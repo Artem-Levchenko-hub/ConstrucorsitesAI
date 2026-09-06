@@ -38,7 +38,7 @@ export default function TermsPage() {
           Цена и объём зачисления показываются до перехода к оплате. Платёж
           подтверждается только серверной проверкой статуса ЮKassa. Оплата
           выбранного пакета означает принятие{" "}
-          <Link className="font-medium text-[#6a95fa]" href="/legal/offer">
+          <Link className="font-medium text-accent-secondary" href="/legal/offer">
             публичной оферты
           </Link>
           .

@@ -43,7 +43,7 @@ export function PasswordRecoveryForm() {
           autoComplete="email"
         />
       </div>
-      {message && <p className="text-sm text-fg-secondary">{message}</p>}
+      {message && <p role="status" className="text-sm text-fg-secondary">{message}</p>}
       <Button className="w-full" disabled={pending}>
         {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
         Отправить ссылку

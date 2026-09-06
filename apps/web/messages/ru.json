@@ -1,9 +1,9 @@
 {
   "meta": {
-    "title": "Omnia — продуктовая студия для запуска цифровых сервисов",
-    "landingTitle": "Omnia — MAX Mini Apps и цифровые продукты",
+    "title": "Omnia — MAX Studio",
+    "landingTitle": "Omnia — создание приложений для MAX",
     "description": "Соберите и запустите мини-приложение для MAX: интерфейс, сервер, бот, HTTPS-публикация и webhook в одной рабочей среде.",
-    "keywords": "MAX Mini App, конструктор MAX, бот MAX, мини-приложение MAX, разработка цифровых продуктов"
+    "keywords": "MAX Mini App, конструктор MAX, бот MAX, мини-приложение MAX"
   },
   "landing": {
     "nav": {
@@ -34,7 +34,7 @@
     },
     "register": {
       "title": "Создать аккаунт",
-      "subtitle": "100 ₽ на счёт сразу — без карты, без подписки.",
+      "subtitle": "Создайте аккаунт, подтвердите email и перейдите к первому MAX-проекту.",
       "hasAccount": "Уже есть аккаунт?",
       "loginLink": "Войдите"
     },

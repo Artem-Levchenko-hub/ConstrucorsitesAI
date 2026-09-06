@@ -94,7 +94,7 @@ export function PasswordResetForm({ token }: { token: string }) {
           autoComplete="new-password"
         />
       </div>
-      {error && <p className="text-sm text-danger">{error}</p>}
+      {error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <Button className="w-full" disabled={pending}>
         {pending && <Loader2 className="mr-2 size-4 animate-spin" />}
         Сохранить пароль

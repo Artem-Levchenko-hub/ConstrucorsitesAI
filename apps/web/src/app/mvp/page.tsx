@@ -10,6 +10,8 @@ import {
 import Link from "next/link";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import "@/components/max/max-studio.css";
+import "@/components/marketing/max-public.css";
 import {
   mvpChecklist,
   mvpChecklistUpdatedAt,
@@ -54,7 +56,7 @@ export default function MvpChecklistPage() {
   const progress = Math.round((completed / items.length) * 100);
 
   return (
-    <main className="min-h-screen bg-[#121519] text-white">
+    <main data-max-studio className="max-docs min-h-screen">
       <header className="border-b border-[#2b2d32] bg-[#191b20]">
         <div className="mx-auto flex h-18 max-w-[1200px] items-center justify-between px-5 sm:px-8">
           <div className="[&>a]:min-h-11">

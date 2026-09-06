@@ -11,6 +11,8 @@ import {
 import Link from "next/link";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import "@/components/max/max-studio.css";
+import "@/components/marketing/max-public.css";
 
 export const metadata: Metadata = {
   title: "Быстрый старт — MAX Studio",
@@ -30,7 +32,7 @@ const steps = [
   {
     number: "02",
     title: "Проверьте сборку",
-    text: "Откройте основные экраны в мобильном preview и попросите агента исправить найденное.",
+    text: "Откройте основные экраны в мобильном предпросмотре и попросите агента исправить найденное.",
     result: "Навигация, формы и главный сценарий работают без технических ошибок.",
     href: "/max/guide#builder",
     icon: Check,
@@ -71,7 +73,7 @@ const steps = [
 
 export default function MaxQuickStartPage() {
   return (
-    <main data-product-shell className="min-h-screen bg-[#121519] text-white">
+    <main data-max-studio className="max-docs min-h-screen">
       <header className="border-b border-[#2b2d32] bg-[#191b20]">
         <div className="mx-auto flex min-h-16 max-w-[1120px] items-center justify-between gap-4 px-5 sm:px-8">
           <BrandMark href="/max/product" label="MAX Studio" />

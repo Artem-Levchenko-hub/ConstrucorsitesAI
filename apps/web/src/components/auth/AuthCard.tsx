@@ -1,7 +1,9 @@
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Check, Eye, ShieldCheck } from "lucide-react";
 
 import { BrandMark } from "@/components/marketing/BrandMark";
+import "@/components/max/max-studio.css";
+import "@/components/marketing/max-public.css";
 
 export function AuthCard({
   title,
@@ -15,24 +17,34 @@ export function AuthCard({
   footer: React.ReactNode;
 }) {
   return (
-    <main data-product-shell className="relative min-h-svh bg-[#121519] px-5 py-8 text-white">
-      <header className="mx-auto flex max-w-[1320px] items-center justify-between">
+    <main data-max-studio className="max-auth-shell">
+      <header>
         <BrandMark />
-        <Link href="/" className="inline-flex items-center gap-2 text-xs text-[#9fa1b1] hover:text-white">
+        <Link href="/" className="max-public-link inline-flex items-center gap-2">
           <ArrowLeft className="size-3.5" />
           На главную
         </Link>
       </header>
-      <section className="mx-auto flex min-h-[calc(100svh-96px)] max-w-[420px] items-center py-12">
-        <div className="w-full">
-          <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6 shadow-[0_18px_50px_rgba(23,23,22,.06)] sm:p-8">
-            <p className="omnia-kicker text-[#4f81f7]">Omnia / аккаунт</p>
-            <h1 className="mt-4 text-[30px] font-semibold leading-tight tracking-[-.035em]">{title}</h1>
-            <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{subtitle}</p>
-            <div className="mt-7 space-y-6">{children}</div>
+      <section className="max-auth-layout">
+        <div className="max-auth-context">
+          <p className="max-public-kicker">MAX Studio</p>
+          <h1>Продолжите с того места, где остановились</h1>
+          <p>Создавайте и проверяйте приложение в одном рабочем пространстве. Доступы к MAX и внешним сервисам понадобятся только перед соответствующим запуском.</p>
+          <ul>
+            <li><Check className="size-4" /> Ответы брифа сохраняются в проекте</li>
+            <li><Eye className="size-4" /> Изменения видны в мобильном предпросмотре</li>
+            <li><ShieldCheck className="size-4" /> Секреты вводятся только в защищённых формах</li>
+          </ul>
+        </div>
+        <div>
+          <div className="max-auth-card">
+            <p className="max-public-kicker">Аккаунт</p>
+            <h2>{title}</h2>
+            <p>{subtitle}</p>
+            <div className="space-y-6">{children}</div>
           </div>
-          {footer && <div className="mt-6 text-center text-sm text-[#9fa1b1]">{footer}</div>}
-          <p className="mt-8 text-center text-[11px] leading-5 text-[#828491]">
+          {footer && <div className="max-auth-footer">{footer}</div>}
+          <p className="mt-7 text-center text-[11px] leading-5 text-fg-tertiary">
             Защищённое соединение · сессиями можно управлять в профиле
           </p>
         </div>

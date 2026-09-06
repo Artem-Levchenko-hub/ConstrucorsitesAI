@@ -3,6 +3,8 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import Link from "next/link";
 
 import { BrandMark } from "./BrandMark";
+import "@/components/max/max-studio.css";
+import "./max-public.css";
 
 export function PublicPageShell({
   eyebrow,
@@ -16,31 +18,28 @@ export function PublicPageShell({
   children: React.ReactNode;
 }) {
   return (
-    <div data-product-shell className="min-h-svh bg-[#121519] text-white">
-      <header className="border-b border-[#2b2d32] bg-[#191b20]">
-        <div className="mx-auto flex h-16 max-w-[1320px] items-center justify-between px-5 sm:px-8">
-          <BrandMark />
-          <div className="flex items-center gap-3">
-            <Link href="/" className="hidden items-center gap-2 text-xs text-[#9fa1b1] hover:text-white sm:inline-flex"><ArrowLeft className="size-4" />На главную</Link>
-            <Link href="/max/register" className="omnia-button omnia-button-primary min-h-9 px-4 text-xs">Создать приложение</Link>
+    <div data-max-studio className="max-public">
+      <header className="max-public-header">
+        <div className="max-public-header__inner">
+          <div className="max-public-header__brand"><BrandMark /><span>MAX Studio</span></div>
+          <div className="max-public-header__actions">
+            <Link href="/" className="max-public-link hidden items-center gap-2 sm:inline-flex"><ArrowLeft className="size-4" />На главную</Link>
+            <Link href="/max/register" className="max-public-button max-public-button--primary">Создать приложение</Link>
           </div>
         </div>
       </header>
       <main>
-        <section data-graphite-shell className="bg-[#121519] px-5 py-20 text-white sm:px-8 lg:py-24">
-          <div className="mx-auto max-w-[960px] text-center">
-            <span className="omnia-kicker text-[#4f81f7]">{eyebrow}</span>
-            <h1 className="mt-6 text-[42px] font-semibold leading-[1.03] tracking-[-.05em] sm:text-[58px]">{title}</h1>
-            <p className="mx-auto mt-6 max-w-[720px] text-[16px] leading-7 text-white/50">{lead}</p>
+        <section className="max-public-hero">
+          <div className="max-public-wrap">
+            <span className="max-public-kicker">{eyebrow}</span>
+            <h1>{title}</h1>
+            <p>{lead}</p>
           </div>
         </section>
-        <div className="mx-auto max-w-[1180px] px-5 py-16 sm:px-8 lg:py-20">{children}</div>
+        <div className="max-public-content">{children}</div>
       </main>
-      <footer className="border-t border-[#2b2d32] bg-[#191b20] px-5 py-10 sm:px-8">
-        <div className="mx-auto flex max-w-[1180px] flex-col gap-5 text-xs text-[#828491] sm:flex-row sm:items-center sm:justify-between">
-          <span>© 2026 Omnia</span>
-          <div className="flex flex-wrap gap-5"><Link href="/requisites">Реквизиты</Link><Link href="/legal/offer">Оферта</Link><Link href="/legal/refunds">Оплата и возвраты</Link><Link href="/legal/privacy">Конфиденциальность</Link><Link href="/security">Безопасность</Link></div>
-        </div>
+      <footer className="max-public-footer">
+        <div><span>© 2026 Omnia · MAX Studio</span><nav><Link href="/requisites">Реквизиты</Link><Link href="/legal/offer">Оферта</Link><Link href="/legal/refunds">Оплата и возвраты</Link><Link href="/legal/privacy">Конфиденциальность</Link><Link href="/security">Безопасность</Link></nav></div>
       </footer>
     </div>
   );
@@ -56,13 +55,13 @@ export function InfoGrid({
       {items.map(({ Icon, title, text, href }) => {
         const body = (
           <>
-            <span className="grid size-11 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]"><Icon className="size-5" /></span>
+            <span className="grid size-11 place-items-center rounded-[8px] bg-surface-3 text-accent"><Icon className="size-5" /></span>
             <h2 className="mt-8 text-lg font-semibold">{title}</h2>
-            <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{text}</p>
-            {href && <span className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-[#6a95fa]">Подробнее <ArrowRight className="size-4" /></span>}
+            <p className="mt-2 text-sm leading-6 text-fg-secondary">{text}</p>
+            {href && <span className="mt-6 inline-flex items-center gap-2 text-xs font-semibold text-accent-secondary">Подробнее <ArrowRight className="size-4" /></span>}
           </>
         );
-        const className = "rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-7 transition-colors hover:border-[#828491]";
+        const className = "rounded-[12px] border border-border-default bg-surface p-7 transition-colors hover:border-border-strong";
         return href ? <Link key={title} href={href} className={className}>{body}</Link> : <article key={title} className={className}>{body}</article>;
       })}
     </div>

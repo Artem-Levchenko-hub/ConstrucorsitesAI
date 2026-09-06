@@ -20,13 +20,13 @@ import {
 } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-const ink = "#ffffff";
-const paper = "#191b20";
-const canvas = "#121519";
-const line = "#2b2d32";
-const accent = "#4f81f7";
-const muted = "#828491";
-const success = "#248a4b";
+const ink = "#192335";
+const paper = "#ffffff";
+const canvas = "#f7f8fb";
+const line = "#dce2ec";
+const accent = "#2563eb";
+const muted = "#627087";
+const success = "#187443";
 
 type Callout = {
   number: number;
@@ -169,7 +169,7 @@ function ScreenshotFrame({
     <figure className="overflow-hidden rounded-[14px] border border-[#2b2d32] bg-[#191b20] shadow-[0_22px_70px_rgba(23,23,22,.10)]">
       <figcaption className="flex items-center justify-between gap-4 border-b border-[#2b2d32] bg-[#191b20] px-4 py-3 sm:px-5">
         <div className="min-w-0">
-          <p className="font-mono text-[9px] uppercase tracking-[.16em] text-[#4f81f7]">{label}</p>
+          <p className="font-mono text-[9px] uppercase tracking-[.16em] text-[#4f81f7]">Пример интерфейса · {label}</p>
           <p className="mt-1 truncate text-xs font-semibold text-white">{title}</p>
         </div>
         <div className="flex gap-1.5" aria-hidden="true">
@@ -218,14 +218,14 @@ function Sidebar({ active }: { active: string }) {
 
 export function ProjectCreationVisual() {
   return (
-    <ScreenshotFrame label="Снимок 01" title="Мои приложения → Новый проект">
+    <ScreenshotFrame label="Снимок 01" title="Мои приложения → Пошаговое создание">
       <div className="flex h-full text-white">
         <Sidebar active="Проекты" />
         <div className="min-w-0 flex-1">
           <div className="flex h-[13%] items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-[4%]">
             <span className="font-mono text-[8px] uppercase tracking-[.18em] text-[#828491]">MAX Studio</span>
             <button data-guide-target="project-new" className="flex items-center gap-1.5 rounded-md bg-[#4f81f7] px-3 py-2 text-[8px] font-semibold text-[#121519]">
-              <span className="text-xs leading-none">+</span> Новый проект
+              <span className="text-xs leading-none">+</span> Создать приложение
             </button>
           </div>
           <div className="p-[5%]">
@@ -242,27 +242,21 @@ export function ProjectCreationVisual() {
                 <div className="p-[5%] text-[9px] font-semibold">Кофе рядом</div>
               </div>
               <button className="grid place-items-center rounded-lg border border-dashed border-[#2b2d32] bg-[#191b20] text-center">
-                <span className="text-[9px] font-semibold"><span className="mx-auto mb-2 grid size-7 place-items-center rounded-md border border-[#2b2d32] text-[#4f81f7]">+</span>Новый проект</span>
+                <span className="text-[9px] font-semibold"><span className="mx-auto mb-2 grid size-7 place-items-center rounded-md border border-[#2b2d32] text-[#4f81f7]">+</span>Создать приложение</span>
               </button>
             </div>
           </div>
         </div>
         <div className="absolute bottom-[5%] right-[4%] top-[9%] z-[5] w-[48%] rounded-xl border border-[#2b2d32] bg-[#191b20] shadow-[0_18px_50px_rgba(23,23,22,.2)]">
           <div className="border-b border-[#2b2d32] p-[5%]">
-            <p className="font-mono text-[7px] uppercase tracking-[.16em] text-[#4f81f7]">Новый MAX-проект</p>
-            <h4 className="mt-1 text-[15px] font-semibold">Что создаём?</h4>
+            <p className="font-mono text-[7px] uppercase tracking-[.16em] text-[#4f81f7]">Новое приложение · Шаг 2 из 4</p>
+            <h4 className="mt-1 text-[15px] font-semibold">Для кого приложение?</h4>
           </div>
           <div className="space-y-[4%] p-[5%] text-[8px]">
-            <label className="block font-medium">Название<div className="mt-1.5 rounded-md border border-[#2b2d32] bg-[#191b20] px-2 py-2 text-[#9fa1b1]">Кофе рядом</div></label>
-            <label className="block font-medium">Что пользователь сможет делать?<div data-guide-target="project-description" className="mt-1.5 h-12 rounded-md border border-[#2b2d32] bg-[#191b20] p-2 font-normal text-[#9fa1b1]">Получать баллы, выбирать награды и оформлять заказ</div></label>
-            <div>
-              <p className="font-medium">Тип приложения</p>
-              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                <div className="rounded-md border border-[#4f81f7] bg-[#4f81f7]/5 p-2">Лояльность <Check className="float-right size-3 text-[#4f81f7]" /></div>
-                <div className="rounded-md border border-[#2b2d32] p-2">Каталог и заказы</div>
-              </div>
-            </div>
-            <button data-guide-target="project-create" className="float-right flex items-center gap-1.5 rounded-md bg-[#4f81f7] px-3 py-2 font-semibold text-[#121519]"><Sparkles className="size-3" />Создать проект</button>
+            <label className="block font-medium">Аудитория<div className="mt-1.5 rounded-md border border-[#2b2d32] bg-[#191b20] px-2 py-2 text-[#9fa1b1]">Постоянные гости кофейни</div></label>
+            <label className="block font-medium">Главное действие<div data-guide-target="project-description" className="mt-1.5 rounded-md border border-[#2b2d32] bg-[#191b20] p-2 font-normal text-[#9fa1b1]">Обменять баллы на награду</div></label>
+            <p className="rounded-md bg-[#121519] p-2 text-[#828491]">Ответы сохраняются при переходе назад и вперёд.</p>
+            <div className="flex items-center justify-between"><button className="rounded-md border border-[#2b2d32] px-3 py-2 font-semibold">Назад</button><button data-guide-target="project-create" className="flex items-center gap-1.5 rounded-md bg-[#4f81f7] px-3 py-2 font-semibold text-[#121519]">Далее <ArrowRight className="size-3" /></button></div>
           </div>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { VerifyMaxEmail } from "@/components/max/VerifyMaxEmail";
+import "@/components/max/max-studio.css";
 
 export default async function VerifyMaxEmailPage({
   searchParams,
@@ -7,7 +8,7 @@ export default async function VerifyMaxEmailPage({
 }) {
   const { token } = await searchParams;
   return (
-    <main data-product-shell className="flex min-h-screen items-center justify-center bg-[#121519] px-5 text-white">
+    <main data-max-studio className="flex min-h-screen items-center justify-center bg-bg-base px-5 text-fg-primary">
       <VerifyMaxEmail token={token ?? ""} />
     </main>
   );
