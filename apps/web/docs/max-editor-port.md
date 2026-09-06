@@ -37,6 +37,12 @@ fonts and no font fixture completed successfully (46 static pages).
 
 ## Release gate — still pending
 
+Editor source committed locally as `aad48bdc89bae733af14183658ac79a61406f688`.
+The normal non-force push `git push origin HEAD:refs/heads/main` failed with
+`fatal: could not read Username for 'https://github.com': Device not configured`.
+No production write or container restart was attempted. GitHub write authentication
+must be configured before resuming the push and rollout; do not send secrets in chat.
+
 Network access is approved. Upstream and the live web health revision both match
 `1689a2380266215ed5ffb488c36297f83eef3004` before rollout. The live web image is
 `sha256:c09841ea53be95128440bffcec96f0b29d52710ac6c9a9e9721d308c55f77a83`.
