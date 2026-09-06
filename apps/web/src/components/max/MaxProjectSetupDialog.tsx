@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FileCheck2, Loader2, Plus, Settings2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,6 +24,8 @@ import {
 import type { MaxProjectConfigPayload } from "@/lib/api/types";
 import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
 import { cn } from "@/lib/utils";
+import "./max-studio.css";
+import "./max-project-workspace.css";
 
 const CHECKS: {
   key: "has_sales" | "has_user_content" | "marketing_notifications";
@@ -72,6 +74,7 @@ export function MaxProjectSetupDialog({
   label?: string;
 }) {
   const qc = useQueryClient();
+  const tabsId = useId();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
   const [section, setSection] = useState<SetupSection>("details");
@@ -107,9 +110,8 @@ export function MaxProjectSetupDialog({
     onError: (error) =>
       toast.error("Не удалось сохранить", { description: errorMessage(error) }),
   });
-  const inputClass = "h-11 border-[#2b2d32] bg-[#191b20] sm:h-10";
-  const sectionClass =
-    "space-y-4 rounded-[10px] border border-[#2b2d32] bg-[#191b20] p-4";
+  const inputClass = "h-11 border-border-default bg-surface sm:h-10";
+  const sectionClass = "max-settings-section space-y-5";
   const saved = config.data?.config;
   const changedSections = current && saved
     ? [
@@ -150,7 +152,7 @@ export function MaxProjectSetupDialog({
             ? cn(
                 "h-11 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]",
                 !emphasized &&
-                  "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1] hover:bg-[#121519]",
+                  "border-border-default bg-surface text-fg-secondary hover:bg-surface-base",
               )
             : "h-11 gap-1.5 px-2.5 text-xs sm:h-7"
         }
@@ -175,33 +177,45 @@ export function MaxProjectSetupDialog({
       >
         <DialogContent
           data-product-shell
-          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#2b2d32] bg-[#191b20] p-0 text-white sm:max-h-[92dvh] sm:max-w-[760px] sm:p-0"
+          data-max-studio
+          className="max-settings-dialog flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-border-default bg-surface p-0 text-fg-primary sm:max-h-[92dvh] sm:max-w-[760px] sm:p-0"
         >
           <DialogHeader className="shrink-0 px-5 pb-4 pr-16 pt-5 sm:px-7 sm:pb-5 sm:pr-14 sm:pt-7">
-            <DialogTitle className="flex items-center gap-2 text-white">
-              <FileCheck2 className="h-5 w-5 text-[#4f81f7]" />
+            <DialogTitle className="flex items-center gap-2 text-fg-primary">
+              <FileCheck2 className="h-5 w-5 text-accent" />
               Данные приложения
             </DialogTitle>
-            <DialogDescription className="text-[#9fa1b1]">
+            <DialogDescription className="text-fg-secondary">
               Заполните четыре раздела. Настройки сохраняются на сервере и
               применяются без повторной генерации.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="shrink-0 border-y border-[#25272b] px-5 py-3 sm:px-7">
+          <div className="shrink-0 border-y border-border-default px-5 py-3 sm:px-7">
             <div className="flex gap-2 overflow-x-auto" role="tablist" aria-label="Разделы данных приложения">
               {SETUP_SECTIONS.map((item) => (
                 <button
                   key={item.id}
                   type="button"
                   role="tab"
+                  id={`${tabsId}-${item.id}`}
+                  aria-controls={`${tabsId}-panel`}
                   aria-selected={section === item.id}
+                  tabIndex={section === item.id ? 0 : -1}
                   onClick={() => setSection(item.id)}
+                  onKeyDown={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const index = SETUP_SECTIONS.findIndex(tab => tab.id === item.id);
+                    const next = event.key === "Home" ? 0 : event.key === "End" ? SETUP_SECTIONS.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + SETUP_SECTIONS.length) % SETUP_SECTIONS.length;
+                    setSection(SETUP_SECTIONS[next].id);
+                    document.getElementById(`${tabsId}-${SETUP_SECTIONS[next].id}`)?.focus();
+                  }}
                   className={cn(
                     "h-9 shrink-0 rounded-[8px] border px-3 text-xs font-medium transition-colors",
                     section === item.id
-                      ? "border-[#25272b] bg-[#121519] text-white"
-                      : "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1] hover:bg-[#121519]",
+                      ? "border-accent bg-accent-subtle text-accent-secondary"
+                      : "border-border-default bg-surface text-fg-secondary hover:bg-surface-base",
                   )}
                 >
                   {item.label}
@@ -210,14 +224,19 @@ export function MaxProjectSetupDialog({
             </div>
           </div>
 
-          {config.isLoading || !current ? (
+          {config.isError ? (
+            <div role="alert" className="p-6 text-sm"><p>Не удалось загрузить данные приложения.</p><Button variant="outline" className="mt-3" onClick={() => void config.refetch()}>Повторить загрузку</Button></div>
+          ) : config.isLoading || !current ? (
             <div className="flex min-h-44 flex-1 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-[#4f81f7]" />
+              <Loader2 className="h-5 w-5 animate-spin text-accent" />
             </div>
           ) : (
             <>
               <div
                 className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 sm:px-7 sm:pb-7"
+                role="tabpanel"
+                id={`${tabsId}-panel`}
+                aria-labelledby={`${tabsId}-${section}`}
                 data-testid="max-settings-scroll-region"
               >
                 <div className="space-y-4">
@@ -225,7 +244,7 @@ export function MaxProjectSetupDialog({
                     <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Продукт</h3>
-                  <p className="mt-1 text-xs text-[#828491]">
+                  <p className="mt-1 text-xs text-fg-tertiary">
                     Главный сценарий и тексты, которыми пользуются бот и приложение.
                   </p>
                 </div>
@@ -259,7 +278,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-summary">Описание сервиса</Label>
                     <Textarea
                       id="max-config-summary"
-                      className="min-h-24 border-[#2b2d32] bg-[#191b20]"
+                      className="min-h-24 border-border-default bg-surface"
                       value={current.summary}
                       aria-describedby="max-config-summary-limit"
                       aria-invalid={Array.from(current.summary.trim()).length > MAX_BRIEF_LENGTH}
@@ -267,7 +286,7 @@ export function MaxProjectSetupDialog({
                         setDraft({ ...current, summary: event.target.value })
                       }
                     />
-                    <p id="max-config-summary-limit" className="text-xs text-[#9fa1b1]">
+                    <p id="max-config-summary-limit" className="text-xs text-fg-secondary">
                       {Array.from(current.summary.trim()).length} / {MAX_BRIEF_LENGTH} символов. {Array.from(current.summary.trim()).length > MAX_BRIEF_LENGTH ? "Сократите описание перед сохранением — текст не обрезан." : "Описание сохранится целиком."}
                     </p>
                   </div>
@@ -275,7 +294,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-type">Тип приложения</Label>
                     <select
                       id="max-config-type"
-                      className="h-11 w-full rounded-md border border-[#2b2d32] bg-[#191b20] px-3 text-sm sm:h-10"
+                      className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm sm:h-10"
                       value={current.app_type}
                       onChange={(event) =>
                         setDraft({
@@ -319,7 +338,7 @@ export function MaxProjectSetupDialog({
                     <Label htmlFor="max-config-style">Визуальный стиль</Label>
                     <select
                       id="max-config-style"
-                      className="h-11 w-full rounded-md border border-[#2b2d32] bg-[#191b20] px-3 text-sm sm:h-10"
+                      className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm sm:h-10"
                       value={current.style}
                       onChange={(event) =>
                         setDraft({
@@ -340,7 +359,7 @@ export function MaxProjectSetupDialog({
                     </Label>
                     <Textarea
                       id="max-config-features"
-                      className="min-h-20 border-[#2b2d32] bg-[#191b20]"
+                      className="min-h-20 border-border-default bg-surface"
                       value={current.features.join(", ")}
                       placeholder="Заказы, бонусы, запись, уведомления"
                       onChange={(event) =>
@@ -354,7 +373,7 @@ export function MaxProjectSetupDialog({
                         })
                       }
                     />
-                    <p className="text-[10px] leading-4 text-[#828491]">
+                    <p className="text-[10px] leading-4 text-fg-tertiary">
                       Перечислите через запятую до 24 функций. Они попадут в
                       управляемую конфигурацию приложения без повторной генерации.
                     </p>
@@ -368,7 +387,7 @@ export function MaxProjectSetupDialog({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h3 className="text-sm font-semibold">Каталог и контент</h3>
-                    <p className="mt-1 text-xs text-[#828491]">
+                    <p className="mt-1 text-xs text-fg-tertiary">
                       Товары, услуги, события, награды или уроки — без обращения к модели.
                     </p>
                   </div>
@@ -398,7 +417,7 @@ export function MaxProjectSetupDialog({
                   </Button>
                 </div>
                 {current.content.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-[#2b2d32] p-4 text-center text-xs text-[#828491]">
+                  <p className="rounded-xl border border-dashed border-border-default p-4 text-center text-xs text-fg-tertiary">
                     Добавьте управляемые элементы, если приложению нужен каталог.
                   </p>
                 ) : (
@@ -406,7 +425,7 @@ export function MaxProjectSetupDialog({
                     {current.content.map((item, index) => (
                       <div
                         key={item.id}
-                        className="grid gap-3 rounded-xl border border-[#2b2d32] bg-[#191b20] p-3 sm:grid-cols-[minmax(0,1fr)_160px_auto]"
+                        className="grid gap-3 rounded-xl border border-border-default bg-surface p-3 sm:grid-cols-[minmax(0,1fr)_160px_auto]"
                       >
                         <div className="space-y-2">
                           <Input
@@ -421,7 +440,7 @@ export function MaxProjectSetupDialog({
                           />
                           <Textarea
                             aria-label={`Описание элемента ${index + 1}`}
-                            className="min-h-16 border-[#2b2d32] bg-[#191b20] text-xs"
+                            className="min-h-16 border-border-default bg-surface text-xs"
                             value={item.description}
                             placeholder="Описание"
                             onChange={(event) => {
@@ -475,7 +494,7 @@ export function MaxProjectSetupDialog({
                               "inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs sm:min-h-9",
                               item.active
                                 ? "bg-[#248a4b]/10 text-success-fg"
-                                : "bg-[#121519] text-[#828491]",
+                                : "bg-surface-base text-fg-tertiary",
                             )}
                             onClick={() => {
                               const content = [...current.content];
@@ -496,7 +515,7 @@ export function MaxProjectSetupDialog({
                           </button>
                           <button
                             type="button"
-                            className="flex h-11 w-11 items-center justify-center rounded-lg text-[#828491] hover:bg-danger/10 hover:text-danger sm:h-9 sm:w-9"
+                            className="flex h-11 w-11 items-center justify-center rounded-lg text-fg-tertiary hover:bg-danger/10 hover:text-danger sm:h-9 sm:w-9"
                             aria-label={`Удалить ${item.title}`}
                             onClick={() =>
                               setDraft({
@@ -521,7 +540,7 @@ export function MaxProjectSetupDialog({
                     <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Владелец и поддержка</h3>
-                  <p className="mt-1 text-xs text-[#828491]">
+                  <p className="mt-1 text-xs text-fg-tertiary">
                     MAX проверяет бизнес в своём кабинете. Здесь сведения не
                     проверяются повторно — они попадут в обязательные страницы
                     приложения: политику, условия и поддержку.
@@ -645,7 +664,7 @@ export function MaxProjectSetupDialog({
                     <section className={sectionClass}>
                 <div>
                   <h3 className="text-sm font-semibold">Политики MAX</h3>
-                  <p className="mt-1 text-xs text-[#828491]">
+                  <p className="mt-1 text-xs text-fg-tertiary">
                     Отметьте реальные функции — студия включит нужные правила.
                   </p>
                 </div>
@@ -660,8 +679,8 @@ export function MaxProjectSetupDialog({
                         className={cn(
                           "rounded-xl border p-3 text-left",
                           checked
-                            ? "border-[#4f81f7] bg-[#4f81f7]/[.07]"
-                            : "border-[#2b2d32] bg-[#191b20]",
+                            ? "border-[#4f81f7] bg-accent/[.07]"
+                            : "border-border-default bg-surface",
                         )}
                         onClick={() =>
                           setDraft({
@@ -675,15 +694,15 @@ export function MaxProjectSetupDialog({
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded border",
                               checked
-                                ? "border-[#4f81f7] bg-[#4f81f7]"
-                                : "border-[#2b2d32]",
+                                ? "border-[#4f81f7] bg-accent"
+                                : "border-border-default",
                             )}
                           >
                             {checked && <Check className="h-3 w-3" />}
                           </span>
                           {item.label}
                         </span>
-                        <span className="mt-2 block text-[10px] leading-4 text-[#828491]">
+                        <span className="mt-2 block text-[10px] leading-4 text-fg-tertiary">
                           {item.description}
                         </span>
                       </button>
@@ -694,7 +713,7 @@ export function MaxProjectSetupDialog({
                   <Label htmlFor="max-age-rating">Возрастная маркировка</Label>
                   <select
                     id="max-age-rating"
-                    className="h-11 w-full rounded-md border border-[#2b2d32] bg-[#191b20] px-3 text-sm sm:h-10 sm:w-48"
+                    className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm sm:h-10 sm:w-48"
                     value={current.legal.age_rating}
                     onChange={(event) =>
                       setDraft({
@@ -714,7 +733,7 @@ export function MaxProjectSetupDialog({
                     ))}
                   </select>
                 </div>
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#2b2d32] bg-[#191b20] p-3">
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border-default bg-surface p-3">
                   <input
                     type="checkbox"
                     className="mt-0.5 h-4 w-4 accent-[#4f81f7]"
@@ -733,13 +752,13 @@ export function MaxProjectSetupDialog({
                     <span className="block text-xs font-medium">
                       Подтверждаю корректность данных владельца
                     </span>
-                    <span className="mt-1 block text-[10px] leading-4 text-[#828491]">
+                    <span className="mt-1 block text-[10px] leading-4 text-fg-tertiary">
                       Автоматический комплект — основа. Владелец отвечает за
                       актуальность реквизитов и соответствие своей деятельности закону.
                     </span>
                   </span>
                 </label>
-                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-[#2b2d32] bg-[#191b20] p-3">
+                <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-border-default bg-surface p-3">
                   <input
                     type="checkbox"
                     className="mt-0.5 h-4 w-4 accent-[#4f81f7]"
@@ -758,7 +777,7 @@ export function MaxProjectSetupDialog({
                     <span className="block text-xs font-medium">
                       Запрашивать согласие на обработку персональных данных
                     </span>
-                    <span className="mt-1 block text-[10px] leading-4 text-[#828491]">
+                    <span className="mt-1 block text-[10px] leading-4 text-fg-tertiary">
                       Оставьте включённым, если приложение получает имя, телефон,
                       email, адрес или другие данные пользователя.
                     </span>
@@ -770,10 +789,10 @@ export function MaxProjectSetupDialog({
               </div>
 
               <div
-                className="flex shrink-0 flex-col gap-3 border-t border-[#25272b] px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:pt-4"
+                className="flex shrink-0 flex-col gap-3 border-t border-border-default px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:flex-row sm:items-center sm:justify-between sm:px-7 sm:pt-4"
                 data-testid="max-settings-footer"
               >
-                <p className="text-xs text-[#828491]">
+                <p className="text-xs text-fg-tertiary">
                   {changedSections > 0
                     ? `Изменено разделов: ${changedSections}`
                     : "Все изменения сохранены"}

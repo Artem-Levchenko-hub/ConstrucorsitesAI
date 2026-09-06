@@ -35,6 +35,7 @@ import {
 } from "@/lib/api/max-integration";
 import { getProject } from "@/lib/api/projects";
 import { canActivateMaxWebhook } from "@/lib/max-integration-flow";
+import "@/components/max/max-studio.css";
 
 function message(error: unknown): string {
   return error instanceof ApiError ? error.message : "Не удалось выполнить действие";
@@ -46,12 +47,14 @@ export function MaxIntegrationButton({
   display = "toolbar",
   emphasized = false,
   label,
+  maxStudio = false,
 }: {
   projectId: string;
   initialTemplate?: string;
   display?: "toolbar" | "panel";
   emphasized?: boolean;
   label?: string;
+  maxStudio?: boolean;
 }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -151,7 +154,7 @@ export function MaxIntegrationButton({
         </span>
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[540px]">
+        <DialogContent data-max-studio={maxStudio || undefined} className="max-h-[88dvh] overflow-y-auto sm:max-w-[540px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Bot className="h-5 w-5 text-accent" />

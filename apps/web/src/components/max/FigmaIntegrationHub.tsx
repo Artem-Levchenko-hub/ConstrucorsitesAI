@@ -249,63 +249,63 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       title="Интеграции"
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >
-      <p className="mt-5 text-sm leading-6 text-[#9fa1b1]">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
-      <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_300px]">
-        <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
+      <p className="mt-4 max-w-[850px] text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
+      <section className="max-integration-summary mt-6 grid gap-4 lg:grid-cols-[1fr_220px]">
+        <div className="rounded-[12px] border border-border-default bg-surface p-6">
           <div className="flex items-start gap-4">
-            <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#4f81f7] text-[#121519]"><Sparkles className="size-5" /></span>
+            <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-accent text-fg-on-accent"><Sparkles className="size-5" /></span>
             <div>
-              <p className="omnia-kicker text-[#4f81f7]">Рекомендуемый набор</p>
+              <p className="omnia-kicker text-accent">Рекомендуемый набор</p>
               <h2 className="mt-1 text-xl font-semibold">{catalog.data?.recommended_pack?.title ?? "Базовый контур приложения"}</h2>
-              <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{catalog.data?.recommended_pack?.description ?? "Оплата, CRM, учёт и аналитика для вашего сценария."}</p>
+              <p className="mt-2 text-sm leading-6 text-fg-secondary">{catalog.data?.recommended_pack?.description ?? "Оплата, CRM, учёт и аналитика для вашего сценария."}</p>
             </div>
           </div>
-          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-6 min-h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
+          <Button onClick={() => pack.mutate()} disabled={pack.isPending || !catalog.data?.recommended_pack} className="mt-4 min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">
             {pack.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             Подключить рекомендуемые
           </Button>
         </div>
-        <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
-          <p className="omnia-kicker text-[#828491]">Состояние</p>
-          <p className="mt-3 text-3xl font-semibold">{connectedCount}<span className="text-lg text-[#828491]"> / {catalog.data?.providers.length ?? 0}</span></p>
-          <p className="mt-2 text-xs text-[#9fa1b1]">сервисов активно в этом проекте</p>
+        <div className="rounded-[12px] border border-border-default bg-surface p-6">
+          <p className="omnia-kicker text-fg-tertiary">Состояние</p>
+          <p className="mt-3 text-3xl font-semibold">{catalog.isSuccess ? connectedCount : "—"}<span className="text-lg text-fg-tertiary"> / {catalog.isSuccess ? catalog.data.providers.length : "—"}</span></p>
+          <p className="mt-2 text-xs text-fg-secondary">сервисов активно в этом проекте</p>
           <div className="mt-5 flex items-center gap-2 text-xs text-success-fg"><ShieldCheck className="size-4" /> Секреты зашифрованы</div>
         </div>
       </section>
 
-      <section className="mt-8">
+      <section className="mt-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
             {(Object.keys(categories) as Array<IntegrationCategory | "all">).map((key) => {
               const item = categories[key];
               return (
-                <button key={key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-[#25272b] bg-[#121519] text-white" : "border-[#2b2d32] bg-[#191b20] text-[#9fa1b1]")}>
+                <button key={key} aria-pressed={category === key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-accent bg-accent-subtle text-accent-secondary" : "border-border-default bg-surface text-fg-secondary")}>
                   <item.icon className="size-3.5" />{item.label}
                 </button>
               );
             })}
           </div>
           <label className="relative block w-full lg:w-[280px]">
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 border-[#2b2d32] bg-[#191b20] pl-9 sm:h-9" />
+            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-fg-tertiary" />
+            <Input aria-label="Найти сервис" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти сервис" className="h-11 border-border-default bg-surface pl-9 sm:h-9" />
           </label>
         </div>
 
-        <div className="mt-5 overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
-          <div className="hidden grid-cols-[1.3fr_1fr_150px_150px] border-b border-[#2b2d32] px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-[#828491] lg:grid">
+        <div className="mt-5 overflow-hidden rounded-[12px] border border-border-default bg-surface">
+          <div className="hidden grid-cols-[1.3fr_.8fr_130px_190px] border-b border-border-default px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-fg-tertiary lg:grid">
             <span>Сервис</span><span>Возможности</span><span>Статус</span><span />
           </div>
           {catalog.isLoading ? (
-            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-[#4f81f7]" /></div>
+            <div className="grid min-h-[260px] place-items-center"><Loader2 className="size-5 animate-spin text-accent" /></div>
           ) : catalog.isError ? (
             <div className="grid min-h-[260px] place-items-center px-6 py-10 text-center">
               <div className="max-w-[420px]">
-                <Plug className="mx-auto size-7 text-[#828491]" />
+                <Plug className="mx-auto size-7 text-fg-tertiary" />
                 <h3 className="mt-4 text-base font-semibold">Не удалось загрузить сервисы</h3>
-                <p className="mt-2 text-sm leading-6 text-[#9fa1b1]">{message(catalog.error)}</p>
+                <p className="mt-2 text-sm leading-6 text-fg-secondary">{message(catalog.error)}</p>
                 <Button
                   variant="outline"
-                  className="mt-5 border-[#2b2d32] bg-[#191b20]"
+                  className="mt-5 border-border-default bg-surface"
                   onClick={() => void catalog.refetch()}
                 >
                   <RefreshCw className="size-4" />
@@ -314,7 +314,8 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
               </div>
             </div>
           ) : (
-            <div className="divide-y divide-[#25272b]">
+            <div className="divide-y divide-border-subtle">
+              {visible.length === 0 && <div className="px-6 py-12 text-center"><h3 className="font-semibold">Ничего не найдено</h3><p className="mt-2 text-sm text-fg-secondary">Попробуйте другое название или категорию.</p><Button variant="outline" className="mt-4" onClick={() => { setSearch(""); setCategory("all"); }}>Сбросить фильтры</Button></div>}
               {visible.map((provider) => {
                 const connection = connections.get(provider.key);
                 const platform = provider.connection_mode === "platform";
@@ -323,21 +324,21 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
                 return (
-                  <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_1fr_150px_150px] lg:items-center">
+                  <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_.8fr_130px_190px] lg:items-center">
                     <div className="flex items-center gap-3">
-                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#2b2d32] bg-[#191b20] text-[#4f81f7]"><Icon className="size-4" /></span>
-                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className={cn("mt-1 text-xs text-[#828491]", !platform && "line-clamp-1")}>{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p></div>
+                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-border-default bg-surface text-accent"><Icon className="size-4" /></span>
+                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className={cn("mt-1 text-xs text-fg-tertiary", !platform && "line-clamp-1")}>{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p></div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {provider.capabilities.slice(0, 3).map((item) => <span key={item} className="rounded-full border border-[#2b2d32] px-2 py-1 text-[9px] text-[#9fa1b1]">{item}</span>)}
+                      {provider.capabilities.slice(0, 3).map((item) => <span key={item} className="rounded-full border border-border-default px-2 py-1 text-[9px] text-fg-secondary">{item}</span>)}
                     </div>
                     <div>
                       {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-fg"><Check className="size-3.5" />{platform ? "Встроено" : "Подключено"}</span>
-                        : platform && provider.available ? <span className="text-xs text-[#828491]">Не включено</span>
+                        : platform && provider.available ? <span className="text-xs text-fg-tertiary">Не включено</span>
                         : needsSetup ? <span className="text-xs text-danger-fg">Требуется настройка</span>
-                        : reusable ? <span className="text-xs text-[#6a95fa]">Есть у бизнеса</span>
-                        : provider.available ? <span className="text-xs text-[#828491]">Не подключено</span>
-                        : <span className="text-xs text-[#828491]">Готовим</span>}
+                        : reusable ? <span className="text-xs text-accent-secondary">Есть у бизнеса</span>
+                        : provider.available ? <span className="text-xs text-fg-tertiary">Не подключено</span>
+                        : <span className="text-xs text-fg-tertiary">Готовим</span>}
                     </div>
                     <div className="flex flex-wrap justify-end gap-1">
                       {platform ? (
@@ -350,8 +351,8 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                       ) : connected ? (
                         <>
                           {implementationFeatures[provider.key] && <Button size="sm" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
-                          <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#9fa1b1] hover:bg-[#121519] sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
-                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#828491] hover:bg-[#c63d35]/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
+                          <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-secondary hover:bg-surface-base sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
+                          <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-tertiary hover:bg-[#c63d35]/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : reusable ? (
@@ -359,7 +360,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                       ) : provider.available ? (
                         <Button size="sm" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
                       ) : (
-                        <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-[#828491]">Требования <ExternalLink className="size-3" /></a>
+                        <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fg-tertiary">Требования <ExternalLink className="size-3" /></a>
                       )}
                     </div>
                   </article>
@@ -371,11 +372,11 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       </section>
 
       <Dialog open={Boolean(implementationProvider)} onOpenChange={(open) => { if (!open) setImplementationProvider(null); }}>
-        <DialogContent data-product-shell className="max-h-[90dvh] overflow-y-auto border-[#2b2d32] bg-[#191b20] text-white sm:max-w-[600px]">
+        <DialogContent data-product-shell data-max-studio className="max-h-[90dvh] overflow-y-auto border-border-default bg-surface text-fg-primary sm:max-w-[600px]">
           <DialogTitle>Добавить интеграцию в приложение</DialogTitle>
-          <DialogDescription className="text-[#9fa1b1]">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DialogDescription>
+          <DialogDescription className="text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DialogDescription>
           <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
-          <Textarea id="integration-implementation-prompt" value={implementationPrompt} onChange={(event) => setImplementationPrompt(event.target.value)} className="min-h-[240px] border-[#2b2d32] bg-[#121519]" />
+          <Textarea id="integration-implementation-prompt" value={implementationPrompt} onChange={(event) => setImplementationPrompt(event.target.value)} className="min-h-[240px] border-border-default bg-surface-base" />
           {!canImplement && implementationPrompt.trim() && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
           <Button disabled={!canImplement} onClick={startImplementation} className="min-h-11">Запустить доработку</Button>
         </DialogContent>
@@ -388,40 +389,40 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       >
         {selected && (
           <DialogContent
-            data-product-shell
-            className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#2b2d32] bg-[#191b20] p-0 text-white sm:max-h-[90dvh] sm:max-w-[600px] sm:p-0"
+            data-product-shell data-max-studio
+            className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-border-default bg-surface p-0 text-fg-primary sm:max-h-[90dvh] sm:max-w-[600px] sm:p-0"
           >
-            <header className="shrink-0 border-b border-[#2b2d32] p-5 pr-16 sm:p-6 sm:pr-14">
+            <header className="shrink-0 border-b border-border-default p-5 pr-16 sm:p-6 sm:pr-14">
               <div>
-                <p className="omnia-kicker text-[#4f81f7]">Подключение</p>
-                <DialogTitle className="mt-2 text-2xl font-semibold text-white">
+                <p className="omnia-kicker text-accent">Подключение</p>
+                <DialogTitle className="mt-2 text-2xl font-semibold text-fg-primary">
                   {selected.name}
                 </DialogTitle>
-                <DialogDescription className="mt-2 max-w-[470px] text-sm leading-6 text-[#9fa1b1]">
+                <DialogDescription className="mt-2 max-w-[470px] text-sm leading-6 text-fg-secondary">
                   {selected.description}
                 </DialogDescription>
               </div>
             </header>
             <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
               {selected.oauth_available && (
-                <div className="rounded-[10px] border border-[#4f81f7]/30 bg-[#4f81f7]/[.06] p-4">
+                <div className="rounded-[10px] border border-[#4f81f7]/30 bg-accent/[.06] p-4">
                   <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
-                  <p className="mt-1 text-xs leading-5 text-[#9fa1b1]">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
-                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
+                  <p className="mt-1 text-xs leading-5 text-fg-secondary">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
+                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
                 </div>
               )}
               {selected.fields.map((field) => (
                 <div key={field.key} className="space-y-2">
                   <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>
-                  <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-[#2b2d32] bg-[#191b20]" />
-                  {field.help && <p className="text-xs leading-5 text-[#828491]">{field.help}</p>}
+                  <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-border-default bg-surface" />
+                  {field.help && <p className="text-xs leading-5 text-fg-tertiary">{field.help}</p>}
                 </div>
               ))}
-              <div className="rounded-[10px] bg-[#121519] p-4 text-xs leading-5 text-[#9fa1b1]"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
+              <div className="rounded-[10px] bg-surface-base p-4 text-xs leading-5 text-fg-secondary"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
             </div>
-            <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#2b2d32] p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
-              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-[#828491]">Документация сервиса</a>
-              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
+            <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-border-default p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
+              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-fg-tertiary">Документация сервиса</a>
+              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
             </footer>
           </DialogContent>
         )}

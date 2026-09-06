@@ -27,6 +27,38 @@ const record: MaxProjectConfig = {
 
 afterEach(() => vi.clearAllMocks());
 
+it("supports keyboard tab selection, retains edited fields and closes accessibly without saving", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    await act(async () => { tabs[0].focus(); tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(document.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(tabs[1].id);
+    await act(async () => tabs[2].click());
+    await act(async () => {
+      const input = document.querySelector<HTMLInputElement>("#max-legal-name")!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Несохранённый владелец");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => tabs[0].click());
+    await act(async () => tabs[2].click());
+    expect(document.querySelector<HTMLInputElement>("#max-legal-name")!.value).toBe("Несохранённый владелец");
+    const close = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === "Закрыть");
+    expect(close).toBeDefined();
+    await act(async () => close!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(mocks.save).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
 it.each([false, true])("saves/retries the owner tab and refreshes preview without a build (pending=%s)", async (pending) => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.get.mockResolvedValue(pending ? { ...record, synced_snapshot_id: null } : record);

@@ -79,6 +79,16 @@ describe("Integration Hub implementation handoff", () => {
     expect(window.sessionStorage.getItem("omnia:max:starter:project-1")).toBe("Добавь оплату заказа и проверку статуса через подключённую ЮKassa.");
     expect(boundary.push).toHaveBeenCalledWith("/max/project-1?starter=1");
   });
+  it("shows an empty search result and lets the user reset filters", async () => {
+    await render([]);
+    const search = container.querySelector<HTMLInputElement>('input[placeholder="Найти сервис"]')!;
+    await act(async () => input(search, "нет такого сервиса"));
+    expect(container.textContent).toContain("Ничего не найдено");
+    expect(button("Подключить")).toBeUndefined();
+    await click("Сбросить фильтры");
+    expect(search.value).toBe("");
+    expect(button("Подключить")).toBeDefined();
+  });
   it("does not dispatch a blank proposal or a cancelled dialog", async () => {
     await render([connection]);
     await click("Добавить в приложение");

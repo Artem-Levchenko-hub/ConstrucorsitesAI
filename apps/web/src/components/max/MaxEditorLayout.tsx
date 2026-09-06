@@ -87,7 +87,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
             </Dialog.Trigger>
             <Dialog.Portal>
               <Dialog.Overlay className="max-editor-overlay" />
-              <Dialog.Content className="max-editor-launch-drawer" aria-describedby={undefined}>
+              <Dialog.Content data-max-studio className="max-editor-launch-drawer max-studio-launch-dialog" aria-describedby={undefined}>
                 <Dialog.Title className="sr-only">Публикация приложения</Dialog.Title>
                 {launch}
               </Dialog.Content>

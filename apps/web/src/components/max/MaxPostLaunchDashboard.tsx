@@ -1,136 +1,90 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  Bot,
-  Check,
-  CircleAlert,
-  Clock3,
-  Cloud,
-  ExternalLink,
-  GitCommitHorizontal,
-  RefreshCw,
-  RotateCcw,
-  ShieldCheck,
-  Webhook,
-} from "lucide-react";
-
+import { ArrowUpRight, Check, CircleAlert, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import Link from "next/link";
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getDeployHistory, getLastDeploy, getRuntime } from "@/lib/api/runtime";
+import type { DeployPhase, RuntimeState } from "@/lib/api/types";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
+import { isMaxDeployActive } from "@/lib/max-launch-state";
+
+const phaseLabels: Record<DeployPhase, string> = {
+  idle: "Ещё не запускалась", queued: "В очереди", building: "Сборка", pushing: "Передача сборки",
+  swapping: "Проверка и переключение", cancelling: "Остановка", cancelled: "Отменена", done: "Опубликовано", failed: "Ошибка",
+};
+const runtimeLabels: Record<RuntimeState, string> = { running: "Запущена", provisioning: "Готовится", paused: "Приостановлена", stopped: "Остановлена", failed: "Ошибка запуска" };
 
 export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: string; projectName: string }) {
   const runtime = useQuery({ queryKey: ["runtime", projectId], queryFn: () => getRuntime(projectId), retry: false });
-  const deploy = useQuery({ queryKey: ["deploy", projectId], queryFn: () => getLastDeploy(projectId), retry: false });
+  const deploy = useQuery({ queryKey: ["deploy", projectId], queryFn: () => getLastDeploy(projectId), retry: false,
+    refetchInterval: query => isMaxDeployActive(query.state.data?.phase ?? "idle", query.state.data?.run_id) ? 1_500 : false });
   const readiness = useQuery({ queryKey: ["max-readiness", projectId], queryFn: () => getMaxReadiness(projectId), retry: false, refetchInterval: 10_000 });
   const history = useQuery({ queryKey: ["deploy-history", projectId], queryFn: () => getDeployHistory(projectId), retry: false });
   const integration = useQuery({ queryKey: ["max-integration", projectId], queryFn: () => getMaxIntegration(projectId), retry: false });
+  const statusError = readiness.isError || deploy.isError;
+  const publicationState = getMaxPublicationState(readiness.isSuccess ? readiness.data : undefined, deploy.data?.phase);
+  const published = !statusError && publicationState === "published";
+  const active = !deploy.isError && isMaxDeployActive(deploy.data?.phase ?? "idle", deploy.data?.run_id);
+  const statusLabel = statusError ? "Не удалось проверить публикацию"
+    : readiness.isPending || deploy.isPending ? "Проверяем публикацию"
+    : published ? "Текущая версия опубликована" : "Текущая версия не опубликована";
+  const url = published ? deploy.data?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
+  const latest = deploy.isSuccess ? deploy.data : undefined;
+  const integrationLabel = integration.isError ? "Не удалось проверить" : integration.isPending ? "Проверяем…" : integration.data?.connected ? integration.data.bot_name ?? "Подключён" : "Не подключён";
 
-  const publicationState = getMaxPublicationState(readiness.data, deploy.data?.phase);
-  const healthy = publicationState === "published";
-  const statusLabel = healthy
-    ? "Текущая версия опубликована"
-    : publicationState === "checking"
-      ? "Проверяем публикацию"
-      : "Текущая версия не опубликована";
-  const url = healthy ? deploy.data?.prod_url ?? integration.data?.app_url : null;
+  function refreshStatus() { void readiness.refetch(); void deploy.refetch(); void runtime.refetch(); void integration.refetch(); }
 
   return (
-    <MaxSectionShell
-      projectId={projectId}
-      projectName={projectName}
-      active="dashboard"
-      eyebrow="Приложение запущено"
-      title="После запуска"
-      lead="Production-состояние, URL, контейнер, связь с MAX и история версий. Данные обновляются с сервера — этот экран не имитирует готовность локальными флагами."
-    >
-      <section className="mt-8 rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
-        <div className="flex flex-col gap-5 border-b border-[#2b2d32] p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className={`size-2 rounded-full ${healthy ? "bg-[#248a4b]" : "bg-[#e8c547]"}`} />
-              <span className={`text-xs font-medium ${healthy ? "text-success-fg" : "text-[#e8c547]"}`}>{statusLabel}</span>
-            </div>
-            <h2 className="mt-3 text-2xl font-semibold">{projectName}</h2>
-            {url ? (
-              <a href={url} target="_blank" rel="noreferrer" className="mt-2 flex min-w-0 items-center gap-1.5 font-mono text-xs text-[#6a95fa]"><span className="truncate">{url}</span><ExternalLink className="size-3 shrink-0" /></a>
-            ) : <p className="mt-2 text-xs text-[#828491]">Текущая версия появится по постоянному URL после публикации</p>}
+    <MaxSectionShell projectId={projectId} projectName={projectName} active="dashboard" eyebrow="Управление" title="Обзор приложения" lead="Публикация, подключения и история изменений вашего приложения.">
+      <div className="max-dashboard-overview">
+        <section className="max-dashboard-project" aria-label="Ваше приложение">
+          <p className={statusError ? "text-danger-fg" : published ? "text-success-fg" : "text-fg-secondary"} role="status">{published ? <Check className="size-4" /> : statusError ? <CircleAlert className="size-4" /> : <Loader2 className={`size-4 ${readiness.isPending || deploy.isPending ? "animate-spin" : ""}`} />}{statusLabel}</p>
+          <h2>{projectName}</h2>
+          {url ? <a className="max-dashboard-url" href={url} target="_blank" rel="noreferrer">{url}<ExternalLink className="size-4 shrink-0" /></a> : <p className="text-sm text-fg-secondary">{statusError ? "Повторите проверку, чтобы узнать актуальный статус и адрес приложения." : "Постоянный адрес текущей версии появится после публикации."}</p>}
+          <div className="max-dashboard-actions">
+            {url ? <Button asChild><a href={url} target="_blank" rel="noreferrer">Открыть приложение <ArrowUpRight className="size-4" /></a></Button>
+              : <Button asChild><Link href={`/max/${projectId}/publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
+            <Button asChild variant="outline"><Link href={`/max/${projectId}`}>Редактировать</Link></Button>
           </div>
-          <div className="w-full lg:min-w-[280px] lg:w-auto"><RuntimeButton projectId={projectId} display="compact" /></div>
+          {publicationState === "outdated" && !statusError && <p className="max-launch-notice">После последней публикации появились изменения. Проверьте их в редакторе и опубликуйте обновление.</p>}
+          {active && <p className="max-launch-notice" role="status">{phaseLabels[deploy.data!.phase]} — публикация выполняется на сервере.</p>}
+          {latest?.phase === "failed" && <div role="alert" className="max-dashboard-error"><strong>Последняя публикация не завершилась</strong><p>{latest.error ?? "Проверьте готовность и повторите попытку."}</p></div>}
+          {statusError && <Button variant="outline" className="mt-3" onClick={refreshStatus}>Повторить проверку</Button>}
+          <Link className="max-dashboard-settings-link" href={`/max/${projectId}/settings?tab=app`}>Данные и настройки приложения <ArrowUpRight className="size-4" /></Link>
+        </section>
+        <section className="max-dashboard-release" aria-labelledby="max-release-heading">
+          <h2 id="max-release-heading">Последняя публикация</h2>
+          <p>Сведения о последней операции на сервере</p>
+          <dl>
+            <div><dt>Статус операции</dt><dd>{deploy.isError ? "Не удалось загрузить" : deploy.isPending ? "Проверяем…" : latest ? phaseLabels[latest.phase] : "Нет данных"}</dd></div>
+            <div><dt>Версия сборки</dt><dd>{latest?.image_tag?.split(":").at(-1) ?? "—"}</dd></div>
+            <div><dt>Размещение</dt><dd>{latest?.target_label ?? "—"}</dd></div>
+            <div><dt>Операция завершена</dt><dd>{latest?.finished_at ? new Date(latest.finished_at).toLocaleString("ru-RU") : "—"}</dd></div>
+          </dl>
+          <p className="max-dashboard-monitoring-note">Постоянный мониторинг доступности не подключён. Успешная публикация подтверждает проверку при выпуске версии.</p>
+        </section>
+      </div>
+
+      <section className="max-dashboard-system" aria-labelledby="max-system-heading">
+        <header><div><h2 id="max-system-heading">Состояние и подключения</h2><p>Данные среды разработки и связи с MAX</p></div><Button variant="outline" onClick={refreshStatus} disabled={runtime.isFetching || integration.isFetching || readiness.isFetching || deploy.isFetching}><RefreshCw className="size-4" />Обновить</Button></header>
+        <div className="max-dashboard-system-row"><div><h3>Среда разработки</h3><p>Используется редактором и превью. Её активность не определяет публикацию приложения.</p></div>
+          <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">Не удалось проверить среду</p> : runtime.isPending ? <p>Проверяем…</p> : <><p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p><RuntimeButton projectId={projectId} display="compact" /></>}</div>
         </div>
-        <div className="grid divide-y divide-[#2b2d32] sm:grid-cols-4 sm:divide-x sm:divide-y-0">
-          {[
-            ["Состояние", runtime.data?.state ?? "—"],
-            ["Версия", deploy.data?.image_tag?.split(":").at(-1)?.slice(0, 12) ?? "—"],
-            ["Цель", deploy.data?.target_label ?? "Omnia"],
-            ["Последний релиз", deploy.data?.finished_at ? new Date(deploy.data.finished_at).toLocaleString("ru-RU") : "—"],
-          ].map(([label, value]) => (
-            <div key={label} className="p-5"><p className="omnia-kicker text-[#828491]">{label}</p><p className="mt-2 truncate text-sm font-semibold">{value}</p></div>
-          ))}
-        </div>
+        <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}/settings?tab=bot`}>Настроить MAX</Link></Button></div>
+        <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3><p>Серверные события приложения</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? "Не удалось проверить" : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
       </section>
 
-      <section className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {[
-          [Cloud, "Контейнер", runtime.data?.state === "running", runtime.data?.state ?? "Нет данных"],
-          [Activity, "Health-check", healthy, healthy ? "Отвечает" : "Нужна проверка"],
-          [Bot, "Безопасный вход", Boolean(integration.data?.connected), integration.data?.bot_name ?? "Не подключён"],
-          [Webhook, "Связь с MAX", integration.data?.status === "active", integration.data?.status === "active" ? "Активна" : "Нужна проверка"],
-        ].map(([Icon, title, ok, copy]) => {
-          const ItemIcon = Icon as typeof Cloud;
-          return (
-            <article key={String(title)} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5">
-              <div className="flex items-center justify-between">
-                <span className="grid size-9 place-items-center rounded-[8px] bg-[#2b2d32]"><ItemIcon className="size-4 text-[#4f81f7]" /></span>
-                {ok ? <Check className="size-4 text-success-fg" /> : <CircleAlert className="size-4 text-[#6a95fa]" />}
-              </div>
-              <h3 className="mt-5 text-sm font-semibold">{String(title)}</h3>
-              <p className="mt-1 truncate text-xs text-[#828491]">{String(copy)}</p>
-            </article>
-          );
-        })}
-      </section>
-
-      <section className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
-        <div className="overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
-          <div className="flex items-center justify-between border-b border-[#2b2d32] p-5">
-            <div><p className="omnia-kicker text-[#828491]">Versions</p><h2 className="mt-1 text-lg font-semibold">История публикаций</h2></div>
-            <Button variant="outline" size="sm" onClick={() => history.refetch()}><RefreshCw className="size-3.5" />Обновить</Button>
-          </div>
-          <div className="divide-y divide-[#25272b]">
-            {(history.data ?? []).slice(0, 8).map((item, index) => (
-              <div key={item.run_id ?? `${item.started_at}-${index}`} className="grid gap-3 p-5 lg:grid-cols-[minmax(0,1fr)_130px_110px] lg:items-center">
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className={`grid size-8 place-items-center rounded-full ${item.phase === "done" ? "bg-[#248a4b]/10 text-success-fg" : "bg-[#c63d35]/10 text-danger-fg"}`}><GitCommitHorizontal className="size-4" /></span>
-                  <div className="min-w-0"><p className="truncate text-sm font-medium">{item.image_tag?.split(":").at(-1) ?? "Production build"}</p><p className="mt-1 truncate text-[10px] text-[#828491]">{item.detail ?? item.target_label ?? "Omnia"}</p></div>
-                </div>
-                <span className="text-xs text-[#9fa1b1]">{item.finished_at ? new Date(item.finished_at).toLocaleDateString("ru-RU") : "в процессе"}</span>
-                <span className={`text-xs font-medium ${item.phase === "done" ? "text-success-fg" : item.phase === "failed" ? "text-danger-fg" : "text-[#e8c547]"}`}>{item.phase}</span>
-              </div>
-            ))}
-            {!history.isLoading && (history.data ?? []).length === 0 && <p className="p-8 text-center text-sm text-[#828491]">История появится после первой публикации.</p>}
-          </div>
-        </div>
-
-        <aside className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
-          <p className="omnia-kicker text-[#828491]">Эксплуатация</p>
-          <h2 className="mt-2 text-lg font-semibold">Что доступно без разработчика</h2>
-          <div className="mt-6 space-y-5 text-sm">
-            {[
-              [Clock3, "Всегда активный контейнер", "Включается рядом со статусом runtime."],
-              [ShieldCheck, "Health-check после релиза", "Трафик переключается только после успешной проверки."],
-              [RotateCcw, "Версии и откат", "Неудачную публикацию можно повторить или вернуть предыдущую."],
-            ].map(([Icon, title, copy]) => {
-              const ItemIcon = Icon as typeof Clock3;
-              return <div key={String(title)} className="flex gap-3"><ItemIcon className="mt-0.5 size-4 shrink-0 text-[#4f81f7]" /><div><p className="font-medium">{String(title)}</p><p className="mt-1 text-xs leading-5 text-[#828491]">{String(copy)}</p></div></div>;
-            })}
-          </div>
-        </aside>
+      <section className="max-dashboard-history" aria-labelledby="max-history-heading">
+        <header><h2 id="max-history-heading">История публикаций</h2><Button variant="outline" size="sm" onClick={() => void history.refetch()} disabled={history.isFetching}><RefreshCw className="size-4" />Обновить историю</Button></header>
+        {history.isPending ? <p role="status" className="max-dashboard-empty">Загружаем историю…</p>
+          : history.isError ? <div className="max-dashboard-empty" role="alert"><p>Не удалось загрузить историю публикаций.</p><Button variant="outline" onClick={() => void history.refetch()}>Повторить загрузку</Button></div>
+          : history.data.length === 0 ? <p className="max-dashboard-empty">История появится после первой публикации.</p>
+          : <ol>{history.data.slice(0, 8).map((item, index) => <li key={item.run_id ?? `${item.started_at}-${index}`}><div><strong>{item.image_tag?.split(":").at(-1) ?? "Публикация приложения"}</strong><small>{item.target_label ?? "Размещение не указано"}</small></div><time>{item.finished_at ? new Date(item.finished_at).toLocaleString("ru-RU") : item.started_at ? new Date(item.started_at).toLocaleString("ru-RU") : "—"}</time><span className={item.phase === "done" ? "text-success-fg" : item.phase === "failed" ? "text-danger-fg" : "text-fg-secondary"}>{phaseLabels[item.phase]}</span>{item.error && <p className="text-sm text-danger-fg">{item.error}</p>}</li>)}</ol>}
       </section>
     </MaxSectionShell>
   );

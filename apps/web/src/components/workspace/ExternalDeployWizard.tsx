@@ -27,6 +27,7 @@ import {
   launchExternalDeploy,
 } from "@/lib/api/external-deploy";
 import { getLastDeploy } from "@/lib/api/runtime";
+import "@/components/max/max-studio.css";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "Что-то пошло не так";
@@ -50,7 +51,7 @@ function Field({
   );
 }
 
-export function ExternalDeployWizard({ projectId }: { projectId: string }) {
+export function ExternalDeployWizard({ projectId, maxStudio = false }: { projectId: string; maxStudio?: boolean }) {
   const queryClient = useQueryClient();
   const [domain, setDomain] = useState("");
   const [host, setHost] = useState("");
@@ -174,11 +175,12 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
 
   return (
     <section
-      className="space-y-4 rounded-xl border border-[#2b2d32] bg-[#191b20] p-4"
+      data-max-studio={maxStudio || undefined}
+      className="space-y-4 rounded-xl border border-border-default bg-surface p-4"
       data-testid="external-deploy-wizard"
     >
       <div className="flex items-start gap-3">
-        <span className="rounded-lg bg-[#4f81f7]/10 p-2 text-[#4f81f7]">
+        <span className="rounded-lg bg-accent/10 p-2 text-accent">
           <Rocket className="h-4 w-4" />
         </span>
         <div>
@@ -197,7 +199,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
           "Проект запускается по HTTPS",
         ].map((step, index) => (
           <div key={step} className="rounded-md bg-surface-overlay/70 p-2">
-            <span className="mb-1 block font-semibold text-[#4f81f7]">
+            <span className="mb-1 block font-semibold text-accent">
               0{index + 1}
             </span>
             {step}
@@ -278,7 +280,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 disabled={!!target}
                 className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${
                   authType === "password"
-                    ? "border-[#4f81f7] bg-[#4f81f7]/10"
+                    ? "border-[#4f81f7] bg-accent/10"
                     : "border-border-subtle text-fg-secondary"
                 }`}
               >
@@ -293,7 +295,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                 disabled={!!target}
                 className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${
                   authType === "key"
-                    ? "border-[#4f81f7] bg-[#4f81f7]/10"
+                    ? "border-[#4f81f7] bg-accent/10"
                     : "border-border-subtle text-fg-secondary"
                 }`}
               >
@@ -326,7 +328,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
                   reset();
                 }}
                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                className="h-20 w-full resize-y rounded-md border border-border-subtle bg-surface-overlay px-2 py-1.5 font-mono text-xs"
+                className={`h-20 w-full resize-y rounded-md border border-border-subtle bg-surface-overlay px-2 py-1.5 font-mono text-xs ${maxStudio ? "max-studio-secret" : ""}`}
                 disabled={!!target}
               />
             )}
@@ -428,9 +430,9 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
             {completed ? (
               <CheckCircle2 className="h-4 w-4 text-success" />
             ) : activeDeploy || deployQuery.isFetching ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[#4f81f7]" />
+              <Loader2 className="h-4 w-4 animate-spin text-accent" />
             ) : (
-              <Rocket className="h-4 w-4 text-[#4f81f7]" />
+              <Rocket className="h-4 w-4 text-accent" />
             )}
             <p className="flex-1 text-xs font-semibold">
               {completed
@@ -456,7 +458,7 @@ export function ExternalDeployWizard({ projectId }: { projectId: string }) {
               href={deployQuery.data.prod_url}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1 text-xs text-[#6a95fa] hover:underline"
+              className="flex items-center gap-1 text-xs text-accent-secondary hover:underline"
             >
               Открыть сайт <ExternalLink className="h-3 w-3" />
             </a>
