@@ -128,3 +128,25 @@ describe("dark blue product theme", () => {
     expect(violations).toEqual([]);
   });
 });
+
+describe("light MAX editor theme", () => {
+  const editorCss = readFileSync(resolve(SRC, "components/max/max-editor.css"), "utf8");
+  const editorTokens: Record<string, string> = {};
+  postcss.parse(editorCss).walkRules("[data-max-editor]", (rule) => {
+    rule.walkDecls((declaration) => { editorTokens[declaration.prop] = declaration.value; });
+  });
+  it("keeps secondary text and primary actions readable on the light canvas", () => {
+    for (const token of ["--color-fg-primary", "--color-fg-secondary", "--color-fg-tertiary"]) {
+      expect(contrast(editorTokens[token], "#f7f8fb")).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(contrast("#ffffff", editorTokens["--color-accent"])).toBeGreaterThanOrEqual(4.5);
+    expect(editorTokens["--color-accent-fg"]).toBe(editorTokens["--color-fg-on-accent"]);
+  });
+  it("overrides the legacy dark composer surface, not just its border", () => {
+    let background: string | undefined;
+    postcss.parse(editorCss).walkRules("[data-max-editor] .max-studio-prompt > .rounded-lg", (rule) => {
+      rule.walkDecls("background", (declaration) => { background = declaration.value; });
+    });
+    expect(background).toBe("#fff");
+  });
+});

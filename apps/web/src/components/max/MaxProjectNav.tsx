@@ -94,8 +94,8 @@ export function MaxProjectNav({
               className={cn(
                 "inline-flex h-10 items-center gap-2 rounded-[8px] px-3 text-xs",
                 selected
-                  ? "bg-[#121519] font-medium text-white"
-                  : "text-[#9fa1b1] hover:bg-[#121519]",
+                  ? "bg-surface-base font-medium text-fg-primary"
+                  : "text-fg-secondary hover:bg-surface-base",
               )}
             >
               <Icon className="size-3.5" />
@@ -110,8 +110,8 @@ export function MaxProjectNav({
   return (
     <div>
       {showProgress && (
-        <div className="mb-3 rounded-[8px] border border-[#2b2d32] bg-[#121519] px-3 py-3">
-          <div className="flex items-center justify-between gap-2 text-[10px] text-[#828491]">
+        <div className="mb-3 rounded-[8px] border border-border-default bg-surface-base px-3 py-3">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-fg-tertiary">
             <span>Путь до запуска</span>
             <span className="tabular-nums">
               {readiness.isSuccess
@@ -119,7 +119,7 @@ export function MaxProjectNav({
                 : "Проверяем…"}
             </span>
           </div>
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#2b2d32]">
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-surface-overlay">
             <div
               className="h-full rounded-full bg-[#4f81f7] transition-[width]"
               style={{ width: `${readiness.isSuccess ? journey.progress : 0}%` }}
@@ -144,8 +144,8 @@ export function MaxProjectNav({
               className={cn(
                 "flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs transition-colors",
                 selected
-                  ? "bg-[#2b2d32] font-medium text-white"
-                  : "text-[#9fa1b1] hover:bg-[#121519] hover:text-white",
+                  ? "bg-surface-overlay font-medium text-fg-primary"
+                  : "text-fg-secondary hover:bg-surface-base hover:text-fg-primary",
               )}
             >
               <Icon className={cn("size-4 shrink-0", selected && "text-[#4f81f7]")} />

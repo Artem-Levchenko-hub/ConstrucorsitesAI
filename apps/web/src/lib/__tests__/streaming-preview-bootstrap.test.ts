@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import morphdom from "morphdom";
 
 import {
@@ -82,6 +82,7 @@ function genImg(): HTMLImageElement {
 afterEach(() => {
   for (const fn of activeListeners) window.removeEventListener("message", fn);
   activeListeners = [];
+  vi.restoreAllMocks();
 });
 
 describe("streaming-preview bootstrap harness (V3.0b)", () => {
@@ -180,7 +181,22 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
   // на готовой /p/<slug>, НО per-section ПО МЕРЕ стрима. Бутстрап включает
   // html.omnia-anim (взводит скрытый старт kit-CSS) и сам метит .is-visible на
   // следующем кадре — kit-JS (IntersectionObserver) намеренно не грузится.
-  const flushRaf = () => new Promise((r) => setTimeout(r, 60));
+  // The runtime schedules two frames. Wall-clock 60 ms does not guarantee
+  // either frame ran under parallel CI load; await the actual DOM contract.
+  const expectRevealed = (id: string) => vi.waitFor(() => {
+    expect(document.getElementById(id)?.classList.contains("is-visible")).toBe(true);
+  }, { timeout: 1_000, interval: 10 });
+
+  it("waits for section birth when animation frames are delayed", async () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) =>
+      window.setTimeout(() => callback(performance.now()), 75),
+    );
+    boot();
+    send({ type: "omnia:render", bodyHtml: '<section class="reveal" id="slow">Контент</section>', cssText: "" });
+    expect(document.getElementById("slow")!.classList.contains("is-visible")).toBe(false);
+    await expectRevealed("slow");
+    expect(document.getElementById("slow")!.classList.contains("is-visible")).toBe(true);
+  });
 
   it("(c-render) arms html.omnia-anim and reveals a streamed .reveal section", async () => {
     boot();
@@ -202,7 +218,7 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
     expect(r!.hasAttribute("data-omnia-born")).toBe(true);
     expect(r!.classList.contains("is-visible")).toBe(false);
     // После кадра анимации секция раскрыта.
-    await flushRaf();
+    await expectRevealed("r");
     expect(r!.classList.contains("is-visible")).toBe(true);
   });
 
@@ -214,7 +230,7 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
       bodyHtml: '<section class="reveal" id="hero"><h1>Привет</h1></section>',
       cssText: "",
     });
-    await flushRaf();
+    await expectRevealed("hero");
     const hero = document.getElementById("hero")!;
     expect(hero.classList.contains("is-visible")).toBe(true);
 
@@ -237,7 +253,7 @@ describe("streaming-preview bootstrap harness (V3.0b)", () => {
     expect(features.classList.contains("is-visible")).toBe(false);
     expect(features.hasAttribute("data-omnia-born")).toBe(true);
 
-    await flushRaf();
+    await expectRevealed("features");
     expect(features.classList.contains("is-visible")).toBe(true);
     // Герой по-прежнему виден после рождения второй секции.
     expect(document.getElementById("hero")!.classList.contains("is-visible")).toBe(

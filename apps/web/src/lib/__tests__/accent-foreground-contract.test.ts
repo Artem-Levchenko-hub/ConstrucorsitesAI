@@ -14,7 +14,7 @@ const landing = source("src/app/page.tsx");
 
 describe("semantic foreground contracts", () => {
   it("keeps Studio user messages and journey markers readable on blue", () => {
-    expect(chatMessage).toContain('studio ? "text-[#121519]" : "text-accent"');
+    expect(chatMessage).toContain('studio && isUser && "bg-accent-subtle text-accent"');
     expect(chatMessage).toContain("text-inherit");
     expect(chatMessage).not.toContain("text-white/80 underline-offset-2");
     expect(chatMessage).not.toContain("text-inherit opacity-80");

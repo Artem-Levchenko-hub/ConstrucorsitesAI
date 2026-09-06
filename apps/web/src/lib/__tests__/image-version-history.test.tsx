@@ -71,6 +71,45 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe("image version history", () => {
+  it("mounts only one preview on mobile and closes it with Escape", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    render(<MaxWorkspaceShell project={project} email="a@example.com" />);
+    await settle();
+    expect(document.querySelectorAll("[data-testid='max-live-preview']")).toHaveLength(0);
+    click("[data-testid='max-mobile-preview-open']");
+    await settle();
+    expect(document.querySelectorAll("[data-testid='max-live-preview']")).toHaveLength(1);
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await settle();
+    expect(document.querySelectorAll("[data-testid='max-live-preview']")).toHaveLength(0);
+    expect(document.activeElement).toBe(container.querySelector("[data-testid='max-mobile-preview-open']"));
+  });
+  it("does not distract a new project with an empty version rail", async () => {
+    render(<Preview versions={[]} selected={null} head="" />);
+    await settle();
+    expect(container.querySelector("[data-testid='max-version-rail']")).toBeNull();
+  });
+  it("keeps a failed history request visible and retryable even without versions", async () => {
+    const retry = vi.fn();
+    render(<MaxLivePreview project={project} versions={[]} historyError snapshotsLoading={false}
+      currentSnapshotId="s32" selectedVersionId={null} onSelectVersion={vi.fn()}
+      onRestoreSnapshot={api.rollback} restoringSnapshot={false} onLoadOlder={retry} />);
+    await settle();
+    click("[data-testid='max-history-load-older']");
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  it("has one launch entry in the editor header and keeps project navigation behind a button", async () => {
+    render(<MaxWorkspaceShell project={project} email="a@example.com" />);
+    await settle();
+    const launch = container.querySelector<HTMLButtonElement>("header [data-testid='max-launch-open']");
+    expect(launch?.textContent).toContain("Опубликовать");
+    expect(container.querySelector("[data-testid='max-next-action-bar']")).toBeNull();
+    expect(container.querySelector("[data-testid='max-navigation-scroll']")).toBeNull();
+    expect(container.querySelector("header a[href='/max/p/settings?tab=app']")).not.toBeNull();
+    click("[data-testid='max-navigation-open']");
+    await settle();
+    expect(document.querySelector("[role='dialog'] [data-testid='max-navigation-scroll']")).not.toBeNull();
+  });
   it("shows a full-height historical image with no runtime/session/restore calls", async () => {
     render(<Preview versions={[version(32), version(31)]} selected="v31" />); await settle();
     expect(image()?.getAttribute("src")).toBe("/images/v31.png");

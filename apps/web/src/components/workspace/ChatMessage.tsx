@@ -82,10 +82,10 @@ export function ChatMessage({
       variants={fadeUp}
       initial="hidden"
       animate="visible"
+      data-chat-role={studio ? message.role : undefined}
       className={cn(
         "flex gap-3 px-4 py-3",
         studio && "px-8 py-3.5",
-        studio && isUser && "flex-row-reverse",
       )}
     >
       <div
@@ -95,19 +95,19 @@ export function ChatMessage({
             ? "bg-accent-subtle border border-accent/40"
             : "bg-surface-overlay border border-border-default",
           studio && "h-8 w-8 border-0",
-          studio && isUser && "bg-[#9fa1b1] text-[#121519]",
-          studio && !isUser && "bg-[#2b2d32] text-[#4f81f7]",
+          studio && isUser && "bg-accent-subtle text-accent",
+          studio && !isUser && "bg-surface-overlay text-[#4f81f7]",
         )}
       >
         {isUser ? (
-          <UserIcon className={cn("h-3.5 w-3.5", studio ? "text-[#121519]" : "text-accent")} />
+          <UserIcon className="h-3.5 w-3.5 text-accent" />
         ) : (
           <Bot className="h-3.5 w-3.5 text-fg-secondary" />
         )}
       </div>
 
-      <div className={cn("flex-1 min-w-0 space-y-1.5", studio && "max-w-[420px]", studio && isUser && "flex flex-col items-end")}>
-        <div className={cn("flex items-center gap-2 text-xs", studio && "hidden")}>
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="flex items-center gap-2 text-xs">
           <span className="font-semibold text-fg-primary tracking-tight">
             {isUser ? "Вы" : "Omnia"}
           </span>
@@ -119,8 +119,7 @@ export function ChatMessage({
         <div
           className={cn(
             "text-sm text-fg-primary leading-6 space-y-2",
-            studio && "w-full rounded-[10px] border border-[#2b2d32] bg-[#191b20] px-4 py-3.5",
-            studio && isUser && "border-[#4f81f7] bg-[#4f81f7] text-[#121519]",
+            studio && "max-editor-message-body w-full",
           )}
         >
           {!isUser && streaming && projectId && (

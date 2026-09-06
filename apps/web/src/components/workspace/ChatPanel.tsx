@@ -396,17 +396,17 @@ export function ChatPanel({
         )}
 
         {!isPending && messages && messages.length === 0 && (
-          <div className="p-6 text-center space-y-2">
-            <div className="text-sm text-fg-secondary">
+          <div className={embedded ? "max-editor-empty" : "p-6 text-center space-y-2"}>
+            <h2 className="text-sm text-fg-primary">
               {mode === "max"
-                ? "Расскажите, что изменить в Mini App."
+                ? "Какое приложение создадим?"
                 : "Поговорим о вашем сайте."}
-            </div>
-            <div className="text-xs text-fg-tertiary leading-5">
+            </h2>
+            <p className="text-xs text-fg-tertiary leading-5">
               {mode === "max" ? (
                 <>
-                  Здесь нельзя переключить проект на обычный сайт: все правки
-                  сохраняют MAX Bridge, мобильный интерфейс и интеграцию бота.
+                  Расскажите, для кого оно и что должен сделать пользователь.
+                  Например: «Каталог кофе с заказом к определённому времени».
                 </>
               ) : (
                 <>
@@ -415,7 +415,7 @@ export function ChatPanel({
                   «Сделай лендинг для пиццерии с меню и формой заказа».
                 </>
               )}
-            </div>
+            </p>
           </div>
         )}
 
@@ -435,11 +435,14 @@ export function ChatPanel({
           !showSurvey &&
           !isStreaming &&
           productAdvice.data?.items.length ? (
-            <MaxProductAdvisor
+            <details className={embedded ? "max-editor-advice" : "m-4"}>
+              <summary>Подсказки для улучшения приложения</summary>
+              <MaxProductAdvisor
               items={productAdvice.data.items}
               applyingId={applyingAdviceId}
               onApply={handleApplyAdvice}
-            />
+              />
+            </details>
           ) : null}
 
         {!showSurvey && chips && chips.choices.length > 0 && (
@@ -472,7 +475,7 @@ export function ChatPanel({
           textareaRef={inputRef}
           placeholder={
             mode === "max"
-              ? "Опишите правку или вставьте: ЮKassa — ключ …"
+              ? "Опишите приложение или изменения…"
               : undefined
           }
           ariaLabel={
