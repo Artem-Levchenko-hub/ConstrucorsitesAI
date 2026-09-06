@@ -32,6 +32,7 @@ Fixture results prove presentation and client-side state handling, not provider 
 - Task 3: 52 files / 304 tests; final review-fix focus 26/26 plus TypeScript/ESLint/whitespace passed.
 - Task 4: 54 files / 334 tests before bounded review fixes; final focused 38/38 plus TypeScript/ESLint/whitespace passed.
 - Task 5 pre-rollout: VPS accessible-label RED failed on the missing `htmlFor`; GREEN and related project/data/deploy tests passed 21/21. TypeScript and ESLint passed. The controller still owns the combined full suite, explicit `NEXT_PUBLIC_USE_MOCKS=false` production build and final branch review.
+- Final style integration review: focused RED reproduced low-contrast pricing text/icon and the missing admin dark boundary. GREEN plus related public/account/theme tests passed 52/52; TypeScript and ESLint passed. Browser QA confirmed the pricing CTA is white on blue at rest and populated synthetic admin users/audit remain readable without mutations; hover is covered by the computed CSS regression, not claimed as a browser interaction.
 
 ## Production rollout record
 

@@ -67,7 +67,7 @@
 .max-public-content { max-width: 1180px; margin: auto; padding: 56px 28px 76px; }
 .max-public-content :is(article, .omnia-card) { border-color: var(--color-border-default) !important; background: var(--color-surface) !important; color: var(--color-fg-primary); }
 .max-public-content :is(p, li) { color: var(--color-fg-secondary); }
-.max-public-content :is(a, svg) { color: var(--color-accent-secondary); }
+.max-public-content a:not(.max-public-button) { color: var(--color-accent-secondary); }
 .max-public-footer { border-top: 1px solid var(--color-border-default); background: #fff; }
 .max-public-footer > div { display: flex; max-width: 1180px; margin: auto; padding: 34px 28px; align-items: center; justify-content: space-between; gap: 24px; color: var(--color-fg-tertiary); font-size: 12px; }
 .max-public-footer nav { display: flex; flex-wrap: wrap; gap: 18px; }
