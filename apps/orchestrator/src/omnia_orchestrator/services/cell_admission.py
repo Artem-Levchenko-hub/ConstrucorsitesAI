@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import fsum
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
 
@@ -241,9 +242,14 @@ class CellAdmissionGate:
         # first v2 cell on an otherwise unreserved eight-core host. Protect CPU
         # using the atomic full-envelope ledger, which includes provisional
         # claims, and leave the explicit host reserve outside cell allocation.
-        if snapshot.cpu_count - reserved_capacity.cpu_cores - required.cpu_cores < (
-            self.profile.host_cpu_reserve_cores
-        ):
+        # Sum demand instead of subtracting fractional quotas: 8 - 4.2 - 1.8
+        # rounds below the protected 2 cores and rejects an exact-fit release.
+        # Accurate summation needs no tolerance that could admit real excess.
+        if fsum((
+            reserved_capacity.cpu_cores,
+            required.cpu_cores,
+            self.profile.host_cpu_reserve_cores,
+        )) > snapshot.cpu_count:
             return AdmissionDecision(False, "insufficient_cpu")
         memory_total = snapshot.memory_total_bytes or snapshot.memory_available_bytes
         if (

@@ -266,3 +266,41 @@ def test_v2_cpu_admission_uses_reserved_envelope_not_load_average(load_1m: float
             reserved=full,
             provisional=provisional,
         ) == AdmissionDecision(False, "insufficient_cpu")
+
+
+@pytest.mark.parametrize(
+    ("editor_cpu", "expected"),
+    [
+        (4.2, AdmissionDecision(True, "admitted")),
+        (4.200000001, AdmissionDecision(False, "insufficient_cpu")),
+        (4.21, AdmissionDecision(False, "insufficient_cpu")),
+    ],
+)
+def test_publication_cpu_exact_fit_preserves_host_reserve(
+    editor_cpu: float, expected: AdmissionDecision
+) -> None:
+    # The live host fits editor 4.2 + publication 1.8 + host reserve 2 = 8.
+    # Even one genuinely excess nano-CPU must still be rejected.
+    profile = replace(
+        _profile(),
+        profile_version="docker-owner-cell-resources-v2",
+        bundle_cpu_cores=1.0,
+        active_machine_cpu_cores=0.5,
+        managed_core_cpu_cores=0.2,
+    )
+    snapshot = HostCapacitySnapshot(
+        cpu_count=8,
+        load_1m=2.0,
+        memory_available_bytes=32 * 1024**3,
+        disk_free_bytes=200 * 1024**3,
+        disk_free_inodes=1_000_000,
+        active_bundle_count=1,
+        disk_path="/var/lib/docker",
+    )
+
+    assert CellAdmissionGate(profile).check(
+        snapshot,
+        existing_bundle=False,
+        running_bundle=False,
+        reserved=ReservedCapacity(cpu_cores=editor_cpu),
+    ) == expected
