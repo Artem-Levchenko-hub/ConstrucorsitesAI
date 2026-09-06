@@ -35,28 +35,44 @@ After network access was approved, all 277 tests, TypeScript and ESLint passed
 again. A normal optimized Next build with `NEXT_PUBLIC_USE_MOCKS=false`, real
 fonts and no font fixture completed successfully (46 static pages).
 
-## Release gate — still pending
+## Production rollout — 2026-09-07
 
-Editor source committed locally as `aad48bdc89bae733af14183658ac79a61406f688`.
-The normal non-force push `git push origin HEAD:refs/heads/main` failed with
-`fatal: could not read Username for 'https://github.com': Device not configured`.
-No production write or container restart was attempted. GitHub write authentication
-must be configured before resuming the push and rollout; do not send secrets in chat.
+Editor source: `aad48bdc89bae733af14183658ac79a61406f688`.
+Deployed revision: `403e0c0fd3373dcf462656bb56ab3b74e887536c` (includes delivery notes).
+Normal non-force push to `origin/main` succeeded after explicitly authorized,
+temporary authentication. No supplied credential was saved in files or Git config.
 
-Network access is approved. Upstream and the live web health revision both match
-`1689a2380266215ed5ffb488c36297f83eef3004` before rollout. The live web image is
-`sha256:c09841ea53be95128440bffcec96f0b29d52710ac6c9a9e9721d308c55f77a83`.
-Production Git HEAD/index are root-owned; privileged read-only inspection verified
-the revision and unrelated secondbrain changes, which must be preserved.
-Do not label this change deployed until the remaining gate is complete:
+The first SSH build disconnected before producing an image. A subsequent build
+under the ordinary deployment user could not read root-owned source files and
+failed typechecking. Git hashes verified those files matched the committed source.
+Building the same production Dockerfile with privileged read access succeeded;
+no file permissions or application code were changed to work around the issue.
 
-1. Fetch current upstream and inspect concurrent changes; preserve the user's
-   divergent local main and other worktrees.
-2. Re-run tests, typecheck, lint and a standard production build with real fonts
-   and `NEXT_PUBLIC_USE_MOCKS=false`.
-3. Push the reviewed revision using the normal non-force workflow.
-4. Record the currently deployed web revision/image for rollback. Deploy only
-   `web` through the documented `/opt/omnia/apps/llm-gateway/deploy/full` stack.
-5. Verify deployed revision, web health, authenticated MAX editor, real generation,
-   selected historical image, rollback and protected live preview.
-6. Mark H131 and V8 complete only after those checks; no new DB migrations.
+Only `web` was recreated in `/opt/omnia/apps/llm-gateway/deploy/full`, using
+`docker compose up -d --no-deps --no-build web` after the successful image build.
+`WEB_IMAGE` and release identity were persisted in the existing production env;
+other configuration was preserved. API, worker, generation-worker and gateway
+container IDs/start times were identical before and after rollout.
+
+- New image: `sha256:342f5a998d4253e01cb2d4b0d4d415daacb2074c0984fab330432443167f07af`.
+- Container health: `healthy`.
+- Public `/web-health`: `status: ok`, exact deployed revision above.
+- Homepage and login: HTTP 200; anonymous MAX access retains the authentication redirect.
+- Authenticated browser: editor, existing chat and version history loaded in two
+  projects. Data points to the app tab. Publication and tools dialogs open and
+  close with Escape, returning keyboard focus to their triggers.
+
+Rollback revision: `1689a2380266215ed5ffb488c36297f83eef3004`.
+Retained image: `sha256:c09841ea53be95128440bffcec96f0b29d52710ac6c9a9e9721d308c55f77a83`.
+Protected on-host rollout record and previous env:
+`/tmp/omnia-editor-release.77BFlp` (directory mode 700).
+The rollout included automatic restoration on failed health checks; it was not needed.
+
+## Remaining functional QA
+
+No generation, publication or version restoration was triggered on the owner's
+existing projects. In the inspected projects, one runtime rendered a 404 alongside
+an old failed generation, and another remained synchronizing its saved version.
+Those observations do not establish a frontend regression or successful runtime QA.
+Real generation, historical-image selection and restoration still need a dedicated
+test project. H131 remains testing and the separate functional-QA step stays open.
