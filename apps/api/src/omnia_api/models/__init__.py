@@ -29,6 +29,7 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.hero_media_asset import HeroMediaAsset
 from omnia_api.models.hero_media_brief import HeroMediaBrief
 from omnia_api.models.hero_media_render import HeroMediaRender
+from omnia_api.models.integration_operation import IntegrationOperation
 from omnia_api.models.lead import Lead
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.max_project_config import MaxProjectConfig
@@ -76,6 +77,7 @@ __all__ = [
     "HeroMediaBrief",
     "HeroMediaRender",
     "IntegrationOAuthState",
+    "IntegrationOperation",
     "Lead",
     "LegalAcceptance",
     "MaxIntegration",

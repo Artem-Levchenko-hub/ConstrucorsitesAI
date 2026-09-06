@@ -374,18 +374,29 @@ async def refresh_access_token(
                 )
             _token_error(provider, response)
             payload = response.json()
-            access = str(payload.get("access_token") or "")
-            if not access:
+            if not isinstance(payload, dict):
+                raise IntegrationProviderError(
+                    "Сервис вернул неизвестный формат обновления авторизации"
+                )
+            access = payload.get("access_token")
+            if not isinstance(access, str) or not access.strip():
                 raise IntegrationProviderError(
                     "Сервис не вернул новый токен авторизации"
+                )
+            refresh_token = payload.get("refresh_token")
+            if refresh_token is not None and (
+                not isinstance(refresh_token, str) or not refresh_token.strip()
+            ):
+                raise IntegrationProviderError(
+                    "Сервис вернул неизвестный формат обновления авторизации"
                 )
             updated = dict(secret_values)
             if provider == "yandex_metrica":
                 updated["oauth_token"] = access
             else:
                 updated["access_token"] = access
-            if payload.get("refresh_token"):
-                updated["refresh_token"] = str(payload["refresh_token"])
+            if refresh_token is not None:
+                updated["refresh_token"] = refresh_token
             return updated, _expires(payload)
     except IntegrationProviderError:
         raise

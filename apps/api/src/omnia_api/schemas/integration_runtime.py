@@ -40,6 +40,7 @@ class RuntimePaymentStatusRequest(BaseModel):
 
 
 class RuntimeLeadRequest(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=16, max_length=128)
     name: str = Field(min_length=1, max_length=200)
     phone: str | None = Field(default=None, max_length=64)
     email: str | None = Field(default=None, max_length=254)
@@ -58,7 +59,7 @@ class RuntimeCatalogItem(BaseModel):
     description: str = ""
     price: float | None = None
     currency: str = "RUB"
-    available: bool = True
+    available: bool | None = None
     image_url: str | None = None
 
 

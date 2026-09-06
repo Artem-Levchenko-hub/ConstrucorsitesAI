@@ -92,6 +92,8 @@ ErrorCode = Literal[
     "integration_request_failed",
     "integration_configuration_invalid",
     "integration_response_invalid",
+    "integration_operation_unknown",
+    "integration_operation_conflict",
     "max_init_data_invalid",
     "unsafe_generated_backend",
     "payment_integration_required",

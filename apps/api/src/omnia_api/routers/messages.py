@@ -4712,6 +4712,11 @@ async def _process_prompt(
                 from omnia_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
 
                 _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
+                from omnia_api.services.integration_generation import generation_context
+
+                async with factory() as _integration_session:
+                    _integration_guide = await generation_context(_integration_session, project_id)
+                _stack_guide += "\n\n" + _integration_guide
                 if _project_cell_executor_handle is not None:
                     from omnia_api.services.portable_cell_contract import (
                         machine_stack_guide_from_executor,

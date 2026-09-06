@@ -677,12 +677,11 @@ class MachineAdapter:
             core.start()
         core.reload()
         core_ip = core.attrs["NetworkSettings"]["Networks"][names.internal_network]["IPAddress"]
-        if public_mode:
-            from omnia_orchestrator.services.machine_business_config import (
-                apply_public_core_overlay,
-            )
+        from omnia_orchestrator.services.machine_business_config import (
+            apply_public_core_overlay,
+        )
 
-            apply_public_core_overlay(core)
+        apply_public_core_overlay(core)
         self._wait_http(core, core_ip, "/api/health", expected=200, timeout=120)
         from omnia_orchestrator.services.machine_business_config import (
             apply_core_config,

@@ -8,13 +8,12 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Query, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from omnia_api.core.config import get_settings
-from omnia_api.core.crypto import decrypt_strong, encrypt_strong
+from omnia_api.core.crypto import encrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.app_integration import (
@@ -36,6 +35,7 @@ from omnia_api.schemas.app_integration import (
 )
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.services import integration_oauth, integration_providers
+from omnia_api.services.integration_credentials import load_credentials
 from omnia_api.services.max_access import require_max_business
 
 router = APIRouter(tags=["app-integrations"])
@@ -199,7 +199,7 @@ def _connection_public(
         binding_config=dict(binding.config or {}) if binding else {},
         account_label=connection.account_label,
         public_config=dict(connection.public_config or {}),
-        capabilities=list(connection.capabilities or []),
+        capabilities=list(provider.capabilities),
         configured_fields=configured_fields,
         last_error=(
             binding.last_error
@@ -495,36 +495,39 @@ async def verify_integration(
             status.HTTP_404_NOT_FOUND,
         )
     binding = await _binding(session, project_id, provider_key)
+    secret_values = await load_credentials(session, connection)
     try:
-        secret_values = json.loads(decrypt_strong(connection.credentials_enc))
-        if not isinstance(secret_values, dict):
-            raise ValueError("invalid encrypted credentials")
         account_label = await integration_providers.verify_provider(
             provider_key,
             dict(connection.public_config or {}),
-            {str(key): str(value) for key, value in secret_values.items()},
+            secret_values,
         )
-    except integration_providers.IntegrationProviderError as exc:
+    except integration_providers.IntegrationProviderUnavailable as exc:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "Сервис временно недоступен. Повторите проверку позже.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    except integration_providers.IntegrationCredentialsInvalid as exc:
+        # Provider adapters use safe local messages; also remove exact credential
+        # values before persisting or exposing any future adapter's error text.
+        message = str(exc)
+        for value in secret_values.values():
+            if value:
+                message = message.replace(value, "[REDACTED]")
         connection.status = "error"
-        connection.last_error = str(exc)[:500]
+        connection.last_error = message[:500]
         connection.last_checked_at = datetime.now(UTC)
         if binding:
             binding.status = "error"
             binding.last_error = connection.last_error
         await session.commit()
-        raise _map_provider_error(exc) from exc
-    except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
-        connection.status = "error"
-        connection.last_error = (
-            "Сохранённые реквизиты повреждены. Подключите сервис заново."
-        )
-        connection.last_checked_at = datetime.now(UTC)
-        await session.commit()
         raise ApiError(
-            "integration_credentials_corrupted",
-            connection.last_error,
-            status.HTTP_409_CONFLICT,
+            "integration_credentials_invalid", message,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
         ) from exc
+    except integration_providers.IntegrationProviderError as exc:
+        raise _map_provider_error(exc) from exc
 
     now = datetime.now(UTC)
     connection.status = "active"

@@ -7,7 +7,6 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, cast
 from urllib.parse import parse_qsl, urlparse
@@ -15,10 +14,10 @@ from uuid import UUID
 
 import httpx
 from cryptography.fernet import InvalidToken
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, Header, Request, status
 from sqlalchemy import select
 
-from omnia_api.core.crypto import decrypt_strong, encrypt_strong
+from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.redis import get_redis
@@ -30,7 +29,6 @@ from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.schemas.integration_runtime import (
     RuntimeAIPublic,
     RuntimeAIRequest,
-    RuntimeCatalogItem,
     RuntimeCatalogPublic,
     RuntimeIntegrationStatus,
     RuntimeLeadPublic,
@@ -39,7 +37,14 @@ from omnia_api.schemas.integration_runtime import (
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
 )
-from omnia_api.services import integration_oauth, integration_providers
+from omnia_api.services import integration_providers
+from omnia_api.services.integration_auth import verify_integration_assertion
+from omnia_api.services.integration_responses import (
+    invalid_response,
+    lead_id,
+    payment_response,
+    response_object,
+)
 from omnia_api.services.secret_safety import redact_provider_secrets
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
@@ -93,7 +98,7 @@ def _validate_init_data(init_data: str, bot_token: str) -> int:
 
 
 async def _runtime_context(
-    session: SessionDep, project_id: UUID, init_data: str
+    session: SessionDep, project_id: UUID, init_data: str, request: Request
 ) -> RuntimeContext:
     max_integration = (
         await session.execute(
@@ -108,7 +113,16 @@ async def _runtime_context(
         )
     try:
         token = decrypt_strong(max_integration.bot_token_enc)
-        max_user_id = _validate_init_data(init_data, token)
+        assertion = request.headers.get("X-Omnia-Integration-Assertion")
+        if assertion:
+            if request.url.query:
+                raise ValueError("unsigned integration query")
+            max_user_id = verify_integration_assertion(
+                assertion, token, project_id=project_id,
+                method=request.method, path=request.url.path, body=await request.body(),
+            )
+        else:
+            max_user_id = _validate_init_data(init_data, token)
     except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ApiError(
             "max_init_data_invalid",
@@ -142,48 +156,9 @@ async def _connections(
 async def _secrets(
     session: SessionDep, connection: BusinessIntegration
 ) -> dict[str, str]:
-    try:
-        value = json.loads(decrypt_strong(connection.credentials_enc))
-    except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
-        raise ApiError(
-            "integration_credentials_corrupted",
-            "Подключение сервиса повреждено. Переподключите его в Integration Hub.",
-            status.HTTP_409_CONFLICT,
-        ) from exc
-    if not isinstance(value, dict):
-        raise ApiError(
-            "integration_credentials_corrupted",
-            "Подключение сервиса повреждено. Переподключите его в Integration Hub.",
-            status.HTTP_409_CONFLICT,
-        )
-    result = {str(key): str(item) for key, item in value.items()}
-    if (
-        connection.auth_mode == "oauth"
-        and connection.token_expires_at is not None
-        and connection.token_expires_at <= datetime.now(UTC) + timedelta(minutes=2)
-    ):
-        try:
-            result, expires_at = await integration_oauth.refresh_access_token(
-                connection.provider,
-                dict(connection.public_config or {}),
-                result,
-            )
-        except integration_providers.IntegrationProviderError as exc:
-            connection.status = "error"
-            connection.last_error = str(exc)[:500]
-            await session.commit()
-            raise ApiError(
-                "integration_credentials_invalid",
-                str(exc),
-                status.HTTP_409_CONFLICT,
-            ) from exc
-        connection.credentials_enc = encrypt_strong(
-            json.dumps(result, ensure_ascii=False, sort_keys=True)
-        )
-        connection.token_expires_at = expires_at
-        connection.last_checked_at = datetime.now(UTC)
-        await session.commit()
-    return result
+    from omnia_api.services.integration_credentials import load_credentials
+
+    return await load_credentials(session, connection)
 
 
 def _provider_failure(provider: str, response: httpx.Response) -> ApiError:
@@ -210,9 +185,10 @@ def _provider_failure(provider: str, response: httpx.Response) -> ApiError:
 async def runtime_integration_status(
     project_id: UUID,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeIntegrationStatus:
-    await _runtime_context(session, project_id, x_max_init_data)
+    await _runtime_context(session, project_id, x_max_init_data, request)
     connections = await _connections(session, project_id)
     metrica = connections.get("yandex_metrica")
     return RuntimeIntegrationStatus(
@@ -221,7 +197,9 @@ async def runtime_integration_status(
             {
                 capability
                 for connection in connections.values()
-                for capability in (connection.capabilities or [])
+                for capability in (
+                    integration_providers.get_provider(connection.provider).capabilities
+                )
             }
         ),
         analytics_counter_id=(
@@ -342,11 +320,12 @@ async def request_runtime_ai(
     project_id: UUID,
     payload: RuntimeAIRequest,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeAIPublic:
     """Run owner-funded AITUNNEL inference through the secretless MAX bridge."""
 
-    context = await _runtime_context(session, project_id, x_max_init_data)
+    context = await _runtime_context(session, project_id, x_max_init_data, request)
     connection = (await _connections(session, project_id)).get("aitunnel")
     if connection is None:
         raise ApiError(
@@ -383,9 +362,10 @@ async def create_runtime_payment(
     project_id: UUID,
     payload: RuntimePaymentRequest,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimePaymentPublic:
-    context = await _runtime_context(session, project_id, x_max_init_data)
+    context = await _runtime_context(session, project_id, x_max_init_data, request)
     connection = (await _connections(session, project_id)).get("yookassa")
     if connection is None:
         raise ApiError(
@@ -398,7 +378,13 @@ async def create_runtime_payment(
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "Idempotence-Key": payload.idempotency_key,
+        # YooKassa scopes keys to the merchant; reconnecting must not create a new payment.
+        "Idempotence-Key": hashlib.sha256(
+            (
+                f"omnia:payment:v1:{project_id}:"
+                f"{context.max_user_id}:{payload.idempotency_key}"
+            ).encode()
+        ).hexdigest(),
         "User-Agent": "Omnia-MAX-Runtime/1.0",
     }
     if credentials.get("access_token"):
@@ -443,13 +429,7 @@ async def create_runtime_payment(
         ) from exc
     if response.status_code >= 300:
         raise _provider_failure("ЮKassa", response)
-    result = response.json()
-    confirmation = result.get("confirmation") or {}
-    return RuntimePaymentPublic(
-        id=str(result.get("id") or ""),
-        status=str(result.get("status") or "pending"),
-        confirmation_url=confirmation.get("confirmation_url"),
-    )
+    return payment_response(response_object(response))
 
 
 @router.post("/{project_id}/payments/status", response_model=RuntimePaymentPublic)
@@ -457,9 +437,10 @@ async def get_runtime_payment_status(
     project_id: UUID,
     payload: RuntimePaymentStatusRequest,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimePaymentPublic:
-    await _runtime_context(session, project_id, x_max_init_data)
+    context = await _runtime_context(session, project_id, x_max_init_data, request)
     connection = (await _connections(session, project_id)).get("yookassa")
     if connection is None:
         raise ApiError(
@@ -498,13 +479,17 @@ async def get_runtime_payment_status(
         ) from exc
     if response.status_code >= 300:
         raise _provider_failure("ЮKassa", response)
-    result = response.json()
-    confirmation = result.get("confirmation") or {}
-    return RuntimePaymentPublic(
-        id=str(result.get("id") or payload.payment_id),
-        status=str(result.get("status") or "pending"),
-        confirmation_url=confirmation.get("confirmation_url"),
-    )
+    result = response_object(response)
+    metadata = result.get("metadata")
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("omnia_project_id") != str(project_id)
+        or str(metadata.get("max_user_id")) != str(context.max_user_id)
+    ):
+        raise ApiError("not_found", "Платёж не найден", 404)
+    if result.get("id") != payload.payment_id:
+        raise invalid_response()
+    return payment_response(result)
 
 
 @router.post("/{project_id}/leads", response_model=RuntimeLeadPublic)
@@ -512,9 +497,10 @@ async def create_runtime_lead(
     project_id: UUID,
     payload: RuntimeLeadRequest,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeLeadPublic:
-    context = await _runtime_context(session, project_id, x_max_init_data)
+    context = await _runtime_context(session, project_id, x_max_init_data, request)
     connections = await _connections(session, project_id)
     connection = connections.get("bitrix24") or connections.get("amocrm")
     if connection is None:
@@ -524,6 +510,27 @@ async def create_runtime_lead(
             status.HTTP_409_CONFLICT,
         )
     credentials = await _secrets(session, connection)
+    from omnia_api.services.integration_operations import execute_once
+
+    async def send() -> dict[str, Any]:
+        return (await _send_runtime_lead(connection, credentials, context, payload)).model_dump()
+
+    if payload.idempotency_key is None:
+        # Compatibility with previously generated clients; new clients always
+        # provide a stable operation key. No platform retry occurs on this path.
+        return await _send_runtime_lead(connection, credentials, context, payload)
+    result = await execute_once(
+        session, project_id=project_id, integration_id=connection.id, provider=connection.provider,
+        max_user_id=context.max_user_id, kind="lead", client_key=payload.idempotency_key,
+        payload=payload.model_dump(exclude={"idempotency_key"}), send=send,
+    )
+    return RuntimeLeadPublic.model_validate(result)
+
+
+async def _send_runtime_lead(
+    connection: BusinessIntegration, credentials: dict[str, str],
+    context: RuntimeContext, payload: RuntimeLeadRequest,
+) -> RuntimeLeadPublic:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             if connection.provider == "bitrix24":
@@ -558,8 +565,8 @@ async def create_runtime_lead(
                     )
                 if response.status_code >= 300:
                     raise _provider_failure("Битрикс24", response)
-                result = response.json().get("result")
-                return RuntimeLeadPublic(provider="bitrix24", id=str(result or ""))
+                result = response_object(response).get("result")
+                return RuntimeLeadPublic(provider="bitrix24", id=lead_id(result))
 
             base_url = str(connection.public_config.get("base_url") or "").rstrip("/")
             parsed = urlparse(base_url)
@@ -602,7 +609,9 @@ async def create_runtime_lead(
                 raise _provider_failure("amoCRM", response)
             result = response.json()
             lead = result[0] if isinstance(result, list) and result else {}
-            return RuntimeLeadPublic(provider="amocrm", id=str(lead.get("id") or ""))
+            if not isinstance(lead, dict):
+                raise invalid_response()
+            return RuntimeLeadPublic(provider="amocrm", id=lead_id(lead.get("id")))
     except ApiError:
         raise
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
@@ -623,9 +632,10 @@ async def create_runtime_lead(
 async def get_runtime_catalog(
     project_id: UUID,
     session: SessionDep,
-    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")],
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeCatalogPublic:
-    await _runtime_context(session, project_id, x_max_init_data)
+    await _runtime_context(session, project_id, x_max_init_data, request)
     connections = await _connections(session, project_id)
     connection = connections.get("iiko") or connections.get("moysklad")
     if connection is None:
@@ -650,23 +660,9 @@ async def get_runtime_catalog(
                 )
                 if response.status_code >= 300:
                     raise _provider_failure("МойСклад", response)
-                rows = response.json().get("rows") or []
-                items = [
-                    RuntimeCatalogItem(
-                        id=str(row.get("id") or ""),
-                        name=str(row.get("name") or "Товар"),
-                        description=str(row.get("description") or ""),
-                        price=(
-                            Decimal(str((row.get("salePrices") or [{}])[0].get("value", 0)))
-                            / Decimal(100)
-                            if row.get("salePrices")
-                            else None
-                        ),
-                        available=float(row.get("quantity") or 0) > 0,
-                    )
-                    for row in rows
-                    if isinstance(row, dict) and row.get("id")
-                ]
+                from omnia_api.services.integration_catalog import moysklad_items
+
+                items = moysklad_items(response_object(response))
                 return RuntimeCatalogPublic(provider="moysklad", items=items)
 
             token_response = await client.post(
@@ -675,7 +671,9 @@ async def get_runtime_catalog(
             )
             if token_response.status_code >= 300:
                 raise _provider_failure("iikoCloud", token_response)
-            access_token = str(token_response.json().get("token") or "")
+            access_token = response_object(token_response).get("token")
+            if not isinstance(access_token, str) or not access_token.strip():
+                raise invalid_response()
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             organizations_response = await client.post(
                 "https://api-ru.iiko.services/api/1/organizations",
@@ -684,16 +682,21 @@ async def get_runtime_catalog(
             )
             if organizations_response.status_code >= 300:
                 raise _provider_failure("iikoCloud", organizations_response)
-            organizations = organizations_response.json().get("organizations") or []
-            organization_id = str(
-                (organizations[0] if organizations else {}).get("id") or ""
-            )
-            if not organization_id:
+            organizations = response_object(organizations_response).get("organizations")
+            if not isinstance(organizations, list):
+                raise invalid_response()
+            if not organizations:
                 raise ApiError(
                     "integration_configuration_invalid",
                     "В iikoCloud не найдена доступная организация",
                     status.HTTP_409_CONFLICT,
                 )
+            organization = organizations[0]
+            if not isinstance(organization, dict):
+                raise invalid_response()
+            organization_id = organization.get("id")
+            if not isinstance(organization_id, str) or not organization_id.strip():
+                raise invalid_response()
             menu_response = await client.post(
                 "https://api-ru.iiko.services/api/1/nomenclature",
                 headers=auth_headers,
@@ -701,28 +704,9 @@ async def get_runtime_catalog(
             )
             if menu_response.status_code >= 300:
                 raise _provider_failure("iikoCloud", menu_response)
-            products = menu_response.json().get("products") or []
-            items = []
-            for product in products[:200]:
-                if not isinstance(product, dict) or not product.get("id"):
-                    continue
-                size_prices = product.get("sizePrices") or []
-                first_price = (
-                    (size_prices[0].get("price") or {}).get("currentPrice")
-                    if size_prices and isinstance(size_prices[0], dict)
-                    else None
-                )
-                image_links = product.get("imageLinks") or []
-                items.append(
-                    RuntimeCatalogItem(
-                        id=str(product["id"]),
-                        name=str(product.get("name") or "Позиция"),
-                        description=str(product.get("description") or ""),
-                        price=Decimal(str(first_price)) if first_price is not None else None,
-                        available=not bool(product.get("isDeleted")),
-                        image_url=str(image_links[0]) if image_links else None,
-                    )
-                )
+            from omnia_api.services.integration_catalog import iiko_items
+
+            items = iiko_items(response_object(menu_response))
             return RuntimeCatalogPublic(provider="iiko", items=items)
     except ApiError:
         raise

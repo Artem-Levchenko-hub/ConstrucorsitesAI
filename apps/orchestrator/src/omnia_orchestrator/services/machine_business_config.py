@@ -148,6 +148,11 @@ def apply_public_core_overlay(core: Any) -> None:
     from omnia_orchestrator.services.provisioner import _template_source_dir
 
     template = _template_source_dir(get_stack("max-miniapp-nextjs").template_dir)
-    relative = "src/app/api/max/webhook/route.ts"
-    source = (template / relative).read_bytes()
-    _upload_changed_files(core, {relative: source}, "public MAX core update failed")
+    paths = (
+        "src/app/api/max/webhook/route.ts",
+        "src/app/api/omnia/integrations/[...path]/route.ts",
+    )
+    _upload_changed_files(
+        core, {relative: (template / relative).read_bytes() for relative in paths},
+        "public MAX core update failed",
+    )

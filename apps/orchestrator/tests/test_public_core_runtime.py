@@ -118,3 +118,29 @@ def test_invalid_public_image_is_rejected_before_changing_live_auth(image_ref, p
     with pytest.raises(CellResourceError, match="image"):
         adapter._start_boundary(SimpleNamespace(resource_names=None), None, backend, 1,
                                 public_mode=True)
+
+
+def test_draft_core_receives_current_trusted_routes_before_serving(tmp_path, monkeypatch):
+    from omnia_orchestrator.services import machine_business_config
+
+    manager = SimpleNamespace(state_store=SimpleNamespace(root=tmp_path))
+    adapter = MachineAdapter(manager, SimpleNamespace())
+    state = SimpleNamespace(workspace_id=uuid4(), resource_names=SimpleNamespace(
+        internal_network="draft-network"))
+    core = SimpleNamespace(status="running", reload=lambda: None, attrs={
+        "NetworkSettings": {"Networks": {"draft-network": {"IPAddress": "127.0.0.1"}}}})
+    backend = SimpleNamespace(client=SimpleNamespace(containers=None), stem="draft",
+                              _lookup=lambda *_: core)
+
+    class OverlayReached(Exception):
+        pass
+
+    def overlay(target):
+        assert target is core
+        raise OverlayReached
+
+    monkeypatch.setattr(machine_business_config, "apply_public_core_overlay", overlay)
+    monkeypatch.setattr(adapter, "_wait_http", lambda *_a, **_kw: pytest.fail(
+        "draft served before trusted integration routes were updated"))
+    with pytest.raises(OverlayReached):
+        adapter._start_boundary(state, None, backend, 1)

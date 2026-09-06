@@ -54,6 +54,9 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -82,6 +85,12 @@ jobs:
           tests/test_agent_native.py
           tests/test_generation_runs.py
           tests/test_generation_worker.py
+          tests/test_app_integrations_api.py
+          tests/test_integration_credentials.py
+          tests/test_integration_runtime_contracts.py
+          tests/test_integration_runtime_auth.py
+          tests/test_integration_catalog_contracts.py
+          tests/test_integration_iiko_responses.py
           tests/test_projects_delete.py
           tests/test_project_memory.py
           tests/test_production_canary.py

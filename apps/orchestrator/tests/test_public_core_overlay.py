@@ -34,7 +34,19 @@ def test_public_overlay_uploads_real_shipped_webhook_from_any_cwd(
     destination, archive = uploads[0]
     assert destination == "/app"
     with tarfile.open(fileobj=io.BytesIO(archive)) as uploaded:
-        assert uploaded.getnames() == [relative]
+        assert set(uploaded.getnames()) == {
+            relative,
+            "src/app/api/omnia/integrations/[...path]/route.ts",
+        }
+        proxy = uploaded.extractfile("src/app/api/omnia/integrations/[...path]/route.ts")
+        assert proxy is not None
+        assert (
+            proxy.read()
+            == (
+                orchestrator
+                / "templates/max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts"
+            ).read_bytes()
+        )
         entry = uploaded.getmember(relative)
         assert (entry.mode, entry.uid, entry.gid) == (0o644, 1000, 1000)
         contents = uploaded.extractfile(entry)

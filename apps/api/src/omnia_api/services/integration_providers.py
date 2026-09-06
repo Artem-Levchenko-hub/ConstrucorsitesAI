@@ -72,8 +72,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="yookassa",
         name="ЮKassa",
         category="payments",
-        description="Приём оплаты, возвраты и подтверждение статусов платежей.",
-        capabilities=("Оплата", "Возвраты", "Статусы", "Чеки"),
+        description='Доступно: Оплата, Статусы.',
+        capabilities=('Оплата', 'Статусы'),
         fields=(
             IntegrationField(
                 "shop_id",
@@ -98,8 +98,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="iiko",
         name="iikoCloud",
         category="restaurant",
-        description="Меню, организации и ресторанные заказы через iikoCloud API.",
-        capabilities=("Меню", "Стоп-лист", "Заказы", "Организации"),
+        description='Доступно: Меню.',
+        capabilities=('Меню',),
         fields=(
             IntegrationField(
                 "api_login",
@@ -117,8 +117,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="bitrix24",
         name="Битрикс24",
         category="crm",
-        description="Передача заявок, клиентов и сделок во входящий webhook.",
-        capabilities=("Лиды", "Контакты", "Сделки", "Задачи"),
+        description='Доступно: Лиды.',
+        capabilities=('Лиды',),
         fields=(
             IntegrationField(
                 "webhook_url",
@@ -136,8 +136,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="moysklad",
         name="МойСклад",
         category="inventory",
-        description="Товары, цены, остатки и заказы покупателей.",
-        capabilities=("Товары", "Остатки", "Цены", "Заказы"),
+        description='Доступно: Товары, Цены.',
+        capabilities=('Товары', 'Цены'),
         fields=(
             IntegrationField(
                 "token",
@@ -154,8 +154,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="yandex_metrica",
         name="Яндекс Метрика",
         category="analytics",
-        description="События, цели и измерение конверсий мини-приложения.",
-        capabilities=("События", "Цели", "Конверсии", "Отчёты"),
+        description='Доступно: Счётчик.',
+        capabilities=('Счётчик',),
         fields=(
             IntegrationField(
                 "counter_id",
@@ -202,8 +202,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="amocrm",
         name="amoCRM",
         category="crm",
-        description="Лиды, контакты, сделки и автоматические задачи.",
-        capabilities=("Лиды", "Контакты", "Сделки", "Задачи"),
+        description='Доступно: Лиды.',
+        capabilities=('Лиды',),
         fields=(),
         available=False,
         requirement="Нужно зарегистрировать интеграцию amoCRM и настроить OAuth callback.",

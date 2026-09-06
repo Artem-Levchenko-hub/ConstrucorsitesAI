@@ -24,6 +24,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   applyIntegrationPack,
   bindAppIntegration,
@@ -75,6 +77,19 @@ const providerIcons: Record<string, LucideIcon> = {
   cdek: Truck,
 };
 
+// Static implementation briefs never interpolate account metadata or credentials.
+const implementationFeatures: Record<string, string> = {
+  yookassa: "Добавь оплату заказа через ЮKassa: создание платежа и проверку его статуса. Подтверждай оплату только по серверному статусу, а не по возврату пользователя со страницы оплаты. Возвраты не поддерживаются.",
+  iiko: "Добавь меню iiko с категориями и блюдами. Доступно только чтение меню; создание заказов не поддерживается.",
+  bitrix24: "Добавь форму заявки с созданием лида в Битрикс24 и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
+  amocrm: "Добавь форму заявки с созданием лида в amoCRM и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
+  moysklad: "Добавь каталог товаров и цены из МойСклад. Реальные складские остатки пока недоступны; не показывай товары как имеющиеся в наличии на основании каталога.",
+  yandex_metrica: "Подключи счётчик Яндекс Метрики к приложению через управляемую интеграцию.",
+  aitunnel: "Добавь ИИ-помощника с отправкой сообщений через подключённый AITunnel и отображением ответа.",
+};
+const readyForImplementation = (connection: AppIntegration | undefined) =>
+  connection?.status === "active" && connection.bound_to_project && connection.binding_status === "ready";
+
 const message = (error: unknown) => {
   if (error instanceof ApiError) return error.message;
   if (error instanceof TypeError && /fetch/i.test(error.message)) {
@@ -85,6 +100,9 @@ const message = (error: unknown) => {
 
 export function FigmaIntegrationHub({ projectId, projectName }: { projectId: string; projectName: string }) {
   const qc = useQueryClient();
+  const router = useRouter();
+  const [implementationProvider, setImplementationProvider] = useState<string | null>(null);
+  const [implementationPrompt, setImplementationPrompt] = useState("");
   const [category, setCategory] = useState<IntegrationCategory | "all">("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<IntegrationProvider | null>(null);
@@ -130,7 +148,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       void sync();
       setSelected(null);
       setValues({});
-      toast.success("Интеграция подключена");
+      toast.success("Доступ к сервису подтверждён");
     },
     onError: (error) => toast.error("Проверка не пройдена", { description: message(error) }),
   });
@@ -161,7 +179,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     mutationFn: (provider: string) => verifyAppIntegration(projectId, provider),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey });
-      toast.success("Подключение работает");
+      toast.success("Доступ к сервису подтверждён");
     },
     onError: (error) => toast.error("Интеграция не отвечает", { description: message(error) }),
   });
@@ -184,7 +202,24 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     );
   };
 
-  const connectedCount = (catalog.data?.connections ?? []).filter((item) => item.status === "active" && item.bound_to_project).length;
+  const openImplementation = (providerKey: string) => {
+    const feature = implementationFeatures[providerKey];
+    if (!feature || !readyForImplementation(connections.get(providerKey))) return;
+    setImplementationPrompt(`${feature}\nИспользуй только доступные управляемые методы интеграции. Не запрашивай и не вставляй секреты в код или сообщения. Добавь состояния загрузки, пустого результата и ошибки. Проверь сценарий и сообщи, что проверено, а что требует проверки с реальным аккаунтом.`);
+    setImplementationProvider(providerKey);
+  };
+  const canImplement = Boolean(implementationProvider && readyForImplementation(connections.get(implementationProvider)) && implementationPrompt.trim());
+  const startImplementation = () => {
+    if (!canImplement) return;
+    try {
+      window.sessionStorage.setItem(`omnia:max:starter:${projectId}`, implementationPrompt.trim());
+    } catch {
+      toast.error("Не удалось передать задание в студию", { description: "Разрешите хранилище браузера и повторите попытку." });
+      return;
+    }
+    router.push(`/max/${projectId}?starter=1`);
+  };
+  const connectedCount = (catalog.data?.connections ?? []).filter(readyForImplementation).length;
   const canSubmit = selected?.fields.every((field) => !field.required || Boolean(values[field.key]?.trim())) ?? false;
 
   return (
@@ -196,6 +231,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       title="Интеграции"
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >
+      <p className="mt-5 text-sm leading-6 text-[#9fa1b1]">Подключение сервиса не добавляет экраны автоматически. После авторизации выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку.</p>
       <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_300px]">
         <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
           <div className="flex items-start gap-4">
@@ -263,7 +299,8 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             <div className="divide-y divide-[#25272b]">
               {visible.map((provider) => {
                 const connection = connections.get(provider.key);
-                const connected = connection?.status === "active" && connection.bound_to_project;
+                const connected = readyForImplementation(connection);
+                const needsSetup = connection?.bound_to_project && !connected;
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
                 return (
@@ -277,13 +314,15 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                     </div>
                     <div>
                       {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-fg"><Check className="size-3.5" />Подключено</span>
+                        : needsSetup ? <span className="text-xs text-danger-fg">Требуется настройка</span>
                         : reusable ? <span className="text-xs text-[#6a95fa]">Есть у бизнеса</span>
                         : provider.available ? <span className="text-xs text-[#828491]">Не подключено</span>
                         : <span className="text-xs text-[#828491]">Готовим</span>}
                     </div>
-                    <div className="flex justify-end gap-1">
+                    <div className="flex flex-wrap justify-end gap-1">
                       {connected ? (
                         <>
+                          {implementationFeatures[provider.key] && <Button size="sm" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
                           <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#9fa1b1] hover:bg-[#121519] sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
                           <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#828491] hover:bg-[#c63d35]/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
@@ -304,6 +343,16 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
         </div>
       </section>
 
+      <Dialog open={Boolean(implementationProvider)} onOpenChange={(open) => { if (!open) setImplementationProvider(null); }}>
+        <DialogContent data-product-shell className="max-h-[90dvh] overflow-y-auto border-[#2b2d32] bg-[#191b20] text-white sm:max-w-[600px]">
+          <DialogTitle>Добавить интеграцию в приложение</DialogTitle>
+          <DialogDescription className="text-[#9fa1b1]">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DialogDescription>
+          <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
+          <Textarea id="integration-implementation-prompt" value={implementationPrompt} onChange={(event) => setImplementationPrompt(event.target.value)} className="min-h-[240px] border-[#2b2d32] bg-[#121519]" />
+          {!canImplement && implementationPrompt.trim() && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
+          <Button disabled={!canImplement} onClick={startImplementation} className="min-h-11">Запустить доработку</Button>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={Boolean(selected)}
         onOpenChange={(open) => {
