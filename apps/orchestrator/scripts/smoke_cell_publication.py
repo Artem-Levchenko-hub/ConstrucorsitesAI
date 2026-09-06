@@ -257,6 +257,9 @@ def http(url: str, path: str, *, cookie: str = "", body: dict | None = None, htm
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
+        # Exercise the same-origin mutation boundary used by browser clients.
+        parsed = urllib.parse.urlsplit(url)
+        headers.setdefault("Origin", f"{parsed.scheme}://{parsed.netloc}")
     request = urllib.request.Request(url + path, data=data, headers=headers)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:

@@ -672,7 +672,10 @@ class MachineAdapter:
             "secret": secret, "project_id": str(state.project_id), "epoch": epoch,
             "core_host": core_ip, "machine_host": backend.address(),
             "routes": [route.model_dump() for route in manifest.routes],
-            **({"public_mode": True} if public_mode else {}),
+            **({
+                "public_mode": True,
+                "public_origin": (runtime_env or {}).get("OMNIA_PUBLIC_APP_ORIGIN", ""),
+            } if public_mode else {}),
         }
         public_stamp = self.root / "public-boundary-runtime" / f"{state.workspace_id}.json"
         wire_config: dict[str, Any] = config

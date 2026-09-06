@@ -69,17 +69,19 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(tmp_path,
     monkeypatch.setattr(machine_business_config, "apply_public_core_overlay", lambda _: None)
     monkeypatch.setattr(machine_business_config, "boundary_source", lambda: "first trusted server")
 
-    adapter._start_boundary(state, manifest, backend, 7, public_mode=True)
+    runtime_env = {"OMNIA_PUBLIC_APP_ORIGIN": "https://app.example.test"}
+    adapter._start_boundary(state, manifest, backend, 7, public_mode=True, runtime_env=runtime_env)
     first = containers["public-test-gateway"]
     assert delivered[-1]["server"] == "first trusted server"
-    adapter._start_boundary(state, manifest, backend, 7, public_mode=True)
+    assert delivered[-1]["config"]["public_origin"] == runtime_env["OMNIA_PUBLIC_APP_ORIGIN"]
+    adapter._start_boundary(state, manifest, backend, 7, public_mode=True, runtime_env=runtime_env)
     assert containers["public-test-gateway"] is first
     assert len(delivered) == 1 and not removed
 
     monkeypatch.setattr(
         machine_business_config, "boundary_source", lambda: "updated trusted server",
     )
-    adapter._start_boundary(state, manifest, backend, 7, public_mode=True)
+    adapter._start_boundary(state, manifest, backend, 7, public_mode=True, runtime_env=runtime_env)
     assert containers["public-test-gateway"] is not first
     assert delivered[-1]["server"] == "updated trusted server"
     assert delivered[-1]["config"] == delivered[0]["config"]

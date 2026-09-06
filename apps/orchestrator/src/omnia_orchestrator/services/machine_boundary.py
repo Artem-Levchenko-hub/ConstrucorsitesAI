@@ -32,6 +32,9 @@ _HOP = {
 _PUBLIC_ANONYMOUS = {
     "/api/max/session", "/api/max/webhook", "/api/omnia/config", "/api/omnia/health",
 }
+_SESSION_COOKIE = "__Host-max_session"
+_EMBEDDED_COOKIES = ("__Host-max_session_embedded", "__Host-max_session_partitioned")
+_PUBLIC_FRAMING = "frame-ancestors 'self' https://web.max.ru https://max.ru"
 _BOOTSTRAP_SCRIPT = """
 (() => {
   const message = document.getElementById('status');
@@ -70,7 +73,8 @@ _BOOTSTRAP_SCRIPT = """
         credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(10000)
       });
       if (!identity.ok) {
-        message.textContent = 'MAX не сохранил вход. Закройте приложение и откройте снова.';
+        message.textContent = 'Не удалось сохранить защищённую сессию. '
+          + 'Закройте приложение и откройте снова.';
         return;
       }
       location.replace(location.href);
@@ -107,6 +111,59 @@ def verified_user(value: str, secret: str) -> dict[str, Any] | None:
         return {key: value for key, value in payload.items() if key != "expiresAt"}
     except (ValueError, TypeError, UnicodeError):
         return None
+
+
+def authenticated_session(
+    raw_cookie: str, secret: str, *, public: bool,
+) -> tuple[dict[str, Any] | None, str]:
+    cookies = http.cookies.SimpleCookie()
+    try:
+        cookies.load(raw_cookie)
+    except http.cookies.CookieError:
+        return None, ""
+    candidates = []
+    names = (_SESSION_COOKIE, *_EMBEDDED_COOKIES) if public else (_SESSION_COOKIE,)
+    for name in names:
+        session = cookies.get(name)
+        user = verified_user(session.value, secret) if session else None
+        # Public MAX identities are numeric. Never promote the owner preview user.
+        if session is not None and user is not None and (
+            not public or re.fullmatch(r"[0-9]+", user["id"])
+        ):
+            candidates.append((user, session.value))
+    if not candidates or len({user["id"] for user, _ in candidates}) != 1:
+        # Conflicting accounts must reauthenticate; the login endpoint stays open.
+        return None, ""
+    return candidates[0]
+
+
+def embedded_session_cookies(header: str, secret: str) -> list[str]:
+    """Mirror only a verified, host-only core login cookie; never extend its lifetime."""
+    cookies = http.cookies.SimpleCookie()
+    try:
+        cookies.load(header)
+        session = cookies.get(_SESSION_COOKIE)
+        if session is None or len(cookies) != 1:
+            return []
+        user = verified_user(session.value, secret)
+        if (
+            user is None or not re.fullmatch(r"[0-9]+", user["id"])
+            or not session["secure"] or not session["httponly"]
+            or session["path"] != "/" or session["domain"]
+        ):
+            return []
+        max_age = min(int(session["max-age"]), 86400)
+        if max_age <= 0:
+            return []
+        # Keep the original Lax cookie for first-party clients. Older webviews
+        # may reject Partitioned; newer embedded browsers may require it.
+        attributes = f"; Path=/; Secure; HttpOnly; SameSite=None; Max-Age={max_age}"
+        return [
+            f"{_EMBEDDED_COOKIES[0]}={session.value}{attributes}",
+            f"{_EMBEDDED_COOKIES[1]}={session.value}{attributes}; Partitioned",
+        ]
+    except (http.cookies.CookieError, ValueError):
+        return []
 
 
 def canonical_request_path(raw: str) -> str | None:
@@ -172,6 +229,13 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, _format: str, *_args: object) -> None:
         # No signed bootstrap URL, cookie, body, or project credentials in logs.
         pass
+
+    def end_headers(self) -> None:
+        if cast(BoundaryServer, self.server).config.get("public_mode") is True:
+            # Origin checks stop CSRF, but not clicks inside a hostile iframe.
+            # A separate CSP intersects, never weakens any upstream policy.
+            self.send_header("Content-Security-Policy", _PUBLIC_FRAMING)
+        super().end_headers()
 
     def do_GET(self) -> None:
         self._forward()
@@ -241,16 +305,19 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         preview_path = "/api/omnia/preview-session"
         if public and (path == preview_path or path.startswith(preview_path + "/")):
             return self._reply(404)
-        cookies = http.cookies.SimpleCookie()
-        try:
-            cookies.load(self.headers.get("Cookie", ""))
-            session = cookies.get("__Host-max_session")
-            user = verified_user(session.value if session else "", config["secret"])
-        except http.cookies.CookieError:
-            user = None
-        # Public MAX identities are numeric. Never promote the owner preview user.
-        if public and user is not None and not re.fullmatch(r"[0-9]+", user["id"]):
-            user = None
+        user, session_value = authenticated_session(
+            self.headers.get("Cookie", ""), config["secret"], public=public,
+        )
+        if (
+            public and self.command not in {"GET", "HEAD", "OPTIONS"}
+            and path != "/api/max/webhook"
+            and (user is not None or path == "/api/max/session")
+        ):
+            # SameSite=None needs an explicit CSRF boundary. Never trust Host or
+            # forwarding headers, null/missing origins, or duplicate Origin fields.
+            origin = config.get("public_origin", "")
+            if not origin.startswith("https://") or self.headers.get_all("Origin") != [origin]:
+                return self._reply(403, b"Same-origin request required")
         legal_page = path in {"/legal/privacy", "/legal/terms", "/support"}
         core_assets = "/api/omnia/core-assets/"
         upstream_path = self.path
@@ -273,9 +340,13 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
             if public:
                 headers = {
                     key: value for key, value in headers.items()
-                    if key.casefold() != "forwarded"
+                    if key.casefold() not in {"forwarded", "cookie"}
                     and not key.casefold().startswith("x-forwarded-")
                 }
+                if session_value:
+                    # The trusted core uses one canonical cookie name. None of
+                    # these credentials are forwarded to generated product code.
+                    headers["Cookie"] = f"{_SESSION_COOKIE}={session_value}"
             if legal_page:
                 headers = {
                     k: v
@@ -338,6 +409,13 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
             for key, value in response.getheaders():
                 if key.casefold() not in _HOP and (managed or key.casefold() != "set-cookie"):
                     self.send_header(key, value)
+            if public and path == "/api/max/session" and self.command == "POST" and (
+                response.status == 200
+            ):
+                for key, value in response.getheaders():
+                    if key.casefold() == "set-cookie":
+                        for cookie in embedded_session_cookies(value, config["secret"]):
+                            self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             if self.command != "HEAD":
