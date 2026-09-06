@@ -30,6 +30,17 @@ const project = { id: "p", name: "App", slug: "app", template: "max_miniapp", cu
 const version = (number: number, extra: Partial<ProjectVersion> = {}): ProjectVersion => ({ id: `v${number}`, number, project_id: "p", snapshot_id: `s${number}`, commit_sha: `sha${number}`, prompt_text: "Добавил каталог", model_id: null, created_at: "2026-09-06T10:00:00Z", status: "ready", preview_status: "ready", previews: [{ url: `/images/v${number}.png`, width: 390, height: 2400, route: "/" }], is_current: number === 32, can_restore: true, ...extra });
 let root: Root, container: HTMLDivElement, client: QueryClient;
 async function settle() { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); }); }
+// Flush React/Query notifications on each poll; finish as soon as the actual
+// DOM condition holds rather than assuming one short timer drains the request chain.
+async function waitForDom(assertion: () => void) {
+  const deadline = Date.now() + 1_000;
+  for (;;) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+    try { assertion(); return; } catch (error) {
+      if (Date.now() >= deadline) throw error;
+    }
+  }
+}
 function click(selector: string) { const button = container.querySelector<HTMLButtonElement>(selector); expect(button).not.toBeNull(); act(() => button!.click()); }
 function image() { return container.querySelector<HTMLImageElement>("[data-testid='history-image']"); }
 function Preview({ versions, selected = "v31", head = "s32" }: { versions: ProjectVersion[]; selected?: string | null; head?: string }) {
@@ -94,7 +105,12 @@ describe("image version history", () => {
     await settle(); expect(image()?.getAttribute("src")).toBe("/images/v31.png");
     expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(counts);
     expect(container.querySelector("[data-testid='max-version-32']")?.textContent).toContain("v32");
-    click("[data-testid='max-return-current-version']"); await settle(); expect(container.querySelector("iframe")).not.toBeNull();
+    api.session.mockImplementationOnce(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return { url: "https://live.example", expires_at: "2099-01-01" };
+    });
+    click("[data-testid='max-return-current-version']");
+    await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
   });
   it("keeps queued, failed and unchanged versions with their own number", () => {
     render(<Preview versions={[version(34, { status: "queued", previews: [], preview_status: "pending" }), version(33, { status: "failed", previews: [], preview_status: "missing" }), version(32, { status: "unchanged", snapshot_id: "s31" }), version(31)]} selected="v34" />);
@@ -111,8 +127,8 @@ describe("image version history", () => {
     expect(container.querySelector("iframe")).toBeNull(); expect(container.textContent).toContain("нет изображения");
     act(() => client.setQueryData(["snapshots", "p"], [{ id: "s32", commit_sha: "new" }, { id: "s31", commit_sha: "old", created_at: "2026-09-06T10:00:00Z", preview_url: "/old.png" }])); await settle();
     expect(image()?.getAttribute("src")).toBe("/old.png");
-    act(() => useWorkspaceStore.getState().selectSnapshot(null)); await settle(); await settle();
-    expect(container.querySelector("iframe")?.getAttribute("src")).toContain("live.example");
+    act(() => useWorkspaceStore.getState().selectSnapshot(null));
+    await waitForDom(() => expect(container.querySelector("iframe")?.getAttribute("src")).toContain("live.example"));
   });
 
   it("does not clear generic historical selection on a real snapshot.created stream event", async () => {
@@ -148,14 +164,16 @@ describe("image version history", () => {
     click("[data-testid='max-version-31']"); expect(image()).not.toBeNull();
     render(<MaxWorkspaceShell project={{ ...project, id: "other" }} email="a@example.com" />); expect(image()).toBeNull();
     render(<MaxWorkspaceShell project={project} email="a@example.com" />); await settle();
-    expect(image()).toBeNull(); expect(container.querySelector("iframe")).not.toBeNull();
+    expect(image()).toBeNull();
+    await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
   });
   it("keeps missing version selection isolated, with an explicit return to live preview", async () => {
     render(<Preview versions={[version(32)]} selected="unknown" />); await settle();
     expect(container.textContent).toContain("нет изображения"); expect(container.querySelector("iframe")).toBeNull();
     expect(container.querySelector<HTMLButtonElement>("[aria-label='Предыдущая версия']")?.disabled).toBe(true);
     expect(api.runtime).not.toHaveBeenCalled();
-    click("[data-testid='max-return-current-version']"); await settle(); await settle(); expect(container.querySelector("iframe")).not.toBeNull();
+    click("[data-testid='max-return-current-version']");
+    await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
   });
 
   it("stops scheduled live connection retries after selecting image history", async () => {
