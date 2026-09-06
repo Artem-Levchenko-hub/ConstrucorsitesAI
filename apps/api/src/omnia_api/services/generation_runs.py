@@ -443,11 +443,11 @@ async def recover_interrupted_generation_runs(
 ) -> int:
     """Release executions that cannot survive an API-process restart.
 
-    Prompt coroutines live in the API event loop. In the current one-process
-    deployment none can still be running when a fresh process starts, so an
-    active DB row at startup is an interrupted execution, not real work.
-    Finalising it prevents both a permanent single-flight lock and a chat row
-    that looks as if it were streaming forever.
+    Only API-owned coroutines are interrupted by this process restarting.
+    Independently owned worker dispatches are excluded even before they start;
+    the worker resumes its pending queue and keeps live executions in place.
+    Finalising legacy API-owned work prevents a permanent single-flight lock
+    and a chat row that looks as if it were streaming forever.
     """
 
     if session is not None:

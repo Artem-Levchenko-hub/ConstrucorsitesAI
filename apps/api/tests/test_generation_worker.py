@@ -235,3 +235,37 @@ async def test_database_deadline_cancels_real_task_without_rewriting_failure(
         if not task.done():
             task.cancel()
             await task
+
+
+async def test_dispatcher_retries_unclaimed_work_after_connection_failure(
+    db_session, test_engine, monkeypatch,
+):
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    await db_session.commit()
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    recovered = asyncio.Event()
+    attempts = 0
+
+    class Redis:
+        async def set(self, *args, **kwargs):
+            pass
+
+    async def execute(run_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("database unavailable before claiming")
+        recovered.set()
+        return True
+
+    monkeypatch.setattr(generation, "get_redis", Redis)
+    monkeypatch.setattr(generation, "execute_dispatch", execute)
+    worker = asyncio.create_task(generation.run_forever())
+    try:
+        await asyncio.wait_for(recovered.wait(), 7)
+        assert attempts == 2
+    finally:
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker

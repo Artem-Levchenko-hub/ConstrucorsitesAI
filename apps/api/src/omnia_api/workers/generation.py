@@ -226,8 +226,10 @@ async def run_forever() -> None:
         try:
             for run_id, task in list(active.items()):
                 if task.done():
-                    task.result()
+                    # Drop the completed task before observing its exception.
+                    # A pre-claim DB failure must not poison every later scan.
                     active.pop(run_id)
+                    task.result()
             async with factory() as session:
                 candidates = list(
                     (
