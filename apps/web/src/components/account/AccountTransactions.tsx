@@ -29,24 +29,24 @@ export function AccountTransactions() {
       <Link href="/billing">К балансу →</Link>
     </div>}
     {Boolean(rows?.length) && <div className="account-table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Дата</th>
-            <th>Операция</th>
-            <th>Сумма</th>
-            <th>Статус</th>
+      <table role="table" aria-label="Платежи аккаунта">
+        <thead role="rowgroup">
+          <tr role="row">
+            <th scope="col" role="columnheader" id="payment-date">Дата</th>
+            <th scope="col" role="columnheader" id="payment-purpose">Операция</th>
+            <th scope="col" role="columnheader" id="payment-amount">Сумма</th>
+            <th scope="col" role="columnheader" id="payment-status">Статус</th>
           </tr>
         </thead>
-        <tbody>{rows?.map(p => <tr key={p.id}>
-          <td>{date(p.created_at)}</td>
-          <td>{p.purpose === "wallet_topup" ? "Пополнение баланса" : p.purpose === "subscription_renewal" ? "Продление тарифа" : "Покупка тарифа"}
+        <tbody role="rowgroup">{rows?.map(p => <tr key={p.id} role="row">
+          <td role="cell" headers="payment-date"><span className="account-operation-label" aria-hidden="true">Дата</span>{date(p.created_at)}</td>
+          <td role="cell" headers="payment-purpose"><span className="account-operation-label" aria-hidden="true">Операция</span>{p.purpose === "wallet_topup" ? "Пополнение баланса" : p.purpose === "subscription_renewal" ? "Продление тарифа" : "Покупка тарифа"}
             <small>{p.package_code}</small>
           </td>
-          <td>{money(p.amount_rub)}
+          <td role="cell" headers="payment-amount"><span className="account-operation-label" aria-hidden="true">Сумма</span>{money(p.amount_rub)}
             <small>{p.status === "succeeded" ? `Кредит: ${money(p.credit_rub)}` : "Не зачислено"}</small>
           </td>
-          <td>
+          <td role="cell" headers="payment-status"><span className="account-operation-label" aria-hidden="true">Статус</span>
             <Link href={`/billing?payment=${encodeURIComponent(p.id)}`} className={`account-status ${paymentState(p.status).tone}`}>{paymentState(p.status).label}</Link>
           </td>
         </tr>)}</tbody>

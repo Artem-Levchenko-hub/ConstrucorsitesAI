@@ -176,3 +176,16 @@ it("compares publication capacity and integrations from actual entitlements", as
   const app = await mount("plan");
   try { await wait(() => expect(button("Выбрать Pro")).toBeDefined()); const entries = [...document.querySelectorAll("article dl > div")].map(row => row.textContent); expect(entries).toContain("Публикаций5"); expect(entries).toContain("Постоянно работающих приложений2"); expect(entries).toContain("ИнтеграцииНет"); } finally { await app.close(); }
 });
+it("keeps every operation labelled and semantically tabular when mobile rows reflow", async () => {
+  payments = [payment];
+  const app = await mount("transactions");
+  try {
+    await wait(() => expect(document.querySelector("tbody tr")).not.toBeNull());
+    const table = document.querySelector('table[role="table"]');
+    expect(table?.getAttribute("aria-label")).toBe("Платежи аккаунта");
+    const row = document.querySelector('tbody [role="row"]')!;
+    expect([...row.querySelectorAll('[role="cell"] > .account-operation-label')].map(label => label.textContent)).toEqual(["Дата", "Операция", "Сумма", "Статус"]);
+    expect(row.querySelector('[headers="payment-amount"]')?.textContent).toContain("777");
+    expect(row.querySelector('[headers="payment-status"]')?.textContent).toContain("Ожидает оплаты");
+  } finally { await app.close(); }
+});

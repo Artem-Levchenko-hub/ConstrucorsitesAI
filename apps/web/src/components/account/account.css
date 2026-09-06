@@ -76,6 +76,7 @@
 .account-table-scroll td { padding: 18px 12px; border-bottom: 1px solid var(--color-border-subtle); }
 .account-table-scroll td:first-child { white-space: nowrap; font-size: 12px; }
 .account-table-scroll small { display: block; margin-top: 4px; color: var(--color-fg-secondary); font-size: 11px; }
+.account-operation-label { display: none; }
 .account-empty { text-align: center; padding: 40px 16px; }
 .account-empty a { display: inline-block; color: var(--color-accent); margin-top: 16px; }
 .account-plan-current { display: flex; justify-content: space-between; gap: 30px; padding: 28px; background: var(--color-accent-subtle); border-radius: 8px; }
@@ -136,4 +137,16 @@
   .account-session { grid-template-columns: 20px minmax(0,1fr); }
   .account-session button { grid-column: 2; justify-self: start; }
   .account-table-scroll table { min-width: 540px; }
+}
+@media(max-width:600px) {
+  .account-table-scroll { overflow: visible; }
+  .account-table-scroll table { display: block; min-width: 0; }
+  .account-table-scroll thead { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .account-table-scroll tbody { display: block; }
+  .account-table-scroll tbody tr { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px 12px; padding: 20px 0; border-top: 1px solid var(--color-border-default); }
+  .account-table-scroll td { display: block; min-width: 0; padding: 0; border: 0; overflow-wrap: anywhere; }
+  .account-table-scroll td:first-child { white-space: normal; }
+  .account-table-scroll td:nth-child(3) { grid-column: 2; grid-row: 1; text-align: right; font-weight: 550; }
+  .account-table-scroll td:nth-child(4) { text-align: right; }
+  .account-operation-label { display: block; margin-bottom: 6px; color: var(--color-fg-secondary); font-size: 11px; font-weight: 400; }
 }
