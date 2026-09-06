@@ -110,6 +110,8 @@ async def test_durable_cell_public_flow_survives_disabled_owner_flag(
         assert response.json()["port"] is None
     response = await client.post(base + "/max/sync-kit")
     assert response.status_code == 200, response.text
+    assert response.json()["application_mode"] == "runtime"
+    assert response.json()["synced_snapshot_id"] is None
     response = await client.post(base + "/max/preview-session")
     assert response.status_code == 200, response.text
     assert response.json()["url"] == bootstrap

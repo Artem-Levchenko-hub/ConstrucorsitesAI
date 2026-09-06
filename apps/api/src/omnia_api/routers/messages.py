@@ -641,7 +641,14 @@ async def _build_agent_seed_parts(
     project_slug: str,
     *,
     project_cell_handle: ProjectCellExecutorHandle | None = None,
+    refresh_managed_sdk: bool = False,
 ) -> list[str]:
+    if refresh_managed_sdk and project_cell_handle is not None:
+        from omnia_api.services.max_managed_generation import refresh_integration_sdk
+
+        # Required delivery precedes fail-soft context reads and all model work.
+        # Keep this outside the try: a failed lease/write must abort generation.
+        await refresh_integration_sdk(project_cell_handle)
     seed_parts: list[str] = []
     try:
         if project_cell_handle is not None:
@@ -4665,6 +4672,7 @@ async def _process_prompt(
                 project_id,
                 project_slug,
                 project_cell_handle=_project_cell_executor_handle,
+                refresh_managed_sdk=project_template == "max_miniapp",
             )
             _seed_block = (
                 (

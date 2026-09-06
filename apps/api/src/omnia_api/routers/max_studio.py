@@ -440,7 +440,11 @@ async def sync_max_managed_kit(
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> MaxProjectConfigPublic:
-    """Apply the current model-free managed kit to an existing MAX project."""
+    """Sync configuration; Project Cell source upgrades use a generation lease.
+
+    A runtime-mode response confirms metadata only. The generation seed refresh
+    delivers the browser SDK before model execution and verified finalization.
+    """
     project = await _owned_max_project(session, project_id, current_user.id)
     record = await session.get(MaxProjectConfig, project_id)
     payload = (
@@ -454,7 +458,9 @@ async def sync_max_managed_kit(
         owner=current_user,
     )
     if selection.selected and record is None:
-        return _public(project, record)
+        result = _public(project, record)
+        result.application_mode = "runtime"
+        return result
     return await put_max_config(project_id, payload, session, current_user)
 
 

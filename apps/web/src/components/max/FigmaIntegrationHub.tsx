@@ -137,7 +137,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     try {
       await syncMaxManagedKit(projectId);
     } catch (error) {
-      toast.warning("Подключение сохранено, SDK обновится позже", { description: message(error) });
+      toast.warning("Подключение сохранено, доработка приложения ещё не применена", { description: message(error) });
     }
   };
   const connect = useMutation({
@@ -231,7 +231,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       title="Интеграции"
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >
-      <p className="mt-5 text-sm leading-6 text-[#9fa1b1]">Подключение сервиса не добавляет экраны автоматически. После авторизации выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку.</p>
+      <p className="mt-5 text-sm leading-6 text-[#9fa1b1]">Подключение сервиса не добавляет экраны автоматически. После авторизации выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
       <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_300px]">
         <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
           <div className="flex items-start gap-4">
