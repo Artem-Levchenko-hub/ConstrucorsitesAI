@@ -75,3 +75,36 @@ it.each([false, true])("saves/retries the owner tab and refreshes preview withou
     container.remove();
   }
 });
+
+it.each(["я".repeat(19_992) + "КОНЕЦ ТЗ", "я".repeat(20_001)])("keeps the entire pasted description and validates before saving (%#.0)", async (brief) => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.get.mockResolvedValue(record);
+  mocks.save.mockResolvedValue(record);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>); });
+    await act(async () => { container.querySelector<HTMLButtonElement>("button")!.click(); });
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-summary")).not.toBeNull()); });
+    const input = document.querySelector<HTMLTextAreaElement>("#max-config-summary")!;
+    expect(input.maxLength).toBe(-1);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, brief);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(input.value).toBe(brief);
+    const save = [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Сохранить и проверить"))!;
+    expect(save.disabled).toBe(brief.length > 20_000);
+    await act(async () => { save.click(); });
+    if (brief.length > 20_000) expect(mocks.save).not.toHaveBeenCalled();
+    else {
+      await act(async () => { await vi.waitFor(() => expect(mocks.save).toHaveBeenCalled()); });
+      expect(mocks.save.mock.calls[0][1].summary).toBe(brief);
+    }
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove(); client.clear();
+  }
+});

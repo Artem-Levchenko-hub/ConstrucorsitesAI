@@ -43,7 +43,7 @@ class MaxProjectConfigPayload(BaseModel):
 
     app_name: str = Field(min_length=1, max_length=100)
     app_type: Literal["loyalty", "catalog", "booking", "event", "education", "custom"]
-    summary: str = Field(min_length=1, max_length=1000)
+    summary: str = Field(min_length=1, max_length=20_000)
     audience: str = Field(default="", max_length=400)
     primary_action: str = Field(default="", max_length=200)
     features: list[str] = Field(default_factory=list, max_length=24)

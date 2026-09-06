@@ -1,3 +1,6 @@
+export const MAX_BRIEF_LENGTH = 20_000;
+export const MAX_PROMPT_LENGTH = 30_000;
+
 export const MAX_APP_TYPES = [
   {
     id: "loyalty",
@@ -82,6 +85,9 @@ function optionLabel<T extends { id: string; label: string }>(
   return options.find((option) => option.id === id)?.label ?? id;
 }
 export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
+  if (Array.from(brief.idea.trim()).length > MAX_BRIEF_LENGTH) {
+    throw new Error(`Описание слишком длинное: максимум ${MAX_BRIEF_LENGTH} символов. Текст сохранён в форме.`);
+  }
   const features =
     brief.features.length > 0
       ? brief.features.join(", ")
@@ -92,7 +98,7 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
   const colors =
     brief.brandColors.trim() || "подбери уместную палитру под продукт";
 
-  return [
+  const prompt = [
     "Создай готовое мини-приложение именно для мессенджера MAX.",
     "Не превращай его в обычный сайт, Telegram Mini App, VK Mini App или отдельное веб-приложение.",
     "",
@@ -108,4 +114,8 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
     "Сразу собери целостный рабочий MVP: мобильную навигацию, все основные экраны, состояния загрузки/пустого списка/ошибки, реальные русские тексты и демонстрационные данные.",
     "Используй готовую обвязку MAX Bridge, серверную проверку initData, MAX-профиль пользователя и webhook бота из шаблона. Не добавляй отдельную регистрацию или вход по email.",
   ].join("\n");
+  if (Array.from(prompt).length > MAX_PROMPT_LENGTH) {
+    throw new Error(`Задание с уточнениями превышает ${MAX_PROMPT_LENGTH} символов. Сократите описание или уточнения.`);
+  }
+  return prompt;
 }

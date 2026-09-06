@@ -634,3 +634,28 @@ def test_preseeded_portable_manifest_satisfies_real_completion_without_agent_rew
     assert max_source_completion_gap(
         "Build warehouse", {**missing_seed, **authored}, portable=True,
     ) is not None
+
+
+def test_long_brief_survives_config_and_prompt_validation() -> None:
+    from omnia_api.schemas.message import PromptRequest
+
+    brief = ("Товары, движения, история.\n" * 800)[:19_992] + "КОНЕЦ ТЗ"
+    config = MaxProjectConfigPayload.model_validate(
+        {**_config().model_dump(), "summary": brief}
+    )
+    assert config.summary == brief
+    request = PromptRequest(prompt=f"Создай MAX Mini App.\n{brief}\nПроверь результат.")
+    assert brief in request.prompt
+
+
+def test_brief_limits_reject_instead_of_truncating() -> None:
+    from pydantic import ValidationError
+
+    from omnia_api.schemas.message import PromptRequest
+
+    with pytest.raises(ValidationError):
+        MaxProjectConfigPayload.model_validate(
+            {**_config().model_dump(), "summary": "я" * 20_001}
+        )
+    with pytest.raises(ValidationError):
+        PromptRequest(prompt="я" * 30_001)

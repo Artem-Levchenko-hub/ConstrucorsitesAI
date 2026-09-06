@@ -42,7 +42,10 @@ async def test_queued_for_capacity_is_a_durable_active_generation_status() -> No
     assert "queued_for_capacity" in str(constraint.sqltext)
 
 
-async def test_generation_dispatch_requires_exact_owned_json_shape() -> None:
+@pytest.mark.parametrize(
+    "prompt", ["build the app", "я" * 29_992 + "КОНЕЦ ТЗ"], ids=["short", "long"]
+)
+async def test_generation_dispatch_requires_exact_owned_json_shape(prompt: str) -> None:
     from omnia_api.services.generation_runs import GenerationDispatch, load_generation_dispatch
 
     run = GenerationRun(
@@ -60,7 +63,7 @@ async def test_generation_dispatch_requires_exact_owned_json_shape() -> None:
         user_message_id=uuid.uuid4(),
         assistant_message_id=uuid.uuid4(),
         current_snapshot_id=None,
-        prompt_text="build the app",
+        prompt_text=prompt,
         model_id="google/gemini-2.5-pro",
         force_model=None,
         is_free=False,

@@ -70,7 +70,7 @@ class MessagePublic(BaseModel):
 
 
 class PromptRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=10_000)
+    prompt: str = Field(min_length=1, max_length=30_000)
     # Stable identity of one UI submit. Retrying the same HTTP request with the
     # same key replays the original response and never starts another generation.
     # Optional for backward compatibility; new clients always send it.

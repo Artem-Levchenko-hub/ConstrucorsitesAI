@@ -113,7 +113,7 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
         raise ValueError("generation dispatch field types are invalid")
     prompt_text = str(raw["prompt_text"])
     model_id = str(raw["model_id"])
-    if not 1 <= len(prompt_text) <= 10_000 or not model_id:
+    if not 1 <= len(prompt_text) <= 30_000 or not model_id:
         raise ValueError("generation dispatch text fields are invalid")
     selected = raw.get("selected_elements")
     if selected is not None:

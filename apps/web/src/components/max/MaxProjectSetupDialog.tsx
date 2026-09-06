@@ -22,6 +22,7 @@ import {
   saveMaxProjectConfig,
 } from "@/lib/api/max-studio";
 import type { MaxProjectConfigPayload } from "@/lib/api/types";
+import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
 import { cn } from "@/lib/utils";
 
 const CHECKS: {
@@ -260,11 +261,15 @@ export function MaxProjectSetupDialog({
                       id="max-config-summary"
                       className="min-h-24 border-[#2b2d32] bg-[#191b20]"
                       value={current.summary}
-                      maxLength={1000}
+                      aria-describedby="max-config-summary-limit"
+                      aria-invalid={Array.from(current.summary.trim()).length > MAX_BRIEF_LENGTH}
                       onChange={(event) =>
                         setDraft({ ...current, summary: event.target.value })
                       }
                     />
+                    <p id="max-config-summary-limit" className="text-xs text-[#9fa1b1]">
+                      {Array.from(current.summary.trim()).length} / {MAX_BRIEF_LENGTH} символов. {Array.from(current.summary.trim()).length > MAX_BRIEF_LENGTH ? "Сократите описание перед сохранением — текст не обрезан." : "Описание сохранится целиком."}
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="max-config-type">Тип приложения</Label>
@@ -779,7 +784,8 @@ export function MaxProjectSetupDialog({
                     save.isPending ||
                     (changedSections === 0 && !pendingApplication) ||
                     current.app_name.trim().length < 1 ||
-                    current.summary.trim().length < 1
+                    current.summary.trim().length < 1 ||
+                    Array.from(current.summary.trim()).length > MAX_BRIEF_LENGTH
                   }
                   onClick={() => save.mutate(current)}
                 >

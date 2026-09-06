@@ -162,3 +162,14 @@ follow-up. This release does not claim that every concurrent retry is error-free
 - Full-build service readiness failures are returned as failed durable command evidence with the original task logs. The confirmed Next.js missing-production-build case returns to the bounded source-repair loop, with guidance to keep final tests from overwriting `.next`. No unchanged-source rebuild or generic infrastructure retry is introduced.
 
 - New portable generations include the actual platform-seeded `.omnia/cell.json` in the source-completion baseline even when the agent does not rewrite it. Only runtime metadata is adopted; old product pages/backend files are not. Explicit agent changes/deletions override this baseline, and missing/invalid manifests still fail completion.
+
+## Complete Studio briefs (2026-09-06)
+
+Studio creation and business-settings descriptions accept 20,000 Unicode code
+points. Textareas retain oversized pasted text and visibly block submission;
+they do not silently clip it. The assembled generation prompt is validated
+before project creation against a 30,000-character API limit, including the
+Studio wrapper and optional fields. Durable capacity dispatch accepts the same
+30,000-character prompt, so queue recovery retains the full request. Previously
+clipped historical messages cannot reconstruct requirements that never reached
+the server. This change does not implement recovery of an active agent process.

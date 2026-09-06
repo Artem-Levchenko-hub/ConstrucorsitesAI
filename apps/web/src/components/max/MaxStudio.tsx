@@ -41,6 +41,7 @@ import { createProject, listProjects } from "@/lib/api/projects";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import {
   MAX_APP_TYPES,
+  MAX_BRIEF_LENGTH,
   MAX_FEATURES,
   MAX_STYLES,
   buildMaxProjectPrompt,
@@ -231,7 +232,7 @@ export function MaxStudio({ email }: { email: string }) {
     },
   });
 
-  const ready = name.trim().length > 1 && idea.trim().length > 9;
+  const ready = name.trim().length > 1 && idea.trim().length > 9 && Array.from(idea.trim()).length <= MAX_BRIEF_LENGTH;
   const toggleFeature = (feature: MaxFeature) =>
     setFeatures((current) =>
       current.includes(feature)
@@ -340,7 +341,10 @@ export function MaxStudio({ email }: { email: string }) {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
-                <Textarea id="max-project-idea" value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-24 resize-none border-[#2b2d32] bg-[#191b20]" maxLength={600} />
+                <Textarea id="max-project-idea" value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-24 resize-none border-[#2b2d32] bg-[#191b20]" aria-describedby="max-project-idea-limit" aria-invalid={Array.from(idea.trim()).length > MAX_BRIEF_LENGTH} />
+                <p id="max-project-idea-limit" className="text-xs text-[#9fa1b1]">
+                  {Array.from(idea.trim()).length} / {MAX_BRIEF_LENGTH} символов. {Array.from(idea.trim()).length > MAX_BRIEF_LENGTH ? "Сократите описание перед отправкой — текст не обрезан." : "Описание отправится целиком."}
+                </p>
               </div>
               <fieldset>
                 <legend className="text-sm font-medium">Тип приложения</legend>

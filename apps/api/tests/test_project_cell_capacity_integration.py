@@ -73,6 +73,12 @@ async def test_two_api_schedulers_claim_one_dispatch_and_recover_expired_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = await _queued_dispatch(db_session)
+    long_prompt = "я" * 29_992 + "КОНЕЦ ТЗ"
+    run.agent_state = {
+        **run.agent_state,
+        "dispatch": {**run.agent_state["dispatch"], "prompt_text": long_prompt},
+    }
+    await db_session.commit()
     spawned: list[dict[str, object]] = []
 
     monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
@@ -90,6 +96,7 @@ async def test_two_api_schedulers_claim_one_dispatch_and_recover_expired_lease(
 
     assert sorted(claimed) == [0, 1]
     assert [item["run_id"] for item in spawned] == [run.id]
+    assert spawned[0]["prompt_text"] == long_prompt
     first_token = spawned[0]["capacity_dispatch_token"]
 
     async with AsyncSession(test_engine, expire_on_commit=False) as session:
