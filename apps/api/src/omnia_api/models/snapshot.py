@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from omnia_api.models.base import Base
@@ -35,6 +35,14 @@ class Snapshot(Base):
         nullable=True,
     )
     preview_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Version images carry explicit source provenance and live in private storage.
+    preview_manifest: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
+    preview_status: Mapped[str] = mapped_column(
+        Text, nullable=False, default="missing", server_default="missing",
+    )
+    preview_commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_rollback_target: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

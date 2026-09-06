@@ -10,7 +10,6 @@ import type {
   MaxPreviewSession,
   Project,
   RuntimeStatus,
-  Snapshot,
 } from "@/lib/api/types";
 
 const createMaxPreviewSession = vi.fn<
@@ -158,20 +157,6 @@ const PROJECT: Project = {
   updated_at: "2026-09-02T20:00:00Z",
 };
 
-const SNAPSHOTS: Snapshot[] = [
-  {
-    id: "snapshot-1",
-    project_id: PROJECT.id,
-    commit_sha: "1111111111111111111111111111111111111111",
-    prompt_text: null,
-    model_id: null,
-    parent_id: null,
-    preview_url: null,
-    is_rollback_target: true,
-    created_at: "2026-09-02T20:00:00Z",
-  },
-];
-
 async function flushPromises(rounds: number = 4): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
     await act(async () => {
@@ -262,11 +247,11 @@ describe("MAX live preview recovery", () => {
         <QueryClientProvider client={queryClient}>
           <MaxLivePreview
             project={PROJECT}
-            snapshots={SNAPSHOTS}
+            versions={[]}
             snapshotsLoading={false}
             currentSnapshotId={currentSnapshotId}
-            selectedSnapshotId={null}
-            onSelectSnapshot={vi.fn()}
+            selectedVersionId={null}
+            onSelectVersion={vi.fn()}
             onRestoreSnapshot={vi.fn().mockResolvedValue(undefined)}
             restoringSnapshot={false}
           />

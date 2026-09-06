@@ -1032,3 +1032,35 @@ export interface ExeReadyData {
   /** Installer file size in bytes (for the «N МБ» label). */
   size: number;
 }
+
+/** Durable, permanently numbered accepted-message version; independent of technical snapshots. */
+export interface ProjectVersion {
+  id: string;
+  number: number;
+  project_id: string;
+  source_message_id?: string | null;
+  generation_run_id?: string | null;
+  snapshot_id: string | null;
+  commit_sha: string | null;
+  prompt_text: string | null;
+  model_id: string | null;
+  created_at: string;
+  status: "queued" | "running" | "ready" | "failed" | "cancelled" | "unchanged";
+  preview_status: "pending" | "ready" | "failed" | "missing";
+  previews: VersionPreviewImage[];
+  is_current: boolean;
+  can_restore: boolean;
+}
+
+export interface VersionPreviewImage {
+  reconstructed?: boolean;
+  url: string;
+  width: number;
+  height: number;
+  route: string;
+}
+
+export interface ProjectVersionPage {
+  versions: ProjectVersion[];
+  next_cursor: number | null;
+}

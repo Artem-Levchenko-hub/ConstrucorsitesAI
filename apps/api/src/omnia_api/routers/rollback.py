@@ -12,9 +12,10 @@ from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
-from omnia_api.services import orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.project_versions import record_restored_version
 from omnia_api.services.queue import enqueue_preview
+from omnia_api.services.snapshot_restore import apply_legacy_restore, ensure_restore_supported
 
 router = APIRouter(prefix="/api/projects", tags=["rollback"])
 
@@ -82,39 +83,17 @@ async def post_rollback(
         _cur = await session.get(Snapshot, project.current_snapshot_id)
         old_sha = _cur.commit_sha if _cur is not None else None
 
-    new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)
-
-    # Container apps: push the rolled-back tree into the live dev container so the
-    # preview actually reverts (parity with build / edit / style-patch). Without
-    # this the git repo reverts but `omnia-dev-<slug>` keeps serving the post-edit
-    # code → the flagship "вернуться назад" is a no-op on the live preview.
-    # Best-effort (R-10): git + snapshot are already the canonical state, so a
-    # momentarily-down orchestrator only delays the live revert, never loses it.
+    # Unsupported MAX activation must fail before touching Git, the Cell or data.
+    ensure_restore_supported(project.template)
     if project.template in _CONTAINER_NEXT:
-        try:
-            reverted_files = await asyncio.to_thread(
-                repo_svc.read_files, project_id, new_sha
-            )
-            # hot_reload can only add/overwrite — a file CREATED after the target
-            # snapshot would survive the rollback inside the container and keep
-            # breaking the build (2026-07-08: a failed build's phantom modules
-            # outlived a rollback exactly this way and re-poisoned the retry).
-            # write_files treats empty content as "delete this file", so send
-            # every old-tree path missing from the target tree as "".
-            reverted_files = with_rollback_deletions(
-                reverted_files,
-                await asyncio.to_thread(repo_svc.read_files, project_id, old_sha)
-                if old_sha and old_sha != new_sha
-                else {},
-            )
-            await orchestrator_client.hot_reload(
-                project_id=project_id,
-                slug=project.slug,
-                files=reverted_files,
-            )
-        except Exception:
-            # Preview refresh must never block the rollback; it's already committed.
-            pass
+        target_files = await asyncio.to_thread(repo_svc.read_files, project_id, target.commit_sha)
+        old_files = (
+            await asyncio.to_thread(repo_svc.read_files, project_id, old_sha) if old_sha else {}
+        )
+        await apply_legacy_restore(project_id, project.slug, target_files, old_files)
+
+    # Only acknowledge canonical restoration after the runtime accepted the source.
+    new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)
 
     new_snapshot = Snapshot(
         project_id=project_id,
@@ -130,6 +109,7 @@ async def post_rollback(
     target.is_rollback_target = True
     await session.flush()
     project.current_snapshot_id = new_snapshot.id
+    await record_restored_version(session, project, new_snapshot, target)
     await session.commit()
     await session.refresh(new_snapshot)
 

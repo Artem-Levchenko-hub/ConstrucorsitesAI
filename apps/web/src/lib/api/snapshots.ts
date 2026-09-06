@@ -41,3 +41,13 @@ export async function getSnapshotWithFiles(
     `/api/projects/${projectId}/snapshots/${snapshotId}`,
   );
 }
+
+export async function listProjectVersions(
+  projectId: string,
+  before?: number,
+  signal?: AbortSignal,
+): Promise<import("./types").ProjectVersionPage> {
+  const params = new URLSearchParams({ limit: "30" });
+  if (before !== undefined) params.set("before", String(before));
+  return apiFetch(`/api/projects/${projectId}/versions?${params}`, { signal });
+}

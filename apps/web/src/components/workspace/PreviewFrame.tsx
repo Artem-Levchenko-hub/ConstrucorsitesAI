@@ -44,6 +44,7 @@ import { StreamingCodeView } from "./StreamingCodeView";
 import { StreamingAgentCodeView } from "./StreamingAgentCodeView";
 import { HeroMediaPanel } from "./HeroMediaPanel";
 import { StylePanel } from "./StylePanel";
+import { VersionImagePreview } from "./VersionImagePreview";
 import { CodeView } from "./CodeView";
 
 type Device = "mobile" | "tablet" | "desktop";
@@ -134,6 +135,15 @@ export function PreviewFrame({
     queryKey: ["snapshots", project.id],
     queryFn: () => listSnapshots(project.id),
   });
+  const headSnapshot = snapshots?.[0];
+  const visible: Snapshot | undefined = selectedSnapshotId
+    ? snapshots?.find((snapshot) => snapshot.id === selectedSnapshotId)
+    : headSnapshot;
+  // A selected ID is historical intent even before its record arrives.
+  const viewingOld = selectedSnapshotId !== null;
+  const selectedIndex = snapshots?.findIndex((snapshot) => snapshot.id === selectedSnapshotId) ?? -1;
+  const olderSnapshot = selectedIndex >= 0 ? snapshots?.[selectedIndex + 1] : undefined;
+  const newerSnapshot = selectedIndex > 0 ? snapshots?.[selectedIndex - 1] : undefined;
   // Реалтайм-preview: тянем messages, чтобы достать частичный <file path="index.html">
   // из текущего стриминг-сообщения. Кэш разделяем с ChatPanel, второй запрос
   // дёшев и react-query сам дедуплицирует.
@@ -208,7 +218,7 @@ export function PreviewFrame({
   } = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
-    enabled: isFullstack,
+    enabled: isFullstack && !viewingOld,
     // Keep polling until the container is actually serving (or hard-failed).
     // The orchestrator can bring the dev container up via auto-provision
     // (e.g. right after a build) without a guaranteed `runtime.started` WS
@@ -234,7 +244,7 @@ export function PreviewFrame({
   const autoStarted = useRef(false);
   const runtimeState = runtime?.state;
   useEffect(() => {
-    if (!isFullstack || autoStarted.current || runtimeLoading) return;
+    if (viewingOld || !isFullstack || autoStarted.current || runtimeLoading) return;
     const idle =
       runtimeError ||
       runtimeState === "stopped" ||
@@ -244,13 +254,8 @@ export function PreviewFrame({
       autoStarted.current = true;
       startMut.mutate();
     }
-  }, [isFullstack, runtimeLoading, runtimeError, runtimeState, startMut]);
+  }, [viewingOld, isFullstack, runtimeLoading, runtimeError, runtimeState, startMut]);
 
-  const headSnapshot = snapshots?.[0];
-  const visible: Snapshot | undefined = selectedSnapshotId
-    ? snapshots?.find((s) => s.id === selectedSnapshotId)
-    : headSnapshot;
-  const viewingOld = !!visible && !!headSnapshot && visible.id !== headSnapshot.id;
 
   const [device, setDevice] = useState<Device>(defaultDevice);
   const [iframeKey, setIframeKey] = useState(0);
@@ -463,19 +468,9 @@ export function PreviewFrame({
     ? `${apiOrigin.replace(/\/$/, "")}/p/${project.slug}`
     : `https://${project.slug}.omnia.ai`;
 
-  // For V1 projects the /p/<slug> endpoint always serves the project's
-  // current_snapshot HEAD. To show a *historical* snapshot, append
-  // `?snapshot=<id>`. Re-key the iframe when the visible snapshot changes
-  // so React fully remounts (clean reload).
-  //
-  // For V2 fullstack: when the dev container is up, swap the iframe to
-  // `runtime.dev_url` — the live Next.js process with HMR. We deliberately
-  // do NOT pass `?snapshot=…` here because the dev container only knows
-  // about HEAD (orchestrator hot-reload always writes the latest snapshot's
-  // files). Historical snapshots on fullstack will need a deploy-time
-  // checkout in a later sprint.
+  // Only live mode mounts an app document. Historical selection loads images.
   const fullstackLive =
-    isFullstack && runtime?.state === "running" && !!runtime.dev_url;
+    !viewingOld && isFullstack && runtime?.state === "running" && !!runtime.dev_url;
   const liveSrc =
     `${runtime?.dev_url ?? ""}?inspect=1#k=${iframeKey}` +
     `&omniaApi=${encodeURIComponent(apiOrigin)}`;
@@ -586,6 +581,7 @@ export function PreviewFrame({
   // their own content, so the load skeleton only covers the two iframes while
   // their document loads (handleFrameLoad lifts it).
   const iframeActive =
+    !viewingOld &&
     !showStreaming &&
     !showStreamingCode &&
     !isCode &&
@@ -766,8 +762,8 @@ export function PreviewFrame({
         <div className="px-4 py-2 border-b border-blue-500/30 bg-blue-500/10 flex items-center gap-2 text-xs">
           <Clock className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
           <span className="text-fg-primary">
-            Просматриваете старую версию ({formatRelativeTime(visible.created_at)}) —{" "}
-            <span className="font-mono">{shortSha(visible.commit_sha)}</span>
+            Просматриваете старую версию ({visible ? formatRelativeTime(visible.created_at) : "загружается"}) —{" "}
+            <span className="font-mono">{visible ? shortSha(visible.commit_sha) : ""}</span>
           </span>
           <button
             type="button"
@@ -804,7 +800,7 @@ export function PreviewFrame({
             )
           ) : (
             <>
-              <div className="h-9 flex items-center gap-1.5 px-3 shrink-0">
+              {!viewingOld && <div className="h-9 flex items-center gap-1.5 px-3 shrink-0">
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
                 <span className="w-2.5 h-2.5 rounded-full bg-border-strong" />
@@ -854,10 +850,10 @@ export function PreviewFrame({
                     );
                   })}
                 </div>
-              </div>
+              </div>}
 
               <div className="flex-1 relative bg-surface-base flex items-start justify-center overflow-auto">
-                {isPending && (
+                {isPending && !viewingOld && (
                   <div className="absolute inset-0 p-4">
                     <Skeleton className="w-full h-full" />
                   </div>
@@ -867,7 +863,7 @@ export function PreviewFrame({
                     (no rebuild, no blank); a quiet chip confirms work is happening
                     and that only the requested bit will change. */}
                 <AnimatePresence>
-                  {isEditTurn && (
+                  {isEditTurn && !viewingOld && (
                     <motion.div
                       key="edit-turn-chip"
                       initial={{ opacity: 0 }}
@@ -882,7 +878,18 @@ export function PreviewFrame({
                   )}
                 </AnimatePresence>
 
-                <AnimatePresence mode="wait">
+                {viewingOld ? (
+                  <VersionImagePreview
+                    identity={`${project.id}:${selectedSnapshotId}`}
+                    label={visible ? `Версия ${shortSha(visible.commit_sha)}` : "Версия недоступна"}
+                    images={visible?.preview_url ? [{ url: visible.preview_url, width: 0, height: 0, route: "/" }] : []}
+                    previewStatus={isPending ? "pending" : visible?.preview_url ? "ready" : "missing"}
+                    previous={olderSnapshot?.preview_url ? { url: olderSnapshot.preview_url, width: 0, height: 0, route: "/" } : undefined}
+                    next={newerSnapshot?.preview_url ? { url: newerSnapshot.preview_url, width: 0, height: 0, route: "/" } : undefined}
+                    onPrevious={olderSnapshot ? () => selectSnapshot(olderSnapshot.id) : undefined}
+                    onNext={newerSnapshot ? () => selectSnapshot(newerSnapshot.id) : undefined}
+                  />
+                ) : <AnimatePresence mode="wait">
                   {isCode ? (
                     <CodeProjectPanel
                       key="code-project"
@@ -1004,7 +1011,7 @@ export function PreviewFrame({
                       </div>
                     </motion.div>
                   )}
-                </AnimatePresence>
+                </AnimatePresence>}
 
                 {/* Phase 5.3 — load skeleton over the preview iframe until its
                     document paints, so neither the live container's first paint

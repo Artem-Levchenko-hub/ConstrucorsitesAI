@@ -28,7 +28,6 @@ import {
 } from "@/lib/generation-lifecycle";
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
-import { useWorkspaceStore } from "@/store/workspace";
 
 /**
  * Opens a real WebSocket to /api/ws/projects/:id and routes server events
@@ -174,7 +173,6 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       ) => Promise<boolean>)
     | null
   >(null);
-  const selectSnapshot = useWorkspaceStore((s) => s.selectSnapshot);
 
   const fireQueued = useCallback(() => {
     const p = pendingRef.current;
@@ -213,6 +211,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         activeGenerationRunRef.current = envelope.run_id;
         lastGenerationSeqRef.current[envelope.run_id] = envelope.seq;
         const data = envelope.data;
+        if (envelope.type === "generation.phase") {
+          void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
+        }
         const mid = typeof data.message_id === "string" ? data.message_id : null;
         if (mid) watchdogHeartbeatRef.current[mid]?.();
 
@@ -336,6 +337,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "llm.done") {
+        void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         // V3.8 JOY-MOMENT — read the turn-mode + brief for THIS build BEFORE the
         // removeQueries below drops them, then fire exactly one reward trigger
         // (build only; `buildJoyTrigger` returns null for edits). The error path
@@ -512,11 +514,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           event.data.snapshot,
           ...(prev ?? []),
         ]);
-        // Hot-reload: jump the iframe to the freshly-created HEAD so the
-        // user sees their generated site immediately without manually
-        // clicking the new card in the timeline. `null` = "show HEAD",
-        // which PreviewFrame resolves to snapshots[0].
-        selectSnapshot(null);
+        // Live selection (null) follows HEAD; an explicit historical selection stays.
+        void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         // MAX preview bootstrap files are platform-owned. A new generated
         // snapshot may replace them, so re-run the idempotent managed-kit sync
         // before the live phone iframe mints its next preview session.
@@ -593,6 +592,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "generation.cancelled") {
+        void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
             m.id === event.data.message_id
@@ -635,6 +635,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "llm.error") {
+        void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
           (prev ?? []).map((m) =>
             m.id === event.data.message_id
@@ -668,7 +669,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         fireQueued();
       }
     },
-    [qc, projectId, fireQueued, selectSnapshot],
+    [qc, projectId, fireQueued],
   );
 
   // Silence watchdog: fires `onSilence` if the message gets no update for
@@ -957,6 +958,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           opts,
         );
         message_id = resp.message_id;
+        void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         activeGenerationRunRef.current = resp.run_id;
         lastGenerationSeqRef.current[resp.run_id] ??= 0;
         if (!USE_MOCKS) {

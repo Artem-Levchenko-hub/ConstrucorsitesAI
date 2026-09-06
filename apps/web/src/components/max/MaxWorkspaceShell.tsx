@@ -1,7 +1,7 @@
 "use client";
 
 import { type CSSProperties, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
   LayoutGrid,
@@ -19,11 +19,10 @@ import { BrandMark } from "@/components/marketing/BrandMark";
 import { ChatPanel } from "@/components/workspace/ChatPanel";
 import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { listProjects } from "@/lib/api/projects";
-import { listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
+import { listProjectVersions, listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Project, Snapshot } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
-import { visibleMaxSnapshots } from "@/lib/max-version-history";
 import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { cn } from "@/lib/utils";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
@@ -45,8 +44,8 @@ export function MaxWorkspaceShell({
   const [navigationVisible, setNavigationVisible] = useState(true);
   const [previewPanelVisible, setPreviewPanelVisible] = useState(true);
   const [versionSelection, setVersionSelection] = useState<{
-    snapshotId: string;
-    headId: string | null;
+    versionId: string;
+    projectId: string;
   } | null>(null);
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
@@ -71,16 +70,25 @@ export function MaxWorkspaceShell({
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
   );
-  const versionSnapshots = useMemo(
-    () => visibleMaxSnapshots(snapshots.data ?? []),
-    [snapshots.data],
-  );
-  const currentSnapshotId =
-    snapshots.data?.[0]?.id ?? project.current_snapshot_id;
-  const selectedSnapshotId =
-    versionSelection?.headId === currentSnapshotId
-      ? versionSelection.snapshotId
-      : null;
+  const history = useInfiniteQuery({
+    queryKey: ["project-versions", project.id],
+    queryFn: ({ pageParam, signal }) => listProjectVersions(project.id, pageParam, signal),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+    refetchInterval: 5_000,
+  });
+  const versions = useMemo(() => {
+    const seen = new Set<string>();
+    return (history.data?.pages.flatMap((page) => page.versions) ?? []).filter((version) => {
+      if (seen.has(version.id)) return false;
+      seen.add(version.id); return true;
+    });
+  }, [history.data]);
+  const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
+  // Selection belongs to the project, never the moving HEAD. Clear during
+  // render so switching A → B → A cannot resurrect a stale selection.
+  if (versionSelection && versionSelection.projectId !== project.id) setVersionSelection(null);
+  const selectedVersionId = versionSelection?.projectId === project.id ? versionSelection.versionId : null;
 
   const rollbackMutation = useMutation({
     mutationFn: (snapshotId: string) =>
@@ -91,6 +99,7 @@ export function MaxWorkspaceShell({
         (previous) => upsertSnapshotNewest(previous, snapshot),
       );
       setVersionSelection(null);
+      void queryClient.invalidateQueries({ queryKey: ["project-versions", project.id] });
       toast.success("Версия восстановлена", {
         description:
           "Она стала текущей, а прежнее состояние осталось в истории.",
@@ -116,9 +125,9 @@ export function MaxWorkspaceShell({
     },
   });
 
-  function selectSnapshot(snapshotId: string | null) {
+  function selectVersion(versionId: string | null) {
     setVersionSelection(
-      snapshotId ? { snapshotId, headId: currentSnapshotId } : null,
+      versionId ? { versionId, projectId: project.id } : null,
     );
   }
 
@@ -218,7 +227,7 @@ export function MaxWorkspaceShell({
           </div>
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <MaxUsageBreakdown projectId={project.id} />
-            {versionSnapshots.length > 0 && (
+            {versions.length > 0 && (
               <div className="hidden md:block">
                 <DownloadButton
                   projectId={project.id}
@@ -301,12 +310,17 @@ export function MaxWorkspaceShell({
       {previewPanelVisible && (
         <div className="hidden min-h-0 bg-transparent 2xl:block">
           <MaxLivePreview
+            key={project.id}
             project={project}
-            snapshots={versionSnapshots}
-            snapshotsLoading={snapshots.isPending}
+            versions={versions}
+            historyError={history.isError}
+            hasOlder={history.hasNextPage}
+            loadingOlder={history.isFetchingNextPage}
+            onLoadOlder={() => { void (history.isError && !history.isFetchNextPageError ? history.refetch() : history.fetchNextPage()); }}
+            snapshotsLoading={history.isPending}
             currentSnapshotId={currentSnapshotId}
-            selectedSnapshotId={selectedSnapshotId}
-            onSelectSnapshot={selectSnapshot}
+            selectedVersionId={selectedVersionId}
+            onSelectVersion={selectVersion}
             onRestoreSnapshot={async (snapshotId) => {
               await rollbackMutation.mutateAsync(snapshotId);
             }}
@@ -344,12 +358,17 @@ export function MaxWorkspaceShell({
             </div>
             <div className="min-h-0 flex-1">
               <MaxLivePreview
+                key={project.id}
                 project={project}
-                snapshots={versionSnapshots}
-                snapshotsLoading={snapshots.isPending}
+                versions={versions}
+                historyError={history.isError}
+                hasOlder={history.hasNextPage}
+                loadingOlder={history.isFetchingNextPage}
+                onLoadOlder={() => { void (history.isError && !history.isFetchNextPageError ? history.refetch() : history.fetchNextPage()); }}
+                snapshotsLoading={history.isPending}
                 currentSnapshotId={currentSnapshotId}
-                selectedSnapshotId={selectedSnapshotId}
-                onSelectSnapshot={selectSnapshot}
+                selectedVersionId={selectedVersionId}
+                onSelectVersion={selectVersion}
                 onRestoreSnapshot={async (snapshotId) => {
                   await rollbackMutation.mutateAsync(snapshotId);
                 }}

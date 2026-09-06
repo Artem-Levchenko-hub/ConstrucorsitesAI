@@ -3028,6 +3028,9 @@ async def post_prompt(
     generation_run.assistant_message_id = assistant_msg.id
     generation_run.user_message_id = user_msg.id
     generation_run.response_mode = turn_mode
+    from omnia_api.services.project_versions import ensure_generation_version
+
+    await ensure_generation_version(session, generation_run, project)
     await session.commit()
     await session.refresh(user_msg)
     await session.refresh(assistant_msg)
@@ -6632,7 +6635,16 @@ async def _process_prompt(
                         )
                     except Exception as _ae:  # never affect the build
                         print(f"[ATTEST] persist skipped: {_ae}", flush=True)
-                await asyncio.to_thread(enqueue_preview, _agent_snap_id)
+                if project_template == "max_miniapp" and _project_cell_executor_handle is not None:
+                    from omnia_api.services.snapshot_preview_capture import (
+                        capture_snapshot_frontend,
+                    )
+
+                    await capture_snapshot_frontend(
+                        _agent_snap_id, project_id, new_sha, files, _project_cell_executor_handle,
+                    )
+                else:
+                    await asyncio.to_thread(enqueue_preview, _agent_snap_id)
                 await publish_event(
                     project_id,
                     "snapshot.created",

@@ -38,6 +38,7 @@ from omnia_api.routers import messages as messages_router
 from omnia_api.routers import models_router
 from omnia_api.routers import payments as payments_router
 from omnia_api.routers import product_advice as product_advice_router
+from omnia_api.routers import project_versions as project_versions_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.routers import public as public_router
 from omnia_api.routers import rollback as rollback_router
@@ -138,6 +139,7 @@ def create_app() -> FastAPI:
     app.include_router(product_advice_router.router)
     app.include_router(hero_media_router.router)
     app.include_router(snapshots_router.router)
+    app.include_router(project_versions_router.router)
     app.include_router(messages_router.router)
     app.include_router(max_integrations_router.router)
     app.include_router(max_accounts_router.router)

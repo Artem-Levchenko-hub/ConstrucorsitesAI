@@ -1,107 +1,33 @@
 "use client";
 
-import { GitCommitHorizontal, Loader2 } from "lucide-react";
-
-import type { Snapshot } from "@/lib/api/types";
-import {
-  maxSnapshotLabel,
-  maxSnapshotVersion,
-} from "@/lib/max-version-history";
+import type { ProjectVersion } from "@/lib/api/types";
+import { projectVersionLabel, versionStatusLabel, versionImageUrl } from "@/lib/project-version";
 import { cn } from "@/lib/utils";
 
-export function MaxVersionRail({
-  snapshots,
-  currentSnapshotId,
-  selectedSnapshotId,
-  loading,
-  onSelect,
-}: {
-  snapshots: Snapshot[];
-  currentSnapshotId: string | null;
-  selectedSnapshotId: string | null;
+export function MaxVersionRail({ versions, selectedVersionId, loading, error, hasOlder, loadingOlder, onLoadOlder, onSelect }: {
+  versions: ProjectVersion[];
+  selectedVersionId: string | null;
   loading: boolean;
-  onSelect: (snapshotId: string | null) => void;
+  error?: boolean;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
+  onSelect: (versionId: string | null) => void;
 }) {
-  return (
-    <nav
-      className="max-projects-scroll relative h-full w-[76px] shrink-0 overflow-y-auto overscroll-contain border-r border-[#25272b] py-2 pl-1 pr-1"
-      aria-label="История версий"
-      aria-busy={loading}
-      data-testid="max-version-rail"
-    >
-      {loading ? (
-        <div className="flex min-h-28 items-center justify-center" role="status">
-          <Loader2 className="size-3.5 animate-spin text-accent" />
-          <span className="sr-only">Загружаем историю версий</span>
-        </div>
-      ) : snapshots.length === 0 ? (
-        <div className="flex min-h-28 flex-col items-center justify-center gap-2 px-1 text-center text-[9px] leading-3 text-[#828491]">
-          <GitCommitHorizontal className="size-3.5" />
-          Версии появятся здесь
-        </div>
-      ) : (
-        <ol className="relative flex min-h-full flex-col items-stretch justify-center py-1">
-          <span
-            className="absolute bottom-6 left-[15px] top-6 w-px bg-[#2b2d32]"
-            aria-hidden="true"
-          />
-          {snapshots.map((snapshot) => {
-            const version = maxSnapshotVersion(snapshots, snapshot.id);
-            const isCurrent = snapshot.id === currentSnapshotId;
-            const isSelected = snapshot.id === selectedSnapshotId;
-            const label = maxSnapshotLabel(snapshot);
-            const stateLabel = isCurrent
-              ? "текущая"
-              : isSelected
-                ? "открыта для просмотра"
-                : "";
-
-            return (
-              <li key={snapshot.id} className="relative z-10 min-h-11">
-                <button
-                  type="button"
-                  onClick={() => onSelect(isCurrent ? null : snapshot.id)}
-                  aria-pressed={isCurrent || isSelected}
-                  aria-label={`Версия ${version}: ${label}${stateLabel ? `, ${stateLabel}` : ""}`}
-                  title={`v${version} · ${label}`}
-                  className={cn(
-                    "group grid min-h-11 w-full grid-cols-[22px_minmax(0,1fr)] items-center gap-1 rounded-[8px] text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent",
-                    isSelected ? "bg-accent/10" : "hover:bg-[#121519]",
-                  )}
-                  data-testid={`max-version-${version}`}
-                >
-                  <span className="grid size-[22px] place-items-center">
-                    <span
-                      className={cn(
-                        "block size-2.5 rounded-full border-2 bg-[#191b20] transition-[border-color,background-color,box-shadow]",
-                        isCurrent
-                          ? "border-accent bg-accent shadow-[0_0_0_3px_var(--color-accent-subtle)]"
-                          : isSelected
-                            ? "border-accent shadow-[0_0_0_3px_var(--color-accent-subtle)]"
-                            : "border-[#828491] group-hover:border-accent",
-                      )}
-                      aria-hidden="true"
-                    />
-                  </span>
-                  <span className="min-w-0 pr-0.5">
-                    <span
-                      className={cn(
-                        "block text-[9px] font-semibold leading-3 tabular-nums",
-                        isCurrent || isSelected ? "text-accent" : "text-[#9fa1b1]",
-                      )}
-                    >
-                      v{version}
-                    </span>
-                    <span className="block truncate text-[9px] leading-3 text-[#9fa1b1]">
-                      {isCurrent ? "Текущая" : label}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </nav>
-  );
+  return <nav className="max-projects-scroll h-full w-[90px] shrink-0 overflow-y-auto overscroll-contain border-r border-[#25272b] px-1 py-2" aria-label="История версий" aria-busy={loading} data-testid="max-version-rail">
+    {loading ? <p role="status" className="p-2 text-[10px]">Загружаем историю…</p> : !versions.length && <p className="p-2 text-[10px] text-[#828491]">{error ? "История недоступна" : "Версии появятся здесь"}</p>}
+    <ol className="space-y-1">{versions.map((version) => <li key={version.id}>
+      <button type="button" onClick={() => onSelect(version.id)} aria-pressed={selectedVersionId === version.id} aria-label={`Версия ${version.number}: ${projectVersionLabel(version)}, ${versionStatusLabel[version.status]}`} title={`v${version.number} · ${projectVersionLabel(version)} · ${new Date(version.created_at).toLocaleString("ru-RU")}`} data-testid={`max-version-${version.number}`} className={cn("w-full rounded-lg p-1.5 text-left text-[9px] hover:bg-[#2b2d32] focus-visible:outline-accent", selectedVersionId === version.id && "bg-accent/10")}>
+        {version.previews[0] && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={versionImageUrl(version.previews[0].url)} alt="" loading="lazy" className="mb-1 h-10 w-full rounded object-cover object-top" />
+        )}
+        <span className="block font-semibold text-accent">v{version.number}{version.is_current ? " · текущая" : ""}</span>
+        <span className="block truncate text-[#9fa1b1]">{projectVersionLabel(version)}</span>
+        <span className="block text-[#828491]">{versionStatusLabel[version.status]}</span>
+        <time dateTime={version.created_at} className="block text-[#828491]">{new Date(version.created_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })}</time>
+      </button>
+    </li>)}</ol>
+    {(hasOlder || error) && onLoadOlder && <button type="button" onClick={onLoadOlder} disabled={loadingOlder} data-testid="max-history-load-older" className="my-2 min-h-9 w-full rounded border border-[#2b2d32] px-1 text-[10px] text-[#9fa1b1] disabled:opacity-50">{loadingOlder ? "Загружаем…" : error ? "Повторить" : "Более ранние"}</button>}
+  </nav>;
 }

@@ -160,17 +160,16 @@ def test_capacity_queue_migration_uses_actual_generation_constraint_names() -> N
     recorder.f.side_effect = lambda name: name
     migration.downgrade()
 
-    assert call(
-        "ck_generation_runs_status_allowed", "generation_runs", type_="check"
-    ) in recorder.drop_constraint.call_args_list
+    assert (
+        call("ck_generation_runs_status_allowed", "generation_runs", type_="check")
+        in recorder.drop_constraint.call_args_list
+    )
     downgrade_create = next(
         item
         for item in recorder.create_check_constraint.call_args_list
         if item.args[1] == "generation_runs"
     )
-    assert downgrade_create.args[0] == (
-        "ck_generation_runs_ck_generation_runs_status_allowed"
-    )
+    assert downgrade_create.args[0] == ("ck_generation_runs_ck_generation_runs_status_allowed")
     assert "queued_for_capacity" not in str(downgrade_create.args[2])
 
 
@@ -201,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_platform_ai_opt_in_is_the_only_head() -> None:
+def test_project_versions_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0059_project_runtime_ai"]
+    assert heads == ["0060_project_versions"]
+    assert chain["0060_project_versions"] == "0059_project_runtime_ai"
     assert chain["0059_project_runtime_ai"] == "0058_integration_operations"
     assert chain["0058_integration_operations"] == "0057_generation_execution_owner"
     assert chain["0057_generation_execution_owner"] == "0056_project_cell_finalization"
@@ -221,23 +221,32 @@ def test_project_cell_candidates_migration_upgrade_and_rollback(
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
         "0054_project_cell_candidates"
     )
-    checks = [str(row["definition"]) for row in database.fetch("""
+    checks = [
+        str(row["definition"])
+        for row in database.fetch("""
         SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
         WHERE conrelid = 'project_cell_candidates'::regclass AND contype = 'c'
-    """)]
+    """)
+    ]
     assert len(checks) == 8
     for prefix in ("database-backup", "build", "verification"):
         assert any(f"{prefix}/sha256/[0-9a-f]{{64}}" in check for check in checks)
-    assert database.fetchval("""
+    assert (
+        database.fetchval("""
         SELECT count(*) FROM pg_constraint
         WHERE conrelid = 'project_cell_candidates'::regclass AND contype = 'u'
-    """) == 0  # Retrying the same source after rejection/cancellation is allowed.
-    assert database.fetchval("""
+    """)
+        == 0
+    )  # Retrying the same source after rejection/cancellation is allowed.
+    assert (
+        database.fetchval("""
         SELECT count(*) FROM pg_indexes
         WHERE tablename = 'project_cell_candidates'
           AND indexname = 'uq_project_cell_candidates_one_accepted'
           AND indexdef LIKE '%UNIQUE%WHERE%accepted%'
-    """) == 1
+    """)
+        == 1
+    )
     command.downgrade(database.config, "0053_project_cell_operation_fencing")
     assert database.fetchval("SELECT to_regclass('project_cell_candidates')") is None
     assert database.fetchval("SELECT to_regclass('project_cell_workspaces')") is not None
@@ -431,6 +440,46 @@ def test_chain_is_fully_connected() -> None:
         assert node not in seen, "cycle detected in migration chain"
         seen.add(node)
         node = chain[node]
-    assert len(seen) == len(chain), (
-        f"unreachable migrations: {sorted(set(chain) - seen)}"
+    assert len(seen) == len(chain), f"unreachable migrations: {sorted(set(chain) - seen)}"
+
+
+def test_project_versions_migration_backfills_only_user_history(project_cell_migration_database):
+    database = project_cell_migration_database
+    database.upgrade("0059_project_runtime_ai")
+    owner, project, technical, legacy, message, assistant, run = [str(uuid4()) for _ in range(7)]
+    sql = f"""
+      INSERT INTO users(id,email) VALUES ('{owner}','version-migration@example.test');
+      INSERT INTO projects(id,owner_id,name,slug,template)
+        VALUES ('{project}','{owner}','History','history','max_miniapp');
+      INSERT INTO snapshots(id,project_id,commit_sha,prompt_text,is_rollback_target,created_at)
+        VALUES ('{technical}','{project}','{"a" * 40}',NULL,false,'2025-01-01'),
+               ('{legacy}','{project}','{"b" * 40}','Legacy prompt',false,'2025-01-02');
+      INSERT INTO messages(id,project_id,role,content)
+        VALUES ('{message}','{project}','user','Failed prompt'),
+               ('{assistant}','{project}','assistant','');
+      INSERT INTO generation_runs(id,project_id,user_id,user_message_id,assistant_message_id,
+           idempotency_key,prompt_hash,status,created_at)
+        VALUES ('{run}','{project}','{owner}','{message}','{assistant}',
+                'migration','hash','failed','2025-01-03');
+      UPDATE generation_runs
+        SET agent_state = '{{"dispatch":{{"current_snapshot_id":"{technical}"}}}}'::jsonb
+      WHERE id = '{run}';
+    """
+    asyncio.run(_execute(database.dsn, sql))
+    database.upgrade("head")
+    assert (
+        str(
+            database.fetchval(
+                f"SELECT base_snapshot_id FROM project_versions WHERE generation_run_id='{run}'"
+            )
+        )
+        == technical
     )
+    rows = database.fetch("SELECT number,prompt_text,status FROM project_versions ORDER BY number")
+    assert [(r["number"], r["prompt_text"], r["status"]) for r in rows] == [
+        (1, "Legacy prompt", "ready"),
+        (2, "Failed prompt", "failed"),
+    ]
+    assert database.fetchval("SELECT count(*) FROM snapshots WHERE preview_status='missing'") == 2
+    database.upgrade("head")
+    assert database.fetchval("SELECT count(*) FROM project_versions") == 2

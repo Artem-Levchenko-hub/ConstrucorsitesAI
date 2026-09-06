@@ -7,7 +7,6 @@ import {
   Check,
   CircleAlert,
   ExternalLink,
-  GitCommitHorizontal,
   Loader2,
   PanelRightClose,
   Play,
@@ -32,11 +31,9 @@ import {
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
-import type { Project, Snapshot } from "@/lib/api/types";
-import {
-  maxSnapshotLabel,
-  maxSnapshotVersion,
-} from "@/lib/max-version-history";
+import type { Project, ProjectVersion } from "@/lib/api/types";
+import { projectVersionLabel } from "@/lib/project-version";
+import { VersionImagePreview } from "../workspace/VersionImagePreview";
 import { shortSha } from "@/lib/utils";
 import { MaxVersionRail } from "./MaxVersionRail";
 
@@ -69,26 +66,43 @@ function isTransientPreviewError(error: unknown): boolean {
 
 export function MaxLivePreview({
   project,
-  snapshots,
+  versions,
   snapshotsLoading,
   currentSnapshotId,
-  selectedSnapshotId,
-  onSelectSnapshot,
+  selectedVersionId,
+  onSelectVersion,
   onRestoreSnapshot,
   restoringSnapshot,
   onClose,
+  historyError,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
 }: {
   project: Project;
-  snapshots: Snapshot[];
+  versions: ProjectVersion[];
   snapshotsLoading: boolean;
   currentSnapshotId: string | null;
-  selectedSnapshotId: string | null;
-  onSelectSnapshot: (snapshotId: string | null) => void;
+  selectedVersionId: string | null;
+  onSelectVersion: (versionId: string | null) => void;
   onRestoreSnapshot: (snapshotId: string) => Promise<void>;
   restoringSnapshot: boolean;
   onClose?: () => void;
+  historyError?: boolean;
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const viewingHistorical = selectedVersionId !== null;
+  const historySelected = useRef(viewingHistorical);
+  useEffect(() => {
+    historySelected.current = viewingHistorical;
+    if (!viewingHistorical) return;
+    // Disabling an observer does not cancel an already scheduled query retry.
+    void queryClient.cancelQueries({ queryKey: ["max-managed-kit-sync", project.id] });
+    void queryClient.cancelQueries({ queryKey: ["max-preview-session", project.id] });
+  }, [viewingHistorical, project.id, queryClient]);
   const started = useRef(false);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
@@ -99,6 +113,7 @@ export function MaxLivePreview({
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
+    enabled: !viewingHistorical,
     retry: false,
     refetchInterval: (query) => {
       const state = query.state.data?.state;
@@ -106,11 +121,14 @@ export function MaxLivePreview({
     },
   });
   const start = useMutation({
-    mutationFn: () => startRuntime(project.id),
+    mutationFn: () => {
+      if (historySelected.current) throw new Error("Открыта история версий");
+      return startRuntime(project.id);
+    },
     // Cold restoration is bounded by the server. A competing start or a lost
     // response is retryable; auth/ownership failures are not.
     retry: (failureCount, error) =>
-      failureCount < 20 && isTransientPreviewError(error),
+      !historySelected.current && failureCount < 20 && isTransientPreviewError(error),
     retryDelay: previewRetryDelay,
     onSuccess: (value) => queryClient.setQueryData(["runtime", project.id], value),
   });
@@ -118,7 +136,7 @@ export function MaxLivePreview({
   const managedKit = useQuery({
     queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId],
     queryFn: () => syncMaxManagedKit(project.id),
-    enabled: runtimeRunning,
+    enabled: !viewingHistorical && runtimeRunning,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
     retryDelay: previewRetryDelay,
@@ -135,7 +153,7 @@ export function MaxLivePreview({
       managedKit.data?.synced_snapshot_id ?? null,
     ],
     queryFn: () => createMaxPreviewSession(project.id),
-    enabled: runtimeRunning && managedKit.isSuccess,
+    enabled: !viewingHistorical && runtimeRunning && managedKit.isSuccess,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
     retryDelay: previewRetryDelay,
@@ -149,6 +167,7 @@ export function MaxLivePreview({
   const recoverPreview = useMutation({
     mutationFn: async () => {
       const runtimeResult = await runtime.refetch();
+      if (historySelected.current) return null;
       let activeRuntime = runtimeResult.data ?? runtime.data ?? null;
       if (
         !activeRuntime ||
@@ -156,12 +175,13 @@ export function MaxLivePreview({
       ) {
         activeRuntime = await start.mutateAsync();
       }
-      if (activeRuntime.state !== "running") {
+      if (historySelected.current || activeRuntime.state !== "running") {
         // Polling below will connect once preparation completes. Do not mint
         // sessions (or show a false failure) while a generation/wake is active.
         return null;
       }
       const managedKitResult = await managedKit.refetch();
+      if (historySelected.current) return null;
       if (!managedKitResult.data) {
         throw (
           managedKitResult.error ??
@@ -194,12 +214,12 @@ export function MaxLivePreview({
   });
 
   useEffect(() => {
-    if (runtime.isLoading || started.current) return;
+    if (viewingHistorical || runtime.isLoading || started.current) return;
     if (runtime.isError || !runtime.data || ["stopped", "paused", "failed"].includes(runtime.data.state)) {
       started.current = true;
       start.mutate();
     }
-  }, [runtime.isLoading, runtime.isError, runtime.data, start]);
+  }, [viewingHistorical, runtime.isLoading, runtime.isError, runtime.data, start]);
 
   useEffect(() => {
     const stage = deviceStage.current;
@@ -266,21 +286,13 @@ export function MaxLivePreview({
     (runtimeRunning && (managedKit.isLoading || previewSession.isLoading));
   const showPreviewError = Boolean(previewError) && !preparing;
   const displayPreviewUrl = previewUrl ?? lastWorkingUrl;
-  const selectedSnapshot = selectedSnapshotId
-    ? snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) ?? null
-    : null;
-  const viewingHistorical = Boolean(
-    selectedSnapshot && selectedSnapshot.id !== currentSnapshotId,
-  );
-  const selectedVersion = selectedSnapshot
-    ? maxSnapshotVersion(snapshots, selectedSnapshot.id)
-    : null;
-  const restoreTargetSnapshot = restoreTargetId
-    ? snapshots.find((snapshot) => snapshot.id === restoreTargetId) ?? null
-    : null;
-  const restoreTargetVersion = restoreTargetSnapshot
-    ? maxSnapshotVersion(snapshots, restoreTargetSnapshot.id)
-    : null;
+  const selectedIndex = versions.findIndex((version) => version.id === selectedVersionId);
+  const selectedSnapshot = versions[selectedIndex] ?? null;
+  const selectedVersion = selectedSnapshot?.number ?? null;
+  const previousVersion = selectedIndex >= 0 ? versions[selectedIndex + 1] : undefined;
+  const nextVersion = selectedIndex > 0 ? versions[selectedIndex - 1] : undefined;
+  const restoreTargetSnapshot = versions.find((version) => version.id === restoreTargetId) ?? null;
+  const restoreTargetVersion = restoreTargetSnapshot?.number ?? null;
   const preparationLabel = !runtimeRunning
     ? "Запускаем сервер приложения"
     : !managedKit.isSuccess
@@ -318,9 +330,9 @@ export function MaxLivePreview({
   }
 
   async function confirmRestoreSnapshot() {
-    if (!restoreTargetSnapshot) return;
+    if (!restoreTargetSnapshot?.snapshot_id || !restoreTargetSnapshot.can_restore) return;
     try {
-      await onRestoreSnapshot(restoreTargetSnapshot.id);
+      await onRestoreSnapshot(restoreTargetSnapshot.snapshot_id);
       setRestoreTargetId(null);
     } catch {
       // The owner mutation keeps the confirmation open and shows the error.
@@ -339,15 +351,15 @@ export function MaxLivePreview({
           </p>
           <h2 className="mt-1 text-sm font-semibold">
             {viewingHistorical && selectedSnapshot
-              ? `v${selectedVersion} · ${maxSnapshotLabel(selectedSnapshot)}`
+              ? `v${selectedVersion} · ${projectVersionLabel(selectedSnapshot)}`
               : "Живое превью"}
           </h2>
         </div>
         <div className="flex max-w-[62%] shrink-0 flex-wrap items-center justify-end gap-1 sm:gap-1.5">
-          <span className="inline-flex items-center gap-2 text-[10px] text-[#9fa1b1]">
+          {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[10px] text-[#9fa1b1]">
             <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#828491]"}`} />
             {connected ? "Подключено" : "Запускается"}
-          </span>
+          </span>}
           {!viewingHistorical && (
             <button
               type="button"
@@ -383,11 +395,14 @@ export function MaxLivePreview({
 
       <div className="mt-3 flex min-h-0 flex-1">
         <MaxVersionRail
-          snapshots={snapshots}
-          currentSnapshotId={currentSnapshotId}
-          selectedSnapshotId={selectedSnapshotId}
+          versions={versions}
+          error={historyError}
+          hasOlder={hasOlder}
+          loadingOlder={loadingOlder}
+          onLoadOlder={onLoadOlder}
+          selectedVersionId={selectedVersionId}
           loading={snapshotsLoading}
-          onSelect={onSelectSnapshot}
+          onSelect={onSelectVersion}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
         <div
@@ -427,38 +442,19 @@ export function MaxLivePreview({
                   </span>
                 </div>
                 <div className="relative bg-white" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}>
-                  {viewingHistorical && selectedSnapshot ? (
-                    <div
-                      className="absolute inset-0 bg-[#191b20]"
-                      data-testid="max-historical-snapshot"
-                    >
-                      {selectedSnapshot.preview_url ? (
-                        // Snapshot thumbnails are immutable remote render artifacts.
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={selectedSnapshot.preview_url}
-                          alt={`Снимок версии v${selectedVersion}`}
-                          className="size-full object-cover object-top"
-                        />
-                      ) : (
-                        <div className="flex size-full flex-col items-center justify-center px-10 text-center">
-                          <GitCommitHorizontal className="size-7 text-accent" />
-                          <p className="mt-5 text-[15px] font-medium text-white">
-                            Версия сохранена
-                          </p>
-                          <p className="mt-2 text-[12px] leading-5 text-[#828491]">
-                            Изображение этой сборки не сохранилось, но её можно безопасно восстановить.
-                          </p>
-                        </div>
-                      )}
-                      <div className="absolute inset-x-3 top-3 rounded-[10px] border border-accent/25 bg-[#191b20]/95 px-3 py-2 text-left shadow-sm backdrop-blur">
-                        <p className="text-[10px] font-semibold text-accent">
-                          Версия v{selectedVersion} · только просмотр
-                        </p>
-                        <p className="mt-0.5 truncate text-[9px] text-[#9fa1b1]">
-                          {maxSnapshotLabel(selectedSnapshot)}
-                        </p>
-                      </div>
+                  {viewingHistorical ? (
+                    <div className="absolute inset-0" data-testid="max-historical-snapshot">
+                      <VersionImagePreview
+                        identity={`${project.id}:${selectedVersionId}`}
+                        label={selectedSnapshot ? `Версия v${selectedSnapshot.number}` : "Версия недоступна"}
+                        images={selectedSnapshot?.previews ?? []}
+                        previewStatus={selectedSnapshot?.preview_status ?? (snapshotsLoading ? "pending" : "missing")}
+                        status={selectedSnapshot?.status}
+                        previous={previousVersion?.previews[0]}
+                        next={nextVersion?.previews[0]}
+                        onPrevious={previousVersion ? () => onSelectVersion(previousVersion.id) : undefined}
+                        onNext={nextVersion ? () => onSelectVersion(nextVersion.id) : undefined}
+                      />
                     </div>
                   ) : displayPreviewUrl ? (
                     <>
@@ -565,21 +561,21 @@ export function MaxLivePreview({
           </div>
         </div>
         <div className="shrink-0 text-center">
-          {viewingHistorical && selectedSnapshot ? (
+          {viewingHistorical ? (
             <div className="mt-1 flex min-h-11 items-center justify-center gap-1.5 px-2">
               <button
                 type="button"
-                onClick={() => onSelectSnapshot(null)}
+                onClick={() => onSelectVersion(null)}
                 disabled={restoringSnapshot}
                 className="inline-flex min-h-11 items-center rounded-[9px] px-2.5 text-[10px] font-medium text-[#9fa1b1] hover:bg-[#2b2d32] hover:text-white disabled:opacity-45"
                 data-testid="max-return-current-version"
               >
-                Текущая
+                Живое превью
               </button>
               <button
                 type="button"
-                onClick={() => setRestoreTargetId(selectedSnapshot.id)}
-                disabled={restoringSnapshot}
+                onClick={() => setRestoreTargetId(selectedSnapshot?.id ?? null)}
+                disabled={restoringSnapshot || !selectedSnapshot?.can_restore || !selectedSnapshot.snapshot_id}
                 className="inline-flex min-h-11 items-center gap-1.5 rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[10px] font-semibold text-accent hover:bg-accent/15 disabled:opacity-45"
                 data-testid="max-restore-version"
               >
@@ -609,7 +605,7 @@ export function MaxLivePreview({
       </div>
       <Dialog
         open={Boolean(
-          restoreTargetSnapshot && restoreTargetId === selectedSnapshotId,
+          restoreTargetSnapshot && restoreTargetId === selectedVersionId,
         )}
         onOpenChange={(open) => {
           if (!restoringSnapshot && !open) setRestoreTargetId(null);
@@ -622,7 +618,7 @@ export function MaxLivePreview({
               Создадим новую текущую версию на основе{" "}
               <span className="font-mono text-white">
                 {restoreTargetSnapshot
-                  ? shortSha(restoreTargetSnapshot.commit_sha)
+                  ? shortSha(restoreTargetSnapshot.commit_sha ?? "")
                   : ""}
               </span>
               . Нынешняя версия останется в истории.

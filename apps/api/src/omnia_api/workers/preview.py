@@ -348,6 +348,7 @@ async def capture_live_url_report(
     settle_container: bool = True,
     full_page: bool = False,
     bootstrap_url: str | None = None,
+    require_success_status: bool = False,
 ) -> LiveCaptureReport:
     """Like ``capture_live_url()``, but keeps bounded failure diagnostics."""
 
@@ -380,11 +381,13 @@ async def capture_live_url_report(
                         issues.append(_live_capture_issue("bootstrap", exc))
                         return LiveCaptureReport({}, tuple(issues))
                 try:
-                    await page.goto(
+                    response = await page.goto(
                         url,
                         wait_until="domcontentloaded",
                         timeout=startup_timeout_ms,
                     )
+                    if require_success_status and (response is None or response.status >= 400):
+                        raise ValueError("Unsuccessful preview HTTP status")
                     if settle_container:
                         await _await_container_ready(page)
                     await _await_paint(page)
@@ -395,11 +398,13 @@ async def capture_live_url_report(
                 for width in widths:
                     try:
                         await page.set_viewport_size({"width": int(width), "height": height})
-                        await page.goto(
+                        response = await page.goto(
                             url,
                             wait_until="domcontentloaded",
                             timeout=GOTO_TIMEOUT_MS,
                         )
+                        if require_success_status and (response is None or response.status >= 400):
+                            raise ValueError("Unsuccessful preview HTTP status")
                         if settle_container:
                             await _await_container_ready(page)
                         await _await_paint(page)
@@ -622,6 +627,12 @@ async def _render_async(snapshot_id: str) -> None:
             commit_sha = snapshot.commit_sha
             project = await session.get(Project, project_id)
             template = project.template if project is not None else None
+
+        # MAX history captures are created under the generation lease with exact
+        # before/after source checks. A deferred live screenshot can label newer
+        # content as an older snapshot and must never overwrite that provenance.
+        if template == "max_miniapp":
+            return
 
         files = await asyncio.to_thread(repo_svc.read_files, project_id, commit_sha)
 

@@ -359,6 +359,7 @@ class ProjectCellExecutorHandle:
     workspace_id: UUID
     create_preview_session: Callable[[], Awaitable[ProjectCellPreviewSession]]
     release: Callable[[], Awaitable[None]]
+    refresh_snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None
     current_identity: Callable[[], Awaitable[ProofIdentity]] | None = None
     run_role: (
         Callable[[ProjectCellCommandRole, UUID], Awaitable[ProjectCellCommandObservation]] | None
@@ -829,6 +830,11 @@ async def maybe_create_project_cell_executor(
     async def _snapshot_files() -> dict[str, str]:
         return dict(workspace_files)
 
+    async def _refresh_snapshot_files() -> dict[str, str]:
+        # Capture provenance requires a physical read under the same fenced lease.
+        await _refresh_workspace_from_cell()
+        return dict(workspace_files)
+
     async def _release() -> None:
         await _release_generation_lease(
             session_factory=session_factory,
@@ -1176,6 +1182,7 @@ async def maybe_create_project_cell_executor(
         execute=_execute,
         sync_preview=_sync_preview,
         snapshot_files=_snapshot_files,
+        refresh_snapshot_files=_refresh_snapshot_files,
         stage_patch=_stage_patch,
         stage_files=_stage_files,
         apply_external_files=_apply_external_files,

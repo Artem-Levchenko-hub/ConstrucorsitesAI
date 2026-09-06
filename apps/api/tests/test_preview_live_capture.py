@@ -139,3 +139,26 @@ def test_capture_error_redacts_url_credentials() -> None:
     )
     assert message == "failed https://preview.example/path?[REDACTED]"
     assert preview._redact_url("https://[bad-host/path?token=fake") == "[invalid URL]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("statuses", [[500], [200, 401], [200, 200, 503]])
+async def test_version_capture_rejects_unsuccessful_http(monkeypatch, statuses):
+    page = SimpleNamespace(
+        goto=AsyncMock(side_effect=[SimpleNamespace(status=status) for status in statuses]),
+        set_viewport_size=AsyncMock(),
+        screenshot=AsyncMock(return_value=b"png"),
+        close=AsyncMock(),
+    )
+    fake_playwright, _browser = _fake_playwright(page)
+    monkeypatch.setattr(preview, "async_playwright", fake_playwright)
+    for name in (
+        "_block_external_fonts", "_route_media_internal", "_await_container_ready",
+        "_await_paint", "_await_content",
+    ):
+        monkeypatch.setattr(preview, name, _noop)
+    report = await preview.capture_live_url_report(
+        "https://preview.example/", widths=(390, 1280), require_success_status=True,
+    )
+    assert report.issues
+    assert len(report.screenshots) < 2
