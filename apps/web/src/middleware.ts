@@ -31,6 +31,8 @@ export function middleware(req: NextRequest) {
   // session by signing in again.
 
   const isProtectedRoute =
+    path === "/account" || path.startsWith("/account/") ||
+    path === "/billing" || path.startsWith("/billing/") ||
     path.startsWith("/projects") ||
     path.startsWith("/admin") ||
     path === "/max" ||
@@ -47,9 +49,13 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  // JWT validation happens in the layout; overwrite client input with the
+  // actual destination so an expired cookie also preserves payment returns.
+  const headers = new Headers(req.headers);
+  headers.set("x-omnia-return-to", `${path}${req.nextUrl.search}`);
+  return NextResponse.next({ request: { headers } });
 }
 
 export const config = {
-  matcher: ["/projects/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
+  matcher: ["/account/:path*", "/billing/:path*", "/projects/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
 };

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth-mock";
+import { headers } from "next/headers";
 
 export default async function AppLayout({
   children,
@@ -7,7 +8,11 @@ export default async function AppLayout({
   children: React.ReactNode;
 }) {
   const session = await getSession();
-  if (!session) redirect("/login");
+  if (!session) {
+    const target = (await headers()).get("x-omnia-return-to");
+    const accountReturn = target && /^\/(account|billing)(?:[/?]|$)/.test(target);
+    redirect(accountReturn ? `/login?next=${encodeURIComponent(target)}` : "/login");
+  }
 
   // h-dvh (а не min-h-svh) — фиксируем высоту обёртки = viewport. Без этого
   // child-grid в Workspace растёт под content, h-full в ChatPanel перестаёт

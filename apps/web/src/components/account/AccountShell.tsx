@@ -15,6 +15,8 @@ import { logoutAction } from "@/app/(auth)/actions";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import type { AccountView } from "@/components/account/AccountControlCenter";
 import { getMaxAdminAccessServer } from "@/lib/auth-mock";
+import "@/components/max/max-studio.css";
+import "./account.css";
 
 const navigation = [
   ["profile", "/account", UserRound, "Профиль"],
@@ -48,49 +50,33 @@ export async function AccountShell({
   const page = copy[active];
   const isAdmin = await getMaxAdminAccessServer();
   return (
-    <div data-product-shell className="flex h-dvh min-h-0 bg-[#121519] text-white">
-      <aside data-graphite-shell className="hidden w-[220px] shrink-0 flex-col bg-[#121519] text-white md:flex">
-        <div className="flex h-16 items-center border-b border-white/12 px-5"><BrandMark inverse href="/max" /></div>
-        <nav className="flex-1 p-3">
-          <Link href="/max" className="mb-5 flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs text-white/55 hover:bg-white/[.06] hover:text-white"><LayoutGrid className="size-4" />MAX Studio</Link>
-          <p className="omnia-kicker px-3 text-white/25">Настройки</p>
-          <div className="mt-2 space-y-1">
-            {navigation.map(([id, href, Icon, label]) => (
-              <Link key={id} href={href} className={`flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs ${active === id ? "bg-white/10 font-medium text-white" : "text-white/50 hover:bg-white/[.06] hover:text-white"}`}>
-                <Icon className={`size-4 ${active === id ? "text-[#4f81f7]" : ""}`} />{label}
-              </Link>
-            ))}
-            {isAdmin && (
-              <Link href="/admin/max" className={`flex h-9 items-center gap-3 rounded-[8px] px-3 text-xs ${active === "admin" ? "bg-white/10 font-medium text-white" : "text-white/50 hover:bg-white/[.06] hover:text-white"}`}>
-                <ScanSearch className={`size-4 ${active === "admin" ? "text-[#4f81f7]" : ""}`} />
-                Админ-центр
-              </Link>
-            )}
-          </div>
-        </nav>
-        <div className="border-t border-white/12 p-3">
-          <p className="truncate px-3 text-xs font-medium">{email}</p>
+    <div data-max-studio className="account-shell">
+      <header className="account-topbar">
+        <BrandMark href="/max" />
+        <Link href="/max" className="account-back">
+          <LayoutGrid className="size-4" />К приложениям</Link>
+        <div className="account-user">
+          <span>{email}</span>
           <form action={logoutAction}>
-            <button className="mt-3 flex w-full items-center gap-3 rounded-[8px] px-3 py-2 text-xs text-white/45 hover:bg-white/[.06] hover:text-white"><LogOut className="size-3.5" />Выйти</button>
+            <button aria-label="Выйти из аккаунта">
+              <LogOut className="size-4" />
+            </button>
           </form>
         </div>
-      </aside>
-      <div className="min-w-0 flex-1 overflow-y-auto">
-        <header className="flex h-16 items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-5 sm:px-8">
-          <div className="md:hidden"><BrandMark href="/max" /></div>
-          <p className="hidden text-xs text-[#828491] md:block">Настройки Omnia</p>
-          <span className="truncate text-xs text-[#9fa1b1]">{email}</span>
-        </header>
-        <main className="px-5 py-8 sm:px-8 sm:py-10 lg:px-12">
-          <div className="mx-auto max-w-[900px]">
-            <header className="border-b border-[#2b2d32] pb-8">
-              <p className="omnia-kicker text-[#4f81f7]">{page.eyebrow}</p>
-              <h1 className="mt-3 text-[36px] font-semibold tracking-[-.045em] sm:text-[46px]">{page.title}</h1>
-              <p className="mt-3 max-w-[680px] text-sm leading-6 text-[#9fa1b1]">{page.lead}</p>
-            </header>
-            <div className="mt-8">{children}</div>
-          </div>
-        </main>
+      </header>
+      <div className="account-layout">
+        <aside className="account-sidebar">
+          <p>Аккаунт</p>
+          <nav aria-label="Разделы аккаунта">{navigation.map(([id, href, Icon, label]) => <Link key={id} href={href} aria-current={active === id ? "page" : undefined}>
+            <Icon className="size-4" />{label}</Link>)}</nav>
+          {isAdmin && <Link className="account-admin" href="/admin/max">
+            <ScanSearch className="size-4" />Админ-центр</Link>}</aside>
+        <main className="account-main">
+          <header className="account-heading">
+            <h1>{page.title}</h1>
+            <p>{page.lead}</p>
+          </header>
+          {children}</main>
       </div>
     </div>
   );

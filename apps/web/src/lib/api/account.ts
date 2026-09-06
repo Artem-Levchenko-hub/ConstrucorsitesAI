@@ -76,12 +76,12 @@ export function listPayments(): Promise<Payment[]> {
   return apiFetch<Payment[]>("/api/payments");
 }
 
-export function createPayment(packageCode: string): Promise<Payment> {
+export function createPayment(packageCode: string, idempotencyKey = crypto.randomUUID()): Promise<Payment> {
   return apiFetch<Payment>("/api/payments", {
     method: "POST",
     json: {
       package_code: packageCode,
-      idempotency_key: crypto.randomUUID(),
+      idempotency_key: idempotencyKey,
     },
   });
 }
@@ -97,12 +97,13 @@ export function getSubscription(): Promise<Subscription> {
 export function createSubscriptionCheckout(
   planCode: "pro" | "business",
   autoRenew: boolean,
+  idempotencyKey = crypto.randomUUID(),
 ): Promise<Payment> {
   return apiFetch<Payment>("/api/payments/subscription", {
     method: "POST",
     json: {
       plan_code: planCode,
-      idempotency_key: crypto.randomUUID(),
+      idempotency_key: idempotencyKey,
       auto_renew: autoRenew,
       consent_version: autoRenew
         ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-07-30"
