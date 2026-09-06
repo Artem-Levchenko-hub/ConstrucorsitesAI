@@ -151,6 +151,8 @@ def apply_public_core_overlay(core: Any) -> None:
     paths = (
         "src/app/api/max/webhook/route.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
+        "src/app/api/max/session/route.ts",
+        "src/lib/max/session.ts",
     )
     _upload_changed_files(
         core, {relative: (template / relative).read_bytes() for relative in paths},

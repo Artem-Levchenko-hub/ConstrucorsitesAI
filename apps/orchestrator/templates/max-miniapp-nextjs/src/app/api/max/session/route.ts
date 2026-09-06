@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import {
   createMaxSession,
+  getMaxUser,
   MAX_SESSION_COOKIE,
   type MaxSessionUser,
 } from "@/lib/max/session";
@@ -12,6 +13,24 @@ import {
   type ValidatedMaxInitData,
   validateMaxInitData,
 } from "@/lib/max/validate-init-data";
+
+/** Resume only an authenticated MAX identity; never renew or write a user on GET. */
+export async function GET() {
+  const headers = { "Cache-Control": "no-store" };
+  try {
+    const user = await getMaxUser();
+    if (!user || typeof user.id !== "string" || !/^[1-9][0-9]{0,19}$/.test(user.id)) {
+      return NextResponse.json(
+        { error: "MAX authentication required" }, { status: 401, headers },
+      );
+    }
+    return NextResponse.json({ user }, { headers });
+  } catch {
+    return NextResponse.json(
+      { error: "Temporary session failure" }, { status: 503, headers },
+    );
+  }
+}
 
 export async function POST(request: Request) {
   const token = process.env.MAX_BOT_TOKEN;

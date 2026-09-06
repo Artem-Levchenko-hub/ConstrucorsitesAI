@@ -37,6 +37,8 @@ def test_public_overlay_uploads_real_shipped_webhook_from_any_cwd(
         assert set(uploaded.getnames()) == {
             relative,
             "src/app/api/omnia/integrations/[...path]/route.ts",
+            "src/app/api/max/session/route.ts",
+            "src/lib/max/session.ts",
         }
         proxy = uploaded.extractfile("src/app/api/omnia/integrations/[...path]/route.ts")
         assert proxy is not None
@@ -47,6 +49,12 @@ def test_public_overlay_uploads_real_shipped_webhook_from_any_cwd(
                 / "templates/max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts"
             ).read_bytes()
         )
+        for session_path in ("src/app/api/max/session/route.ts", "src/lib/max/session.ts"):
+            session_source = uploaded.extractfile(session_path)
+            assert session_source is not None
+            assert session_source.read() == (
+                orchestrator / "templates/max-miniapp-nextjs" / session_path
+            ).read_bytes()
         entry = uploaded.getmember(relative)
         assert (entry.mode, entry.uid, entry.gid) == (0o644, 1000, 1000)
         contents = uploaded.extractfile(entry)

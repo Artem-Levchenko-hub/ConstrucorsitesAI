@@ -9,12 +9,14 @@ from omnia_api.services.max_project_kit import _template_file
 from tests.test_project_cell_executor import _prepare_executor
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
+PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
 
 
 @pytest.mark.parametrize("fail_delivery", [False, True])
 async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fail_delivery):
     tree = {
         SDK_PATH: "old SDK",
+        PROVIDER_PATH: "old session bootstrap",
         "src/app/page.tsx": "existing product",
         ".omnia/cell.json": '{"project":"existing"}',
     }
@@ -31,6 +33,7 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
     async def read(*args):
         seed_reads.append(args)
         assert tree[SDK_PATH] == _template_file(SDK_PATH)
+        assert tree[PROVIDER_PATH] == _template_file(PROVIDER_PATH)
         return None
 
     handle = SimpleNamespace(
@@ -47,12 +50,13 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
             )
         assert not seed_reads
         assert tree[SDK_PATH] == "old SDK"
+        assert tree[PROVIDER_PATH] == "old session bootstrap"
         return
     for _ in range(2):
         await messages._build_agent_seed_parts(
             uuid4(), "existing", project_cell_handle=handle, refresh_managed_sdk=True,
         )
-    assert writes == [({SDK_PATH: _template_file(SDK_PATH)}, ())]
+    assert writes == [({path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH)}, ())]
     assert tree["src/app/page.tsx"] == "existing product"
     assert tree[".omnia/cell.json"] == '{"project":"existing"}'
 
@@ -65,6 +69,7 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
 
     original = {
         SDK_PATH: "old SDK",
+        PROVIDER_PATH: "old session bootstrap",
         "src/app/page.tsx": "existing product",
         ".omnia/cell.json": '{"project":"existing"}',
         "package.json": '{"custom":true}',
@@ -77,14 +82,14 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     assert handle.is_portable()
     await refresh_integration_sdk(handle)
     await refresh_integration_sdk(handle)
-    canonical = _template_file(SDK_PATH)
-    assert await handle.snapshot_files() == {**original, SDK_PATH: canonical}
-    assert await handle.export_files() == {SDK_PATH: canonical}
+    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH)}
+    assert await handle.snapshot_files() == {**original, **canonical}
+    assert await handle.export_files() == canonical
     assert harness.write_calls == [{
         "generation_run_id": harness.run_id,
         "fencing_epoch": 1,
         "expected_revision": f"{1:064x}",
-        "files": {SDK_PATH: canonical},
+        "files": canonical,
         "deletes": [],
     }]
     assert harness.hot_reload_calls == []
@@ -92,4 +97,4 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
         project_cell_executor.get_settings(), "use_max_finalization_coordinator", False,
     )
     await handle.sync_preview()
-    assert harness.hot_reload_calls[0] == {SDK_PATH: canonical}
+    assert harness.hot_reload_calls[0] == canonical

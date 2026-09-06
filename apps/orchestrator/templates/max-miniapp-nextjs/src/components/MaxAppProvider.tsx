@@ -174,40 +174,48 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         host === "localhost" ||
         host === "127.0.0.1" ||
         host.includes("-dev.preview.");
-      setState(
-        isPreview
-          ? { mode: "preview", user: previewUser, error: null }
-          : {
-              mode: "error",
-              user: null,
-              error: "Откройте приложение из чата с ботом в MAX.",
-            },
-      );
-      return;
+      // A reload may retain its signed cookie while the MAX bridge has no
+      // launch data. Clear any previous in-memory launch header before resume.
+      activeInitData = "";
+      if (isPreview) {
+        setState({ mode: "preview", user: previewUser, error: null });
+        return;
+      }
+    } else {
+      configureMaxShell(webApp);
+      // Some iOS MAX WebViews do not persist Set-Cookie from a fetch response.
+      // Keep signed launch data in memory and attach it only to same-origin APIs.
+      installAuthenticatedFetch(webApp.initData);
+      setAppearance({
+        platform: webApp.platform === "ios" ? "ios" : "android",
+        colorScheme: webApp.colorScheme === "dark" ? "dark" : "light",
+      });
     }
-    configureMaxShell(webApp);
-    // Some iOS MAX WebViews do not persist Set-Cookie from a fetch response.
-    // Keep the signed MAX launch data in memory and attach it only to same-origin
-    // API requests, so protected routes can authenticate without browser storage.
-    installAuthenticatedFetch(webApp.initData);
-    setAppearance({
-      platform: webApp.platform === "ios" ? "ios" : "android",
-      colorScheme: webApp.colorScheme === "dark" ? "dark" : "light",
-    });
     try {
-      const response = await fetch("/api/max/session", {
+      const response = await fetch("/api/max/session", webApp?.initData ? {
         method: "POST",
         credentials: "include",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ initData: webApp.initData }),
+      } : {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
       });
       const body = (await response.json().catch(() => ({}))) as {
         user?: MaxSessionUser;
         code?: string;
       };
-      if (!response.ok || !body.user) {
+      const validUser = body.user && (
+        Boolean(webApp?.initData) ||
+        (typeof body.user.id === "string" && /^[1-9][0-9]{0,19}$/.test(body.user.id))
+      );
+      if (!response.ok || !body.user || !validUser) {
         if (response.status === 401) {
+          if (!webApp?.initData) {
+            throw new Error("Откройте приложение из чата с ботом в MAX.");
+          }
           console.warn("[max-auth] launch rejected", body.code || "unknown");
           throw new Error(
             "Закройте приложение и откройте его снова из чата с ботом. Если ошибка повторится, напишите в поддержку.",
