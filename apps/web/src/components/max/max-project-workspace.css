@@ -121,6 +121,8 @@
   .max-dashboard-runtime { width: 100%; min-width: 0; }
 }
 @media (max-width: 480px) {
+  .max-settings-dialog [role=tablist] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+  .max-settings-dialog [role=tablist] button { width: 100%; min-width: 0; padding-inline: 6px; }
   .max-project-brand { font-size: 16px; }
   .max-project-header { gap: 8px; }
   .max-project-header .max-project-launch { padding-inline: 10px; }

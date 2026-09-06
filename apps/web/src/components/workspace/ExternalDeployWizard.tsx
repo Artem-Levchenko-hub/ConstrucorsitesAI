@@ -9,7 +9,7 @@ import {
   Server,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -34,17 +34,21 @@ function message(error: unknown): string {
 }
 
 function Field({
+  htmlFor,
   label,
   hint,
   children,
 }: {
+  htmlFor: string;
   label: string;
   hint?: string;
   children: React.ReactNode;
 }) {
   return (
     <div>
-      <Label className="mb-1 block text-xs text-fg-secondary">{label}</Label>
+      <Label htmlFor={htmlFor} className="mb-1 block text-xs text-fg-secondary">
+        {label}
+      </Label>
       {children}
       {hint && <p className="mt-1 text-[10px] text-fg-tertiary">{hint}</p>}
     </div>
@@ -53,6 +57,7 @@ function Field({
 
 export function ExternalDeployWizard({ projectId, maxStudio = false }: { projectId: string; maxStudio?: boolean }) {
   const queryClient = useQueryClient();
+  const fieldsId = useId();
   const [domain, setDomain] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("22");
@@ -211,10 +216,12 @@ export function ExternalDeployWizard({ projectId, maxStudio = false }: { project
         <>
           <div className="grid grid-cols-2 gap-2">
             <Field
+              htmlFor={`${fieldsId}-domain`}
               label="Домен"
               hint="Необязательно: без домена сайт откроется по IP и порту."
             >
               <Input
+                id={`${fieldsId}-domain`}
                 value={domain}
                 onChange={(event) => {
                   setDomain(event.target.value);
@@ -226,8 +233,9 @@ export function ExternalDeployWizard({ projectId, maxStudio = false }: { project
                 data-testid="external-deploy-domain"
               />
             </Field>
-            <Field label="Публичный IP VPS">
+            <Field htmlFor={`${fieldsId}-host`} label="Публичный IP VPS">
               <Input
+                id={`${fieldsId}-host`}
                 value={host}
                 onChange={(event) => {
                   setHost(event.target.value);
@@ -239,8 +247,9 @@ export function ExternalDeployWizard({ projectId, maxStudio = false }: { project
                 data-testid="external-deploy-host"
               />
             </Field>
-            <Field label="SSH-пользователь">
+            <Field htmlFor={`${fieldsId}-user`} label="SSH-пользователь">
               <Input
+                id={`${fieldsId}-user`}
                 value={user}
                 onChange={(event) => {
                   setUser(event.target.value);
@@ -251,8 +260,9 @@ export function ExternalDeployWizard({ projectId, maxStudio = false }: { project
                 disabled={!!target}
               />
             </Field>
-            <Field label="SSH-порт">
+            <Field htmlFor={`${fieldsId}-port`} label="SSH-порт">
               <Input
+                id={`${fieldsId}-port`}
                 value={port}
                 onChange={(event) => {
                   setPort(event.target.value);
@@ -305,10 +315,12 @@ export function ExternalDeployWizard({ projectId, maxStudio = false }: { project
           </div>
 
           <Field
+            htmlFor={`${fieldsId}-secret`}
             label={authType === "password" ? "Пароль SSH" : "Приватный ключ OpenSSH"}
           >
             {authType === "password" ? (
               <Input
+                id={`${fieldsId}-secret`}
                 type="password"
                 value={secret}
                 onChange={(event) => {
@@ -322,6 +334,7 @@ export function ExternalDeployWizard({ projectId, maxStudio = false }: { project
               />
             ) : (
               <textarea
+                id={`${fieldsId}-secret`}
                 value={secret}
                 onChange={(event) => {
                   setSecret(event.target.value);
