@@ -267,8 +267,11 @@ def test_failed_or_unverified_core_session_never_mints_compatibility_cookies(
 @pytest.mark.parametrize("embedded,allowed_cookies", [
     (False, {CANONICAL}), (True, {EMBEDDED}), (True, {PARTITIONED}), (True, set(COOKIE_NAMES)),
 ])
+@pytest.mark.parametrize("launch_fragment", [
+    "", "#WebAppData=disposable-test-launch&WebAppPlatform=web",
+])
 def test_browser_login_roundtrip_uses_real_cookie_transport(
-    session_boundary, embedded, allowed_cookies,
+    session_boundary, embedded, allowed_cookies, launch_fragment,
 ):
     """Optional browser gate: route HTTPS to real gateway; never inject cookie storage.
 
@@ -279,6 +282,7 @@ def test_browser_login_roundtrip_uses_real_cookie_transport(
     playwright = pytest.importorskip("playwright.sync_api")
     session = session_boundary
     parent = "https://web.max.ru"
+    launch_url = ORIGIN + "/" + launch_fragment
     statuses = []
     with playwright.sync_playwright() as p:
         browser = p.chromium.launch()
@@ -290,7 +294,7 @@ def test_browser_login_roundtrip_uses_real_cookie_transport(
                 url = route.request.url
                 if url == parent + "/":
                     return route.fulfill(content_type="text/html", body=(
-                        f'<iframe style="width:100%;height:800px" src="{ORIGIN}/"></iframe>'
+                        f'<iframe style="width:100%;height:800px" src="{launch_url}"></iframe>'
                     ))
                 if not url.startswith(ORIGIN + "/"):
                     return route.abort()
@@ -312,13 +316,15 @@ def test_browser_login_roundtrip_uses_real_cookie_transport(
 
             context.route("**/*", handle)
             page = context.new_page()
-            page.goto((parent if embedded else ORIGIN) + "/")
+            page.goto(parent + "/" if embedded else launch_url)
             target = page.frame_locator("iframe") if embedded else page
             target.get_by_role("heading", name="Protected application").wait_for(timeout=15000)
             assert ("/api/max/session", 200) in statuses
             assert ("/__omnia/identity", 200) in statuses
             assert ("/__omnia/identity", 401) not in statuses
             assert session.product_requests[-1][1]["X-Omnia-User-ID"] == "123"
+            app_frame = next(frame for frame in page.frames if frame.url.startswith(ORIGIN + "/"))
+            assert app_frame.url == launch_url
             cookies = context.cookies()
             assert cookies and all(c["secure"] and c["httpOnly"] for c in cookies)
             assert all(c["name"] in allowed_cookies for c in cookies)

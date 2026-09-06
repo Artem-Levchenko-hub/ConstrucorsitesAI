@@ -307,7 +307,7 @@ const context = {
   window: {WebApp: {initData: 'signed-test-launch', ready() {}, expand() {}}},
   document: {getElementById: id => id === 'retry' ? button : message},
   location: {href: 'https://app.example/?safe=1#WebAppData=kept',
-             replace: target => navigation.push(target)},
+             reload: () => navigation.push('reload')},
   fetch: async (url, options) => {
     calls.push({url, options});
     return {ok: calls.length === 1 ? input.session_ok : input.identity_ok,

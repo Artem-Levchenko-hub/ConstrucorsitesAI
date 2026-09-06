@@ -88,7 +88,9 @@ _BOOTSTRAP_SCRIPT = """
           + 'Закройте приложение и откройте снова.';
         return;
       }
-      location.replace(location.href);
+      // MAX launch data lives in the URL fragment. Replacing that same URL is
+      // only a same-document navigation; reload to enter the protected app.
+      location.reload();
     } catch (_) {
       message.textContent = 'Не удалось войти через MAX. Проверьте соединение и повторите.';
     } finally {
