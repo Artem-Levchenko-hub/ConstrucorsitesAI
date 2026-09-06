@@ -27,10 +27,12 @@ export function DeleteProjectDialog({
   project,
   open,
   onOpenChange,
+  maxStudio = false,
 }: {
   project: Project;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  maxStudio?: boolean;
 }) {
   const qc = useQueryClient();
 
@@ -53,7 +55,7 @@ export function DeleteProjectDialog({
         if (!mutation.isPending) onOpenChange(next);
       }}
     >
-      <DialogContent>
+      <DialogContent data-max-studio={maxStudio || undefined}>
         <DialogHeader>
           <DialogTitle>Удалить проект?</DialogTitle>
           <DialogDescription>

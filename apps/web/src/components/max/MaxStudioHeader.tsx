@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, ChevronDown, LogOut, Settings, User } from "lucide-react";
+import { Building2, ChevronDown, CircleHelp, CreditCard, LogOut, Receipt, Shield, User, WalletCards } from "lucide-react";
 
 import { logoutAction } from "@/app/(auth)/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -15,6 +15,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import "./max-studio.css";
+
+const accountLinks = [
+  ["/account", User, "Профиль"],
+  ["/account/organization", Building2, "Организация"],
+  ["/account/security", Shield, "Безопасность"],
+  ["/billing", WalletCards, "Баланс"],
+  ["/billing/transactions", Receipt, "Операции"],
+  ["/billing/plan", CreditCard, "Тариф"],
+] as const;
 
 export function MaxStudioHeader({
   email,
@@ -26,12 +36,12 @@ export function MaxStudioHeader({
   const initial = email.slice(0, 1).toUpperCase();
 
   return (
-    <header data-product-shell className="flex h-16 shrink-0 items-center justify-between border-b border-[#2b2d32] bg-[#191b20]/95 px-5 text-white backdrop-blur-xl sm:px-8">
+    <header data-max-studio className="max-studio-header">
       <div className="flex min-w-0 items-center gap-3">
         <BrandMark href="/max" label="MAX Studio" />
         {compact && (
-          <span className="hidden items-center gap-2 text-xs text-[#828491] sm:flex">
-            <span className="h-4 w-px bg-[#2b2d32]" />
+          <span className="hidden items-center gap-2 text-xs text-fg-secondary sm:flex">
+            <span className="h-4 w-px bg-border-default" />
             <span>Редактор</span>
           </span>
         )}
@@ -42,11 +52,11 @@ export function MaxStudioHeader({
           asChild
           variant="ghost"
           size="sm"
-          className="hidden text-[#9fa1b1] hover:bg-[#121519] hover:text-white sm:inline-flex"
+          className="min-h-11 px-2"
         >
-          <Link href="/projects">
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Все проекты
+          <Link href="/max/start" aria-label="Помощь и быстрый старт">
+            <CircleHelp className="h-4 w-4" />
+            <span className="hidden sm:inline">Помощь</span>
           </Link>
         </Button>
 
@@ -55,15 +65,17 @@ export function MaxStudioHeader({
             <Button
               variant="ghost"
               size="sm"
-              className="gap-2 px-1.5 text-white hover:bg-[#121519]"
+              aria-label="Аккаунт"
+              className="min-h-11 gap-2 px-1.5"
             >
               <Avatar className="h-8 w-8">
                 <AvatarFallback>{initial}</AvatarFallback>
               </Avatar>
-              <ChevronDown className="h-3.5 w-3.5 text-[#828491]" />
+              <span className="hidden sm:inline">Аккаунт</span>
+              <ChevronDown className="h-3.5 w-3.5 text-fg-secondary" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent data-max-studio align="end">
             <DropdownMenuLabel className="font-normal">
               <div className="text-xs text-fg-tertiary">Вошли как</div>
               <div className="max-w-[220px] truncate text-sm text-fg-primary">
@@ -77,12 +89,7 @@ export function MaxStudioHeader({
                 Мои MAX-приложения
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/account">
-                <Settings className="h-4 w-4" />
-                Аккаунт
-              </Link>
-            </DropdownMenuItem>
+            {accountLinks.map(([href, Icon, label]) => <DropdownMenuItem asChild key={href}><Link href={href}><Icon className="h-4 w-4" />{label}</Link></DropdownMenuItem>)}
             <DropdownMenuSeparator />
             <DropdownMenuItem asChild>
               <form action={logoutAction} className="w-full">

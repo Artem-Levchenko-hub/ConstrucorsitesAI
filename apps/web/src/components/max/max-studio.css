@@ -1,0 +1,120 @@
+/* Opt-in light MAX surfaces. Put data-max-studio on portal roots as well. */
+[data-max-studio] {
+  color-scheme: light;
+  --color-bg-base: #f7f8fb;
+  --color-bg-elevated-1: #fff;
+  --color-surface: #fff;
+  --color-surface-2: #f7f8fb;
+  --color-surface-3: #eef2f7;
+  --color-surface-base: #f7f8fb;
+  --color-surface-raised: #fff;
+  --color-surface-overlay: #fff;
+  --color-surface-input: #fff;
+  --color-surface-panel-dark: #f7f8fb;
+  --color-surface-glass: rgb(255 255 255 / .94);
+  --color-border-subtle: #e9edf3;
+  --color-border-default: #dce2ec;
+  --color-border-strong: #b9c4d5;
+  --color-border-accent: #2563eb;
+  --color-fg-primary: #192335;
+  --color-fg-secondary: #526079;
+  --color-fg-tertiary: #627087;
+  --color-fg-muted: #627087;
+  --color-fg-on-accent: #fff;
+  --color-fg-on-danger: #fff;
+  --color-label-1: #192335;
+  --color-label-2: #526079;
+  --color-label-3: #627087;
+  --color-accent: #2563eb;
+  --color-accent-fg: #fff;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-subtle: #edf3ff;
+  --color-accent-secondary: #1d4ed8;
+  --color-success: #187443;
+  --color-success-fg: #187443;
+  --color-danger: #b42318;
+  --color-danger-fg: #b42318;
+  --color-warning: #756000;
+  --color-ink: #192335;
+  --color-paper: #fff;
+  --color-warm-white: #f7f8fb;
+  --color-muted-ink: #526079;
+  --color-warm-border: #dce2ec;
+  color: var(--color-fg-primary);
+}
+[data-max-studio] :is(button, a, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+[data-max-studio] ::selection { background: #dce8ff; color: #192335; }
+.max-studio-workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--color-bg-base); }
+.max-studio-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-shrink: 0; min-height: 76px; padding: 12px 32px; border-bottom: 1px solid var(--color-border-default); background: var(--color-surface); }
+.max-projects-main { flex: 1; min-height: 0; overflow-y: auto; }
+.max-projects-content { max-width: 1280px; margin: auto; padding: 44px 32px 72px; }
+.max-projects-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
+.max-projects-heading h1 { margin: 10px 0; font-size: clamp(28px, 3vw, 36px); line-height: 1.2; font-weight: 600; letter-spacing: -.035em; }
+.max-projects-heading h1 + p { color: var(--color-fg-secondary); line-height: 1.6; }
+.max-projects-heading > button { flex-shrink: 0; }
+.max-projects-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.max-projects-search { display: flex; align-items: center; gap: 10px; width: 360px; max-width: 100%; min-width: 0; padding: 0 12px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 7px; color: var(--color-fg-secondary); }
+.max-projects-search:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 3px rgb(37 99 235 / .12); }
+.max-projects-search input { border: 0; border-radius: 0; padding: 0; min-height: 44px; box-shadow: none; outline: none; background: transparent; }
+.max-projects-search input:focus-visible { box-shadow: none; outline: none; }
+.max-projects-toolbar > span { flex-shrink: 0; }
+.max-projects-list { border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-surface); }
+.max-projects-list-heading, .max-project-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, .7fr) minmax(230px, .9fr); gap: 24px; align-items: center; padding: 22px 24px; }
+.max-projects-list-heading { padding-block: 13px; font-size: 12px; color: var(--color-fg-secondary); }
+.max-project-row { min-height: 120px; border-top: 1px solid var(--color-border-subtle); }
+.max-project-identity { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
+.max-project-monogram { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 8px; background: var(--color-accent-subtle); color: var(--color-accent); font-size: 19px; }
+.max-project-identity h2 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
+.max-project-identity h2 a:hover { color: var(--color-accent); }
+.max-project-identity p { margin-top: 5px; font-size: 12px; color: var(--color-fg-secondary); }
+.max-project-state { font-size: 13px; line-height: 1.5; }
+.max-project-state > p { display: flex; gap: 7px; align-items: flex-start; }
+.max-project-state small { display: block; margin-top: 5px; color: var(--color-fg-secondary); }
+.max-project-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.max-project-next { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 1; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 7px; color: var(--color-accent-secondary); font-size: 13px; font-weight: 500; }
+.max-project-next:hover { background: var(--color-accent-subtle); border-color: var(--color-accent); }
+.max-projects-empty { padding: 64px 24px; background: var(--color-surface); border: 1px solid var(--color-border-default); border-radius: 10px; text-align: center; }
+.max-projects-empty h2 { margin: 16px 0 12px; font-size: 24px; font-weight: 600; }
+.max-projects-empty p { max-width: 450px; margin: 0 auto 24px; line-height: 1.65; color: var(--color-fg-secondary); }
+[data-max-studio].max-project-wizard { display: flex; flex-direction: column; gap: 0; max-width: 700px; max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; border-radius: 12px; background: var(--color-surface); }
+.max-wizard-heading { flex-shrink: 0; padding: 24px 60px 0 24px; }
+.max-wizard-progress { display: block; width: 100%; height: 3px; margin-top: 20px; appearance: none; border: 0; background: var(--color-border-subtle); }
+.max-wizard-progress::-webkit-progress-bar { background: var(--color-border-subtle); }
+.max-wizard-progress::-webkit-progress-value { background: var(--color-accent); }
+.max-wizard-progress::-moz-progress-bar { background: var(--color-accent); }
+.max-wizard-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
+.max-wizard-body > * + * { margin-top: 24px; }
+.max-wizard-body input { min-height: 44px; }
+.max-wizard-option { min-height: 44px; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 8px; text-align: left; }
+.max-wizard-option:hover { border-color: var(--color-border-strong); }
+.max-wizard-option[aria-pressed=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); }
+.max-wizard-review > div { padding: 14px 0; border-bottom: 1px solid var(--color-border-subtle); }
+.max-wizard-review > div:first-child { padding-top: 0; }
+.max-wizard-review dt { font-size: 12px; color: var(--color-fg-secondary); }
+.max-wizard-review dd { margin-top: 5px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+.max-wizard-footer { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px max(16px, env(safe-area-inset-bottom)); border-top: 1px solid var(--color-border-default); }
+.max-wizard-footer button { min-height: 44px; }
+.max-project-wizard[data-busy=true] > button { opacity: .4; cursor: wait; }
+@media (max-width: 900px) {
+  .max-projects-list-heading { display: none; }
+  .max-project-row { grid-template-columns: minmax(0, 1fr) minmax(220px, 1fr); gap: 16px; }
+  .max-project-row:first-of-type { border-top: 0; }
+  .max-project-identity { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
+  .max-studio-header { min-height: 68px; padding: 12px 18px; gap: 8px; }
+  .max-projects-content { padding: 28px 18px 56px; }
+  .max-projects-heading { align-items: flex-start; flex-direction: column; gap: 20px; }
+  .max-projects-heading h1 + p { font-size: 14px; }
+  .max-projects-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .max-projects-search { width: 100%; }
+  .max-project-row { grid-template-columns: minmax(0, 1fr); padding: 20px 16px; }
+  .max-project-state { padding-left: 54px; }
+  .max-projects-empty { padding: 40px 16px; }
+  .max-wizard-heading { padding: 20px 56px 0 20px; }
+  .max-wizard-body { padding: 20px; }
+  .max-wizard-footer { padding-inline: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-max-studio] *, [data-max-studio] *::before, [data-max-studio] *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

@@ -32,11 +32,13 @@ it("transfers the entire pasted brief from creation to the chat starter", async 
     expect(input.maxLength).toBe(-1);
     await act(async () => { change(document.querySelector<HTMLInputElement>("#max-project-name")!, "Склад"); change(input, brief); });
     expect(input.value).toBe(brief);
-    const submit = [...document.querySelectorAll("button")].find(b => b.textContent?.includes("Создать проект"))!;
+    const next = () => [...document.querySelectorAll("button")].find(b => b.textContent?.trim() === "Далее")!;
     await act(async () => { change(input, "я".repeat(20_001)); });
-    expect(submit.disabled).toBe(true);
+    expect(next().disabled).toBe(true);
     expect(input.value.length).toBe(20_001);
     await act(async () => { change(input, brief); });
+    for (let step = 0; step < 3; step++) await act(async () => { next().click(); });
+    const submit = [...document.querySelectorAll("button")].find(b => b.textContent?.includes("Создать проект"))!;
     await act(async () => { submit.click(); });
     await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenCalled()); });
     expect(mocks.save.mock.calls[0][1].summary).toBe(brief);

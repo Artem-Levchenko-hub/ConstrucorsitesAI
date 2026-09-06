@@ -2,88 +2,24 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Bot,
-  Check,
-  ChevronRight,
-  CircleHelp,
-  FolderKanban,
-  LayoutGrid,
-  Loader2,
-  LogOut,
-  Plus,
-  Search,
-  Settings,
-  Sparkles,
-} from "lucide-react";
-import Link from "next/link";
+import { CircleAlert, FolderKanban, Plus, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { logoutAction } from "@/app/(auth)/actions";
-import { BrandMark } from "@/components/marketing/BrandMark";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  connectAppIntegration,
-  getIntegrationCatalog,
-} from "@/lib/api/app-integrations";
+import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-integrations";
 import { createProject, listProjects } from "@/lib/api/projects";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
-import {
-  MAX_APP_TYPES,
-  MAX_BRIEF_LENGTH,
-  MAX_FEATURES,
-  MAX_STYLES,
-  buildMaxProjectPrompt,
-  type MaxAppTypeId,
-  type MaxFeature,
-  type MaxStyleId,
-} from "@/lib/max-brief";
-import {
-  containsChatSecret,
-  redactChatSecrets,
-  resolveChatCredential,
-} from "@/lib/max-chat-credentials";
-import { cn } from "@/lib/utils";
+import { buildMaxProjectPrompt, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { containsChatSecret, redactChatSecrets, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
-import { MaxStudioAccountDisclosure } from "./MaxStudioAccountDisclosure";
+import { MaxStudioHeader } from "./MaxStudioHeader";
+import { MaxProjectWizard } from "./MaxProjectWizard";
+import "./max-studio.css";
 
 const STARTER_FEATURES: MaxFeature[] = ["Профиль пользователя", "История действий"];
-
-function StudioNav({ email }: { email: string }) {
-  return (
-    <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[#2b2d32] bg-[#191b20] md:flex">
-      <div className="flex h-16 items-center border-b border-[#2b2d32] px-5">
-        <BrandMark />
-      </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 text-sm">
-        <Link href="/max" className="flex items-center gap-3 rounded-[8px] bg-[#2b2d32] px-3 py-2.5 font-medium">
-          <LayoutGrid className="size-4" /> Проекты
-        </Link>
-        <MaxStudioAccountDisclosure />
-      </nav>
-      <div className="border-t border-[#2b2d32] p-3">
-        <p className="truncate px-3 text-xs font-medium">{email}</p>
-        <p className="mt-1 px-3 text-[10px] text-[#828491]">Владелец MAX Studio</p>
-        <form action={logoutAction}>
-          <button className="mt-3 flex w-full items-center gap-3 rounded-[8px] px-3 py-2 text-xs text-[#9fa1b1] hover:bg-[#121519]">
-            <LogOut className="size-3.5" /> Выйти
-          </button>
-        </form>
-      </div>
-    </aside>
-  );
-}
 
 export function MaxStudio({ email }: { email: string }) {
   const router = useRouter();
@@ -232,175 +168,86 @@ export function MaxStudio({ email }: { email: string }) {
     },
   });
 
-  const ready = name.trim().length > 1 && idea.trim().length > 9 && Array.from(idea.trim()).length <= MAX_BRIEF_LENGTH;
-  const toggleFeature = (feature: MaxFeature) =>
-    setFeatures((current) =>
-      current.includes(feature)
-        ? current.filter((item) => item !== feature)
-        : [...current, feature],
-    );
+  const allMaxProjects = (projects.data ?? []).filter((project) => project.template === "max_miniapp");
 
   return (
-    <div data-product-shell className="flex h-full min-h-0 bg-[#121519] text-white">
-      <StudioNav email={email} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-5 sm:px-7">
-          <div className="flex items-center gap-3 md:hidden">
-            <BrandMark />
-          </div>
-          <div className="hidden md:block">
-            <p className="omnia-kicker text-[#828491]">MAX Studio</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link href="/max/start" className="hidden rounded-[8px] px-3 py-2 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex">
-              <CircleHelp className="mr-2 size-3.5" /> Быстрый старт
-            </Link>
-            <Button onClick={() => setDialogOpen(true)} className="bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
-              <Plus className="size-4" /> Новый проект
+    <div data-max-studio className="max-studio-workspace">
+      <MaxStudioHeader email={email} />
+      <main className="max-projects-main">
+        <div className="max-projects-content">
+          <div className="max-projects-heading">
+            <div>
+              <p className="omnia-kicker text-accent">Ваша студия</p>
+              <h1>Мои приложения</h1>
+              <p>Продолжите работу или запустите новую идею в MAX.</p>
+            </div>
+            <Button size="lg" onClick={() => setDialogOpen(true)}>
+              <Plus className="size-4" /> Создать приложение
             </Button>
           </div>
-        </header>
 
-        <main className="min-h-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8 sm:py-10 lg:px-12">
-          <div className="mx-auto max-w-[1120px]">
-            <div className="flex flex-col gap-6 border-b border-[#2b2d32] pb-8 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="omnia-kicker text-[#4f81f7]">Рабочее пространство</p>
-                <h1 className="mt-3 text-[36px] font-semibold tracking-[-.045em] sm:text-[44px]">Мои приложения</h1>
-                <p className="mt-2 text-sm text-[#9fa1b1]">Создание, публикация и управление MAX Mini Apps.</p>
-              </div>
-              {maxProjects.length > 0 && (
-                <label className="relative w-full sm:w-[260px]">
-                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
-                  <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" className="h-10 border-[#2b2d32] bg-[#191b20] pl-9" />
-                </label>
-              )}
-            </div>
-
-            {projects.isLoading ? (
-              <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-[260px] rounded-[12px]" />)}
-              </div>
-            ) : maxProjects.length === 0 ? (
-              <section className="mt-8 grid min-h-[460px] place-items-center rounded-[12px] border border-dashed border-[#2b2d32] bg-[#191b20] p-8 text-center">
-                <div className="max-w-[430px]">
-                  <span className="mx-auto grid size-12 place-items-center rounded-[10px] bg-[#2b2d32] text-[#4f81f7]"><FolderKanban className="size-5" /></span>
-                  <h2 className="mt-6 text-2xl font-semibold tracking-[-.025em]">Первого проекта ещё нет</h2>
-                  <p className="mt-3 text-sm leading-6 text-[#9fa1b1]">Опишите задачу — Omnia создаст рабочее приложение, а затем проведёт через интеграции, MAX-бота и публикацию.</p>
-                  <Button onClick={() => setDialogOpen(true)} className="mt-7 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
-                    <Plus className="size-4" /> Создать приложение
-                  </Button>
-                </div>
-              </section>
-            ) : (
-              <div className="mt-8 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {maxProjects.map((project, index) => (
-                  <MaxStudioProjectCard
-                    key={project.id}
-                    project={project}
-                    index={index}
-                  />
-                ))}
-                <button onClick={() => setDialogOpen(true)} className="grid min-h-[280px] place-items-center rounded-[12px] border border-dashed border-[#2b2d32] bg-transparent p-8 text-center hover:bg-[#191b20]">
-                  <span><span className="mx-auto grid size-11 place-items-center rounded-[8px] border border-[#2b2d32] bg-[#191b20]"><Plus className="size-5 text-[#4f81f7]" /></span><span className="mt-4 block text-sm font-semibold">Новый проект</span></span>
-                </button>
-              </div>
-            )}
+          <div className="max-projects-toolbar">
+            <label className="max-projects-search">
+              <Search className="size-4 shrink-0" aria-hidden="true" />
+              <Input type="search" aria-label="Найти проект" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти проект" />
+            </label>
+            {projects.isSuccess && <span className="text-sm text-fg-secondary" aria-live="polite">
+              {search.trim() ? `Найдено: ${maxProjects.length} из ${allMaxProjects.length}` : `Всего: ${allMaxProjects.length}`}
+            </span>}
           </div>
-        </main>
-      </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent
-          data-product-shell
-          className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-[#2b2d32] bg-[#191b20] p-0 text-white sm:max-h-[92dvh] sm:max-w-[720px] sm:p-0"
-        >
-          <form
-            className="contents"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (ready && !create.isPending) create.mutate();
-            }}
-          >
-            <div className="shrink-0 border-b border-[#2b2d32] px-5 pb-5 pr-16 pt-5 sm:p-6 sm:pr-14">
-              <div>
-                <p className="omnia-kicker text-[#4f81f7]">Новый MAX-проект</p>
-                <DialogTitle className="mt-2 text-2xl font-semibold text-white">
-                  Что создаём?
-                </DialogTitle>
-                <DialogDescription className="mt-1 text-sm text-[#9fa1b1]">
-                  Короткого описания достаточно для первой сборки.
-                </DialogDescription>
-              </div>
+          {projects.isPending ? (
+            <div role="status" aria-label="Загрузка приложений" className="space-y-3">
+              <span className="sr-only">Загружаем приложения</span>
+              {Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-28 rounded-lg" />)}
             </div>
-
-            <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-5 sm:p-6">
-              <div className="space-y-2">
-                <Label htmlFor="max-project-name">Название</Label>
-                <Input id="max-project-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Например, Кофе рядом" className="h-11 border-[#2b2d32] bg-[#191b20]" maxLength={100} />
+          ) : projects.isError ? (
+            <section role="alert" className="max-projects-empty">
+              <CircleAlert className="mx-auto size-7 text-danger-fg" />
+              <h2>Не удалось загрузить приложения</h2>
+              <p>Проверьте подключение и попробуйте ещё раз.</p>
+              <Button variant="outline" disabled={projects.isFetching} onClick={() => void projects.refetch()}>Повторить</Button>
+            </section>
+          ) : search.trim() && maxProjects.length === 0 ? (
+            <section className="max-projects-empty">
+              <h2>Ничего не найдено</h2>
+              <p>Попробуйте другое название или сбросьте поиск.</p>
+              <Button variant="outline" onClick={() => setSearch("")}>Сбросить поиск</Button>
+            </section>
+          ) : allMaxProjects.length === 0 ? (
+            <section className="max-projects-empty">
+              <FolderKanban className="mx-auto size-7 text-accent" />
+              <h2>Первого проекта ещё нет</h2>
+              <p>Опишите задачу — MAX Studio поможет создать приложение и подготовить его к запуску.</p>
+              <Button variant="outline" onClick={() => setDialogOpen(true)}>Описать идею</Button>
+            </section>
+          ) : (
+            <section className="max-projects-list" aria-label="Приложения">
+              <div className="max-projects-list-heading" aria-hidden="true">
+                <span>Приложение</span><span>Состояние</span><span>Следующее действие</span>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="max-project-idea">Что пользователь сможет делать?</Label>
-                <Textarea id="max-project-idea" value={idea} onChange={(event) => setIdea(event.target.value)} placeholder="Получать баллы, выбирать награды и оформлять заказ к выдаче" className="min-h-24 resize-none border-[#2b2d32] bg-[#191b20]" aria-describedby="max-project-idea-limit" aria-invalid={Array.from(idea.trim()).length > MAX_BRIEF_LENGTH} />
-                <p id="max-project-idea-limit" className="text-xs text-[#9fa1b1]">
-                  {Array.from(idea.trim()).length} / {MAX_BRIEF_LENGTH} символов. {Array.from(idea.trim()).length > MAX_BRIEF_LENGTH ? "Сократите описание перед отправкой — текст не обрезан." : "Описание отправится целиком."}
-                </p>
-              </div>
-              <fieldset>
-                <legend className="text-sm font-medium">Тип приложения</legend>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {MAX_APP_TYPES.map((item) => (
-                    <button key={item.id} type="button" onClick={() => setAppType(item.id)} className={cn("rounded-[10px] border p-3 text-left", appType === item.id ? "border-[#4f81f7] bg-[#4f81f7]/[.06]" : "border-[#2b2d32] hover:border-[#828491]")}>
-                      <span className="flex items-center justify-between text-sm font-medium">{item.label}{appType === item.id && <Check className="size-4 text-[#4f81f7]" />}</span>
-                      <span className="mt-1 block text-xs leading-5 text-[#828491]">{item.description}</span>
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-
-              <details className="group rounded-[10px] border border-[#2b2d32]">
-                <summary className="flex cursor-pointer list-none items-center justify-between p-4 text-sm font-medium [&::-webkit-details-marker]:hidden">
-                  Уточнить функции и стиль <ChevronRight className="size-4 text-[#828491] transition-transform group-open:rotate-90" />
-                </summary>
-                <div className="space-y-5 border-t border-[#25272b] p-4">
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2"><Label htmlFor="max-audience">Аудитория</Label><Input id="max-audience" value={audience} onChange={(event) => setAudience(event.target.value)} className="border-[#2b2d32] bg-[#191b20]" /></div>
-                    <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={primaryAction} onChange={(event) => setPrimaryAction(event.target.value)} className="border-[#2b2d32] bg-[#191b20]" /></div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">Функции</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {MAX_FEATURES.map((feature) => (
-                        <button key={feature} type="button" onClick={() => toggleFeature(feature)} className={cn("rounded-full border px-3 py-1.5 text-xs", features.includes(feature) ? "border-[#4f81f7] bg-[#4f81f7]/[.07] text-[#6a95fa]" : "border-[#2b2d32] text-[#9fa1b1]")}>{feature}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium">Стиль</p>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                      {MAX_STYLES.map((item) => (
-                        <button key={item.id} type="button" onClick={() => setStyle(item.id)} className={cn("rounded-[8px] border p-3 text-left text-xs", style === item.id ? "border-[#4f81f7] bg-[#4f81f7]/[.07]" : "border-[#2b2d32]")}>{item.label}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={brandColors} onChange={(event) => setBrandColors(event.target.value)} placeholder="#4f81f7, графит, молочный" className="border-[#2b2d32] bg-[#191b20]" /></div>
-                </div>
-              </details>
-            </div>
-
-            <div className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-[#2b2d32] bg-[#191b20] p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:p-5">
-              <p className="hidden text-xs text-[#828491] sm:block">Генерация начнётся один раз после открытия проекта.</p>
-              <div className="flex flex-col-reverse gap-2 sm:ml-auto sm:flex-row">
-                <Button type="button" variant="outline" className="min-h-11" onClick={() => setDialogOpen(false)}>Отмена</Button>
-                <Button disabled={!ready || create.isPending} className="min-h-11 bg-[#4f81f7] text-[#121519] hover:bg-[#6a95fa]">
-                  {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-                  Создать проект
-                </Button>
-              </div>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+              {maxProjects.map((project) => <MaxStudioProjectCard key={project.id} project={project} />)}
+            </section>
+          )}
+        </div>
+      </main>
+      <MaxProjectWizard
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        pending={create.isPending}
+        values={{ name, idea, appType, audience, primaryAction, features, style, brandColors }}
+        onChange={(patch) => {
+          if (patch.name !== undefined) setName(patch.name);
+          if (patch.idea !== undefined) setIdea(patch.idea);
+          if (patch.appType !== undefined) setAppType(patch.appType);
+          if (patch.audience !== undefined) setAudience(patch.audience);
+          if (patch.primaryAction !== undefined) setPrimaryAction(patch.primaryAction);
+          if (patch.features !== undefined) setFeatures(patch.features);
+          if (patch.style !== undefined) setStyle(patch.style);
+          if (patch.brandColors !== undefined) setBrandColors(patch.brandColors);
+        }}
+        onSubmit={() => create.mutateAsync()}
+      />
     </div>
   );
 }
