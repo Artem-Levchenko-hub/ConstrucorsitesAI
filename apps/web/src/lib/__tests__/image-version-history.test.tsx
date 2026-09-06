@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { PreviewFrame } from "@/components/workspace/PreviewFrame";
+import { VersionImagePreview } from "@/components/workspace/VersionImagePreview";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLivePreview } from "@/components/max/MaxLivePreview";
 import { MaxWorkspaceShell } from "@/components/max/MaxWorkspaceShell";
@@ -260,9 +261,9 @@ describe("image version history", () => {
     expect(container.querySelector("iframe")).toBeNull();
     for (const fn of [api.runtime, api.start, api.sync, api.session]) expect(fn).not.toHaveBeenCalled();
   });
-  it("switches quickly using arrows, keyboard and horizontal swipe while preserving vertical scrolling", async () => {
+  it("switches quickly using the rail, keyboard and horizontal swipe while preserving vertical scrolling", async () => {
     render(<Preview versions={[version(32), version(31), version(30)]} />);
-    click("[aria-label='Предыдущая версия']"); expect(image()?.getAttribute("src")).toBe("/images/v30.png");
+    click("[data-testid='max-version-30']"); expect(image()?.getAttribute("src")).toBe("/images/v30.png");
     const region = () => container.querySelector<HTMLElement>("[data-testid='history-image-viewer']")!;
     act(() => region().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
     expect(image()?.getAttribute("src")).toBe("/images/v31.png");
@@ -358,7 +359,9 @@ describe("image version history", () => {
   it("keeps missing version selection isolated, with an explicit return to live preview", async () => {
     render(<Preview versions={[version(32)]} selected="unknown" />); await settle();
     expect(container.textContent).toContain("нет изображения"); expect(container.querySelector("iframe")).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>("[aria-label='Предыдущая версия']")?.disabled).toBe(true);
+    expect(container.querySelector("[aria-label='Предыдущая версия']")).toBeNull();
+    act(() => container.querySelector("[data-testid='history-image-viewer']")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(container.querySelector("iframe")).toBeNull();
     expect(api.runtime).not.toHaveBeenCalled();
     click("[data-testid='max-return-current-version']");
     await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
@@ -386,12 +389,33 @@ describe("image version history", () => {
     expect(container.querySelector("[data-testid='max-version-33']")?.textContent).toContain("В очереди");
   });
 
-  it("distinguishes captured viewports on the same route and switches the image", () => {
-    render(<Preview versions={[version(31, { previews: [{ url: "/mobile.png", width: 390, height: 2400, route: "/" }, { url: "/desktop.png", width: 1280, height: 900, route: "/" }] })]} />);
+  it("keeps viewport and version controls in generic image history", () => {
+    const previous = vi.fn();
+    render(<VersionImagePreview identity="generic-v31" label="Версия v31" images={[{ url: "/mobile.png", width: 390, height: 2400, route: "/", reconstructed: true }, { url: "/desktop.png", width: 1280, height: 900, route: "/" }]} previewStatus="ready" status="ready" onPrevious={previous} />);
     const select = container.querySelector<HTMLSelectElement>("[aria-label='Экран версии']")!;
     expect([...select.options].map((option) => option.textContent)).toEqual(["/ · 390px", "/ · 1280px"]);
+    expect(container.textContent).toContain("Восстановлено из кода · данные для предпросмотра");
     act(() => { select.value = "1"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(image()?.getAttribute("src")).toBe("/desktop.png");
+    click("[aria-label='Предыдущая версия']");
+    expect(previous).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("Версия v31 · только просмотр");
+  });
+  it("chooses a mobile capture for MAX even when desktop is first and keeps the phone free of history controls", () => {
+    render(<Preview versions={[version(32), version(31, { previews: [
+      { url: "/desktop.png", width: 1280, height: 900, route: "/" },
+      { url: "/tablet.png", width: 768, height: 1200, route: "/" },
+      { url: "/mobile.png", width: 390, height: 2400, route: "/", reconstructed: true },
+    ] })]} />);
+    expect(image()?.getAttribute("src")).toBe("/mobile.png");
+    act(() => image()!.dispatchEvent(new Event("load")));
+    const phone = container.querySelector("[data-testid='max-historical-snapshot']")!;
+    expect(phone.querySelector("select")).toBeNull();
+    expect(phone.querySelector("button")).toBeNull();
+    expect(phone.textContent).toBe("");
+    expect(container.querySelector("[data-testid='max-version-31']")).not.toBeNull();
+    expect(api.runtime).not.toHaveBeenCalled();
+    expect(api.session).not.toHaveBeenCalled();
   });
 
   it("retries the failed older page instead of refetching only the already loaded page", async () => {
@@ -424,10 +448,18 @@ describe("image version history", () => {
     expect(image()?.getAttribute("src")).toBe("http://localhost:8000/api/projects/p/snapshots/s31/previews/0");
     expect(container.querySelector<HTMLImageElement>("[data-testid='max-version-31'] img")?.getAttribute("src")).toBe("http://localhost:8000/api/projects/p/snapshots/s31/previews/0");
   });
-  it("labels reconstructed capture with preview data and clears that label on original capture", () => {
+  it("shows reconstructed capture provenance in the prompt dialog outside the phone", () => {
     render(<Preview versions={[version(32), version(31, { previews: [{ url: "/rebuilt.png", width: 390, height: 1200, route: "/", reconstructed: true }] })]} />);
-    expect(container.textContent).toContain("Восстановлено из кода · данные для предпросмотра");
-    click("[data-testid='max-version-32']"); expect(container.textContent).not.toContain("Восстановлено из кода · данные для предпросмотра");
+    const provenance = "Восстановлено из кода · данные для предпросмотра";
+    expect(container.querySelector("[data-testid='max-historical-snapshot']")?.textContent).not.toContain(provenance);
+    click("[data-testid='max-version-prompt-toggle']");
+    expect(document.querySelector("[data-testid='max-version-prompt']")?.textContent).toContain(provenance);
+    const close = [...document.querySelectorAll<HTMLButtonElement>("[data-testid='max-version-prompt'] button")].find((button) => button.textContent === "Закрыть");
+    expect(close).toBeDefined();
+    act(() => close!.click());
+    click("[data-testid='max-version-32']");
+    click("[data-testid='max-version-prompt-toggle']");
+    expect(document.querySelector("[data-testid='max-version-prompt']")?.textContent).not.toContain(provenance);
   });
 
 });

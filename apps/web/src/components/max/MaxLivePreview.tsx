@@ -49,6 +49,12 @@ const PREVIEW_RETRY_DELAY_MS = 1_500;
 const previewRetryDelay = (attempt: number) =>
   Math.min(PREVIEW_RETRY_DELAY_MS * 2 ** attempt, 10_000);
 
+function phonePreview(version?: ProjectVersion | null) {
+  return version?.previews.slice().sort((a, b) =>
+    Math.abs(a.width - SCREEN_WIDTH) - Math.abs(b.width - SCREEN_WIDTH),
+  )[0];
+}
+
 function isTransientPreviewError(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true;
   if (error.status === 0 || error.status === 409 || error.status >= 500) {
@@ -99,6 +105,7 @@ export function MaxLivePreview({
   const queryClient = useQueryClient();
   const selectedIndex = versions.findIndex((version) => version.id === selectedVersionId);
   const selectedSnapshot = versions[selectedIndex] ?? null;
+  const historicalImage = phonePreview(selectedSnapshot);
   // Queued/failed entries can share the applied snapshot. Only the server's
   // current marker identifies the version whose application is running.
   const viewingHistorical = selectedVersionId !== null && (!historyCurrent || selectedSnapshot?.is_current !== true);
@@ -474,13 +481,14 @@ export function MaxLivePreview({
                       <VersionImagePreview
                         identity={`${project.id}:${selectedVersionId}`}
                         label={selectedSnapshot ? `Версия v${selectedSnapshot.number}` : "Версия недоступна"}
-                        images={selectedSnapshot?.previews ?? []}
+                        images={historicalImage ? [historicalImage] : []}
                         previewStatus={selectedSnapshot?.preview_status ?? (snapshotsLoading ? "pending" : "missing")}
                         status={selectedSnapshot?.status}
-                        previous={previousVersion?.previews[0]}
-                        next={nextVersion?.previews[0]}
+                        previous={phonePreview(previousVersion)}
+                        next={phonePreview(nextVersion)}
                         onPrevious={previousVersion ? () => onSelectVersion(previousVersion.id) : undefined}
                         onNext={nextVersion ? () => onSelectVersion(nextVersion.id) : undefined}
+                        showControls={false}
                       />
                     </div>
                   ) : displayPreviewUrl ? (
@@ -636,6 +644,7 @@ export function MaxLivePreview({
             <DialogTitle>Запрос к версии v{displayedVersion?.number}</DialogTitle>
             <DialogDescription>
               Исходный промпт{displayedVersion?.commit_sha ? ` · коммит ${shortSha(displayedVersion.commit_sha)}` : ""}
+              {viewingHistorical && historicalImage?.reconstructed && <span className="mt-2 block">Восстановлено из кода · данные для предпросмотра</span>}
             </DialogDescription>
           </DialogHeader>
           <p className="whitespace-pre-wrap break-words text-sm leading-6" data-testid="max-version-prompt-text">{displayedVersion?.prompt_text || "Текст запроса не сохранился."}</p>

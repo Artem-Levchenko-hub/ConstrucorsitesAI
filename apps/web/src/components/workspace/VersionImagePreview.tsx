@@ -6,7 +6,7 @@ import type { ProjectVersion, VersionPreviewImage } from "@/lib/api/types";
 import { versionStatusLabel, versionImageUrl } from "@/lib/project-version";
 
 /** Image-only history. Loading an artifact never calls a render/runtime endpoint. */
-export function VersionImagePreview({ identity, label, images, previewStatus, status, previous, next, onPrevious, onNext }: {
+export function VersionImagePreview({ identity, label, images, previewStatus, status, previous, next, onPrevious, onNext, showControls = true }: {
   identity: string;
   label: string;
   images: VersionPreviewImage[];
@@ -16,6 +16,7 @@ export function VersionImagePreview({ identity, label, images, previewStatus, st
   next?: VersionPreviewImage;
   onPrevious?: () => void;
   onNext?: () => void;
+  showControls?: boolean;
 }) {
   useEffect(() => {
     const preload = [previous?.url, next?.url].filter(Boolean).map((url) => {
@@ -23,10 +24,10 @@ export function VersionImagePreview({ identity, label, images, previewStatus, st
     });
     return () => { for (const img of preload) img.onload = img.onerror = null; };
   }, [previous?.url, next?.url]);
-  return <ImagePage key={identity} {...{ label, images, previewStatus, status, onPrevious, onNext }} />;
+  return <ImagePage key={identity} {...{ label, images, previewStatus, status, onPrevious, onNext, showControls }} />;
 }
 
-function ImagePage({ label, images, previewStatus, status, onPrevious, onNext }: Omit<Parameters<typeof VersionImagePreview>[0], "identity" | "previous" | "next">) {
+function ImagePage({ label, images, previewStatus, status, onPrevious, onNext, showControls }: Omit<Parameters<typeof VersionImagePreview>[0], "identity" | "previous" | "next">) {
   const touch = useRef<{ x: number; y: number } | null>(null);
   const [screen, setScreen] = useState(0);
   const currentImage = images[screen] ?? images[0];
@@ -46,13 +47,13 @@ function ImagePage({ label, images, previewStatus, status, onPrevious, onNext }:
         const dx = end.clientX - start.x, dy = end.clientY - start.y;
         if (Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.5) { if (dx < 0) onNext?.(); else onPrevious?.(); }
       }}>
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 text-[11px]">
+      {showControls && <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 text-[11px]">
         <button type="button" aria-label="Предыдущая версия" disabled={!onPrevious} onClick={onPrevious} className="grid size-9 shrink-0 place-items-center rounded disabled:opacity-25"><ChevronLeft className="size-4" /></button>
         <div className="min-w-0 flex-1 text-center"><p className="font-semibold">{label} · только просмотр</p>{status && <p className="text-[#9fa1b1]">{versionStatusLabel[status]}</p>}</div>
         <button type="button" aria-label="Следующая версия" disabled={!onNext} onClick={onNext} className="grid size-9 shrink-0 place-items-center rounded disabled:opacity-25"><ChevronRight className="size-4" /></button>
-      </div>
-      {images.length > 1 && <select className="mx-3 my-2 rounded bg-[#2b2d32] p-2 text-xs" aria-label="Экран версии" value={screen} onChange={(event) => setScreen(Number(event.target.value))}>{images.map((image, index) => <option key={`${image.route}:${index}`} value={index}>{image.route || `Экран ${index + 1}`}{image.width > 0 ? ` · ${image.width}px` : ""}</option>)}</select>}
-      {currentImage?.reconstructed && <p className="shrink-0 px-3 py-2 text-center text-[10px] text-[#9fa1b1]">Восстановлено из кода · данные для предпросмотра</p>}
+      </div>}
+      {showControls && images.length > 1 && <select className="mx-3 my-2 rounded bg-[#2b2d32] p-2 text-xs" aria-label="Экран версии" value={screen} onChange={(event) => setScreen(Number(event.target.value))}>{images.map((image, index) => <option key={`${image.route}:${index}`} value={index}>{image.route || `Экран ${index + 1}`}{image.width > 0 ? ` · ${image.width}px` : ""}</option>)}</select>}
+      {showControls && currentImage?.reconstructed && <p className="shrink-0 px-3 py-2 text-center text-[10px] text-[#9fa1b1]">Восстановлено из кода · данные для предпросмотра</p>}
       {currentImage ? <ArtifactImage key={currentImage.url} image={currentImage} label={label} /> : <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-[#9fa1b1]" role="status">{previewStatus === "pending" ? "Изображение готовится" : previewStatus === "failed" ? "Изображение не сохранилось" : "Для этой версии нет изображения"}</div>}
     </section>
   );
