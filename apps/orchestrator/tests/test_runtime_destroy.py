@@ -23,8 +23,15 @@ def _env(monkeypatch: pytest.MonkeyPatch):
 
 
 async def test_destroy_removes_isolated_project_network(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.services import cell_publication
+
+    # Use the real publication tombstone path, isolated from host/CI runtime
+    # directories. This legacy project has no public Cell record.
+    publications = cell_publication.CellPublicationService(get_settings(), root=tmp_path)
+    monkeypatch.setattr(cell_publication, "get_cell_publication_service", lambda: publications)
     project_id = "00000000-0000-0000-0000-000000000001"
     destroy_container = AsyncMock()
     destroy_project_network = AsyncMock()

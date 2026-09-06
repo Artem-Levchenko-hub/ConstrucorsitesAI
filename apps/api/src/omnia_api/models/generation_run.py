@@ -49,6 +49,12 @@ class GenerationRun(Base):
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="pending", default="pending"
     )
+    execution_backend: Mapped[str] = mapped_column(
+        Text, nullable=False, default="api", server_default="api"
+    )
+    execution_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     response_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
     response_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     # Exact user turn that created this run. Nullable for historical rows.

@@ -16,6 +16,7 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
+from omnia_api.services.generation_execution_context import execution_run_id
 
 ALLOWED_OPERATION_KINDS = frozenset(
     {
@@ -486,6 +487,7 @@ async def claim_cell_operation(
     operation = await _locked_operation(session, operation_id)
     if operation.status not in {"pending", "waiting_capacity"}:
         raise ProjectCellStateConflict(f"cannot claim operation in state {operation.status!r}")
+    operation.execution_run_id = execution_run_id.get()
     operation.status = "running"
     operation.attempt_count += 1
     operation.capacity_reason = None
@@ -597,6 +599,7 @@ async def claim_cell_operation_committed(
         workspace.fencing_epoch += 1
         workspace.version += 1
         locked_operation.fencing_epoch = workspace.fencing_epoch
+        locked_operation.execution_run_id = execution_run_id.get()
         locked_operation.status = "running"
         locked_operation.attempt_count += 1
         locked_operation.capacity_reason = None
@@ -660,6 +663,7 @@ async def reclaim_indeterminate_cell_operation_committed(
             raise ProjectCellBusy("Project Cell workspace already has an active operation")
 
         request = _stored_request_payload(locked_operation)
+        locked_operation.execution_run_id = execution_run_id.get()
         locked_operation.status = "running"
         locked_operation.attempt_count += 1
         locked_operation.error = None
@@ -685,7 +689,10 @@ async def _recover_interrupted_cell_operations(session: AsyncSession) -> int:
         (
             await session.execute(
                 select(ProjectCellOperation)
-                .where(ProjectCellOperation.status == "running")
+                .where(
+                    ProjectCellOperation.status == "running",
+                    ProjectCellOperation.execution_run_id.is_(None),
+                )
                 .with_for_update()
             )
         )

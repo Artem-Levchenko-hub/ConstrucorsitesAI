@@ -205,7 +205,8 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    environment:
+    environment: &api_environment
+      USE_GENERATION_WORKER: ${USE_GENERATION_WORKER:-true}
       ENV: prod
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
@@ -414,6 +415,22 @@ services:
       timeout: 3s
       retries: 12
       start_period: 15s
+    restart: unless-stopped
+    networks:
+      - omnia-prod
+
+  generation-worker:
+    image: ${API_IMAGE:-omnia-api:prod}
+    container_name: omnia-prod-generation-worker
+    command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.generation"]
+    volumes:
+      - ../../../orchestrator/templates:/orchestrator/templates:ro
+      - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
+    environment:
+      <<: *api_environment
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - omnia-prod

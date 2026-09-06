@@ -307,8 +307,9 @@ async def _finalize_cancelled_generation(
         run = await session.scalar(
             select(GenerationRun).where(GenerationRun.id == run_id).with_for_update()
         )
-        if run is not None:
-            await _apply_cancelled_generation_locked(session, run)
+        if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
+            return
+        await _apply_cancelled_generation_locked(session, run)
         await session.commit()
     await publish_event(
         project_id,
@@ -1799,7 +1800,10 @@ async def resume_capacity_queued_generations() -> int:
             (
                 await session.execute(
                     select(GenerationRun)
-                    .where(GenerationRun.status == "queued_for_capacity")
+                    .where(
+                        GenerationRun.status == "queued_for_capacity",
+                        GenerationRun.execution_backend == "api",
+                    )
                     .order_by(GenerationRun.created_at, GenerationRun.id)
                     .with_for_update(skip_locked=True)
                 )
@@ -3121,25 +3125,28 @@ async def post_prompt(
             ),
         )
         capacity_dispatch_token = uuid4() if project.template == "max_miniapp" else None
+        if project.template == "max_miniapp" and get_settings().use_generation_worker:
+            generation_run.execution_backend = "worker"
         await session.commit()
-        _spawn_process_prompt(
-            run_id=generation_run.id,
-            capacity_dispatch_token=capacity_dispatch_token,
-            project_id=project_id,
-            user_id=current_user.id,
-            user_message_id=user_msg.id,
-            assistant_message_id=assistant_msg.id,
-            current_snapshot_id=project.current_snapshot_id,
-            # On a discovery BUILD this is the compiled brief; otherwise the raw
-            # prompt. The full Q&A still rides along via chat history.
-            prompt_text=effective_prompt,
-            model_id=routing_model,
-            force_model=force_model,
-            is_free=is_free,
-            free_business_id=free_business_id,
-            orchestrate=orchestrate,
-            selected_elements=selected_dump,
-        )
+        if generation_run.execution_backend == "api":
+            _spawn_process_prompt(
+                run_id=generation_run.id,
+                capacity_dispatch_token=capacity_dispatch_token,
+                project_id=project_id,
+                user_id=current_user.id,
+                user_message_id=user_msg.id,
+                assistant_message_id=assistant_msg.id,
+                current_snapshot_id=project.current_snapshot_id,
+                # On a discovery BUILD this is the compiled brief; otherwise the raw
+                # prompt. The full Q&A still rides along via chat history.
+                prompt_text=effective_prompt,
+                model_id=routing_model,
+                force_model=force_model,
+                is_free=is_free,
+                free_business_id=free_business_id,
+                orchestrate=orchestrate,
+                selected_elements=selected_dump,
+            )
 
     # Reset the orchestrator's hibernate timer — a user submitting a new prompt
     # is the strongest possible "this project is active" signal. The hibernate
@@ -9181,7 +9188,17 @@ async def _process_prompt(
                 await _max_generation_deadline_task
         if _project_cell_executor_handle is not None:
             try:
-                await asyncio.shield(_project_cell_executor_handle.release())
+                release_task: asyncio.Future[None] = asyncio.ensure_future(
+                    _project_cell_executor_handle.release()
+                )
+                try:
+                    await asyncio.shield(release_task)
+                except asyncio.CancelledError:
+                    # Keep the executor ownership lock until cleanup finishes;
+                    # shield alone leaves an untracked release running behind us.
+                    with suppress(Exception):
+                        await release_task
+                    raise
             except Exception as release_exc:
                 _log.warning(
                     "Project Cell generation lease release failed",

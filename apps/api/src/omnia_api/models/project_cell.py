@@ -104,6 +104,11 @@ class ProjectCellOperation(Base):
         ForeignKey("generation_runs.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Owner of the coroutine dispatching this operation; it may act on another
+    # generation's cell during capacity reclamation.
+    execution_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     request_digest: Mapped[str] = mapped_column(Text, nullable=False)
     fencing_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)

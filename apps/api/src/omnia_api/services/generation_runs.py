@@ -404,7 +404,10 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
         (
             await session.execute(
                 select(GenerationRun)
-                .where(GenerationRun.status.in_(INTERRUPTED_GENERATION_STATUSES))
+                .where(
+                    GenerationRun.status.in_(INTERRUPTED_GENERATION_STATUSES),
+                    GenerationRun.execution_backend == "api",
+                )
                 .with_for_update()
             )
         )

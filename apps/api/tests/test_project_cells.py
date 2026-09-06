@@ -1938,3 +1938,29 @@ async def test_operation_reservation_serializes_with_real_advisory_lock(
             .all()
         )
     assert [operation.id for operation in operations] == [first.id]
+
+
+async def test_api_recovery_preserves_worker_owned_cell_operation(db_session, test_engine, owner):
+    from omnia_api.services.generation_execution_context import execution_run_id
+
+    project = await _new_project(db_session, owner, "worker-operation")
+    workspace = await _new_workspace(db_session, project, owner)
+    operation, _ = await reserve_cell_operation(
+        db_session, workspace_id=workspace.id, generation_run_id=None,
+        kind="ensure", idempotency_key="worker:ensure", request={},
+    )
+    await db_session.commit()
+    owner_run_id = uuid.uuid4()
+    token = execution_run_id.set(owner_run_id)
+    try:
+        await claim_cell_operation_committed(
+            async_sessionmaker(test_engine, expire_on_commit=False), operation.id
+        )
+    finally:
+        execution_run_id.reset(token)
+    await db_session.commit()
+    await db_session.refresh(operation)
+    assert operation.execution_run_id == owner_run_id
+    assert await recover_interrupted_cell_operations(db_session) == 0
+    await complete_cell_operation(db_session, operation.id, {"state": "ready"})
+    assert operation.status == "completed"

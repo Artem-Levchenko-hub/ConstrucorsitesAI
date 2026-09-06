@@ -120,8 +120,19 @@ async def probe_readiness() -> ReadinessReport:
         _deploy_control_plane_ok(),
         _preview_storage_ok(),
     )
+    generation_ok, generation_release = True, "unknown"
+    if get_settings().use_generation_worker:
+        try:
+            async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
+                generation_ok, generation_release = parse_worker_heartbeat(
+                    await get_redis().get("omnia:health:generation-worker")
+                )
+        except Exception:
+            generation_ok = False
     return ReadinessReport(
         checks={
+            **({"generation_worker": "ok" if generation_ok else "failed"}
+               if get_settings().use_generation_worker else {}),
             "database": "ok" if database_ok else "failed",
             "redis": "ok" if redis_ok else "failed",
             "worker": "ok" if worker_ok else "failed",
@@ -129,6 +140,8 @@ async def probe_readiness() -> ReadinessReport:
             "preview_storage": "ok" if preview_ok else "failed",
         },
         dependencies={
+            **({"generation_worker_release_sha": generation_release}
+               if get_settings().use_generation_worker else {}),
             "worker_release_sha": worker_release_sha,
             "orchestrator_release_sha": orchestrator_release_sha,
         },

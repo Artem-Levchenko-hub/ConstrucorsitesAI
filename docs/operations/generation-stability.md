@@ -173,3 +173,29 @@ Studio wrapper and optional fields. Durable capacity dispatch accepts the same
 30,000-character prompt, so queue recovery retains the full request. Previously
 clipped historical messages cannot reconstruct requirements that never reached
 the server. This change does not implement recovery of an active agent process.
+
+## API-independent generation execution (2026-09-06)
+
+`USE_GENERATION_WORKER` defaults on in production full Compose. MAX build
+dispatches are committed with `execution_backend=worker` before delivery. The
+separate `generation-worker` service uses the API image, environment and template
+mount, and holds a PostgreSQL session advisory lock throughout execution and Cell
+release. API restart recovery excludes worker-owned runs and operations, including
+capacity reclamation on a different generation's workspace. Redis readiness
+includes this worker's expiring heartbeat and release SHA. Include
+`generation-worker` whenever deploying/recreating the API image.
+
+Unstarted dispatches survive API downtime and are picked up from PostgreSQL.
+A live worker continues its existing transcript and effects through API restart;
+no prompt replay is involved. The database cancellation/deadline is also monitored
+so losing a Redis notification cannot leave work running. Completed runs retain
+the execution lock until physical cleanup finishes. Tagged orphan Cell operations
+are marked indeterminate only after the old execution lock is free, including
+operations whose generation already has a terminal status.
+
+If the executor itself dies, a claimed run is explicitly failed and unknown
+effects are not replayed. Full recovery of that process still requires durable
+model/tool journaling and effect reconciliation; process isolation alone does not
+provide that guarantee. The production release guard remains enabled. A controlled
+API-only restart acceptance test must first prove all active runs belong to its
+own QA project, and preserve the worker container identity throughout.

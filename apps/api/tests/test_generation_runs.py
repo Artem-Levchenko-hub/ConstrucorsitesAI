@@ -359,7 +359,9 @@ async def test_cancel_endpoint_terminalizes_queued_run_before_any_signal_or_fina
     assert await recover_interrupted_generation_runs(db_session) == 0
 
 
+@pytest.mark.parametrize("worker_backend", [False, True])
 async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
+    worker_backend: bool,
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -369,7 +371,13 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     async def _current_user() -> User:
         return owner
 
-    settings = SimpleNamespace(
+    from omnia_api.core.config import get_settings
+
+    if worker_backend:
+        project.template = "max_miniapp"
+        await db_session.commit()
+    settings = get_settings().model_copy(update=dict(
+        use_generation_worker=worker_backend,
         unlimited_generations=False,
         force_model=None,
         use_progressive_discovery=False,
@@ -377,7 +385,7 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
         use_auto_stack_routing=False,
         use_followup_appification=False,
         use_result_type_router=False,
-    )
+    ))
     spawned: list[dict[str, object]] = []
 
     def _spawn(**kwargs: object) -> None:
@@ -411,7 +419,9 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     assert replay.json()["replayed"] is True
     assert replay.json()["run_status"] == "pending"
     assert first.json()["run_id"]
-    assert len(spawned) == 1
+    assert len(spawned) == (0 if worker_backend else 1)
+    stored = await db_session.get(GenerationRun, uuid.UUID(first.json()["run_id"]))
+    assert stored.execution_backend == ("worker" if worker_backend else "api")
     assert blocked.status_code == 409
     assert latest.status_code == 200
     assert latest.json()["id"] == first.json()["run_id"]
@@ -781,3 +791,19 @@ async def test_startup_recovery_releases_interrupted_run(
     )
     assert replayed is False
     assert replacement.id != run.id
+
+
+@pytest.mark.parametrize("run_status", ["pending", "running", "cancel_requested"])
+async def test_api_restart_does_not_finalize_worker_owned_generation(db_session, run_status):
+    owner, project = await _owner_and_project(db_session)
+    run = GenerationRun(
+        project_id=project.id, user_id=owner.id, idempotency_key="worker-owned",
+        prompt_hash="a" * 64, status=run_status,
+    )
+    run.execution_backend = "worker"
+    db_session.add(run)
+    await db_session.commit()
+    assert await recover_interrupted_generation_runs(db_session) == 0
+    await db_session.refresh(run)
+    assert run.status == run_status
+    assert run.finished_at is None

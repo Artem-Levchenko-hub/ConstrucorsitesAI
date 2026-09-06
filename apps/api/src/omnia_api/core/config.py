@@ -1043,6 +1043,7 @@ class Settings(BaseSettings):
     agentic_builder_canary_users: str = Field(default="")
     project_cell_docker_canary_enabled: bool = Field(default=False)
     project_cell_canary_emails: str = Field(default="")
+    use_generation_worker: bool = Field(default=False)
     use_max_finalization_coordinator: bool = Field(default=False)
     use_project_cell_activity_watchdog: bool = Field(default=False)
     use_generation_event_replay: bool = Field(default=False)

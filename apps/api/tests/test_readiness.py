@@ -96,3 +96,35 @@ async def test_deploy_control_plane_reports_orchestrator_release(
     )
 
     assert await readiness._deploy_control_plane_ok() == (True, "a7c4fc22")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("heartbeat", [None, '{"release_sha":"a7c4fc22"}'])
+async def test_enabled_generation_worker_is_required_for_readiness(monkeypatch, heartbeat):
+    async def yes():
+        return True
+
+    async def redis_and_worker():
+        return True, True, "a7c4fc22"
+
+    async def deploy():
+        return True, "a7c4fc22"
+
+    class Redis:
+        async def get(self, key):
+            assert key == "omnia:health:generation-worker"
+            return heartbeat
+
+    monkeypatch.setattr(
+        readiness, "get_settings", lambda: SimpleNamespace(use_generation_worker=True)
+    )
+    monkeypatch.setattr(readiness, "get_redis", Redis)
+    monkeypatch.setattr(readiness, "_database_ok", yes)
+    monkeypatch.setattr(readiness, "_redis_and_worker", redis_and_worker)
+    monkeypatch.setattr(readiness, "_deploy_control_plane_ok", deploy)
+    monkeypatch.setattr(readiness, "_preview_storage_ok", yes)
+    report = await readiness.probe_readiness()
+    assert report.checks["generation_worker"] == ("ok" if heartbeat else "failed")
+    assert report.dependencies["generation_worker_release_sha"] == (
+        "a7c4fc22" if heartbeat else "unknown"
+    )
