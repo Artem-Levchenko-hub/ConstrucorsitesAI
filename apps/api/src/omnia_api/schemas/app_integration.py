@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 
 class IntegrationFieldPublic(BaseModel):
@@ -29,6 +29,7 @@ class IntegrationProviderPublic(BaseModel):
     oauth_supported: bool = False
     oauth_available: bool = False
     connection_mode: str = "credentials"
+    enabled: bool = False
 
 
 class AppIntegrationPublic(BaseModel):
@@ -93,3 +94,8 @@ class IntegrationConnectRequest(BaseModel):
                 raise ValueError("integration value is too long")
             normalized[clean_key] = clean_value
         return normalized
+
+
+class PlatformAIState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool

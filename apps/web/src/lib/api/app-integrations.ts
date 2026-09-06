@@ -71,3 +71,13 @@ export function disconnectAppIntegration(
     method: "DELETE",
   });
 }
+
+export function setPlatformAiEnabled(
+  projectId: Uuid,
+  enabled: boolean,
+): Promise<{ enabled: boolean }> {
+  return apiFetch(`/api/projects/${projectId}/platform-ai`, {
+    method: "PUT",
+    json: { enabled },
+  });
+}

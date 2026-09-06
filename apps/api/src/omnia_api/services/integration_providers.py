@@ -45,9 +45,17 @@ class IntegrationProvider:
     requirement: str | None = None
     oauth_supported: bool = False
     docs_pages: tuple[str, ...] = ()
+    platform: bool = False
 
 
 PROVIDERS: tuple[IntegrationProvider, ...] = (
+    IntegrationProvider(
+        key="llmgw", name="ИИ", category="ai",
+        description="Встроенные ИИ-функции через LLMGW. Расходы с баланса владельца.",
+        capabilities=("ИИ-ответы", "Анализ", "Генерация текста"),
+        fields=(), available=True, recommended=True, platform=True,
+        docs_url="https://llmgw.ru/",
+    ),
     IntegrationProvider(
         key="aitunnel",
         name="AITUNNEL",
@@ -63,9 +71,10 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
                 secret=True,
             ),
         ),
-        available=True,
+        available=False,
+        requirement="Текстовый ИИ теперь работает через встроенный LLMGW.",
         docs_url="https://docs.aitunnel.ru/",
-        recommended=True,
+        recommended=False,
         docs_pages=("/api/authentication", "/api/reference"),
     ),
     IntegrationProvider(
@@ -350,23 +359,6 @@ async def verify_provider(
                 )
                 _provider_http_error(provider.name, response)
                 return f"Магазин {public_values['shop_id']}"
-
-            if provider_key == "aitunnel":
-                response = await client.get(
-                    "https://api.aitunnel.ru/v1/aitunnel/me",
-                    headers={
-                        **headers,
-                        "Authorization": f"Bearer {secret_values['api_key']}",
-                    },
-                )
-                _provider_http_error(provider.name, response)
-                aitunnel_payload = response.json()
-                if not isinstance(aitunnel_payload, dict):
-                    raise IntegrationProviderError(
-                        "AITUNNEL вернул ответ в неизвестном формате."
-                    )
-                account = aitunnel_payload.get("email") or aitunnel_payload.get("id")
-                return f"AITUNNEL · {account}" if account else "AITUNNEL"
 
             if provider_key == "iiko":
                 response = await client.post(

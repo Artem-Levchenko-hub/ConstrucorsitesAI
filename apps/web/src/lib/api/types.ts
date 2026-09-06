@@ -570,7 +570,8 @@ export type IntegrationProvider = {
   docs_url: string;
   oauth_supported: boolean;
   oauth_available: boolean;
-  connection_mode: "oauth" | "credentials" | "partner";
+  connection_mode: "oauth" | "credentials" | "partner" | "platform";
+  enabled?: boolean;
 };
 
 export type AppIntegration = {

@@ -44,6 +44,7 @@ import {
   disconnectAppIntegration,
   getIntegrationCatalog,
   startIntegrationOAuth,
+  setPlatformAiEnabled,
   verifyAppIntegration,
 } from "@/lib/api/app-integrations";
 import { ApiError } from "@/lib/api/client";
@@ -64,7 +65,7 @@ const categories: Record<IntegrationCategory | "all", { label: string; icon: Luc
 };
 
 const providerIcons: Record<string, LucideIcon> = {
-  aitunnel: Sparkles,
+  llmgw: Sparkles,
   yookassa: CircleDollarSign,
   iiko: Store,
   rkeeper: Store,
@@ -85,10 +86,14 @@ const implementationFeatures: Record<string, string> = {
   amocrm: "Добавь форму заявки с созданием лида в amoCRM и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
   moysklad: "Добавь каталог товаров и цены из МойСклад. Реальные складские остатки пока недоступны; не показывай товары как имеющиеся в наличии на основании каталога.",
   yandex_metrica: "Подключи счётчик Яндекс Метрики к приложению через управляемую интеграцию.",
-  aitunnel: "Добавь ИИ-помощника с отправкой сообщений через подключённый AITunnel и отображением ответа.",
+  llmgw: "Добавь ИИ-помощника с отправкой сообщений через встроенный LLMGW и отображением ответа. Используй requestOmniaAI; расходы оплачиваются с баланса владельца приложения. Пользователю не нужны API-ключи или отдельное подключение ИИ.",
 };
-const readyForImplementation = (connection: AppIntegration | undefined) =>
-  connection?.status === "active" && connection.bound_to_project && connection.binding_status === "ready";
+const readyForImplementation = (
+  provider: IntegrationProvider | undefined,
+  connection: AppIntegration | undefined,
+) => Boolean(provider && (provider.connection_mode === "platform"
+  ? provider.available && provider.enabled === true
+  : connection?.status === "active" && connection.bound_to_project && connection.binding_status === "ready"));
 
 const message = (error: unknown) => {
   if (error instanceof ApiError) return error.message;
@@ -170,6 +175,14 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     },
     onError: (error) => toast.error("Не удалось подготовить набор", { description: message(error) }),
   });
+  const platformAi = useMutation({
+    mutationFn: (enabled: boolean) => setPlatformAiEnabled(projectId, enabled),
+    onSuccess: ({ enabled }) => {
+      void qc.invalidateQueries({ queryKey });
+      toast.success(enabled ? "ИИ включён для проекта" : "ИИ выключен для проекта");
+    },
+    onError: (error) => toast.error("Не удалось изменить доступ к ИИ", { description: message(error) }),
+  });
   const oauth = useMutation({
     mutationFn: (provider: string) => startIntegrationOAuth(projectId, provider),
     onSuccess: ({ authorization_url }) => window.location.assign(authorization_url),
@@ -193,6 +206,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
   });
 
   const openProvider = (provider: IntegrationProvider) => {
+    if (provider.connection_mode === "platform") return;
     const connection = connections.get(provider.key);
     setSelected(provider);
     setValues(
@@ -202,13 +216,17 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     );
   };
 
+  const canUseProvider = (providerKey: string) => readyForImplementation(
+    catalog.data?.providers.find((provider) => provider.key === providerKey),
+    connections.get(providerKey),
+  );
   const openImplementation = (providerKey: string) => {
     const feature = implementationFeatures[providerKey];
-    if (!feature || !readyForImplementation(connections.get(providerKey))) return;
+    if (!feature || !canUseProvider(providerKey)) return;
     setImplementationPrompt(`${feature}\nИспользуй только доступные управляемые методы интеграции. Не запрашивай и не вставляй секреты в код или сообщения. Добавь состояния загрузки, пустого результата и ошибки. Проверь сценарий и сообщи, что проверено, а что требует проверки с реальным аккаунтом.`);
     setImplementationProvider(providerKey);
   };
-  const canImplement = Boolean(implementationProvider && readyForImplementation(connections.get(implementationProvider)) && implementationPrompt.trim());
+  const canImplement = Boolean(implementationProvider && canUseProvider(implementationProvider) && implementationPrompt.trim());
   const startImplementation = () => {
     if (!canImplement) return;
     try {
@@ -219,7 +237,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     }
     router.push(`/max/${projectId}?starter=1`);
   };
-  const connectedCount = (catalog.data?.connections ?? []).filter(readyForImplementation).length;
+  const connectedCount = (catalog.data?.providers ?? []).filter((provider) => canUseProvider(provider.key)).length;
   const canSubmit = selected?.fields.every((field) => !field.required || Boolean(values[field.key]?.trim())) ?? false;
 
   return (
@@ -231,7 +249,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
       title="Интеграции"
       lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
     >
-      <p className="mt-5 text-sm leading-6 text-[#9fa1b1]">Подключение сервиса не добавляет экраны автоматически. После авторизации выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
+      <p className="mt-5 text-sm leading-6 text-[#9fa1b1]">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
       <section className="mt-8 grid gap-4 lg:grid-cols-[1fr_300px]">
         <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-6">
           <div className="flex items-start gap-4">
@@ -299,7 +317,8 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             <div className="divide-y divide-[#25272b]">
               {visible.map((provider) => {
                 const connection = connections.get(provider.key);
-                const connected = readyForImplementation(connection);
+                const platform = provider.connection_mode === "platform";
+                const connected = readyForImplementation(provider, connection);
                 const needsSetup = connection?.bound_to_project && !connected;
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
@@ -307,20 +326,28 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
                   <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_1fr_150px_150px] lg:items-center">
                     <div className="flex items-center gap-3">
                       <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-[#2b2d32] bg-[#191b20] text-[#4f81f7]"><Icon className="size-4" /></span>
-                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className="mt-1 line-clamp-1 text-xs text-[#828491]">{provider.description}</p></div>
+                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className={cn("mt-1 text-xs text-[#828491]", !platform && "line-clamp-1")}>{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p></div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {provider.capabilities.slice(0, 3).map((item) => <span key={item} className="rounded-full border border-[#2b2d32] px-2 py-1 text-[9px] text-[#9fa1b1]">{item}</span>)}
                     </div>
                     <div>
-                      {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-fg"><Check className="size-3.5" />Подключено</span>
+                      {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-fg"><Check className="size-3.5" />{platform ? "Встроено" : "Подключено"}</span>
+                        : platform && provider.available ? <span className="text-xs text-[#828491]">Не включено</span>
                         : needsSetup ? <span className="text-xs text-danger-fg">Требуется настройка</span>
                         : reusable ? <span className="text-xs text-[#6a95fa]">Есть у бизнеса</span>
                         : provider.available ? <span className="text-xs text-[#828491]">Не подключено</span>
                         : <span className="text-xs text-[#828491]">Готовим</span>}
                     </div>
                     <div className="flex flex-wrap justify-end gap-1">
-                      {connected ? (
+                      {platform ? (
+                        provider.key === "llmgw" && provider.available ? (
+                          <>
+                            {connected && implementationFeatures[provider.key] && <Button size="sm" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                            <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={platformAi.isPending} onClick={() => platformAi.mutate(!connected)}>{connected ? "Выключить ИИ" : "Включить ИИ"}</Button>
+                          </>
+                        ) : null
+                      ) : connected ? (
                         <>
                           {implementationFeatures[provider.key] && <Button size="sm" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
                           <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-[#9fa1b1] hover:bg-[#121519] sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>

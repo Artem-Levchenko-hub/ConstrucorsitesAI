@@ -32,6 +32,7 @@ from omnia_api.schemas.app_integration import (
     IntegrationPackApplyPublic,
     IntegrationPackPublic,
     IntegrationProviderPublic,
+    PlatformAIState,
 )
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.services import integration_oauth, integration_providers
@@ -143,6 +144,7 @@ def _oauth_available(provider_key: str) -> bool:
 
 def _provider_public(
     provider: integration_providers.IntegrationProvider,
+    *, enabled: bool = False,
 ) -> IntegrationProviderPublic:
     oauth_available = provider.oauth_supported and _oauth_available(provider.key)
     manual_available = provider.available and bool(provider.fields)
@@ -163,14 +165,17 @@ def _provider_public(
             )
             for field in provider.fields
         ],
-        available=manual_available or oauth_available,
+        available=provider.platform or manual_available or oauth_available,
+        enabled=enabled,
         recommended=provider.recommended,
         requirement=provider.requirement,
         docs_url=provider.docs_url,
         oauth_supported=provider.oauth_supported,
         oauth_available=oauth_available,
         connection_mode=(
-            "oauth"
+            "platform"
+            if provider.platform
+            else "oauth"
             if oauth_available
             else "credentials"
             if manual_available
@@ -332,16 +337,29 @@ async def get_integration_catalog(
     }
     return IntegrationCatalogPublic(
         providers=[
-            _provider_public(provider) for provider in integration_providers.PROVIDERS
+            _provider_public(provider, enabled=provider.platform and project.runtime_ai_enabled)
+            for provider in integration_providers.PROVIDERS if provider.key != "aitunnel"
         ],
         connections=[
             _connection_public(connection, bindings.get(connection.provider))
-            for connection in connections
+            for connection in connections if connection.provider != "aitunnel"
         ],
         recommended_pack=await _recommended_pack(
             session, project, connections, bindings
         ),
     )
+
+
+@router.put("/api/projects/{project_id}/platform-ai", response_model=PlatformAIState)
+async def set_platform_ai(
+    project_id: UUID, payload: PlatformAIState,
+    session: SessionDep, current_user: CurrentUserDep,
+) -> PlatformAIState:
+    project = await _owned_max_project(session, project_id, current_user.id)
+    await require_max_business(session, current_user)
+    project.runtime_ai_enabled = payload.enabled
+    await session.commit()
+    return PlatformAIState(enabled=project.runtime_ai_enabled)
 
 
 @router.put(
@@ -413,6 +431,11 @@ async def bind_existing_integration(
     current_user: CurrentUserDep,
 ) -> AppIntegrationPublic:
     await _owned_max_project(session, project_id, current_user.id)
+    if provider_key in {"aitunnel", "llmgw"}:
+        raise ApiError(
+            "ai_integration_required", "Включите встроенный ИИ в настройках приложения",
+            status.HTTP_409_CONFLICT,
+        )
     business = await require_max_business(session, current_user)
     connection = await _business_connection(session, business.id, provider_key)
     if connection is None:
@@ -486,6 +509,11 @@ async def verify_integration(
     current_user: CurrentUserDep,
 ) -> AppIntegrationPublic:
     await _owned_max_project(session, project_id, current_user.id)
+    if provider_key in {"aitunnel", "llmgw"}:
+        raise ApiError(
+            "ai_integration_required", "Включите встроенный ИИ в настройках приложения",
+            status.HTTP_409_CONFLICT,
+        )
     business = await require_max_business(session, current_user)
     connection = await _business_connection(session, business.id, provider_key)
     if connection is None:

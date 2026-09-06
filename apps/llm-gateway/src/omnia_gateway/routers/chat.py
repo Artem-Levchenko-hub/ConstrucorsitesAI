@@ -45,6 +45,9 @@ class ChatMetadata(BaseModel):
     # still logged so we can measure the real cost of the free tier. The API
     # backend (apps/api) decides who is free and counts the quota.
     free: bool = False
+    # Public mini-app calls require confirmed wallet access/debit. Legacy
+    # generation requests retain their existing billing failure policy.
+    require_billing: bool = False
 
 
 class ChatCompletionRequest(BaseModel):
@@ -70,6 +73,16 @@ def _gateway_error_to_http(exc: GatewayError) -> HTTPException:
     )
 
 
+def _billing_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={"error": {
+            "code": "billing_unavailable",
+            "message": "Wallet billing is temporarily unavailable",
+        }},
+    )
+
+
 def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
     """Conservative pre-flight estimate: input tokens + 25% as output guess."""
     tokens_in = count_message_tokens(model, messages)
@@ -86,6 +99,25 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     filtered_messages = safety.sanitize_messages(raw_messages)
 
     meta = req.metadata or ChatMetadata()
+
+    if meta.require_billing:
+        if req.user is None or meta.free or req.stream:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": {
+                    "code": "invalid_billing_request",
+                    "message": "Required billing needs a user and a paid non-streaming request",
+                }},
+            )
+        # Cached answers cost nothing, but cannot bypass the owner's wallet
+        # availability check. Do this once, before cache or provider access.
+        try:
+            await billing.precheck_balance(req.user, _estimate_cost(req.model, filtered_messages))
+        except WalletEmptyError as exc:
+            raise _gateway_error_to_http(exc) from exc
+        except Exception as exc:
+            log.exception("required_billing.precheck_failed", user=str(req.user))
+            raise _billing_unavailable() from exc
 
     if req.stream:
         # Pre-check balance before opening the SSE generator (cheap reject).
@@ -146,7 +178,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         return cached
 
     # Cache miss — pre-check balance (free generations skip the floor check).
-    if req.user is not None and not meta.free:
+    if req.user is not None and not meta.free and not meta.require_billing:
         try:
             await billing.precheck_balance(req.user, _estimate_cost(req.model, filtered_messages))
         except WalletEmptyError as exc:
@@ -190,8 +222,11 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc
-        except Exception:
+        except Exception as exc:
             log.exception("charge_failed", user=str(req.user), model=actual_model)
+            if meta.require_billing:
+                # Never expose or cache an answer whose wallet debit failed.
+                raise _billing_unavailable() from exc
 
     response.setdefault("metadata", {})
     response["metadata"]["actual_model_used"] = actual_model

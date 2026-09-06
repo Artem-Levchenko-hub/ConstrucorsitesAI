@@ -17,6 +17,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Header, Request, status
 from sqlalchemy import select
 
+from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
@@ -26,6 +27,7 @@ from omnia_api.models.app_integration import (
     ProjectIntegrationBinding,
 )
 from omnia_api.models.max_integration import MaxIntegration
+from omnia_api.models.project import Project
 from omnia_api.schemas.integration_runtime import (
     RuntimeAIPublic,
     RuntimeAIRequest,
@@ -189,19 +191,24 @@ async def runtime_integration_status(
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeIntegrationStatus:
     await _runtime_context(session, project_id, x_max_init_data, request)
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise ApiError("not_found", "Проект не найден", status.HTTP_404_NOT_FOUND)
     connections = await _connections(session, project_id)
+    connections.pop("aitunnel", None)
     metrica = connections.get("yandex_metrica")
+    providers = set(connections)
+    capabilities = {
+        capability
+        for connection in connections.values()
+        for capability in integration_providers.get_provider(connection.provider).capabilities
+    }
+    if project.runtime_ai_enabled:
+        providers.add("llmgw")
+        capabilities.update(integration_providers.get_provider("llmgw").capabilities)
     return RuntimeIntegrationStatus(
-        providers=sorted(connections),
-        capabilities=sorted(
-            {
-                capability
-                for connection in connections.values()
-                for capability in (
-                    integration_providers.get_provider(connection.provider).capabilities
-                )
-            }
-        ),
+        providers=sorted(providers),
+        capabilities=sorted(capabilities),
         analytics_counter_id=(
             str(metrica.public_config.get("counter_id"))
             if metrica and metrica.public_config.get("counter_id")
@@ -211,7 +218,7 @@ async def runtime_integration_status(
 
 
 async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None:
-    """Fail closed before spending an owner's provider balance."""
+    """Fail closed before spending the project owner's wallet balance."""
 
     buckets = (
         (f"omnia:runtime-ai:minute:{project_id}:{max_user_id}", 8, 60),
@@ -242,77 +249,86 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
         ) from exc
 
 
-async def _request_aitunnel_ai(
-    session: SessionDep,
-    connection: BusinessIntegration,
+async def _request_gateway_ai(
     *,
+    owner_id: UUID,
+    project_id: UUID,
     system_prompt: str,
     user_message: str,
 ) -> RuntimeAIPublic:
-    """Use an encrypted owner key without exposing it to app code or the agent."""
-
-    credentials = await _secrets(session, connection)
-    api_key = credentials.get("api_key", "")
-    if not api_key:
-        raise ApiError(
-            "integration_credentials_corrupted",
-            "Подключение AITUNNEL повреждено. Подключите сервис заново.",
-            status.HTTP_409_CONFLICT,
-        )
+    """Request billed inference through Omnia's internal LLM gateway."""
+    settings = get_settings()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=5.0)) as client:
             response = await client.post(
-                "https://api.aitunnel.ru/v1/chat/completions",
+                f"{settings.llm_gateway_url.rstrip('/')}/v1/chat/completions",
                 headers={
                     "Accept": "application/json",
-                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                     "User-Agent": "Omnia-MAX-Runtime/1.0",
                 },
                 json={
-                    "model": "auto",
+                    "model": settings.max_runtime_ai_model,
                     "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_message},
                     ],
+                    "user": str(owner_id),
+                    "metadata": {
+                        "project_id": str(project_id), "free": False, "require_billing": True,
+                    },
+                    "stream": False,
                     "max_tokens": 1_600,
                     "temperature": 0.35,
                 },
             )
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+    except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
         raise ApiError(
             "integration_provider_unavailable",
-            "AITUNNEL временно недоступен. Попробуйте ещё раз.",
+            "ИИ временно недоступен. Попробуйте ещё раз.",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
+    if response.status_code == 402:
+        raise ApiError(
+            "wallet_empty",
+            "На балансе владельца приложения недостаточно средств для ИИ-запроса.",
+            status.HTTP_402_PAYMENT_REQUIRED,
+        )
+    if response.status_code == 429:
+        raise ApiError(
+            "rate_limited",
+            "Лимит ИИ-запросов временно исчерпан. Попробуйте позже.",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    if response.status_code >= 500:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "ИИ временно недоступен. Попробуйте ещё раз.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
     if response.status_code >= 300:
-        raise _provider_failure("AITUNNEL", response)
-    try:
-        body = response.json()
-        choices = body.get("choices") if isinstance(body, dict) else None
-        first = choices[0] if isinstance(choices, list) and choices else None
-        message = first.get("message") if isinstance(first, dict) else None
-        answer = message.get("content") if isinstance(message, dict) else None
-        model = body.get("model") if isinstance(body, dict) else None
-    except (ValueError, TypeError, KeyError, IndexError) as exc:
         raise ApiError(
             "integration_request_failed",
-            "AITUNNEL вернул ответ в неизвестном формате.",
-            status.HTTP_502_BAD_GATEWAY,
-        ) from exc
-    if not isinstance(answer, str) or not answer.strip():
-        raise ApiError(
-            "integration_request_failed",
-            "AITUNNEL не вернул ответ. Попробуйте ещё раз.",
+            "Не удалось выполнить ИИ-запрос. Попробуйте позже.",
             status.HTTP_502_BAD_GATEWAY,
         )
-    safe_answer = redact_provider_secrets(
-        answer.replace(api_key, "[CREDENTIAL REDACTED]")
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise invalid_response() from exc
+    if not isinstance(body, dict) or body.get("error"):
+        raise invalid_response()
+    choices = body.get("choices")
+    first = choices[0] if isinstance(choices, list) and choices else None
+    message = first.get("message") if isinstance(first, dict) else None
+    answer = message.get("content") if isinstance(message, dict) else None
+    model = body.get("model", settings.max_runtime_ai_model)
+    if not isinstance(answer, str) or not answer.strip() or not isinstance(model, str):
+        raise invalid_response()
+    return RuntimeAIPublic(
+        answer=redact_provider_secrets(answer).strip()[:16_000],
+        model=redact_provider_secrets(model)[:200],
     )
-    safe_model = redact_provider_secrets(
-        str(model or "aitunnel:auto").replace(api_key, "[CREDENTIAL REDACTED]")
-    )
-    return RuntimeAIPublic(answer=safe_answer.strip()[:16_000], model=safe_model[:200])
 
 
 @router.post("/{project_id}/ai", response_model=RuntimeAIPublic)
@@ -323,14 +339,16 @@ async def request_runtime_ai(
     request: Request,
     x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
 ) -> RuntimeAIPublic:
-    """Run owner-funded AITUNNEL inference through the secretless MAX bridge."""
+    """Run owner-billed inference through the internal LLM gateway."""
 
     context = await _runtime_context(session, project_id, x_max_init_data, request)
-    connection = (await _connections(session, project_id)).get("aitunnel")
-    if connection is None:
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise ApiError("not_found", "Проект не найден", status.HTTP_404_NOT_FOUND)
+    if not project.runtime_ai_enabled:
         raise ApiError(
             "ai_integration_required",
-            "Подключите AITUNNEL к этому приложению",
+            "Включите ИИ в настройках приложения",
             status.HTTP_409_CONFLICT,
         )
     await _enforce_runtime_ai_limits(project_id, context.max_user_id)
@@ -349,9 +367,9 @@ async def request_runtime_ai(
             ensure_ascii=False,
             default=str,
         )
-    return await _request_aitunnel_ai(
-        session,
-        connection,
+    return await _request_gateway_ai(
+        owner_id=project.owner_id,
+        project_id=project.id,
         system_prompt=system_prompt,
         user_message=user_message,
     )

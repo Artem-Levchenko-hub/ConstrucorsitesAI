@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     jwt_cookie_domain: str | None = Field(default=None)
 
     llm_gateway_url: str = Field(default="http://localhost:8001")
+    # Server-owned model for billed AI calls from authenticated mini-app users.
+    max_runtime_ai_model: Literal["gemini-3.1-pro-preview-customtools", "claude-sonnet-5"] = (
+        "gemini-3.1-pro-preview-customtools"
+    )
     mock_llm: bool = Field(default=True)
     # Cheap, bounded ranking pass for contextual MAX product advice. The
     # server-owned catalog remains the source of executable prompts.

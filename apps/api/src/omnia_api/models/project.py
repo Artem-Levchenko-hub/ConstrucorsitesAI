@@ -73,6 +73,10 @@ class Project(Base):
     viral_eligible: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", default=False
     )
+    # Owner opt-in for paid AI operations from public MAX app visitors.
+    runtime_ai_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False,
+    )
     current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),

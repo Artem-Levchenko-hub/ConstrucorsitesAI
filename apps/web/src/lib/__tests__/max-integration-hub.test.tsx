@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
 
-const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), verify: vi.fn(), catalog: vi.fn(), success: vi.fn() }));
+const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), verify: vi.fn(), catalog: vi.fn(), platformAi: vi.fn(), success: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: boundary.push }) }));
 vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: async () => undefined }));
 vi.mock("sonner", () => ({ toast: { success: boundary.success, error: vi.fn(), warning: vi.fn() } }));
 vi.mock("@/lib/api/app-integrations", () => ({
-  getIntegrationCatalog: boundary.catalog, connectAppIntegration: boundary.connect, verifyAppIntegration: boundary.verify,
+  getIntegrationCatalog: boundary.catalog, setPlatformAiEnabled: boundary.platformAi, connectAppIntegration: boundary.connect, verifyAppIntegration: boundary.verify,
   bindAppIntegration: vi.fn(), disconnectAppIntegration: vi.fn(), applyIntegrationPack: vi.fn(), startIntegrationOAuth: vi.fn(),
 }));
 const provider: IntegrationProvider = {
@@ -57,8 +57,8 @@ describe("Integration Hub implementation handoff", () => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   });
   afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); });
-  async function render(connections: AppIntegration[]) {
-    const data = catalog(connections);
+  async function render(connections: AppIntegration[], providers = [provider]) {
+    const data = { ...catalog(connections), providers };
     client.setQueryData(["app-integrations", "project-1"], data);
     boundary.catalog.mockResolvedValue(data);
     await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(FigmaIntegrationHub, { projectId: "project-1", projectName: "Project" }))));
@@ -118,6 +118,65 @@ describe("Integration Hub implementation handoff", () => {
     expect(button("Добавить в приложение")).toBeUndefined();
     expect(container.textContent).not.toContain("Подключено");
     expect(container.textContent).toContain("Требуется настройка");
+  });
+  it("offers built-in LLMGW without any credentials or business connection", async () => {
+    await render([], [{
+      ...provider, key: "llmgw", name: "ИИ", category: "ai", connection_mode: "platform",
+      fields: [], capabilities: ["ai"], enabled: true,
+    }]);
+    expect(container.textContent).toContain("Работает через LLMGW; расходы с баланса владельца");
+    expect(container.textContent).toContain("Встроено");
+    expect(button("Подключить")).toBeUndefined();
+    expect(button("Использовать")).toBeUndefined();
+    expect(button("Настроить")).toBeUndefined();
+    expect(container.querySelector('[aria-label="Проверить ИИ"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Отключить ИИ"]')).toBeNull();
+    expect(boundary.push).not.toHaveBeenCalled();
+    await click("Добавить в приложение");
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    const prompt = document.querySelector("textarea")!.value;
+    expect(prompt).toContain("LLMGW");
+    expect(prompt).not.toContain("AITunnel");
+    expect(boundary.push).not.toHaveBeenCalled();
+    await click("Запустить доработку");
+    expect(window.sessionStorage.getItem("omnia:max:starter:project-1")).toBe(prompt);
+    expect(boundary.push).toHaveBeenCalledWith("/max/project-1?starter=1");
+    expect(boundary.connect).not.toHaveBeenCalled();
+    expect(boundary.platformAi).not.toHaveBeenCalled();
+  });
+  it("requires the owner to explicitly enable platform AI before offering implementation", async () => {
+    const builtin: IntegrationProvider = {
+      ...provider, key: "llmgw", name: "ИИ", category: "ai", connection_mode: "platform",
+      fields: [], enabled: false,
+    };
+    await render([], [builtin]);
+    expect(button("Добавить в приложение")).toBeUndefined();
+    expect(boundary.platformAi).not.toHaveBeenCalled();
+    boundary.platformAi.mockResolvedValue({ enabled: true });
+    boundary.catalog.mockResolvedValue({ ...catalog([]), providers: [{ ...builtin, enabled: true }] });
+    await click("Включить ИИ");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(boundary.platformAi).toHaveBeenCalledWith("project-1", true);
+    expect(button("Добавить в приложение")).toBeDefined();
+    expect(boundary.push).not.toHaveBeenCalled();
+    expect(window.sessionStorage.length).toBe(0);
+    boundary.platformAi.mockResolvedValue({ enabled: false });
+    boundary.catalog.mockResolvedValue({ ...catalog([]), providers: [builtin] });
+    await click("Выключить ИИ");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(boundary.platformAi).toHaveBeenLastCalledWith("project-1", false);
+    expect(button("Добавить в приложение")).toBeUndefined();
+    expect(button("Включить ИИ")).toBeDefined();
+  });
+  it("does not expose configuration or generation for an unavailable platform provider", async () => {
+    await render([], [{
+      ...provider, key: "llmgw", name: "ИИ", category: "ai", connection_mode: "platform",
+      fields: [], available: false,
+    }]);
+    expect(button("Добавить в приложение")).toBeUndefined();
+    expect(button("Подключить")).toBeUndefined();
+    expect(button("Настроить")).toBeUndefined();
+    expect(container.textContent).not.toContain("Встроено");
   });
   it("reports verification as access confirmation", async () => {
     await render([connection]);

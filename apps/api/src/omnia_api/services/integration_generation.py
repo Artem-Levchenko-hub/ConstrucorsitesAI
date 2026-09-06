@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.models.app_integration import BusinessIntegration, ProjectIntegrationBinding
+from omnia_api.models.project import Project
 
 _METHODS = {
     "yookassa": (
@@ -29,9 +30,10 @@ _METHODS = {
         "getOmniaCatalog(). Reads menu only; do not claim restaurant order "
         "submission or live stop-list support."
     ),
-    "aitunnel": (
-        "requestOmniaAI({message, instructions?, context?}). Uses the connected "
-        "server-side account."
+    "llmgw": (
+        "requestOmniaAI({message, instructions?, context?}). Uses built-in LLMGW "
+        "through the platform gateway; charged to the owner's balance. Never request "
+        "an API key or choose billing identity/model in the app."
     ),
     "yandex_metrica": (
         "getOmniaIntegrations() returns analytics_counter_id. Counter access does"
@@ -59,6 +61,12 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
             )
         ).all()
     )
+    providers = [p for p in providers if p != "aitunnel"]
+    ai_enabled = await session.scalar(
+        select(Project.runtime_ai_enabled).where(Project.id == project_id)
+    )
+    if ai_enabled:
+        providers.append("llmgw")
     lines = [
         (
             "CONNECTED BUSINESS INTEGRATIONS (server-verified configuration, not live"

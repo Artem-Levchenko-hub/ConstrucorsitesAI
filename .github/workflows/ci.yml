@@ -86,6 +86,9 @@ jobs:
           tests/test_generation_runs.py
           tests/test_generation_worker.py
           tests/test_app_integrations_api.py
+          tests/test_platform_ai.py
+          tests/test_runtime_ai_gateway.py
+          tests/test_aitunnel_integration.py
           tests/test_integration_credentials.py
           tests/test_integration_runtime_contracts.py
           tests/test_integration_runtime_auth.py

@@ -13,3 +13,21 @@ Authorized design: user approved the Integration Hub flow described in the prece
 - [ ] Acceptance: execute tests/lint/types/migration checks, independent review, commit/push/CI, production deployment and health. Verify real provider credentials read-only where available; distinguish controlled contract tests from real account transactions. Record any missing account prerequisites explicitly.
 
 Verified locally: 114 API tests before final review fixes; final targeted regressions recorded in delivery evidence. Web 231 tests; orchestrator 1075 tests plus new draft-overlay regression; API and orchestrator strict types; migration 0057→0058→0057→0058 on disposable PostgreSQL. Final review found and fixed reconnect payment-key instability, definitive CRM rejection retry, and missing draft-core overlay. Managed kit revision 15 ships the updated SDK on the next managed refresh. Production public core must be rebuilt and pinned; publication recovery reconciles existing live cores.
+
+## Correction: built-in text AI through LLMGW
+
+The owner confirmed that mini-app text AI must use the existing LLMGW route.
+AITUNNEL credentials are not required for text AI. Legacy records remain stored
+but are hidden and cannot be connected, bound, verified or used for inference.
+Media providers in the gateway are separate from this text feature.
+
+- [x] Add owner-only platform AI enable/disable; database default is disabled.
+- [x] Route MAX-authenticated, rate-limited calls through the internal gateway
+  with the Project owner as billing identity and server-owned model/token limits.
+- [x] Require billing (`free=false`, `require_billing=true`) and fail closed on
+  wallet lookup/debit failures, including before serving cached answers.
+- [x] Show built-in AI, balance cost and explicit enable/feature generation controls
+  without an integration key or a fabricated external connection record.
+- [x] Test disabled legacy bindings, ownership, malformed input, safe errors,
+  billing identity and gateway failure behavior; test migration 0059 up/down/up.
+- [ ] Deploy gateway before API and verify a published app through LLMGW.

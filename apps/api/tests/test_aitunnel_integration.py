@@ -37,32 +37,15 @@ class _FakeClient:
 
 
 @pytest.mark.asyncio
-async def test_aitunnel_key_is_verified_by_read_only_profile_endpoint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    provider = integration_providers.get_provider("aitunnel")
-    public, secret = integration_providers.split_values(
-        provider,
-        {"api_key": "sk-aitunnel-test-value"},
-    )
-    capture: dict[str, Any] = {}
-    response = httpx.Response(200, json={"id": 42, "email": "owner@example.test"})
-    monkeypatch.setattr(
-        integration_providers.httpx,
-        "AsyncClient",
-        lambda **kwargs: _FakeClient(response, capture, **kwargs),
-    )
-
-    label = await integration_providers.verify_provider("aitunnel", public, secret)
-
-    assert label == "AITUNNEL · owner@example.test"
-    assert capture["method"] == "GET"
-    assert capture["url"] == "https://api.aitunnel.ru/v1/aitunnel/me"
-    assert capture["headers"]["Authorization"] == "Bearer sk-aitunnel-test-value"
+async def test_legacy_aitunnel_cannot_verify_new_credentials() -> None:
+    with pytest.raises(integration_providers.IntegrationProviderError):
+        await integration_providers.verify_provider(
+            "aitunnel", {}, {"api_key": "synthetic-legacy-key"},
+        )
 
 
 @pytest.mark.asyncio
-async def test_runtime_ai_redacts_a_provider_echo(
+async def test_runtime_ai_redacts_a_gateway_echo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw_key = "sk-aitunnel-runtime-value"
@@ -80,21 +63,16 @@ async def test_runtime_ai_redacts_a_provider_echo(
         lambda **kwargs: _FakeClient(response, capture, **kwargs),
     )
 
-    async def fake_secrets(*_args: object) -> dict[str, str]:
-        return {"api_key": raw_key}
-
-    monkeypatch.setattr(integration_runtime, "_secrets", fake_secrets)
-
-    result = await integration_runtime._request_aitunnel_ai(
-        None,  # type: ignore[arg-type]
-        object(),  # type: ignore[arg-type]
+    result = await integration_runtime._request_gateway_ai(
+        owner_id=UUID(int=1),
+        project_id=UUID(int=2),
         system_prompt="Инструкция",
         user_message="Запрос",
     )
 
     assert result.answer == "Ответ [CREDENTIAL REDACTED]"
     assert raw_key not in result.model
-    assert capture["json"]["model"] == "auto"
+    assert capture["json"]["model"] == "gemini-3.1-pro-preview-customtools"
 
 
 @pytest.mark.asyncio

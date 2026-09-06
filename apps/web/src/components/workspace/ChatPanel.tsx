@@ -142,7 +142,7 @@ export function ChatPanel({
         if (resolution.kind === "needs_provider") {
           toast.error("Не понял, к какому провайдеру относится ключ", {
             description:
-              "Напишите рядом точное название сервиса, например: AITUNNEL — ключ …",
+              "Напишите рядом точное название сервиса, например: ЮKassa — ключ …",
           });
           return false;
         }
@@ -472,7 +472,7 @@ export function ChatPanel({
           textareaRef={inputRef}
           placeholder={
             mode === "max"
-              ? "Опишите правку или вставьте: AITUNNEL — ключ …"
+              ? "Опишите правку или вставьте: ЮKassa — ключ …"
               : undefined
           }
           ariaLabel={
