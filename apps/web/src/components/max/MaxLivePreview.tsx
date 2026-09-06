@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
   Check,
+  ChevronDown,
   CircleAlert,
   ExternalLink,
   Loader2,
@@ -32,7 +33,7 @@ import {
 } from "@/lib/api/max-studio";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project, ProjectVersion } from "@/lib/api/types";
-import { projectVersionLabel } from "@/lib/project-version";
+import { projectVersionTitle } from "@/lib/project-version";
 import { VersionImagePreview } from "../workspace/VersionImagePreview";
 import { shortSha } from "@/lib/utils";
 import { MaxVersionRail } from "./MaxVersionRail";
@@ -75,6 +76,7 @@ export function MaxLivePreview({
   restoringSnapshot,
   onClose,
   historyError,
+  historyCurrent = true,
   hasOlder,
   loadingOlder,
   onLoadOlder,
@@ -89,12 +91,24 @@ export function MaxLivePreview({
   restoringSnapshot: boolean;
   onClose?: () => void;
   historyError?: boolean;
+  historyCurrent?: boolean;
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
 }) {
   const queryClient = useQueryClient();
-  const viewingHistorical = selectedVersionId !== null;
+  const selectedIndex = versions.findIndex((version) => version.id === selectedVersionId);
+  const selectedSnapshot = versions[selectedIndex] ?? null;
+  // Queued/failed entries can share the applied snapshot. Only the server's
+  // current marker identifies the version whose application is running.
+  const viewingHistorical = selectedVersionId !== null && (!historyCurrent || selectedSnapshot?.is_current !== true);
+  const displayedVersion = selectedVersionId !== null
+    ? selectedSnapshot
+    : historyCurrent ? versions.find((version) => version.is_current) ?? null : null;
+  const [promptTargetId, setPromptTargetId] = useState<string | null>(null);
+  const promptContentId = useId();
+  const promptToggle = useRef<HTMLButtonElement>(null);
+  const promptOpen = Boolean(displayedVersion && promptTargetId === displayedVersion.id);
   const historySelected = useRef(viewingHistorical);
   useEffect(() => {
     historySelected.current = viewingHistorical;
@@ -227,10 +241,13 @@ export function MaxLivePreview({
 
     const updateScale = () => {
       const bounds = stage.getBoundingClientRect();
+      const style = getComputedStyle(stage);
+      const horizontalPadding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+      const verticalPadding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
       const next = Math.min(
         1,
-        bounds.width / DEVICE_WIDTH,
-        bounds.height / DEVICE_HEIGHT,
+        (bounds.width - horizontalPadding) / DEVICE_WIDTH,
+        (bounds.height - verticalPadding) / DEVICE_HEIGHT,
       );
       if (Number.isFinite(next) && next > 0) {
         setDeviceScale(next);
@@ -286,8 +303,6 @@ export function MaxLivePreview({
     (runtimeRunning && (managedKit.isLoading || previewSession.isLoading));
   const showPreviewError = Boolean(previewError) && !preparing;
   const displayPreviewUrl = previewUrl ?? lastWorkingUrl;
-  const selectedIndex = versions.findIndex((version) => version.id === selectedVersionId);
-  const selectedSnapshot = versions[selectedIndex] ?? null;
   const selectedVersion = selectedSnapshot?.number ?? null;
   const previousVersion = selectedIndex >= 0 ? versions[selectedIndex + 1] : undefined;
   const nextVersion = selectedIndex > 0 ? versions[selectedIndex - 1] : undefined;
@@ -344,21 +359,34 @@ export function MaxLivePreview({
       className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
       data-testid="max-live-preview"
     >
-      <div className="flex shrink-0 items-start justify-between gap-3 px-3 sm:px-5">
-        <div className="min-w-0">
+      <div className="flex h-16 shrink-0 items-start justify-between gap-2 px-3 sm:px-5" data-testid="max-preview-header">
+        <div className="min-w-0 flex-1">
           <p className="omnia-kicker text-[#828491]">
-            {viewingHistorical ? "История версий" : "Mobile WebView"}
+            {viewingHistorical ? "История версий" : "Живое превью"}
           </p>
-          <h2 className="mt-1 text-sm font-semibold">
-            {viewingHistorical && selectedSnapshot
-              ? `v${selectedVersion} · ${projectVersionLabel(selectedSnapshot)}`
-              : "Живое превью"}
-          </h2>
+          {displayedVersion ? (
+            <h2 className="mt-1 min-w-0 text-sm font-semibold">
+              <button
+                type="button"
+                ref={promptToggle}
+                onClick={() => setPromptTargetId(promptOpen ? null : displayedVersion.id)}
+                aria-expanded={promptOpen}
+                aria-controls={promptContentId}
+                aria-label={`Промпт версии v${displayedVersion.number}`}
+                title={projectVersionTitle(displayedVersion)}
+                className="flex min-h-9 w-full min-w-0 items-center gap-1.5 rounded text-left focus-visible:outline-accent"
+                data-testid="max-version-prompt-toggle"
+              >
+                <span className="truncate">v{displayedVersion.number} · {projectVersionTitle(displayedVersion)}</span>
+                <ChevronDown className="size-4 shrink-0 text-[#9fa1b1]" />
+              </button>
+            </h2>
+          ) : <h2 className="mt-1 truncate text-sm font-semibold">{viewingHistorical ? "Версия недоступна" : "Текущая версия"}</h2>}
         </div>
-        <div className="flex max-w-[62%] shrink-0 flex-wrap items-center justify-end gap-1 sm:gap-1.5">
+        <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
           {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[10px] text-[#9fa1b1]">
-            <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#828491]"}`} />
-            {connected ? "Подключено" : "Запускается"}
+            <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#828491]"}`} title={connected ? "Подключено" : "Запускается"} />
+            <span className="sr-only">{connected ? "Подключено" : "Запускается"}</span>
           </span>}
           {!viewingHistorical && (
             <button
@@ -375,7 +403,6 @@ export function MaxLivePreview({
               ) : (
                 <RefreshCw className="size-3" />
               )}
-              <span className="hidden sm:inline">Обновить превью</span>
             </button>
           )}
           {onClose && (
@@ -395,7 +422,7 @@ export function MaxLivePreview({
 
       <div className="mt-3 flex min-h-0 flex-1">
         <MaxVersionRail
-          versions={versions}
+          versions={historyCurrent ? versions : versions.map((version) => ({ ...version, is_current: false }))}
           error={historyError}
           hasOlder={hasOlder}
           loadingOlder={loadingOlder}
@@ -560,9 +587,9 @@ export function MaxLivePreview({
             </div>
           </div>
         </div>
-        <div className="shrink-0 text-center">
+        <div className="mt-1 flex h-12 shrink-0 items-center justify-center text-center" data-testid="max-preview-actions">
           {viewingHistorical ? (
-            <div className="mt-1 flex min-h-11 items-center justify-center gap-1.5 px-2">
+            <div className="flex h-12 items-center justify-center gap-1.5 px-2">
               <button
                 type="button"
                 onClick={() => onSelectVersion(null)}
@@ -603,6 +630,18 @@ export function MaxLivePreview({
         </div>
         </div>
       </div>
+      <Dialog open={promptOpen} onOpenChange={(open) => { if (!open) setPromptTargetId(null); }}>
+        <DialogContent id={promptContentId} className="max-h-[80dvh] max-w-xl overflow-y-auto" data-testid="max-version-prompt" onCloseAutoFocus={(event) => { event.preventDefault(); promptToggle.current?.focus(); }}>
+          <DialogHeader>
+            <DialogTitle>Запрос к версии v{displayedVersion?.number}</DialogTitle>
+            <DialogDescription>
+              Исходный промпт{displayedVersion?.commit_sha ? ` · коммит ${shortSha(displayedVersion.commit_sha)}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="whitespace-pre-wrap break-words text-sm leading-6" data-testid="max-version-prompt-text">{displayedVersion?.prompt_text || "Текст запроса не сохранился."}</p>
+          <DialogFooter><Button variant="outline" onClick={() => setPromptTargetId(null)}>Закрыть</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={Boolean(
           restoreTargetSnapshot && restoreTargetId === selectedVersionId,

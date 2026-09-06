@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronDown,
@@ -70,9 +70,17 @@ export function MaxWorkspaceShell({
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
   );
+  const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
   const history = useInfiniteQuery({
     queryKey: ["project-versions", project.id],
-    queryFn: ({ pageParam, signal }) => listProjectVersions(project.id, pageParam, signal),
+    queryFn: async ({ pageParam, signal }) => {
+      // Capture before the request: a late response for an earlier HEAD must
+      // not authorize live preview of that HEAD's selected user version.
+      const snapshotIdAtRequest = queryClient.getQueryData<Snapshot[]>(["snapshots", project.id])?.[0]?.id
+        ?? project.current_snapshot_id;
+      const page = await listProjectVersions(project.id, pageParam, signal);
+      return { ...page, snapshotIdAtRequest };
+    },
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
     refetchInterval: 5_000,
@@ -84,7 +92,11 @@ export function MaxWorkspaceShell({
       seen.add(version.id); return true;
     });
   }, [history.data]);
-  const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
+  const historyCurrent = !!history.data?.pages.length
+    && history.data.pages.every((page) => page.snapshotIdAtRequest === currentSnapshotId);
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: ["project-versions", project.id] });
+  }, [currentSnapshotId, project.id, queryClient]);
   // Selection belongs to the project, never the moving HEAD. Clear during
   // render so switching A → B → A cannot resurrect a stale selection.
   if (versionSelection && versionSelection.projectId !== project.id) setVersionSelection(null);
@@ -313,6 +325,7 @@ export function MaxWorkspaceShell({
             key={project.id}
             project={project}
             versions={versions}
+            historyCurrent={historyCurrent}
             historyError={history.isError}
             hasOlder={history.hasNextPage}
             loadingOlder={history.isFetchingNextPage}
@@ -361,6 +374,7 @@ export function MaxWorkspaceShell({
                 key={project.id}
                 project={project}
                 versions={versions}
+                historyCurrent={historyCurrent}
                 historyError={history.isError}
                 hasOlder={history.hasNextPage}
                 loadingOlder={history.isFetchingNextPage}

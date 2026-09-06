@@ -48,6 +48,11 @@ function Preview({ versions, selected = "v31", head = "s32" }: { versions: Proje
   return <MaxLivePreview project={project} versions={versions} snapshotsLoading={false} currentSnapshotId={head} selectedVersionId={id} onSelectVersion={setId} onRestoreSnapshot={api.rollback} restoringSnapshot={false} />;
 }
 function render(node: React.ReactNode) { act(() => root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>)); }
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -65,13 +70,195 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe("image version history", () => {
-  it("shows a full-height image with no runtime/session/restore calls, even for current version", async () => {
-    render(<Preview versions={[version(32), version(31)]} selected="v32" />); await settle();
-    expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+  it("shows a full-height historical image with no runtime/session/restore calls", async () => {
+    render(<Preview versions={[version(32), version(31)]} selected="v31" />); await settle();
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
     expect(image()?.style.height).toBe("auto");
     expect(container.querySelector("[data-testid='history-image-scroll']")?.getAttribute("style")).toContain("overflow-y: auto");
     expect(container.querySelector("iframe")).toBeNull();
     for (const fn of [api.runtime, api.start, api.sync, api.session, api.rollback]) expect(fn).not.toHaveBeenCalled();
+  });
+  it("opens the applied current version as a live iframe, including its rail entry", async () => {
+    render(<Preview versions={[version(32), version(31)]} selected="v32" />);
+    await waitForDom(() => expect(container.querySelector("iframe")?.getAttribute("src")).toBe("https://live.example"));
+    expect(image()).toBeNull();
+    expect(api.session).toHaveBeenCalledWith("p");
+    click("[data-testid='max-version-31']");
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
+    expect(container.querySelector("iframe")).toBeNull();
+    click("[data-testid='max-version-32']");
+    await waitForDom(() => expect(container.querySelector("iframe")?.getAttribute("src")).toBe("https://live.example"));
+    expect(image()).toBeNull();
+    expect(api.rollback).not.toHaveBeenCalled();
+  });
+  it("keeps an explicitly selected current version as an image when a newer HEAD is applied", async () => {
+    render(<Preview versions={[version(32), version(31)]} selected="v32" />);
+    await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
+    const counts = [api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length);
+    render(<Preview versions={[version(33, { is_current: true }), version(32, { is_current: false }), version(31)]} selected="v32" head="s33" />);
+    await settle();
+    expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+    expect(container.querySelector("iframe")).toBeNull();
+    expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(counts);
+  });
+  it("preserves a historical selection across a newly applied HEAD", async () => {
+    render(<Preview versions={[version(32), version(31)]} selected="v31" />);
+    render(<Preview versions={[version(33, { is_current: true }), version(32, { is_current: false }), version(31)]} selected="v31" head="s33" />);
+    await settle();
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
+    expect(container.querySelector("iframe")).toBeNull();
+    for (const fn of [api.runtime, api.start, api.sync, api.session]) expect(fn).not.toHaveBeenCalled();
+  });
+  it.each([
+    { name: "a newer user version", head: "s33", remainsCurrent: false },
+    { name: "a technical snapshot of the same version", head: "technical-s32", remainsCurrent: true },
+  ])("waits for matching version metadata after HEAD changes to $name, ignoring an old in-flight response", async ({ head, remainsCurrent }) => {
+    const previousPage = { versions: [version(32), version(31)], next_cursor: null };
+    const staleRequest = deferred<typeof previousPage>();
+    const freshRequest = deferred<typeof previousPage>();
+    api.versions.mockReset().mockResolvedValueOnce(previousPage)
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    render(<MaxWorkspaceShell project={project} email="a@example.com" />);
+    await waitForDom(() => {
+      expect(container.querySelector("iframe")).not.toBeNull();
+      expect(container.querySelector("[data-testid='max-version-32']")).not.toBeNull();
+    });
+    click("[data-testid='max-version-32']");
+
+    // An ordinary history poll starts before the snapshot-created notification.
+    act(() => { void client.invalidateQueries({ queryKey: ["project-versions", "p"] }); });
+    await waitForDom(() => expect(api.versions).toHaveBeenCalledTimes(2));
+    const runtimeCounts = [api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length);
+    act(() => { client.setQueryData(["snapshots", "p"], [{ id: head }]); });
+    await waitForDom(() => {
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+    });
+    expect(api.versions).toHaveBeenCalledTimes(3);
+    expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(runtimeCounts);
+
+    // A late response describing the previous HEAD must not reopen the live app.
+    await act(async () => { staleRequest.resolve(previousPage); });
+    await settle();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+    expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(runtimeCounts);
+
+    await act(async () => { freshRequest.resolve({
+      versions: remainsCurrent ? previousPage.versions : [version(33, { is_current: true }), version(32, { is_current: false }), version(31)],
+      next_cursor: null,
+    }); });
+    if (remainsCurrent) {
+      await waitForDom(() => expect(container.querySelector("iframe")?.getAttribute("src")).toBe("https://live.example"));
+      expect(image()).toBeNull();
+    } else {
+      await waitForDom(() => expect(container.querySelector("[data-testid='max-version-33']")).not.toBeNull());
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+      expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(runtimeCounts);
+    }
+    expect(container.querySelector("[data-testid='max-version-32']")?.getAttribute("aria-pressed")).toBe("true");
+  });
+  it("retains a selected older page while history refreshes for a new HEAD", async () => {
+    const nextFirstPage = deferred<{ versions: ProjectVersion[]; next_cursor: number }>();
+    let headChanged = false;
+    api.versions.mockReset().mockImplementation(async (_id: string, before?: number) => {
+      if (before) return { versions: (headChanged ? [3, 2, 1] : [2, 1]).map((number) => version(number)), next_cursor: null };
+      if (headChanged) return nextFirstPage.promise;
+      return { versions: Array.from({ length: 30 }, (_, index) => version(32 - index)), next_cursor: 3 };
+    });
+    render(<MaxWorkspaceShell project={project} email="a@example.com" />);
+    await waitForDom(() => expect(container.querySelector("[data-testid='max-history-load-older']")).not.toBeNull());
+    click("[data-testid='max-history-load-older']");
+    await waitForDom(() => expect(container.querySelector("[data-testid='max-version-1']")).not.toBeNull());
+    click("[data-testid='max-version-1']");
+    const runtimeCounts = [api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length);
+    headChanged = true;
+    act(() => { client.setQueryData(["snapshots", "p"], [{ id: "s33" }]); });
+    await waitForDom(() => expect(api.versions).toHaveBeenCalledTimes(3));
+    expect(image()?.getAttribute("src")).toBe("/images/v1.png");
+    await act(async () => { nextFirstPage.resolve({
+      versions: Array.from({ length: 30 }, (_, index) => version(33 - index, { is_current: index === 0 })),
+      next_cursor: 4,
+    }); });
+    await waitForDom(() => expect(container.querySelector("[data-testid='max-version-33']")).not.toBeNull());
+    expect(container.querySelector("[data-testid='max-version-1']")?.getAttribute("aria-pressed")).toBe("true");
+    expect(image()?.getAttribute("src")).toBe("/images/v1.png");
+    expect(container.querySelector("iframe")).toBeNull();
+    expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(runtimeCounts);
+  });
+  it.each([false, true])("does not eagerly sync the previous live selection on snapshot.created (same current version=%s)", async (remainsCurrent) => {
+    let socket: { onmessage?: (event: { data: string }) => void } | undefined;
+    vi.stubGlobal("WebSocket", class { static OPEN = 1; static CONNECTING = 0; readyState = 1; onmessage?: (event: { data: string }) => void; onclose = null; constructor() { socket = this; } send() {} close() {} });
+    client.setQueryData(["messages", "p"], [{ id: "a", role: "assistant", tokens_out: null }]);
+    const previousPage = { versions: [version(32), version(31)], next_cursor: null };
+    const freshRequest = deferred<typeof previousPage>();
+    api.versions.mockReset().mockResolvedValue(previousPage);
+    function Stream() { usePromptStream("p", "app"); return null; }
+    render(<><MaxWorkspaceShell project={project} email="a@example.com" /><Stream /></>);
+    await waitForDom(() => {
+      expect(socket?.onmessage).toBeTypeOf("function");
+      expect(container.querySelector("iframe")).not.toBeNull();
+      expect(container.querySelector("[data-testid='max-version-32']")).not.toBeNull();
+    });
+    click("[data-testid='max-version-32']");
+    const runtimeCounts = [api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length);
+    api.versions.mockImplementation(() => freshRequest.promise);
+    const head = remainsCurrent ? "technical-s32" : "s33";
+    act(() => { socket!.onmessage!({ data: JSON.stringify({ type: "snapshot.created", data: { snapshot: { id: head } } }) }); });
+    await waitForDom(() => {
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+    });
+    expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(runtimeCounts);
+    await act(async () => { freshRequest.resolve({
+      versions: remainsCurrent ? previousPage.versions : [version(33, { is_current: true }), version(32, { is_current: false }), version(31)],
+      next_cursor: null,
+    }); });
+    if (remainsCurrent) {
+      await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
+      expect(api.sync.mock.calls.length).toBeGreaterThan(runtimeCounts[2]);
+      expect(image()).toBeNull();
+    } else {
+      await waitForDom(() => expect(container.querySelector("[data-testid='max-version-33']")).not.toBeNull());
+      expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+      expect(container.querySelector("iframe")).toBeNull();
+      expect([api.runtime, api.start, api.sync, api.session].map((fn) => fn.mock.calls.length)).toEqual(runtimeCounts);
+    }
+  });
+  it("highlights the applied current version when live preview has no explicit selection", async () => {
+    render(<Preview versions={[version(33, { status: "failed", previews: [], preview_status: "missing" }), version(32), version(31)]} selected={null} />);
+    await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
+    expect(container.querySelector("[data-testid='max-version-32']")?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector("[data-testid='max-version-33']")?.getAttribute("aria-pressed")).toBe("false");
+  });
+  it("collapses a long prompt behind a short title and discloses its exact original text", () => {
+    const prompt = "Измени заголовок приложения.\n\nСохрани список задач, SDK и авторизацию без изменений. ".repeat(8);
+    render(<Preview versions={[version(32), version(31, { prompt_text: prompt })]} />);
+    const toggle = container.querySelector<HTMLButtonElement>("[data-testid='max-version-prompt-toggle']")!;
+    expect(toggle).not.toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent!.length).toBeLessThan(110);
+    expect(toggle.textContent).toContain("Измени заголовок приложения.");
+    const controls = toggle.getAttribute("aria-controls");
+    expect(controls).toBeTruthy();
+    click("[data-testid='max-version-prompt-toggle']");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const panel = document.getElementById(controls!);
+    expect(panel).not.toBeNull();
+    expect([...panel!.querySelectorAll("*")].some((node) => node.textContent === prompt)).toBe(true);
+    expect(panel!.textContent).toContain("sha31");
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
+    click("[data-testid='max-version-prompt-toggle']");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(api.session).not.toHaveBeenCalled();
+  });
+  it("keeps a newer queued version isolated from the currently applied live runtime", async () => {
+    render(<Preview versions={[version(33, { status: "queued", preview_status: "pending", previews: [], snapshot_id: null }), version(32)]} selected="v33" />);
+    await settle();
+    expect(container.querySelector("iframe")).toBeNull();
+    for (const fn of [api.runtime, api.start, api.sync, api.session]) expect(fn).not.toHaveBeenCalled();
   });
   it("switches quickly using arrows, keyboard and horizontal swipe while preserving vertical scrolling", async () => {
     render(<Preview versions={[version(32), version(31), version(30)]} />);
@@ -81,14 +268,15 @@ describe("image version history", () => {
     expect(image()?.getAttribute("src")).toBe("/images/v31.png");
     function touch(type: string, x: number, y: number) { const e = new Event(type, { bubbles: true }); Object.defineProperty(e, type === "touchstart" ? "touches" : "changedTouches", { value: [{ clientX: x, clientY: y }] }); act(() => region().dispatchEvent(e)); }
     touch("touchstart", 100, 100); touch("touchend", 110, 300); expect(image()?.getAttribute("src")).toBe("/images/v31.png");
-    touch("touchstart", 200, 100); touch("touchend", 40, 105); expect(image()?.getAttribute("src")).toBe("/images/v32.png");
-    await settle(); expect(api.start).not.toHaveBeenCalled();
+    touch("touchstart", 200, 100); touch("touchend", 40, 105);
+    await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
+    expect(image()).toBeNull(); expect(api.start).not.toHaveBeenCalled();
   });
   it("shows missing, pending and broken images honestly and ignores late old image events", () => {
-    const versions = [version(32), version(31), version(30, { previews: [], preview_status: "failed", status: "failed", can_restore: false })];
+    const versions = [version(32), version(31), version(30, { previews: [], preview_status: "failed", status: "failed", can_restore: false }), version(29)];
     render(<Preview versions={versions} />); const old = image()!;
-    click("[data-testid='max-version-32']"); act(() => old.dispatchEvent(new Event("error")));
-    expect(image()?.getAttribute("src")).toBe("/images/v32.png");
+    click("[data-testid='max-version-29']"); act(() => old.dispatchEvent(new Event("error")));
+    expect(image()?.getAttribute("src")).toBe("/images/v29.png");
     act(() => image()!.dispatchEvent(new Event("error"))); expect(container.textContent).toContain("Не удалось загрузить изображение");
     click("[data-testid='max-version-30']"); expect(container.textContent).toContain("Изображение не сохранилось");
     expect(container.querySelector("iframe")).toBeNull(); expect(container.querySelector<HTMLButtonElement>("[data-testid='max-restore-version']")?.disabled).toBe(true);
@@ -113,7 +301,7 @@ describe("image version history", () => {
     await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
   });
   it("keeps queued, failed and unchanged versions with their own number", () => {
-    render(<Preview versions={[version(34, { status: "queued", previews: [], preview_status: "pending" }), version(33, { status: "failed", previews: [], preview_status: "missing" }), version(32, { status: "unchanged", snapshot_id: "s31" }), version(31)]} selected="v34" />);
+    render(<Preview versions={[version(34, { status: "queued", previews: [], preview_status: "pending" }), version(33, { status: "failed", previews: [], preview_status: "missing" }), version(32, { status: "unchanged", snapshot_id: "s31", is_current: false }), version(31)]} selected="v34" />);
     expect(container.textContent).toContain("В очереди"); expect(container.textContent).toContain("Ошибка"); expect(container.textContent).toContain("Без изменений");
     click("[data-testid='max-version-32']"); expect(image()?.getAttribute("src")).toBe("/images/v32.png");
   });

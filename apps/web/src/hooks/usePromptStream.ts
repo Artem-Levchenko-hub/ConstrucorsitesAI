@@ -517,10 +517,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         // Live selection (null) follows HEAD; an explicit historical selection stays.
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         // MAX preview bootstrap files are platform-owned. A new generated
-        // snapshot may replace them, so re-run the idempotent managed-kit sync
-        // before the live phone iframe mints its next preview session.
+        // snapshot may replace them. Mark the cache stale here; the preview's
+        // new HEAD query key starts sync after its live-selection guard runs.
+        // Eager refetch would run under the previous render's selection.
         qc.invalidateQueries({
           queryKey: ["max-managed-kit-sync", projectId],
+          refetchType: "none",
         });
         return;
       }

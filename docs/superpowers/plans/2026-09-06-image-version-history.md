@@ -15,8 +15,10 @@
 - One accepted message creates one permanent version number, including queued, failed, cancelled and unchanged outcomes. Duplicate delivery/retry must not create another version.
 - Technical starter/sync/retry snapshots belong to their source message/run. Neither prompt-text heuristics nor array length may define versions or their numbers.
 - Unchanged versions keep their own number and reference the earlier result; do not duplicate source or images unnecessarily.
-- Clicking any version, including the current one, selects images. Only an explicit “Живое превью” action leaves image history.
-- Selection, arrows, swipes and prefetch must not start generation, builds, a Project Cell, session minting, runtime synchronization, rollback, database changes or integration writes.
+- Updated owner requirement: the applied current version opens the live application, including when selected in the rail. Older, failed, queued and unresolved selections remain image history. The server `is_current` flag identifies the applied version; list order or shared snapshot IDs do not.
+- Capture the observed HEAD before each history request. After HEAD changes, keep explicit selections in image history until every loaded page was fetched for that HEAD. Late responses cannot authorize a different live application; loaded historical pages remain available.
+- Phone geometry stays constant across selections at the same viewport: screen 390×844, status bar 38 and 10px bezel. The header and actions reserve fixed space. A compact version title opens the exact original prompt in a dialog without resizing or remounting the live phone.
+- Historical selection, arrows, swipes and prefetch must not start generation, builds, a Project Cell, session minting, runtime synchronization, rollback, database changes or integration writes. Selecting the applied current version resumes the existing live-preview connection flow.
 - A missing/failed image must remain visibly missing/failed. Never substitute current HEAD or another version's image.
 - Full source, exact dependency files/locks and migrations must remain archived independently of screenshots. Images alone cannot restore an application.
 - MAX rollback is deliberately unavailable: `can_restore=false` and the backend rejects the operation before changing HEAD. Do not return a false successful response. Safe compatibility checks and atomic activation are a separate future prerequisite.
@@ -61,6 +63,8 @@
 - [x] Run web verification: `pnpm --dir apps/web test`, `pnpm --dir apps/web typecheck`, ESLint for changed web files and `git diff --check`.
 - [ ] Parent runs the integrated API/capture/restore suites and runner checks.
 - [ ] Parent reviews, commits, pushes and deploys the integrated revision through the documented production path, then verifies health and image-history behavior. Subagents do not commit or deploy.
-- [ ] Production browser proof: select old/current version images and navigate without runtime/build/session/rollback requests; confirm tall images scroll, old numbers remain stable, older pages remain reachable, missing images are honest and MAX restore is unavailable.
+- [ ] Production browser proof: browse historical images without runtime/build/session/rollback requests and select the applied current version to resume the live application; confirm tall images scroll, phone size stays fixed, original prompts open without reloading the iframe, old numbers remain stable, older pages remain reachable, missing images are honest and MAX restore is unavailable.
 
 **Current evidence (2026-09-06):** Full web suite: 47 files / 258 tests passed, including 19 image-history React tests. TypeScript, affected-file ESLint and diff check passed. Cursor retry, terminal-status refresh, split-origin image URLs and reconstructed-image labeling each have RED → GREEN regression evidence. API/runner and production evidence belong to the parent delivery report; this document does not claim deployment.
+
+**Live-current follow-up (2026-09-06):** 47 web files / 269 tests passed, including deferred history responses, technical HEAD changes, preserved older pages and real WebSocket snapshot events. TypeScript, affected-file ESLint and independent review passed. Browser checks at 1440, 1280, 768 and 390px confirmed constant phone geometry across versions/disclosure, interactive current content and iframe state preserved while reading the prompt. Node 25 verification used `--no-experimental-webstorage` to avoid native WebStorage shadowing JSDOM. Production delivery is verified separately.
