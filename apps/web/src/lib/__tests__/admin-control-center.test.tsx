@@ -11,11 +11,12 @@ const org: BusinessReview = { id: "org", kind: "legal_entity", inn: "7707083893"
 const person: AdminUser = { id: "person", email: "person@example.test", role: "user", is_admin: false, status: "suspended", email_verified_at: null, created_at: "2026-09-07T00:00:00Z", last_login_at: null, wallet_balance_rub: "1250", business: org };
 const self: AdminUser = { ...person, id: "self", email: "admin@example.test", role: "admin", is_admin: true, status: "active", email_verified_at: "2026-09-07", business: null };
 const event: AdminAuditEvent = { id: "event", actor_email: self.email, target_email: person.email, action: "admin.user.update", details: { before: { role: "user", status: "active" }, after: { role: "admin", status: "suspended" }, note: "Manual review" }, created_at: "2026-09-07T12:00:00Z" };
-let people: AdminUser[], reviews: BusinessReview[], requests: { path: string; method: string; body: unknown }[], auditError: boolean;
+let people: AdminUser[], reviews: BusinessReview[], auditEvents: AdminAuditEvent[], requests: { path: string; method: string; body: unknown }[], auditError: boolean;
 let respondMutation: (path: string, body: Record<string, unknown>) => Promise<Response>;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   people = [self, person]; reviews = [org, { ...org, id: "verified", inn: "1234567890", legal_name: "Verified company", status: "verified" }]; requests = []; auditError = false;
+  auditEvents = [event];
   respondMutation = async (path, body) => {
     if (path.startsWith("/api/admin/users/")) {
       const updated = { ...person, ...body } as AdminUser;
@@ -31,7 +32,7 @@ beforeEach(() => {
     }
     if (path === "/api/admin/users") return Response.json(people);
     if (path === "/api/max/account/admin/businesses") return Response.json(reviews);
-    if (path === "/api/admin/audit") return auditError ? Promise.reject(new Error("Audit unavailable")) : Response.json([event]);
+    if (path === "/api/admin/audit") return auditError ? Promise.reject(new Error("Audit unavailable")) : Response.json(auditEvents);
     throw new Error(`Unexpected endpoint ${path}`);
   }));
 });
@@ -151,6 +152,25 @@ it("offers retry for failed audit loading and renders real actor, target and cha
     expect(document.querySelector("tbody")!.textContent).toContain(person.email);
     expect(document.querySelector("tbody")!.textContent).toContain(self.email);
     expect(document.querySelector("tbody")!.textContent).toContain(event.details.note);
+  } finally { await close(); }
+});
+
+it.each([
+  ["business.verify", "Организация подтверждена"],
+  ["creator.subscription.lifetime_business.bootstrap", "Активирован бессрочный тариф Business"],
+  ["account.update", "Аккаунт обновлён"],
+  ["future.event", "future.event"],
+])("uses a readable label for %s while preserving unknown audit events", async (action, label) => {
+  auditEvents = [{ ...event, action, details: { before: {}, after: {}, note: "Existing record" } }];
+  const close = await mount();
+  try {
+    await click("Журнал");
+    await wait(() => expect(document.querySelector('table[aria-label="Журнал изменений"]')).not.toBeNull());
+    const cell = document.querySelector('[headers="admin-audit-changes"]')!;
+    expect(cell.textContent).toContain(label);
+    expect(cell.textContent).toContain("Existing record");
+    if (action !== label) expect(cell.textContent).not.toContain(action);
+    expect(requests).toEqual([]);
   } finally { await close(); }
 });
 

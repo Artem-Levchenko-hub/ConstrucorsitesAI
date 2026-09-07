@@ -5,6 +5,11 @@ import { listAdminAudit } from "@/lib/api/admin";
 import { AdminCellLabel, AdminState, adminDate } from "./AdminPresentation";
 
 const fields = { role: "Роль", status: "Статус", email_verified: "Email подтверждён", business_status: "Организация" };
+const actions: Record<string, string> = {
+  "account.update": "Аккаунт обновлён",
+  "business.verify": "Организация подтверждена",
+  "creator.subscription.lifetime_business.bootstrap": "Активирован бессрочный тариф Business",
+};
 const values: Record<string, string> = { admin: "Администратор", user: "Пользователь", active: "Активен", suspended: "Приостановлен", deletion_pending: "Удаление запрошено", pending: "Ожидает проверки", verified: "Подтверждена", rejected: "Отклонена" };
 function valueLabel(value: unknown) {
   if (value === undefined || value === null) return "—";
@@ -27,7 +32,7 @@ export function AdminAuditPanel() {
           <td role="cell" headers="admin-audit-actor"><AdminCellLabel>Кто изменил</AdminCellLabel>{event.actor_email}</td>
           <td role="cell" headers="admin-audit-target"><AdminCellLabel>Аккаунт</AdminCellLabel>{event.target_email}</td>
           <td role="cell" headers="admin-audit-changes"><AdminCellLabel>Изменение</AdminCellLabel>
-            {changes.length ? <ul className="admin-changes">{changes.map(([key, label]) => <li key={key}><span>{label}: </span><span className="admin-muted">{valueLabel(event.details.before?.[key])}</span> → <strong>{valueLabel(event.details.after?.[key])}</strong></li>)}</ul> : <span>{event.action === "account.update" ? "Аккаунт обновлён" : event.action}</span>}
+            {changes.length ? <ul className="admin-changes">{changes.map(([key, label]) => <li key={key}><span>{label}: </span><span className="admin-muted">{valueLabel(event.details.before?.[key])}</span> → <strong>{valueLabel(event.details.after?.[key])}</strong></li>)}</ul> : <span>{actions[event.action] ?? event.action}</span>}
             {event.details.note && <small>{event.details.note}</small>}
           </td>
         </tr>;

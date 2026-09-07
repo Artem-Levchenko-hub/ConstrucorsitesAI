@@ -43,7 +43,8 @@ Files: `MaxProjectWizard.tsx`, new scoped review CSS/component and test. Group n
 ### 5. Integration and delivery (controller)
 
 - [x] Review combined diff and targeted agent evidence. Independent reviewer did not complete; controller performed the combined review and browser checks.
-- [x] Run full Vitest suite (372/372 across 61 files), typecheck, lint, production build (46/46 pages) and `git diff --check`.
+- [x] Run full Vitest suite (376/376 across 61 files after translating two historical audit actions), typecheck, lint, production build (46/46 pages) and `git diff --check`.
 - [x] Update `otchet/data.json` with verified evidence and an unscored testing hypothesis; validate unrelated steps remain unchanged.
-- [ ] Commit and push without force. Build the exact web image; roll out only web with rollback guard on a72b40889d88b5a7f7538bd3b6dd91d231a192ba (latest verified concurrent production release, image sha256:0b71bda85fc8d53e28f02048420a211efeaf0829258aadc452f6e48aec4cc68d).
+- [x] Commit and push without force. Build the exact web image; initial web-only rollout 303053814d41a82bc7afd28c959d1da35c78255f healthy, backend IDs and start times unchanged. Rollback baseline was a72b40889d88b5a7f7538bd3b6dd91d231a192ba.
+- [ ] Deliver the audit-label follow-up, using the verified 303053814d41a82bc7afd28c959d1da35c78255f image as rollback.
 - [ ] Verify exact web-health revision, unchanged non-web containers and read-only live UI. Publish report evidence; report any remaining limitation honestly.
