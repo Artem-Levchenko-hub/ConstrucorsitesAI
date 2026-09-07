@@ -11,7 +11,7 @@ import type {
 const path = (projectId: Uuid) => `/api/projects/${projectId}/max`;
 
 export function getMaxProjectConfig(projectId: Uuid): Promise<MaxProjectConfig> {
-  return apiFetch<MaxProjectConfig>(`${path(projectId)}/config`);
+  return apiFetch<MaxProjectConfig>(`${path(projectId)}/config`, { timeoutMs: 15_000 });
 }
 
 export function saveMaxProjectConfig(
@@ -21,6 +21,7 @@ export function saveMaxProjectConfig(
   return apiFetch<MaxProjectConfig>(`${path(projectId)}/config`, {
     method: "PUT",
     json: config,
+    timeoutMs: 180_000,
   });
 }
 

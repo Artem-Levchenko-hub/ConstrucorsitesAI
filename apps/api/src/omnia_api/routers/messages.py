@@ -642,13 +642,24 @@ async def _build_agent_seed_parts(
     *,
     project_cell_handle: ProjectCellExecutorHandle | None = None,
     refresh_managed_sdk: bool = False,
+    max_config_source: str | None = None,
 ) -> list[str]:
-    if refresh_managed_sdk and project_cell_handle is not None:
-        from omnia_api.services.max_managed_generation import refresh_integration_sdk
+    if refresh_managed_sdk:
+        from omnia_api.services.max_managed_generation import (
+            managed_browser_files,
+            refresh_integration_sdk,
+        )
 
         # Required delivery precedes fail-soft context reads and all model work.
         # Keep this outside the try: a failed lease/write must abort generation.
-        await refresh_integration_sdk(project_cell_handle)
+        if project_cell_handle is not None:
+            await refresh_integration_sdk(project_cell_handle, max_config_source=max_config_source)
+        else:
+            # Legacy provisioning restores template defaults. Reapply the saved
+            # profile afterwards so the model never reads that empty catalog.
+            await orchestrator_client.hot_reload(
+                project_id, project_slug, managed_browser_files(max_config_source),
+            )
     seed_parts: list[str] = []
     try:
         if project_cell_handle is not None:
@@ -2463,6 +2474,22 @@ async def post_prompt(
             details={"active_run_id": str(generation_run.id)},
         )
 
+    if payload.max_config_version is not None:
+        from omnia_api.models.max_project_config import MaxProjectConfig
+
+        config = await session.get(MaxProjectConfig, project_id, populate_existing=True)
+        if (
+            project.template != "max_miniapp"
+            or config is None
+            or config.owner_id != current_user.id
+            or config.config_version != payload.max_config_version
+        ):
+            raise ApiError(
+                "conflict",
+                "Данные приложения изменились. Откройте настройки и примените актуальную версию.",
+                status.HTTP_409_CONFLICT,
+            )
+
     # A credential pasted into MAX chat is configuration, not a code-generation
     # request.  Redirect it before wallet checks/model dispatch and redact the
     # chat row; generated repositories must never become a secret store.
@@ -2486,6 +2513,24 @@ async def post_prompt(
         else None
     )
     is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
+    if payload.max_config_version is not None and is_first_build and _cur_snapshot is not None:
+        # Model-free config saves create technical snapshots. Follow this head's
+        # ancestry, not unrelated historical branches, before choosing a rebuild.
+        lineage = select(Snapshot.id, Snapshot.parent_id, Snapshot.prompt_text).where(
+            Snapshot.id == _cur_snapshot.id, Snapshot.project_id == project_id,
+        ).cte("max_config_lineage", recursive=True)
+        lineage = lineage.union(
+            select(Snapshot.id, Snapshot.parent_id, Snapshot.prompt_text)
+            .join(lineage, Snapshot.id == lineage.c.parent_id)
+            .where(Snapshot.project_id == project_id)
+        )
+        generated_ancestor = await session.scalar(
+            select(lineage.c.id).where(
+                lineage.c.prompt_text.is_not(None),
+                func.length(func.trim(lineage.c.prompt_text)) > 0,
+            ).limit(1)
+        )
+        is_first_build = generated_ancestor is None
     _previous_run = None
     if is_first_build:
         _previous_run = (
@@ -4671,11 +4716,25 @@ async def _process_prompt(
             # (the #1 latency sink observed in the first live runs). Fail-soft.
             if project_template == "max_miniapp" and _project_cell_executor_handle is None:
                 await _ensure_legacy_runtime_ready()
+            _saved_max_config_source = None
+            if project_template == "max_miniapp":
+                from omnia_api.models.max_project_config import MaxProjectConfig
+                from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+                from omnia_api.services.max_project_kit import render_max_managed_files
+
+                async with factory() as _config_session:
+                    _saved_max_record = await _config_session.get(MaxProjectConfig, project_id)
+                if _saved_max_record is not None:
+                    _saved_max_config_source = render_max_managed_files(
+                        MaxProjectConfigPayload.model_validate(_saved_max_record.config),
+                        project_id,
+                    )["src/lib/omnia/max-config.ts"]
             _seed_parts = await _build_agent_seed_parts(
                 project_id,
                 project_slug,
                 project_cell_handle=_project_cell_executor_handle,
                 refresh_managed_sdk=project_template == "max_miniapp",
+                max_config_source=_saved_max_config_source,
             )
             _seed_block = (
                 (

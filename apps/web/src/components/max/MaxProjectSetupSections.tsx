@@ -43,7 +43,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   };
 
   if (section === "details") return <section className="max-setup-section">
-    <Intro title="Что делает приложение">Название, сценарий и возможности. Начните с того, что получит ваш пользователь.</Intro>
+    <Intro title="Что делает приложение">Название, сценарий и возможности. Чтобы изменить готовые экраны, сохраните данные и нажмите «Применить к приложению».</Intro>
     <Group title="О приложении">
       <div className="max-setup-field">
         <Label htmlFor="max-config-name">Название</Label>
@@ -103,7 +103,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
 
   if (section === "content") return <section className="max-setup-section">
     <div className="max-setup-content-heading">
-      <Intro title="Каталог и контент">Товары, услуги, события или уроки, которые увидят пользователи.</Intro>
+      <Intro title="Каталог и контент">Товары, услуги, события или уроки. Сохранение добавляет их в данные; «Применить к приложению» свяжет каталог с экранами.</Intro>
       <Button size="sm" className="max-setup-add" onClick={() => onChange({ ...current, content: [...current.content, {
         id: `item-${Date.now()}`, title: "Новый элемент", description: "", price: "", action_label: "Открыть", active: true,
       }] })}><Plus aria-hidden="true" className="h-4 w-4" />Добавить элемент</Button>
@@ -151,7 +151,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
         </div>
       </fieldset>)}
     </div>}
-    <p className="max-setup-footnote">Контент обновляется из настроек, без повторной генерации.</p>
+    <p className="max-setup-footnote">После подключения каталога к экрану приложение сможет читать обновления из этих настроек.</p>
   </section>;
 
   if (section === "owner") return <section className="max-setup-section">
@@ -195,7 +195,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   return <section className="max-setup-section">
-    <Intro title="Правила для пользователей">Отметьте реальные функции приложения — Studio включит соответствующие разделы документов.</Intro>
+    <Intro title="Правила для пользователей">Отметьте реальные функции приложения — Studio включит соответствующие разделы документов. Эти настройки сами по себе не добавляют оплату, модерацию или рассылки.</Intro>
     <Group title="Что есть в приложении">
       <div className="max-setup-policy-list max-setup-wide">{CHECKS.map(item => {
         const checked = Boolean(current.legal[item.key]);
@@ -220,7 +220,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
       </label>
       <label className="max-setup-consent max-setup-wide">
         <input type="checkbox" checked={current.legal.personal_data_consent} onChange={event => onChange({ ...current, legal: { ...current.legal, personal_data_consent: event.target.checked } })} />
-        <span><span>Запрашивать согласие на обработку персональных данных</span><small>Если приложение получает имя, телефон, email, адрес или другие данные пользователя.</small></span>
+        <span><span>Требуется согласие на обработку персональных данных</span><small>Если приложение получает имя, телефон, email, адрес или другие данные пользователя. Для добавления запроса согласия в экраны используйте «Применить к приложению».</small></span>
       </label>
     </Group>
     <p className="max-setup-footnote">Автоматический комплект документов — основа. Проверьте его перед публикацией.</p>

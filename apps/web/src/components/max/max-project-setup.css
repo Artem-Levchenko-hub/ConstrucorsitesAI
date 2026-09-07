@@ -83,8 +83,8 @@
 .max-setup-policy-option[aria-pressed=true] .max-setup-choice-status { color: var(--color-accent-secondary); }
 .max-setup-consent { display: flex; align-items: flex-start; gap: 12px; padding: 4px 0; cursor: pointer; font-size: 13px; font-weight: 500; }
 .max-setup-consent input { flex-shrink: 0; width: 18px; height: 18px; margin-top: 2px; accent-color: var(--color-accent); }
-.max-setup-footer { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 20px; padding: 18px 28px max(18px, env(safe-area-inset-bottom)); border-top: 1px solid var(--color-border-default); background: var(--color-surface-base); }
-.max-setup-save-status { display: flex; align-items: flex-start; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--color-fg-secondary); }
+.max-setup-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 12px; padding: 18px 28px max(18px, env(safe-area-inset-bottom)); border-top: 1px solid var(--color-border-default); background: var(--color-surface-base); }
+.max-setup-save-status { display: flex; flex-basis: 100%; align-items: flex-start; gap: 8px; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--color-fg-secondary); }
 .max-setup-save-status svg { width: 16px; height: 16px; margin-top: 1px; flex-shrink: 0; color: var(--color-success); }
 .max-setup-save-status[data-state=changed] svg { color: var(--color-accent); }
 .max-setup-save-status[data-state=invalid] { color: var(--color-danger-fg); }

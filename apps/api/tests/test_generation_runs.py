@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -807,3 +807,70 @@ async def test_api_restart_does_not_finalize_worker_owned_generation(db_session,
     await db_session.refresh(run)
     assert run.status == run_status
     assert run.finished_at is None
+
+
+@pytest.mark.parametrize("existing_product", [False, True])
+async def test_config_application_rejects_stale_data_before_dispatch(
+    client, db_session, monkeypatch, existing_product,
+):
+    from omnia_api.core.config import get_settings
+    from omnia_api.models.max_project_config import MaxProjectConfig
+    owner, project = await _owner_and_project(db_session)
+    project.template = "max_miniapp"
+    if existing_product:
+        product = Snapshot(project_id=project.id, commit_sha="a" * 40, prompt_text="Build tasks")
+        db_session.add(product)
+        await db_session.flush()
+        saved_config = Snapshot(
+            project_id=project.id, commit_sha="b" * 40, prompt_text=None, parent_id=product.id,
+        )
+        db_session.add(saved_config)
+        await db_session.flush()
+        project.current_snapshot_id = saved_config.id
+    record = MaxProjectConfig(
+        project_id=project.id, owner_id=owner.id, config_version=2, managed_kit_version=16,
+        config={"app_name": "After", "app_type": "custom", "summary": "Saved"},
+    )
+    db_session.add(record)
+    await db_session.commit()
+
+    async def current_user():
+        return owner
+
+    settings = get_settings().model_copy(update=dict(
+        use_generation_worker=False, unlimited_generations=True,
+        use_progressive_discovery=False, use_clarify_interview=False, use_auto_stack_routing=False,
+        use_followup_appification=False, use_result_type_router=False,
+    ))
+    spawn = Mock()
+    app.dependency_overrides[get_current_user] = current_user
+    monkeypatch.setattr(messages, "get_settings", lambda: settings)
+    monkeypatch.setattr(messages, "_spawn_process_prompt", spawn)
+    monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    try:
+        rejected = await client.post(f"/api/projects/{project.id}/prompt", json={
+            "prompt":"Примени данные приложения", "skip_clarify":True,
+            "idempotency_key":"config-apply-version-check", "max_config_version":1})
+        assert rejected.status_code == 409
+        assert "Данные приложения изменились" in rejected.text
+        spawn.assert_not_called()
+        # The shared-session test client does not close the request session;
+        # production's session context rolls this rejected reservation back.
+        await db_session.rollback()
+        await db_session.refresh(owner)
+        await db_session.refresh(project)
+        accepted = await client.post(f"/api/projects/{project.id}/prompt", json={
+            "prompt":"Примени данные приложения", "skip_clarify":True,
+            "idempotency_key":"config-apply-version-check", "max_config_version":2})
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["mode"] == ("edit" if existing_product else "build")
+        record = await db_session.get(MaxProjectConfig, project.id)
+        record.config_version = 3
+        await db_session.commit()
+        replay = await client.post(f"/api/projects/{project.id}/prompt", json={
+            "prompt":"Примени данные приложения", "skip_clarify":True,
+            "idempotency_key":"config-apply-version-check", "max_config_version":2})
+        assert replay.status_code == 202 and replay.json()["run_id"] == accepted.json()["run_id"]
+        assert spawn.call_count == 1
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

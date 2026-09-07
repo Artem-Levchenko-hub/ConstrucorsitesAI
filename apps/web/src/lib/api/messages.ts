@@ -46,6 +46,7 @@ export async function sendPrompt(
     skipClarify?: boolean;
     designPresetId?: string | null;
     idempotencyKey?: string;
+    maxConfigVersion?: number;
   },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
@@ -78,6 +79,7 @@ export async function sendPrompt(
     json: {
       prompt,
       idempotency_key: idempotencyKey,
+      ...(opts?.maxConfigVersion !== undefined ? { max_config_version: opts.maxConfigVersion } : {}),
       ...(selectedElements && selectedElements.length
         ? { selected_elements: selectedElements }
         : {}),

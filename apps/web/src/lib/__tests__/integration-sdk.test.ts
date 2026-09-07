@@ -88,3 +88,15 @@ describe('generated integration SDK', () => {
     expect(fetch.mock.calls[0][0]).toBe('/api/omnia/integrations/status');
   });
 });
+
+
+it('reads saved app data afresh without MAX launch data or integration access', async () => {
+  const fetch = vi.fn().mockResolvedValueOnce({ok: true, json: async () => ({app_name: 'До', content: []})})
+    .mockResolvedValueOnce({ok: true, json: async () => ({app_name: 'После', content: [{id:'tea', title:'Чай', active:true}]})});
+  const client = sdk(fetch, null);
+  expect(typeof client.getOmniaAppConfig).toBe('function');
+  expect(await client.getOmniaAppConfig()).toMatchObject({app_name:'До'});
+  expect(await client.getOmniaAppConfig()).toMatchObject({app_name:'После',content:[{id:'tea'}]});
+  expect(fetch.mock.calls.map(call => call[0])).toEqual(['/api/omnia/config','/api/omnia/config']);
+  expect(fetch.mock.calls[1][1]).toMatchObject({cache:'no-store',credentials:'include'});
+});

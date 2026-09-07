@@ -1,6 +1,17 @@
 "use client";
 
 import { getMaxWebApp } from "@/lib/max/bridge";
+import type { OmniaMaxConfig } from "@/lib/omnia/max-config";
+
+/** Owner-maintained app data; independent of MAX login or connected providers. */
+export async function getOmniaAppConfig(): Promise<OmniaMaxConfig> {
+  const response = await fetch("/api/omnia/config", {
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error("Данные приложения временно недоступны");
+  return response.json() as Promise<OmniaMaxConfig>;
+}
 
 export class OmniaIntegrationError extends Error {
   constructor(message: string, public readonly code: string | null, public readonly status: number) {

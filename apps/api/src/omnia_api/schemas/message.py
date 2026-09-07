@@ -86,6 +86,9 @@ class PromptRequest(BaseModel):
     # quiz (and the "just generate" skip) send skip_clarify=true. Optional →
     # legacy clients keep the server clarify behaviour.
     skip_clarify: bool = Field(default=False)
+    # Applying saved MAX data must use the version the owner reviewed. Checked
+    # under the same project lock as config saves, before any model dispatch.
+    max_config_version: int | None = Field(default=None, ge=1)
     # Onboarding-survey submit (owner 2026-06-19): when the user answers the whole
     # popup at once, the picked design preset rides here so the build uses it
     # directly (the palette question is a preset swatch). Optional → ignored when

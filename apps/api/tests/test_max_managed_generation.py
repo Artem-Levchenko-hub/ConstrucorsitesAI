@@ -10,6 +10,46 @@ from tests.test_project_cell_executor import _prepare_executor
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
+FOOTER_PATH = "src/components/OmniaCompliance.tsx"
+CONFIG_PATH = "src/lib/omnia/max-config.ts"
+
+
+@pytest.mark.parametrize("fail_delivery", [False, True])
+async def test_legacy_generation_restores_saved_config_after_provisioning(
+    monkeypatch, fail_delivery,
+):
+    source = 'export const omniaMaxConfig = {app_name: "Saved", content: [{id: "tea"}]};\n'
+    tree = {CONFIG_PATH: "template defaults", "src/app/page.tsx": "existing product"}
+    seed_reads = []
+
+    async def reload(project_id, slug, files):
+        assert not seed_reads
+        if fail_delivery:
+            raise RuntimeError("delivery failed")
+        tree.update(files)
+        return {"ok": True}
+
+    async def read(*args):
+        seed_reads.append(args)
+        assert tree[CONFIG_PATH] == source
+        assert tree[SDK_PATH] == _template_file(SDK_PATH)
+        return ""
+
+    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", reload)
+    monkeypatch.setattr(messages.orchestrator_client, "agent_list_dir", read)
+    monkeypatch.setattr(messages.orchestrator_client, "agent_read_file", read)
+    if fail_delivery:
+        with pytest.raises(RuntimeError, match="delivery failed"):
+            await messages._build_agent_seed_parts(
+                uuid4(), "legacy", refresh_managed_sdk=True, max_config_source=source,
+            )
+        assert not seed_reads
+    else:
+        await messages._build_agent_seed_parts(
+            uuid4(), "legacy", refresh_managed_sdk=True, max_config_source=source,
+        )
+        assert seed_reads and tree[CONFIG_PATH] == source
+        assert tree["src/app/page.tsx"] == "existing product"
 
 
 @pytest.mark.parametrize("fail_delivery", [False, True])
@@ -56,7 +96,8 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         await messages._build_agent_seed_parts(
             uuid4(), "existing", project_cell_handle=handle, refresh_managed_sdk=True,
         )
-    assert writes == [({path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH)}, ())]
+    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
+    assert writes == [(canonical, ())]
     assert tree["src/app/page.tsx"] == "existing product"
     assert tree[".omnia/cell.json"] == '{"project":"existing"}'
 
@@ -80,9 +121,11 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     )
     handle = harness.handle
     assert handle.is_portable()
-    await refresh_integration_sdk(handle)
-    await refresh_integration_sdk(handle)
-    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH)}
+    saved_source = 'export const omniaMaxConfig = {app_name: "Saved owner title"};\n'
+    await refresh_integration_sdk(handle, max_config_source=saved_source)
+    await refresh_integration_sdk(handle, max_config_source=saved_source)
+    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
+    canonical[CONFIG_PATH] = saved_source
     assert await handle.snapshot_files() == {**original, **canonical}
     assert await handle.export_files() == canonical
     assert harness.write_calls == [{

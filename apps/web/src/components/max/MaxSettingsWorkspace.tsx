@@ -338,7 +338,7 @@ export function MaxSettingsWorkspace({
           <div className="rounded-[12px] border border-border-default bg-surface p-5 sm:p-6">
             <span className="grid size-11 place-items-center rounded-[8px] bg-surface-3 text-accent"><FileCheck2 className="size-5" /></span>
             <h2 className="mt-4 text-xl font-semibold">Данные готового приложения</h2>
-            <p className="mt-3 max-w-[620px] text-sm leading-6 text-fg-secondary">Название, сценарий, функции, стиль, управляемый контент, оператор, поддержка, возрастной рейтинг и обязательные юридические страницы. Эти изменения версионируются без расходов на модель.</p>
+            <p className="mt-3 max-w-[620px] text-sm leading-6 text-fg-secondary">Название, сценарий, контент, владелец, поддержка и политики сохраняются без расходов на модель. Чтобы изменить экраны и функции, выберите «Применить к приложению»: ИИ выполнит доработку с расходом баланса.</p>
             <div className="mt-7 max-w-[260px]"><MaxProjectSetupDialog projectId={projectId} display="panel" emphasized={!config.data?.config.legal.terms_accepted} label="Открыть данные приложения" /></div>
           </div>
           <aside className="rounded-[12px] border border-border-default bg-surface p-6">

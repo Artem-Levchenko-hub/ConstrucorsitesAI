@@ -15,7 +15,7 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 16
+MAX_MANAGED_KIT_VERSION = 17
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 
@@ -140,11 +140,11 @@ def render_max_managed_files(
 
 import { omniaMaxConfig } from "@/lib/omnia/max-config";
 
-export const dynamic = "force-static";
+export const dynamic = "force-dynamic";
 
 export function GET() {
   return NextResponse.json(omniaMaxConfig, {
-    headers: { "Cache-Control": "public, max-age=60, stale-while-revalidate=300" },
+    headers: { "Cache-Control": "no-store" },
   });
 }
 """,
@@ -308,6 +308,16 @@ The existing MAX files are a secure runtime substrate, not a product UI template
 Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. Do not
 rewrite platform-owned files.
+
+The owner edits business data in Studio's Main, Content, Owner and Policies tabs.
+Read `src/lib/omnia/max-config.ts` to understand that saved brief. In product
+screens load owner-editable names, descriptions, actions and catalogs with
+`getOmniaAppConfig()` from `@/lib/omnia/integration-client`, on mount and when the
+app regains focus. Render only active content items, keep their stable ids and
+handle loading, empty and failed reads honestly. Do not copy this mutable data
+into constants or invent catalog entries. Keep runtime business configuration
+separate from user-owned actions. Saved feature/style/policy choices are a brief
+to implement, not proof that a payment, consent or marketing flow exists.
 
 On a FULL BUILD, there is deliberately no product home page or visual template.
 Create src/app/page.tsx, the product styling, domain screens, components and API

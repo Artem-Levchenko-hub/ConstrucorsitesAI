@@ -3,12 +3,15 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { MaxProjectSetupDialog } from "@/components/max/MaxProjectSetupDialog";
+import { MaxProjectDataApplyDialog } from "@/components/max/MaxProjectDataApplyDialog";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), send: vi.fn(), push: vi.fn() }));
 vi.mock("@/lib/api/max-studio", () => ({
   getMaxProjectConfig: mocks.get, saveMaxProjectConfig: mocks.save,
 }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
+vi.mock("@/lib/api/messages", () => ({ sendPrompt: mocks.send }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
 
 const record: MaxProjectConfig = {
@@ -25,7 +28,71 @@ const record: MaxProjectConfig = {
   },
 };
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => { vi.resetAllMocks(); sessionStorage.clear(); });
+
+it("allows an explicit new attempt after terminal failure and persists it before dispatch", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  mocks.send.mockResolvedValueOnce({ run_id: "failed", run_status: "failed", replayed: true })
+    .mockRejectedValueOnce(new Error("Ответ потерян"))
+    .mockResolvedValue({ run_id: "retry", run_status: "pending", replayed: true });
+  const close = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const click = async (label: string) => act(async () => {
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === label)!.click();
+  });
+  const render = () => <QueryClientProvider client={client}><MaxProjectDataApplyDialog config={record} onClose={close} /></QueryClientProvider>;
+  try {
+    await act(async () => root.render(render()));
+    await click("Запустить доработку");
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Повторить доработку")); });
+    expect(close).not.toHaveBeenCalled();
+    await click("Повторить доработку");
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Ответ потерян")); });
+    const key = mocks.send.mock.calls[1][4].idempotencyKey;
+    expect(key).not.toBe(mocks.send.mock.calls[0][4].idempotencyKey);
+    expect(sessionStorage.getItem("omnia:max-config-apply-qa-1")).toBe(key);
+    await act(async () => root.render(null));
+    await act(async () => root.render(render()));
+    await click("Запустить доработку");
+    await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1)); });
+    expect(mocks.send.mock.calls[2][4].idempotencyKey).toBe(key);
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
+it.each(["stale", "lost-response"])("keeps failed application review open: %s", async (failure) => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(failure === "stale" ? { ...record, config_version: 2 } : record);
+  mocks.send.mockRejectedValueOnce(new Error("Ответ потерян"))
+    .mockResolvedValue({ run_id: "original", message_id: "a", replayed: true });
+  const close = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const launch = () => [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find(b => b.textContent?.includes("Запустить доработку"))!;
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}>
+      <MaxProjectDataApplyDialog config={record} onClose={close} />
+    </QueryClientProvider>));
+    await act(async () => { launch().click(); launch().click(); });
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull()); });
+    expect(close).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
+    if (failure === "stale") {
+      expect(mocks.send).not.toHaveBeenCalled();
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain("Данные приложения изменились");
+    } else {
+      expect(mocks.send).toHaveBeenCalledTimes(1);
+      await act(async () => launch().click());
+      await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1)); });
+      expect(mocks.send).toHaveBeenCalledTimes(2);
+      expect(mocks.send.mock.calls[1][4].idempotencyKey).toBe(mocks.send.mock.calls[0][4].idempotencyKey);
+    }
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
 
 it("groups product and appearance fields and gives content controls visible associated labels", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -167,7 +234,8 @@ it.each([false, true])("saves/retries the owner tab and refreshes preview withou
     });
     await wait(() => expect(mocks.success).toHaveBeenCalled());
     expect(mocks.save).toHaveBeenCalledWith("qa", updated.config);
-    expect(mocks.success.mock.calls[0][1].description).toContain("Сборка и данные приложения не изменены");
+    expect(mocks.success.mock.calls[0][1].description).toContain("Конфигурация, поддержка и документы обновлены");
+    expect(mocks.send).not.toHaveBeenCalled();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["max-preview-session", "qa"] });
     await act(async () => { container.querySelector<HTMLButtonElement>("button")!.click(); });
     await wait(() => expect(document.querySelector("#max-config-name")).not.toBeNull());
@@ -209,5 +277,44 @@ it.each(["я".repeat(19_992) + "КОНЕЦ ТЗ", "я".repeat(20_001)])("keeps t
   } finally {
     await act(async () => { root.unmount(); });
     container.remove(); client.clear();
+  }
+});
+
+
+it("saves content before showing an explicit, version-bound AI application action", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  let finishSave!: (value: MaxProjectConfig) => void;
+  mocks.save.mockImplementation(() => new Promise(resolve => { finishSave = resolve; }));
+  mocks.send.mockResolvedValue({ run_id: "run", message_id: "a", mode: "edit", run_status: "pending" });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === label);
+  const click = async (label: string) => { expect(button(label)).toBeDefined(); await act(async () => button(label)!.click()); };
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    await click("Контент");
+    await click("Добавить элемент");
+    await click("Сохранить и применить");
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(button("Запустить доработку")).toBeUndefined();
+    const updated = { ...record, config_version: 2, config: mocks.save.mock.calls[0][1] };
+    expect(updated.config.content).toHaveLength(1);
+    mocks.get.mockResolvedValue(updated);
+    await act(async () => finishSave(updated));
+    await act(async () => { await vi.waitFor(() => expect(button("Запустить доработку")).toBeDefined()); });
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("баланс");
+    expect(mocks.send).not.toHaveBeenCalled();
+    await click("Запустить доработку");
+    await act(async () => { await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1)); });
+    expect(mocks.send.mock.calls[0][0]).toBe("qa");
+    expect(mocks.send.mock.calls[0][4]).toMatchObject({ skipClarify: true, maxConfigVersion: 2, idempotencyKey: "max-config-apply-qa-2" });
+    expect(mocks.push).toHaveBeenCalledWith("/max/qa");
+  } finally {
+    await act(async () => root.unmount()); container.remove(); client.clear();
   }
 });

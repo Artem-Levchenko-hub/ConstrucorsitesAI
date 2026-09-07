@@ -18,13 +18,14 @@ import {
   getMaxProjectConfig,
   saveMaxProjectConfig,
 } from "@/lib/api/max-studio";
-import type { MaxProjectConfigPayload } from "@/lib/api/types";
+import type { MaxProjectConfig, MaxProjectConfigPayload } from "@/lib/api/types";
 import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
 import { cn } from "@/lib/utils";
 import "./max-studio.css";
 import "./max-project-workspace.css";
 import "./max-project-setup.css";
 import { MaxProjectSetupSections, type SetupSection } from "./MaxProjectSetupSections";
+import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
 
 const SETUP_SECTIONS: Array<{ id: SetupSection; label: string }> = [
   { id: "details", label: "Основное" },
@@ -53,6 +54,8 @@ export function MaxProjectSetupDialog({
   const scrollRegion = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
+  const [applyConfig, setApplyConfig] = useState<MaxProjectConfig | null>(null);
+  const applyAfterSave = useRef(false);
   const [section, setSection] = useState<SetupSection>("details");
   const config = useQuery({
     queryKey: ["max-config", projectId],
@@ -72,19 +75,22 @@ export function MaxProjectSetupDialog({
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-preview-session", projectId] });
-      toast.success(data.application_mode === "runtime" && !data.synced_snapshot_id
-        ? "Настройки сохранены на сервере" : "Настройки применены без генерации", {
+      toast.success("Данные сохранены", {
         description: data.application_mode === "runtime"
           ? (data.synced_snapshot_id
-            ? "Конфигурация, поддержка и юридические страницы обновлены. Сборка и данные приложения не изменены."
+            ? "Конфигурация, поддержка и документы обновлены. Для изменения экранов нажмите «Применить к приложению»."
             : "Они будут использованы при создании приложения.")
-          : "Контент и юридические страницы сохранены в новой версии.",
+          : "Настройки и документы сохранены в версии кода. Для изменения экранов используйте «Применить к приложению», затем опубликуйте результат.",
       });
+      if (applyAfterSave.current) setApplyConfig(data);
+      applyAfterSave.current = false;
       setOpen(false);
       setDraft(null);
     },
-    onError: (error) =>
-      toast.error("Не удалось сохранить", { description: errorMessage(error) }),
+    onError: (error) => {
+      applyAfterSave.current = false;
+      toast.error("Не удалось сохранить", { description: errorMessage(error) });
+    },
   });
   const saved = config.data?.config;
   const changedSections = current && saved
@@ -170,7 +176,7 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <DialogDescription className="max-setup-description">
-              Управляйте содержанием, контактами и правилами приложения без повторной генерации.
+              Сохраните данные, контакты и правила. Чтобы изменить экраны и функции готового приложения, примените данные с помощью ИИ.
             </DialogDescription>
           </DialogHeader>
 
@@ -239,18 +245,28 @@ export function MaxProjectSetupDialog({
                     (changedSections === 0 && !pendingApplication) ||
                     Boolean(saveIssue)
                   }
-                  onClick={() => save.mutate(current)}
+                  onClick={() => { applyAfterSave.current = false; save.mutate(current); }}
                 >
                   {save.isPending && (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   )}
                   Сохранить и проверить
                 </Button>
+                <Button className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => {
+                  if (changedSections || pendingApplication || !config.data?.config_version || config.data.application_mode !== "runtime") {
+                    applyAfterSave.current = true;
+                    save.mutate(current);
+                  } else if (config.data) {
+                    setOpen(false);
+                    setApplyConfig(config.data);
+                  }
+                }}>{changedSections ? "Сохранить и применить" : "Применить к приложению"}</Button>
               </div>
             </>
           )}
         </DialogContent>
       </Dialog>
+      {applyConfig && <MaxProjectDataApplyDialog config={applyConfig} onClose={() => setApplyConfig(null)} />}
     </>
   );
 }
