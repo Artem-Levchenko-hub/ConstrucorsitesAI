@@ -400,9 +400,6 @@ async def _save_cell_business_config(
                 "business_config": payload.model_dump(mode="json", exclude={"max_url_attached"}),
                 "business_config_version": version,
             })
-            await project_cell_runtime.start_project_cell_runtime(
-                session, project, owner=current_user,
-            )
             await project_cell_runtime._try_preview_project_lock(session, project.id)
             await session.refresh(record)
             if record.config_version != version or record.config != config_data:
@@ -414,19 +411,22 @@ async def _save_cell_business_config(
                 version=version,
                 config=payload.model_dump(mode="json", exclude={"max_url_attached"}),
             )
-            if not applied:
-                raise ApiError("orchestrator_unavailable", "Применение данных не подтверждено", 503)
         except Exception as exc:
             if isinstance(exc, ApiError) and exc.status_code < 500:
                 raise
-            log.warning("max_config_cell_sync_failed", project_id=str(project.id), version=version)
+            log.warning(
+                "max_config_cell_sync_failed", project_id=str(project.id), version=version,
+                error_type=type(exc).__name__,
+            )
             raise ApiError(
                 "orchestrator_unavailable",
                 "Данные сохранены на сервере, но ещё не применены. "
                 "Повторите сохранение — генерация не нужна.",
                 503,
             ) from exc
-        record.synced_snapshot_id = project.current_snapshot_id
+        # A confirmed deferred write is durable in the controller and is replayed
+        # on the next wake. Do not report the sleeping preview as already updated.
+        record.synced_snapshot_id = project.current_snapshot_id if applied else None
         await session.commit()
         await session.refresh(record)
     result = _public(project, record)

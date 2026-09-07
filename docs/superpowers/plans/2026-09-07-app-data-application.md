@@ -18,3 +18,11 @@ application action using the normal generation pipeline.
 
 The action does not claim that checking payment/marketing flags connects a
 provider. Published source-based apps still require publication after code edits.
+
+Live QA found that metadata saving unnecessarily wakes a sleeping cell and fails
+with insufficient CPU before an explicit generation can use normal scheduling.
+Persist desired metadata in the controller without waking; report it as deferred
+until a live readback confirms application. Replay it on normal preview/generation
+wake. Keep public configuration updates and all owner/lease/version fences.
+Regression coverage must prove no runtime allocation while asleep, durable replay,
+strict deferred-response validation, and unchanged immediate application when live.

@@ -218,6 +218,34 @@ async def test_cell_config_does_not_mutate_during_generation(client, db_session,
     assert await db_session.get(MaxProjectConfig, project.id) is None
 
 
+async def test_cell_config_saves_while_asleep_without_cpu_admission(
+    client, db_session, monkeypatch,
+):
+    _, project, _, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    wake = AsyncMock(side_effect=AssertionError("metadata save must not wake resources"))
+    monkeypatch.setattr(runtime, "start_project_cell_runtime", wake)
+    publish = AsyncMock(return_value={"applied": True})
+    apply = AsyncMock(return_value=False)
+    monkeypatch.setattr(oc, "configure_published_cell", publish)
+    monkeypatch.setattr(oc, "project_cell_apply_business_config", apply)
+    base = f"/api/projects/{project.id}/max/config"
+    config = (await client.get(base)).json()["config"]
+    config["app_name"] = "Saved without waking"
+    for _ in range(2):
+        response = await client.put(base, json=config)
+        assert response.status_code == 200, response.text
+        assert response.json()["config"] == config
+        assert response.json()["config_version"] == 1
+        assert response.json()["synced_snapshot_id"] is None
+    wake.assert_not_awaited()
+    assert apply.await_count == 2 and publish.await_count == 2
+    await db_session.refresh(workspace)
+    assert workspace.state == "stopped" and workspace.generation_run_id is None
+
+
 async def test_non_owner_cannot_access_cell_preview(client, db_session, monkeypatch):
     _, project, _, _ = await _seed(db_session, monkeypatch)
     other = User(email="other-cell-owner@example.com", password_hash="x")

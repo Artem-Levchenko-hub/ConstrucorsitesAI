@@ -912,7 +912,7 @@ class MachineAdapter:
 
     async def apply_owner_business_config(
         self, state: Any, *, version: int, config: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         machine, backend = self.parts(state)
         path = machine.path.parent / "business-config.json"
         previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
@@ -932,7 +932,7 @@ class MachineAdapter:
             # Repeated save must not bounce a working gateway.
             if previous["version"] != version:
                 write_controller_json(path, {**previous, "version": version})
-            return
+            return True
         manifest = MachineManifest.model_validate(machine.state()["manifest"])
         # Persist desired metadata before any runtime effect. Retrying or waking
         # replays the same data. No project source, DB or environment restore.
@@ -940,11 +940,16 @@ class MachineAdapter:
             "project_id": str(state.project_id), "owner_id": str(state.owner_id),
             "version": version, "config": config,
         })
+        # Metadata must not allocate a sleeping project's CPU/memory envelope.
+        # The normal preview/generation wake replays this controller-owned file.
+        if preview is None or preview[0] != "running":
+            return False
         await machine_effect(self._start_boundary, state, manifest, backend, state.fencing_epoch)
         write_controller_json(path, {
             "project_id": str(state.project_id), "owner_id": str(state.owner_id),
             "version": version, "config": config, "applied": True,
         })
+        return True
 
     async def resume_preview(self, state: Any, *, epoch: int | None = None) -> None:
         machine, backend = self.parts(state)

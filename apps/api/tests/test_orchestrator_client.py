@@ -26,6 +26,28 @@ from omnia_api.services.orchestrator_client import (
 )
 
 
+@pytest.mark.parametrize("applied", [False, True, None, "false"])
+@pytest.mark.parametrize("matching", [False, True])
+async def test_business_config_requires_confirmed_applied_or_deferred_status(
+    monkeypatch, applied, matching,
+):
+    from unittest.mock import AsyncMock
+
+    workspace_id = uuid4()
+    monkeypatch.setattr(orchestrator_client, "_request", AsyncMock(return_value={
+        "workspace_id": str(workspace_id if matching else uuid4()),
+        "version": 2, "applied": applied,
+    }))
+    request = orchestrator_client.project_cell_apply_business_config(
+        workspace_id, project_id=uuid4(), owner_id=uuid4(), version=2, config={},
+    )
+    if matching and isinstance(applied, bool):
+        assert await request is applied
+    else:
+        with pytest.raises(OrchestratorUnavailable, match="invalid MAX configuration"):
+            await request
+
+
 async def test_project_cell_capability_client_calls_exact_internal_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

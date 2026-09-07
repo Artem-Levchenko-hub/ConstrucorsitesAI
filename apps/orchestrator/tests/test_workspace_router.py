@@ -1958,8 +1958,9 @@ async def test_portable_owner_start_retries_do_not_restart_healthy_services(
 
 
 @pytest.mark.parametrize("failure", [None, "owner", "project", "active", "token"])
+@pytest.mark.parametrize("applied", [False, True])
 async def test_owner_business_config_has_no_generation_write_authority(
-    monkeypatch, tmp_path, failure,
+    monkeypatch, tmp_path, failure, applied,
 ):
     from unittest.mock import AsyncMock
 
@@ -1972,13 +1973,14 @@ async def test_owner_business_config_has_no_generation_write_authority(
         )
     before = manager.state_store.load(workspace_id)
     spec = _default_workspace_spec(workspace_id)
-    apply = AsyncMock()
+    apply = AsyncMock(return_value=applied)
     monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
     monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
     monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
         apply_owner_business_config=apply,
     ))
-    monkeypatch.setattr(workspace, "_publish_draft_preview", AsyncMock())
+    publish = AsyncMock()
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
     async with _client() as client:
         response = await client.put(
             f"/internal/workspaces/{workspace_id}/owner-business-config",
@@ -1991,6 +1993,9 @@ async def test_owner_business_config_has_no_generation_write_authority(
         )
     assert response.status_code == (200 if failure is None else 401 if failure == "token" else 409)
     assert apply.await_count == (1 if failure is None else 0)
+    if failure is None:
+        assert response.json()["applied"] is applied
+    assert publish.await_count == (1 if failure is None and applied else 0)
     assert manager.state_store.load(workspace_id) == before
 
 

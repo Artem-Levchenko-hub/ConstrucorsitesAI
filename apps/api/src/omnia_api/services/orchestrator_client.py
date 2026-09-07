@@ -1286,8 +1286,11 @@ async def project_cell_apply_business_config(
               "version": version, "config": config},
         timeout=300.0,
     )
-    return (payload.get("workspace_id") == str(workspace_id)
-            and payload.get("version") == version and payload.get("applied") is True)
+    applied = payload.get("applied")
+    if (payload.get("workspace_id") != str(workspace_id)
+            or payload.get("version") != version or not isinstance(applied, bool)):
+        raise OrchestratorUnavailable("Orchestrator returned invalid MAX configuration status")
+    return applied
 
 
 async def wake(project_id: UUID) -> dict[str, Any]:

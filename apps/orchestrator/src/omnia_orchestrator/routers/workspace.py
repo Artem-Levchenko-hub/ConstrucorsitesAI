@@ -1000,11 +1000,12 @@ async def apply_workspace_owner_business_config(
             raise OrchestratorError(
                 code="conflict", message="portable runtime required", status_code=409,
             )
-        await _require_portable_runtime(manager).apply_owner_business_config(
+        applied = await _require_portable_runtime(manager).apply_owner_business_config(
             state, version=request.version, config=request.config,
         )
-        await _publish_draft_preview(manager, workspace_id)
-        return {"workspace_id": str(workspace_id), "version": request.version, "applied": True}
+        if applied:
+            await _publish_draft_preview(manager, workspace_id)
+        return {"workspace_id": str(workspace_id), "version": request.version, "applied": applied}
 
 
 async def _resource_response(

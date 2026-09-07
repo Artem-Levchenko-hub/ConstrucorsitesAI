@@ -69,3 +69,29 @@ async def test_saved_metadata_replays_without_touching_product_or_generation(tmp
     with pytest.raises(CellResourceError, match="ownership"):
         await runtime.apply_owner_business_config(state, version=2, config={"app_name": "Saved"})
     assert start.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_sleeping_metadata_is_durable_without_starting_resources(tmp_path, monkeypatch):
+    from omnia_orchestrator.services.machine_defaults import next_machine_manifest
+
+    state = SimpleNamespace(project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5)
+    machine = SimpleNamespace(
+        path=tmp_path / "machine.json",
+        state=lambda: {"manifest": next_machine_manifest().model_dump(mode="json")},
+    )
+    runtime = MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    monkeypatch.setattr(runtime, "parts", lambda _: (machine, object()))
+    monkeypatch.setattr(runtime, "preview", lambda _: None)
+    start = Mock()
+    monkeypatch.setattr(runtime, "_start_boundary", start)
+    config = {"app_name": "Saved while asleep", "content": []}
+    assert await runtime.apply_owner_business_config(state, version=2, config=config) is False
+    saved = json.loads((tmp_path / "business-config.json").read_text())
+    assert saved["config"] == config and saved["version"] == 2
+    assert not saved.get("applied")
+    start.assert_not_called()
+    monkeypatch.setattr(runtime, "preview", lambda _: ("running", "127.0.0.1"))
+    assert await runtime.apply_owner_business_config(state, version=2, config=config) is True
+    assert start.call_count == 1
+    assert json.loads((tmp_path / "business-config.json").read_text())["applied"] is True
