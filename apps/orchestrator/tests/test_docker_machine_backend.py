@@ -41,6 +41,224 @@ def backend(tmp_path, **overrides):
     return module.DockerMachineBackend(**values)
 
 
+def retained_preview_fixture(tmp_path):
+    import docker
+
+    from omnia_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    volumes = {}
+    for index, name in enumerate(runtime.environment_volume_names(manifest)):
+        mountpoint = tmp_path / f"volume-{index}"
+        mountpoint.mkdir()
+        labels = runtime.labels("project-volume")
+        if name == runtime.workspace_volume:
+            labels = {
+                "omnia.managed": "true", "omnia.project_cell": "true",
+                "omnia.workspace_id": str(runtime.workspace_id),
+                "omnia.project_id": str(runtime.project_id),
+                "omnia.owner_id": str(runtime.owner_id),
+                "omnia.provider": "docker_owner_canary", "omnia.resource_kind": "workspace",
+                "omnia.profile_version": runtime.resource_profile_version,
+            }
+        volumes[name] = SimpleNamespace(attrs={
+            "Name": name, "CreatedAt": "2026-09-07T12:00:00Z", "Driver": "local",
+            "Scope": "local", "Mountpoint": str(mountpoint), "Labels": labels,
+        })
+    image_id = "sha256:" + "d" * 64
+    image = SimpleNamespace(id=image_id, attrs={"Config": {
+        "Labels": runtime.labels("environment")}})
+
+    def missing(_):
+        raise docker.errors.NotFound("absent")
+
+    def get_volume(name):
+        return volumes[name] if name in volumes else missing(name)
+
+    attached = []
+    helpers = {}
+
+    class ProofHelper:
+        id = "stat-helper"
+
+        def __init__(self, options):
+            self.options = options
+            self.attrs = {"Config": {"Labels": options["labels"]}}
+
+        def start(self):
+            pass
+
+        def wait(self, **_):
+            return {"StatusCode": 0}
+
+        def logs(self, **_):
+            import json
+
+            stats = [os.stat(volumes[name].attrs["Mountpoint"])
+                     for name in self.options["volumes"]]
+            return json.dumps([[item.st_dev, item.st_ino, item.st_ctime_ns]
+                               for item in stats]).encode()
+
+        def remove(self, **_):
+            helpers.pop(self.options["name"])
+
+    def create_helper(_image, _command, **options):
+        assert options["network_mode"] == "none"
+        assert options["read_only"] and options["cap_drop"] == ["ALL"]
+        assert all(item["mode"] == "ro" for item in options["volumes"].values())
+        helper = ProofHelper(options)
+        helpers[options["name"]] = helper
+        return helper
+
+    def get_container(name):
+        return helpers[name] if name in helpers else missing(name)
+
+    runtime.client = SimpleNamespace(
+        info=lambda: {"ID": "local-daemon"},
+        images=SimpleNamespace(get=lambda _: image),
+        containers=SimpleNamespace(get=get_container, list=lambda **_: attached,
+                                   create=create_helper),
+        volumes=SimpleNamespace(get=get_volume),
+    )
+    reference = MachineEnvironmentRef(
+        workspace_id=runtime.workspace_id, image_id=image_id, artifact_ref="a" * 32 + ".tar",
+        sha256="a" * 64, size=100, base_image=runtime.base_image,
+        manifest_digest=manifest.digest(), manifest=manifest,
+        volumes=tuple(VolumeEnvironmentRef(
+            name=name, artifact_ref=f"{index:032x}.tar", sha256="c" * 64, size=10,
+        ) for index, name in enumerate(volumes)),
+    )
+    write_controller_json(runtime.metadata_path, {
+        "environment_ref": reference.model_dump(mode="json"), "restored_image": image_id,
+        "manifest": manifest.model_dump(mode="json"), "epoch": 7,
+    })
+    return runtime, reference, volumes, image, attached
+
+
+def test_completed_halt_receipt_is_consumed_once(tmp_path):
+    runtime, reference, *_ = retained_preview_fixture(tmp_path)
+    assert runtime.record_retained_preview(reference, epoch=7)
+    assert runtime._metadata().get("retained_preview_receipt")
+    assert runtime.consume_retained_preview(reference, epoch=7)
+    assert "retained_preview_receipt" not in runtime._metadata()
+    assert not runtime.consume_retained_preview(reference, epoch=7)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "bad_output"])
+def test_interrupted_stat_helper_is_removed_without_certifying_volumes(
+    tmp_path, monkeypatch, failure,
+):
+    import docker
+
+    runtime, reference, *_ = retained_preview_fixture(tmp_path)
+    create = runtime.client.containers.create
+
+    def broken_create(*args, **kwargs):
+        helper = create(*args, **kwargs)
+        if failure == "timeout":
+            def expired(**_):
+                raise TimeoutError("proof deadline expired")
+
+            helper.wait = expired
+        else:
+            helper.logs = lambda **_: b"not valid JSON"
+        return helper
+
+    monkeypatch.setattr(runtime.client.containers, "create", broken_create)
+    if failure == "timeout":
+        with pytest.raises(TimeoutError, match="deadline"):
+            runtime.record_retained_preview(reference, epoch=7)
+    else:
+        assert not runtime.record_retained_preview(reference, epoch=7)
+    assert "retained_preview_receipt" not in runtime._metadata()
+    with pytest.raises(docker.errors.NotFound):
+        runtime.client.containers.get(runtime.stem + "-retained-proof")
+
+
+@pytest.mark.parametrize("fault", [
+    "missing", "recreated", "same_timestamp_recreated", "foreign_volume", "foreign_workspace",
+    "reference", "epoch", "dirty_receipt", "image", "foreign_image", "daemon", "writer",
+    "restore_in_progress", "quiesce_failed", "quiesce_pending",
+])
+def test_retained_preview_never_trusts_stale_or_unsafe_resources(tmp_path, fault):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    runtime, reference, volumes, image, attached = retained_preview_fixture(tmp_path)
+    assert runtime.record_retained_preview(reference, epoch=7)
+    name = runtime.project_postgres_volume
+    metadata = runtime._metadata()
+    if fault == "missing":
+        del volumes[name]
+    elif fault == "recreated":
+        volumes[name].attrs["CreatedAt"] = "2026-09-07T13:00:00Z"
+    elif fault == "same_timestamp_recreated":
+        mountpoint = volumes[name].attrs["Mountpoint"]
+        os.rename(mountpoint, mountpoint + "-old")
+        os.mkdir(mountpoint)
+    elif fault in {"foreign_volume", "foreign_workspace"}:
+        target = runtime.workspace_volume if fault == "foreign_workspace" else name
+        volumes[target].attrs["Labels"]["omnia.owner_id"] = str(uuid4())
+    elif fault == "reference":
+        reference = reference.model_copy(update={"artifact_ref": "f" * 32 + ".tar"})
+    elif fault == "epoch":
+        metadata["epoch"] = 8
+    elif fault == "dirty_receipt":
+        metadata["retained_preview_receipt"]["epoch"] = 8
+    elif fault == "image":
+        metadata["restored_image"] = "sha256:" + "e" * 64
+    elif fault == "foreign_image":
+        image.attrs["Config"]["Labels"]["omnia.owner_id"] = str(uuid4())
+    elif fault == "daemon":
+        runtime.client.info = lambda: {"ID": "different-daemon"}
+    elif fault == "writer":
+        attached.append(SimpleNamespace(id="unexpected-container"))
+    elif fault == "restore_in_progress":
+        metadata["restore_in_progress"] = True
+    else:
+        metadata["quiesce_state"] = fault.removeprefix("quiesce_")
+    write_controller_json(runtime.metadata_path, metadata)
+    if fault in {"foreign_volume", "foreign_workspace", "foreign_image"}:
+        with pytest.raises(CellIdentityConflict, match="identity"):
+            runtime.consume_retained_preview(reference, epoch=7)
+    else:
+        assert not runtime.consume_retained_preview(reference, epoch=7)
+    assert "retained_preview_receipt" not in runtime._metadata()
+
+
+@pytest.mark.parametrize("operation", ["ensure", "exec", "restore"])
+def test_mutation_invalidates_halted_receipt_before_first_effect(tmp_path, monkeypatch, operation):
+    runtime, reference, *_ = retained_preview_fixture(tmp_path)
+    assert runtime.record_retained_preview(reference, epoch=7)
+
+    def interrupted(*_):
+        assert "retained_preview_receipt" not in runtime._metadata()
+        raise RuntimeError("interrupted before Docker mutation")
+
+    if operation == "ensure":
+        monkeypatch.setattr(runtime, "container_options", interrupted)
+
+        def call():
+            runtime.ensure(reference.manifest, 7)
+    elif operation == "exec":
+        monkeypatch.setattr(runtime, "_container", interrupted)
+
+        def call():
+            runtime.exec_start(["true"], ".", str(uuid4()))
+    else:
+        monkeypatch.setattr(runtime, "_reconcile_recovery_helpers", interrupted)
+
+        def call():
+            runtime.begin_restore(reference)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        call()
+
+
 def test_project_root_can_install_userland_but_cannot_control_network_or_host(tmp_path):
     runtime = backend(tmp_path)
     runtime._metadata = lambda: {"proxy_ip": "10.0.0.2"}

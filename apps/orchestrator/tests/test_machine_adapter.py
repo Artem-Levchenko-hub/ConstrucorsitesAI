@@ -179,6 +179,7 @@ async def test_halt_failed_quiesce_preserves_rootfs_without_recapturing(tmp_path
     runtime.checkpoint = AsyncMock(side_effect=AssertionError("failed state must not be captured"))
     events = []
     backend = SimpleNamespace(
+        invalidate_retained_preview=lambda: None,
         _metadata=lambda: {"quiesce_state": "failed"},
         _reconcile_recovery_helpers=lambda: events.append("helpers-confirmed-dead"),
         stop=lambda: events.append("stop-preserve-rootfs"),
@@ -190,6 +191,91 @@ async def test_halt_failed_quiesce_preserves_rootfs_without_recapturing(tmp_path
     runtime.parts = lambda state: (None, backend)
     await runtime.halt(SimpleNamespace(workspace_id=uuid4()))
     assert events == ["helpers-confirmed-dead", "stop-preserve-rootfs"]
+
+
+@pytest.mark.parametrize("receipt_valid", [False, True])
+async def test_preview_resume_uses_only_consumed_halt_receipt(tmp_path, monkeypatch, receipt_valid):
+    from unittest.mock import AsyncMock
+
+    from tests.test_docker_machine_backend import retained_preview_fixture
+
+    api = module()
+    backend, reference, *_ = retained_preview_fixture(tmp_path)
+    runtime = api.MachineAdapter(
+        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "states")), SimpleNamespace()
+    )
+    machine = SimpleNamespace(path=tmp_path / "machine.json", state=lambda: {
+        "manifest": reference.manifest.model_dump(mode="json"), "epoch": 7,
+    })
+    runtime.parts = lambda _: (machine, backend)
+    events = []
+
+    def consume(*_, **kwargs):
+        assert kwargs == {"epoch": 7}
+        events.append("consume")
+        return receipt_valid
+
+    monkeypatch.setattr(backend, "consume_retained_preview", consume)
+    monkeypatch.setattr(backend, "ensure", lambda *_: events.append("ensure"))
+    monkeypatch.setattr(backend, "start_service", lambda *_: events.append("service"))
+    monkeypatch.setattr(backend, "service_status", lambda *_: {"ready": True})
+    monkeypatch.setattr(api.MachineEnvironmentStore, "restore", lambda *_args, **_kwargs:
+                        events.append("restore"))
+    runtime._start_boundary = lambda *_: events.append("boundary")
+    runtime.checkpoint = AsyncMock(side_effect=AssertionError("resume must not recapture"))
+    await runtime.resume_preview(SimpleNamespace(workspace_id=backend.workspace_id))
+    assert events == ["consume", *([] if receipt_valid else ["restore"]),
+                      "ensure", "service", "service", "boundary"]
+
+
+@pytest.mark.parametrize("failure", [None, "capture", "teardown", "no_capture", "already_absent"])
+async def test_halt_certifies_retained_volumes_only_after_complete_capture_and_teardown(
+    tmp_path, failure,
+):
+    from unittest.mock import AsyncMock
+
+    api = module()
+    events = []
+    reference = object()
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.exists = lambda _: True
+    runtime.recovery_required = lambda _: False
+
+    async def checkpoint(_):
+        events.append("capture")
+        if failure == "capture":
+            raise RuntimeError("capture failed")
+        return reference
+
+    def remove():
+        events.append("teardown")
+        if failure == "teardown":
+            raise RuntimeError("teardown failed")
+
+    def record(ref, *, epoch):
+        assert ref is reference and epoch == 7
+        assert events[-1] == "teardown"
+        events.append("receipt")
+
+    backend = SimpleNamespace(
+        invalidate_retained_preview=lambda: events.append("invalidate"),
+        _container=lambda: None if failure == "already_absent" else object(),
+        _reconcile_recovery_helpers=lambda: None,
+        remove=remove, _lookup=lambda *_: None, record_retained_preview=record,
+        stem="owned", client=SimpleNamespace(containers=None),
+    )
+    runtime.parts = lambda _: (SimpleNamespace(state=lambda: {"epoch": 7}), backend)
+    runtime.checkpoint = AsyncMock(side_effect=checkpoint)
+    if failure in {"capture", "teardown"}:
+        with pytest.raises(RuntimeError, match="failed"):
+            await runtime.halt(SimpleNamespace(workspace_id=uuid4()))
+        assert "receipt" not in events and events[0] == "invalidate"
+    else:
+        await runtime.halt(SimpleNamespace(workspace_id=uuid4()), capture=failure != "no_capture")
+        expected = ["invalidate", *([] if failure == "no_capture" else ["capture"]), "teardown"]
+        if failure is None:
+            expected.append("receipt")
+        assert events == expected
 
 
 @pytest.mark.parametrize("budget", [600, 900])

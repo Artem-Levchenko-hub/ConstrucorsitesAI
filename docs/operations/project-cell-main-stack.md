@@ -151,6 +151,24 @@ are always captured anew. No running database is replaced by an older checkpoint
 
 Measure repeated handover separately from initial allocation and model execution;
 a timed-out `ensure` followed by reconciliation is not evidence of CPU shortage.
+The API gives `ensure` the same 930-second HTTP timeout as portable release, since
+both can capture an existing machine. The total capacity deadline and worker
+cancellation monitor remain independent; a real capacity rejection still returns
+immediately. Network failure/cancellation still requires fenced reconciliation.
+
+A successful captured halt can leave a controller-owned, single-use receipt for
+owner preview resume on the same Docker daemon. It binds the exact environment
+reference, runtime epoch, sanitized image and the complete retained volume set.
+Volume ownership, Docker metadata and root inode/ctime identities are checked;
+one restricted networkless helper reads only those identities through read-only
+mounts. No container may remain attached to the captured volumes.
+
+Resume consumes the receipt before starting any work. Only a matching proof skips
+re-importing the already retained volumes; normal ensure, service readiness and
+the trusted preview boundary still run. Missing/recreated volumes, incomplete
+restore, old references or absent proof use the existing recovery path. Execution,
+ensure and explicit restore invalidate the receipt. Capture still archives every
+source, dependency and database volume, and explicit version restoration is unchanged.
 
 Add these **API and worker** switches initially disabled, then enable one at a
 time for the existing owner canary only:

@@ -903,11 +903,14 @@ class MachineAdapter:
     async def halt(self, state: Any, *, remove_network: bool = False, capture: bool = True) -> None:
         if not self.exists(state.workspace_id):
             return
-        _machine, backend = self.parts(state)
+        machine, backend = self.parts(state)
+        await machine_effect(backend.invalidate_retained_preview)
         recovery = self.recovery_required(state)
+        had_machine = capture and not recovery and backend._container() is not None
+        reference = None
         await machine_effect(backend._reconcile_recovery_helpers)
         if capture and not recovery:
-            await self.checkpoint(state)
+            reference = await self.checkpoint(state)
         if capture and recovery:
             # Pause a failed environment without certifying or discarding its
             # stopped rootfs. Explicit checkpoint restoration is the recovery path.
@@ -931,6 +934,10 @@ class MachineAdapter:
             )
             if network is not None:
                 await machine_effect(network.remove)
+        if had_machine and reference is not None:
+            await machine_effect(
+                backend.record_retained_preview, reference, epoch=machine.state()["epoch"]
+            )
 
     async def apply_owner_business_config(
         self, state: Any, *, version: int, config: dict[str, Any],
@@ -980,12 +987,17 @@ class MachineAdapter:
         metadata = backend._metadata()
         if backend._container() is None and metadata.get("environment_ref"):
             reference = MachineEnvironmentRef.model_validate(metadata["environment_ref"])
-            store = MachineEnvironmentStore(
-                self.root / "artifacts", state.workspace_id, backend, max_bytes=backend.disk_bytes
+            retained = await machine_effect(
+                backend.consume_retained_preview, reference, epoch=saved["epoch"]
             )
-            await machine_effect(
-                store.restore, reference, manifest_digest=reference.manifest_digest
-            )
+            if not retained:
+                store = MachineEnvironmentStore(
+                    self.root / "artifacts", state.workspace_id, backend,
+                    max_bytes=backend.disk_bytes,
+                )
+                await machine_effect(
+                    store.restore, reference, manifest_digest=reference.manifest_digest
+                )
         runtime_epoch = epoch or saved["epoch"]
         await machine_effect(backend.ensure, manifest, runtime_epoch)
         for name in manifest.service_order():

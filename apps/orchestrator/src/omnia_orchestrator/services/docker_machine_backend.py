@@ -481,6 +481,7 @@ class DockerMachineBackend:
         }
 
     def ensure(self, manifest: MachineManifest, epoch: int) -> None:
+        self.invalidate_retained_preview()
         if self._metadata().get("restore_in_progress"):
             raise CellResourceError("environment restore is incomplete; startup is fenced")
         if self._metadata().get("quiesce_state") in {"pending", "failed"}:
@@ -909,6 +910,7 @@ class DockerMachineBackend:
         write_controller_json(self.metadata_path, metadata)
 
     def exec_start(self, argv: list[str], cwd: str, operation_id: str) -> str:
+        self.invalidate_retained_preview()
         machine = self._container()
         if machine is None:
             raise CellResourceError("machine is missing")
@@ -1122,6 +1124,165 @@ class DockerMachineBackend:
         project_postgres.reload()
         return bool(project_postgres.status == "running")
 
+    def invalidate_retained_preview(self) -> None:
+        metadata = self._metadata()
+        if "retained_preview_receipt" in metadata:
+            metadata.pop("retained_preview_receipt")
+            write_controller_json(self.metadata_path, metadata)
+
+    def _retained_volume_stats(self, names: list[str]) -> list[list[int]] | None:
+        # One networkless helper reads inode identities only. The controller
+        # need not have host filesystem access to Docker's volume directory.
+        name = self.stem + "-retained-proof"
+        helper = self._lookup(self.client.containers, name, "retained-proof")
+        if helper is not None:
+            helper.remove(force=True)
+            if self._lookup(self.client.containers, name, "retained-proof") is not None:
+                raise CellResourceError("retained proof helper removal was not confirmed")
+        command = (
+            "import json,os,stat; "
+            f"s=[os.stat('/proof/'+str(i)) for i in range({len(names)})]; "
+            "assert all(stat.S_ISDIR(x.st_mode) for x in s); "
+            "print(json.dumps([[x.st_dev,x.st_ino,x.st_ctime_ns] for x in s]))"
+        )
+        helper = self.client.containers.create(
+            self.base_image, ["python3", "-I", "-S", "-c", command],
+            name=name, labels=self.labels("retained-proof"), entrypoint=[],
+            network_mode="none", cap_drop=["ALL"], privileged=False, read_only=True,
+            security_opt=["no-new-privileges:true"], user="0:0", pids_limit=16,
+            mem_limit=64 * 1024**2, memswap_limit=64 * 1024**2,
+            nano_cpus=100_000_000,
+            volumes={volume: {"bind": f"/proof/{index}", "mode": "ro"}
+                     for index, volume in enumerate(names)},
+        )
+        try:
+            helper.start()
+            if helper.wait(timeout=machine_remaining_seconds(15)).get("StatusCode") != 0:
+                return None
+            output = helper.logs(stdout=True, stderr=False)
+            if len(output) > 16384:
+                return None
+            try:
+                values = json.loads(output)
+            except (ValueError, TypeError):
+                return None
+            if not isinstance(values, list) or len(values) != len(names) or any(
+                not isinstance(item, list) or len(item) != 3
+                or any(type(value) is not int or value < 0 for value in item)
+                for item in values
+            ):
+                return None
+            return values
+        finally:
+            helper.remove(force=True)
+            if self._lookup(self.client.containers, name, "retained-proof") is not None:
+                raise CellResourceError("retained proof helper removal was not confirmed")
+
+    def _retained_preview_proof(
+        self, reference: MachineEnvironmentRef, *, epoch: int,
+    ) -> dict[str, Any] | None:
+        self.validate_restore_reference(reference)
+        metadata = self._metadata()
+        if (
+            type(epoch) is not int or epoch <= 0 or metadata.get("epoch") != epoch
+            or metadata.get("environment_ref") != reference.model_dump(mode="json")
+            or metadata.get("restored_image") != reference.image_id
+            or metadata.get("restore_in_progress") or metadata.get("restore_target")
+            or metadata.get("pending_image")
+            or metadata.get("quiesce_state") in {"pending", "failed"}
+            or reference.manifest is None
+            or metadata.get("manifest") != reference.manifest.model_dump(mode="json")
+            or reference.manifest.digest() != reference.manifest_digest
+            or {item.name for item in reference.volumes}
+            != set(self.environment_volume_names(reference.manifest))
+        ):
+            return None
+        try:
+            for suffix, kind in (
+                ("dev", "development"), ("project-postgres", "project-postgres"),
+                ("gateway", "max-gateway"), ("max-core", "managed-max-core"),
+                ("guard", "namespace-guard"), ("proxy", "egress-proxy"),
+            ):
+                if self._lookup(self.client.containers, self.stem + "-" + suffix, kind):
+                    return None
+            image = self.client.images.get(reference.image_id)
+            config = image.attrs.get("Config", {})
+            labels = config.get("Labels") or {}
+            if image.id != reference.image_id or any(
+                labels.get(key) != value for key, value in self.labels("environment").items()
+            ):
+                raise CellIdentityConflict("environment image project identity mismatch")
+            if config.get("Env") or config.get("Entrypoint") or config.get("Cmd"):
+                raise CellIdentityConflict(
+                    "environment image contains unexpected runtime configuration"
+                )
+            daemon_id = self.client.info().get("ID")
+            if not isinstance(daemon_id, str) or not daemon_id:
+                return None
+            identities = {}
+            for item in reference.volumes:
+                volume = self.client.volumes.get(item.name)
+                attrs = volume.attrs
+                expected = self.labels("project-volume")
+                if item.name == self.workspace_volume:
+                    expected = {
+                        "omnia.managed": "true", "omnia.project_cell": "true",
+                        "omnia.workspace_id": str(self.workspace_id),
+                        "omnia.project_id": str(self.project_id),
+                        "omnia.owner_id": str(self.owner_id),
+                        "omnia.provider": "docker_owner_canary", "omnia.resource_kind": "workspace",
+                        "omnia.profile_version": self.resource_profile_version,
+                    }
+                labels = attrs.get("Labels") or {}
+                if any(labels.get(key) != value for key, value in expected.items()):
+                    raise CellIdentityConflict("retained volume ownership identity mismatch")
+                identity = {
+                    key: attrs.get(key) for key in ("Name", "CreatedAt", "Driver", "Mountpoint")
+                }
+                if (
+                    not all(isinstance(value, str) and value for value in identity.values())
+                    or identity["Name"] != item.name or identity["Driver"] != "local"
+                    or attrs.get("Options") or attrs.get("Scope") != "local"
+                ):
+                    return None
+                if self.client.containers.list(all=True, filters={"volume": item.name}):
+                    return None
+                identities[item.name] = {**identity, "labels": labels}
+            stats = self._retained_volume_stats(list(identities))
+            if stats is None:
+                return None
+            for identity, inode in zip(identities.values(), stats, strict=True):
+                identity["inode"] = inode
+            return {
+                "version": 1, "epoch": epoch, "daemon_id": daemon_id, "volumes": identities,
+                "reference_digest": hashlib.sha256(
+                    reference.model_dump_json().encode()
+                ).hexdigest(),
+            }
+        except TimeoutError:
+            raise
+        except (docker.errors.APIError, OSError):
+            return None
+
+    def record_retained_preview(self, reference: MachineEnvironmentRef, *, epoch: int) -> bool:
+        self.invalidate_retained_preview()
+        proof = self._retained_preview_proof(reference, epoch=epoch)
+        if proof is None:
+            return False
+        metadata = self._metadata()
+        metadata["retained_preview_receipt"] = proof
+        write_controller_json(self.metadata_path, metadata)
+        return True
+
+    def consume_retained_preview(self, reference: MachineEnvironmentRef, *, epoch: int) -> bool:
+        receipt = self._metadata().get("retained_preview_receipt")
+        # Consume before examining Docker, so failure/interruption cannot leave
+        # a usable receipt after a new execution or partially restored volume.
+        self.invalidate_retained_preview()
+        if not isinstance(receipt, dict):
+            return False
+        return self._retained_preview_proof(reference, epoch=epoch) == receipt
+
     def can_reuse_image(self, reference: MachineEnvironmentRef) -> bool:
         if reference.workspace_id != self.workspace_id:
             raise CellIdentityConflict("environment workspace identity mismatch")
@@ -1270,6 +1431,7 @@ class DockerMachineBackend:
                 "project-postgres-prepare",
                 "project-postgres-init",
                 "project-postgres-restore",
+                "retained-proof",
             }:
                 continue
             if any(labels.get(key) != value for key, value in self.labels(kind).items()):
@@ -1435,6 +1597,7 @@ class DockerMachineBackend:
             raise CellIdentityConflict("environment volume identity mismatch")
 
     def begin_restore(self, reference: MachineEnvironmentRef) -> None:
+        self.invalidate_retained_preview()
         self.validate_restore_reference(reference)
         metadata = self._metadata()
         self._reconcile_recovery_helpers()
