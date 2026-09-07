@@ -1149,9 +1149,10 @@ class DockerMachineBackend:
                     "environment image contains unexpected runtime configuration"
                 )
             machine_remaining_seconds(1)
-            # None/unknown responses are not evidence of an unchanged rootfs.
+            # Docker encodes an empty Go slice as either [] or null. SDK 7.1
+            # returns the decoded JSON only after checking HTTP success.
             changes = machine.diff()
-            return isinstance(changes, list) and changes == []
+            return changes is None or (isinstance(changes, list) and changes == [])
         except TimeoutError:
             raise
         except (docker.errors.APIError, OSError):

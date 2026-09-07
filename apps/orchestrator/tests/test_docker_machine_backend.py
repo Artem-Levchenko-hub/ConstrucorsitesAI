@@ -64,7 +64,8 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
     assert not any(name.startswith("/") for name in options["volumes"])
 
 
-@pytest.mark.parametrize("fault", [None, "dirty", "unknown_diff", "diff_error", "image",
+@pytest.mark.parametrize("fault", [None, "empty_null", "dirty", "unknown_diff", "diff_error",
+                                  "image", "false_diff", "string_diff",
                                   "base", "running", "owner", "image_owner", "workspace",
                                   "missing_image", "runtime_config", "deadline"])
 def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
@@ -94,8 +95,14 @@ def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
             raise docker.errors.APIError("unavailable")
         if fault == "deadline":
             raise TimeoutError("machine budget exhausted")
+        if fault == "empty_null":
+            return None
+        if fault == "false_diff":
+            return False
+        if fault == "string_diff":
+            return ""
         return [{"Path": "/usr/bin/new", "Kind": 1}] if fault == "dirty" else (
-            None if fault == "unknown_diff" else [])
+            {} if fault == "unknown_diff" else [])
 
     machine = SimpleNamespace(status="running" if fault == "running" else "exited",
         reload=lambda: None, diff=diff, attrs={"Image": image_id if fault != "image" else
@@ -121,7 +128,7 @@ def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
         with pytest.raises(TimeoutError, match="budget"):
             runtime.can_reuse_image(ref)
     else:
-        assert runtime.can_reuse_image(ref) is (fault is None)
+        assert runtime.can_reuse_image(ref) is (fault in {None, "empty_null"})
 
 
 def test_package_workers_and_node_heap_respect_cell_budget(tmp_path, monkeypatch):
