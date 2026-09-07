@@ -92,6 +92,18 @@ async def teardown_project_cell(session: AsyncSession, project: Project) -> None
         ) from exc
     response = outcome.response
     if (
+        outcome.kind == "destroy" and outcome.status == "completed"
+        and response is not None and response.has_draft_runtime
+    ):
+        # Older controllers reported a retained portable identity as a live
+        # draft. Keep the immutable operation receipt; verify current resources
+        # at the same fence rather than replaying a completed deletion.
+        from omnia_api.services.project_cell_runtime import _get_cell_resources
+
+        observed = await _get_cell_resources(workspace_id)
+        if observed.fencing_epoch == response.fencing_epoch:
+            response = observed
+    if (
         outcome.kind != "destroy" or outcome.status != "completed"
         or response is None or response.state != "retained"
         or response.has_draft_runtime

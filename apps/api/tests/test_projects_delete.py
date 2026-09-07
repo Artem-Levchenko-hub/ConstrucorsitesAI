@@ -357,6 +357,47 @@ async def test_delete_cell_failure_preserves_project_and_retries_same_operation(
     assert await db_session.get(Project, project_id) is None
 
 
+async def test_delete_rechecks_stale_completed_destroy_without_replaying_it(
+    client, db_session, as_user, fake_teardown, monkeypatch,
+):
+    from dataclasses import replace
+
+    from omnia_api.services import project_cell_runtime
+    from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+
+    owner, project, workspace = await _cell_project(db_session)
+    project_id, workspace_id = project.id, workspace.id
+    as_user(owner)
+    controls, inspections = [], []
+    cached = None
+
+    async def destroy(_self, request):
+        nonlocal cached
+        controls.append(request)
+        cached = replace(_destroyed_cell(request), has_draft_runtime=True, draft_state="stopped")
+        return cached
+
+    async def inspect(current_workspace_id):
+        assert current_workspace_id == workspace_id
+        inspections.append(current_workspace_id)
+        return replace(cached, has_draft_runtime=len(inspections) == 1)
+
+    monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", destroy)
+    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", inspect)
+
+    first = await client.delete(f"/api/projects/{project_id}")
+    assert first.status_code == 503
+    assert await db_session.get(Project, project_id) is not None
+    assert fake_teardown["repo"] == []
+    second = await client.delete(f"/api/projects/{project_id}")
+
+    assert second.status_code == 204, second.text
+    assert len(controls) == 1
+    assert len(inspections) == 2
+    assert cached.has_draft_runtime is True
+    assert await db_session.get(Project, project_id) is None
+
+
 async def test_deleting_cell_rejects_old_preview_start(
     client, db_session, as_user, fake_teardown, monkeypatch,
 ):

@@ -1033,9 +1033,12 @@ async def _resource_response(
                 portable = (
                     manager.machine_runtime.preview(state) if manager.machine_runtime else None
                 )
-                has_draft_runtime = True
-                draft_state = _draft_state_name(portable[0]) if portable else "stopped"
-                preview_url = _draft_preview_url(status.workspace_id)
+                # Portable identity survives teardown in retained checkpoints;
+                # only an existing gateway proves a remaining draft runtime.
+                if portable is not None:
+                    has_draft_runtime = True
+                    draft_state = _draft_state_name(portable[0])
+                    preview_url = _draft_preview_url(status.workspace_id)
     return WorkspaceResourceResponse(
         workspace_id=status.workspace_id,
         state=status.state,

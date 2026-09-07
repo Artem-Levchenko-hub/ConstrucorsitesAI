@@ -1957,6 +1957,31 @@ async def test_portable_owner_start_retries_do_not_restart_healthy_services(
     assert manager.state_store.load(workspace_id) == before
 
 
+@pytest.mark.parametrize("gateway_state", [None, "running", "exited"])
+async def test_retained_portable_identity_does_not_invent_a_draft_runtime(
+    monkeypatch, tmp_path, gateway_state,
+):
+    workspace_id = uuid4()
+    provider, manager, _, _ = await _ready_provider(tmp_path, workspace_id)
+    monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+    manager.machine_runtime = SimpleNamespace(
+        preview=lambda _: None if gateway_state is None else (gateway_state, "172.30.0.2"),
+    )
+    status = WorkspaceResourceStatus(
+        workspace_id=workspace_id, state="retained", provider_ref="retained-cell",
+        fencing_epoch=4, checkpoint_ref="retained-checkpoint", has_workspace=True,
+        has_agent_home=True, has_postgres=True, has_redis=True,
+    )
+
+    response = await workspace._resource_response(status, provider=provider)
+
+    assert response.has_draft_runtime is (gateway_state is not None)
+    assert (response.preview_url is not None) is (gateway_state is not None)
+    assert response.draft_state == (
+        None if gateway_state is None else "running" if gateway_state == "running" else "stopped"
+    )
+
+
 @pytest.mark.parametrize("failure", [None, "owner", "project", "active", "token"])
 @pytest.mark.parametrize("applied", [False, True])
 async def test_owner_business_config_has_no_generation_write_authority(
