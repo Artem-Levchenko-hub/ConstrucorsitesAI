@@ -27,6 +27,77 @@ const record: MaxProjectConfig = {
 
 afterEach(() => vi.clearAllMocks());
 
+it("groups product and appearance fields and gives content controls visible associated labels", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    const appearance = document.querySelector("#max-config-colors")?.closest("fieldset");
+    expect(appearance?.querySelector("legend")?.textContent).toBe("Оформление");
+    expect(appearance?.contains(document.querySelector("#max-config-style"))).toBe(true);
+    expect(appearance?.contains(document.querySelector("#max-config-name"))).toBe(false);
+    await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1].click());
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="tabpanel"] button')].find(b => b.textContent?.includes("Добавить"))!.click());
+    const inputs = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[role="tabpanel"] input, [role="tabpanel"] textarea')];
+    expect(inputs).toHaveLength(4);
+    for (const input of inputs) {
+      expect(input.labels?.length).toBeGreaterThan(0);
+      expect(input.labels?.[0].textContent?.trim()).toBeTruthy();
+    }
+    const visibility = document.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(visibility.getAttribute("aria-checked")).toBe("true");
+    await act(async () => visibility.click());
+    expect(visibility.getAttribute("aria-checked")).toBe("false");
+    expect(mocks.save).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
+it("keeps owner/support and policy choices distinguishable without changing consent defaults", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    await act(async () => tabs[2].click());
+    expect(document.querySelector("#max-legal-name")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Реквизиты владельца");
+    expect(document.querySelector("#max-support-email")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Связь с поддержкой");
+    await act(async () => tabs[3].click());
+    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[role="tabpanel"] input[type="checkbox"]')];
+    expect(checkboxes.map(input => input.checked)).toEqual([false, true]);
+    expect(document.querySelectorAll('[role="tabpanel"] button[aria-pressed="false"]')).toHaveLength(3);
+    expect(mocks.save).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
+it("explains blocked saving on any tab instead of leaving an unexplained disabled action", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue({ ...record, config: { ...record.config, app_name: "", summary: "" } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="tab"]')[3].click());
+    const footer = document.querySelector('[data-testid="max-settings-footer"]')!;
+    expect(footer.querySelector('[role="status"]')).not.toBeNull();
+    expect(footer.querySelector('[role="status"]')?.textContent).toMatch(/название.*описание/);
+    expect(footer.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true);
+    expect(mocks.save).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
 it("supports keyboard tab selection, retains edited fields and closes accessibly without saving", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   mocks.get.mockResolvedValue(record);
