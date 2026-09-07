@@ -434,6 +434,76 @@ async def test_ensure_tls_writes_private_upstream(
     assert "proxy_pass http://172.16.5.9:3310" in conf
 
 
+async def test_repeated_wildcard_preview_reuses_confirmed_tls_but_repairs_changes(
+    tmp_path, monkeypatch,
+):
+    from unittest.mock import AsyncMock
+
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("OMNIA_WILDCARD_CERT_ROOT", "/certs")
+    get_settings.cache_clear()
+    reload = AsyncMock(return_value=CmdResult(rc=0, stdout="", stderr=""))
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    host = "cell-test-dev.preview.omniadevelop.ru"
+    options = {"upstream_host": "10.253.0.3", "private_cell": True}
+    assert await nginx_writer.ensure_tls(host, 3000, **options)
+    path = tmp_path / (host + ".conf")
+    original = path.read_bytes()
+    assert await nginx_writer.ensure_tls(host, 3000, **options)
+    assert reload.await_count == 1, "opening warm preview must not reload shared nginx"
+    assert path.read_bytes() == original
+
+    # Changed/missing routes must still be written and applied to nginx.
+    options["upstream_host"] = "10.253.0.4"
+    assert await nginx_writer.ensure_tls(host, 3000, **options)
+    assert reload.await_count == 2
+    path.unlink()
+    assert await nginx_writer.ensure_tls(host, 3000, **options)
+    assert reload.await_count == 3
+
+
+async def test_tls_confirmation_expires_and_does_not_trust_existing_file(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("OMNIA_WILDCARD_CERT_ROOT", "/certs")
+    get_settings.cache_clear()
+    reload = AsyncMock(return_value=CmdResult(rc=0, stdout="", stderr=""))
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    host = "cell-expiry-dev.preview.omniadevelop.ru"
+    path = tmp_path / (host + ".conf")
+    path.write_text(nginx_writer._https_block(host, 3000), encoding="utf-8")
+    assert await nginx_writer.ensure_tls(host, 3000)
+    assert reload.await_count == 1
+    monkeypatch.setattr(nginx_writer, "_TLS_CONFIRMATION_SECONDS", 0)
+    assert await nginx_writer.ensure_tls(host, 3000)
+    assert reload.await_count == 2
+
+
+async def test_failed_tls_reload_is_never_cached_as_success(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from omnia_orchestrator.core.config import get_settings
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("OMNIA_WILDCARD_CERT_ROOT", "/certs")
+    get_settings.cache_clear()
+    good = CmdResult(rc=0, stdout="", stderr="")
+    reload = AsyncMock(side_effect=[CmdResult(rc=1, stdout="", stderr="invalid"), good, good])
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    host = "cell-test-dev.preview.omniadevelop.ru"
+    assert not await nginx_writer.ensure_tls(host, 3000, private_cell=True)
+    assert await nginx_writer.ensure_tls(host, 3000, private_cell=True)
+    assert reload.await_count == 3
+
+
 async def test_ensure_tls_rejects_invalid_upstream_before_cert_issue(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

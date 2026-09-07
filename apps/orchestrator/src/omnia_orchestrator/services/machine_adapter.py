@@ -607,15 +607,20 @@ class MachineAdapter:
         client = backend.client
         names = state.resource_names
         image_tag = get_stack("max-miniapp-nextjs").image_tag
-        if public_mode:
+        preview_image = getattr(self.settings, "cell_preview_core_image", "")
+        compiled_core = public_mode or bool(preview_image)
+        if compiled_core:
             from omnia_orchestrator.services.docker_machine_backend import _PIN
 
-            image_tag = getattr(self.settings, "cell_public_core_image", "")
+            image_tag = (getattr(self.settings, "cell_public_core_image", "")
+                         if public_mode else preview_image)
             if not _PIN.fullmatch(image_tag):
                 raise CellResourceError("pinned compiled public MAX core image is required")
             image = client.images.get(image_tag)
             if image.labels.get("omnia.max-core.protocol") != "1":
                 raise CellResourceError("compiled public MAX core image protocol mismatch")
+            if not public_mode and image.labels.get("omnia.max-core.preview-protocol") != "1":
+                raise CellResourceError("compiled MAX core image lacks owner preview protocol")
             image_tag = image.id
             # Validate image before any auth rotation or old-core removal.
         secret = (self._public_auth_secret(state, backend, runtime_env or {})
@@ -623,8 +628,8 @@ class MachineAdapter:
         core_name = backend.stem + "-max-core"
         core = backend._lookup(client.containers, core_name, "managed-max-core")
         public_options = ""
-        if public_mode:
-            # No dev compiler or package-manager supervisor in public serving.
+        if compiled_core:
+            # The trusted core never needs a dev compiler, including owner preview.
             # Bound V8 from the container, not the host's available memory.
             heap_mib = max(64, min(384, self._max_core_memory_bytes() // (2 * 1024**2)))
             public_options = f"--max-old-space-size={heap_mib}"
@@ -633,7 +638,8 @@ class MachineAdapter:
                 env = dict(item.split("=", 1) for item in config.get("Env", []) if "=" in item)
                 if (env.get("NODE_OPTIONS") != public_options
                         or config.get("Cmd") != list(_PUBLIC_CORE_COMMAND)
-                        or core.attrs.get("Image") != image_tag):
+                        or core.attrs.get("Image") != image_tag
+                        or (not public_mode and env.get("OMNIA_OWNER_PREVIEW") != "1")):
                     # Runtime-only upgrade. Keep auth secret, product and all DB
                     # containers/volumes; this is not a resource-profile change.
                     core.remove(force=True)
@@ -642,10 +648,10 @@ class MachineAdapter:
             credentials = self.manager.credential_store.load_or_create(state.workspace_id)
             core = client.containers.create(
                 image_tag,
-                **({"command": list(_PUBLIC_CORE_COMMAND)} if public_mode else {}),
+                **({"command": list(_PUBLIC_CORE_COMMAND)} if compiled_core else {}),
                 name=core_name,
                 labels={**backend.labels("managed-max-core"),
-                        **({"omnia.max-core.protocol": "1"} if public_mode else {})},
+                        **({"omnia.max-core.protocol": "1"} if compiled_core else {})},
                 detach=True,
                 network=names.internal_network,
                 cap_drop=["ALL"],
@@ -662,7 +668,8 @@ class MachineAdapter:
                     "REDIS_URL": f"redis://{names.redis_container}:6379/0",
                     **(runtime_env or {}),
                     **({"NODE_OPTIONS": public_options, "NODE_ENV": "production",
-                        "HOSTNAME": "0.0.0.0", "PORT": "3000"} if public_mode else {}),
+                        "HOSTNAME": "0.0.0.0", "PORT": "3000"} if compiled_core else {}),
+                    **({"OMNIA_OWNER_PREVIEW": "1"} if compiled_core and not public_mode else {}),
                 },
                 mem_limit=self._max_core_memory_bytes(),
                 memswap_limit=self._max_core_memory_bytes(),
@@ -866,6 +873,19 @@ class MachineAdapter:
             .get(backend.internal_network, {})
             .get("IPAddress", "")
         )
+        if gateway.status == "running":
+            core = backend._lookup(
+                backend.client.containers, backend.stem + "-max-core", "managed-max-core",
+            )
+            if core is None:
+                return "stopped", address
+            core.reload()
+            preview_image = getattr(self.settings, "cell_preview_core_image", "")
+            if preview_image:
+                preview_image = backend.client.images.get(preview_image).id
+            if (core.status != "running"
+                    or (preview_image and core.attrs.get("Image") != preview_image)):
+                return "stopped", address
         return gateway.status, address
 
     async def logs(self, state: Any) -> str:

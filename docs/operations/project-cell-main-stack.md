@@ -113,6 +113,32 @@ using canonical production compose, restart the orchestrator, verify status,
 health and canary capability/bootstrap. Record pushed/deployed revision and image
 IDs. Do not claim delivery until that loop is complete.
 
+### Precompiled owner preview core
+
+Build the trusted image with `scripts/build-public-max-core.sh` from the pinned
+kit. Set `CELL_PREVIEW_CORE_IMAGE` to the resulting immutable image ID in the
+host orchestrator environment. It must advertise both `omnia.max-core.protocol=1`
+and `omnia.max-core.preview-protocol=1`. An empty setting retains the legacy draft
+core for rollout control. The agent's image, application sources and databases
+are not replaced by this setting.
+
+The trusted owner core runs `server.js` with bounded heap and
+`OMNIA_OWNER_PREVIEW=1`. Its bootstrap still requires an unexpired project HMAC.
+Public cores never receive that flag; a public origin also disables the route.
+New owner previews without saved metadata use the trusted kit's initial metadata;
+missing public or malformed metadata still fails closed. Readiness notices a
+stopped/missing or outdated core so normal owner-start can repair it.
+
+Repeated wildcard TLS setup reuses a matching file only after this orchestrator
+process confirmed its reload. File edits, upstream changes, missing files, restart
+and the five-minute confirmation limit force another check/reload. Per-host ACME
+issuance remains unchanged.
+
+Verify a real signed owner bootstrap and page load, unsigned/expired rejection,
+public bootstrap rejection, metadata readback and cold/warm timings before rollout.
+Rollback clears `CELL_PREVIEW_CORE_IMAGE`; an already-running compiled core remains
+until the next normal teardown/recreation. Keep the previous pinned image available.
+
 Add these **API and worker** switches initially disabled, then enable one at a
 time for the existing owner canary only:
 

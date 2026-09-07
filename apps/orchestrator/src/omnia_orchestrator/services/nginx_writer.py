@@ -25,6 +25,7 @@ import asyncio
 import ipaddress
 import os
 import re
+import time
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -40,6 +41,10 @@ log = structlog.get_logger("omnia_orchestrator.nginx")
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,253}[a-z0-9])?$")
 _ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/[A-Za-z0-9_./-]+$")
 _VHOST_TEMPLATE_MARKER = "# omnia vhost template: html-no-store-v3"
+# Only a successful reload in this process confirms a file was applied. Recheck
+# periodically because wildcard certificate files may be unreadable to this user.
+_TLS_CONFIRMATION_SECONDS = 300
+_tls_confirmations: dict[Path, tuple[str, int, float]] = {}
 _RFC1918_V4_NETWORKS = (
     ipaddress.IPv4Network("10.0.0.0/8"),
     ipaddress.IPv4Network("172.16.0.0/12"),
@@ -518,17 +523,22 @@ async def ensure_tls(
     upstream_host = _validate_upstream_host(upstream_host)
     if not get_settings().enable_tls:
         return False
-    if not await _issue_cert(host):
-        return False
     path = _site_path(host)
     path.parent.mkdir(parents=True, exist_ok=True)
     previous = path.read_text(encoding="utf-8") if path.exists() else None
-    path.write_text(
-        _https_block(host, port, upstream_host=upstream_host, private_cell=private_cell),
-        encoding="utf-8",
-    )
+    desired = _https_block(host, port, upstream_host=upstream_host, private_cell=private_cell)
+    confirmed = _tls_confirmations.get(path)
+    if (confirmed is not None and _wildcard_cert_dir(host) and previous == desired
+            and confirmed[0] == desired and confirmed[1] == path.stat().st_mtime_ns
+            and time.monotonic() - confirmed[2] < _TLS_CONFIRMATION_SECONDS):
+        return True
+    _tls_confirmations.pop(path, None)
+    if not await _issue_cert(host):
+        return False
+    path.write_text(desired, encoding="utf-8")
     res = await _reload()
     if res.ok:
+        _tls_confirmations[path] = (desired, path.stat().st_mtime_ns, time.monotonic())
         log.info("nginx.published_https", host=host, port=port)
         return True
     # Never downgrade a previously working HTTPS site on a failed refresh.

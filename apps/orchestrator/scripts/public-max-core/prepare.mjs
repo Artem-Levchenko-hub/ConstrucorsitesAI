@@ -28,6 +28,12 @@ edit("src/lib/max/bot-api.ts", (source) => {
   return source.replace(configImport, runtimeImport)
     .replace(handlers, "$1\n  const app = getMaxConfig();");
 });
+// Compile once; owner preview remains an explicit controller-only runtime mode.
+// NODE_ENV is folded to production by Next, so it cannot authorize this route.
+edit("src/app/api/omnia/preview-session/route.ts", (source) => source.replace(
+  'process.env.NODE_ENV !== "development" || !projectId',
+  'process.env.OMNIA_OWNER_PREVIEW !== "1" || process.env.OMNIA_PUBLIC_APP_ORIGIN || !projectId',
+));
 writeFileSync("src/app/layout.tsx", `
 export const dynamic = "force-dynamic";
 export default function Layout({ children }: { children: React.ReactNode }) {
@@ -35,10 +41,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 }
 `);
 writeFileSync("src/lib/omnia/runtime-config.ts", `
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { OmniaMaxConfig } from "./max-config";
+import { omniaMaxConfig as initialPreviewConfig } from "./max-config";
 export function getMaxConfig(): OmniaMaxConfig {
-  // Missing/invalid config fails closed; the controller must finish readback
+  // A first owner preview may not have saved business metadata yet. Preserve
+  // the trusted kit's initial values; published apps still require saved data.
+  if (process.env.OMNIA_OWNER_PREVIEW === "1" && !process.env.OMNIA_PUBLIC_APP_ORIGIN
+      && !existsSync("/app/omnia-business-config.json")) return initialPreviewConfig;
+  // Missing public/invalid config fails closed; the controller must finish readback
   // before publishing ingress. No build-time placeholders are served.
   return JSON.parse(readFileSync("/app/omnia-business-config.json", "utf8"));
 }
