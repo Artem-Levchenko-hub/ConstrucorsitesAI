@@ -46,5 +46,5 @@ Files: `MaxProjectWizard.tsx`, new scoped review CSS/component and test. Group n
 - [x] Run full Vitest suite (376/376 across 61 files after translating two historical audit actions), typecheck, lint, production build (46/46 pages) and `git diff --check`.
 - [x] Update `otchet/data.json` with verified evidence and an unscored testing hypothesis; validate unrelated steps remain unchanged.
 - [x] Commit and push without force. Build the exact web image; initial web-only rollout 303053814d41a82bc7afd28c959d1da35c78255f healthy, backend IDs and start times unchanged. Rollback baseline was a72b40889d88b5a7f7538bd3b6dd91d231a192ba.
-- [ ] Deliver the audit-label follow-up, using the verified 303053814d41a82bc7afd28c959d1da35c78255f image as rollback.
-- [ ] Verify exact web-health revision, unchanged non-web containers and read-only live UI. Publish report evidence; report any remaining limitation honestly.
+- [x] Deliver the audit-label follow-up ff2ecfbce2fdff2eb36e8009ff15e826310ff3e0, using the verified 303053814d41a82bc7afd28c959d1da35c78255f image as rollback. Release record: `/tmp/omnia-admin-clarity-release.hgIAiK`.
+- [x] Verify exact public web-health revision ff2ecfbce2fdff2eb36e8009ff15e826310ff3e0, healthy web and unchanged non-web IDs/start times. Read-only production journal shows the translated historical actions and preserved role changes/notes. Report version 71 records delivery; user impact remains unmeasured, missing project images remain honestly documented.
