@@ -170,6 +170,27 @@ restore, old references or absent proof use the existing recovery path. Executio
 ensure and explicit restore invalidate the receipt. Capture still archives every
 source, dependency and database volume, and explicit version restoration is unchanged.
 
+The trusted idle process in newly created development containers handles SIGTERM
+and exits normally, allowing Docker to tear down its process namespace without
+waiting for the forced-kill grace period. Database quiesce and PostgreSQL's stop
+grace period remain unchanged; this is not a shortcut around data capture.
+
+Generation release retains the owned guard, egress proxy, managed MAX core and
+gateway only after a successful current checkpoint and removal of the agent and
+dedicated PostgreSQL containers. This keeps trusted services warm within the
+existing reserved envelope; no agent processes survive release. The receipt also
+binds the retained trusted container identities. Captured data volumes must still
+have no attachments. Pause, destroy, recovery and a new generation's fenced
+handover use the full teardown path.
+
+Retained trusted services alone do not make a preview ready: its application and
+dedicated database must be running. Owner resume still starts those services and
+checks readiness. Gateway reuse requires a matching controller-owned runtime
+stamp and a healthy boundary; changed identity, configuration or trusted code
+requires reconciliation. Measure release capture, owner resume and complete idle
+cell wake separately. Keeping trusted services warm does not eliminate current
+volume capture or waiting for genuinely unavailable capacity.
+
 Add these **API and worker** switches initially disabled, then enable one at a
 time for the existing owner canary only:
 

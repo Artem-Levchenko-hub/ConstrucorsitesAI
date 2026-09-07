@@ -16,6 +16,55 @@ def module():
     return importlib.import_module(name)
 
 
+@pytest.mark.parametrize("mode", ["release", "default", "no_capture", "network", "recovery"])
+async def test_halt_retains_trusted_only_after_successful_release_capture(tmp_path, mode):
+    from unittest.mock import AsyncMock
+
+    runtime = module().MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.exists = lambda _: True
+    runtime.recovery_required = lambda _: mode == "recovery"
+    runtime.checkpoint = AsyncMock(return_value="captured")
+    removed = []
+    records = []
+    trusted = {kind: SimpleNamespace(remove=lambda **_: removed.append(True)) for kind in (
+        "max-gateway", "managed-max-core", "namespace-guard", "egress-proxy",
+    )}
+    backend = SimpleNamespace(
+        invalidate_retained_preview=lambda: None, _container=lambda: object(),
+        _reconcile_recovery_helpers=lambda: None, remove=lambda: removed.append("product"),
+        stop=lambda: removed.append("stopped"), stem="owned",
+        client=SimpleNamespace(containers=None, networks=None),
+        _lookup=lambda _, _name, kind: trusted.get(kind),
+        record_retained_preview=lambda ref, **kw: records.append((ref, kw)) or True,
+    )
+    runtime.parts = lambda _: (SimpleNamespace(state=lambda: {"epoch": 7}), backend)
+    await runtime.halt(SimpleNamespace(workspace_id=uuid4()),
+                       retain_trusted=mode != "default", capture=mode != "no_capture",
+                       remove_network=mode == "network")
+    assert len(removed) == (1 if mode == "release" else 5)
+    assert records == ([] if mode in {"no_capture", "recovery"} else [
+        ("captured", {"epoch": 7, **({"retain_trusted": True} if mode == "release" else {})}),
+    ])
+
+
+@pytest.mark.parametrize("missing", ["development", "project-postgres"])
+def test_retained_gateway_without_product_cannot_report_ready(missing):
+    runtime = module().MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.exists = lambda _: True
+    gateway = SimpleNamespace(status="running", reload=lambda: None, attrs={
+        "NetworkSettings": {"Networks": {"internal": {"IPAddress": "10.0.0.1"}}},
+    })
+    running = SimpleNamespace(status="running", reload=lambda: None, attrs={})
+    backend = SimpleNamespace(
+        client=SimpleNamespace(containers=None), stem="owned", internal_network="internal",
+        _lookup=lambda _, _name, kind: (
+            gateway if kind == "max-gateway" else None if kind == missing else running
+        ),
+    )
+    runtime.parts = lambda _: (None, backend)
+    assert runtime.preview(SimpleNamespace(workspace_id=uuid4())) == ("stopped", "10.0.0.1")
+
+
 async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tmp_path):
     api = module()
     commands = []
@@ -218,7 +267,7 @@ async def test_preview_resume_uses_only_consumed_halt_receipt(tmp_path, monkeypa
     monkeypatch.setattr(backend, "consume_retained_preview", consume)
     monkeypatch.setattr(backend, "ensure", lambda *_: events.append("ensure"))
     monkeypatch.setattr(backend, "start_service", lambda *_: events.append("service"))
-    monkeypatch.setattr(backend, "service_status", lambda *_: {"ready": True})
+    monkeypatch.setattr(backend, "service_status", lambda *_, **kw: {"ready": True})
     monkeypatch.setattr(api.MachineEnvironmentStore, "restore", lambda *_args, **_kwargs:
                         events.append("restore"))
     runtime._start_boundary = lambda *_: events.append("boundary")
@@ -229,8 +278,9 @@ async def test_preview_resume_uses_only_consumed_halt_receipt(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("failure", [None, "capture", "teardown", "no_capture", "already_absent"])
+@pytest.mark.parametrize("retain_trusted", [False, True])
 async def test_halt_certifies_retained_volumes_only_after_complete_capture_and_teardown(
-    tmp_path, failure,
+    tmp_path, failure, retain_trusted,
 ):
     from unittest.mock import AsyncMock
 
@@ -252,10 +302,12 @@ async def test_halt_certifies_retained_volumes_only_after_complete_capture_and_t
         if failure == "teardown":
             raise RuntimeError("teardown failed")
 
-    def record(ref, *, epoch):
+    def record(ref, *, epoch, **options):
         assert ref is reference and epoch == 7
+        assert options == ({"retain_trusted": True} if retain_trusted else {})
         assert events[-1] == "teardown"
         events.append("receipt")
+        return True
 
     backend = SimpleNamespace(
         invalidate_retained_preview=lambda: events.append("invalidate"),
@@ -268,10 +320,11 @@ async def test_halt_certifies_retained_volumes_only_after_complete_capture_and_t
     runtime.checkpoint = AsyncMock(side_effect=checkpoint)
     if failure in {"capture", "teardown"}:
         with pytest.raises(RuntimeError, match="failed"):
-            await runtime.halt(SimpleNamespace(workspace_id=uuid4()))
+            await runtime.halt(SimpleNamespace(workspace_id=uuid4()), retain_trusted=retain_trusted)
         assert "receipt" not in events and events[0] == "invalidate"
     else:
-        await runtime.halt(SimpleNamespace(workspace_id=uuid4()), capture=failure != "no_capture")
+        await runtime.halt(SimpleNamespace(workspace_id=uuid4()), capture=failure != "no_capture",
+                           retain_trusted=retain_trusted)
         expected = ["invalidate", *([] if failure == "no_capture" else ["capture"]), "teardown"]
         if failure is None:
             expected.append("receipt")

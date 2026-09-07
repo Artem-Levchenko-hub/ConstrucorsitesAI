@@ -641,7 +641,11 @@ class MachineAdapter:
                 if (env.get("NODE_OPTIONS") != public_options
                         or config.get("Cmd") != list(_PUBLIC_CORE_COMMAND)
                         or core.attrs.get("Image") != image_tag
-                        or (not public_mode and env.get("OMNIA_OWNER_PREVIEW") != "1")):
+                        or (not public_mode and (
+                            env.get("OMNIA_OWNER_PREVIEW") != "1"
+                            or env.get("AUTH_SECRET") != secret
+                            or env.get("OMNIA_PROJECT_ID") != str(state.project_id)
+                        ))):
                     # Runtime-only upgrade. Keep auth secret, product and all DB
                     # containers/volumes; this is not a resource-profile change.
                     core.remove(force=True)
@@ -736,27 +740,41 @@ class MachineAdapter:
                 "public_origin": (runtime_env or {}).get("OMNIA_PUBLIC_APP_ORIGIN", ""),
             } if public_mode else {}),
         }
-        public_stamp = self.root / "public-boundary-runtime" / f"{state.workspace_id}.json"
+        runtime_stamp = self.root / (
+            "public-boundary-runtime" if public_mode else "owner-boundary-runtime"
+        ) / f"{state.workspace_id}.json"
         wire_config: dict[str, Any] = config
         if business_config is not None or public_mode:
             wire_config = {"config": config, "server": boundary_source()}
         # Reconcile trusted code updates as well as configuration changes. Reusing
         # a healthy old gateway must not strand already-published apps on old auth.
         runtime_digest = hashlib.sha256(
-            json.dumps(wire_config, sort_keys=True).encode(),
+            json.dumps({
+                "wire": wire_config, "source": boundary_source(), "core_image": image_tag,
+                "guard_image": backend.guard_image, "public_mode": public_mode,
+                "owner_id": str(state.owner_id), "workspace_id": str(state.workspace_id),
+            }, sort_keys=True).encode(),
         ).hexdigest()
         old = backend._lookup(client.containers, gateway_name, "max-gateway")
-        if public_mode and old is not None and public_stamp.is_file():
-            if public_stamp.is_symlink():
-                raise CellResourceError("unsafe public boundary state")
-            stamp = json.loads(public_stamp.read_text(encoding="utf-8"))
-            old.reload()
-            if stamp.get("digest") == runtime_digest and old.status == "running":
+        if runtime_stamp.is_symlink():
+            raise CellResourceError("unsafe boundary state")
+        if old is not None and runtime_stamp.is_file():
+            stamp = json.loads(runtime_stamp.read_text(encoding="utf-8"))
+            identity = backend.trusted_container_identity(old, "max-gateway")
+            if (identity is not None and stamp.get("digest") == runtime_digest
+                    and stamp.get("gateway") == identity):
                 address = old.attrs["NetworkSettings"]["Networks"][names.internal_network][
                     "IPAddress"
                 ]
-                self._wait_http(old, address, "/__omnia/identity", expected=401, timeout=30)
-                return
+                try:
+                    self._wait_http(old, address, "/__omnia/identity", expected=401, timeout=30)
+                except CellResourceError:
+                    # Matching metadata cannot certify an unhealthy gateway.
+                    # Forget its receipt before replacing only this owned
+                    # container; budget exhaustion/cancellation still propagate.
+                    write_controller_json(runtime_stamp, {})
+                else:
+                    return
         if old is not None:
             old.remove(force=True)
         gateway = client.containers.create(
@@ -819,8 +837,9 @@ class MachineAdapter:
             "IPAddress"
         ]
         self._wait_http(gateway, gateway_ip, "/__omnia/identity", expected=401, timeout=30)
-        if public_mode:
-            write_controller_json(public_stamp, {"digest": runtime_digest})
+        identity = backend.trusted_container_identity(gateway, "max-gateway")
+        if identity is not None:
+            write_controller_json(runtime_stamp, {"digest": runtime_digest, "gateway": identity})
 
     @staticmethod
     def _wait_http(
@@ -876,6 +895,18 @@ class MachineAdapter:
             .get("IPAddress", "")
         )
         if gateway.status == "running":
+            # Generation release can retain ingress, but its generated process
+            # and dedicated database are physically removed. Owner-start must
+            # resume them before treating that gateway as a working preview.
+            for suffix, kind in (("dev", "development"), ("project-postgres", "project-postgres")):
+                product = backend._lookup(
+                    backend.client.containers, backend.stem + "-" + suffix, kind,
+                )
+                if product is None:
+                    return "stopped", address
+                product.reload()
+                if product.status != "running":
+                    return "stopped", address
             core = backend._lookup(
                 backend.client.containers, backend.stem + "-max-core", "managed-max-core",
             )
@@ -900,7 +931,10 @@ class MachineAdapter:
             tails.append(f"[{name}] {tail}")
         return "\n".join(tails)[-24000:]
 
-    async def halt(self, state: Any, *, remove_network: bool = False, capture: bool = True) -> None:
+    async def halt(
+        self, state: Any, *, remove_network: bool = False, capture: bool = True,
+        retain_trusted: bool = False,
+    ) -> None:
         if not self.exists(state.workspace_id):
             return
         machine, backend = self.parts(state)
@@ -917,6 +951,15 @@ class MachineAdapter:
             await machine_effect(backend.stop)
         else:
             await machine_effect(backend.remove)
+        if retain_trusted and had_machine and reference is not None and not remove_network:
+            # Only successful release may retain controller-owned services. The
+            # receipt proves product death and no attachment to captured data;
+            # an incomplete proof takes the ordinary full teardown path.
+            if await machine_effect(
+                backend.record_retained_preview, reference, epoch=machine.state()["epoch"],
+                retain_trusted=True,
+            ):
+                return
         for suffix, kind in (
             ("gateway", "max-gateway"),
             ("max-core", "managed-max-core"),
@@ -973,7 +1016,9 @@ class MachineAdapter:
         # The normal preview/generation wake replays this controller-owned file.
         if preview is None or preview[0] != "running":
             return False
-        await machine_effect(self._start_boundary, state, manifest, backend, state.fencing_epoch)
+        await machine_effect(
+            self._start_boundary, state, manifest, backend, machine.state()["epoch"],
+        )
         write_controller_json(path, {
             "project_id": str(state.project_id), "owner_id": str(state.owner_id),
             "version": version, "config": config, "applied": True,
@@ -1003,7 +1048,9 @@ class MachineAdapter:
         for name in manifest.service_order():
             service = next(item for item in manifest.services if item.name == name)
             await machine_effect(backend.start_service, service, runtime_epoch)
-            status = await machine_effect(backend.service_status, service, runtime_epoch)
+            status = await machine_effect(
+                backend.service_status, service, runtime_epoch, include_logs=False,
+            )
             if not status["ready"]:
                 raise CellResourceError(f"service {name} did not become ready after recreation")
         saved["epoch"] = runtime_epoch

@@ -433,7 +433,7 @@ class DockerCellResourceManager:
             if names is None:
                 raise CellResourceError("resource names missing")
             if self.machine_runtime is not None:
-                await self.machine_runtime.halt(state)
+                await self.machine_runtime.halt(state, retain_trusted=True)
             await self.stateful_begin_or_replay(
                 spec,
                 mutation,

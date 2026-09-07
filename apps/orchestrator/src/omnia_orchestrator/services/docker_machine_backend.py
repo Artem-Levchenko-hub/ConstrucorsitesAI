@@ -423,7 +423,12 @@ class DockerMachineBackend:
             "user": "0:0",
             "labels": {**self.labels("development"), "omnia.fencing_epoch": str(epoch)},
             "entrypoint": ["python3", "-c"],
-            "command": ["import signal; signal.pause()"],
+            # PID1 ignores default SIGTERM. Explicit exit lets Docker tear down
+            # the PID namespace after quiesce instead of waiting for SIGKILL.
+            "command": [
+                "import signal,sys; "
+                "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.pause()"
+            ],
             "working_dir": "/workspace",
             "network_mode": "container:" + namespace_id,
             "privileged": False,
@@ -1034,7 +1039,9 @@ class DockerMachineBackend:
         write_controller_json(self.metadata_path, metadata)
         self.client.api.exec_start(response["Id"], detach=True)
 
-    def service_status(self, service: MachineService, epoch: int) -> dict[str, Any]:
+    def service_status(
+        self, service: MachineService, epoch: int, *, include_logs: bool = True,
+    ) -> dict[str, Any]:
         metadata = self._metadata()
         record = metadata["services"].get(service.name)
         if record is None or record["epoch"] != epoch:
@@ -1075,7 +1082,7 @@ class DockerMachineBackend:
             "name": service.name,
             "state": "running" if running else "failed",
             "ready": ready,
-            "log_tail": self._read_log(record["log"]),
+            "log_tail": self._read_log(record["log"]) if include_logs or not ready else "",
         }
 
     def address(self) -> str:
@@ -1178,8 +1185,38 @@ class DockerMachineBackend:
             if self._lookup(self.client.containers, name, "retained-proof") is not None:
                 raise CellResourceError("retained proof helper removal was not confirmed")
 
+    def trusted_container_identity(self, container: Any, kind: str) -> dict[str, str] | None:
+        """Bind controller-owned runtime configuration without persisting secrets."""
+        container.reload()
+        attrs = container.attrs
+        labels = attrs.get("Config", {}).get("Labels") or {}
+        if any(labels.get(key) != value for key, value in self.labels(kind).items()):
+            raise CellIdentityConflict("trusted runtime ownership identity mismatch")
+        started = attrs.get("State", {}).get("StartedAt")
+        image = attrs.get("Image")
+        if (
+            container.status != "running" or not container.id
+            or not isinstance(started, str) or not started
+            or not isinstance(image, str) or not _PIN.fullmatch(image)
+            or not isinstance(attrs.get("Config"), dict)
+            or not isinstance(attrs.get("HostConfig"), dict)
+            or not isinstance(attrs.get("NetworkSettings"), dict)
+            or not isinstance(attrs.get("Mounts"), list)
+            or attrs["HostConfig"].get("Privileged") is not False
+        ):
+            return None
+        fingerprint = {key: attrs[key] for key in (
+            "Config", "HostConfig", "NetworkSettings", "Mounts",
+        )}
+        return {
+            "id": container.id, "started_at": started, "image": image,
+            "configuration_digest": hashlib.sha256(
+                json.dumps(fingerprint, sort_keys=True).encode(),
+            ).hexdigest(),
+        }
+
     def _retained_preview_proof(
-        self, reference: MachineEnvironmentRef, *, epoch: int,
+        self, reference: MachineEnvironmentRef, *, epoch: int, retain_trusted: bool = False,
     ) -> dict[str, Any] | None:
         self.validate_restore_reference(reference)
         metadata = self._metadata()
@@ -1198,13 +1235,20 @@ class DockerMachineBackend:
         ):
             return None
         try:
+            trusted = {}
             for suffix, kind in (
                 ("dev", "development"), ("project-postgres", "project-postgres"),
                 ("gateway", "max-gateway"), ("max-core", "managed-max-core"),
                 ("guard", "namespace-guard"), ("proxy", "egress-proxy"),
             ):
-                if self._lookup(self.client.containers, self.stem + "-" + suffix, kind):
-                    return None
+                container = self._lookup(self.client.containers, self.stem + "-" + suffix, kind)
+                if container is not None:
+                    if not retain_trusted or suffix in {"dev", "project-postgres"}:
+                        return None
+                    trusted_identity = self.trusted_container_identity(container, kind)
+                    if trusted_identity is None:
+                        return None
+                    trusted[suffix] = trusted_identity
             image = self.client.images.get(reference.image_id)
             config = image.attrs.get("Config", {})
             labels = config.get("Labels") or {}
@@ -1254,7 +1298,8 @@ class DockerMachineBackend:
             for identity, inode in zip(identities.values(), stats, strict=True):
                 identity["inode"] = inode
             return {
-                "version": 1, "epoch": epoch, "daemon_id": daemon_id, "volumes": identities,
+                "version": 2, "epoch": epoch, "daemon_id": daemon_id, "volumes": identities,
+                "trusted": trusted,
                 "reference_digest": hashlib.sha256(
                     reference.model_dump_json().encode()
                 ).hexdigest(),
@@ -1264,9 +1309,11 @@ class DockerMachineBackend:
         except (docker.errors.APIError, OSError):
             return None
 
-    def record_retained_preview(self, reference: MachineEnvironmentRef, *, epoch: int) -> bool:
+    def record_retained_preview(
+        self, reference: MachineEnvironmentRef, *, epoch: int, retain_trusted: bool = False,
+    ) -> bool:
         self.invalidate_retained_preview()
-        proof = self._retained_preview_proof(reference, epoch=epoch)
+        proof = self._retained_preview_proof(reference, epoch=epoch, retain_trusted=retain_trusted)
         if proof is None:
             return False
         metadata = self._metadata()
@@ -1281,7 +1328,9 @@ class DockerMachineBackend:
         self.invalidate_retained_preview()
         if not isinstance(receipt, dict):
             return False
-        return self._retained_preview_proof(reference, epoch=epoch) == receipt
+        return self._retained_preview_proof(
+            reference, epoch=epoch, retain_trusted=bool(receipt.get("trusted")),
+        ) == receipt
 
     def can_reuse_image(self, reference: MachineEnvironmentRef) -> bool:
         if reference.workspace_id != self.workspace_id:

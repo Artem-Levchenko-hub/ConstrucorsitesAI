@@ -41,6 +41,28 @@ def backend(tmp_path, **overrides):
     return module.DockerMachineBackend(**values)
 
 
+def test_development_pid_one_handles_stop_signal_without_waiting_for_kill(tmp_path, monkeypatch):
+    import signal
+    import sys
+
+    runtime = backend(tmp_path)
+    options = runtime.container_options(MachineManifest.model_validate(payload()), "guard", 7)
+    handlers = {}
+
+    def pause():
+        assert signal.SIGTERM in handlers, "namespace PID1 ignores default SIGTERM"
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    monkeypatch.setitem(sys.modules, "signal", SimpleNamespace(
+        SIGTERM=signal.SIGTERM, signal=lambda sig, handler: handlers.update({sig: handler}),
+        pause=pause,
+    ))
+    assert options["entrypoint"] == ["python3", "-c"]
+    with pytest.raises(SystemExit) as stopped:
+        exec(options["command"][0], {})
+    assert stopped.value.code == 0
+
+
 def retained_preview_fixture(tmp_path):
     import docker
 
@@ -147,6 +169,73 @@ def test_completed_halt_receipt_is_consumed_once(tmp_path):
     assert runtime.consume_retained_preview(reference, epoch=7)
     assert "retained_preview_receipt" not in runtime._metadata()
     assert not runtime.consume_retained_preview(reference, epoch=7)
+
+
+@pytest.mark.parametrize("fault", [None, "restarted", "replaced", "foreign", "attached",
+                                 "missing", "changed_config", "product_alive"])
+def test_retained_receipt_binds_trusted_runtime_and_still_fences_product(tmp_path, fault):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    runtime, reference, _volumes, _image, attached = retained_preview_fixture(tmp_path)
+    original_get = runtime.client.containers.get
+    trusted = SimpleNamespace(id="trusted-core", status="running", reload=lambda: None, attrs={
+        "Id": "trusted-core", "Image": "sha256:" + "e" * 64,
+        "State": {"StartedAt": "2026-09-07T10:00:00Z"},
+        "Config": {"Labels": runtime.labels("managed-max-core"), "Env": ["SECRET=private"]},
+        "HostConfig": {"Privileged": False}, "NetworkSettings": {}, "Mounts": [],
+    })
+    resources = {runtime.stem + "-max-core": trusted}
+    runtime.client.containers.get = lambda name: (
+        resources[name] if name in resources else original_get(name)
+    )
+    assert not runtime.record_retained_preview(reference, epoch=7)
+    assert runtime.record_retained_preview(reference, epoch=7, retain_trusted=True)
+    assert "private" not in runtime.metadata_path.read_text()
+    if fault == "restarted":
+        trusted.attrs["State"]["StartedAt"] = "2026-09-07T11:00:00Z"
+    elif fault == "replaced":
+        trusted.id = "replacement"
+        trusted.attrs["Id"] = "replacement"
+    elif fault == "foreign":
+        trusted.attrs["Config"]["Labels"]["omnia.owner_id"] = str(uuid4())
+    elif fault == "attached":
+        attached.append(trusted)
+    elif fault == "missing":
+        resources.clear()
+    elif fault == "changed_config":
+        trusted.attrs["Config"]["Env"] = ["SECRET=changed"]
+    elif fault == "product_alive":
+        resources[runtime.machine_name] = SimpleNamespace(attrs={
+            "Config": {"Labels": runtime.labels("development")},
+        })
+    if fault == "foreign":
+        with pytest.raises(CellIdentityConflict):
+            runtime.consume_retained_preview(reference, epoch=7)
+    else:
+        assert runtime.consume_retained_preview(reference, epoch=7) is (fault is None)
+    assert "retained_preview_receipt" not in runtime._metadata()
+
+
+@pytest.mark.parametrize("running", [True, False])
+@pytest.mark.parametrize("include_logs", [True, False])
+def test_owner_readiness_can_skip_unused_success_logs_but_keeps_failure_logs(
+    tmp_path, running, include_logs,
+):
+    runtime = backend(tmp_path)
+    service = MachineManifest.model_validate(payload()).services[0].model_copy(
+        update={"readiness": None},
+    )
+    runtime._metadata = lambda: {"services": {
+        service.name: {"epoch": 7, "exec_id": "service", "log": "service.log"},
+    }}
+    runtime.client = SimpleNamespace(api=SimpleNamespace(
+        exec_inspect=lambda _: {"Running": running},
+    ))
+    reads = []
+    runtime._read_log = lambda path: reads.append(path) or "diagnostic"
+    result = runtime.service_status(service, 7, include_logs=include_logs)
+    assert result["ready"] is running
+    assert reads == (["service.log"] if include_logs or not running else [])
 
 
 @pytest.mark.parametrize("failure", ["timeout", "bad_output"])
