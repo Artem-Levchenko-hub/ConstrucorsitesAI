@@ -63,12 +63,19 @@
 .max-projects-list-heading { padding-block: 13px; font-size: 12px; color: var(--color-fg-secondary); }
 .max-project-row { min-height: 120px; border-top: 1px solid var(--color-border-subtle); }
 .max-project-identity { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
-.max-project-monogram { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 8px; background: var(--color-accent-subtle); color: var(--color-accent); font-size: 19px; }
+.max-project-monogram, .max-project-thumbnail { display: grid; flex-shrink: 0; width: 40px; height: 40px; border-radius: 8px; }
+.max-project-monogram { place-items: center; background: var(--color-accent-subtle); color: var(--color-accent); font-size: 19px; }
+.max-project-thumbnail { border: 1px solid var(--color-border-default); background: var(--color-surface-3); object-fit: cover; object-position: top; }
 .max-project-identity h2 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
 .max-project-identity h2 a:hover { color: var(--color-accent); }
 .max-project-identity p { margin-top: 5px; font-size: 12px; color: var(--color-fg-secondary); }
 .max-project-state { font-size: 13px; line-height: 1.5; }
 .max-project-state > p { display: flex; gap: 7px; align-items: flex-start; }
+.max-project-status--setup { color: #1d4ed8; }
+.max-project-status--needs-input { color: #756000; }
+.max-project-status--ready { color: #187443; }
+.max-project-status--failed { color: #b42318; }
+.max-project-status--pending { color: #526079; }
 .max-project-state small { display: block; margin-top: 5px; color: var(--color-fg-secondary); }
 .max-project-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .max-project-next { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 1; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 7px; color: var(--color-accent-secondary); font-size: 13px; font-weight: 500; }

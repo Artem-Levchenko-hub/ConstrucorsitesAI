@@ -1,12 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Building2, History, UsersRound } from "lucide-react";
-
-import { AdminAuditPanel } from "@/components/account/AdminAuditPanel";
-import { AdminUsersPanel } from "@/components/account/AdminUsersPanel";
-import { AdminVerificationPanel } from "@/components/account/AdminVerificationPanel";
-import { cn } from "@/lib/utils";
+import { AdminAuditPanel } from "./AdminAuditPanel";
+import { AdminUsersPanel } from "./AdminUsersPanel";
+import { AdminVerificationPanel } from "./AdminVerificationPanel";
+import "./admin.css";
 
 const tabs = [
   ["users", "Аккаунты", UsersRound],
@@ -14,36 +13,34 @@ const tabs = [
   ["audit", "Журнал", History],
 ] as const;
 
-export function AdminControlCenter({
-  currentEmail,
-}: {
-  currentEmail: string;
-}) {
+export function AdminControlCenter({ currentEmail }: { currentEmail: string }) {
   const [tab, setTab] = useState<(typeof tabs)[number][0]>("users");
-
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const id = useId();
   return (
-    <div className="space-y-5">
-      <div className="flex gap-2 overflow-x-auto rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-2">
-        {tabs.map(([id, label, Icon]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={cn(
-              "flex h-10 shrink-0 items-center gap-2 rounded-[8px] px-4 text-xs font-medium",
-              tab === id
-                ? "bg-[#121519] text-white"
-                : "text-[#9fa1b1] hover:bg-[#2b2d32]",
-            )}
-          >
-            <Icon className="size-4" />
-            {label}
+    <div className="admin-center">
+      <div role="tablist" aria-label="Разделы админ-центра" className="admin-tabs">
+        {tabs.map(([value, label, Icon], index) => (
+          <button key={value} ref={node => { tabRefs.current[index] = node; }} type="button"
+            role="tab" id={`${id}-${value}`} aria-selected={tab === value}
+            aria-controls={`${id}-panel`} tabIndex={tab === value ? 0 : -1}
+            onClick={() => setTab(value)}
+            onKeyDown={event => {
+              const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+                : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+                  : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+              if (next === null) return;
+              event.preventDefault(); setTab(tabs[next][0]); tabRefs.current[next]?.focus();
+            }}>
+            <Icon aria-hidden="true" />{label}
           </button>
         ))}
       </div>
-      {tab === "users" && <AdminUsersPanel currentEmail={currentEmail} />}
-      {tab === "businesses" && <AdminVerificationPanel />}
-      {tab === "audit" && <AdminAuditPanel />}
+      <section role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} tabIndex={0}>
+        {tab === "users" && <AdminUsersPanel currentEmail={currentEmail} />}
+        {tab === "businesses" && <AdminVerificationPanel />}
+        {tab === "audit" && <AdminAuditPanel />}
+      </section>
     </div>
   );
 }

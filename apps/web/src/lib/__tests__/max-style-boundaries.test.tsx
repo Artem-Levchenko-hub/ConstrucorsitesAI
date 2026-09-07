@@ -27,6 +27,7 @@ const globalCss = readFileSync(
   resolve(process.cwd(), "src/app/globals.css"),
   "utf8",
 );
+const accountCss = readFileSync(resolve(process.cwd(), "src/components/account/account.css"), "utf8");
 
 function declarations(css: string, selector: string) {
   const result: Record<string, string> = {};
@@ -104,29 +105,23 @@ describe("MAX style boundaries", () => {
     }
   });
 
-  it("restores the complete legacy dark token boundary only for admin content", async () => {
+  it("keeps admin content in the same readable light theme and marks its current navigation", async () => {
     const style = document.createElement("style");
-    style.textContent = [
+    style.textContent = resolveVars([
       rule(maxStudioCss, "[data-max-studio]"),
       rule(globalCss, "[data-product-shell]"),
-    ].join("\n");
+      accountCss,
+    ].join("\n"), declarations(maxStudioCss, "[data-max-studio]"));
     document.head.append(style);
     document.body.innerHTML = renderToStaticMarkup(
       await AccountShell({ email: "admin@example.test", active: "admin", children: <input /> }),
     );
 
-    const admin = document.querySelector<HTMLElement>("main[data-product-shell]");
-    expect(admin).not.toBeNull();
-    const computed = getComputedStyle(admin!);
-    expect(computed.colorScheme).toBe("dark");
-    expect(computed.getPropertyValue("--color-ink")).toBe("#ffffff");
-    expect(computed.getPropertyValue("--color-warm-white")).toBe("#121519");
-    expect(computed.getPropertyValue("--color-label-1")).toBe("#ffffff");
-    expect(computed.getPropertyValue("--color-surface-input")).toBe("#2b2d32");
-    expect(computed.getPropertyValue("--color-accent-fg")).toBe("#121519");
-    expect(computed.getPropertyValue("--color-success-fg")).toBe("#4ade80");
-    expect(computed.getPropertyValue("--color-danger-fg")).toBe("#f87171");
-    expect(computed.getPropertyValue("--color-warning")).toBe("#e8c547");
+    expect(document.querySelector("main[data-product-shell]")).toBeNull();
+    expect(document.querySelector('a[href="/admin/max"]')?.getAttribute("aria-current")).toBe("page");
+    const shell = document.querySelector<HTMLElement>("[data-max-studio]")!;
+    expect(getComputedStyle(shell).colorScheme).toBe("light");
+    expect(contrast(getComputedStyle(shell).color, getComputedStyle(shell).backgroundColor)).toBeGreaterThanOrEqual(4.5);
 
     document.body.innerHTML = renderToStaticMarkup(
       await AccountShell({ email: "user@example.test", active: "profile", children: null }),

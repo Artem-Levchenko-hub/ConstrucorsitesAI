@@ -15,6 +15,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import "./max-account-dropdown.css";
 import "./max-studio.css";
 
 const accountLinks = [
@@ -75,7 +76,11 @@ export function MaxStudioHeader({
               <ChevronDown className="h-3.5 w-3.5 text-fg-secondary" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent data-max-studio align="end">
+          <DropdownMenuContent
+            data-max-studio
+            align="end"
+            className="max-account-dropdown"
+          >
             <DropdownMenuLabel className="font-normal">
               <div className="text-xs text-fg-tertiary">Вошли как</div>
               <div className="max-w-[220px] truncate text-sm text-fg-primary">
@@ -91,14 +96,14 @@ export function MaxStudioHeader({
             </DropdownMenuItem>
             {accountLinks.map(([href, Icon, label]) => <DropdownMenuItem asChild key={href}><Link href={href}><Icon className="h-4 w-4" />{label}</Link></DropdownMenuItem>)}
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <form action={logoutAction} className="w-full">
-                <button type="submit" className="flex w-full items-center gap-2">
+            <form action={logoutAction} className="w-full">
+              <DropdownMenuItem asChild>
+                <button type="submit">
                   <LogOut className="h-4 w-4" />
                   Выйти
                 </button>
-              </form>
-            </DropdownMenuItem>
+              </DropdownMenuItem>
+            </form>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

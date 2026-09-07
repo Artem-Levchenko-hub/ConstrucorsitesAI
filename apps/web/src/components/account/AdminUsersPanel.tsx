@@ -2,289 +2,84 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  BadgeCheck,
-  Ban,
-  CircleAlert,
-  KeyRound,
-  Loader2,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  ShieldOff,
-  UserRound,
-} from "lucide-react";
+import { BadgeCheck, Ban, ChevronDown, KeyRound, Loader2, RotateCcw, ShieldCheck, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
-
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  listAdminUsers,
-  updateAdminUser,
-  type AdminUser,
-  type AdminUserUpdate,
-} from "@/lib/api/admin";
-import { cn } from "@/lib/utils";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { listAdminUsers, updateAdminUser, type AdminUser, type AdminUserUpdate } from "@/lib/api/admin";
+import { AdminCellLabel, AdminSearch, AdminState, AdminStatus, adminDate } from "./AdminPresentation";
 
-function statusLabel(status: string) {
-  if (status === "active") return "Активен";
-  if (status === "suspended") return "Приостановлен";
-  return "Удаление запрошено";
+function UserStatus({ status }: { status: string }) {
+  if (status === "active") return <AdminStatus tone="success">Активен</AdminStatus>;
+  if (status === "suspended") return <AdminStatus tone="warning">Приостановлен</AdminStatus>;
+  if (status === "deletion_pending") return <AdminStatus tone="danger">Удаление запрошено</AdminStatus>;
+  return <AdminStatus tone="neutral">{status || "Неизвестно"}</AdminStatus>;
 }
 
 export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const users = useQuery({
-    queryKey: ["admin-users"],
-    queryFn: () => listAdminUsers(),
-    retry: false,
-  });
+  const users = useQuery({ queryKey: ["admin-users"], queryFn: () => listAdminUsers(), retry: false });
   const update = useMutation({
-    mutationFn: ({
-      user,
-      change,
-    }: {
-      user: AdminUser;
-      change: AdminUserUpdate;
-    }) => updateAdminUser(user.id, change),
-    onSuccess: (user) => {
+    mutationFn: ({ user, change }: { user: AdminUser; change: AdminUserUpdate }) => updateAdminUser(user.id, change),
+    onSuccess: user => {
       void queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       void queryClient.invalidateQueries({ queryKey: ["admin-audit"] });
       toast.success(`Аккаунт ${user.email} обновлён`);
     },
-    onError: (error) =>
-      toast.error("Не удалось обновить аккаунт", {
-        description: error instanceof Error ? error.message : "Повторите попытку",
-      }),
+    onError: error => toast.error("Не удалось обновить аккаунт", { description: error instanceof Error ? error.message : "Повторите попытку" }),
   });
-
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
-    return (users.data ?? []).filter(
-      (user) =>
-        !needle ||
-        user.email.toLocaleLowerCase("ru-RU").includes(needle) ||
-        user.business?.legal_name
-          .toLocaleLowerCase("ru-RU")
-          .includes(needle) ||
-        user.business?.inn.includes(needle),
-    );
+    return (users.data ?? []).filter(user => !needle || user.email.toLocaleLowerCase("ru-RU").includes(needle)
+      || user.business?.legal_name.toLocaleLowerCase("ru-RU").includes(needle) || user.business?.inn.includes(needle));
   }, [search, users.data]);
+  if (users.isLoading) return <AdminState loading title="Загружаем аккаунты" />;
+  if (users.isError) return <AdminState error title="Аккаунты не загрузились" description={users.error instanceof Error ? users.error.message : "Повторите попытку"} retry={() => void users.refetch()} />;
 
-  if (users.isLoading) {
-    return (
-      <div className="grid min-h-[280px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-[#4f81f7]" />
-      </div>
-    );
-  }
-
-  if (users.isError) {
-    return (
-      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
-        <CircleAlert className="mx-auto size-7 text-danger-fg" />
-        <h2 className="mt-4 text-lg font-semibold">Аккаунты не загрузились</h2>
-        <p className="mt-2 text-sm text-[#9fa1b1]">
-          {users.error instanceof Error
-            ? users.error.message
-            : "Повторите попытку"}
-        </p>
-        <Button
-          variant="outline"
-          className="mt-5"
-          onClick={() => void users.refetch()}
-        >
-          Повторить
-        </Button>
-      </section>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-4">
-        <label className="relative block">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Email, организация или ИНН"
-            aria-label="Поиск аккаунтов"
-            className="border-[#2b2d32] bg-[#191b20] pl-9"
-          />
-        </label>
-      </div>
-
-      <div className="space-y-3">
-        {visible.map((user) => {
+  return <div className="admin-panel">
+    <div className="admin-toolbar">
+      <AdminSearch label="Поиск аккаунтов" placeholder="Email, организация или ИНН" value={search} onChange={setSearch} />
+      <p className="admin-count"><strong>{visible.length}</strong> из {users.data?.length ?? 0} загруженных</p>
+    </div>
+    {update.isError && <p className="admin-inline-error" role="alert">Изменение не сохранено. {update.error instanceof Error ? update.error.message : "Повторите попытку."}</p>}
+    {visible.length === 0 ? <AdminState title={search.trim() ? "Ничего не найдено" : "Аккаунтов пока нет"} description={search.trim() ? "Попробуйте другой email, название организации или ИНН." : undefined} /> :
+      <div className="admin-table-wrap"><table role="table" className="admin-table admin-users-table" aria-label="Аккаунты">
+        <thead><tr>{[["identity", "Аккаунт"], ["role", "Роль"], ["status", "Статус"], ["balance", "Баланс"], ["actions", ""]].map(([id, label]) =>
+          <th key={id} scope="col" id={`admin-users-${id}`}>{label || <span className="sr-only">Действия</span>}</th>)}</tr></thead>
+        <tbody>{visible.map(user => {
           const isSelf = user.email.toLowerCase() === currentEmail.toLowerCase();
           const pending = update.isPending && update.variables?.user.id === user.id;
-          return (
-            <article
-              key={user.id}
-              className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5"
-            >
-              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                <div className="flex min-w-0 gap-4">
-                  <span
-                    className={cn(
-                      "grid size-11 shrink-0 place-items-center rounded-[8px]",
-                      user.is_admin
-                        ? "bg-[#4f81f7]/10 text-[#4f81f7]"
-                        : "bg-[#2b2d32] text-[#9fa1b1]",
-                    )}
-                  >
-                    {user.is_admin ? (
-                      <ShieldCheck className="size-5" />
-                    ) : (
-                      <UserRound className="size-5" />
-                    )}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="break-all text-base font-semibold">
-                        {user.email}
-                      </h2>
-                      {user.is_admin && (
-                        <span className="rounded-full bg-[#4f81f7]/10 px-2.5 py-1 text-[10px] font-medium text-[#4f81f7]">
-                          Администратор
-                        </span>
-                      )}
-                      <span
-                        className={cn(
-                          "rounded-full px-2.5 py-1 text-[10px] font-medium",
-                          user.status === "active"
-                            ? "bg-[#248a4b]/10 text-success-fg"
-                            : "bg-[#c63d35]/10 text-danger-fg",
-                        )}
-                      >
-                        {statusLabel(user.status)}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
-                      Email:{" "}
-                      {user.email_verified_at
-                        ? "подтверждён"
-                        : "не подтверждён"}{" "}
-                      · Баланс: {Number(user.wallet_balance_rub).toLocaleString("ru-RU")} ₽
-                    </p>
-                    <p className="text-xs leading-5 text-[#828491]">
-                      Создан {new Date(user.created_at).toLocaleDateString("ru-RU")}
-                      {user.last_login_at
-                        ? ` · Вход ${new Date(user.last_login_at).toLocaleDateString("ru-RU")}`
-                        : " · Ещё не входил"}
-                    </p>
-                    {user.business && (
-                      <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
-                        {user.business.legal_name} · ИНН {user.business.inn} ·{" "}
-                        {user.business.status === "verified"
-                          ? "организация подтверждена"
-                          : "организация ожидает проверки"}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-[430px]">
-                  {!user.email_verified_at && (
-                    <Button
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() =>
-                        update.mutate({
-                          user,
-                          change: { email_verified: true },
-                        })
-                      }
-                    >
-                      <BadgeCheck className="size-4" />
-                      Подтвердить email
-                    </Button>
-                  )}
-                  {user.business?.status !== "verified" && user.business && (
-                    <Button
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() =>
-                        update.mutate({
-                          user,
-                          change: {
-                            business_verified: true,
-                            note: "Реквизиты проверены администратором",
-                          },
-                        })
-                      }
-                    >
-                      <KeyRound className="size-4" />
-                      Подтвердить бизнес
-                    </Button>
-                  )}
-                  {user.role === "admin" ? (
-                    <Button
-                      variant="outline"
-                      disabled={pending || isSelf}
-                      onClick={() =>
-                        update.mutate({
-                          user,
-                          change: { role: "user" },
-                        })
-                      }
-                    >
-                      <ShieldOff className="size-4" />
-                      Снять права
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() =>
-                        update.mutate({
-                          user,
-                          change: { role: "admin" },
-                        })
-                      }
-                    >
-                      <ShieldCheck className="size-4" />
-                      Сделать админом
-                    </Button>
-                  )}
-                  {user.status === "active" ? (
-                    <Button
-                      variant="outline"
-                      disabled={pending || isSelf}
-                      className="border-[#c63d35]/30 text-danger-fg"
-                      onClick={() =>
-                        update.mutate({
-                          user,
-                          change: { status: "suspended" },
-                        })
-                      }
-                    >
-                      <Ban className="size-4" />
-                      Приостановить
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      disabled={pending}
-                      onClick={() =>
-                        update.mutate({
-                          user,
-                          change: { status: "active" },
-                        })
-                      }
-                    >
-                      <RotateCcw className="size-4" />
-                      Восстановить
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-    </div>
-  );
+          return <tr key={user.id} role="row">
+            <td role="cell" headers="admin-users-identity"><AdminCellLabel>Аккаунт</AdminCellLabel>
+              <div className="admin-identity"><strong>{user.email}</strong>{isSelf && <span className="admin-self">Вы</span>}</div>
+              <small className={user.email_verified_at ? "" : "admin-attention"}>{user.email_verified_at ? "Email подтверждён" : "Email не подтверждён"}</small>
+              {user.business && <small>{user.business.legal_name} · ИНН {user.business.inn}</small>}
+              <small className="admin-date">Создан {adminDate(user.created_at)} · {user.last_login_at ? `Вход ${adminDate(user.last_login_at)}` : "Ещё не входил"}</small>
+            </td>
+            <td role="cell" headers="admin-users-role"><AdminCellLabel>Роль</AdminCellLabel><span className={user.is_admin ? "admin-role" : "admin-muted"}>{user.is_admin && <ShieldCheck aria-hidden="true" />} {user.is_admin ? "Администратор" : "Пользователь"}</span></td>
+            <td role="cell" headers="admin-users-status"><AdminCellLabel>Статус</AdminCellLabel><UserStatus status={user.status} /></td>
+            <td role="cell" headers="admin-users-balance"><AdminCellLabel>Баланс</AdminCellLabel><span className="admin-money">{Number(user.wallet_balance_rub).toLocaleString("ru-RU")} ₽</span></td>
+            <td role="cell" headers="admin-users-actions" className="admin-row-actions">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild><Button variant="outline" size="sm" disabled={pending} aria-label={`Действия с аккаунтом ${user.email}`}>{pending ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : null}Действия<ChevronDown /></Button></DropdownMenuTrigger>
+                <DropdownMenuContent data-max-studio className="admin-action-menu" align="end">
+                  <DropdownMenuLabel className="admin-menu-label">{user.email}</DropdownMenuLabel>
+                  {!user.email_verified_at && <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { email_verified: true } })}><BadgeCheck />Подтвердить email</DropdownMenuItem>}
+                  {user.business && user.business.status !== "verified" && <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { business_verified: true, note: "Реквизиты проверены администратором" } })}><KeyRound />Подтвердить бизнес</DropdownMenuItem>}
+                  {user.role === "admin"
+                    ? <DropdownMenuItem disabled={pending || isSelf} onSelect={() => update.mutate({ user, change: { role: "user" } })}><ShieldOff />Снять права</DropdownMenuItem>
+                    : <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { role: "admin" } })}><ShieldCheck />Сделать админом</DropdownMenuItem>}
+                  <DropdownMenuSeparator />
+                  {user.status === "active"
+                    ? <DropdownMenuItem className="admin-danger-action" disabled={pending || isSelf} onSelect={() => update.mutate({ user, change: { status: "suspended" } })}><Ban />Приостановить</DropdownMenuItem>
+                    : <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { status: "active" } })}><RotateCcw />Восстановить</DropdownMenuItem>}
+                  {isSelf && <p className="admin-menu-note">Нельзя снять права или приостановить свой аккаунт.</p>}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </td>
+          </tr>;
+        })}</tbody>
+      </table></div>}
+  </div>;
 }

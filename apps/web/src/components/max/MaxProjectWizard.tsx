@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_STYLES, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
 
 type WizardValues = {
@@ -102,15 +103,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               <fieldset><legend className="text-sm font-medium">Стиль</legend><div className="mt-3 grid gap-2 sm:grid-cols-3">{MAX_STYLES.map(item => <button key={item.id} type="button" aria-pressed={values.style === item.id} className="max-wizard-option text-sm" onClick={() => onChange({ style: item.id })}>{item.label}</button>)}</div></fieldset>
               <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={values.brandColors} onChange={event => onChange({ brandColors: event.target.value })} placeholder="#2563eb, графит, молочный" /></div>
             </>}
-            {step === 3 && <dl className="max-wizard-review">
-              {[
-                ["Название", values.name], ["Идея", values.idea],
-                ["Тип приложения", MAX_APP_TYPES.find(item => item.id === values.appType)?.label],
-                ["Аудитория", values.audience || "Уточним позже"], ["Главное действие", values.primaryAction || "Уточним позже"],
-                ["Функции", values.features.join(", ") || "Без дополнительных функций"],
-                ["Стиль", MAX_STYLES.find(item => item.id === values.style)?.label], ["Цвета бренда", values.brandColors || "Подобрать автоматически"],
-              ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
-            </dl>}
+            {step === 3 && <MaxProjectReview {...values} />}
           </div>
           <footer className="max-wizard-footer">
             <Button type="button" variant="outline" disabled={busy} onClick={() => step === 0 ? onOpenChange(false) : setStep(step - 1)}>{step === 0 ? "Отмена" : "Назад"}</Button>

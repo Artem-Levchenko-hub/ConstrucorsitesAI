@@ -1,0 +1,20 @@
+[data-max-studio].max-account-dropdown :is(a, button)[role="menuitem"] {
+  width: 100%;
+  border: 0;
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  outline: none;
+  box-shadow: none;
+  transition: none;
+}
+
+[data-max-studio].max-account-dropdown :is(a, button)[role="menuitem"][data-highlighted] {
+  background-color: var(--color-surface-3);
+}
+
+[data-max-studio].max-account-dropdown :is(a, button)[role="menuitem"]:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+}

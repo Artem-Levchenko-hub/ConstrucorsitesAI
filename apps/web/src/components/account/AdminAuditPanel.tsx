@@ -1,68 +1,37 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { CircleAlert, History, Loader2 } from "lucide-react";
-
 import { listAdminAudit } from "@/lib/api/admin";
+import { AdminCellLabel, AdminState, adminDate } from "./AdminPresentation";
 
+const fields = { role: "Роль", status: "Статус", email_verified: "Email подтверждён", business_status: "Организация" };
+const values: Record<string, string> = { admin: "Администратор", user: "Пользователь", active: "Активен", suspended: "Приостановлен", deletion_pending: "Удаление запрошено", pending: "Ожидает проверки", verified: "Подтверждена", rejected: "Отклонена" };
+function valueLabel(value: unknown) {
+  if (value === undefined || value === null) return "—";
+  if (typeof value === "boolean") return value ? "Да" : "Нет";
+  return values[String(value)] ?? String(value);
+}
 export function AdminAuditPanel() {
-  const audit = useQuery({
-    queryKey: ["admin-audit"],
-    queryFn: listAdminAudit,
-    retry: false,
-  });
-
-  if (audit.isLoading) {
-    return (
-      <div className="grid min-h-[240px] place-items-center">
-        <Loader2 className="size-6 animate-spin text-[#4f81f7]" />
-      </div>
-    );
-  }
-  if (audit.isError) {
-    return (
-      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
-        <CircleAlert className="mx-auto size-7 text-danger-fg" />
-        <h2 className="mt-4 text-lg font-semibold">Журнал не загрузился</h2>
-      </section>
-    );
-  }
-  if (!audit.data?.length) {
-    return (
-      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-10 text-center">
-        <History className="mx-auto size-7 text-[#828491]" />
-        <h2 className="mt-4 text-lg font-semibold">Изменений пока нет</h2>
-        <p className="mt-2 text-sm text-[#9fa1b1]">
-          Выдача прав и подтверждения появятся здесь.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <div className="overflow-hidden rounded-[12px] border border-[#2b2d32] bg-[#191b20]">
-      {audit.data.map((event) => (
-        <article
-          key={event.id}
-          className="border-b border-[#2b2d32] p-4 last:border-b-0 sm:p-5"
-        >
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm font-medium">
-              {event.actor_email} → {event.target_email}
-            </p>
-            <time className="text-xs text-[#828491]">
-              {new Date(event.created_at).toLocaleString("ru-RU")}
-            </time>
-          </div>
-          <p className="mt-2 text-xs leading-5 text-[#9fa1b1]">
-            Роль: {String(event.details.before?.role ?? "—")} →{" "}
-            {String(event.details.after?.role ?? "—")} · Статус:{" "}
-            {String(event.details.before?.status ?? "—")} →{" "}
-            {String(event.details.after?.status ?? "—")}
-            {event.details.note ? ` · ${event.details.note}` : ""}
-          </p>
-        </article>
-      ))}
-    </div>
-  );
+  const audit = useQuery({ queryKey: ["admin-audit"], queryFn: listAdminAudit, retry: false });
+  if (audit.isLoading) return <AdminState loading title="Загружаем журнал" />;
+  if (audit.isError) return <AdminState error title="Журнал не загрузился" description={audit.error instanceof Error ? audit.error.message : "Повторите попытку"} retry={() => void audit.refetch()} />;
+  if (!audit.data?.length) return <AdminState title="Изменений пока нет" description="Выдача прав и подтверждения появятся здесь." />;
+  return <div className="admin-panel">
+    <p className="admin-list-caption">Последние загруженные изменения · <strong>{audit.data.length}</strong></p>
+    <div className="admin-table-wrap"><table role="table" className="admin-table admin-audit-table" aria-label="Журнал изменений">
+      <thead><tr>{[["date", "Когда"], ["actor", "Кто изменил"], ["target", "Аккаунт"], ["changes", "Изменение"]].map(([id, label]) => <th key={id} id={`admin-audit-${id}`} scope="col">{label}</th>)}</tr></thead>
+      <tbody>{audit.data.map(event => {
+        const changes = Object.entries(fields).filter(([key]) => event.details.before?.[key] !== event.details.after?.[key]);
+        return <tr key={event.id} role="row">
+          <td role="cell" headers="admin-audit-date"><AdminCellLabel>Когда</AdminCellLabel><time dateTime={event.created_at}>{adminDate(event.created_at, true)}</time></td>
+          <td role="cell" headers="admin-audit-actor"><AdminCellLabel>Кто изменил</AdminCellLabel>{event.actor_email}</td>
+          <td role="cell" headers="admin-audit-target"><AdminCellLabel>Аккаунт</AdminCellLabel>{event.target_email}</td>
+          <td role="cell" headers="admin-audit-changes"><AdminCellLabel>Изменение</AdminCellLabel>
+            {changes.length ? <ul className="admin-changes">{changes.map(([key, label]) => <li key={key}><span>{label}: </span><span className="admin-muted">{valueLabel(event.details.before?.[key])}</span> → <strong>{valueLabel(event.details.after?.[key])}</strong></li>)}</ul> : <span>{event.action === "account.update" ? "Аккаунт обновлён" : event.action}</span>}
+            {event.details.note && <small>{event.details.note}</small>}
+          </td>
+        </tr>;
+      })}</tbody>
+    </table></div>
+  </div>;
 }

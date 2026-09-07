@@ -69,12 +69,9 @@ export async function AccountShell({
           <p>Аккаунт</p>
           <nav aria-label="Разделы аккаунта">{navigation.map(([id, href, Icon, label]) => <Link key={id} href={href} aria-current={active === id ? "page" : undefined}>
             <Icon className="size-4" />{label}</Link>)}</nav>
-          {isAdmin && <Link className="account-admin" href="/admin/max">
+          {isAdmin && <Link className="account-admin" href="/admin/max" aria-current={active === "admin" ? "page" : undefined}>
             <ScanSearch className="size-4" />Админ-центр</Link>}</aside>
-        <main
-          data-product-shell={active === "admin" ? "" : undefined}
-          className="account-main"
-        >
+        <main className="account-main">
           <header className="account-heading">
             <h1>{page.title}</h1>
             <p>{page.lead}</p>

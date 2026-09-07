@@ -1,254 +1,81 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Building2,
-  Check,
-  CircleAlert,
-  Loader2,
-  Search,
-  X,
-} from "lucide-react";
+import { Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  decideBusiness,
-  listBusinessReviews,
-  type BusinessReview,
-} from "@/lib/api/max-account";
+import { decideBusiness, listBusinessReviews, type BusinessReview } from "@/lib/api/max-account";
 import { ApiError } from "@/lib/api/client";
-import { cn } from "@/lib/utils";
+import { AdminCellLabel, AdminSearch, AdminState, AdminStatus, adminDate } from "./AdminPresentation";
 
-const kindLabels: Record<BusinessReview["kind"], string> = {
-  legal_entity: "Юридическое лицо",
-  sole_proprietor: "Индивидуальный предприниматель",
-  self_employed: "Самозанятый",
-};
-
-const statusLabels: Record<BusinessReview["status"], string> = {
-  pending: "Ожидает проверки",
-  verified: "Подтверждён",
-  rejected: "Отклонён",
-  suspended: "Приостановлен",
-};
+const kindLabels = { legal_entity: "Юридическое лицо", sole_proprietor: "Индивидуальный предприниматель", self_employed: "Самозанятый" };
+const statusLabels = { pending: "Ожидает проверки", verified: "Подтверждён", rejected: "Отклонён", suspended: "Приостановлен" };
+const tones = { pending: "warning", verified: "success", rejected: "danger", suspended: "neutral" } as const;
 
 export function AdminVerificationPanel() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<"pending" | "all">("pending");
   const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const reviews = useQuery({
-    queryKey: ["admin-business-reviews"],
-    queryFn: listBusinessReviews,
-    retry: false,
-  });
+  const reviews = useQuery({ queryKey: ["admin-business-reviews"], queryFn: listBusinessReviews, retry: false });
   const decision = useMutation({
-    mutationFn: ({
-      inn,
-      approved,
-      note,
-    }: {
-      inn: string;
-      approved: boolean;
-      note?: string;
-    }) => decideBusiness(inn, approved, note),
-    onSuccess: (profile) => {
-      void queryClient.invalidateQueries({
-        queryKey: ["admin-business-reviews"],
-      });
-      toast.success(
-        profile.status === "verified"
-          ? "Организация подтверждена"
-          : "Заявка отклонена",
-      );
+    mutationFn: ({ inn, approved, note }: { inn: string; approved: boolean; note?: string }) => decideBusiness(inn, approved, note),
+    onSuccess: profile => {
+      void queryClient.invalidateQueries({ queryKey: ["admin-business-reviews"] });
+      toast.success(profile.status === "verified" ? "Организация подтверждена" : "Заявка отклонена");
     },
-    onError: (error) =>
-      toast.error("Не удалось сохранить решение", {
-        description:
-          error instanceof Error ? error.message : "Повторите попытку",
-      }),
+    onError: error => toast.error("Не удалось сохранить решение", { description: error instanceof Error ? error.message : "Повторите попытку" }),
   });
-
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
-    return (reviews.data ?? []).filter(
-      (item) =>
-        (filter === "all" || item.status === "pending") &&
-        (!needle ||
-          item.legal_name.toLocaleLowerCase("ru-RU").includes(needle) ||
-          item.inn.includes(needle) ||
-          item.owner_email.toLocaleLowerCase("ru-RU").includes(needle)),
-    );
+    return (reviews.data ?? []).filter(item => (filter === "all" || item.status === "pending")
+      && (!needle || item.legal_name.toLocaleLowerCase("ru-RU").includes(needle) || item.inn.includes(needle) || item.owner_email.toLocaleLowerCase("ru-RU").includes(needle)));
   }, [filter, reviews.data, search]);
+  if (reviews.isError && reviews.error instanceof ApiError && reviews.error.status === 403)
+    return <AdminState error title="Нет административного доступа" description="Этот аккаунт не имеет роли администратора." />;
+  if (reviews.isLoading) return <AdminState loading title="Загружаем организации" />;
+  if (reviews.isError) return <AdminState error title="Не удалось загрузить очередь" description={reviews.error instanceof Error ? reviews.error.message : "Повторите попытку"} retry={() => void reviews.refetch()} />;
 
-  if (
-    reviews.isError &&
-    reviews.error instanceof ApiError &&
-    reviews.error.status === 403
-  ) {
-    return (
-      <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
-        <CircleAlert className="mx-auto size-7 text-danger-fg" />
-        <h2 className="mt-4 text-lg font-semibold">Нет административного доступа</h2>
-        <p className="mt-2 text-sm text-[#9fa1b1]">
-          Этот аккаунт не имеет роли администратора.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex gap-2">
-          {(["pending", "all"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setFilter(value)}
-              className={cn(
-                "h-9 rounded-[8px] border px-3 text-xs",
-                filter === value
-                  ? "border-[#25272b] bg-[#121519] text-white"
-                  : "border-[#2b2d32] text-[#9fa1b1]",
-              )}
-            >
-              {value === "pending" ? "Ожидают" : "Все заявки"}
-            </button>
-          ))}
-        </div>
-        <label className="relative block w-full sm:w-[300px]">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#828491]" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Название, ИНН или email"
-            className="border-[#2b2d32] bg-[#191b20] pl-9"
-          />
-        </label>
+  return <div className="admin-panel">
+    <div className="admin-toolbar admin-toolbar--organizations">
+      <div className="admin-filters" aria-label="Фильтр организаций">
+        {(["pending", "all"] as const).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === "pending" ? "Ожидают проверки" : "Все заявки"}</button>)}
       </div>
-
-      {reviews.isLoading ? (
-        <div className="grid min-h-[260px] place-items-center">
-          <Loader2 className="size-6 animate-spin text-[#4f81f7]" />
-        </div>
-      ) : reviews.isError ? (
-        <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-8 text-center">
-          <CircleAlert className="mx-auto size-7 text-danger-fg" />
-          <h2 className="mt-4 text-lg font-semibold">Не удалось загрузить очередь</h2>
-          <p className="mt-2 text-sm text-[#9fa1b1]">
-            {reviews.error instanceof Error
-              ? reviews.error.message
-              : "Повторите попытку"}
-          </p>
-          <Button variant="outline" className="mt-5" onClick={() => void reviews.refetch()}>
-            Повторить
-          </Button>
-        </section>
-      ) : visible.length === 0 ? (
-        <section className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-10 text-center">
-          <Check className="mx-auto size-7 text-success-fg" />
-          <h2 className="mt-4 text-lg font-semibold">Очередь пуста</h2>
-          <p className="mt-2 text-sm text-[#9fa1b1]">
-            Новых заявок на ручную проверку сейчас нет.
-          </p>
-        </section>
-      ) : (
-        <div className="space-y-4">
-          {visible.map((item) => (
-            <article
-              key={item.id}
-              className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-6"
-            >
-              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-                <div className="flex min-w-0 gap-4">
-                  <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-[#2b2d32] text-[#4f81f7]">
-                    <Building2 className="size-5" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-semibold">{item.legal_name}</h2>
-                      <span
-                        className={cn(
-                          "rounded-full px-2.5 py-1 text-[10px] font-medium",
-                          item.status === "verified"
-                            ? "bg-[#248a4b]/10 text-success-fg"
-                            : item.status === "pending"
-                              ? "bg-[#e8c547]/15 text-[#e8c547]"
-                              : "bg-[#c63d35]/10 text-danger-fg",
-                        )}
-                      >
-                        {statusLabels[item.status]}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm text-[#9fa1b1]">
-                      {kindLabels[item.kind]} · ИНН {item.inn}
-                      {item.ogrn ? ` · ОГРН ${item.ogrn}` : ""}
-                    </p>
-                    <p className="mt-1 text-xs text-[#828491]">
-                      Владелец: {item.owner_email} · Заявка от{" "}
-                      {new Date(item.created_at).toLocaleDateString("ru-RU")}
-                    </p>
-                  </div>
-                </div>
-                {item.status === "pending" && (
-                  <div className="w-full shrink-0 lg:w-[330px]">
-                    <Input
-                      value={notes[item.inn] ?? ""}
-                      onChange={(event) =>
-                        setNotes((current) => ({
-                          ...current,
-                          [item.inn]: event.target.value,
-                        }))
-                      }
-                      placeholder="Комментарий к решению"
-                      className="border-[#2b2d32] bg-[#191b20]"
-                    />
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <Button
-                        variant="outline"
-                        disabled={decision.isPending}
-                        onClick={() =>
-                          decision.mutate({
-                            inn: item.inn,
-                            approved: false,
-                            note: notes[item.inn],
-                          })
-                        }
-                        className="border-[#c63d35]/30 text-danger-fg"
-                      >
-                        <X className="size-4" />
-                        Отклонить
-                      </Button>
-                      <Button
-                        disabled={decision.isPending}
-                        onClick={() =>
-                          decision.mutate({
-                            inn: item.inn,
-                            approved: true,
-                            note: notes[item.inn] || "Реквизиты проверены",
-                          })
-                        }
-                        className="bg-[#248a4b] text-white hover:bg-[#1f7540]"
-                      >
-                        {decision.isPending ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <Check className="size-4" />
-                        )}
-                        Подтвердить
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
+      <AdminSearch label="Поиск организаций" placeholder="Название, ИНН или email" value={search} onChange={setSearch} />
     </div>
-  );
+    <p className="admin-list-caption">{filter === "pending" ? "На проверке" : "Показано"}: <strong>{visible.length}</strong> · среди загруженных заявок</p>
+    {visible.length === 0 ? <AdminState title={search.trim() ? "Ничего не найдено" : filter === "pending" ? "Очередь пуста" : "Заявок пока нет"}
+      description={search.trim() ? "Измените запрос или выберите все заявки." : "Новые заявки появятся здесь."} /> :
+      <div className="admin-table-wrap"><table role="table" className="admin-table admin-business-table" aria-label="Организации">
+        <thead><tr>{[["identity", "Организация"], ["owner", "Владелец"], ["status", "Статус"], ["actions", ""]].map(([id, label]) => <th key={id} id={`admin-business-${id}`} scope="col">{label || <span className="sr-only">Действия</span>}</th>)}</tr></thead>
+        <tbody>{visible.map((item: BusinessReview) => <Fragment key={item.id}>
+          <tr role="row">
+            <td role="cell" headers="admin-business-identity"><AdminCellLabel>Организация</AdminCellLabel><strong>{item.legal_name}</strong><small>ИНН {item.inn}</small><small>{kindLabels[item.kind]}</small></td>
+            <td role="cell" headers="admin-business-owner"><AdminCellLabel>Владелец</AdminCellLabel>{item.owner_email}<small>Заявка от {adminDate(item.created_at)}</small></td>
+            <td role="cell" headers="admin-business-status"><AdminCellLabel>Статус</AdminCellLabel><AdminStatus tone={tones[item.status] ?? "neutral"}>{statusLabels[item.status] ?? item.status}</AdminStatus></td>
+            <td role="cell" headers="admin-business-actions" className="admin-row-actions"><Button variant="outline" size="sm" aria-expanded={expanded === item.id} aria-controls={`review-${item.id}`} onClick={() => setExpanded(expanded === item.id ? null : item.id)}>{expanded === item.id ? "Свернуть" : item.status === "pending" ? "Рассмотреть" : "Подробнее"}<ChevronDown /></Button></td>
+          </tr>
+          {expanded === item.id && <tr className="admin-review-row"><td colSpan={4}>
+            <section id={`review-${item.id}`} className="admin-review" aria-label={`Проверка: ${item.legal_name}`}>
+              <div><h3>Реквизиты для проверки</h3><dl><div><dt>ОГРН / ОГРНИП</dt><dd>{item.ogrn || "Не указан"}</dd></div>
+                <div><dt>Подтверждение</dt><dd>{item.verified_at ? adminDate(item.verified_at, true) : "Ещё не подтверждён"}</dd></div></dl>
+                {item.verification_note && <p className="admin-muted">{item.verification_note}</p>}
+              </div>
+              {item.status === "pending" && <div className="admin-review-decision">
+                <label htmlFor={`note-${item.id}`}>Комментарий к решению</label>
+                <Input id={`note-${item.id}`} aria-label="Комментарий к решению" value={notes[item.inn] ?? ""} onChange={event => setNotes(current => ({ ...current, [item.inn]: event.target.value }))} placeholder="Что проверено или нужно уточнить" disabled={decision.isPending} />
+                {decision.isError && decision.variables?.inn === item.inn && <p role="alert" className="admin-inline-error">Решение не сохранено. {decision.error instanceof Error ? decision.error.message : "Повторите попытку."}</p>}
+                <div className="admin-review-actions">
+                  <Button variant="outline" className="admin-reject" disabled={decision.isPending} onClick={() => decision.mutate({ inn: item.inn, approved: false, note: notes[item.inn] })}><X />Отклонить</Button>
+                  <Button className="admin-approve" disabled={decision.isPending} onClick={() => decision.mutate({ inn: item.inn, approved: true, note: notes[item.inn] || "Реквизиты проверены" })}>{decision.isPending && decision.variables?.inn === item.inn ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : <Check />}Подтвердить</Button>
+                </div>
+              </div>}
+            </section>
+          </td></tr>}
+        </Fragment>)}</tbody>
+      </table></div>}
+  </div>;
 }
