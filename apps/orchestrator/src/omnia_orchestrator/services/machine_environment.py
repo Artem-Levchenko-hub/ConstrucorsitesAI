@@ -44,6 +44,7 @@ class MachineEnvironmentRef(BaseModel):
 
 class EnvironmentBackend(Protocol):
     def prepare_capture(self) -> None: ...
+    def can_reuse_image(self, reference: MachineEnvironmentRef) -> bool: ...
     def validate_restore(self, reference: MachineEnvironmentRef) -> None: ...
     def stop(self) -> None: ...
     def export_image(self) -> tuple[str, Iterable[bytes]]: ...
@@ -100,15 +101,22 @@ class MachineEnvironmentStore:
         base_image: str,
         volumes: tuple[str, ...],
         manifest: MachineManifest | None = None,
+        previous: MachineEnvironmentRef | None = None,
     ) -> MachineEnvironmentRef:
         if manifest is not None and manifest.digest() != manifest_digest:
             raise EnvironmentIntegrityError("capture manifest digest mismatch")
+        if previous is not None and previous.workspace_id != self.workspace_id:
+            raise EnvironmentIntegrityError("environment workspace identity mismatch")
         self.backend.prepare_capture()
         machine_remaining_seconds(1)
         self.backend.stop()
         machine_remaining_seconds(1)
-        image_id, chunks = self.backend.export_image()
-        reference, digest, size = self._save(chunks, self.max_bytes)
+        if previous is not None and self._reusable_image(previous, base_image=base_image):
+            image_id = previous.image_id
+            reference, digest, size = previous.artifact_ref, previous.sha256, previous.size
+        else:
+            image_id, chunks = self.backend.export_image()
+            reference, digest, size = self._save(chunks, self.max_bytes)
         remaining = self.max_bytes - size
         volume_refs = []
         for name in volumes:
@@ -136,6 +144,33 @@ class MachineEnvironmentStore:
             volumes=tuple(volume_refs),
             manifest=manifest,
         )
+
+    def _reusable_image(self, previous: MachineEnvironmentRef, *, base_image: str) -> bool:
+        # Only the immutable rootfs is shared. Every volume below is captured
+        # anew, including source, dependencies and the stopped project database.
+        if previous.base_image != base_image or not self.backend.can_reuse_image(previous):
+            return False
+        if previous.size > self.max_bytes:
+            raise EnvironmentIntegrityError("environment artifact exceeds disk budget")
+        if previous.manifest is not None and previous.manifest.digest() != previous.manifest_digest:
+            return False
+        try:
+            _ensure_secure_dir(self.root, create=True)
+            path = self.artifact_path(previous.artifact_ref)
+            if path.is_symlink() or not path.is_file() or path.stat().st_size != previous.size:
+                return False
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    machine_remaining_seconds(1)
+                    digest.update(chunk)
+            return digest.hexdigest() == previous.sha256
+        except TimeoutError:
+            raise
+        except OSError:
+            # Missing or unreadable cached data never substitutes for a fresh
+            # export. Deadline and identity failures deliberately propagate.
+            return False
 
     def validate(self, reference: MachineEnvironmentRef, *, manifest_digest: str) -> None:
         if reference.workspace_id != self.workspace_id:

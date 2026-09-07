@@ -41,7 +41,13 @@ class ArchiveBackend:
 
     def export_image(self):
         assert not self.running
+        self.events.append("export_image")
         return "sha256:" + "a" * 64, iter([self.image])
+
+    def can_reuse_image(self, reference):
+        assert not self.running
+        self.events.append("reuse_check")
+        return getattr(self, "unchanged", True)
 
     def export_volume(self, name):
         return iter([self.volumes[name]])
@@ -173,3 +179,92 @@ def test_quiesce_precedes_capture_and_failed_restore_checks_never_activate(tmp_p
     with pytest.raises(RuntimeError, match="restore check failed"):
         store.restore(ref, manifest_digest="b" * 64)
     assert backend.restore_pending and "activate" not in backend.events
+
+
+def test_unchanged_rootfs_reuses_archive_but_restores_fresh_volumes(tmp_path):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+                   volumes=("repo", "home"))
+    old = store.capture(**options)
+    backend.volumes["repo"] = b"new application and installed dependencies"
+    backend.events.clear()
+    new = store.capture(**{**options, "manifest_digest": "d" * 64}, previous=old)
+    assert new.artifact_ref == old.artifact_ref
+    assert new.manifest_digest == "d" * 64
+    assert new.volumes[0].artifact_ref != old.volumes[0].artifact_ref
+    assert backend.events == ["quiesce", "stop", "reuse_check"]
+    backend.volumes.clear()
+    store.restore(new, manifest_digest="d" * 64)
+    assert backend.volumes["repo"] == b"new application and installed dependencies"
+    assert store.artifact_path(old.artifact_ref).is_file()
+
+
+@pytest.mark.parametrize(
+    "fault", ["dirty", "base", "missing", "size", "hash", "directory", "missing_root"]
+)
+def test_unusable_previous_rootfs_falls_back_to_full_capture(tmp_path, fault):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+                   volumes=("repo",))
+    old = store.capture(**options)
+    path = store.artifact_path(old.artifact_ref)
+    if fault == "dirty":
+        backend.unchanged = False
+    elif fault == "base":
+        options["base_image"] = "sha256:" + "d" * 64
+    elif fault == "missing":
+        path.unlink()
+    elif fault == "size":
+        path.write_bytes(b"bad")
+    elif fault == "directory":
+        path.unlink()
+        path.mkdir()
+    elif fault == "missing_root":
+        for artifact in store.root.iterdir():
+            artifact.unlink()
+        store.root.rmdir()
+    else:
+        path.write_bytes(b"x" * old.size)
+    backend.events.clear()
+    new = store.capture(**options, previous=old)
+    assert new.artifact_ref != old.artifact_ref
+    assert "export_image" in backend.events
+
+
+def test_reuse_rejects_foreign_workspace_and_preserves_shared_archive_on_budget_failure(tmp_path):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+                   volumes=("repo",))
+    old = store.capture(**options)
+    with pytest.raises(api.EnvironmentIntegrityError, match="identity"):
+        store.capture(**options, previous=old.model_copy(update={"workspace_id": uuid4()}))
+    store.max_bytes = old.size + 1
+    with pytest.raises(api.EnvironmentIntegrityError, match="budget"):
+        store.capture(**options, previous=old)
+    assert store.artifact_path(old.artifact_ref).read_bytes() == backend.image
+
+
+def test_reuse_hashing_deadline_never_starts_another_export(tmp_path, monkeypatch):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64, volumes=())
+    old = store.capture(**options)
+    calls = []
+
+    def budget(_):
+        calls.append(True)
+        if len(calls) >= 3:
+            raise TimeoutError("machine budget exhausted")
+
+    backend.events.clear()
+    monkeypatch.setattr(api, "machine_remaining_seconds", budget)
+    with pytest.raises(TimeoutError, match="budget"):
+        store.capture(**options, previous=old)
+    assert "export_image" not in backend.events

@@ -64,6 +64,66 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
     assert not any(name.startswith("/") for name in options["volumes"])
 
 
+@pytest.mark.parametrize("fault", [None, "dirty", "unknown_diff", "diff_error", "image",
+                                  "base", "running", "owner", "image_owner", "workspace",
+                                  "missing_image", "runtime_config", "deadline"])
+def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
+    import docker
+
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
+
+    runtime = backend(tmp_path)
+    image_id = "sha256:" + "d" * 64
+    ref = MachineEnvironmentRef(workspace_id=runtime.workspace_id, image_id=image_id,
+        artifact_ref="a" * 32 + ".tar", sha256="b" * 64, size=100,
+        base_image=runtime.base_image, manifest_digest="c" * 64, volumes=())
+    image_labels = runtime.labels("environment")
+    container_labels = runtime.labels("development")
+    if fault == "owner":
+        container_labels["omnia.owner_id"] = str(uuid4())
+    if fault == "image_owner":
+        image_labels["omnia.owner_id"] = str(uuid4())
+    if fault == "workspace":
+        ref = ref.model_copy(update={"workspace_id": uuid4()})
+    if fault == "base":
+        ref = ref.model_copy(update={"base_image": "sha256:" + "e" * 64})
+
+    def diff():
+        if fault == "diff_error":
+            raise docker.errors.APIError("unavailable")
+        if fault == "deadline":
+            raise TimeoutError("machine budget exhausted")
+        return [{"Path": "/usr/bin/new", "Kind": 1}] if fault == "dirty" else (
+            None if fault == "unknown_diff" else [])
+
+    machine = SimpleNamespace(status="running" if fault == "running" else "exited",
+        reload=lambda: None, diff=diff, attrs={"Image": image_id if fault != "image" else
+        "sha256:" + "f" * 64, "Config": {"Labels": container_labels}})
+    image = SimpleNamespace(id=image_id, attrs={"Config": {"Labels": image_labels}})
+    if fault == "runtime_config":
+        image.attrs["Config"]["Env"] = ["UNTRUSTED=1"]
+
+    def get_image(_):
+        if fault == "missing_image":
+            raise docker.errors.ImageNotFound("gone")
+        return image
+
+    runtime.client = SimpleNamespace(containers=SimpleNamespace(get=lambda _: machine),
+                                     images=SimpleNamespace(get=get_image))
+    if fault in {"owner", "image_owner", "workspace"}:
+        with pytest.raises(CellIdentityConflict, match="identity"):
+            runtime.can_reuse_image(ref)
+    elif fault == "runtime_config":
+        with pytest.raises(CellIdentityConflict, match="configuration"):
+            runtime.can_reuse_image(ref)
+    elif fault == "deadline":
+        with pytest.raises(TimeoutError, match="budget"):
+            runtime.can_reuse_image(ref)
+    else:
+        assert runtime.can_reuse_image(ref) is (fault is None)
+
+
 def test_package_workers_and_node_heap_respect_cell_budget(tmp_path, monkeypatch):
     monkeypatch.setattr("os.cpu_count", lambda: 8)
     runtime = backend(tmp_path, memory_bytes=896 * 1024**2)

@@ -441,12 +441,14 @@ class MachineAdapter:
         store = MachineEnvironmentStore(
             self.root / "artifacts", state.workspace_id, backend, max_bytes=backend.disk_bytes
         )
+        saved_ref = backend._metadata().get("environment_ref")
         reference = await machine_effect(
             store.capture,
             manifest_digest=manifest.digest(),
             base_image=backend.base_image,
             volumes=backend.snapshot_volume_names(manifest),
             manifest=manifest,
+            previous=MachineEnvironmentRef.model_validate(saved_ref) if saved_ref else None,
         )
         metadata = backend._metadata()
         metadata.update(

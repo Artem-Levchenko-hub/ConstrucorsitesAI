@@ -139,6 +139,19 @@ public bootstrap rejection, metadata readback and cold/warm timings before rollo
 Rollback clears `CELL_PREVIEW_CORE_IMAGE`; an already-running compiled core remains
 until the next normal teardown/recreation. Keep the previous pinned image available.
 
+### Repeated generation preparation
+
+Lease handover still quiesces/stops the old machine, captures all current volumes
+(including project PostgreSQL), and replaces containers under the new fence.
+Capture reuses a previous sanitized rootfs archive only when the stopped owned
+container uses that exact image, Docker reports no rootfs changes, and the archive's
+size and SHA256 match. Installing a system dependency or changing any rootfs file
+forces a fresh image capture. Source, dependencies in volumes, and database changes
+are always captured anew. No running database is replaced by an older checkpoint.
+
+Measure repeated handover separately from initial allocation and model execution;
+a timed-out `ensure` followed by reconciliation is not evidence of CPU shortage.
+
 Add these **API and worker** switches initially disabled, then enable one at a
 time for the existing owner canary only:
 

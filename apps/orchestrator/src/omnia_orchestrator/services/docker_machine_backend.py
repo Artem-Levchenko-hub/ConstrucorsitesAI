@@ -894,11 +894,13 @@ class DockerMachineBackend:
         store = MachineEnvironmentStore(
             self.root / "artifacts", self.workspace_id, self, max_bytes=self.disk_bytes
         )
+        saved_ref = self._metadata().get("environment_ref")
         reference = store.capture(
             manifest_digest=manifest.digest(),
             base_image=self.base_image,
             volumes=self.snapshot_volume_names(manifest),
             manifest=manifest,
+            previous=MachineEnvironmentRef.model_validate(saved_ref) if saved_ref else None,
         )
         metadata = self._metadata()
         metadata.update(
@@ -1119,6 +1121,41 @@ class DockerMachineBackend:
             return False
         project_postgres.reload()
         return bool(project_postgres.status == "running")
+
+    def can_reuse_image(self, reference: MachineEnvironmentRef) -> bool:
+        if reference.workspace_id != self.workspace_id:
+            raise CellIdentityConflict("environment workspace identity mismatch")
+        if reference.base_image != self.base_image:
+            return False
+        try:
+            machine = self._container()
+            if machine is None:
+                return False
+            machine.reload()
+            labels = machine.attrs.get("Config", {}).get("Labels") or {}
+            if any(labels.get(key) != value for key, value in self.labels("development").items()):
+                raise CellIdentityConflict("machine development identity mismatch")
+            if machine.status != "exited" or machine.attrs.get("Image") != reference.image_id:
+                return False
+            image = self.client.images.get(reference.image_id)
+            config = image.attrs.get("Config", {})
+            labels = config.get("Labels") or {}
+            if image.id != reference.image_id or any(
+                labels.get(key) != value for key, value in self.labels("environment").items()
+            ):
+                raise CellIdentityConflict("environment image project identity mismatch")
+            if config.get("Env") or config.get("Entrypoint") or config.get("Cmd"):
+                raise CellIdentityConflict(
+                    "environment image contains unexpected runtime configuration"
+                )
+            machine_remaining_seconds(1)
+            # None/unknown responses are not evidence of an unchanged rootfs.
+            changes = machine.diff()
+            return isinstance(changes, list) and changes == []
+        except TimeoutError:
+            raise
+        except (docker.errors.APIError, OSError):
+            return False
 
     def export_image(self) -> tuple[str, Iterable[bytes]]:
         machine = self._container()
