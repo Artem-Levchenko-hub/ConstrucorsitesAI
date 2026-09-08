@@ -36,6 +36,7 @@ from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as _CONTAINER_NEXT
 from omnia_api.schemas.project import orchestrator_template
 from omnia_api.schemas.runtime import (
     DeployRequest,
@@ -56,13 +57,12 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["runtime"])
 
 # Container-backed templates whose dev container holds AI-generated files in its
-# writable layer (no bind mount). Canonical list lives in routers/messages.py
-# CONTAINER_NEXT; kept in sync. A recreated container (destroy+reprovision, host
+# writable layer (no bind mount). The browser-container family comes from
+# schemas.project. A recreated container (destroy+reprovision, host
 # reboot losing the layer, manual cleanup) comes up running the *baked template*
 # — the "Новый проект на Omnia.AI" starter — instead of the user's app, unless
 # we re-push the latest snapshot. start_runtime does exactly that. `spa` (Vite +
 # React, Phase 7.2) holds its AI files in the writable layer too.
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
 
 
 async def _project_owned_by(session: AsyncSession, project_id: UUID, user_id: UUID) -> Project:

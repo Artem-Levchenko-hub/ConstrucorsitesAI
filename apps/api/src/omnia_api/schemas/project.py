@@ -63,6 +63,13 @@ _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
 }
 
 
+# Browser-container family used by generation, live preview and legacy HMR.
+# This is distinct from all container backends (which include api/tgbot) and
+# from database requirements. Consumers retain their own admission guards;
+# membership does not grant preview, restore or Project Cell permissions.
+CONTAINER_BROWSER_TEMPLATES = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
+
+
 def is_fullstack(template: str) -> bool:
     """Single source of truth: which templates run inside a dev container.
 

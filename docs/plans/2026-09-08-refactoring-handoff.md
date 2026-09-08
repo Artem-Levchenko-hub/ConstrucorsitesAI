@@ -49,10 +49,13 @@ Health/release и публичные маршруты проверены, write 
 самостоятельной генерации владельца; та завершилась до обновления API.
 Доказательства: [Task 10A verification](2026-09-08-task10-exact-edit-verification.md).
 
-Task 10B подготовлен отдельно в `.artifacts/refactor-task10b-20260908/README.md`:
-50 DB-free baseline cases passed (3.65 s), actual preview/runtime/rollback
-routing и четыре одинаковых browser-container tuple. Не менять backend/DB/
-design/prompt facets. Только общий API tuple и прежние import aliases.
+**Task 10B выполняется:** четыре одинаковых browser-container tuple заменены
+общим списком и прежними import aliases. BEFORE: 50 passed (2.88 s);
+AFTER с rollback/agent suites: 212 passed (66.99 s). Ruff/mypy276 clean;
+AST функций/классов совпадает. Backend/DB/design/prompt facets и MAX guards
+не менялись. Независимое review: No findings; нужны full CI и API-only поставка.
+Продолжить с [Task10B verification](2026-09-08-task10b-browser-container-verification.md).
+Не начинать следующий product diff до завершения доставки.
 
 Task 11: кандидат — только openRealStream/StreamHandle, не весь lifecycle.
 Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
@@ -73,7 +76,7 @@ Task 12 требует измеренного IO/build hot path; пользов�
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
 Не повторять Task 4/5. H140 уже опубликован, public version 72, 136 прежних
-записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены. H143 готов к отдельной публикации после doc sync. H134–H136 не публиковать целиком
+записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены. H143 опубликован: public version 75, 139 прежних записей сохранены; следующая H144. H134–H136 не публиковать целиком
 вместе с репозиторным JSON.
 
 ### Предыдущая поставка Task 5

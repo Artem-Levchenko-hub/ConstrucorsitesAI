@@ -50,6 +50,7 @@ from omnia_api.schemas.message import (
     PromptResponse,
     SurveyQuestion,
 )
+from omnia_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as CONTAINER_NEXT
 from omnia_api.schemas.project import is_fullstack, orchestrator_template
 from omnia_api.services import (
     agent_builder,
@@ -3507,7 +3508,6 @@ _KIT_SCRIPT = '<script src="assets/omnia-kit.js" defer></script>'
 # is the Vite + React no-backend stack (Phase 7.2) — despite the historical name,
 # it's container-backed and file-extracted, so it belongs to this group, not the
 # freeform-HTML path. (tgbot/api are backend-only and handled elsewhere.)
-CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
 
 
 def _merge_seeded_agent_files(

@@ -11,6 +11,7 @@ from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
+from omnia_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as _CONTAINER_NEXT
 from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.project_versions import record_restored_version
@@ -26,8 +27,7 @@ router = APIRouter(prefix="/api/projects", tags=["rollback"])
 # `hot_reload`; rollback must do the same or "вернуться назад" is a visible no-op
 # on the live preview). Static templates (blank/landing/portfolio/blog) have no
 # persistent container — their preview re-renders from repo files, so they roll
-# back correctly without this. Kept in sync with messages.py `CONTAINER_NEXT`.
-_CONTAINER_NEXT = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
+# back correctly without this. The shared family is imported from schemas.project.
 
 
 def with_rollback_deletions(
