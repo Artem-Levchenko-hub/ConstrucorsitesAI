@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import shutil
 import tarfile
 import tempfile
 from collections.abc import Callable, Iterator
@@ -24,6 +23,7 @@ from minio.error import S3Error
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.minio import get_minio_client
+from omnia_api.services.template_materialization import materialize_template
 
 # Project complexity quota, not an LLM-response shape limit. Native agents write
 # incrementally, so a real application may contain thousands of source files;
@@ -131,8 +131,7 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
     with tempfile.TemporaryDirectory(prefix=f"omnia-init-{project_id}-") as tmp:
         workdir = Path(tmp) / "repo"
         workdir.mkdir()
-        if template_dir.exists():
-            shutil.copytree(template_dir, workdir, dirs_exist_ok=True)
+        materialize_template(template_dir, workdir)
         repo = pygit2.init_repository(str(workdir), bare=False)
         sig = _signature()
         index = repo.index

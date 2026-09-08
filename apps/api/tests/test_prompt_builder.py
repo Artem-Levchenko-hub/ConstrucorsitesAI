@@ -595,15 +595,19 @@ def test_compute_skill_brief_phase_j_includes_nav_style_for_app_prompt() -> None
         assert "bottom-tabs" in brief or "mobile" in brief.lower()
 
 
-def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates() -> None:
+def test_omnia_kit_css_phase_i_block_is_byte_identical_across_4_templates(tmp_path) -> None:
     """All 4 static templates ship the SAME omnia-kit.css. C.5 maintained
     this; Phase I must too. A divergent block per template means a single
     edit forgot to sync — measure it before it leaks to production."""
     import pathlib
 
+    from omnia_api.services.template_materialization import materialize_template
+
     base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
+    for template in ("blank", "blog", "landing", "portfolio"):
+        materialize_template(base / template, tmp_path / template)
     files = [
-        (base / t / "assets/omnia-kit.css").read_text(encoding="utf-8")
+        (tmp_path / t / "assets/omnia-kit.css").read_text(encoding="utf-8")
         for t in ("blank", "blog", "landing", "portfolio")
     ]
     # All 4 files must be byte-identical end-to-end (the C.5 block already
@@ -753,16 +757,20 @@ def test_build_mode_still_carries_full_prompt() -> None:
     assert "ВИЗУАЛЬНЫЙ СТИЛЬ" in system  # _STYLE_KIT present in build mode
 
 
-def test_anime_and_kit_js_byte_identical_across_4_templates() -> None:
+def test_anime_and_kit_js_byte_identical_across_4_templates(tmp_path) -> None:
     """Vendored anime.min.js + omnia-kit.js must be byte-identical across all
     4 static templates. The kit-edit-then-copy workflow silently forgets a dir
     otherwise, and KIT_FILES protection assumes one canonical copy per asset."""
     import pathlib
 
+    from omnia_api.services.template_materialization import materialize_template
+
     base = pathlib.Path(__file__).parent.parent / "src/omnia_api/templates"
+    for template in ("blank", "blog", "landing", "portfolio"):
+        materialize_template(base / template, tmp_path / template)
     for asset in ("assets/anime.min.js", "assets/omnia-kit.js"):
         files = [
-            (base / t / asset).read_text(encoding="utf-8")
+            (tmp_path / t / asset).read_text(encoding="utf-8")
             for t in ("blank", "blog", "landing", "portfolio")
         ]
         assert files[0] == files[1] == files[2] == files[3], asset

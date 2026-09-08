@@ -1,0 +1,91 @@
+{
+  "base_commit": "810f0fbbbdd46391b8a01cb0ce9a8891533f8666",
+  "templates": {
+    "blank": {
+      "assets/anime.min.js": {
+        "sha256": "b5ce1be3c3f530f192e0f2571d1942846096d66119cbada34bfdc912c4873f35",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.css": {
+        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.js": {
+        "sha256": "3a13f8fe6833cc7d23419fe16ec87fff1b827a74a646beb23f34889a35d1344e",
+        "mode": "100644"
+      },
+      "index.html": {
+        "sha256": "4b9325a98226dc656d6ae90a5c96c519d15d7d7c073e715c7492fd70e8bb1b01",
+        "mode": "100644"
+      }
+    },
+    "landing": {
+      "assets/anime.min.js": {
+        "sha256": "b5ce1be3c3f530f192e0f2571d1942846096d66119cbada34bfdc912c4873f35",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.css": {
+        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.js": {
+        "sha256": "3a13f8fe6833cc7d23419fe16ec87fff1b827a74a646beb23f34889a35d1344e",
+        "mode": "100644"
+      },
+      "index.html": {
+        "sha256": "649c0be8e5cd6cfa9602a722a7f3712a66658454db5ce8f33c318400b0ae3a9a",
+        "mode": "100644"
+      }
+    },
+    "portfolio": {
+      "assets/anime.min.js": {
+        "sha256": "b5ce1be3c3f530f192e0f2571d1942846096d66119cbada34bfdc912c4873f35",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.css": {
+        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.js": {
+        "sha256": "3a13f8fe6833cc7d23419fe16ec87fff1b827a74a646beb23f34889a35d1344e",
+        "mode": "100644"
+      },
+      "index.html": {
+        "sha256": "416ed1b89ad4be4e697510b5a5678c003cb4b227800640521746dc035ebe443a",
+        "mode": "100644"
+      }
+    },
+    "blog": {
+      "assets/anime.min.js": {
+        "sha256": "b5ce1be3c3f530f192e0f2571d1942846096d66119cbada34bfdc912c4873f35",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.css": {
+        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "mode": "100644"
+      },
+      "assets/omnia-kit.js": {
+        "sha256": "3a13f8fe6833cc7d23419fe16ec87fff1b827a74a646beb23f34889a35d1344e",
+        "mode": "100644"
+      },
+      "index.html": {
+        "sha256": "7e299ea689e48889cea89cc3b3f8de4c662d0cee06481c173e8db3e1002d7390",
+        "mode": "100644"
+      }
+    },
+    "fullstack": {
+      "README.md": {
+        "sha256": "dd7835c8a82b84dcd182cf2d36520467106de0b36ce891bbed2f3c503dd9bf43",
+        "mode": "100644"
+      },
+      "src/app/page.tsx": {
+        "sha256": "bda5ec2a5fdb15374d30ea79c4eedfa779a40c048072a6f2c55dd9250f7754d5",
+        "mode": "100644"
+      },
+      "src/lib/db/schema.ts": {
+        "sha256": "04276df1a3def90afef97d4dd212c1645f1c2eb3e2ee58f586bae056c53b18bf",
+        "mode": "100644"
+      }
+    }
+  }
+}

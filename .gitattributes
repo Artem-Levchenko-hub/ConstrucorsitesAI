@@ -1,0 +1,2 @@
+# Template bytes must match Linux production and the frozen materialization fixtures.
+apps/api/src/omnia_api/templates/** text eol=lf

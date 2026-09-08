@@ -21,6 +21,7 @@ from omnia_api.routers.projects import perform_fork
 from omnia_api.schemas.project import is_fullstack
 from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.template_materialization import read_kit_asset
 
 log = logging.getLogger("omnia_api.public")
 
@@ -46,9 +47,6 @@ _INSPECTOR_TAG = (
 # import; filenames whitelisted (no path traversal). The JS is exposed too for
 # future use, but the streaming bootstrap loads ONLY the CSS — the kit's
 # DOM-mutating JS animations conflict with morphdom's live patching.
-_KIT_ASSETS_DIR = (
-    Path(__file__).resolve().parent.parent / "templates" / "blank" / "assets"
-)
 _KIT_ASSET_MIME = {
     "omnia-kit.css": "text/css; charset=utf-8",
     "omnia-kit.js": "application/javascript; charset=utf-8",
@@ -56,7 +54,7 @@ _KIT_ASSET_MIME = {
     "omnia-inspector.js": "application/javascript; charset=utf-8",
 }
 _KIT_ASSETS: dict[str, bytes] = {
-    name: (_KIT_ASSETS_DIR / name).read_bytes()
+    name: read_kit_asset(name)
     for name in _KIT_ASSET_MIME
     if name != "omnia-inspector.js"
 }
