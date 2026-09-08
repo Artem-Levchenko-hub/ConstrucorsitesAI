@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
+  ArrowLeft,
   BarChart3,
   CalendarDays,
   Check,
@@ -49,7 +50,9 @@ import {
 } from "@/lib/api/app-integrations";
 import { ApiError } from "@/lib/api/client";
 import { syncMaxManagedKit } from "@/lib/api/max-studio";
+import { sendPrompt } from "@/lib/api/messages";
 import type { AppIntegration, IntegrationCategory, IntegrationProvider } from "@/lib/api/types";
+import { containsChatSecret } from "@/lib/max-chat-credentials";
 import { cn } from "@/lib/utils";
 
 const categories: Record<IntegrationCategory | "all", { label: string; icon: LucideIcon }> = {
@@ -103,11 +106,22 @@ const message = (error: unknown) => {
   return error instanceof Error ? error.message : "Не удалось выполнить действие";
 };
 
-export function FigmaIntegrationHub({ projectId, projectName }: { projectId: string; projectName: string }) {
+type ImplementationAttempt = { provider: string; prompt: string; key: string; terminal: boolean };
+
+export function FigmaIntegrationHub({ projectId, projectName, embedded = false, onExit, onBusyChange }: {
+  projectId: string;
+  projectName: string;
+  embedded?: boolean;
+  onExit?: () => void;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const qc = useQueryClient();
   const router = useRouter();
   const [implementationProvider, setImplementationProvider] = useState<string | null>(null);
   const [implementationPrompt, setImplementationPrompt] = useState("");
+  const implementationSubmitting = useRef(false);
+  const implementationAttempt = useRef<ImplementationAttempt | null>(null);
+  const [terminalFailure, setTerminalFailure] = useState(false);
   const [category, setCategory] = useState<IntegrationCategory | "all">("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<IntegrationProvider | null>(null);
@@ -205,6 +219,50 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
     onError: (error) => toast.error("Не удалось отключить", { description: message(error) }),
   });
 
+  const attemptStorageKey = (provider: string) => `omnia:max:integration-attempt:${projectId}:${provider}`;
+  const readAttempt = (provider: string): ImplementationAttempt | null => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(attemptStorageKey(provider)) || "null") as ImplementationAttempt | null;
+      return saved?.provider === provider && typeof saved.key === "string" && Boolean(saved.key)
+        && typeof saved.prompt === "string" && Boolean(saved.prompt.trim()) && !containsChatSecret(saved.prompt)
+        && typeof saved.terminal === "boolean" ? saved : null;
+    } catch { return null; }
+  };
+  const implement = useMutation({
+    mutationFn: async ({ provider, prompt }: { provider: string; prompt: string }) => {
+      if (containsChatSecret(prompt)) throw new Error("Удалите ключи и токены из задания. Используйте защищённую форму подключения.");
+      const previous = implementationAttempt.current;
+      const attempt = previous?.provider === provider && previous.prompt === prompt && !previous.terminal
+        ? previous : { provider, prompt, key: `max-integration-${projectId}-${crypto.randomUUID()}`, terminal: false };
+      // Persist the logical request before dispatch so a lost response or modal
+      // remount replays it instead of charging for another generation.
+      try { sessionStorage.setItem(attemptStorageKey(provider), JSON.stringify(attempt)); }
+      catch { throw new Error("Не удалось сохранить попытку. Разрешите хранилище браузера и повторите попытку."); }
+      implementationAttempt.current = attempt;
+      setTerminalFailure(false);
+      return sendPrompt(projectId, prompt, "topmix-v1", [], { skipClarify: true, idempotencyKey: attempt.key });
+    },
+    onSuccess: result => {
+      for (const key of ["messages", "generation", "project-versions"]) {
+        void qc.invalidateQueries({ queryKey: [key, projectId] });
+      }
+      if (result.run_status === "failed" || result.run_status === "cancelled") {
+        const attempt = implementationAttempt.current;
+        if (attempt) {
+          attempt.terminal = true;
+          try { sessionStorage.setItem(attemptStorageKey(attempt.provider), JSON.stringify(attempt)); } catch { /* The saved key still safely replays the terminal result. */ }
+        }
+        setTerminalFailure(true);
+        return;
+      }
+      toast.success("Задание передано в чат приложения");
+      onExit?.();
+    },
+  });
+  const busy = connect.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
+  useEffect(() => () => { onBusyChange?.(false); }, [onBusyChange]);
+
   const openProvider = (provider: IntegrationProvider) => {
     if (provider.connection_mode === "platform") return;
     const connection = connections.get(provider.key);
@@ -223,32 +281,94 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
   const openImplementation = (providerKey: string) => {
     const feature = implementationFeatures[providerKey];
     if (!feature || !canUseProvider(providerKey)) return;
-    setImplementationPrompt(`${feature}\nИспользуй только доступные управляемые методы интеграции. Не запрашивай и не вставляй секреты в код или сообщения. Добавь состояния загрузки, пустого результата и ошибки. Проверь сценарий и сообщи, что проверено, а что требует проверки с реальным аккаунтом.`);
+    const saved = embedded ? readAttempt(providerKey) : null;
+    implementationAttempt.current = saved;
+    implement.reset();
+    setTerminalFailure(saved?.terminal ?? false);
+    setImplementationPrompt(saved?.prompt ?? `${feature}\nИспользуй только доступные управляемые методы интеграции. Не запрашивай и не вставляй секреты в код или сообщения. Добавь состояния загрузки, пустого результата и ошибки. Проверь сценарий и сообщи, что проверено, а что требует проверки с реальным аккаунтом.`);
     setImplementationProvider(providerKey);
   };
-  const canImplement = Boolean(implementationProvider && canUseProvider(implementationProvider) && implementationPrompt.trim());
+  const proposalHasSecret = embedded && containsChatSecret(implementationPrompt);
+  const canImplement = Boolean(implementationProvider && canUseProvider(implementationProvider) && implementationPrompt.trim() && !proposalHasSecret);
   const startImplementation = () => {
-    if (!canImplement) return;
+    if (!canImplement || implementationSubmitting.current) return;
+    if (embedded && implementationProvider) {
+      implementationSubmitting.current = true;
+      void implement.mutateAsync({ provider: implementationProvider, prompt: implementationPrompt.trim() })
+        .catch(() => undefined).finally(() => { implementationSubmitting.current = false; });
+      return;
+    }
     try {
       window.sessionStorage.setItem(`omnia:max:starter:${projectId}`, implementationPrompt.trim());
     } catch {
       toast.error("Не удалось передать задание в студию", { description: "Разрешите хранилище браузера и повторите попытку." });
       return;
     }
+    onExit?.();
     router.push(`/max/${projectId}?starter=1`);
   };
   const connectedCount = (catalog.data?.providers ?? []).filter((provider) => canUseProvider(provider.key)).length;
   const canSubmit = selected?.fields.every((field) => !field.required || Boolean(values[field.key]?.trim())) ?? false;
 
-  return (
-    <MaxSectionShell
-      projectId={projectId}
-      projectName={projectName}
-      active="integrations"
-      eyebrow="Дополнительный шаг"
-      title="Интеграции"
-      lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
-    >
+  const DetailTitle = embedded ? "h2" : DialogTitle;
+  const DetailDescription = embedded ? "p" : DialogDescription;
+  const implementationContent = (
+    <>
+      {embedded && <Button variant="ghost" className="w-fit" disabled={implement.isPending} onClick={() => setImplementationProvider(null)}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
+      <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
+      <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
+      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в новой версии приложения; затем потребуется публикация.</p>
+      <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
+      <Textarea id="integration-implementation-prompt" value={implementationPrompt} disabled={implement.isPending} onChange={(event) => {
+        if (implementationSubmitting.current) return;
+        setImplementationPrompt(event.target.value); implement.reset(); setTerminalFailure(false);
+      }} className="min-h-[240px] border-border-default bg-surface-base" />
+      {implementationProvider && !canUseProvider(implementationProvider) && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
+      {proposalHasSecret && <p role="alert" className="text-sm text-danger-fg">Удалите ключи и токены из задания. Используйте защищённую форму подключения.</p>}
+      {embedded && implement.error && <p role="alert" className="text-sm text-danger-fg">{message(implement.error)}</p>}
+      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Новая попытка расходует баланс владельца.</p>}
+      <Button disabled={!canImplement || implement.isPending} onClick={startImplementation} className="min-h-11">{implement.isPending && <Loader2 className="size-4 animate-spin" />}{embedded && terminalFailure ? "Повторить доработку" : "Запустить доработку"}</Button>
+    </>
+  );
+  const providerContent = selected && (
+    <>
+      <header className={cn("shrink-0 border-b border-border-default p-5 sm:p-6", !embedded && "pr-16 sm:pr-14")}>
+        {embedded && <Button variant="ghost" className="mb-4 w-fit" disabled={connect.isPending} onClick={() => { setSelected(null); setValues({}); }}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
+        <div>
+          <p className="omnia-kicker text-accent">Подключение</p>
+          <DetailTitle className="mt-2 text-2xl font-semibold text-fg-primary">
+            {selected.name}
+          </DetailTitle>
+          <DetailDescription className="mt-2 max-w-[470px] text-sm leading-6 text-fg-secondary">
+            {selected.description}
+          </DetailDescription>
+        </div>
+      </header>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
+        {selected.oauth_available && (
+          <div className="rounded-[10px] border border-[#4f81f7]/30 bg-accent/[.06] p-4">
+            <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
+            <p className="mt-1 text-xs leading-5 text-fg-secondary">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
+            <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
+          </div>
+        )}
+        {selected.fields.map((field) => (
+          <div key={field.key} className="space-y-2">
+            <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>
+            <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-border-default bg-surface" />
+            {field.help && <p className="text-xs leading-5 text-fg-tertiary">{field.help}</p>}
+          </div>
+        ))}
+        <div className="rounded-[10px] bg-surface-base p-4 text-xs leading-5 text-fg-secondary"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
+      </div>
+      <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-border-default p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
+        <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-fg-tertiary">Документация сервиса</a>
+        {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
+      </footer>
+    </>
+  );
+  const catalogContent = (
+    <>
       <p className="mt-4 max-w-[850px] text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
       <section className="max-integration-summary mt-6 grid gap-4 lg:grid-cols-[1fr_220px]">
         <div className="rounded-[12px] border border-border-default bg-surface p-6">
@@ -370,15 +490,34 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
           )}
         </div>
       </section>
+    </>
+  );
 
+  if (embedded) {
+    return (
+      <div className="max-integration-embedded">
+        {selected ? (
+          <section className="flex min-h-0 flex-col">{providerContent}</section>
+        ) : implementationProvider ? (
+          <section className="grid gap-5">{implementationContent}</section>
+        ) : catalogContent}
+      </div>
+    );
+  }
+
+  return (
+    <MaxSectionShell
+      projectId={projectId}
+      projectName={projectName}
+      active="integrations"
+      eyebrow="Дополнительный шаг"
+      title="Интеграции"
+      lead="Авторизуйте сервис один раз для бизнеса. Секреты хранятся отдельно от исходного кода, а приложение получает только безопасные функции."
+    >
+      {catalogContent}
       <Dialog open={Boolean(implementationProvider)} onOpenChange={(open) => { if (!open) setImplementationProvider(null); }}>
         <DialogContent data-product-shell data-max-studio className="max-h-[90dvh] overflow-y-auto border-border-default bg-surface text-fg-primary sm:max-w-[600px]">
-          <DialogTitle>Добавить интеграцию в приложение</DialogTitle>
-          <DialogDescription className="text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DialogDescription>
-          <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
-          <Textarea id="integration-implementation-prompt" value={implementationPrompt} onChange={(event) => setImplementationPrompt(event.target.value)} className="min-h-[240px] border-border-default bg-surface-base" />
-          {!canImplement && implementationPrompt.trim() && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
-          <Button disabled={!canImplement} onClick={startImplementation} className="min-h-11">Запустить доработку</Button>
+          {implementationContent}
         </DialogContent>
       </Dialog>
       <Dialog
@@ -392,38 +531,7 @@ export function FigmaIntegrationHub({ projectId, projectName }: { projectId: str
             data-product-shell data-max-studio
             className="flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden border-border-default bg-surface p-0 text-fg-primary sm:max-h-[90dvh] sm:max-w-[600px] sm:p-0"
           >
-            <header className="shrink-0 border-b border-border-default p-5 pr-16 sm:p-6 sm:pr-14">
-              <div>
-                <p className="omnia-kicker text-accent">Подключение</p>
-                <DialogTitle className="mt-2 text-2xl font-semibold text-fg-primary">
-                  {selected.name}
-                </DialogTitle>
-                <DialogDescription className="mt-2 max-w-[470px] text-sm leading-6 text-fg-secondary">
-                  {selected.description}
-                </DialogDescription>
-              </div>
-            </header>
-            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
-              {selected.oauth_available && (
-                <div className="rounded-[10px] border border-[#4f81f7]/30 bg-accent/[.06] p-4">
-                  <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
-                  <p className="mt-1 text-xs leading-5 text-fg-secondary">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
-                  <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
-                </div>
-              )}
-              {selected.fields.map((field) => (
-                <div key={field.key} className="space-y-2">
-                  <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>
-                  <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-border-default bg-surface" />
-                  {field.help && <p className="text-xs leading-5 text-fg-tertiary">{field.help}</p>}
-                </div>
-              ))}
-              <div className="rounded-[10px] bg-surface-base p-4 text-xs leading-5 text-fg-secondary"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
-            </div>
-            <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-border-default p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
-              <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-fg-tertiary">Документация сервиса</a>
-              {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
-            </footer>
+            {providerContent}
           </DialogContent>
         )}
       </Dialog>

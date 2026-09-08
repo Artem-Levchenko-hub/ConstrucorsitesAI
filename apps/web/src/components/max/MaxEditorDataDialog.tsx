@@ -6,7 +6,7 @@ import { MaxProjectSetupDialog } from "./MaxProjectSetupDialog";
 import type { SetupSection } from "./MaxProjectSetupSections";
 
 /** URL-backed dialog: old links, Back and direct entry share the same editor. */
-export function MaxEditorDataDialog({ projectId }: { projectId: string }) {
+export function MaxEditorDataDialog({ projectId, controlled }: { projectId: string; controlled?: { section: SetupSection | null; onOpenChange: (open: boolean) => void } }) {
   const params = useSearchParams();
   const value = params?.get("data");
   const section: SetupSection | null = value === "details" || value === "content" || value === "owner" || value === "policies" ? value : null;
@@ -14,8 +14,9 @@ export function MaxEditorDataDialog({ projectId }: { projectId: string }) {
   // Back/Forward and external links still own the selected entry.
   const [entry, setEntry] = useState({ source: section, selected: section, projectId });
   if (entry.source !== section || entry.projectId !== projectId) setEntry({ source: section, selected: section, projectId });
-  return <MaxProjectSetupDialog projectId={projectId} display="header" open={entry.selected !== null} initialSection={entry.selected ?? "details"}
+  return <MaxProjectSetupDialog projectId={projectId} display="header" open={(controlled ? controlled.section : entry.selected) !== null} initialSection={(controlled ? controlled.section : entry.selected) ?? "details"}
     onOpenChange={open => {
+      if (controlled) { controlled.onOpenChange(open); return; }
       setEntry({ source: section, selected: open ? "details" : null, projectId });
       const next = new URLSearchParams(params?.toString());
       if (open) next.set("data", "details"); else next.delete("data");

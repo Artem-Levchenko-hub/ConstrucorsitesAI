@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
-import { MaxSettingsWorkspace } from "@/components/max/MaxSettingsWorkspace";
 import { loadMaxProject } from "@/lib/max-project-server";
 
 export const metadata: Metadata = {
@@ -21,11 +20,5 @@ export default async function MaxSettingsPage({
   const tab = query.tab === "app" || query.tab === "vps" ? query.tab : "bot";
   const project = await loadMaxProject(id, `/max/${id}/settings?tab=${tab}`);
   if (tab === "app") redirect(`/max/${project.id}?data=details`);
-  return (
-    <MaxSettingsWorkspace
-      projectId={project.id}
-      projectName={project.name}
-      initialTab={tab}
-    />
-  );
+  redirect(`/max/${project.id}?panel=${tab === "vps" ? "hosting" : "max"}`);
 }

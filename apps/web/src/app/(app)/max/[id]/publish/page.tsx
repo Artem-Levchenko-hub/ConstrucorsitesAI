@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { MaxPublishWorkspace } from "@/components/max/MaxPublishWorkspace";
+import { redirect } from "next/navigation";
 import { loadMaxProject } from "@/lib/max-project-server";
 
 export const metadata: Metadata = {
@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 export default async function MaxPublishPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const project = await loadMaxProject(id, `/max/${id}/publish`);
-  return <MaxPublishWorkspace projectId={project.id} projectName={project.name} />;
+  redirect(`/max/${project.id}?panel=publish`);
 }

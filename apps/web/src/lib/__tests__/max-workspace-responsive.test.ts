@@ -21,7 +21,7 @@ describe("MAX workspace responsive contract", () => {
     expect(styles).toContain("grid-template-columns: minmax(0, 1fr) minmax(440px, 40%)");
     expect(styles).toContain("@media (max-width: 1023px)");
     expect(styles).toContain(".max-editor-desktop-preview { display: none; }");
-    expect(workspace).toContain('data-testid="max-mobile-preview"');
+    expect(workspace).toContain('modal === "preview" ? "max-mobile-preview"');
     expect(workspace).toContain("<Dialog.Content");
   });
 

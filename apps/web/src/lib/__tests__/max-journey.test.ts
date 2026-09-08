@@ -27,7 +27,7 @@ describe("getMaxJourney", () => {
     expect(journey.progress).toBe(50);
     expect(journey.currentStage).toMatchObject({
       id: "bot",
-      href: "/max/project-1/settings?tab=bot",
+      href: "/max/project-1?panel=max",
       status: "current",
     });
   });
@@ -85,10 +85,10 @@ describe("getMaxJourneyItemHref", () => {
     );
     expect(getMaxJourneyItemHref("project-1", "business")).toBe("/max/project-1?data=owner");
     expect(getMaxJourneyItemHref("project-1", "publish")).toBe(
-      "/max/project-1/publish",
+      "/max/project-1?panel=publish",
     );
     expect(getMaxJourneyItemHref("project-1", "bot")).toBe(
-      "/max/project-1/settings?tab=bot",
+      "/max/project-1?panel=max",
     );
   });
 });

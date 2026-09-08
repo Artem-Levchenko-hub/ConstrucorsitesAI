@@ -28,7 +28,6 @@ export function MaxWorkspaceShell({
   project: Project;
   email: string;
 }) {
-  const [launchOpen, setLaunchOpen] = useState(false);
   const [versionSelection, setVersionSelection] = useState<{
     versionId: string;
     projectId: string;
@@ -152,10 +151,8 @@ export function MaxWorkspaceShell({
     <MaxEditorLayout
       project={project}
       launchStatus={launchLabel}
-      launchOpen={launchOpen}
-      onLaunchChange={setLaunchOpen}
       preview={preview}
-      launch={<MaxLaunchPanel project={project} onClose={() => setLaunchOpen(false)} />}
+      launch={<MaxLaunchPanel project={project} standalone />}
       navigation={
         <>
           <div className="max-editor-navigation" data-testid="max-navigation-scroll">
@@ -183,7 +180,7 @@ export function MaxWorkspaceShell({
         <>
           <MaxUsageBreakdown projectId={project.id} />
           {versions.length > 0 && <DownloadButton projectId={project.id} projectSlug={project.slug} />}
-          <Link className="max-editor-nav-link" href={`/max/${project.id}/integrations`}>Интеграции</Link>
+          <Link className="max-editor-nav-link" href={`/max/${project.id}?panel=services`}>Интеграции</Link>
         </>
       }
     >

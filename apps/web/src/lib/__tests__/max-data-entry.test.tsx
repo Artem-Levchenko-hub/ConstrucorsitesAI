@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import MaxSettingsPage from "@/app/(app)/max/[id]/settings/page";
+import MaxPublishPage from "@/app/(app)/max/[id]/publish/page";
+import MaxIntegrationsPage from "@/app/(app)/max/[id]/integrations/page";
 import { MaxEditorLayout } from "@/components/max/MaxEditorLayout";
 import type { Project } from "@/lib/api/types";
 
@@ -29,10 +31,17 @@ it("does not redirect through a failed ownership check", async () => {
   await expect(MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab: "app" }) })).rejects.toBe(denied);
 });
 
-it.each(["bot", "vps"])("preserves the real %s settings screen", async tab => {
+it.each([["bot", "max"], ["vps", "hosting"]])("redirects old %s settings into its editor modal", async (tab, panel) => {
   mocks.load.mockResolvedValue(project);
-  const page = await MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab }) });
-  expect(page.props.initialTab).toBe(tab);
+  await expect(MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab }) }))
+    .rejects.toMatchObject({ digest: expect.stringContaining(`/max/${project.id}?panel=${panel}`) });
+});
+
+it.each([[MaxPublishPage, "publish"], [MaxIntegrationsPage, "services"]] as const)("redirects a legacy page only after checking access", async (Page, panel) => {
+  mocks.load.mockResolvedValue(project);
+  await expect(Page({ params: Promise.resolve({ id: project.id }) })).rejects.toMatchObject({ digest: expect.stringContaining(`/max/${project.id}?panel=${panel}`) });
+  const denied = new Error("Access denied"); mocks.load.mockRejectedValue(denied);
+  await expect(Page({ params: Promise.resolve({ id: project.id }) })).rejects.toBe(denied);
 });
 
 it.each(["details", "owner", "policies"])("opens %s directly over the editor and closes without losing chat input", async section => {

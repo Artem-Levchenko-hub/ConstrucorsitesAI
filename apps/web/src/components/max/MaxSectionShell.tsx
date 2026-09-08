@@ -23,7 +23,7 @@ export function MaxSectionShell({ projectId, projectName, active, eyebrow, title
           <span className="max-project-header-name" title={projectName}>{projectName}</span>
         </div>
         <div className="flex shrink-0 items-center gap-3">
-          {active !== "publish" && <Link href={`/max/${projectId}/publish`} className="max-project-launch"><Rocket className="size-4" />Запуск</Link>}
+          {active !== "publish" && <Link href={`/max/${projectId}?panel=publish`} className="max-project-launch"><Rocket className="size-4" />Запуск</Link>}
           <Link href="/account" aria-label="Аккаунт" className="max-project-back"><UserRound className="size-4" /></Link>
         </div>
       </header>

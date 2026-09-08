@@ -1,0 +1,85 @@
+.max-editor-modal { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: hidden; background: #fff; color: #19253a; border: 1px solid #d9e1ed; border-radius: 16px; box-shadow: 0 24px 80px #15284930; }
+.max-editor-modal-heading { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 22px 28px; border-bottom: 1px solid #e3e8f0; }
+.max-editor-modal-heading h2 { font-size: 22px; font-weight: 650; line-height: 1.3; }
+.max-editor-modal-project { display: block; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #62718a; font-size: 12px; margin-bottom: 5px; }
+.max-editor-modal-back { padding: 16px 28px 0; }
+.max-editor-modal-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 28px 28px; }
+.max-editor-modal-lead { color: #52627b; font-size: 14px; line-height: 1.7; margin-bottom: 20px; }
+.max-editor-modal-services, .max-editor-modal-hosting { width: min(920px, calc(100vw - 32px)); }
+.max-editor-modal-navigation { width: min(400px, calc(100vw - 32px)); }
+.max-editor-modal-tools { width: min(480px, calc(100vw - 32px)); }
+.max-editor-modal-preview { width: min(560px, calc(100vw - 16px)); height: calc(100dvh - 16px); }
+.max-editor-modal-preview .max-editor-modal-scroll { display: flex; padding: 0; flex: 1; overflow: hidden; }
+.max-editor-modal-preview-content { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.max-editor-modal-publish .max-editor-modal-scroll { padding: 0; }
+.max-editor-modal [data-testid=max-launch-panel].max-studio-launch-standalone { border: 0; border-radius: 0; box-shadow: none; }
+.max-editor-modal .max-studio-launch-body { overflow: visible; max-height: none; }
+.max-editor-modal .max-editor-drawer-scroll { padding: 0; overflow: visible; }
+.max-editor-modal .max-editor-tools { padding: 0; }
+.max-editor-modal button { transition-property: background-color, border-color, color; }
+.max-connect-progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; list-style: none; padding: 0 0 24px; margin: 0 0 28px; border-bottom: 1px solid #e3e8f0; }
+.max-connect-progress li { display: flex; align-items: center; gap: 8px; color: #62718a; font-size: 12px; }
+.max-connect-progress li > span { display: grid; place-items: center; width: 28px; height: 28px; flex: none; border: 1px solid #d5ddeb; border-radius: 50%; font-weight: 600; }
+.max-connect-progress small { font-size: 12px; }
+.max-connect-progress svg { width: 14px; height: 14px; }
+.max-connect-progress li[data-complete=true] { color: #237747; }
+.max-connect-progress li[data-complete=true] > span { background: #eaf7ef; border-color: #c8e6d3; }
+.max-connect-progress li[aria-current=step] { color: #245ade; font-weight: 600; }
+.max-connect-progress li[aria-current=step] > span { background: #285af0; border-color: #285af0; color: #fff; }
+.max-connect-step h2 { margin: 8px 0 14px; font-size: 28px; line-height: 1.25; font-weight: 650; letter-spacing: -.025em; }
+.max-connect-step p { font-size: 14px; line-height: 1.7; color: #465774; }
+.max-connect-step p.max-connect-eyebrow { color: #245ade; font-size: 12px; font-weight: 650; letter-spacing: .04em; }
+.max-connect-step p.max-connect-lead { color: #3b4f6b; font-size: 16px; line-height: 1.6; margin-bottom: 22px; max-width: 570px; }
+.max-connect-illustration { margin: 16px 0; background: linear-gradient(110deg, #edf3ff, #f7faff); padding: 18px; border-radius: 10px; }
+.max-connect-diagram { display: flex; justify-content: center; align-items: center; gap: 32px; color: #5275bd; }
+.max-connect-diagram > span { display: grid; justify-items: center; gap: 12px; color: #244b9b; font-weight: 600; }
+.max-connect-diagram > span > svg { width: 32px; height: 32px; stroke-width: 1.5; }
+.max-connect-diagram > span:last-child { color: #237747; }
+.max-connect-illustration figcaption { margin-top: 12px; text-align: center; font-size: 12px; color: #617391; }
+.max-connect-cabinet { display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid #c4d0e5; border-radius: 8px; padding: 10px 14px; min-height: 42px; color: #2456b6; font-size: 14px; font-weight: 550; margin: 16px 0; }
+.max-connect-cabinet:hover { background: #edf3ff; }
+.max-connect-cabinet svg, .max-connect-primary svg, .max-connect-address svg { width: 17px; height: 17px; }
+.max-connect-primary { position: sticky; z-index: 1; bottom: -28px; display: flex; justify-content: flex-end; margin: 20px -28px -28px; padding: 16px 28px 28px; background: #fff; border-top: 1px solid #e3e8f0; box-shadow: 0 -8px 16px #ffffffed; }
+.max-connect-primary button { min-height: 44px; padding-inline: 20px; font-size: 14px; border-radius: 8px; }
+.max-connect-token { margin-block: 24px 12px; }
+.max-connect-token label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.max-connect-token input { height: 48px; font-size: 15px; border: 1px solid #b9c7df; background: #fff; }
+.max-connect-step p.max-connect-hint, .max-connect-hint { font-size: 12px; line-height: 1.6; color: #60718d; margin-top: 8px; }
+.max-connect-back { min-height: 36px; margin-top: 12px; color: #325db1; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.max-connect-address { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: #edf3ff; border-left: 3px solid #285af0; padding: 16px; margin: 24px 0 16px; }
+.max-connect-address code { flex: 1; min-width: 180px; overflow-wrap: anywhere; font-family: inherit; color: #234b9b; font-size: 15px; }
+.max-connect-path { margin-block: 12px; padding: 16px; border: 1px dashed #c4d0e5; border-radius: 8px; }
+.max-connect-acknowledgement { display: flex; align-items: flex-start; gap: 12px; margin: 20px 0; font-size: 14px; line-height: 1.6; color: #253b58; cursor: pointer; }
+.max-connect-acknowledgement input { width: 19px; height: 19px; flex: none; margin-top: 2px; accent-color: #285af0; }
+.max-connect-step p.max-connect-success { color: #237747; border-left: 3px solid #30a56d; background: #eef9f2; padding: 12px 16px; }
+.max-connect-step p.max-connect-error, .max-connect-error { color: #ae303a; background: #fff2f2; padding: 12px; border-radius: 6px; }
+.max-connect-advanced { border-top: 1px solid #e3e8f0; margin-top: 24px; padding-top: 16px; }
+.max-connect-advanced summary, .max-connect-technical summary { cursor: pointer; color: #526785; font-size: 13px; padding-block: 10px; }
+.max-connect-advanced-body { padding-top: 12px; }
+.max-connect-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 16px; }
+.max-connect-technical { margin-top: 12px; font-size: 12px; }
+.max-connect-technical p { font-size: 12px; }
+.max-connect-disconnect { background: #fff5f5; border: 1px solid #f0cbcd; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 13px; }
+.max-connect-disconnect-button { color: #ae303a; }
+.max-connect-state { display: grid; justify-items: start; gap: 16px; padding-block: 24px; font-size: 14px; }
+.max-connect-state h2 { font-size: 22px; font-weight: 600; }
+.max-integration-embedded > section > header { padding: 0 0 20px; }
+.max-integration-embedded > section > div { padding-inline: 0; }
+.max-integration-embedded > section > footer { padding-inline: 0; }
+@media (max-width: 600px) {
+  .max-editor-modal { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }
+  .max-editor-modal-heading { padding: 16px 18px; gap: 12px; }
+  .max-editor-modal-heading h2 { font-size: 19px; }
+  .max-editor-modal-project { max-width: 230px; }
+  .max-editor-modal-scroll { padding: 20px 18px; }
+  .max-editor-modal-back { padding: 12px 18px 0; }
+  .max-editor-modal-hosting [data-testid=external-deploy-wizard] .grid-cols-2 { grid-template-columns: 1fr; }
+  .max-connect-progress { gap: 6px; margin-bottom: 22px; }
+  .max-connect-progress li { flex-direction: column; gap: 7px; text-align: center; }
+  .max-connect-progress small { font-size: 10px; }
+  .max-connect-step h2 { font-size: 24px; }
+  .max-connect-step p.max-connect-lead { font-size: 15px; }
+  .max-connect-primary button { width: 100%; }
+  .max-connect-primary { bottom: -20px; margin-inline: -18px; margin-bottom: -20px; padding: 14px 18px 20px; }
+  .max-connect-illustration { padding: 20px 14px; }
+}

@@ -40,10 +40,10 @@ const dashboard = () => <MaxPostLaunchDashboard projectId={project.id} projectNa
 it("keeps optional services and server actions discoverable outside collapsed readiness details", async () => {
   await mount(<MaxLaunchPanel project={project} />);
   await settle(() => expect(container.querySelector('[data-testid="max-one-click-launch"]')).not.toBeNull());
-  const server = container.querySelector('a[href="/max/project-surfaces/settings?tab=vps"]');
+  const server = container.querySelector('a[href="/max/project-surfaces?panel=hosting"]');
   expect(server).not.toBeNull();
   expect(server!.closest("details")).toBeNull();
-  expect(container.querySelector('a[href="/max/project-surfaces/integrations"]')!.closest("details")).toBeNull();
+  expect(container.querySelector('a[href="/max/project-surfaces?panel=services"]')!.closest("details")).toBeNull();
   expect(container.querySelector('[data-testid="max-one-click-launch"]')).not.toBeNull();
 });
 it("does not call an older release the current version in launch", async () => {

@@ -48,14 +48,14 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           {url ? <a className="max-dashboard-url" href={url} target="_blank" rel="noreferrer">{url}<ExternalLink className="size-4 shrink-0" /></a> : <p className="text-sm text-fg-secondary">{statusError ? "Повторите проверку, чтобы узнать актуальный статус и адрес приложения." : "Постоянный адрес текущей версии появится после публикации."}</p>}
           <div className="max-dashboard-actions">
             {url ? <Button asChild><a href={url} target="_blank" rel="noreferrer">Открыть приложение <ArrowUpRight className="size-4" /></a></Button>
-              : <Button asChild><Link href={`/max/${projectId}/publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
+              : <Button asChild><Link href={`/max/${projectId}?panel=publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
             <Button asChild variant="outline"><Link href={`/max/${projectId}`}>Редактировать</Link></Button>
           </div>
           {publicationState === "outdated" && !statusError && <p className="max-launch-notice">После последней публикации появились изменения. Проверьте их в редакторе и опубликуйте обновление.</p>}
           {active && <p className="max-launch-notice" role="status">{phaseLabels[deploy.data!.phase]} — публикация выполняется на сервере.</p>}
           {latest?.phase === "failed" && <div role="alert" className="max-dashboard-error"><strong>Последняя публикация не завершилась</strong><p>{latest.error ?? "Проверьте готовность и повторите попытку."}</p></div>}
           {statusError && <Button variant="outline" className="mt-3" onClick={refreshStatus}>Повторить проверку</Button>}
-          <Link className="max-dashboard-settings-link" href={`/max/${projectId}/settings?tab=app`}>Данные и настройки приложения <ArrowUpRight className="size-4" /></Link>
+          <Link className="max-dashboard-settings-link" href={`/max/${projectId}?data=details`}>Данные и настройки приложения <ArrowUpRight className="size-4" /></Link>
         </section>
         <section className="max-dashboard-release" aria-labelledby="max-release-heading">
           <h2 id="max-release-heading">Последняя публикация</h2>
@@ -75,7 +75,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
         <div className="max-dashboard-system-row"><div><h3>Среда разработки</h3><p>Используется редактором и превью. Её активность не определяет публикацию приложения.</p></div>
           <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">Не удалось проверить среду</p> : runtime.isPending ? <p>Проверяем…</p> : <><p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p><RuntimeButton projectId={projectId} display="compact" /></>}</div>
         </div>
-        <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}/settings?tab=bot`}>Настроить MAX</Link></Button></div>
+        <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}?panel=max`}>Настроить MAX</Link></Button></div>
         <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3><p>Серверные события приложения</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? "Не удалось проверить" : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
       </section>
 

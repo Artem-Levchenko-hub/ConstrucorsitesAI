@@ -5,7 +5,6 @@ import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, Se
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy } from "@/lib/api/runtime";
@@ -37,7 +36,6 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const available = readiness.isSuccess && items.length > 0;
   const journey = getMaxJourney(project.id, items);
   const currentStage = available ? journey.currentStage : undefined;
-  const nextItem = currentStage ? items.find(item => !item.done && getMaxJourneyItemHref(project.id, item.id) === currentStage.href) : undefined;
   const stateError = readiness.isError || deploy.isError;
   const publication = getMaxPublicationState(readiness.isSuccess ? readiness.data : undefined, deploy.data?.phase);
   const published = !stateError && deploy.isSuccess && !busyDeploy && publication === "published";
@@ -85,15 +83,15 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
             <Button asChild variant="outline"><Link href={`/max/${project.id}`} onClick={onClose}>{published ? "Подготовить обновление" : "В редактор"}</Link></Button>
           </div>
           {productionUrl && <div className="max-launch-address"><a data-testid="max-launch-app-url" href={productionUrl} target="_blank" rel="noreferrer">{productionUrl}</a><Button variant="ghost" size="icon" aria-label="Скопировать адрес приложения" onClick={() => void copyUrl()}><Copy className="size-4" /></Button></div>}
-          {published && !items.find(item => item.id === "max_url")?.done && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в MAX Partner, затем подтвердите его в настройках.</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}/settings?tab=bot`}>Подтвердить адрес</Link></div>}
+          {published && !items.find(item => item.id === "max_url")?.done && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в MAX Partner, затем подтвердите его в настройках.</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}?panel=max`}>Подтвердить адрес</Link></div>}
         </section>
         {available && <details className="max-launch-checks"><summary>Пройдено {journey.completedCount} из {journey.total} проверок <span>Подробнее</span></summary><ol aria-label="Шаги публикации в MAX">{journey.stages.map(step => <li key={step.id} aria-current={step.status === "current" ? "step" : undefined} data-status={step.status} data-testid={`max-launch-step-${step.id}`}><span className={step.done ? "text-success-fg" : "text-fg-secondary"}>{step.done ? <Check className="size-4" /> : step.position}</span><Link href={step.href} onClick={onClose}>{step.label}</Link><small>{step.done ? "Готово" : "Настроить"}</small></li>)}</ol></details>}
         <section aria-label="Другие разделы проекта" data-testid="max-launch-actions" className="max-launch-options">
           <header><h3>Сервисы и размещение</h3><p>Необязательно для запуска</p></header>
-          <div className="max-launch-option"><Plug className="size-4" /><div><h4>Подключить сервисы</h4><p>Платежи, CRM и аналитика</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}/integrations`}>Выбрать сервисы</Link></Button></div>
-          <div className="max-launch-option"><Server className="size-4" /><div><h4>Собственный сервер</h4><p>Размещение на вашей VPS</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}/settings?tab=vps`}>Настроить сервер</Link></Button></div>
+          <div className="max-launch-option"><Plug className="size-4" /><div><h4>Подключить сервисы</h4><p>Платежи, CRM и аналитика</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=services`}>Выбрать сервисы</Link></Button></div>
+          <div className="max-launch-option"><Server className="size-4" /><div><h4>Собственный сервер</h4><p>Размещение на вашей VPS</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=hosting`}>Настроить сервер</Link></Button></div>
         </section>
-        <div className="max-launch-configuration"><MaxIntegrationButton projectId={project.id} initialTemplate={project.template} display="panel" maxStudio emphasized={nextItem?.id === "bot"} label="Подключение MAX" /></div>
+        <div className="max-launch-configuration"><Button asChild variant="outline"><Link href={`/max/${project.id}?panel=max`}>Подключение MAX</Link></Button></div>
         {busyDeploy && (deploy.data?.logs.length ?? 0) > 0 && <details className="max-launch-checks"><summary>Подробности публикации</summary><pre className="max-launch-logs">{deploy.data!.logs.slice(-12).join("\n")}</pre></details>}
       </div>
     </aside>
