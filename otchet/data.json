@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-08",
-  "version": 82,
+  "version": 83,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2649,11 +2649,11 @@
    "id": "H141",
    "title": "Единая подготовка версии в двух путях генерации",
    "description": "Выносим только совпадающую запись Snapshot и связей с Project/GenerationRun. Запись файлов, модель, сообщение, бесплатный лимит, commit/refresh и обработка ошибок остаются у прежних callers.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
-   "evidence": "Baseline a6237ff5: 31 проверка реальных AST-участков обоих callers с настоящим Git прошла до переноса и после. Это ограниченная проверка публикационного участка, не запуск всей генерации. Ещё 31 смежная проверка прошла; full Ruff clean, mypy275 clean. Подготовлены 10 disposable PostgreSQL cases: успешное сохранение/replay, Git/upload/flush/commit failures с независимым перечитыванием. Они ожидают CI; source review и поставка ещё завершаются. Локальная ссылка Project сохранена в результате helper, поскольку нужна последующему runtime/repair.",
+   "evidence": "Доставлен API/worker/generation-worker e03793b4. CI34265225657 полностью success: 41 проверка публикационного участка, включая 10 настоящих PostgreSQL cases; полный API 3170 passed / 12 skipped / 8 xfailed. До и после переноса 31 offline case; 31 смежный passed, Ruff/mypy275 clean, независимое review No findings. Реальные AST-участки callers и Git проверены, полный модельный запуск не выполнялся. Точный доставленный image прошёл offline smoke, production health/release ok, gate снят; web/orchestrator и прочие consumers сохранены.",
    "impact": "У привязки версии теперь одна реализация вместо двух. Новая атомарность, идемпотентность, откат данных и ускорение генерации не заявляются; прежние различия путей сохраняются.",
-   "next_vector": "Проверить реальные транзакции на disposable PostgreSQL, полный API gate и доставить API с воркерами; сохранить работающие web и orchestrator.",
+   "next_vector": "Следующий узкий перенос: отмена генерации из router в service с прежними блокировками, сообщением, операциями и границей транзакции. Полный пользовательский запуск выполняет владелец.",
    "category": "верификация",
    "period": "08.09"
   }

@@ -1,11 +1,11 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
-## Актуально: Task 4, Task 5 и исправляющий пакет доставлены
+## Актуально: Task 4, Task 5, Task 8 и исправляющий пакет доставлены
 
 Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
 доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
 `/web-health` подтверждает revision и ok; публичные страницы проходят smoke,
-gate снят. API/workers остаются `4960f6b9`, orchestrator `1011a0fd`; их процессы
+gate снят. На момент поставки Task 4 API/workers были `4960f6b9`, orchestrator `1011a0fd`; их процессы
 и пять dirty серверных документов не менялись.
 
 Новый HEAD в Edge: 2 HTTP/1 отмена → 1/0 на 1440 и 390 px. Исторический выбор,
@@ -15,12 +15,24 @@ success. API job этого run ещё выполнялся при достав�
 Независимое source/helper review: No findings. Полные доказательства:
 [Task 4 verification](2026-09-08-task4-history-verification.md).
 
-**Сейчас Task 8 подготовлен, ещё не доставлен:** общий SQL-блок подготовки
-Snapshot/Project/Run вынесен в service с сохранением прежней транзакции.
-31 baseline test прошёл до/после; 31 смежный passed, Ruff/mypy275 clean.
-10 PostgreSQL cases и полный API gate ожидают CI. Продолжать с
-[Task 8 verification](2026-09-08-task8-artifacts-verification.md), затем полный
-цикл API-only доставки. Не начинать следующий кодовый пакет до его завершения.
+**Task 8 доставлен:** общий SQL-блок подготовки Snapshot/Project/Run вынесен
+в service с сохранением прежней транзакции. API/worker/generation-worker:
+`e03793b4178a6b3b301bbf4db7cce3515ecadbb4`, image
+`sha256:bc2526f3f95ee05a11daa4d16bd5e07d06bbb7e98def17166f6c1725dd9f5cfe`.
+CI `34265225657` полностью success: 41 artifact check и 3170 API passed /
+12 skipped / 8 xfailed. Ruff/mypy275 clean, independent review No findings.
+Production health/release ok, write gate снят; web/orchestrator и прочие
+consumers не перезапускались. Подробности:
+[Task 8 verification](2026-09-08-task8-artifacts-verification.md).
+
+Следующий узкий пакет Task 9: перенести `_apply_cancelled_generation_locked`
+из router в существующий generation_runs service, сохранив caller lock/commit,
+message+project фильтры, pending/waiting operations, timestamp и memory order.
+Worker должен перестать импортировать именно эту private router функцию;
+весь `_process_prompt` не переносить. Artifact baseline: 10 passed, 8 DB cases
+подготовлены; источник ещё не изменён. Повторно проверить freshness и перенести
+тесты в repo только вместе с выбранным пакетом. Endpoint/worker consumers
+и полный disposable API CI обязательны.
 
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
@@ -53,7 +65,7 @@ gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их ru
 Новый regression suite: 13/13; итоговая поставка приведена выше. Исходные
 измерения сохранены отдельно от результата оптимизации.
 
-Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6–13 не
+Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6/7 и 9–13 не
 выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная
 генерация пользователя не запускалась; live business-flow не заявляется.
 

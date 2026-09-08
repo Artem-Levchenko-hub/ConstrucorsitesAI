@@ -62,8 +62,39 @@ fallback; повторное выполнение; старое Git-дерево
 возвращённого Project и None при его отсутствии. Отдельно **31 passed** в
 repo_limits/snapshot_restore/snapshot_preview_images/release_proof. Full Ruff
 clean; mypy: **275 source files**, ошибок нет; diff check чистый.
-Итоговые CI/review и runtime-доказательства дописываются после проверки.
-На момент этой записи PostgreSQL cases ещё не запускались, пакет не доставлен.
+Независимое итоговое review source/tests/CI/helper/docs: No findings.
+
+Коммит `e03793b4178a6b3b301bbf4db7cce3515ecadbb4` отправлен в origin/main.
+CI `34265225657`: все семь jobs success. Ранний PostgreSQL шаг: **41 passed**
+(12.85 s), включая все 10 DB cases. Полный API: **3170 passed, 12 skipped,
+8 xfailed** (666.61 s). Лог сохранён в `.artifacts/refactor-task8-20260908/ci-api.log`.
+
+## Поставка
+
+Production API, worker и generation-worker доставлены на `e03793b4178a6b3b301bbf4db7cce3515ecadbb4`.
+Фактический image: `sha256:bc2526f3f95ee05a11daa4d16bd5e07d06bbb7e98def17166f6c1725dd9f5cfe`.
+Именно этот собранный image прошёл 31 offline consumer test с отключённой сетью
+и без production credentials перед переключением. Staging image имел другой
+image ID и не использовался как подмена доказательства доставленного образа.
+
+Перед обновлением выполнены read-only проверки отсутствия активных runs,
+operations и leases; создан PostgreSQL backup. На время переключения включён
+короткий write gate, после проверки он снят. Миграции, пользовательские
+генерации и lifecycle Project Cell не запускались.
+
+API health/release и точный image/release трёх consumers подтверждены.
+Web `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e` и orchestrator
+`1011a0fdf7cc4f636e7550937c0e89447fc21bcd` сохранили прежние процессы;
+прочие compose consumers — прежние ID/image/start/env hash.
+Публичные `/login`, `/max/register`, `/max/product`, `/max/guide`: 200;
+`/max`: прежний 307 на регистрацию. Пять серверных dirty документов сохранены:
+SHA256 diff `0faee2b7c90dfd954d0def658d80cd89f21312061c500b2d9efd6ae06f1d250d`.
+Backup/result: `/opt/omnia-runtime/releases/task8-api-e03793b4`.
+
+Это доказательства refactor-контракта и доступности компонентов. Новая полная
+генерация и пользовательский business-flow не запускались. Предсуществующий
+global smoke с единым устаревшим SHA не исправлялся; component SHAs проверены
+отдельно. Для отчёта публикуется только H141, без неопубликованных H134–H136.
 
 Task 6/7 пока отложены: согласованный модельный smoke несовместим с текущим
 указанием не запускать пользовательские генерации самостоятельно. Промпты не
