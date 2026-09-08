@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-09-08",
-  "version": 75,
+  "version": 76,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Project Cell получил отдельный PostgreSQL с полными правами",
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
+   {
+    "s": "open",
+    "t": "Сохранены полный план рефакторинга и точка передачи следующему агенту",
+    "d": "По просьбе владельца GPT-6 Astra остановил новые изменения и подготовил документы в docs/plans: полный план, handoff и доказательства P01. Цель качества 10/10 раскрыта через десять критериев понятного, проверяемого кода для следующих агентов, а не через число удалённых строк. P01 доставлен; Task 5 ещё не начат, весь рефакторинг не объявлен завершённым."
+   },
    {
     "s": "testing",
     "t": "Подготовка PostgreSQL проверяет наличие данных без чтения всей БД",
@@ -217,6 +222,11 @@
   "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
  },
  "owner_actions": [
+  {
+   "date": "08.09",
+   "what": "Попросил остановиться после P01, закоммитить план и точку продолжения для другого агента; затем уточнил цель качества 10/10, чтобы агентам становилось проще работать. Только GPT-6 Astra.",
+   "impact": "GPT-6 Astra подготовил docs/plans/2026-09-08-refactoring-handoff.md и docs/plans/2026-09-08-safe-total-refactoring-plan.md с десятью критериями качества и проверкой понятности для следующего исполнителя. Следующий шаг V4 — Task 5, безопасная дедупликация шаблонов. Оценка 10/10 не присвоена; runtime не меняется."
+  },
   {
    "date": "08.09",
    "what": "Согласовал убрать промежуточный экран данных MAX Studio и отделить необязательные настройки приложения от требований публичного запуска.",
@@ -2792,6 +2802,10 @@
       [
        "Проверка наличия PostgreSQL без чтения содержимого БД: изолированный Docker gate и production-доставка P01",
        true
+      ],
+      [
+       "Безопасная дедупликация static-template ресурсов: Task 5 по сохранённому плану, golden init/export и проверка автономности",
+       false
       ]
    ],
    "hyp_ids": [
