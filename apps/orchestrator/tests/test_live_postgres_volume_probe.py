@@ -81,6 +81,7 @@ def _run_volume_helper(
     *,
     cap_add: list[str] | None = None,
     user: str = "0:0",
+    memory_limit_bytes: int = 64 * 1024 * 1024,
 ) -> bytes:
     output = client.containers.run(
         image,
@@ -96,7 +97,7 @@ def _run_volume_helper(
         privileged=False,
         security_opt=["no-new-privileges:true"],
         pids_limit=32,
-        mem_limit=64 * 1024 * 1024,
+        mem_limit=memory_limit_bytes,
         tmpfs={"/tmp": "rw,nosuid,nodev,noexec,size=8m"},
     )
     return bytes(output)
@@ -191,6 +192,8 @@ async def test_live_probe_is_size_independent_and_preserves_fixture_digest(
             large_volume,
             "mkdir -p /volume/PGDATA/base/1; "
             "dd if=/dev/zero of=/volume/PGDATA/base/1/large.bin bs=1M count=129 2>/dev/null",
+            # Budget large-fixture preparation separately from the actual probe.
+            memory_limit_bytes=256 * 1024 * 1024,
         )
         digest_script = "sha256sum /volume/PGDATA/base/1/large.bin"
         digest_before = _run_volume_helper(client, image, large_volume, digest_script)

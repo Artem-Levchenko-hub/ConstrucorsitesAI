@@ -61,3 +61,21 @@ python -m mypy src
 кэша или dependencies. Старые aliases сохраняют внутренних consumers.
 Это устранение дублирования, не измеренное ускорение генерации.
 Task11 и вся программа рефакторинга ещё не завершены.
+
+## Отдельная корректировка подготовки Docker-теста
+
+Source `f4c35e24737a40624c9f2b7b1015543cd96f356f` pushed. CI34277003261:
+orchestrator **1244 passed / 30 skipped / 15 xfailed**. Отдельный live gate:
+8 passed / 1 failed — `dd` файла 129 MiB в fixture container завершился с
+exit137 до вызова production probe. Тест и orchestrator source этим API
+переносом не менялись. Без State.OOMKilled нельзя утверждать доказанный OOM.
+
+В отдельном test-only исправлении fixture helper сохраняет default 64 MiB;
+только создание большого файла получает 256 MiB. Размер 129 MiB, проверка
+digest, права, запреты и output assertions неизменны. Production probe и
+его собственные 256 MiB/64 PID не изменены; новые retry/skip не добавлялись.
+Это запас ресурсов подготовки, не доказательство причины прежнего SIGKILL.
+Реальный Docker gate должен пройти заново; mock/unit для этого недостаточно.
+SDK Docker 7.1.0 зафиксирован lockfile; числовой mem_limit подтверждён в
+официальной документации docker-py через Context7. Product source extraction
+сохраняется отдельным commit от этой корректировки test fixture.
