@@ -1,6 +1,36 @@
 # Task 5 — static template materialization
 
-Status: local verification and independent review passed; CI and deployment pending.
+Status: implementation pushed; full CI blocked by baseline failures; not deployed.
+
+Implementation: `777f3f61ba377da9fb2eae0008f47f4f7faa0704`, pushed to origin/main.
+CI run `34249743033`: API critical regressions, MAX starter, Task 5 consumers,
+installed wheel, production image and isolated image smoke passed. Full API suite
+reported 14 failures. Thirteen non-database failures were reproduced on both
+baseline `810f0fbb` and current code with identical errors; baseline 5.09 seconds,
+current 2.52 seconds. The migration roundtrip failure was not run locally because
+it creates/drops a PostgreSQL database; its test upgrades to head but still
+expects 0056 while head is 0060.
+
+The unrelated P01 Docker fixture initially exited 137 while writing its 129 MiB
+file in a 64 MiB helper. A rerun of the orchestrator job passed; no P01 code or
+assertions were changed. This transient fixture failure remains recorded.
+
+Full-suite classification:
+
+- Real onboarding wire bug: `SurveyQuestion` instances are passed directly to
+  `publish_event`; Redis JSON serialization uses `default=str`. Clients receive
+  strings instead of question objects. Do not weaken the failing test.
+- Four offline-manifest failures share missing cabinet coverage. Do not fabricate
+  a successful cabinet verdict or silently drop it from the expected gate universe.
+- Nine failures concern stale tests: current backend-default flag, multiline
+  entity guard, brand-variable injection/idempotence, primitive contract text,
+  explicit migration target, execution owner column, disabled legacy provider,
+  and signed bootstrap navigation versus ordinary render navigation.
+
+The owner has been asked to authorize a separate corrective package for the
+onboarding bug and test baseline. No answer has yet been received. Under the
+approved R/O-only plan, do not silently make behavior changes or bypass the red
+full-suite gate. A separate question about Task 3 numeric serialization is pending.
 
 Baseline: `810f0fbbbdd46391b8a01cb0ce9a8891533f8666`. Local branch
 `codex/project-cell-cloud-20260902`, upstream `origin/main`; production checkout
@@ -59,9 +89,14 @@ and release `179a3b3f321b58400351f39880bea902af681fca`; orchestrator health repo
 `1011a0fdf7cc4f636e7550937c0e89447fc21bcd`. API sources between its existing
 release and Task 5 baseline are identical. Repeat activity checks at rollout.
 
-Remaining: normal Docker image smoke, full API CI and baseline analysis for any
-failures, commit/push, active-operation gate, canonical API/worker deployment,
-exact runtime identities, live kit response evidence and report completion.
+Image smoke also passed on the production host under an unused image tag;
+image `sha256:65700e1d3c7b20e995ad2b01f08c5eced8298df257364fba704905dab3823701`.
+No production containers were restarted. The build staging record is
+`/opt/omnia-runtime/releases/template-image-777f3f61`; the API-only delivery script
+is prepared locally but has not run. Its independently reviewed recovery path
+keeps the write gate closed if rollback cannot verify the old API/worker images.
+Remaining delivery blockers are the baseline corrections/approval and a green
+full gate, followed by the documented active-operation/deployment/health checks.
 
 After this package, continue the approved R/O plan one delivered package at a time.
 P01 is already delivered; Tasks 3–4 and 6–13 remain. Do not add behavior changes,
