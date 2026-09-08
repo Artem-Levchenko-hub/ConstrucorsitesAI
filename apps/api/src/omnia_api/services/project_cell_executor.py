@@ -23,6 +23,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
 from omnia_api.services.agent_builder import Action, Executor
+from omnia_api.services.exact_edit import validate_exact_edit
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     promote_generation_after_admission,
@@ -964,18 +965,9 @@ async def maybe_create_project_cell_executor(
                 current = workspace_files.get(path)
                 if current is None:
                     return {"ok": False, "error": f"not found: {path}"}
-                if search not in current:
-                    return {
-                        "ok": False,
-                        "error": (
-                            "search text not found exactly; read the file and copy it byte-for-byte"
-                        ),
-                    }
-                if current.count(search) > 1:
-                    return {
-                        "ok": False,
-                        "error": "search text is not unique; add surrounding lines",
-                    }
+                edit_error = validate_exact_edit(current, search)
+                if edit_error is not None:
+                    return {"ok": False, "error": edit_error}
                 new_content = current.replace(search, str(replace), 1)
                 await _persist_files(writes={path: new_content})
                 _apply_to_local_state(workspace_files, writes={path: new_content})

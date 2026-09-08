@@ -49,3 +49,37 @@ Fixture очищает схему: только disposable DB, никогда pr
 реальных consumer tests. Проверено без изменения sys.path: exact module path,
 26 collected и 23 passed / 3 deselected (2.32 s), Ruff clean. DB baseline
 ещё ожидает повторного CI; production source не изменён.
+
+## Перенос после успешного Cell baseline
+
+На исходном алгоритме commit `03289047703981e151228e8c061ce801eeb8d072`,
+CI `34272760186`: ранний exact-edit шаг success. Только после этого изменены
+два caller и добавлен чистый `services/exact_edit.py::validate_exact_edit`.
+Он возвращает прежний error string либо None; search/count порядок сохранён.
+Сами replacement, observations, пути и side effects не переносились.
+
+После переноса: **23 passed, 3 deselected**, 2.33 s. Смежные реальные
+agent_builder/agent_native/max_generation_contract suites: **149 passed**,
+69.21 s. Full Ruff clean; mypy: **276 source files**, ошибок нет.
+Независимое source/test/CI/deployment helper review: No findings.
+Финальный full CI и реальная поставка ещё ожидаются; пакет не завершён.
+
+## Критерии качества плана
+
+| Требования | Доказательство |
+|---|---|
+| 1–2 | Одна чистая обязанность, два строковых аргумента, явный error-or-None результат. |
+| 3 | Два источника правил/ошибок заменены одним; разные backend контракты не объединены. |
+| 4 | Helper без IO. Чтение, запись, hot reload и fenced операции видны в прежних callers. |
+| 5–6 | Нет классов, state bag, циклических импортов и механического дробления большого файла. |
+| 7–8 | Кэш, потоки, схемы и дополнительные зависимости не добавлялись; тесты не удалялись. |
+| 9 | Алгоритм, ошибки, str conversion и порядок побочных действий сохранены. |
+| 10 | Карта: два executor edit_file → чистая проверка → прежняя backend запись; consumer tests приведены выше. |
+
+Меньше дублирующихся правил, но дополнительная функция не является измеренным
+ускорением генерации. Registry facets и lifecycle WebSocket — другие пакеты.
+
+Команды из apps/api: `uv run --frozen pytest -o addopts='' -q tests/test_exact_edit_contract.py`
+на disposable PostgreSQL, `uv run pytest -q tests/test_agent_builder.py tests/test_agent_native.py tests/test_max_generation_contract.py`,
+`uv run ruff check .`, `uv run mypy src`. Локальный baseline запускать с
+`-k 'not disposable_db'` и dead-loopback DB/Redis, не с production environment.

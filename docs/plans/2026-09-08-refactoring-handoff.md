@@ -35,15 +35,19 @@ CI `34267815377` полностью success: cancellation/consumers 20 passed;
 web/orchestrator и остальные процессы не перезапускались. Доказательства:
 [Task 9 verification](2026-09-08-task9-cancellation-verification.md).
 
-### Следующие пакеты — только baseline, код ещё не менялся
+### Текущий пакет и подготовка следующих
 
-Task 10: одинаковая проверка точной замены edit_file в agent_builder и
-project_cell_executor. Artifact `.artifacts/refactor-task10-20260908/README.md`:
-23 actual container-executor cases passed; 3 real-Cell DB cases подготовлены,
-но пока не запускались. Сначала подтвердить Cell baseline на disposable DB,
-затем переносить только одинаковую membership/count проверку. Не объединять
-различные пути, sanitizers, observations и fenced write. Сохранить empty search,
-str.count non-overlap, str replacement и отсутствие нормализации Unicode/CRLF.
+**Task 10A выполняется:** общий exact-edit validator вынесен из agent_builder
+и project_cell_executor после успешного исходного Cell baseline в CI34272760186.
+23 локальных baseline и 149 смежных тестов прошли, Ruff/mypy276 clean,
+независимое review No findings. Финальный full CI и API-only поставка ещё нужны.
+Продолжить с [Task 10A verification](2026-09-08-task10-exact-edit-verification.md).
+Не начинать следующий product diff до завершения доставки.
+
+Task 10B подготовлен отдельно в `.artifacts/refactor-task10b-20260908/README.md`:
+50 DB-free baseline cases passed (3.65 s), actual preview/runtime/rollback
+routing и четыре одинаковых browser-container tuple. Не менять backend/DB/
+design/prompt facets. Только общий API tuple и прежние import aliases.
 
 Task 11: кандидат — только openRealStream/StreamHandle, не весь lifecycle.
 Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
@@ -61,7 +65,7 @@ Task 12 требует измеренного IO/build hot path; пользов�
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
 Не повторять Task 4/5. H140 уже опубликован, public version 72, 136 прежних
-записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; следующая H142. H134–H136 не публиковать целиком
+записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены; следующая H143. H134–H136 не публиковать целиком
 вместе с репозиторным JSON.
 
 ### Предыдущая поставка Task 5

@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from omnia_api.services import llm_client
+from omnia_api.services.exact_edit import validate_exact_edit
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -1500,12 +1501,9 @@ def make_container_executor(
                     project_id, slug, action.path)
                 if current is None:
                     return {"ok": False, "error": f"not found: {action.path}"}
-                if search not in current:
-                    return {"ok": False,
-                            "error": "search text not found exactly; read the file and copy it byte-for-byte"}
-                if current.count(search) > 1:
-                    return {"ok": False,
-                            "error": "search text is not unique; add surrounding lines"}
+                edit_error = validate_exact_edit(current, search)
+                if edit_error is not None:
+                    return {"ok": False, "error": edit_error}
                 new_content = current.replace(search, str(replace), 1)
                 new_content = _sanitize_nested_layout(action.path, new_content)
                 new_content = _sanitize_css_imports(action.path, new_content)
