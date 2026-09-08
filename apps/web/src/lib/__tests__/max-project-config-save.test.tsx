@@ -105,6 +105,7 @@ it("groups product and appearance fields and gives content controls visible asso
     await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
     const appearance = document.querySelector("#max-config-colors")?.closest("fieldset");
+    expect(document.querySelector('[role="tabpanel"]')?.textContent).toContain("Необязательно для запуска");
     expect(appearance?.querySelector("legend")?.textContent).toBe("Оформление");
     expect(appearance?.contains(document.querySelector("#max-config-style"))).toBe(true);
     expect(appearance?.contains(document.querySelector("#max-config-name"))).toBe(false);
@@ -136,6 +137,8 @@ it("keeps owner/support and policy choices distinguishable without changing cons
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     await act(async () => tabs[2].click());
+    expect(document.querySelector('[role="tabpanel"]')?.textContent).toContain("Перед публичным запуском");
+    expect([...document.querySelectorAll('[data-testid="max-settings-footer"] button')].map(button => button.textContent)).not.toContain("Применить к приложению");
     expect(document.querySelector("#max-legal-name")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Реквизиты владельца");
     expect(document.querySelector("#max-support-email")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Связь с поддержкой");
     await act(async () => tabs[3].click());

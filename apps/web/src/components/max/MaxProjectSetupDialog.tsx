@@ -12,6 +12,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -43,20 +44,38 @@ export function MaxProjectSetupDialog({
   display = "panel",
   emphasized = false,
   label = "Данные приложения",
+  open: controlledOpen,
+  onOpenChange,
+  initialSection = "details",
 }: {
   projectId: string;
-  display?: "panel" | "toolbar";
+  display?: "panel" | "toolbar" | "header";
   emphasized?: boolean;
   label?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  initialSection?: SetupSection;
 }) {
   const qc = useQueryClient();
   const tabsId = useId();
   const scrollRegion = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = (next: boolean) => { setLocalOpen(next); onOpenChange?.(next); };
   const [draft, setDraft] = useState<MaxProjectConfigPayload | null>(null);
   const [applyConfig, setApplyConfig] = useState<MaxProjectConfig | null>(null);
   const applyAfterSave = useRef(false);
-  const [section, setSection] = useState<SetupSection>("details");
+  const [section, setSection] = useState<SetupSection>(initialSection);
+  const [entry, setEntry] = useState({ open, initialSection });
+  if (entry.open !== open || entry.initialSection !== initialSection) {
+    setEntry({ open, initialSection });
+    if (open) {
+      setSection(initialSection);
+      setApplyConfig(null);
+    }
+    else if (entry.open) setDraft(null);
+  }
   const config = useQuery({
     queryKey: ["max-config", projectId],
     queryFn: () => getMaxProjectConfig(projectId),
@@ -134,11 +153,18 @@ export function MaxProjectSetupDialog({
 
   return (
     <>
+      <Dialog open={open} onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setDraft(null);
+      }}>
+      <DialogTrigger asChild>
       <Button
+        ref={trigger}
         size="sm"
-        variant={emphasized ? "primary" : "secondary"}
+        variant={emphasized ? "primary" : "outline"}
+        aria-label={label}
         className={
-          display === "panel"
+          display === "header" ? "max-editor-data-button" : display === "panel"
             ? cn(
                 "h-11 min-w-0 w-full gap-1.5 overflow-hidden rounded-lg px-2 text-[11px]",
                 !emphasized &&
@@ -147,24 +173,17 @@ export function MaxProjectSetupDialog({
             : "h-11 gap-1.5 px-2.5 text-xs sm:h-7"
         }
         onClick={() => {
-          setSection("details");
+          setSection(initialSection);
           setDraft(null);
-          setOpen(true);
         }}
         data-testid="max-settings-open"
       >
         <Settings2 className="h-3.5 w-3.5" />
         <span className="min-w-0 truncate">
-          {display === "panel" ? label : "Настройки"}
+          {display === "header" ? "Данные" : display === "panel" ? label : "Настройки"}
         </span>
       </Button>
-      <Dialog
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next);
-          if (!next) setDraft(null);
-        }}
-      >
+      </DialogTrigger>
         <DialogContent
           data-product-shell
           data-max-studio
@@ -176,7 +195,7 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <DialogDescription className="max-setup-description">
-              Сохраните данные, контакты и правила. Чтобы изменить экраны и функции готового приложения, примените данные с помощью ИИ.
+              Уточняйте приложение по желанию. Владелец, поддержка и документы понадобятся только перед публичным запуском.
             </DialogDescription>
           </DialogHeader>
 
@@ -252,7 +271,7 @@ export function MaxProjectSetupDialog({
                   )}
                   Сохранить и проверить
                 </Button>
-                <Button className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => {
+                {(section === "details" || section === "content") && <Button variant="outline" className="max-setup-save" disabled={save.isPending || Boolean(saveIssue)} onClick={() => {
                   if (changedSections || pendingApplication || !config.data?.config_version || config.data.application_mode !== "runtime") {
                     applyAfterSave.current = true;
                     save.mutate(current);
@@ -260,13 +279,13 @@ export function MaxProjectSetupDialog({
                     setOpen(false);
                     setApplyConfig(config.data);
                   }
-                }}>{changedSections ? "Сохранить и применить" : "Применить к приложению"}</Button>
+                }}>{changedSections ? "Сохранить и применить" : "Применить к приложению"}</Button>}
               </div>
             </>
           )}
         </DialogContent>
       </Dialog>
-      {applyConfig && <MaxProjectDataApplyDialog config={applyConfig} onClose={() => setApplyConfig(null)} />}
+      {applyConfig && <MaxProjectDataApplyDialog config={applyConfig} onClose={() => setApplyConfig(null)} onReturnFocus={() => trigger.current?.focus()} />}
     </>
   );
 }

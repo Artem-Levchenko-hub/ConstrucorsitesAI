@@ -38,6 +38,7 @@ from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.deploy_attestation import ensure_current_release_proof
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
+from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     render_max_managed_files,
@@ -530,26 +531,18 @@ async def get_max_readiness(
             and deployment.get("snapshot_id") == str(current_snapshot.id)
             and deployment.get("commit_sha") == current_snapshot.commit_sha
         )
-    configured = bool(
-        config
-        and config.app_name
-        and config.summary
-        and config.primary_action
-        and config.operator.legal_name
-        and config.support.email
-    )
     items = [
         MaxReadinessItem(
             id="business",
-            label="Данные приложения и поддержка заполнены",
-            done=configured,
-            action="Заполнить настройки",
+            label="Владелец и поддержка",
+            done=has_launch_owner_and_support(config),
+            action="Указать владельца и контакт поддержки",
         ),
         MaxReadinessItem(
             id="legal",
-            label="Юридические данные подтверждены",
+            label="Документы для пользователей",
             done=bool(config and config.legal.terms_accepted),
-            action="Подтвердить данные",
+            action="Проверить и подтвердить документы",
         ),
         MaxReadinessItem(
             id="build",

@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
-  Check,
   CircleAlert,
   ExternalLink,
   FileCheck2,
@@ -16,7 +15,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
-import { MaxProjectSetupDialog } from "@/components/max/MaxProjectSetupDialog";
+import Link from "next/link";
 import { ExternalDeployWizard } from "@/components/workspace/ExternalDeployWizard";
 import { MaxIntegrationButton } from "@/components/workspace/MaxIntegrationButton";
 import { Button } from "@/components/ui/button";
@@ -29,7 +28,7 @@ import {
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
 import { cn } from "@/lib/utils";
 
-type Tab = "bot" | "app" | "vps";
+type Tab = "bot" | "vps";
 
 export function MaxSettingsWorkspace({
   projectId,
@@ -120,11 +119,6 @@ export function MaxSettingsWorkspace({
       title: "Подключение MAX",
       lead: "Свяжите приложение с ботом перед публикацией для безопасного входа пользователей.",
     },
-    app: {
-      eyebrow: "Этап 3 из 6",
-      title: "Данные приложения",
-      lead: "Заполните продукт, контент, владельца, поддержку и политики. Статусы основаны на серверной проверке.",
-    },
     vps: {
       eyebrow: "Размещение",
       title: "Собственная VPS",
@@ -141,7 +135,7 @@ export function MaxSettingsWorkspace({
     <MaxSectionShell
       projectId={projectId}
       projectName={projectName}
-      active={tab === "app" ? "app" : "bot"}
+      active="bot"
       eyebrow={pageCopy.eyebrow}
       title={pageCopy.title}
       lead={pageCopy.lead}
@@ -149,13 +143,13 @@ export function MaxSettingsWorkspace({
       <div className="max-settings-tabs mt-6 flex flex-wrap gap-2" aria-label="Разделы настроек">
         {[
           ["bot", Bot, "MAX"],
-          ["app", FileCheck2, "Данные приложения"],
           ["vps", Server, "Своя VPS"],
         ].map(([id, Icon, label]) => (
           <button aria-pressed={tab === id} key={String(id)} onClick={() => selectTab(id as Tab)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-4 text-sm sm:h-10", tab === id ? "border-accent bg-accent-subtle text-accent-secondary" : "border-border-default bg-surface text-fg-secondary")}>
             <Icon className="size-4" />{String(label)}
           </button>
         ))}
+        <Button asChild variant="outline"><Link href={`/max/${projectId}?data=details`}><FileCheck2 className="size-4" />Данные приложения</Link></Button>
       </div>
 
       {tab === "bot" && (
@@ -331,37 +325,6 @@ export function MaxSettingsWorkspace({
             </div>
           </section>
         </>
-      )}
-
-      {tab === "app" && (
-        <section className="mt-6 grid gap-5 lg:grid-cols-[1fr_320px]">
-          <div className="rounded-[12px] border border-border-default bg-surface p-5 sm:p-6">
-            <span className="grid size-11 place-items-center rounded-[8px] bg-surface-3 text-accent"><FileCheck2 className="size-5" /></span>
-            <h2 className="mt-4 text-xl font-semibold">Данные готового приложения</h2>
-            <p className="mt-3 max-w-[620px] text-sm leading-6 text-fg-secondary">Название, сценарий, контент, владелец, поддержка и политики сохраняются без расходов на модель. Чтобы изменить экраны и функции, выберите «Применить к приложению»: ИИ выполнит доработку с расходом баланса.</p>
-            <div className="mt-7 max-w-[260px]"><MaxProjectSetupDialog projectId={projectId} display="panel" emphasized={!config.data?.config.legal.terms_accepted} label="Открыть данные приложения" /></div>
-          </div>
-          <aside className="rounded-[12px] border border-border-default bg-surface p-6">
-            <p className="omnia-kicker text-fg-tertiary">Готовность</p>
-            {config.isError ? <div className="mt-4 text-sm" role="alert"><p>Не удалось загрузить данные приложения.</p><Button variant="outline" className="mt-3" onClick={() => void config.refetch()}>Повторить проверку</Button></div> : config.isPending ? <p className="mt-4 text-sm text-fg-secondary" role="status">Проверяем данные…</p> :
-            <div className="mt-5 space-y-4 text-sm">
-              {[
-                ["Название и сценарий", Boolean(config.data?.config.app_name && config.data?.config.summary)],
-                ["Функции и стиль", Boolean(config.data?.config.features.length || config.data?.config.brand_colors)],
-                ["Управляемый контент", Boolean(config.data?.config.content.length)],
-                ["Данные оператора", Boolean(config.data?.config.operator.legal_name && config.data?.config.operator.inn)],
-                ["Контакты поддержки", Boolean(config.data?.config.support.email || config.data?.config.support.phone)],
-                ["Условия приняты", Boolean(config.data?.config.legal.terms_accepted)],
-              ].map(([label, done]) => (
-                <p key={String(label)} className="flex items-center gap-3">
-                  <span className={`grid size-5 place-items-center rounded-full border ${done ? "border-[#248a4b] bg-[#248a4b]/5 text-success-fg" : "border-border-default text-transparent"}`}><Check className="size-3" /></span>
-                  <span className={done ? "text-fg-secondary" : "text-fg-primary"}>{String(label)}</span>
-                </p>
-              ))}
-            </div>
-            }
-          </aside>
-        </section>
       )}
 
       {tab === "vps" && (

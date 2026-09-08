@@ -156,6 +156,97 @@ async def test_readiness_requires_published_snapshot_not_just_later_timestamp(
     assert statuses["publish"] is exact
 
 
+@pytest.mark.parametrize("explicit_empty_brief", [False, True])
+async def test_launch_ready_without_optional_app_brief(
+    client, db_session, monkeypatch, explicit_empty_brief,
+):
+    value, _ = await seed(db_session)
+    project = value["project"]
+    record = await db_session.get(MaxProjectConfig, project.id)
+    config = {
+        "app_name": project.name,
+        "app_type": "custom",
+        "summary": "Мини-приложение для пользователей MAX",
+        "operator": {"legal_name": "QA owner"},
+        "support": {"email": "qa@example.com"},
+        "legal": {"terms_accepted": True},
+        "max_url_attached": True,
+    }
+    if explicit_empty_brief:
+        config.update(audience="", primary_action="", features=[], content=[], style="brand")
+    record.config = config
+    await db_session.commit()
+    monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value={
+        "phase": "done", "prod_url": "https://qa.example.test",
+        "snapshot_id": str(value["snapshot"].id),
+        "commit_sha": value["snapshot"].commit_sha,
+    }))
+
+    readiness = await client.get(f"/api/projects/{project.id}/max/readiness")
+
+    assert readiness.status_code == 200, readiness.text
+    result = readiness.json()
+    assert result["ready_to_launch"] is True
+    assert result["progress"] == 100
+    assert {item["id"]: item["done"] for item in result["items"]} == {
+        "business": True, "legal": True, "build": True,
+        "bot": True, "publish": True, "max_url": True,
+    }
+
+    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", AsyncMock(
+        return_value=SimpleNamespace(state="resources_ready"),
+    ))
+    monkeypatch.setattr(orchestrator_client, "publish_project_cell", AsyncMock(return_value={
+        "phase": "queued", "run_id": "without-app-brief",
+    }))
+    publication = await client.post(f"/api/projects/{project.id}/deploy", json={})
+    assert publication.status_code == 200, publication.text
+    assert publication.json()["run_id"] == "without-app-brief"
+
+
+@pytest.mark.parametrize(
+    ("override", "blocked_item"),
+    [
+        ({"operator": {"legal_name": ""}}, "business"),
+        ({"operator": {"legal_name": " \t\n "}}, "business"),
+        ({"support": {"email": None}}, "business"),
+        ({"legal": {"terms_accepted": False}}, "legal"),
+    ],
+)
+@pytest.mark.parametrize("check", ["readiness", "publication"])
+async def test_launch_requires_owner_support_and_explicit_document_acceptance(
+    client, db_session, monkeypatch, override, blocked_item, check,
+):
+    value, _ = await seed(db_session)
+    project = value["project"]
+    record = await db_session.get(MaxProjectConfig, project.id)
+    record.config = {**record.config, "max_url_attached": True, **override}
+    await db_session.commit()
+    monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value={
+        "phase": "done", "prod_url": "https://qa.example.test",
+        "snapshot_id": str(value["snapshot"].id),
+        "commit_sha": value["snapshot"].commit_sha,
+    }))
+
+    if check == "readiness":
+        readiness = await client.get(f"/api/projects/{project.id}/max/readiness")
+        assert readiness.status_code == 200, readiness.text
+        result = readiness.json()
+        assert result["ready_to_launch"] is False
+        assert [item["id"] for item in result["items"] if not item["done"]] == [blocked_item]
+        return
+
+    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", AsyncMock(
+        return_value=SimpleNamespace(state="resources_ready"),
+    ))
+    submit = AsyncMock(return_value={"phase": "queued", "run_id": "must-not-publish"})
+    monkeypatch.setattr(orchestrator_client, "publish_project_cell", submit)
+    publication = await client.post(f"/api/projects/{project.id}/deploy", json={})
+    assert publication.status_code == 409, publication.text
+    assert publication.json()["error"]["code"] == "conflict"
+    submit.assert_not_awaited()
+
+
 @pytest.mark.parametrize("failure", [False, True])
 async def test_disconnect_revokes_public_credentials_before_deleting_integration(
     client, db_session, monkeypatch, failure,

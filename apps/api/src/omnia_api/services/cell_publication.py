@@ -23,6 +23,7 @@ from omnia_api.models.project_cell import (
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.services import orchestrator_client, project_cell_runtime
+from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.project_cell_proofs import (
     ProofDimension,
     proof_identity_from_model,
@@ -285,10 +286,14 @@ async def submit_publication(
         raise ApiError("conflict", "Сначала подключите и проверьте MAX-бота", 409)
     record = await session.get(MaxProjectConfig, project.id)
     if record is None or record.owner_id != project.owner_id:
-        raise ApiError("conflict", "Сначала сохраните данные приложения и политики", 409)
+        raise ApiError(
+            "conflict", "Укажите владельца, контакт поддержки и подтвердите документы", 409,
+        )
     config = MaxProjectConfigPayload.model_validate(record.config)
-    if not (config.operator.legal_name and config.support.email and config.legal.terms_accepted):
-        raise ApiError("conflict", "Заполните владельца, поддержку и подтвердите политики", 409)
+    if not (has_launch_owner_and_support(config) and config.legal.terms_accepted):
+        raise ApiError(
+            "conflict", "Укажите владельца, контакт поддержки и подтвердите документы", 409,
+        )
     return await orchestrator_client.publish_project_cell(
         project.id,
         {

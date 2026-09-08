@@ -12,9 +12,10 @@ import { sendPrompt } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-export function MaxProjectDataApplyDialog({ config, onClose }: {
+export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
   config: MaxProjectConfig;
   onClose: () => void;
+  onReturnFocus?: () => void;
 }) {
   const router = useRouter();
   const qc = useQueryClient();
@@ -64,7 +65,9 @@ export function MaxProjectDataApplyDialog({ config, onClose }: {
   });
 
   return <Dialog open onOpenChange={(open) => { if (!open && !submitting.current) onClose(); }}>
-    <DialogContent data-product-shell data-max-studio className="max-settings-dialog max-w-xl">
+    <DialogContent data-product-shell data-max-studio className="max-settings-dialog max-w-xl" onCloseAutoFocus={event => {
+      if (onReturnFocus) { event.preventDefault(); onReturnFocus(); }
+    }}>
       <DialogHeader>
         <DialogTitle>Применить данные к приложению</DialogTitle>
         <DialogDescription>

@@ -35,9 +35,8 @@ const navigation: Array<{
   {
     key: "app",
     label: "Данные приложения",
-    suffix: "/settings?tab=app",
+    suffix: "?data=details",
     icon: FileCheck2,
-    stageId: "app",
   },
   { key: "integrations", label: "Интеграции", suffix: "/integrations", icon: Plug },
   {

@@ -81,8 +81,9 @@ describe("getMaxJourney", () => {
 describe("getMaxJourneyItemHref", () => {
   it("routes each server blocker to the screen where it can be fixed", () => {
     expect(getMaxJourneyItemHref("project-1", "legal")).toBe(
-      "/max/project-1/settings?tab=app",
+      "/max/project-1?data=policies",
     );
+    expect(getMaxJourneyItemHref("project-1", "business")).toBe("/max/project-1?data=owner");
     expect(getMaxJourneyItemHref("project-1", "publish")).toBe(
       "/max/project-1/publish",
     );
@@ -90,4 +91,9 @@ describe("getMaxJourneyItemHref", () => {
       "/max/project-1/settings?tab=bot",
     );
   });
+});
+
+it("asks only for publication information, not another product questionnaire", () => {
+  const journey = getMaxJourney("p", [item("build", true), item("business", true), item("legal", false)]);
+  expect(journey.currentStage).toMatchObject({ id: "app", label: "Владелец и документы", href: "/max/p?data=policies" });
 });

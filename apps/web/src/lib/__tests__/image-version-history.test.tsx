@@ -22,6 +22,7 @@ vi.mock("@/components/workspace/StylePanel", () => ({ StylePanel: () => null }))
 vi.mock("@/components/workspace/ChatPanel", () => ({ ChatPanel: () => null }));
 vi.mock("@/components/workspace/DownloadButton", () => ({ DownloadButton: () => null }));
 vi.mock("@/components/max/MaxLaunchPanel", () => ({ MaxLaunchPanel: () => null }));
+vi.mock("@/components/max/MaxEditorDataDialog", () => ({ MaxEditorDataDialog: () => <button aria-label="Данные приложения">Данные</button> }));
 vi.mock("@/components/max/MaxAccountMenu", () => ({ MaxAccountMenu: () => null }));
 vi.mock("@/components/max/MaxProjectNav", () => ({ MaxProjectNav: () => null }));
 vi.mock("@/components/max/MaxUsageBreakdown", () => ({ MaxUsageBreakdown: () => null }));
@@ -176,7 +177,7 @@ describe("image version history", () => {
     expect(launch?.textContent).toContain("Опубликовать");
     expect(container.querySelector("[data-testid='max-next-action-bar']")).toBeNull();
     expect(container.querySelector("[data-testid='max-navigation-scroll']")).toBeNull();
-    expect(container.querySelector("header a[href='/max/p/settings?tab=app']")).not.toBeNull();
+    expect(container.querySelector('header button[aria-label="Данные приложения"]')).not.toBeNull();
     click("[data-testid='max-navigation-open']");
     await settle();
     expect(document.querySelector("[role='dialog'] [data-testid='max-navigation-scroll']")).not.toBeNull();

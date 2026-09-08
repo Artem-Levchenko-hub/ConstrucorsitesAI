@@ -25,8 +25,8 @@ function Group({ title, children, description }: { title: string; children: Reac
   </fieldset>;
 }
 
-function Intro({ title, children }: { title: string; children: ReactNode }) {
-  return <div className="max-setup-intro"><h3>{title}</h3><p>{children}</p></div>;
+function Intro({ title, children, publication = false }: { title: string; children: ReactNode; publication?: boolean }) {
+  return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Перед публичным запуском" : "Необязательно для запуска"}</span><h3>{title}</h3><p>{children}</p></div>;
 }
 
 export function MaxProjectSetupSections({ section, current, onChange }: {
@@ -43,7 +43,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   };
 
   if (section === "details") return <section className="max-setup-section">
-    <Intro title="Что делает приложение">Название, сценарий и возможности. Чтобы изменить готовые экраны, сохраните данные и нажмите «Применить к приложению».</Intro>
+    <Intro title="Описание и оформление">Здесь сохранена идея вашего приложения — заполнять её заново не нужно. Уточняйте аудиторию, функции и стиль только если хотите изменить результат.</Intro>
     <Group title="О приложении">
       <div className="max-setup-field">
         <Label htmlFor="max-config-name">Название</Label>
@@ -86,7 +86,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
         <p id="max-config-features-hint" className="max-setup-hint">До 24 функций, через запятую.</p>
       </div>
     </Group>
-    <Group title="Оформление" description="Визуальные настройки приложения — отдельно от его содержания.">
+    <Group title="Оформление" description="Можно оставить текущий стиль. Дополнительные цвета не нужны для публикации.">
       <div className="max-setup-field">
         <Label htmlFor="max-config-colors">Цвета бренда</Label>
         <Input id="max-config-colors" value={current.brand_colors} placeholder="#4f81f7, #121519"
@@ -155,12 +155,13 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   if (section === "owner") return <section className="max-setup-section">
-    <Intro title="Кто отвечает за приложение">Реквизиты для документов и контакты, по которым пользователи смогут связаться с вами.</Intro>
-    <p className="max-setup-notice">Эти сведения попадут на страницы приложения: в политику, условия и поддержку.</p>
-    <Group title="Реквизиты владельца">
+    <Intro title="Кто отвечает за приложение" publication>Для публикации нужны имя или наименование владельца и email поддержки. Пока вы создаёте и проверяете приложение, этот раздел можно пропустить.</Intro>
+    <p className="max-setup-notice">Сведения будут видны пользователям в документах и поддержке. Их сохранение не запускает ИИ и не расходует баланс.</p>
+    <Group title="Реквизиты владельца" description="Укажите реквизиты, применимые к вашей форме деятельности: физлицо, ИП или организация.">
       <div className="max-setup-field max-setup-wide">
         <Label htmlFor="max-legal-name">ИП, ООО или ФИО владельца</Label>
         <Input id="max-legal-name" value={current.operator.legal_name} onChange={event => onChange({ ...current, operator: { ...current.operator, legal_name: event.target.value } })} />
+        <p className="max-setup-hint">Нужно для публикации</p>
       </div>
       <div className="max-setup-field">
         <Label htmlFor="max-inn">ИНН</Label>
@@ -180,6 +181,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
         <Label htmlFor="max-support-email">Email поддержки</Label>
         <Input id="max-support-email" type="email" value={current.support.email ?? ""} placeholder="support@example.ru"
           onChange={event => onChange({ ...current, support: { ...current.support, email: event.target.value || null } })} />
+        <p className="max-setup-hint">Нужно для публикации</p>
       </div>
       <div className="max-setup-field">
         <Label htmlFor="max-support-phone">Телефон поддержки</Label>
@@ -195,8 +197,8 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   return <section className="max-setup-section">
-    <Intro title="Правила для пользователей">Отметьте реальные функции приложения — Studio включит соответствующие разделы документов. Эти настройки сами по себе не добавляют оплату, модерацию или рассылки.</Intro>
-    <Group title="Что есть в приложении">
+    <Intro title="Правила для пользователей" publication>Проверьте данные для документов перед публикацией. Отметьте только функции, которые действительно есть в приложении — включать всё не нужно.</Intro>
+    <Group title="Только если используется" description="Эти настройки добавляют разделы документов, но сами по себе не подключают оплату, модерацию или рассылки.">
       <div className="max-setup-policy-list max-setup-wide">{CHECKS.map(item => {
         const checked = Boolean(current.legal[item.key]);
         return <button key={item.key} type="button" aria-pressed={checked} className="max-setup-policy-option"

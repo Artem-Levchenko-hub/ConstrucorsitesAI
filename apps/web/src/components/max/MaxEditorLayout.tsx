@@ -2,8 +2,8 @@
 
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowUpRight, ChevronDown, Ellipsis, PanelRightOpen, SlidersHorizontal, X } from "lucide-react";
-import Link from "next/link";
+import { ArrowUpRight, ChevronDown, Ellipsis, PanelRightOpen, X } from "lucide-react";
+import { MaxEditorDataDialog } from "./MaxEditorDataDialog";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { Button } from "@/components/ui/button";
 import type { Project } from "@/lib/api/types";
@@ -61,9 +61,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
           </Dialog.Root>
         </div>
         <div className="max-editor-header-actions">
-          <Button asChild variant="outline" className="max-editor-data-button">
-            <Link href={`/max/${project.id}/settings?tab=app`} aria-label="Данные приложения"><SlidersHorizontal className="size-4" /><span>Данные</span></Link>
-          </Button>
+          <MaxEditorDataDialog projectId={project.id} />
           <Dialog.Root>
             <Dialog.Trigger asChild>
               <Button variant="outline" size="icon" aria-label="Инструменты редактора"><Ellipsis className="size-5" /></Button>

@@ -53,12 +53,12 @@ const STAGE_DEFINITIONS: Array<{
   },
   {
     id: "app",
-    label: "Данные и политики",
-    shortLabel: "Данные",
-    description: "Заполните сведения о продукте, владельце, поддержке и правилах.",
+    label: "Владелец и документы",
+    shortLabel: "Документы",
+    description: "Перед публикацией укажите, кто отвечает за приложение, как связаться с поддержкой, и подтвердите данные для документов. Описание и оформление можно не дополнять.",
     itemIds: ["business", "legal"],
-    suffix: "/settings?tab=app",
-    actionLabel: "Заполнить данные",
+    suffix: "?data=owner",
+    actionLabel: "Указать владельца и поддержку",
   },
   {
     id: "bot",
@@ -108,6 +108,7 @@ function stageIsDone(
   return itemIds.every((itemId) => items.find((item) => item.id === itemId)?.done === true);
 }
 export function getMaxJourneyItemHref(projectId: string, itemId: string): string {
+  if (itemId === "legal") return `/max/${projectId}?data=policies`;
   const stageId = ITEM_STAGE[itemId] ?? "build";
   const definition = STAGE_DEFINITIONS.find((stage) => stage.id === stageId);
   return `/max/${projectId}${definition?.suffix ?? ""}`;
@@ -126,7 +127,10 @@ export function getMaxJourney(
   const prepared = STAGE_DEFINITIONS.map((definition, index) => ({
     ...definition,
     done: stageIsDone(definition.id, definition.itemIds, items),
-    href: `/max/${projectId}${definition.suffix}`,
+    href: definition.id === "app" && items.find(item => item.id === "business")?.done
+      ? getMaxJourneyItemHref(projectId, "legal") : `/max/${projectId}${definition.suffix}`,
+    actionLabel: definition.id === "app" && items.find(item => item.id === "business")?.done
+      ? "Проверить документы" : definition.actionLabel,
     position: index + 1,
   }));
   const currentIndex = prepared.findIndex((stage) => !stage.done);

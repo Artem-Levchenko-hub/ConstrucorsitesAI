@@ -131,6 +131,6 @@ it("uses readiness for the next project action and falls back to management when
   expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee/dashboard");
   mocks.readiness.mockResolvedValue({ items: [{ id: "build", done: true }] });
   await act(async () => { await client.invalidateQueries({ queryKey: ["max-readiness", "coffee"] }); });
-  await settle(() => expect(container.querySelector('.max-project-next')?.textContent).toContain("Заполнить данные"));
-  expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee/settings?tab=app");
+  await settle(() => expect(container.querySelector('.max-project-next')?.textContent).toContain("Указать владельца и поддержку"));
+  expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee?data=owner");
 });
