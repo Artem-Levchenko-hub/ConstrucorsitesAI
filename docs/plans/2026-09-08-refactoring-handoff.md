@@ -16,13 +16,17 @@ gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их ru
 этим пакетом не менялся. Пять dirty secondbrain-документов сохранены побайтно.
 Резервная копия и результат: `/opt/omnia-runtime/releases/startup-latency-4960f6b9`.
 
-**Далее Task 4:** устранить доказанное дублирование обновления истории. Временный
+**Task 4 подготовлен:** устранено доказанное дублирование обновления истории. Временный
 стенд `.artifacts/refactor-task4-20260908/README.md` содержит 7 baseline-тестов:
 новый HEAD 2 запроса/1 отмена; две страницы и rollback 3/1; тот же HEAD 1/0;
 отдельный terminal 1/0. Это вызовы API-функции и AbortSignal в тесте реальных
 компонентов, не измерение серверных HTTP-запросов. Сохранять выбор версии,
 все страницы, terminal reconciliation и защиту от поздних ответов A→B→A.
-Изменения Task 4 ещё не внесены.
+Новый regression suite: 13/13; полный web на Node 20 — 472 passed / 75 suites.
+Независимое review: No findings. Browser fixture и Linux build/поставка ещё
+завершаются; Windows standalone build заблокирован symlink EPERM.
+Продолжать с [Task 4 verification](2026-09-08-task4-history-verification.md),
+не считать этот пакет доставленным до точного web runtime/readback.
 
 Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6–13 не
 выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная

@@ -512,12 +512,19 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
 
       if (event.type === "snapshot.created") {
+        const previousSnapshotId = qc.getQueryData<Snapshot[]>(["snapshots", projectId])?.[0]?.id;
         qc.setQueryData<Snapshot[]>(["snapshots", projectId], (prev) => [
           event.data.snapshot,
           ...(prev ?? []),
         ]);
         // Live selection (null) follows HEAD; an explicit historical selection stays.
-        void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
+        // A known HEAD change triggers MaxWorkspaceShell's history effect.
+        // Let it own the fetch; metadata-only or unknown HEAD still needs one here.
+        void qc.invalidateQueries({
+          queryKey: ["project-versions", projectId],
+          refetchType: previousSnapshotId && previousSnapshotId !== event.data.snapshot.id
+            ? "none" : "active",
+        });
         // MAX preview bootstrap files are platform-owned. A new generated
         // snapshot may replace them. Mark the cache stale here; the preview's
         // new HEAD query key starts sync after its live-selection guard runs.

@@ -91,12 +91,18 @@ export function MaxWorkspaceShell({
     mutationFn: (snapshotId: string) =>
       rollbackSnapshot(project.id, snapshotId),
     onSuccess: (snapshot) => {
+      const previousSnapshotId = queryClient.getQueryData<Snapshot[]>(["snapshots", project.id])?.[0]?.id;
       queryClient.setQueryData<Snapshot[]>(
         ["snapshots", project.id],
         (previous) => upsertSnapshotNewest(previous, snapshot),
       );
       setVersionSelection(null);
-      void queryClient.invalidateQueries({ queryKey: ["project-versions", project.id] });
+      // The HEAD effect owns the refetch only when the cached HEAD actually moves.
+      void queryClient.invalidateQueries({
+        queryKey: ["project-versions", project.id],
+        refetchType: previousSnapshotId && previousSnapshotId !== snapshot.id
+          ? "none" : "active",
+      });
       toast.success("Версия восстановлена", {
         description:
           "Она стала текущей, а прежнее состояние осталось в истории.",
