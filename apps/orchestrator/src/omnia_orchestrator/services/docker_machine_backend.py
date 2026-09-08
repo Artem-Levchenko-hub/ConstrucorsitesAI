@@ -423,7 +423,12 @@ class DockerMachineBackend:
             "user": "0:0",
             "labels": {**self.labels("development"), "omnia.fencing_epoch": str(epoch)},
             "entrypoint": ["python3", "-c"],
-            "command": ["import signal; signal.pause()"],
+            # PID1 ignores default SIGTERM. Explicit exit lets Docker tear down
+            # the PID namespace after quiesce instead of waiting for SIGKILL.
+            "command": [
+                "import signal,sys; "
+                "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.pause()"
+            ],
             "working_dir": "/workspace",
             "network_mode": "container:" + namespace_id,
             "privileged": False,
@@ -481,6 +486,7 @@ class DockerMachineBackend:
         }
 
     def ensure(self, manifest: MachineManifest, epoch: int) -> None:
+        self.invalidate_retained_preview()
         if self._metadata().get("restore_in_progress"):
             raise CellResourceError("environment restore is incomplete; startup is fenced")
         if self._metadata().get("quiesce_state") in {"pending", "failed"}:
@@ -894,11 +900,13 @@ class DockerMachineBackend:
         store = MachineEnvironmentStore(
             self.root / "artifacts", self.workspace_id, self, max_bytes=self.disk_bytes
         )
+        saved_ref = self._metadata().get("environment_ref")
         reference = store.capture(
             manifest_digest=manifest.digest(),
             base_image=self.base_image,
             volumes=self.snapshot_volume_names(manifest),
             manifest=manifest,
+            previous=MachineEnvironmentRef.model_validate(saved_ref) if saved_ref else None,
         )
         metadata = self._metadata()
         metadata.update(
@@ -907,6 +915,7 @@ class DockerMachineBackend:
         write_controller_json(self.metadata_path, metadata)
 
     def exec_start(self, argv: list[str], cwd: str, operation_id: str) -> str:
+        self.invalidate_retained_preview()
         machine = self._container()
         if machine is None:
             raise CellResourceError("machine is missing")
@@ -1030,7 +1039,9 @@ class DockerMachineBackend:
         write_controller_json(self.metadata_path, metadata)
         self.client.api.exec_start(response["Id"], detach=True)
 
-    def service_status(self, service: MachineService, epoch: int) -> dict[str, Any]:
+    def service_status(
+        self, service: MachineService, epoch: int, *, include_logs: bool = True,
+    ) -> dict[str, Any]:
         metadata = self._metadata()
         record = metadata["services"].get(service.name)
         if record is None or record["epoch"] != epoch:
@@ -1071,7 +1082,7 @@ class DockerMachineBackend:
             "name": service.name,
             "state": "running" if running else "failed",
             "ready": ready,
-            "log_tail": self._read_log(record["log"]),
+            "log_tail": self._read_log(record["log"]) if include_logs or not ready else "",
         }
 
     def address(self) -> str:
@@ -1119,6 +1130,243 @@ class DockerMachineBackend:
             return False
         project_postgres.reload()
         return bool(project_postgres.status == "running")
+
+    def invalidate_retained_preview(self) -> None:
+        metadata = self._metadata()
+        if "retained_preview_receipt" in metadata:
+            metadata.pop("retained_preview_receipt")
+            write_controller_json(self.metadata_path, metadata)
+
+    def _retained_volume_stats(self, names: list[str]) -> list[list[int]] | None:
+        # One networkless helper reads inode identities only. The controller
+        # need not have host filesystem access to Docker's volume directory.
+        name = self.stem + "-retained-proof"
+        helper = self._lookup(self.client.containers, name, "retained-proof")
+        if helper is not None:
+            helper.remove(force=True)
+            if self._lookup(self.client.containers, name, "retained-proof") is not None:
+                raise CellResourceError("retained proof helper removal was not confirmed")
+        command = (
+            "import json,os,stat; "
+            f"s=[os.stat('/proof/'+str(i)) for i in range({len(names)})]; "
+            "assert all(stat.S_ISDIR(x.st_mode) for x in s); "
+            "print(json.dumps([[x.st_dev,x.st_ino,x.st_ctime_ns] for x in s]))"
+        )
+        helper = self.client.containers.create(
+            self.base_image, ["python3", "-I", "-S", "-c", command],
+            name=name, labels=self.labels("retained-proof"), entrypoint=[],
+            network_mode="none", cap_drop=["ALL"], privileged=False, read_only=True,
+            security_opt=["no-new-privileges:true"], user="0:0", pids_limit=16,
+            mem_limit=64 * 1024**2, memswap_limit=64 * 1024**2,
+            nano_cpus=100_000_000,
+            volumes={volume: {"bind": f"/proof/{index}", "mode": "ro"}
+                     for index, volume in enumerate(names)},
+        )
+        try:
+            helper.start()
+            if helper.wait(timeout=machine_remaining_seconds(15)).get("StatusCode") != 0:
+                return None
+            output = helper.logs(stdout=True, stderr=False)
+            if len(output) > 16384:
+                return None
+            try:
+                values = json.loads(output)
+            except (ValueError, TypeError):
+                return None
+            if not isinstance(values, list) or len(values) != len(names) or any(
+                not isinstance(item, list) or len(item) != 3
+                or any(type(value) is not int or value < 0 for value in item)
+                for item in values
+            ):
+                return None
+            return values
+        finally:
+            helper.remove(force=True)
+            if self._lookup(self.client.containers, name, "retained-proof") is not None:
+                raise CellResourceError("retained proof helper removal was not confirmed")
+
+    def trusted_container_identity(self, container: Any, kind: str) -> dict[str, str] | None:
+        """Bind controller-owned runtime configuration without persisting secrets."""
+        container.reload()
+        attrs = container.attrs
+        labels = attrs.get("Config", {}).get("Labels") or {}
+        if any(labels.get(key) != value for key, value in self.labels(kind).items()):
+            raise CellIdentityConflict("trusted runtime ownership identity mismatch")
+        started = attrs.get("State", {}).get("StartedAt")
+        image = attrs.get("Image")
+        if (
+            container.status != "running" or not container.id
+            or not isinstance(started, str) or not started
+            or not isinstance(image, str) or not _PIN.fullmatch(image)
+            or not isinstance(attrs.get("Config"), dict)
+            or not isinstance(attrs.get("HostConfig"), dict)
+            or not isinstance(attrs.get("NetworkSettings"), dict)
+            or not isinstance(attrs.get("Mounts"), list)
+            or attrs["HostConfig"].get("Privileged") is not False
+        ):
+            return None
+        fingerprint = {key: attrs[key] for key in (
+            "Config", "HostConfig", "NetworkSettings", "Mounts",
+        )}
+        return {
+            "id": container.id, "started_at": started, "image": image,
+            "configuration_digest": hashlib.sha256(
+                json.dumps(fingerprint, sort_keys=True).encode(),
+            ).hexdigest(),
+        }
+
+    def _retained_preview_proof(
+        self, reference: MachineEnvironmentRef, *, epoch: int, retain_trusted: bool = False,
+    ) -> dict[str, Any] | None:
+        self.validate_restore_reference(reference)
+        metadata = self._metadata()
+        if (
+            type(epoch) is not int or epoch <= 0 or metadata.get("epoch") != epoch
+            or metadata.get("environment_ref") != reference.model_dump(mode="json")
+            or metadata.get("restored_image") != reference.image_id
+            or metadata.get("restore_in_progress") or metadata.get("restore_target")
+            or metadata.get("pending_image")
+            or metadata.get("quiesce_state") in {"pending", "failed"}
+            or reference.manifest is None
+            or metadata.get("manifest") != reference.manifest.model_dump(mode="json")
+            or reference.manifest.digest() != reference.manifest_digest
+            or {item.name for item in reference.volumes}
+            != set(self.environment_volume_names(reference.manifest))
+        ):
+            return None
+        try:
+            trusted = {}
+            for suffix, kind in (
+                ("dev", "development"), ("project-postgres", "project-postgres"),
+                ("gateway", "max-gateway"), ("max-core", "managed-max-core"),
+                ("guard", "namespace-guard"), ("proxy", "egress-proxy"),
+            ):
+                container = self._lookup(self.client.containers, self.stem + "-" + suffix, kind)
+                if container is not None:
+                    if not retain_trusted or suffix in {"dev", "project-postgres"}:
+                        return None
+                    trusted_identity = self.trusted_container_identity(container, kind)
+                    if trusted_identity is None:
+                        return None
+                    trusted[suffix] = trusted_identity
+            image = self.client.images.get(reference.image_id)
+            config = image.attrs.get("Config", {})
+            labels = config.get("Labels") or {}
+            if image.id != reference.image_id or any(
+                labels.get(key) != value for key, value in self.labels("environment").items()
+            ):
+                raise CellIdentityConflict("environment image project identity mismatch")
+            if config.get("Env") or config.get("Entrypoint") or config.get("Cmd"):
+                raise CellIdentityConflict(
+                    "environment image contains unexpected runtime configuration"
+                )
+            daemon_id = self.client.info().get("ID")
+            if not isinstance(daemon_id, str) or not daemon_id:
+                return None
+            identities = {}
+            for item in reference.volumes:
+                volume = self.client.volumes.get(item.name)
+                attrs = volume.attrs
+                expected = self.labels("project-volume")
+                if item.name == self.workspace_volume:
+                    expected = {
+                        "omnia.managed": "true", "omnia.project_cell": "true",
+                        "omnia.workspace_id": str(self.workspace_id),
+                        "omnia.project_id": str(self.project_id),
+                        "omnia.owner_id": str(self.owner_id),
+                        "omnia.provider": "docker_owner_canary", "omnia.resource_kind": "workspace",
+                        "omnia.profile_version": self.resource_profile_version,
+                    }
+                labels = attrs.get("Labels") or {}
+                if any(labels.get(key) != value for key, value in expected.items()):
+                    raise CellIdentityConflict("retained volume ownership identity mismatch")
+                identity = {
+                    key: attrs.get(key) for key in ("Name", "CreatedAt", "Driver", "Mountpoint")
+                }
+                if (
+                    not all(isinstance(value, str) and value for value in identity.values())
+                    or identity["Name"] != item.name or identity["Driver"] != "local"
+                    or attrs.get("Options") or attrs.get("Scope") != "local"
+                ):
+                    return None
+                if self.client.containers.list(all=True, filters={"volume": item.name}):
+                    return None
+                identities[item.name] = {**identity, "labels": labels}
+            stats = self._retained_volume_stats(list(identities))
+            if stats is None:
+                return None
+            for identity, inode in zip(identities.values(), stats, strict=True):
+                identity["inode"] = inode
+            return {
+                "version": 2, "epoch": epoch, "daemon_id": daemon_id, "volumes": identities,
+                "trusted": trusted,
+                "reference_digest": hashlib.sha256(
+                    reference.model_dump_json().encode()
+                ).hexdigest(),
+            }
+        except TimeoutError:
+            raise
+        except (docker.errors.APIError, OSError):
+            return None
+
+    def record_retained_preview(
+        self, reference: MachineEnvironmentRef, *, epoch: int, retain_trusted: bool = False,
+    ) -> bool:
+        self.invalidate_retained_preview()
+        proof = self._retained_preview_proof(reference, epoch=epoch, retain_trusted=retain_trusted)
+        if proof is None:
+            return False
+        metadata = self._metadata()
+        metadata["retained_preview_receipt"] = proof
+        write_controller_json(self.metadata_path, metadata)
+        return True
+
+    def consume_retained_preview(self, reference: MachineEnvironmentRef, *, epoch: int) -> bool:
+        receipt = self._metadata().get("retained_preview_receipt")
+        # Consume before examining Docker, so failure/interruption cannot leave
+        # a usable receipt after a new execution or partially restored volume.
+        self.invalidate_retained_preview()
+        if not isinstance(receipt, dict):
+            return False
+        return self._retained_preview_proof(
+            reference, epoch=epoch, retain_trusted=bool(receipt.get("trusted")),
+        ) == receipt
+
+    def can_reuse_image(self, reference: MachineEnvironmentRef) -> bool:
+        if reference.workspace_id != self.workspace_id:
+            raise CellIdentityConflict("environment workspace identity mismatch")
+        if reference.base_image != self.base_image:
+            return False
+        try:
+            machine = self._container()
+            if machine is None:
+                return False
+            machine.reload()
+            labels = machine.attrs.get("Config", {}).get("Labels") or {}
+            if any(labels.get(key) != value for key, value in self.labels("development").items()):
+                raise CellIdentityConflict("machine development identity mismatch")
+            if machine.status != "exited" or machine.attrs.get("Image") != reference.image_id:
+                return False
+            image = self.client.images.get(reference.image_id)
+            config = image.attrs.get("Config", {})
+            labels = config.get("Labels") or {}
+            if image.id != reference.image_id or any(
+                labels.get(key) != value for key, value in self.labels("environment").items()
+            ):
+                raise CellIdentityConflict("environment image project identity mismatch")
+            if config.get("Env") or config.get("Entrypoint") or config.get("Cmd"):
+                raise CellIdentityConflict(
+                    "environment image contains unexpected runtime configuration"
+                )
+            machine_remaining_seconds(1)
+            # Docker encodes an empty Go slice as either [] or null. SDK 7.1
+            # returns the decoded JSON only after checking HTTP success.
+            changes = machine.diff()
+            return changes is None or (isinstance(changes, list) and changes == [])
+        except TimeoutError:
+            raise
+        except (docker.errors.APIError, OSError):
+            return False
 
     def export_image(self) -> tuple[str, Iterable[bytes]]:
         machine = self._container()
@@ -1232,6 +1480,7 @@ class DockerMachineBackend:
                 "project-postgres-prepare",
                 "project-postgres-init",
                 "project-postgres-restore",
+                "retained-proof",
             }:
                 continue
             if any(labels.get(key) != value for key, value in self.labels(kind).items()):
@@ -1397,6 +1646,7 @@ class DockerMachineBackend:
             raise CellIdentityConflict("environment volume identity mismatch")
 
     def begin_restore(self, reference: MachineEnvironmentRef) -> None:
+        self.invalidate_retained_preview()
         self.validate_restore_reference(reference)
         metadata = self._metadata()
         self._reconcile_recovery_helpers()

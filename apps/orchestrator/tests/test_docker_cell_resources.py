@@ -353,6 +353,19 @@ async def test_portable_runtime_is_halted_before_lease_change_pause_and_destroy(
     assert runtime.halt.await_args.kwargs == {"remove_network": True}
 
 
+async def test_only_generation_release_requests_trusted_retention(tmp_path):
+    from unittest.mock import AsyncMock
+
+    manager, _docker, _state_store, _lock = _make_manager(tmp_path)
+    spec = replace(_spec(uuid4()), generation_run_id=uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    runtime = SimpleNamespace(halt=AsyncMock())
+    manager.machine_runtime = runtime
+    await manager.release_generation(spec.workspace_id, _mutation("b", 2),
+                                     generation_run_id=spec.generation_run_id)
+    assert runtime.halt.await_args.kwargs == {"retain_trusted": True}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["ensure", "release", "pause", "destroy", "prepare"])
 async def test_disabled_portable_provider_cannot_advance_lease_or_release_capacity(

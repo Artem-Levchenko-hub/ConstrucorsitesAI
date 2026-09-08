@@ -50,7 +50,7 @@ async def test_saved_metadata_replays_without_touching_product_or_generation(tmp
     from omnia_orchestrator.services.machine_defaults import next_machine_manifest
 
     manifest = next_machine_manifest().model_dump(mode="json")
-    machine = SimpleNamespace(path=path, state=lambda: {"manifest": manifest})
+    machine = SimpleNamespace(path=path, state=lambda: {"manifest": manifest, "epoch": 4})
     runtime = MachineAdapter(SimpleNamespace(), SimpleNamespace())
     monkeypatch.setattr(runtime, "parts", lambda _: (machine, object()))
     monkeypatch.setattr(runtime, "preview", lambda _: ("running", "127.0.0.1"))
@@ -59,6 +59,7 @@ async def test_saved_metadata_replays_without_touching_product_or_generation(tmp
     for _ in range(2):
         await runtime.apply_owner_business_config(state, version=1, config={"app_name": "Saved"})
     assert start.call_count == 1
+    assert start.call_args.args[-1] == 4  # release changed controller fence, not runtime epoch
     saved = json.loads((tmp_path / "business-config.json").read_text())
     assert saved["applied"] is True
     with pytest.raises(CellResourceError, match="stale"):
@@ -78,7 +79,7 @@ async def test_sleeping_metadata_is_durable_without_starting_resources(tmp_path,
     state = SimpleNamespace(project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5)
     machine = SimpleNamespace(
         path=tmp_path / "machine.json",
-        state=lambda: {"manifest": next_machine_manifest().model_dump(mode="json")},
+        state=lambda: {"manifest": next_machine_manifest().model_dump(mode="json"), "epoch": 4},
     )
     runtime = MachineAdapter(SimpleNamespace(), SimpleNamespace())
     monkeypatch.setattr(runtime, "parts", lambda _: (machine, object()))

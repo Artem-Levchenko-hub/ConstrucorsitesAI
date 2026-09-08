@@ -113,6 +113,84 @@ using canonical production compose, restart the orchestrator, verify status,
 health and canary capability/bootstrap. Record pushed/deployed revision and image
 IDs. Do not claim delivery until that loop is complete.
 
+### Precompiled owner preview core
+
+Build the trusted image with `scripts/build-public-max-core.sh` from the pinned
+kit. Set `CELL_PREVIEW_CORE_IMAGE` to the resulting immutable image ID in the
+host orchestrator environment. It must advertise both `omnia.max-core.protocol=1`
+and `omnia.max-core.preview-protocol=1`. An empty setting retains the legacy draft
+core for rollout control. The agent's image, application sources and databases
+are not replaced by this setting.
+
+The trusted owner core runs `server.js` with bounded heap and
+`OMNIA_OWNER_PREVIEW=1`. Its bootstrap still requires an unexpired project HMAC.
+Public cores never receive that flag; a public origin also disables the route.
+New owner previews without saved metadata use the trusted kit's initial metadata;
+missing public or malformed metadata still fails closed. Readiness notices a
+stopped/missing or outdated core so normal owner-start can repair it.
+
+Repeated wildcard TLS setup reuses a matching file only after this orchestrator
+process confirmed its reload. File edits, upstream changes, missing files, restart
+and the five-minute confirmation limit force another check/reload. Per-host ACME
+issuance remains unchanged.
+
+Verify a real signed owner bootstrap and page load, unsigned/expired rejection,
+public bootstrap rejection, metadata readback and cold/warm timings before rollout.
+Rollback clears `CELL_PREVIEW_CORE_IMAGE`; an already-running compiled core remains
+until the next normal teardown/recreation. Keep the previous pinned image available.
+
+### Repeated generation preparation
+
+Lease handover still quiesces/stops the old machine, captures all current volumes
+(including project PostgreSQL), and replaces containers under the new fence.
+Capture reuses a previous sanitized rootfs archive only when the stopped owned
+container uses that exact image, Docker reports no rootfs changes, and the archive's
+size and SHA256 match. Installing a system dependency or changing any rootfs file
+forces a fresh image capture. Source, dependencies in volumes, and database changes
+are always captured anew. No running database is replaced by an older checkpoint.
+
+Measure repeated handover separately from initial allocation and model execution;
+a timed-out `ensure` followed by reconciliation is not evidence of CPU shortage.
+The API gives `ensure` the same 930-second HTTP timeout as portable release, since
+both can capture an existing machine. The total capacity deadline and worker
+cancellation monitor remain independent; a real capacity rejection still returns
+immediately. Network failure/cancellation still requires fenced reconciliation.
+
+A successful captured halt can leave a controller-owned, single-use receipt for
+owner preview resume on the same Docker daemon. It binds the exact environment
+reference, runtime epoch, sanitized image and the complete retained volume set.
+Volume ownership, Docker metadata and root inode/ctime identities are checked;
+one restricted networkless helper reads only those identities through read-only
+mounts. No container may remain attached to the captured volumes.
+
+Resume consumes the receipt before starting any work. Only a matching proof skips
+re-importing the already retained volumes; normal ensure, service readiness and
+the trusted preview boundary still run. Missing/recreated volumes, incomplete
+restore, old references or absent proof use the existing recovery path. Execution,
+ensure and explicit restore invalidate the receipt. Capture still archives every
+source, dependency and database volume, and explicit version restoration is unchanged.
+
+The trusted idle process in newly created development containers handles SIGTERM
+and exits normally, allowing Docker to tear down its process namespace without
+waiting for the forced-kill grace period. Database quiesce and PostgreSQL's stop
+grace period remain unchanged; this is not a shortcut around data capture.
+
+Generation release retains the owned guard, egress proxy, managed MAX core and
+gateway only after a successful current checkpoint and removal of the agent and
+dedicated PostgreSQL containers. This keeps trusted services warm within the
+existing reserved envelope; no agent processes survive release. The receipt also
+binds the retained trusted container identities. Captured data volumes must still
+have no attachments. Pause, destroy, recovery and a new generation's fenced
+handover use the full teardown path.
+
+Retained trusted services alone do not make a preview ready: its application and
+dedicated database must be running. Owner resume still starts those services and
+checks readiness. Gateway reuse requires a matching controller-owned runtime
+stamp and a healthy boundary; changed identity, configuration or trusted code
+requires reconciliation. Measure release capture, owner resume and complete idle
+cell wake separately. Keeping trusted services warm does not eliminate current
+volume capture or waiting for genuinely unavailable capacity.
+
 Add these **API and worker** switches initially disabled, then enable one at a
 time for the existing owner canary only:
 

@@ -887,6 +887,10 @@ class HttpProjectCellOrchestratorClient:
                 "POST",
                 "/internal/workspaces/ensure",
                 json=request.to_wire_json(),
+                # A new lease may halt/checkpoint the previous portable machine.
+                # Match control release; the outer capacity deadline and worker
+                # cancellation still bound the wait independently.
+                timeout=930.0,
             )
         except OrchestratorBadRequest as exc:
             if exc.status_code != 429:

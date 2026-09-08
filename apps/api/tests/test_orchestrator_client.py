@@ -698,6 +698,11 @@ async def test_every_client_body_preserves_mutation_identity(
     assert sent_json["request_digest"] == digest
     if method_name == "ensure":
         assert sent_json["generation_run_id"] == str(generation_run_id)
+        # Replacing a portable machine checkpoints its complete environment.
+        # A normal capture must not hit the short metadata-request timeout.
+        assert raw_calls[0]["timeout"] == 930.0
+    else:
+        assert "timeout" not in raw_calls[0]
     assert sent_json == dto.to_wire_json()
 
 
