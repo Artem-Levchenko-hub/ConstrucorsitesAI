@@ -49,6 +49,17 @@ def test_max_finalization_defaults_are_dark_and_deadlines_are_exact(
     assert settings.project_cell_watchdog_grace_seconds == 20
 
 
+def test_product_advisor_default_uses_a_current_gateway_model(
+    isolated_settings_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PRODUCT_ADVISOR_MODEL", raising=False)
+
+    # Haiku was removed from the gateway: accepting it here made every real
+    # advice request fail with a 404 despite mocked completion tests passing.
+    assert get_settings().product_advisor_model == "claude-sonnet-5"
+
+
 @pytest.mark.parametrize(
     ("field_name", "value"),
     [

@@ -486,7 +486,9 @@ async def generate_product_advice(
             free=True,
             max_tokens=2200,
             temperature=0.1,
-            timeout_seconds=12.0,
+            # A cold completion can exceed 12 seconds. Leave room for analysis
+            # while staying below the browser's 55-second request deadline.
+            timeout_seconds=45.0,
         )
     except Exception as exc:
         raise advice_unavailable() from exc

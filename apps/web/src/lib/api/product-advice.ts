@@ -51,7 +51,8 @@ export async function requestProductAdvice(
     `/api/projects/${projectId}/product-advice`,
     {
       method: "POST",
-      timeoutMs: 20_000,
+      // The server bounds model analysis to 45 seconds; allow transport overhead.
+      timeoutMs: 55_000,
     },
   );
 }

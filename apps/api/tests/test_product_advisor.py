@@ -166,7 +166,7 @@ async def test_model_generates_specific_advice_and_implementation_prompt() -> No
     assert captured["free"] is True
     assert captured["max_tokens"] <= 2200
     assert captured["temperature"] == 0.1
-    assert captured["timeout_seconds"] == 12.0
+    assert captured["timeout_seconds"] == 45.0
 
 
 def test_context_keeps_bounded_ui_and_product_config_without_private_records() -> None:

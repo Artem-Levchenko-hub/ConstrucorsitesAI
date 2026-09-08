@@ -86,9 +86,9 @@ class Settings(BaseSettings):
         "gemini-3.1-pro-preview-customtools"
     )
     mock_llm: bool = Field(default=True)
-    # Cheap, bounded ranking pass for contextual MAX product advice. The
-    # server-owned catalog remains the source of executable prompts.
-    product_advisor_model: str = Field(default="claude-haiku-4-5")
+    # Bounded generation of contextual MAX advice. Keep the default in the
+    # gateway's current text-model catalog; retired IDs fail before inference.
+    product_advisor_model: str = Field(default="claude-sonnet-5")
 
     # V2 orchestrator (apps/orchestrator on :8003). Internal-only API behind
     # a shared-secret header — token MUST match the one in the orchestrator's
