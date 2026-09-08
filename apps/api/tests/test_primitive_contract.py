@@ -1,4 +1,4 @@
-"""Harness-hardening: the agent is handed the EXACT signatures of the locked
+"""Harness-hardening: the agent is handed the EXACT signatures of the editable
 nextjs-realtime primitives up front, so a weak model imports the real API instead
 of hallucinating names/shapes/arity (`getChannels`, its own `Channel` type,
 `useChannel()`) and looping on TS2305/TS2322/TS2554.
@@ -60,9 +60,12 @@ def test_card_lists_the_real_names_not_the_hallucinated_one() -> None:
     assert "getChannels" not in card
 
 
-def test_card_is_nonempty_and_marks_locked() -> None:
+def test_card_exposes_signatures_and_allows_verified_primitive_edits() -> None:
     card = ab.realtime_primitives_contract()
     assert len(card) > 500
-    assert "КОНТРАКТ" in card
+    assert "ТОЧНЫМИ сигнатурами" in card
+    assert "можешь и ПРАВИТЬ эти файлы" in card
+    assert "гейт перепроверит доставку + 403" in card
+    assert "НЕ выдумывай имена/типы/аргументы" in card
     assert "@/lib/channels" in card
     assert "@/components/realtime/use-channel" in card

@@ -57,6 +57,8 @@ import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +75,7 @@ import niche_batch  # noqa: E402
 
 from omnia_api.services import (  # noqa: E402
     accept_gauntlet,
+    cabinet_gate,
     compose_gate,
     hierarchy_gate,
     reference_corpus,
@@ -902,13 +905,70 @@ def _rendered_surrogates(a: FrozenAnalysis) -> list[GateVerdict]:
     return out
 
 
-def frozen_verdict(html: str) -> GauntletVerdict:
+class _CabinetMarkers(HTMLParser):
+    """Structural markers only; no claims about CSS visibility or JS settling."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.observation: dict[str, Any] = {
+            "has_empty": False, "has_checklist": False, "has_skeleton": False, "rows": 0,
+        }
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        for key in ("empty", "checklist", "skeleton"):
+            if f"data-omnia-{key}" in attributes:
+                self.observation[f"has_{key}"] = True
+        if "data-omnia-collection" in attributes:
+            try:
+                rows = int(attributes.get("data-omnia-rows") or "0")
+            except ValueError:
+                rows = 0
+            self.observation["rows"] = max(self.observation["rows"], rows)
+
+
+def _frozen_cabinet_verdict(html: str | None) -> GateVerdict:
+    """Rehearse the real rubric on a separate representative cabinet fixture.
+
+    The niche corpus contains public pages, not authenticated cabinets. This
+    fixture exercises the cabinet scoring leg, never proves a niche's cabinet.
+    ``rendered=True`` enables the pure rubric for hypothetical DOM observations;
+    the emitted evidence explicitly records that no rendering/auth occurred.
+    """
+    fixture_name = "cabinet-states.html"
+    supplied = html is not None
+    if html is None:
+        html = (_SCRIPTS / "fixtures" / fixture_name).read_text(encoding="utf-8")
+    parser = _CabinetMarkers()
+    parser.feed(html)
+    parser.close()
+    report = cabinet_gate.evaluate_observation(parser.observation, rendered=True)
+    return GateVerdict(
+        gate=accept_gauntlet.CABINET,
+        passed=report.passed,
+        abstained=False,
+        classes=report.classes,
+        summary="frozen-static: separate representative cabinet markers; " + report.summary(),
+        subscore={
+            "gate": accept_gauntlet.CABINET, "frozen": True, "passed": report.passed,
+            "source": "supplied-cabinet-fixture" if supplied else "representative-cabinet-fixture",
+            "fixture": None if supplied else fixture_name,
+            "source_sha256": sha256(html.encode("utf-8")).hexdigest(),
+            "authenticated": False, "rendered": False, "niche_generated": False,
+            "observation": parser.observation,
+            "classes": list(report.classes),
+        },
+    )
+
+
+def frozen_verdict(html: str, *, cabinet_html: str | None = None) -> GauntletVerdict:
     """A real, browser-free ``GauntletVerdict`` over one static page.
 
     The six context/source-scan gates are the genuine ``accept_gauntlet`` gates
     run over the actual HTML (no browser); the eight rendered legs are the
-    frozen-static surrogates. Together they cover EXACTLY ``EXPECTED_GATES``, so a
-    frozen niche has no coverage gap.
+    frozen-static surrogates. The cabinet rubric uses a separately identified
+    representative fixture, not this public niche page. Together they rehearse
+    EXACTLY ``EXPECTED_GATES``; this is not authenticated production evidence.
     """
     a = analyse_frozen(html)
     real = asyncio.run(
@@ -923,7 +983,7 @@ def frozen_verdict(html: str) -> GauntletVerdict:
         )
     )
     return GauntletVerdict(
-        gates=(*real.gates, *_rendered_surrogates(a)),
+        gates=(*real.gates, *_rendered_surrogates(a), _frozen_cabinet_verdict(cabinet_html)),
         render_expected=True,
     )
 

@@ -59,14 +59,17 @@ class _FakeDocsClient:
         )
 
 
-def test_aitunnel_provider_exposes_official_docs_and_one_secret_field() -> None:
+def test_legacy_aitunnel_is_unavailable_but_retains_docs_and_secret_metadata() -> None:
     provider = integration_providers.get_provider("aitunnel")
 
     assert provider.name == "AITUNNEL"
-    assert provider.available is True
+    assert provider.available is False
+    assert provider.recommended is False
+    assert provider.requirement == "Текстовый ИИ теперь работает через встроенный LLMGW."
     assert provider.docs_url == "https://docs.aitunnel.ru/"
     assert provider.docs_pages == ("/api/authentication", "/api/reference")
     assert [field.key for field in provider.fields] == ["api_key"]
+    assert provider.fields[0].secret is True
 
 
 @pytest.mark.asyncio

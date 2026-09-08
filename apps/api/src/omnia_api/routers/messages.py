@@ -2094,7 +2094,7 @@ async def _run_async_onboarding(
             "onboarding.survey",
             {
                 "message_id": str(assistant_message_id),
-                "survey": survey,
+                "survey": [question.model_dump(mode="json") for question in survey],
                 "question_index": 1,
                 "question_total": len(plan),
                 "niche": infer_niche_label(prompt) or None,

@@ -145,7 +145,7 @@ jobs:
             --package-root "$RUNNER_TEMP/omnia-task5-installed"
       - name: Run complete API regression suite on disposable services
         working-directory: apps/api
-        run: uv run --frozen pytest -q
+        run: uv run --frozen pytest -o addopts='' -q --durations=10
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest

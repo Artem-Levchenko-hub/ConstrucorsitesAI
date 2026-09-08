@@ -8,7 +8,7 @@ the queue points at the worker job).
 
 from __future__ import annotations
 
-import re
+import ast
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -319,9 +319,24 @@ def test_messages_enqueues_entity_gate_on_entity_template() -> None:
     """messages.py must enqueue the gate (de-orphaned) and scope it to the
     entity/fullstack templates that skip acceptance.evaluate."""
     src = (_SRC / "routers" / "messages.py").read_text(encoding="utf-8")
-    assert "enqueue_entity_gate" in src
-    # enqueue is scoped to the entity templates that bypass the acceptance gate
-    assert re.search(r'project\.template in \("nextjs_entities", "fullstack"\)', src)
+    tree = ast.parse(src)
+    expected_scope = ast.dump(ast.parse(
+        'project.template in ("nextjs_entities", "fullstack")', mode="eval",
+    ).body)
+    expected_call = ast.dump(ast.parse(
+        "asyncio.to_thread(enqueue_entity_gate, assistant_message_id, project_id, project.slug)",
+        mode="eval",
+    ).body)
+    scoped_calls = [
+        call
+        for branch in ast.walk(tree)
+        if isinstance(branch, ast.If)
+        and any(ast.dump(test) == expected_scope for test in ast.walk(branch.test))
+        for statement in branch.body
+        for call in ast.walk(statement)
+        if isinstance(call, ast.Call) and ast.dump(call) == expected_call
+    ]
+    assert len(scoped_calls) == 1, "entity gate must remain inside its exact template scope"
 
 
 # ── Area C: authenticated cabinet gate (DARK) ─────────────────────────────────

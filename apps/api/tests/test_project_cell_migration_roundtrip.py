@@ -12,6 +12,8 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -323,12 +325,15 @@ async def _insert_finalization_rows(database_url: str, workspace_id: UUID, run_i
         await connection.close()
 
 
-async def _assert_0056_schema(database_url: str) -> None:
+async def _assert_0056_schema(
+    database_url: str, *, expected_revision: str = "0056_project_cell_finalization",
+    expected_rows: int = 0,
+) -> None:
     connection = await asyncpg.connect(_asyncpg_dsn(database_url))
     try:
         assert (
             await connection.fetchval("SELECT version_num FROM alembic_version")
-            == "0056_project_cell_finalization"
+            == expected_revision
         )
         for table_name in (
             "project_cell_proofs",
@@ -337,6 +342,7 @@ async def _assert_0056_schema(database_url: str) -> None:
             "generation_events",
         ):
             assert await connection.fetchval("SELECT to_regclass($1)", table_name) == table_name
+            assert await connection.fetchval(f"SELECT count(*) FROM {table_name}") == expected_rows
         assert (
             await connection.fetchval(
                 """
@@ -376,15 +382,26 @@ async def _assert_0056_schema_absent(database_url: str) -> None:
 
 
 def test_0056_roundtrip(disposable_migration_database: str) -> None:
+    config = Config(str(API_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(API_ROOT / "migrations"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    assert head is not None
     _run_alembic(disposable_migration_database, "upgrade", "0055_project_cell_capacity_queue")
     workspace_id, run_id = asyncio.run(_seed_finalization_0055(disposable_migration_database))
 
-    _run_alembic(disposable_migration_database, "upgrade", "head")
+    _run_alembic(disposable_migration_database, "upgrade", "0056_project_cell_finalization")
     asyncio.run(_insert_finalization_rows(disposable_migration_database, workspace_id, run_id))
-    asyncio.run(_assert_0056_schema(disposable_migration_database))
+    asyncio.run(_assert_0056_schema(disposable_migration_database, expected_rows=1))
+    # Later migrations must preserve the finalization schema and its seeded rows.
+    _run_alembic(disposable_migration_database, "upgrade", "head")
+    asyncio.run(_assert_0056_schema(
+        disposable_migration_database, expected_revision=head, expected_rows=1,
+    ))
 
     _run_alembic(disposable_migration_database, "downgrade", "0055_project_cell_capacity_queue")
     asyncio.run(_assert_0056_schema_absent(disposable_migration_database))
 
-    _run_alembic(disposable_migration_database, "upgrade", "head")
+    _run_alembic(disposable_migration_database, "upgrade", "0056_project_cell_finalization")
     asyncio.run(_assert_0056_schema(disposable_migration_database))
+    _run_alembic(disposable_migration_database, "upgrade", "head")
+    asyncio.run(_assert_0056_schema(disposable_migration_database, expected_revision=head))

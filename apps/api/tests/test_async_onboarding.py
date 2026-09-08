@@ -3,18 +3,20 @@ delivered over the WebSocket, so POST /prompt returns inside the client's 30s
 budget even though Opus (via oneprovider) answers a plan call in ~60-70s.
 
 These are DB-free unit tests of the background runner ``_run_async_onboarding``:
-the slow gateway call, the session factory and ``publish_event`` are all mocked
-(same style as ``test_app_errors``), so they assert the event choreography and
-fail-soft behaviour without a live Postgres or gateway.
+the slow gateway call, session factory and Redis I/O are stubbed. The real event
+publisher serializes the payload, so tests assert wire compatibility, event
+choreography and fail-soft behaviour without live Postgres, Redis or a gateway.
 """
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from omnia_api.core import redis as event_bus
 from omnia_api.routers import messages as m
 from omnia_api.services.discovery import PlannedQuestion
 
@@ -44,16 +46,20 @@ class _FakeSession:
 def _patch_common(
     monkeypatch: pytest.MonkeyPatch, project: object, msg: object
 ) -> list[tuple[str, dict]]:
-    """Wire the fake session + capture published events. Returns the event log."""
+    """Capture the real publisher's wire JSON with only Redis I/O stubbed."""
     events: list[tuple[str, dict]] = []
 
-    async def _fake_publish(_pid: object, etype: str, data: dict) -> None:
-        events.append((etype, data))
+    class _Redis:
+        async def publish(self, channel: str, payload: str) -> None:
+            assert channel.startswith("omnia:project:")
+            event = json.loads(payload)
+            events.append((event["type"], event["data"]))
 
     async def _no_type_q(_prompt: str, _language: str) -> None:
         return None
 
-    monkeypatch.setattr(m, "publish_event", _fake_publish)
+    monkeypatch.setattr(event_bus, "get_redis", _Redis)
+    monkeypatch.setattr(m, "publish_event", event_bus.publish_event)
     monkeypatch.setattr(m, "_maybe_result_type_question", _no_type_q)
     monkeypatch.setattr(m, "get_engine", lambda: None)
     monkeypatch.setattr(
@@ -105,6 +111,12 @@ async def test_run_async_onboarding_streams_and_stashes(
     kinds = [q.get("kind") for q in survey_ev["survey"]]
     assert kinds.count("text") == 2
     assert "palette" in kinds
+    assert survey_ev["survey"][0]["message"] == "Что за продукт?"
+    assert survey_ev["survey"][0]["choices"] == ["A", "B"]
+    assert survey_ev["survey"][1]["choices"] == ["Строгий", "Тёплый"]
+    palette = next(q for q in survey_ev["survey"] if q["kind"] == "palette")
+    assert palette["options"]
+    assert all({"id", "name", "bg", "accent"} <= option.keys() for option in palette["options"])
 
 
 @pytest.mark.asyncio
@@ -131,3 +143,5 @@ async def test_run_async_onboarding_fail_soft_uses_fallback(
     # A real (deterministic) plan was still stashed and a question streamed.
     assert project.discovery_plan
     assert msg.content and msg.content != m._ASYNC_ONBOARDING_PLACEHOLDER
+    survey_ev = next(d for t, d in events if t == "onboarding.survey")
+    assert all(isinstance(question, dict) for question in survey_ev["survey"])

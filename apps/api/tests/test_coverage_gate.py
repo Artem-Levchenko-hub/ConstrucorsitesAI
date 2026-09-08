@@ -88,9 +88,9 @@ async def test_no_dev_url_skipped(monkeypatch):
     assert v.skipped and v.passed
 
 
-@pytest.mark.parametrize("escaped", [False, True])
+@pytest.mark.parametrize("failure", [None, "origin", "scheme", "response", "http", "cookie"])
 async def test_cell_coverage_uses_signed_session_without_legacy_runtime(
-    monkeypatch, escaped: bool,
+    monkeypatch, failure: str | None,
 ):
     workspace_id = uuid.uuid4()
     origin = f"https://cell-{workspace_id.hex[:12]}-dev.preview.lead-generator.ru"
@@ -101,12 +101,21 @@ async def test_cell_coverage_uses_signed_session_without_legacy_runtime(
         "2030-01-01T00:00:00Z",
     )
     page = SimpleNamespace(
-        goto=AsyncMock(return_value=SimpleNamespace(ok=True)),
-        url="https://attacker.example/" if escaped else f"{origin}/",
+        goto=AsyncMock(return_value=None if failure == "response" else SimpleNamespace(
+            ok=failure != "http",
+        )),
+        url=(
+            "https://attacker.example/" if failure == "origin"
+            else origin.replace("https://", "http://") if failure == "scheme"
+            else f"{origin}/"
+        ),
     )
     context = SimpleNamespace(
         new_page=AsyncMock(return_value=page),
-        cookies=AsyncMock(return_value=[{"name": "__Host-max_session"}]),
+        cookies=AsyncMock(return_value=(
+            [{"name": "unrelated_cookie"}] if failure == "cookie"
+            else [{"name": "__Host-max_session"}]
+        )),
     )
     browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
     chromium = SimpleNamespace(launch=AsyncMock(return_value=browser))
@@ -132,12 +141,13 @@ async def test_cell_coverage_uses_signed_session_without_legacy_runtime(
     verdict = await run_coverage_gate(workspace_id, plan, cell_preview=preview)
 
     assert verdict.passed
-    assert verdict.skipped is escaped
+    assert verdict.skipped is (failure is not None)
     page.goto.assert_awaited_once_with(
         preview.bootstrap_url,
         wait_until="domcontentloaded",
     )
-    if escaped:
+    if failure is not None:
+        assert verdict.total == verdict.covered == 0
         request.assert_not_awaited()
     else:
         request.assert_awaited_once_with(page, "POST", "/api/products", None)

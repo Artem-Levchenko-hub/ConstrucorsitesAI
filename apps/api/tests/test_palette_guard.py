@@ -4,10 +4,12 @@ Pins prod bug 2026-06-01: a freeform page invented its own off-palette colours
 (`--brand:#DC2626`, training-default indigo/violet) instead of using the
 project's seeded curated palette. The guard must snap :root colour vars to the
 curated palette, kill banned indigo/violet/purple literals, leave on-palette
-pages untouched, and never raise.
+page colours untouched while supplying kit brand variables, and never raise.
 """
 
 from __future__ import annotations
+
+import re
 
 from omnia_api.sections.palettes import CuratedPalette, all_palettes
 from omnia_api.services.palette_guard import (
@@ -68,14 +70,24 @@ def test_all_banned_hexes_are_six_digit_lowercase() -> None:
         assert len(h) == 7 and h.startswith("#")
 
 
-def test_on_palette_page_untouched() -> None:
+def test_on_palette_page_only_gains_brand_vars_once() -> None:
     good = (
         f"<html><head><style>:root {{ --bg: {PAL.bg}; --primary: {PAL.primary}; "
         f"--text: {PAL.text}; }}</style></head><body>hi</body></html>"
     )
     fixed, changed = repair_html(good, PAL)
-    assert changed is False
-    assert fixed == good
+    assert changed is True
+    brand = re.search(r'<style id="omnia-brand-vars">:root\{([^}]+)\}</style>', fixed)
+    assert brand is not None
+    assert fixed.replace(brand.group(), "", 1) == good
+    declarations = dict(item.split(":", 1) for item in brand.group(1).split(";") if item)
+    assert set(declarations) == {
+        "--brand-primary", "--ring", "--shadow-color", "--sel-bg", "--tint", "--glow",
+        "--cursor-blob-color",
+    }
+    assert declarations["--brand-primary"] == declarations["--ring"] == PAL.accent
+    assert declarations["--cursor-blob-color"] == PAL.accent
+    assert repair_html(fixed, PAL) == (fixed, False)
 
 
 def test_var_reference_not_touched() -> None:

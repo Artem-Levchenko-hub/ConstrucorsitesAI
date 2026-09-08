@@ -131,6 +131,7 @@ async def test_project_cell_models_expose_exact_public_columns() -> None:
         "id",
         "workspace_id",
         "generation_run_id",
+        "execution_run_id",
         "idempotency_key",
         "request_digest",
         "fencing_epoch",
@@ -146,6 +147,9 @@ async def test_project_cell_models_expose_exact_public_columns() -> None:
         "started_at",
         "finished_at",
     }
+    execution = ProjectCellOperation.__table__.columns["execution_run_id"]
+    assert execution.nullable is True
+    assert not execution.foreign_keys  # Diagnostic identity survives generation-row deletion.
 
 
 # Mutations caught: weakening named checks, FK delete actions, defaults, or partial uniqueness.

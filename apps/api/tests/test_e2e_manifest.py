@@ -411,6 +411,54 @@ def test_frozen_verdict_covers_exactly_the_expected_gate_universe() -> None:
     assert gates == set(em.EXPECTED_GATES)
 
 
+def test_frozen_cabinet_uses_separate_fixture_and_exposes_static_only_provenance() -> None:
+    gate = next(g for g in em.frozen_verdict(_agency()).gates if g.gate == "cabinet")
+    assert gate.passed and not gate.abstained
+    assert gate.summary.startswith("frozen-static:")
+    assert gate.subscore["source"] == "representative-cabinet-fixture"
+    assert gate.subscore["fixture"] == "cabinet-states.html"
+    assert len(gate.subscore["source_sha256"]) == 64
+    assert gate.subscore["authenticated"] is False
+    assert gate.subscore["rendered"] is False
+    assert gate.subscore["niche_generated"] is False
+    assert gate.subscore["observation"] == {
+        "has_empty": True, "has_checklist": True, "has_skeleton": False, "rows": 0,
+    }
+    # Caller mutations cannot change later evidence or the committed fixture.
+    gate.subscore["observation"]["has_empty"] = False
+    again = next(g for g in em.frozen_verdict(_agency()).gates if g.gate == "cabinet")
+    assert again.subscore["observation"]["has_empty"] is True
+
+
+@pytest.mark.parametrize(
+    ("cabinet_html", "classes"),
+    [
+        ("<main></main>", ("no-empty-state",)),
+        ('<main data-omnia-empty><div data-omnia-skeleton></div></main>',
+         ("stuck-skeleton",)),
+        ('<main data-omnia-skeleton></main>', ("no-empty-state", "stuck-skeleton")),
+    ],
+)
+def test_frozen_cabinet_adversaries_reach_real_rubric(cabinet_html, classes) -> None:
+    gate = next(
+        g for g in em.frozen_verdict(_agency(), cabinet_html=cabinet_html).gates
+        if g.gate == "cabinet"
+    )
+    assert not gate.passed and not gate.abstained
+    assert gate.classes == classes
+    assert gate.subscore["frozen"] is True
+    assert gate.subscore["rendered"] is False
+
+
+def test_frozen_cabinet_populated_collection_uses_real_row_floor() -> None:
+    html = '<main data-omnia-collection data-omnia-rows="100"></main>'
+    gate = next(
+        g for g in em.frozen_verdict(_agency(), cabinet_html=html).gates if g.gate == "cabinet"
+    )
+    assert gate.passed
+    assert gate.subscore["observation"]["rows"] == 100
+
+
 def test_frozen_real_gates_are_genuine_not_surrogate() -> None:
     """defect/compose/viral/onboarding/render/edit are the REAL browser-free gates.
 

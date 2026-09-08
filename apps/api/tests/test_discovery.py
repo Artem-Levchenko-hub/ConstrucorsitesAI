@@ -1211,19 +1211,31 @@ def test_infer_result_type_none_for_vague() -> None:
     ("rt", "expected"),
     [
         ("landing", "spa"),
-        ("web_app", "nextjs_entities"),
+        ("web_app", "fullstack"),
         ("tool", "spa"),
         ("site", "spa"),
         ("code", "code"),
         ("static", "static"),
         ("LANDING", "spa"),  # case-insensitive
-        ("  web_app  ", "nextjs_entities"),  # trimmed
+        ("  web_app  ", "fullstack"),  # trimmed
         ("garbage", None),
         ("", None),
     ],
 )
-def test_result_type_to_stack_mapping(rt: str, expected: str | None) -> None:
-    assert result_type_to_stack(rt) == expected
+@pytest.mark.parametrize("real_backend", [True, False])
+def test_result_type_to_stack_mapping(
+    rt: str, expected: str | None, real_backend: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_api.core.config import get_settings
+
+    monkeypatch.setenv("USE_REAL_BACKEND_DEFAULT", str(real_backend).lower())
+    get_settings.cache_clear()
+    try:
+        if expected == "fullstack" and not real_backend:
+            expected = "nextjs_entities"
+        assert result_type_to_stack(rt) == expected
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_classify_result_type_parses_llm(monkeypatch: pytest.MonkeyPatch) -> None:
