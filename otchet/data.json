@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-08",
-  "version": 84,
+  "version": 85,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2661,11 +2661,11 @@
    "id": "H142",
    "title": "Отмена генерации отделена от HTTP-router",
    "description": "Переносим одну операцию завершения отмены в существующий service. Router и worker используют её с прежними блокировками и границами транзакции.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
-   "evidence": "BASE2e447f41: полный helper baseline10passed до и после переноса, тело AST сохранено. Переключены2router и1worker caller; ожидаемые значения тестов не менялись. Full Ruff и mypy275 clean. Подготовлены8 disposable PostgreSQL cases и ранние endpoint/worker consumer tests; CI, независимое review и поставка завершаются.",
+   "evidence": "API, worker и generation-worker f00cdfac доставлены; точный image/release и health подтверждены, write gate снят. CI34267815377 полностью success: 20 проверок отмены (18 helper, включая 8 PostgreSQL, плюс 2 реальных consumer); полный API — 3188 passed / 12 skipped / 8 xfailed. До/после 10 offline passed, Ruff/mypy275 clean, независимое review No findings. Тело helper сохранено по AST, три caller сохраняют прежние lock/commit. Web, orchestrator, остальные процессы и dirty документы не менялись. Пользовательская генерация не запускалась.",
    "impact": "Worker меньше зависит от private HTTP-router функций. Отмена, частичный ответ, операции, memory и данные сохраняют прежнее поведение; ускорение и новый пользовательский запуск не заявляются.",
-   "next_vector": "Завершить PostgreSQL/полный API gate, независимое review и API-only поставку с точными release/health доказательствами.",
+   "next_vector": "Следующий пакет: одинаковая проверка точной замены файлов. Legacy baseline — 23 passed, 3 Cell DB cases пока ожидают проверки. Для UI отдельно зафиксирован существующий пробел cleanup WebSocket после unmount; исправление поведения не включалось в перенос отмены.",
    "category": "верификация",
    "period": "08.09"
   }

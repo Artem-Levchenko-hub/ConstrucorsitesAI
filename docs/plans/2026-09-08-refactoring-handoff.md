@@ -1,6 +1,6 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
-## Актуально: Task 4, Task 5, Task 8 и исправляющий пакет доставлены
+## Актуально: Task 4, Task 5, Task 8, Task 9 и исправляющий пакет доставлены
 
 Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
 доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
@@ -25,12 +25,38 @@ Production health/release ok, write gate снят; web/orchestrator и проч�
 consumers не перезапускались. Подробности:
 [Task 8 verification](2026-09-08-task8-artifacts-verification.md).
 
-**Task 9 подготовлен, ещё не доставлен:** locked cancellation helper перенесён
-из router в существующий generation_runs service; worker больше не импортирует
-эту private router функцию. 10 baseline cases прошли до/после, 8 DB cases
-и endpoint/worker consumers ожидают CI. Продолжить с
-[Task 9 verification](2026-09-08-task9-cancellation-verification.md), завершить
-review/gates/API-only поставку до следующего пакета.
+**Task 9 доставлен:** locked cancellation helper теперь находится в
+существующем generation_runs service; worker больше не импортирует эту private
+router функцию. API/worker/generation-worker: `f00cdfac10f5f07279d98d523bbe659570571601`,
+image `sha256:54fece6119511cc929c452f19d14cf32232bd74bf75606f4be79f9d592f16c47`.
+CI `34267815377` полностью success: cancellation/consumers 20 passed;
+полный API 3188 passed / 12 skipped / 8 xfailed. Ruff/mypy275 clean,
+независимое review No findings. Exact release/health ok, write gate снят;
+web/orchestrator и остальные процессы не перезапускались. Доказательства:
+[Task 9 verification](2026-09-08-task9-cancellation-verification.md).
+
+### Следующие пакеты — только baseline, код ещё не менялся
+
+Task 10: одинаковая проверка точной замены edit_file в agent_builder и
+project_cell_executor. Artifact `.artifacts/refactor-task10-20260908/README.md`:
+23 actual container-executor cases passed; 3 real-Cell DB cases подготовлены,
+но пока не запускались. Сначала подтвердить Cell baseline на disposable DB,
+затем переносить только одинаковую membership/count проверку. Не объединять
+различные пути, sanitizers, observations и fenced write. Сохранить empty search,
+str.count non-overlap, str replacement и отсутствие нормализации Unicode/CRLF.
+
+Task 11: кандидат — только openRealStream/StreamHandle, не весь lifecycle.
+Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
+(14 actual AST transport + 5 real hook), 27.54 s; read-only review No findings.
+Воспроизведён предсуществующий gap: heartbeat после unmount и позднее открытие
+сокета из deferred F5 probe. Это не новый refactor regression; исправление
+cleanup — отдельная B-поставка по правилам плана. Смена projectId внутри того
+же hook не доказывает ошибку стандартной навигации Next, где dynamic segment
+пересоздаёт поддерево. Browser/real WS server не проверялись. Не превращать
+характеризацию текущего дефекта в постоянный тест желаемого поведения.
+
+Task 12 требует измеренного IO/build hot path; пользовательские генерации
+самостоятельно не запускать. Task 13 и вся программа ещё не завершены.
 
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
@@ -63,7 +89,7 @@ gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их ru
 Новый regression suite: 13/13; итоговая поставка приведена выше. Исходные
 измерения сохранены отдельно от результата оптимизации.
 
-Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6/7 и 9–13 не
+Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6/7 и 10–13 не
 выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная
 генерация пользователя не запускалась; live business-flow не заявляется.
 
