@@ -1,6 +1,6 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
-## Актуально: Task 4, Task 5, Task 8, Task 9 и исправляющий пакет доставлены
+## Актуально: Task 4, Task 5, Task 8, Task 9, Task 10A и исправляющий пакет доставлены
 
 Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
 доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
@@ -37,12 +37,17 @@ web/orchestrator и остальные процессы не перезапус�
 
 ### Текущий пакет и подготовка следующих
 
-**Task 10A выполняется:** общий exact-edit validator вынесен из agent_builder
-и project_cell_executor после успешного исходного Cell baseline в CI34272760186.
-23 локальных baseline и 149 смежных тестов прошли, Ruff/mypy276 clean,
-независимое review No findings. Финальный full CI и API-only поставка ещё нужны.
-Продолжить с [Task 10A verification](2026-09-08-task10-exact-edit-verification.md).
-Не начинать следующий product diff до завершения доставки.
+**Task 10A доставлен:** общий exact-edit validator вынесен из agent_builder
+и project_cell_executor после исходного Cell baseline: 26 passed, CI34272760186.
+Финальный код `66411078d497460b484eb773b9658efe6b0f8250`, CI34273376561 полностью
+success: 26 exact-edit и 3214 API passed / 12 skipped / 8 xfailed.
+23 локальных baseline, 149 смежных тестов, Ruff/mypy276 и независимое review
+прошли. API/worker/generation-worker работают на `66411078`, image
+`sha256:f03c21b54cf16d9956860bbc40923556c77d8ab8bb33e4ccc1ee671198e65afb`.
+Health/release и публичные маршруты проверены, write gate снят. Web/orchestrator,
+другие consumers и пять dirty документов сохранены. Поставка дождалась
+самостоятельной генерации владельца; та завершилась до обновления API.
+Доказательства: [Task 10A verification](2026-09-08-task10-exact-edit-verification.md).
 
 Task 10B подготовлен отдельно в `.artifacts/refactor-task10b-20260908/README.md`:
 50 DB-free baseline cases passed (3.65 s), actual preview/runtime/rollback
@@ -56,7 +61,10 @@ Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
 сокета из deferred F5 probe. Это не новый refactor regression; исправление
 cleanup — отдельная B-поставка по правилам плана. Смена projectId внутри того
 же hook не доказывает ошибку стандартной навигации Next, где dynamic segment
-пересоздаёт поддерево. Browser/real WS server не проверялись. Не превращать
+пересоздаёт поддерево. BEFORE browser harness прошёл 1440/390: active F5,
+reconnect after_seq=7, выбранная v31, terminal→F5, без console errors/overflow.
+Это реальные UI/transport с HTTP/WebSocket fixtures; native WS server не проверен.
+Команды и ограничения — в artifact browser-report.md. Не превращать
 характеризацию текущего дефекта в постоянный тест желаемого поведения.
 
 Task 12 требует измеренного IO/build hot path; пользовательские генерации
@@ -65,7 +73,7 @@ Task 12 требует измеренного IO/build hot path; пользов�
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
 Не повторять Task 4/5. H140 уже опубликован, public version 72, 136 прежних
-записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены; следующая H143. H134–H136 не публиковать целиком
+записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены. H143 готов к отдельной публикации после doc sync. H134–H136 не публиковать целиком
 вместе с репозиторным JSON.
 
 ### Предыдущая поставка Task 5
@@ -93,7 +101,7 @@ gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их ru
 Новый regression suite: 13/13; итоговая поставка приведена выше. Исходные
 измерения сохранены отдельно от результата оптимизации.
 
-Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6/7 и 10–13 не
+Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6/7, 10B и 11–13 не
 выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная
 генерация пользователя не запускалась; live business-flow не заявляется.
 

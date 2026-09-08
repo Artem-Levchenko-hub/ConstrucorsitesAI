@@ -53,7 +53,7 @@ Fixture очищает схему: только disposable DB, никогда pr
 ## Перенос после успешного Cell baseline
 
 На исходном алгоритме commit `03289047703981e151228e8c061ce801eeb8d072`,
-CI `34272760186`: ранний exact-edit шаг success. Только после этого изменены
+CI `34272760186`: ранний exact-edit шаг **26 passed, 6.71 s**, включая все три Cell cases. Только после этого изменены
 два caller и добавлен чистый `services/exact_edit.py::validate_exact_edit`.
 Он возвращает прежний error string либо None; search/count порядок сохранён.
 Сами replacement, observations, пути и side effects не переносились.
@@ -62,7 +62,7 @@ CI `34272760186`: ранний exact-edit шаг success. Только посл�
 agent_builder/agent_native/max_generation_contract suites: **149 passed**,
 69.21 s. Full Ruff clean; mypy: **276 source files**, ошибок нет.
 Независимое source/test/CI/deployment helper review: No findings.
-Финальный full CI и реальная поставка ещё ожидаются; пакет не завершён.
+Финальный full CI и API-only поставка завершены; доказательства приведены ниже.
 
 ## Критерии качества плана
 
@@ -83,3 +83,31 @@ agent_builder/agent_native/max_generation_contract suites: **149 passed**,
 на disposable PostgreSQL, `uv run pytest -q tests/test_agent_builder.py tests/test_agent_native.py tests/test_max_generation_contract.py`,
 `uv run ruff check .`, `uv run mypy src`. Локальный baseline запускать с
 `-k 'not disposable_db'` и dead-loopback DB/Redis, не с production environment.
+
+## Финальная проверка и поставка
+
+Код `66411078d497460b484eb773b9658efe6b0f8250` pushed origin/main.
+CI `34273376561` полностью success: exact-edit **26 passed, 6.36 s**;
+полный API **3214 passed / 12 skipped / 8 xfailed**, 667.81 s.
+Ruff clean, mypy: **276 source files**, ошибок нет. Промежуточный baseline
+run отменён при его замене, полный успех ему не приписывается.
+
+Во время ожидания CI владелец запустил новую генерацию. Обновление API
+отложено до её завершения: run completed, snapshot совпал с текущим,
+preview_status ready; активных runs/operations/leases стало 0.
+Это самостоятельный запуск владельца на прежней API revision, не smoke
+нового exact-edit helper и не доказательство всех пользовательских сценариев.
+
+Production API/worker/generation-worker обновлены на точный `66411078`, image
+`sha256:f03c21b54cf16d9956860bbc40923556c77d8ab8bb33e4ccc1ee671198e65afb`.
+Перед переключением: резервная копия PostgreSQL и **23 offline consumer tests**
+в новом образе без сети, production credentials и пользовательских томов.
+API health/release и labels трёх containers проверены. HTTP: `/login`,
+`/max/register`, `/max/product`, `/max/guide` — 200; `/max` — прежний 307.
+Write gate снят. Web `10c4ef12`, orchestrator `1011a0fd` и прочие consumers
+сохранили image/process identity. Пять dirty серверных документов сохранены
+побайтно, diff SHA256 остался `0faee2b7c90dfd954d0def658d80cd89f21312061c500b2d9efd6ae06f1d250d`.
+
+Результат и резервные копии: `/opt/omnia-runtime/releases/task10a-api-66411078`.
+Локальные доказательства: `.artifacts/refactor-task10-20260908/final-ci-api.log`
+и `deployment-result.json`. Task 10B и вся программа рефакторинга ещё не завершены.
