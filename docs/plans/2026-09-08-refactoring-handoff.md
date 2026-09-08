@@ -1,5 +1,43 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
+## Актуально: Task 5 и исправляющий пакет доставлены
+
+8 сентября выполнение возобновлено. Task 5 `777f3f61` и отдельное исправление
+baseline `4960f6b99909e44efc421b6e2c99140d55cbd43b` отправлены и доставлены.
+Полный CI `34258366570` success: API 3129 passed / 12 skipped / 8 xfailed;
+orchestrator 1244 passed / 30 skipped / 15 xfailed плюс 9 реальных Docker-проверок.
+Первый job orchestrator завис без вывода и был остановлен после успеха API;
+отдельный повтор того же SHA прошёл. Причина зависания не установлена.
+
+Production API/worker/generation-worker работают на `4960f6b9`, образ
+`sha256:8a44eb141a52c21e9d9615a7991c8b21316a6b7c2e1609c717d04ab58658b670`.
+API health/release и публичные SHA256 трёх kit-ресурсов проверены. Maintenance
+gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их runtime-код
+этим пакетом не менялся. Пять dirty secondbrain-документов сохранены побайтно.
+Резервная копия и результат: `/opt/omnia-runtime/releases/startup-latency-4960f6b9`.
+
+**Далее Task 4:** устранить доказанное дублирование обновления истории. Временный
+стенд `.artifacts/refactor-task4-20260908/README.md` содержит 7 baseline-тестов:
+новый HEAD 2 запроса/1 отмена; две страницы и rollback 3/1; тот же HEAD 1/0;
+отдельный terminal 1/0. Это вызовы API-функции и AbortSignal в тесте реальных
+компонентов, не измерение серверных HTTP-запросов. Сохранять выбор версии,
+все страницы, terminal reconciliation и защиту от поздних ответов A→B→A.
+Изменения Task 4 ещё не внесены.
+
+Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6–13 не
+выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная
+генерация пользователя не запускалась; live business-flow не заявляется.
+
+Канонический checkout `C:/Users/Артём/ConstrucorsitesAI`, ветка
+`codex/project-cell-cloud-20260902`, upstream `origin/main`. Свежесть проверять
+перед продолжением. Runtime-доказательства: [Task 5](2026-09-08-task5-template-verification.md)
+и [исправляющий пакет](2026-09-08-baseline-corrections.md). Правило публичного отчёта:
+синхронизировать только H138/H139; не публиковать весь repo JSON с ранее
+неопубликованными H134–H136.
+
+<details>
+<summary>Исторические точки остановки до этой доставки</summary>
+
 ## Продолжение 08.09: Task 5 подготовлен, доставка заблокирована
 
 Код Task 5 отправлен в origin/main: `777f3f61ba377da9fb2eae0008f47f4f7faa0704`.
@@ -148,3 +186,5 @@ Production compose: apps/llm-gateway/deploy/full/docker-compose.yml, project ful
 ## Готовое поручение для новой задачи
 
 > Продолжи безопасный тотальный рефакторинг Omnia исключительно на GPT-6 Astra. Прочитай docs/plans/2026-09-08-refactoring-handoff.md и полный docs/plans/2026-09-08-safe-total-refactoring-plan.md. Подтверди свежесть local/upstream/production. P01 уже доставлен — не переделывай его. Начни с Task 5: карта consumers и golden materialization, затем безопасная дедупликация static-template ресурсов. Сохрани 100% текущего функционала, версионирование, UX и бизнес-данные. Выполняй только разрешённые R/O-пакеты, по одному, с проверкой и полным циклом доставки. Пользовательскую генерацию не запускай. Фиксируй факты, оставшиеся риски и точную следующую точку в этих документах.
+
+</details>

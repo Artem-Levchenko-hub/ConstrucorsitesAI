@@ -1,6 +1,6 @@
 # Task 5 — static template materialization
 
-Status: implementation pushed; full CI blocked by baseline failures; not deployed.
+Status: implemented, reviewed, pushed and deployed with correction release 4960f6b9.
 
 Implementation: `777f3f61ba377da9fb2eae0008f47f4f7faa0704`, pushed to origin/main.
 CI run `34249743033`: API critical regressions, MAX starter, Task 5 consumers,
@@ -101,3 +101,27 @@ full gate, followed by the documented active-operation/deployment/health checks.
 After this package, continue the approved R/O plan one delivered package at a time.
 P01 is already delivered; Tasks 3–4 and 6–13 remain. Do not add behavior changes,
 P12, production data experiments or user generation runs.
+
+
+## Delivery completed after baseline corrections
+
+CI 34258366570 on 4960f6b99909e44efc421b6e2c99140d55cbd43b passed. Full API:
+3129 passed, 12 skipped, 8 xfailed in 699.09s; 0056/head roundtrip passed.
+Orchestrator: 1244 passed, 30 skipped, 15 xfailed; P01 live Docker: 9 passed.
+The first orchestrator job produced no test output for 18 minutes and was
+cancelled only after API completed. The same-SHA job rerun passed in 112.32s;
+this unexplained CI hang remains recorded, not reclassified as a code fix.
+
+Independent combined review: no findings. Focused API 423 passed; full API Ruff
+and mypy clean. Web wire consumer: 2 interaction tests, typecheck and ESLint clean.
+The earlier blocking paragraphs above describe the pre-correction state.
+
+The documented full Compose project now runs API and both workers at 4960f6b9,
+image sha256:8a44eb141a52c21e9d9615a7991c8b21316a6b7c2e1609c717d04ab58658b670.
+The exact image passed isolated five-template materialize/Git/export checks and
+both onboarding wire tests before rollout. API health/release and public kit
+hashes passed after rollout; write gate removed. Orchestrator stayed active;
+web and orchestrator were not restarted. Unrelated dirty diff SHA256 stayed
+0faee2b7c90dfd954d0def658d80cd89f21312061c500b2d9efd6ae06f1d250d.
+Private backup/result record: /opt/omnia-runtime/releases/startup-latency-4960f6b9.
+No user generations or production test-data writes were performed.

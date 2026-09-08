@@ -46,3 +46,18 @@ unrelated dirty secondbrain documents. Repeat these checks at rollout.
 
 No dependency upgrades, new user generations, production test-data writes,
 database rollback feature or ledger changes belong to this package.
+
+
+## Final delivery evidence
+
+Corrective commit 4960f6b9 pushed and deployed with Task 5. Full CI 34258366570
+success; API 3129 passed / 12 skipped / 8 xfailed, including migration roundtrip.
+Orchestrator same-SHA rerun passed after an unexplained no-output hang in its first
+job. All other jobs passed. Full independent source/test review found no defects;
+an isolated-image helper mount defect was fixed and re-reviewed before execution.
+The new image's two onboarding wire tests passed with network disabled and only
+read-only test fixtures mounted. Production API and both workers use 4960f6b9;
+health/release and preserved public kit hashes passed, write gate removed.
+See Task 5 verification for image identity and backup record. No live user/model
+generation was launched; the UI interaction proof is a deterministic component
+test, not a production browser session.
