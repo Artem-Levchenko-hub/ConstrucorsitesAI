@@ -40,3 +40,12 @@ Fixture очищает схему: только disposable DB, никогда pr
 
 Ранний CI запускает весь новый файл; прежние release-critical/full gates
 сохраняются. Пользовательские генерации и модельные запросы не запускаются.
+
+Первый baseline commit `7efadb99`, CI `34272318755`: 23 passed / 3 failed.
+Все три DB cases упали до алгоритма на `ModuleNotFoundError` из-за bare
+импорта test_project_cell_executor. Локальная ручная проверка с добавлением
+папки tests в sys.path ошибочно скрыла эту проблему. В repository tests —
+пакет; импорт исправлен на `tests.test_project_cell_executor`, как у соседних
+реальных consumer tests. Проверено без изменения sys.path: exact module path,
+26 collected и 23 passed / 3 deselected (2.32 s), Ruff clean. DB baseline
+ещё ожидает повторного CI; production source не изменён.

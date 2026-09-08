@@ -144,7 +144,7 @@ async def test_disposable_db_cell_exact_edit_original_consumer(
     test_engine,
 ):
     # Reuse real control/lease setup with isolated transport; never fake the cell closure.
-    from test_project_cell_executor import _prepare_executor
+    from tests.test_project_cell_executor import _prepare_executor
 
     for case in CASES:
         initial = {} if case.current is None else {"src/a.txt": case.current}
@@ -183,7 +183,7 @@ async def test_disposable_db_cell_preserves_its_path_and_content_contract(
     db_session,
     test_engine,
 ):
-    from test_project_cell_executor import _prepare_executor
+    from tests.test_project_cell_executor import _prepare_executor
 
     harness = await _prepare_executor(
         monkeypatch, db_session, test_engine, snapshot_files={"src/app/nested/layout.tsx": "old"}
@@ -211,7 +211,7 @@ async def test_disposable_db_cell_rejected_fence_does_not_change_local_file(
 ):
     from omnia_api.services import project_cell_executor
     from omnia_api.services.orchestrator_client import OrchestratorBadRequest
-    from test_project_cell_executor import _prepare_executor
+    from tests.test_project_cell_executor import _prepare_executor
 
     harness = await _prepare_executor(
         monkeypatch, db_session, test_engine, snapshot_files={"src/a.txt": "old"}
