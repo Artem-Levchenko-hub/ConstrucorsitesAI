@@ -1,6 +1,11 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
-## Актуально: Task 4, Task 5, Task 8, Task 9, Task 10A/10B и исправляющий пакет доставлены
+## Актуально: P01, Task4/5/8/9/10A/10B и Task11 transport доставлены
+
+Текущее runtime: API/worker/generation-worker `85593d30`, web `ff442154`,
+orchestrator `1011a0fd`. Ниже сохранена история отдельных поставок; прежние
+SHA в их разделах не являются текущими. Полная программа не завершена;
+[итоговая матрица и оставшиеся проверки](2026-09-09-refactoring-scope-review.md).
 
 Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
 доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
@@ -64,13 +69,20 @@ review: No findings. Доказательства:
 [Task10B verification](2026-09-08-task10b-browser-container-verification.md).
 Следующий product diff — Task11 после синхронизации delivery docs и H144.
 
-**Task11 transport выполняется:** openRealStream/StreamHandle перенесены
+**Task11 transport доставлен:** openRealStream/StreamHandle перенесены
 отдельно, весь hook и транспорт сохраняют прежнее поведение. AFTER19 и
 новые15 tests прошли; full web487/77, ESLint/typecheck clean, independent
 review No findings. Browser1440/390 AFTER совпал с BEFORE. Windows standalone
-packaging завершился прежним EPERM symlink; нужна Linux web/image сборка.
-Commit/push и web-only delivery ещё впереди. Продолжить с
+packaging завершился прежним EPERM symlink; Linux web/image gates
+CI34282672170 прошли. Source `ff4421549c05c1022665cce3b1d4130b694f2b0e`
+pushed и доставлен web-only, image
+`sha256:279e096fa8c5768e7ad14a7057d88d88c6354dfffc167722fde5936e36e0c748`.
+Exact release/health/routes и isolated image health проверены, gate снят.
+API85593d30, orchestrator1011a0fd, остальные процессы и dirty docs сохранены.
+Full-range web review179a3b3f..ff442154: No findings. Доказательства:
 [Task11 verification](2026-09-09-task11-transport-verification.md).
+Итог CI34282672170: все jobs success, включая полный API3264/12skip/8xfail
+779.01s; последний job завершился 2026-09-08 22:11:13 UTC.
 
 Граница исходного Task11 baseline — только openRealStream/StreamHandle, не весь lifecycle.
 Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
@@ -88,9 +100,12 @@ reconnect after_seq=7, выбранная v31, terminal→F5, без console err
 Task12: read-only разбор run d6356635 не дал внутренней детализации ensure43s
 и release25.7s; IO hot path не доказан. Нельзя удалять финальную сборку как
 предполагаемый дубль. Пользовательские генерации самостоятельно не запускать.
-Task13: три независимых cumulative reviews179a3b3f..85593d30 — No findings;
-matrix draft20 явно отделяет fixtures от customer-flow. Это ещё не полная
-приёмка всей программы. Артефакты: `.artifacts/refactor-task13-20260908/`.
+Task13: независимые cumulative API/orchestrator reviews179a3b3f..85593d30
+и полный web review179a3b3f..ff442154 — No findings. Повторный canonical
+source scan выполнен; дополнительное удаление не обосновано. Матрица20
+явно отделяет fixtures от customer-flow. Это приёмка выполненных пакетов,
+а не полная приёмка всей программы. Канонический отчёт:
+`docs/plans/2026-09-09-refactoring-scope-review.md`.
 
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.

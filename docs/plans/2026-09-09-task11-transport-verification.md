@@ -73,11 +73,38 @@ ChatPanel, hook, новый transport и CSS. AFTER runner меняет толь
 WS server replay, пользовательская бизнес-БД и модельные генерации не
 проверялись. Artifact: `.artifacts/refactor-task11-20260908/browser-after-report.md`.
 
-## Оставшаяся поставка
+## Linux-проверки и поставка
 
-Нужны commit/push, Linux web/image gates и web-only deployment точного SHA.
-Подготовленный helper проверяет исходный web10c4/API85593d30, active-work
-gate, точные images/env, остальные процессы и пять dirty документов.
-Откат самой поставки возвращает старый web image без изменения данных.
-Task11 transport package пока не объявляется доставленным; полная
-программа и все20 end-to-end сценариев также не объявляются завершёнными.
+Source `ff4421549c05c1022665cce3b1d4130b694f2b0e` committed/pushed в origin/main.
+CI34282672170: web typecheck, **487 tests / 77 files, 58.48s**, полная Linux
+сборка и production image-build **success**. Orchestrator:1244 passed /
+30 skipped / 15 xfailed, отдельно9 Docker tests. На момент web-only поставки
+API job ещё выполнялся. API/orchestrator/gateway/workflow source побайтово
+не менялся с85593d30; предыдущий полный API gate3264 прошёл на том же коде.
+Локальный Windows EPERM не выдаётся за успешную локальную упаковку.
+
+Финальная проверка CI34282672170: все jobs **success**, последний API job
+завершился 2026-09-08 22:11:13 UTC. Полный API: **3264 passed / 12 skipped /
+8 xfailed, 779.01s**; отдельные exact-edit26, artifacts41 и cancellation20
+также прошли. Это результат текущего source SHA, полученный после web rollout.
+
+Production web работает на `ff442154`, image
+`sha256:279e096fa8c5768e7ad14a7057d88d88c6354dfffc167722fde5936e36e0c748`.
+Образ построен из точного Git archive с production public build args.
+До переключения прошёл isolated web health: network none/read-only.
+Active generation/operation/activity gate был0; перезапущен только web.
+Release/health и `/login`, `/max/register`, `/max/product`, `/max/guide`200,
+прежний `/max`307 подтверждены. Write gate снят; POST `/api/health`405.
+
+API/оба workers `85593d30`, orchestrator `1011a0fd` и остальные процессы
+сохранили image/process/env identity. Пять dirty документов сохранили hash
+`0faee2b7c90dfd954d0def658d80cd89f21312061c500b2d9efd6ae06f1d250d`.
+Запись: `/opt/omnia-runtime/releases/task11-web-ff442154`.
+Независимое cumulative review всех7 web-файлов `179a3b3f..ff442154`:
+No findings. Это дополняет отдельное review переноса и deployment helper.
+
+Task11 transport package доставлен. API, пользовательские данные и ячейки
+этим пакетом не менялись; новых model/customer генераций не запускали.
+H145 подготовлен для отдельной публикации с сохранением публичной истории.
+Полная программа и все20 end-to-end сценариев не объявляются завершёнными:
+[матрица фактических проверок](2026-09-09-refactoring-scope-review.md).

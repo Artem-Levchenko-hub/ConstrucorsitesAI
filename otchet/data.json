@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 90,
+  "version": 91,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2697,11 +2697,11 @@
    "id": "H145",
    "title": "Соединение генерации выделено в отдельный модуль интерфейса",
    "description": "Перенесли WebSocket transport из большого React hook без изменения протокола, событий, таймеров и интерфейса. Тело hook и транспорт сохранены; новый модуль можно проверять напрямую.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
-   "evidence": "Исходные19 и новые15 тестов прошли. Полный web:487 passed / 77 files; ESLint/typecheck clean. Browser1440/390 сохранил F5, watermark7, выбранную историю и terminal; console errors0. Независимое review No findings. Локальная компиляция и46 static pages прошли, Windows standalone packaging завершился EPERM symlink. Нужны Linux web/image gates и web-only поставка.",
+   "evidence": "Web ff442154 доставлен: точный image/release, health, публичные маршруты и isolated image health подтверждены, gate снят. Финальный CI34282672170 полностью success: web487 tests / 77 files и полная Linux сборка, API3264/12skip/8xfail, orchestrator1244/30skip/15xfail и9 live Docker. Локально19 исходных,15 новых и487 full tests прошли, ESLint/typecheck clean. Windows standalone EPERM остаётся ограничением локальной упаковки. Browser1440/390 сохранил F5, watermark7, выбранную историю и terminal; errors0. Независимые source/helper и cumulative reviews No findings. API85593d30, orchestrator1011a0fd, прочие процессы и dirty документы сохранены; model/customer генераций для пакета не запускали.",
    "impact": "Управление соединением можно читать и тестировать отдельно от состояния React и истории версий. Общее ускорение генерации этим переносом не заявляется.",
-   "next_vector": "Закончить Linux-проверки и поставку. Сверить итоговую матрицу рефакторинга; предсуществующие cleanup gaps рассматривать отдельным изменением поведения.",
+   "next_vector": "Матрица20 фиксирует имеющиеся доказательства и gaps. Дальше нужны числовой контракт расходов, согласованный model smoke для prompt-пакетов и детализация затрат ensure/release. Предсуществующие cleanup gaps — отдельное изменение поведения; вся программа не объявляется завершённой.",
    "category": "верификация",
    "period": "09.09"
   }
