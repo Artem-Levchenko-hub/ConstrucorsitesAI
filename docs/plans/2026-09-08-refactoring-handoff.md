@@ -1,6 +1,6 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
-## Актуально: Task 4, Task 5, Task 8, Task 9, Task 10A и исправляющий пакет доставлены
+## Актуально: Task 4, Task 5, Task 8, Task 9, Task 10A/10B и исправляющий пакет доставлены
 
 Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
 доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
@@ -49,13 +49,20 @@ Health/release и публичные маршруты проверены, write 
 самостоятельной генерации владельца; та завершилась до обновления API.
 Доказательства: [Task 10A verification](2026-09-08-task10-exact-edit-verification.md).
 
-**Task 10B выполняется:** четыре одинаковых browser-container tuple заменены
+**Task 10B доставлен:** четыре одинаковых browser-container tuple заменены
 общим списком и прежними import aliases. BEFORE: 50 passed (2.88 s);
 AFTER с rollback/agent suites: 212 passed (66.99 s). Ruff/mypy276 clean;
 AST функций/классов совпадает. Backend/DB/design/prompt facets и MAX guards
-не менялись. Независимое review: No findings; нужны full CI и API-only поставка.
-Продолжить с [Task10B verification](2026-09-08-task10b-browser-container-verification.md).
-Не начинать следующий product diff до завершения доставки.
+не менялись. Runtime `85593d30630c0a6e5d25d492f454e68cf17208ee`, API image
+`sha256:14ec518c7ea80506676d10f8002aed0b03b64a49701fb93376d3397b4526b54c`.
+CI34278360238 success: API3264/12skip/8xfail; orchestrator1244/30skip/15xfail
+и9 live Docker checks. Unit job оркестратора в первой попытке завис до первого
+прогресса; повтор того же SHA прошёл, причина не установлена. API и оба workers
+доставлены, offline50/health/release/routes проверены, gate снят. Web/orchestrator,
+прочие процессы и dirty documents сохранены. Независимое source и cumulative
+review: No findings. Доказательства:
+[Task10B verification](2026-09-08-task10b-browser-container-verification.md).
+Следующий product diff — Task11 после синхронизации delivery docs и H144.
 
 Task 11: кандидат — только openRealStream/StreamHandle, не весь lifecycle.
 Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites

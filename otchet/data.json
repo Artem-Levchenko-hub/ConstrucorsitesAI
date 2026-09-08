@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-09-08",
-  "version": 88,
+  "updated": "2026-09-09",
+  "version": 89,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2684,14 +2684,14 @@
   {
    "id": "H144",
    "title": "Общий список типов приложений для генерации и браузерного превью",
-   "description": "Заменяем четыре одинаковых определения одним списком. Состав, порядок, прежние имена и проверки доступа сохраняются; требования к БД и backend остаются отдельными.",
-   "status": "testing",
+   "description": "Объединили четыре одинаковых определения одним списком. Состав, порядок, прежние имена и проверки доступа сохранены; требования к БД и backend остаются отдельными.",
+   "status": "worked",
    "score": null,
-   "evidence": "На прежнем коде 50 consumer tests прошли. После переноса с тестами rollback и генератора — 212 passed; Ruff/mypy276 clean, AST всех функций и классов пяти затронутых модулей неизменен. Независимое review: No findings. Full CI и API-only поставка ещё ожидаются.",
+   "evidence": "API и оба workers 85593d30 доставлены: точный image/release, health и публичные маршруты подтверждены, gate снят. CI34278360238 success: API3264 passed / 12 skipped / 8 xfailed; orchestrator1244 passed / 30 skipped / 15 xfailed плюс9 live Docker checks. Зависший unit job повторён на том же SHA; причина зависания не установлена. BEFORE50, AFTER212 и offline50 consumer tests в production-образе прошли; Ruff/mypy276 clean. AST функций/классов неизменен, независимое review No findings. Web, orchestrator, прочие процессы и dirty документы сохранены; пользовательских генераций для проверки не запускали.",
    "impact": "Изменение семейства браузерных контейнеров больше не требует синхронного редактирования четырёх копий списка. Runtime speedup не заявляется.",
-   "next_vector": "Закончить проверку и поставку, затем отдельно вынести WebSocket transport с сохранением reconnect/replay и интерфейса.",
+   "next_vector": "Отдельно вынести WebSocket transport с сохранением reconnect/replay и интерфейса. Итоговый аудит всей программы ещё впереди.",
    "category": "верификация",
-   "period": "08.09"
+   "period": "09.09"
   }
  ],
  "vectors": [
