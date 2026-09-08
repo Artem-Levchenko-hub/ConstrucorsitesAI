@@ -43,6 +43,8 @@ class FakeDockerBackend:
         self.rollback_completed = False
         self.postgres_smoke_calls = 0
         self.postgres_smoke_fail_on_calls: set[int] = set()
+        self.postgres_probe_calls: list[str] = []
+        self.postgres_probe_error: Exception | None = None
         self.created_refs: list[str] = []
         self.finalized_paths: list[str] = []
         self.remaining_tmp_paths: list[str] = []
@@ -98,6 +100,16 @@ class FakeDockerBackend:
     async def read_volume_files(self, name: str) -> dict[str, bytes]:
         record = self.volumes.get(name)
         return {} if record is None else dict(record.files)
+
+    async def probe_postgres_volume_after_legacy_cleanup(self, name: str) -> bool:
+        self.postgres_probe_calls.append(name)
+        if self.postgres_probe_error is not None:
+            raise self.postgres_probe_error
+        record = self.volumes[name]
+        files = dict(record.files)
+        files.pop("PGDATA/postgres-password.txt", None)
+        self.volumes[name] = replace(record, files=files)
+        return bool(files)
 
     async def read_workspace_source_files(self, name: str) -> dict[str, bytes]:
         return await self.read_volume_files(name)

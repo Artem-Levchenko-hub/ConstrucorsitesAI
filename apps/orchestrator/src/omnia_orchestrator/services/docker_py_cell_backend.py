@@ -60,6 +60,7 @@ _CPU_PERIOD = 100_000
 _HELPER_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
 _HELPER_PIDS_LIMIT = 64
 _ARCHIVE_LIMIT_BYTES = 128 * 1024 * 1024
+_POSTGRES_VOLUME_PROBE_TIMEOUT_SECONDS = 30.0
 _WORKSPACE_SOURCE_ARCHIVE_PATH = "/tmp/workspace-source.tar"
 _ONE_SHOT_HELPERS = frozenset({"postgres-ownership", "postgres-init"})
 _WORKSPACE_SYNC_PRESERVE_PATTERNS = (
@@ -263,6 +264,101 @@ class DockerPyCellBackend:
         try:
             raw = await asyncio.to_thread(self._get_archive_bytes, container, _VOLUME_ROOT, name)
             return _archive_to_files(raw, root_prefix=PurePosixPath(_VOLUME_ROOT).name)
+        finally:
+            await self._remove_container_object(container)
+
+    async def probe_postgres_volume_after_legacy_cleanup(self, name: str) -> bool:
+        """Remove the legacy regular secret and report whether regular data remains."""
+
+        volume = await self._get_volume_obj(name)
+        if volume is None:
+            raise CellResourceError(f"missing volume: {name}")
+        labels = self._labels(volume)
+        self._require_identity_labels(labels)
+        container = await self._start_helper_container(
+            name=self._helper_name("postgres-volume-probe", name),
+            labels=self._helper_labels(labels, "postgres-volume-probe"),
+            volumes={name: {"bind": _VOLUME_ROOT, "mode": "rw"}},
+        )
+        command = [
+            "sh",
+            "-eu",
+            "-c",
+            """
+root=/volume
+pgdata="$root/PGDATA"
+if [ -L "$pgdata" ]; then
+  printf '%s\n' 'unsafe PGDATA symlink' >&2
+  exit 41
+fi
+legacy="$pgdata/postgres-password.txt"
+if [ -e "$legacy" ] || [ -L "$legacy" ]; then
+  if [ ! -f "$legacy" ] || [ -L "$legacy" ]; then
+    printf '%s\n' 'unsafe legacy object' >&2
+    exit 42
+  fi
+  rm -f -- "$legacy"
+fi
+if ! first_regular="$(find "$root" -xdev -type f -print -quit 2>/dev/null)"; then
+  printf '%s\n' 'regular-file scan failed' >&2
+  exit 44
+fi
+if [ -n "$first_regular" ]; then
+  printf '%s\n' 'nonempty'
+  exit 0
+fi
+if ! unexpected="$(find "$root" -xdev -mindepth 1 ! -type d -print -quit 2>/dev/null)"; then
+  printf '%s\n' 'non-regular scan failed' >&2
+  exit 45
+fi
+if [ -n "$unexpected" ]; then
+  printf '%s\n' 'unsupported non-regular object' >&2
+  exit 43
+fi
+printf '%s\n' 'empty'
+""".strip(),
+        ]
+        try:
+            try:
+                async with asyncio.timeout(_POSTGRES_VOLUME_PROBE_TIMEOUT_SECONDS):
+                    owner_output = await asyncio.to_thread(
+                        self._exec_checked,
+                        container,
+                        ["stat", "-c", "%u:%g", "--", _VOLUME_ROOT],
+                        f"inspect postgres volume owner {name}",
+                    )
+                    try:
+                        if not owner_output.endswith(b"\n") or owner_output.count(b"\n") != 1:
+                            raise ValueError("owner metadata must be one terminated line")
+                        owner = owner_output[:-1].decode("ascii", "strict")
+                        uid, gid = owner.split(":", 1)
+                    except (UnicodeDecodeError, ValueError) as exc:
+                        raise CellResourceError("malformed postgres volume owner response") from exc
+                    if (
+                        len(owner_output) > 24
+                        or not uid.isascii()
+                        or not uid.isdecimal()
+                        or not gid.isascii()
+                        or not gid.isdecimal()
+                        or int(uid) > 4_294_967_294
+                        or int(gid) > 4_294_967_294
+                    ):
+                        raise CellResourceError("malformed postgres volume owner response")
+                    output = await asyncio.to_thread(
+                        self._exec_checked,
+                        container,
+                        command,
+                        f"probe postgres volume {name}",
+                        None,
+                        owner,
+                    )
+            except TimeoutError as exc:
+                raise CellResourceError(f"postgres volume probe timed out: {name}") from exc
+            if output == b"nonempty\n":
+                return True
+            if output == b"empty\n":
+                return False
+            raise CellResourceError("malformed postgres volume probe response")
         finally:
             await self._remove_container_object(container)
 
@@ -1337,8 +1433,12 @@ class DockerPyCellBackend:
         command: list[str],
         label: str,
         environment: dict[str, str] | None = None,
+        user: str | None = None,
     ) -> bytes:
-        result = container.exec_run(command, environment=environment, demux=False)
+        kwargs: dict[str, object] = {"environment": environment, "demux": False}
+        if user is not None:
+            kwargs["user"] = user
+        result = container.exec_run(command, **kwargs)
         exit_code, output = self._exec_result_parts(result)
         if exit_code != 0:
             detail = output.decode("utf-8", "ignore")

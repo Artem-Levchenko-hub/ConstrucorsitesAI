@@ -13,6 +13,7 @@ from typing import Any, cast
 import docker  # type: ignore[import-untyped]
 import pytest
 
+import omnia_orchestrator.services.docker_py_cell_backend as docker_py_cell_backend
 from omnia_orchestrator.core.cell_resources import CellResourceError
 from omnia_orchestrator.services.docker_cell_resources import DockerContainerSpec
 from omnia_orchestrator.services.docker_py_cell_backend import (
@@ -367,9 +368,15 @@ class _FakeContainer:
         *,
         environment: dict[str, str] | None = None,
         demux: bool = False,
+        user: str | None = None,
     ) -> _FakeExecResult:
         self.exec_calls.append(
-            {"command": list(command), "environment": environment, "demux": demux}
+            {
+                "command": list(command),
+                "environment": environment,
+                "demux": demux,
+                "user": user,
+            }
         )
         if command[:2] == ["pg_dump", "-Fc"]:
             return _FakeExecResult(output=b"pg-dump-bytes")
@@ -557,6 +564,182 @@ def _docker_api_error(status_code: int, explanation: str) -> docker.errors.APIEr
         response=response,
         explanation=explanation,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("output", "expected_nonempty"), [(b"empty\n", False), (b"nonempty\n", True)]
+)
+async def test_postgres_volume_probe_decodes_result_with_isolated_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    output: bytes,
+    expected_nonempty: bool,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["postgres-vol"] = _FakeVolume("postgres-vol", _labels("postgres"))
+    commands: list[list[str]] = []
+
+    def execute_probe(
+        container: _FakeContainer,
+        command: list[str],
+        *,
+        environment: dict[str, str] | None = None,
+        demux: bool = False,
+        user: str | None = None,
+    ) -> _FakeExecResult:
+        _ = environment, demux, user
+        commands.append(list(command))
+        if command[:2] == ["stat", "-c"]:
+            return _FakeExecResult(output=b"0:0\n")
+        return _FakeExecResult(output=output)
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", execute_probe)
+
+    assert (
+        await _backend(client).probe_postgres_volume_after_legacy_cleanup("postgres-vol")
+        is expected_nonempty
+    )
+    assert len(commands) == 2
+    create_call = client.containers.create_calls[0]
+    assert create_call["kwargs"]["network"] == "none"
+    assert create_call["kwargs"]["cap_add"] == []
+    assert create_call["kwargs"]["cap_drop"] == ["ALL"]
+    assert create_call["kwargs"]["security_opt"] == ["no-new-privileges:true"]
+    assert create_call["kwargs"]["volumes"] == {"postgres-vol": {"bind": "/volume", "mode": "rw"}}
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+async def test_postgres_volume_probe_scans_as_the_mounted_volume_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["postgres-vol"] = _FakeVolume(
+        "postgres-vol", _labels("postgres"), files={"PGDATA/PG_VERSION": b"16\n"}
+    )
+    calls: list[tuple[list[str], str | None]] = []
+
+    def owner_aware_probe(
+        _container: _FakeContainer,
+        command: list[str],
+        *,
+        environment: dict[str, str] | None = None,
+        demux: bool = False,
+        user: str | None = None,
+    ) -> _FakeExecResult:
+        _ = environment, demux
+        calls.append((list(command), user))
+        if command[:2] == ["stat", "-c"]:
+            return _FakeExecResult(output=b"70:70\n")
+        if user != "70:70":
+            return _FakeExecResult(exit_code=44, output=b"permission denied\n")
+        return _FakeExecResult(output=b"nonempty\n")
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", owner_aware_probe)
+
+    assert await _backend(client).probe_postgres_volume_after_legacy_cleanup("postgres-vol")
+    assert calls[0] == (["stat", "-c", "%u:%g", "--", "/volume"], None)
+    assert calls[1][1] == "70:70"
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exit_code", "output", "match"),
+    [
+        (0, b"ambiguous\n", "malformed postgres volume probe response"),
+        (42, b"unsafe legacy object\n", "failed with exit code 42"),
+    ],
+)
+async def test_postgres_volume_probe_fails_closed_on_bad_helper_result(
+    monkeypatch: pytest.MonkeyPatch,
+    exit_code: int,
+    output: bytes,
+    match: str,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["postgres-vol"] = _FakeVolume("postgres-vol", _labels("postgres"))
+
+    def bad_result(_container: Any, command: list[str], **_kwargs: Any) -> _FakeExecResult:
+        if command[:2] == ["stat", "-c"]:
+            return _FakeExecResult(output=b"0:0\n")
+        return _FakeExecResult(exit_code=exit_code, output=output)
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", bad_result)
+
+    with pytest.raises(CellResourceError, match=match):
+        await _backend(client).probe_postgres_volume_after_legacy_cleanup("postgres-vol")
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+async def test_postgres_volume_probe_missing_volume_fails_without_helper() -> None:
+    client = _FakeClient()
+
+    with pytest.raises(CellResourceError, match="missing volume"):
+        await _backend(client).probe_postgres_volume_after_legacy_cleanup("missing")
+    assert client.containers.create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_volume_probe_rejects_unowned_volume_without_helper() -> None:
+    client = _FakeClient()
+    labels = _labels("postgres")
+    labels.pop("omnia.owner_id")
+    client.volumes.items["postgres-vol"] = _FakeVolume("postgres-vol", labels)
+
+    with pytest.raises(CellResourceError, match="missing identity labels"):
+        await _backend(client).probe_postgres_volume_after_legacy_cleanup("postgres-vol")
+    assert client.containers.create_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "owner_output",
+    [b"postgres:postgres\n", b" 70:70\n", b"70:70", b"70:70\n\n", b"\xff:70\n"],
+)
+async def test_postgres_volume_probe_rejects_malformed_owner_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    owner_output: bytes,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["postgres-vol"] = _FakeVolume("postgres-vol", _labels("postgres"))
+
+    def malformed_owner(_container: Any, command: list[str], **_kwargs: Any) -> _FakeExecResult:
+        if command[:2] != ["stat", "-c"]:
+            pytest.fail("malformed owner must not authorize a filesystem scan")
+        return _FakeExecResult(output=owner_output)
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", malformed_owner)
+
+    with pytest.raises(CellResourceError, match="malformed postgres volume owner response"):
+        await _backend(client).probe_postgres_volume_after_legacy_cleanup("postgres-vol")
+    assert client.containers.items == {}
+
+
+@pytest.mark.asyncio
+async def test_postgres_volume_probe_timeout_fails_closed_and_removes_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    client.volumes.items["postgres-vol"] = _FakeVolume("postgres-vol", _labels("postgres"))
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked(*_args: Any, **_kwargs: Any) -> _FakeExecResult:
+        entered.set()
+        release.wait(timeout=2)
+        return _FakeExecResult(output=b"empty\n")
+
+    monkeypatch.setattr(_FakeContainer, "exec_run", blocked)
+    monkeypatch.setattr(docker_py_cell_backend, "_POSTGRES_VOLUME_PROBE_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(CellResourceError, match="postgres volume probe timed out"):
+            await _backend(client).probe_postgres_volume_after_legacy_cleanup("postgres-vol")
+        assert entered.is_set()
+        assert client.containers.items == {}
+    finally:
+        release.set()
 
 
 @pytest.mark.asyncio

@@ -542,6 +542,128 @@ async def test_existing_workspace_identity_mismatch_does_not_mutate_durable_stat
 
 
 @pytest.mark.asyncio
+async def test_existing_postgres_volume_uses_metadata_probe_without_whole_volume_read(
+    tmp_path: Path,
+) -> None:
+    class MetadataProbeDocker(FakeDockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.postgres_probe_calls: list[str] = []
+
+        async def read_volume_files(self, name: str) -> dict[str, bytes]:
+            raise AssertionError("whole-volume read forbidden")
+
+        async def probe_postgres_volume_after_legacy_cleanup(self, name: str) -> bool:
+            self.postgres_probe_calls.append(name)
+            return bool(self.volumes[name].files)
+
+    docker = MetadataProbeDocker()
+    manager, _, _, _ = _make_manager(tmp_path, docker)
+    spec = _spec(uuid4())
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    docker.seed_volume(
+        names.postgres_volume,
+        identity_labels(spec, "postgres"),
+        files={"PGDATA/PG_VERSION": b"16\n"},
+    )
+
+    await manager.ensure(spec, _mutation("a", 1))
+
+    assert docker.postgres_probe_calls == [names.postgres_volume]
+    assert all(
+        container.labels["omnia.resource_kind"] != "postgres-init"
+        for container in docker.container_history
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("files", "expect_init"),
+    [
+        ({"PGDATA/postgres-password.txt": b"legacy"}, True),
+        ({"arbitrary-partial.tmp": b"partial"}, False),
+        ({"PGDATA/base/1/42": b"nested"}, False),
+    ],
+)
+async def test_postgres_probe_preserves_initialization_decision_and_exact_cleanup(
+    tmp_path: Path,
+    files: dict[str, bytes],
+    expect_init: bool,
+) -> None:
+    manager, docker, _, _ = _make_manager(tmp_path)
+    spec = _spec(uuid4())
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    docker.seed_volume(
+        names.postgres_volume,
+        identity_labels(spec, "postgres"),
+        files=files,
+    )
+
+    await manager.ensure(spec, _mutation("a", 1))
+
+    assert docker.postgres_probe_calls == [names.postgres_volume]
+    postgres_files = docker.volumes[names.postgres_volume].files
+    assert "PGDATA/postgres-password.txt" not in postgres_files
+    if expect_init:
+        ownership_index = next(
+            index
+            for index, container in enumerate(docker.container_history)
+            if container.labels["omnia.resource_kind"] == "postgres-ownership"
+        )
+        init_index = next(
+            index
+            for index, container in enumerate(docker.container_history)
+            if container.labels["omnia.resource_kind"] == "postgres-init"
+        )
+        assert ownership_index < init_index
+        assert postgres_files["PGDATA/PG_VERSION"] == b"16\n"
+    else:
+        assert postgres_files == files
+        assert all(
+            container.labels["omnia.resource_kind"] != "postgres-init"
+            for container in docker.container_history
+        )
+
+
+@pytest.mark.asyncio
+async def test_postgres_probe_failure_never_authorizes_initialization(tmp_path: Path) -> None:
+    manager, docker, state_store, _ = _make_manager(tmp_path)
+    spec = _spec(uuid4())
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    docker.seed_volume(names.postgres_volume, identity_labels(spec, "postgres"))
+    docker.postgres_probe_error = CellResourceError("probe failed")
+
+    with pytest.raises(CellResourceError, match="probe failed"):
+        await manager.ensure(spec, _mutation("a", 1))
+
+    state = state_store.load(spec.workspace_id)
+    assert state is not None
+    assert state.phase == "indeterminate"
+    assert all(
+        container.labels["omnia.resource_kind"] != "postgres-init"
+        for container in docker.container_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_postgres_identity_is_rejected_before_metadata_probe(tmp_path: Path) -> None:
+    manager, docker, state_store, _ = _make_manager(tmp_path)
+    spec = _spec(uuid4())
+    names = CellResourceNames.for_workspace(spec.workspace_id, namespace="test")
+    docker.seed_volume(
+        names.postgres_volume,
+        {**identity_labels(spec, "postgres"), "omnia.owner_id": str(uuid4())},
+        files={"PGDATA/PG_VERSION": b"16\n"},
+    )
+
+    with pytest.raises(CellIdentityConflict, match="resource identity mismatch"):
+        await manager.ensure(spec, _mutation("a", 1))
+
+    assert docker.postgres_probe_calls == []
+    assert state_store.load(spec.workspace_id) is None
+
+
+@pytest.mark.asyncio
 async def test_empty_postgres_volume_bootstraps_with_removed_one_shot_helper(
     tmp_path: Path,
 ) -> None:
@@ -930,7 +1052,15 @@ async def test_reconcile_cleanup_removes_only_expected_ephemera(tmp_path: Path) 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kind", ["volume-read", "volume-write", "volume-delete", "volume-promote", "volume-clear"]
+    "kind",
+    [
+        "volume-read",
+        "volume-write",
+        "volume-delete",
+        "volume-promote",
+        "volume-clear",
+        "postgres-volume-probe",
+    ],
 )
 async def test_reconcile_recognizes_request_helpers_without_widening_ownership(
     tmp_path: Path,

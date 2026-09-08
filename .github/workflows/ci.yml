@@ -147,6 +147,15 @@ jobs:
       - name: Run orchestrator tests
         working-directory: apps/orchestrator
         run: uv run pytest -q
+      - name: Run isolated P01 PostgreSQL volume probe
+        working-directory: apps/orchestrator
+        env:
+          OMNIA_P01_LIVE_DOCKER: "1"
+          OMNIA_P01_HELPER_IMAGE: >-
+            alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+        run: |
+          docker pull "$OMNIA_P01_HELPER_IMAGE"
+          uv run pytest -q -s tests/test_live_postgres_volume_probe.py
 
   web:
     runs-on: ubuntu-latest

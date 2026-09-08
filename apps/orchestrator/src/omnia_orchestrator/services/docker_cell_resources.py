@@ -44,10 +44,18 @@ _ALLOWED_HELPER_KINDS = frozenset(
         "volume-delete",
         "volume-promote",
         "volume-clear",
+        "postgres-volume-probe",
     }
 )
 _VOLUME_HELPER_PURPOSES = frozenset(
-    {"volume-read", "volume-write", "volume-delete", "volume-promote", "volume-clear"}
+    {
+        "volume-read",
+        "volume-write",
+        "volume-delete",
+        "volume-promote",
+        "volume-clear",
+        "postgres-volume-probe",
+    }
 )
 _SENSITIVE_ENV_KEY_MARKERS = (
     "PASSWORD",
@@ -226,6 +234,8 @@ class CellDockerBackend(Protocol):
     async def list_workspace_volumes(self, workspace_id: UUID) -> list[DockerVolumeRecord]: ...
 
     async def read_volume_files(self, name: str) -> dict[str, bytes]: ...
+
+    async def probe_postgres_volume_after_legacy_cleanup(self, name: str) -> bool: ...
 
     async def read_workspace_source_files(self, name: str) -> dict[str, bytes]: ...
 
@@ -1002,13 +1012,9 @@ class DockerCellResourceManager:
         names: CellResourceNames,
         password: str,
     ) -> None:
-        await self._require_volume(names.postgres_volume)
-        postgres_files = await self.docker.read_volume_files(names.postgres_volume)
-        legacy_secret_path = "PGDATA/postgres-password.txt"
-        if legacy_secret_path in postgres_files:
-            await self.docker.delete_volume_paths(names.postgres_volume, (legacy_secret_path,))
-            postgres_files.pop(legacy_secret_path, None)
-        if postgres_files:
+        postgres_volume = await self._require_volume(names.postgres_volume)
+        self._verify_volume_record(postgres_volume, identity_labels(spec, "postgres"))
+        if await self.docker.probe_postgres_volume_after_legacy_cleanup(names.postgres_volume):
             await self.state_store_advance(
                 spec.workspace_id, mutation, phase="postgres_initialized"
             )
