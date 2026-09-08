@@ -113,6 +113,7 @@ from omnia_api.services.file_extractor import (
     extract_edits,
     extract_files,
 )
+from omnia_api.services.generation_artifacts import create_generation_snapshot
 from omnia_api.services.generation_events import (
     append_generation_event,
     generation_event_envelope,
@@ -6629,27 +6630,17 @@ async def _process_prompt(
                     exact_tree=_max_finalization_proof is not None,
                 )
                 async with factory() as session:
-                    snapshot = Snapshot(
+                    snapshot, project = await create_generation_snapshot(
+                        session,
                         project_id=project_id,
+                        run_id=run_id,
                         commit_sha=new_sha,
                         prompt_text=prompt_text,
                         model_id=model_id,
-                        parent_id=current_snapshot_id,
+                        parent_snapshot_id=current_snapshot_id,
+                        changed_files=list(files),
                     )
-                    session.add(snapshot)
-                    await session.flush()
                     _agent_snap_id = snapshot.id
-                    project = await session.get(Project, project_id)
-                    if project is not None:
-                        project.current_snapshot_id = snapshot.id
-                    memory_run = await session.get(GenerationRun, run_id)
-                    if memory_run is not None:
-                        record_run_artifacts(
-                            memory_run,
-                            snapshot_id=snapshot.id,
-                            commit_sha=new_sha,
-                            changed_files=list(files),
-                        )
                     msg = await session.get(Message, assistant_message_id)
                     if msg is not None:
                         msg.content = accumulated
@@ -8890,28 +8881,17 @@ async def _process_prompt(
                     if model_id != routing_model
                     else (force_model or (ORCHESTRATION_LABEL if orchestrate else routing_model))
                 )
-                snapshot = Snapshot(
+                snapshot, project = await create_generation_snapshot(
+                    session,
                     project_id=project_id,
+                    run_id=run_id,
                     commit_sha=new_sha,
                     prompt_text=prompt_text,
                     model_id=snapshot_model_id,
-                    parent_id=current_snapshot_id,
+                    parent_snapshot_id=current_snapshot_id,
+                    changed_files=list(files),
                 )
-                session.add(snapshot)
-                await session.flush()
                 new_snapshot_id = snapshot.id
-
-                project = await session.get(Project, project_id)
-                if project is not None:
-                    project.current_snapshot_id = snapshot.id
-                memory_run = await session.get(GenerationRun, run_id)
-                if memory_run is not None:
-                    record_run_artifacts(
-                        memory_run,
-                        snapshot_id=snapshot.id,
-                        commit_sha=new_sha,
-                        changed_files=list(files),
-                    )
 
                 msg = await session.get(Message, assistant_message_id)
                 if msg is not None:

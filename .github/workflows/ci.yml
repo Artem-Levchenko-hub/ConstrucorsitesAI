@@ -74,6 +74,9 @@ jobs:
       - name: Lint and typecheck API
         working-directory: apps/api
         run: uv run ruff check . && uv run mypy src
+      - name: Verify generation snapshot publication on disposable PostgreSQL
+        working-directory: apps/api
+        run: uv run --frozen pytest -o addopts='' -q tests/test_generation_artifacts.py
       - name: Run release-critical API regressions
         working-directory: apps/api
         run: >-
