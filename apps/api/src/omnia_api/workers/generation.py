@@ -27,6 +27,7 @@ from omnia_api.models.project_cell import ProjectCellOperation
 from omnia_api.services.generation_execution_context import execution_run_id
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
+    apply_cancelled_generation_locked,
     load_generation_dispatch,
 )
 
@@ -99,7 +100,6 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
 
 async def execute_dispatch(run_id: UUID) -> bool:
     from omnia_api.routers.messages import (
-        _apply_cancelled_generation_locked,
         _process_prompt,
         _run_tracked_prompt,
     )
@@ -127,7 +127,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
                     await session.commit()
                     return False
                 if run.status == "cancel_requested":
-                    await _apply_cancelled_generation_locked(session, run)
+                    await apply_cancelled_generation_locked(session, run)
                     await session.commit()
                     return False
                 if run.execution_started_at is not None:

@@ -77,6 +77,13 @@ jobs:
       - name: Verify generation snapshot publication on disposable PostgreSQL
         working-directory: apps/api
         run: uv run --frozen pytest -o addopts='' -q tests/test_generation_artifacts.py
+      - name: Verify cancellation transaction and consumers on disposable PostgreSQL
+        working-directory: apps/api
+        run: >-
+          uv run --frozen pytest -o addopts='' -q
+          tests/test_generation_cancellation.py
+          tests/test_generation_runs.py::test_cancel_endpoint_terminalizes_queued_run_before_any_signal_or_finalizer
+          tests/test_generation_worker.py::test_cancel_before_dispatch_never_executes
       - name: Run release-critical API regressions
         working-directory: apps/api
         run: >-

@@ -25,19 +25,17 @@ Production health/release ok, write gate снят; web/orchestrator и проч�
 consumers не перезапускались. Подробности:
 [Task 8 verification](2026-09-08-task8-artifacts-verification.md).
 
-Следующий узкий пакет Task 9: перенести `_apply_cancelled_generation_locked`
-из router в существующий generation_runs service, сохранив caller lock/commit,
-message+project фильтры, pending/waiting operations, timestamp и memory order.
-Worker должен перестать импортировать именно эту private router функцию;
-весь `_process_prompt` не переносить. Artifact baseline: 10 passed, 8 DB cases
-подготовлены; источник ещё не изменён. Повторно проверить freshness и перенести
-тесты в repo только вместе с выбранным пакетом. Endpoint/worker consumers
-и полный disposable API CI обязательны.
+**Task 9 подготовлен, ещё не доставлен:** locked cancellation helper перенесён
+из router в существующий generation_runs service; worker больше не импортирует
+эту private router функцию. 10 baseline cases прошли до/после, 8 DB cases
+и endpoint/worker consumers ожидают CI. Продолжить с
+[Task 9 verification](2026-09-08-task9-cancellation-verification.md), завершить
+review/gates/API-only поставку до следующего пакета.
 
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
 Не повторять Task 4/5. H140 уже опубликован, public version 72, 136 прежних
-записей сохранены; следующая запись H141. H134–H136 не публиковать целиком
+записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; следующая H142. H134–H136 не публиковать целиком
 вместе с репозиторным JSON.
 
 ### Предыдущая поставка Task 5

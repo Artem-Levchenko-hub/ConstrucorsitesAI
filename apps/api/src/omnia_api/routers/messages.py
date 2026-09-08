@@ -39,7 +39,6 @@ from omnia_api.models.account import BusinessEntitlement, BusinessMember
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
@@ -121,7 +120,7 @@ from omnia_api.services.generation_events import (
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     GenerationDispatch,
-    compile_terminal_run_memory,
+    apply_cancelled_generation_locked,
     finalize_generation_run,
     load_generation_dispatch,
     reserve_generation_run,
@@ -310,7 +309,7 @@ async def _finalize_cancelled_generation(
         )
         if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
             return
-        await _apply_cancelled_generation_locked(session, run)
+        await apply_cancelled_generation_locked(session, run)
         await session.commit()
     await publish_event(
         project_id,
@@ -320,53 +319,6 @@ async def _finalize_cancelled_generation(
             "message_id": str(assistant_message_id),
         },
     )
-
-
-async def _apply_cancelled_generation_locked(
-    session: AsyncSession,
-    run: GenerationRun,
-) -> None:
-    """Terminalize a locked run, assistant row and waiting operations atomically."""
-
-    msg = None
-    if run.assistant_message_id is not None:
-        msg = await session.scalar(
-            select(Message)
-            .where(
-                Message.id == run.assistant_message_id,
-                Message.project_id == run.project_id,
-            )
-            .with_for_update()
-        )
-    operations = list(
-        (
-            await session.execute(
-                select(ProjectCellOperation)
-                .where(
-                    ProjectCellOperation.generation_run_id == run.id,
-                    ProjectCellOperation.status.in_(("pending", "waiting_capacity")),
-                )
-                .with_for_update()
-            )
-        )
-        .scalars()
-        .all()
-    )
-    now = datetime.now(UTC)
-    if msg is not None and msg.tokens_out is None:
-        marker = "[Отменено пользователем]"
-        if marker not in (msg.content or ""):
-            msg.content = f"{msg.content.rstrip()}\n\n{marker}".strip()
-        msg.tokens_in = msg.tokens_in or 0
-        msg.tokens_out = 0
-    run.status = "cancelled"
-    run.finished_at = now
-    for operation in operations:
-        operation.status = "cancelled"
-        operation.capacity_reason = None
-        operation.next_attempt_at = None
-        operation.finished_at = now
-    await compile_terminal_run_memory(session, run)
 
 
 def _generation_cancel_protocol(
@@ -3344,7 +3296,7 @@ async def cancel_active_generation(
         )
     cancel_protocol = _generation_cancel_protocol(run.status)
     if cancel_protocol == "terminal_without_signal":
-        await _apply_cancelled_generation_locked(session, run)
+        await apply_cancelled_generation_locked(session, run)
         await session.commit()
         await session.refresh(run)
         try:

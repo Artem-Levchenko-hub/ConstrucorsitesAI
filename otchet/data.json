@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-08",
-  "version": 83,
+  "version": 84,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2654,6 +2654,18 @@
    "evidence": "Доставлен API/worker/generation-worker e03793b4. CI34265225657 полностью success: 41 проверка публикационного участка, включая 10 настоящих PostgreSQL cases; полный API 3170 passed / 12 skipped / 8 xfailed. До и после переноса 31 offline case; 31 смежный passed, Ruff/mypy275 clean, независимое review No findings. Реальные AST-участки callers и Git проверены, полный модельный запуск не выполнялся. Точный доставленный image прошёл offline smoke, production health/release ok, gate снят; web/orchestrator и прочие consumers сохранены.",
    "impact": "У привязки версии теперь одна реализация вместо двух. Новая атомарность, идемпотентность, откат данных и ускорение генерации не заявляются; прежние различия путей сохраняются.",
    "next_vector": "Следующий узкий перенос: отмена генерации из router в service с прежними блокировками, сообщением, операциями и границей транзакции. Полный пользовательский запуск выполняет владелец.",
+   "category": "верификация",
+   "period": "08.09"
+  },
+  {
+   "id": "H142",
+   "title": "Отмена генерации отделена от HTTP-router",
+   "description": "Переносим одну операцию завершения отмены в существующий service. Router и worker используют её с прежними блокировками и границами транзакции.",
+   "status": "testing",
+   "score": null,
+   "evidence": "BASE2e447f41: полный helper baseline10passed до и после переноса, тело AST сохранено. Переключены2router и1worker caller; ожидаемые значения тестов не менялись. Full Ruff и mypy275 clean. Подготовлены8 disposable PostgreSQL cases и ранние endpoint/worker consumer tests; CI, независимое review и поставка завершаются.",
+   "impact": "Worker меньше зависит от private HTTP-router функций. Отмена, частичный ответ, операции, memory и данные сохраняют прежнее поведение; ускорение и новый пользовательский запуск не заявляются.",
+   "next_vector": "Завершить PostgreSQL/полный API gate, независимое review и API-only поставку с точными release/health доказательствами.",
    "category": "верификация",
    "period": "08.09"
   }

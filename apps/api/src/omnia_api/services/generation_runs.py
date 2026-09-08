@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
+from omnia_api.models.project_cell import ProjectCellOperation
 
 ACTIVE_GENERATION_STATUSES = (
     "pending",
@@ -265,6 +266,53 @@ async def promote_generation_after_admission(
         run.started_at = run.started_at or datetime.now(UTC)
         await session.commit()
         return "admitted"
+
+
+async def apply_cancelled_generation_locked(
+    session: AsyncSession,
+    run: GenerationRun,
+) -> None:
+    """Terminalize a locked run, assistant row and waiting operations atomically."""
+
+    msg = None
+    if run.assistant_message_id is not None:
+        msg = await session.scalar(
+            select(Message)
+            .where(
+                Message.id == run.assistant_message_id,
+                Message.project_id == run.project_id,
+            )
+            .with_for_update()
+        )
+    operations = list(
+        (
+            await session.execute(
+                select(ProjectCellOperation)
+                .where(
+                    ProjectCellOperation.generation_run_id == run.id,
+                    ProjectCellOperation.status.in_(("pending", "waiting_capacity")),
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    now = datetime.now(UTC)
+    if msg is not None and msg.tokens_out is None:
+        marker = "[Отменено пользователем]"
+        if marker not in (msg.content or ""):
+            msg.content = f"{msg.content.rstrip()}\n\n{marker}".strip()
+        msg.tokens_in = msg.tokens_in or 0
+        msg.tokens_out = 0
+    run.status = "cancelled"
+    run.finished_at = now
+    for operation in operations:
+        operation.status = "cancelled"
+        operation.capacity_reason = None
+        operation.next_attempt_at = None
+        operation.finished_at = now
+    await compile_terminal_run_memory(session, run)
 
 
 async def compile_terminal_run_memory(session: AsyncSession, run: GenerationRun) -> None:
