@@ -15,6 +15,7 @@ ErrorCode = Literal[
     "rate_limited",
     "wallet_empty",
     "model_unavailable",
+    "advice_unavailable",
     "internal_error",
     "conflict",
     # V2: orchestrator-proxy errors surfaced through apps/api/services/orchestrator_client.

@@ -154,7 +154,7 @@ export function ChatMessage({
           ) : (
             parts.map((p, i) =>
               p.kind === "text" ? (
-                <AssistantText key={i} text={p.text} streaming={!!streaming} />
+                <AssistantText key={i} text={p.text} streaming={!!streaming} studio={studio} />
               ) : p.kind === "remix" ? (
                 <RemixRecapCard
                   key={i}
@@ -358,9 +358,11 @@ function QuizSummary({ idea, items }: { idea: string; items: QuizItem[] }) {
 function AssistantText({
   text: rawText,
   streaming,
+  studio = false,
 }: {
   text: string;
   streaming?: boolean;
+  studio?: boolean;
 }) {
   // Safety net: never render leaked raw code as chat prose, even if the
   // server-side honesty pass is off or the row predates it. Mirrors
@@ -368,7 +370,7 @@ function AssistantText({
   const text = cleanChatProse(rawText);
   if (!text) return null;
   if (!STATUS_RE.test(text)) {
-    return <Markdown text={text} className="break-words text-fg-secondary" />;
+    return <Markdown text={text} collapseTechnical={studio && !streaming} className="break-words text-fg-secondary" />;
   }
   // Split into prose / status segments, preserving order.
   const blocks: { kind: "p" | "s"; text: string }[] = [];
@@ -396,6 +398,7 @@ function AssistantText({
           <Markdown
             key={i}
             text={b.text.trim()}
+            collapseTechnical={studio && !streaming}
             className="break-words text-fg-secondary"
           />
         ),

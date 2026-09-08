@@ -7,6 +7,7 @@ import { simulatePromptStream } from "@/lib/ws-mock";
 import type {
   AgentStep,
   GenerationEventEnvelope,
+  GenerationRun,
   Message,
   PassProgress,
   SelectedElement,
@@ -362,6 +363,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
                   ...m,
                   tokens_in: event.data.tokens_in,
                   tokens_out: event.data.tokens_out,
+                  generation_status: "completed",
                   // Client-side annotation: not persisted in the DB row, but
                   // ChatMessage.tsx surfaces it as "≈ ₽X" so the user sees
                   // approximate per-prompt cost without opening the wallet.
@@ -605,6 +607,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
                     : `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim(),
                   tokens_out: m.tokens_out ?? 0,
                   tokens_in: m.tokens_in ?? 0,
+                  generation_status: "cancelled",
                 }
               : m,
           ),
@@ -644,6 +647,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               ? {
                   ...m,
                   content: `[Ошибка: ${event.data.error}]`,
+                  generation_status: "failed",
                   // Без tokens_out !== null ChatPanel считает сообщение
                   // всё ещё стримящимся — UI не разлочивается.
                   tokens_out: m.tokens_out ?? 0,
@@ -1185,8 +1189,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const cancel = useCallback(async () => {
     // 1) Сначала просим backend остановить durable run. WS закрываем только
     // после подтверждения, иначе старая кнопка «Стоп» снова станет визуальной.
+    let generation: GenerationRun | null;
     try {
-      await cancelGeneration(projectId);
+      generation = await cancelGeneration(projectId);
     } catch (e) {
       // A terminal run can win the race between the click and the endpoint.
       // In that case there is nothing left to cancel and local cleanup is safe.
@@ -1196,6 +1201,40 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         });
         return;
       }
+      try {
+        generation = await getLatestGeneration(projectId);
+      } catch {
+        void qc.invalidateQueries({ queryKey: ["messages", projectId] });
+        void qc.invalidateQueries({ queryKey: ["generation", projectId] });
+        return;
+      }
+    }
+
+    pendingRef.current = null;
+    setPendingPrompt(null);
+    if (!generation) {
+      void qc.invalidateQueries({ queryKey: ["messages", projectId] });
+      void qc.invalidateQueries({ queryKey: ["generation", projectId] });
+      return;
+    }
+    const messageId = generation.assistant_message_id;
+    const observedStatus = qc.getQueryData<Message[]>(["messages", projectId])
+      ?.find((m) => m.id === messageId)?.generation_status;
+    if (observedStatus === "completed" || observedStatus === "failed" ||
+        observedStatus === "cancelled") {
+      // A terminal WS event may arrive while the cancellation POST is in flight.
+      generation = { ...generation, status: observedStatus };
+    }
+    qc.setQueryData(["generation", projectId], generation);
+    if (!["completed", "failed", "cancelled"].includes(generation.status)) {
+      // The endpoint acknowledges the request before the worker stops. Keep
+      // listening for its terminal event instead of claiming cancellation.
+      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+        (prev ?? []).map((m) => m.id === messageId
+          ? { ...m, generation_status: generation.status }
+          : m),
+      );
+      return;
     }
 
     // 2) Рвём WS — backend уже получил cancellation signal.
@@ -1205,28 +1244,31 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     streamingRef.current = false;
     activeSubmitSignatureRef.current = null;
 
-    // 3) Помечаем последнее ассистентское сообщение завершённым, чтобы
-    //    ChatPanel.isStreaming (читает tokens_out из кэша) сразу разблокировался.
-    //    Сервер отдельно подтвердит generation.cancelled и сохранит тот же marker.
+    // 3) Reconcile the canonical message with the confirmed terminal outcome.
+    // Completion can win the race with Stop; only cancellation gets a marker.
     let cancelledMessageId: string | null = null;
     qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-      (prev ?? []).map((m, i, arr) => {
+      (prev ?? []).map((m) => {
         if (
-          i === arr.length - 1 &&
-          m.role === "assistant" &&
-          m.tokens_out === null
+          m.id === messageId && m.role === "assistant"
         ) {
           cancelledMessageId = m.id;
           return {
             ...m,
-            content: m.content + "\n\n[Отменено пользователем]",
+            content: generation.status === "cancelled" &&
+              !m.content.includes("[Отменено пользователем]")
+              ? `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim()
+              : m.content,
             tokens_out: m.tokens_out ?? 0,
             tokens_in: m.tokens_in ?? 0,
+            generation_status: generation.status,
           };
         }
         return m;
       }),
     );
+    void qc.invalidateQueries({ queryKey: ["messages", projectId] });
+    void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
     // B.3 — drop the progress entry for the cancelled message so the bar
     // doesn't keep showing "Шаг 2/4" after the user pressed Стоп.
     if (cancelledMessageId) {

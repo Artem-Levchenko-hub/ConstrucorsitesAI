@@ -72,7 +72,7 @@ describe("MAX product advisor", () => {
     });
 
     expect(container.querySelectorAll("[data-advice-id]")).toHaveLength(3);
-    expect(container.textContent).toContain("Что улучшить дальше");
+    expect(container.textContent).toContain("Вставить в чат");
     expect(container.textContent).toContain("Избранное");
     expect(container.textContent).toContain("Улучшить");
     expect(container.textContent).not.toContain("Лишняя карточка");
@@ -150,6 +150,19 @@ describe("MAX product advisor", () => {
     expect(
       getProductAdviceSnapshotId([{ ...completed, snapshot_id: null }]),
     ).toBeNull();
+  });
+
+  it("keeps the existing app available after a failed attempt and follows its current snapshot", () => {
+    const ready = { role: "assistant" as const, snapshot_id: "ready", tokens_out: 42, generation_status: "completed" as const };
+    const failed = { ...ready, snapshot_id: null, generation_status: "failed" as const };
+    expect(getProductAdviceSnapshotId([ready, failed], "restored-current")).toBe("restored-current");
+    expect(getProductAdviceSnapshotId([ready, failed])).toBe("ready");
+    expect(getProductAdviceSnapshotId([ready, { ...failed, tokens_out: null, generation_status: "cancelled" }])).toBe("ready");
+  });
+
+  it("recognizes a completed first snapshot during the server's run-finalization gap", () => {
+    expect(getProductAdviceSnapshotId([{ role: "assistant", snapshot_id: "first-ready",
+      tokens_out: 0, generation_status: "running" }], "first-ready")).toBe("first-ready");
   });
 
   it("submits the server-owned implementation prompt through the normal chat", async () => {

@@ -190,6 +190,7 @@ export function MaxWorkspaceShell({
       <ChatPanel
         projectId={project.id}
         projectSlug={project.slug}
+        currentSnapshotId={currentSnapshotId}
         mode="max"
         basePath={`/max/${project.id}`}
         embedded

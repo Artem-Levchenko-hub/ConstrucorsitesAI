@@ -15,12 +15,16 @@ import { cn } from "@/lib/utils";
  * fenced ``` code blocks, blockquotes (>), inline `code`, **bold**, *italic*,
  * and [links](url). Anything else falls through as a plain paragraph.
  */
-export function Markdown({ text, className }: { text: string; className?: string }) {
+export function Markdown({ text, className, collapseTechnical = false }: { text: string; className?: string; collapseTechnical?: boolean }) {
   const blocks = parseBlocks(text);
   return (
     <div className={cn("space-y-2 text-fg-secondary", className)}>
       {blocks.map((b, i) => (
-        <Block key={i} block={b} />
+        collapseTechnical && isTechnicalBlock(b) ? (
+          <details key={i} className="max-chat-technical-details">
+            <summary>Технические подробности</summary><Block block={b} />
+          </details>
+        ) : <Block key={i} block={b} />
       ))}
     </div>
   );
@@ -35,6 +39,17 @@ type Block =
   | { kind: "code"; text: string }
   | { kind: "ul"; items: string[] }
   | { kind: "ol"; items: string[] };
+
+/** Fold implementation evidence, never user-facing warnings or required actions. */
+function isTechnicalBlock(block: Block): boolean {
+  const text = "items" in block ? block.items.join("\n") : block.text;
+  if (/ошиб|не удалось|не прош|недоступ|не провер|не подключ|не работает|ограничен|требует|внимание|проверьте|failed|error|warning|unavailable|not verified/i.test(text)) return false;
+  if (/укажите|заполните|выполните|добавьте|введите|подключите|настройте|выберите|нажмите|откройте|сохраните|запустите|замените|исправьте|нужно|необходимо|обязател|следует|перед публикац|must|required|please|ensure|configure|verify|execute/i.test(text)) return false;
+  if (block.kind === "code") return true;
+  if (block.kind !== "ul" && block.kind !== "ol") return false;
+  return block.items.length > 1 && block.items.every((item) =>
+    /`[^`]*(?:\.(?:tsx?|jsx?|css|json|py|sql|html)\b|src\/|components\/)[^`]*`/.test(item));
+}
 
 const H_RE = /^(#{1,3})\s+(.*)$/;
 const UL_RE = /^\s*[-*]\s+(.*)$/;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, Loader2, Mic, Send, Square, StopCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import type { SelectedElement } from "@/lib/api/types";
 import { useInspectorStore } from "@/store/inspector";
 import { SelectedChips } from "./SelectedChips";
+
+export type PromptInputHandle = { insertDraft: (text: string) => boolean };
 
 export function PromptInput({
   onSubmit,
@@ -21,6 +23,8 @@ export function PromptInput({
   textareaRef,
   placeholder,
   ariaLabel = "Опишите изменение проекта",
+  draftRef,
+  toolbarAction,
 }: {
   onSubmit: (
     text: string,
@@ -37,6 +41,8 @@ export function PromptInput({
   // discovery "Другое" chip to hand the user the free-text field. Falls back to
   // an internal ref when omitted, so existing call sites are unchanged.
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
+  draftRef?: Ref<PromptInputHandle>;
+  toolbarAction?: ReactNode;
 }) {
   const [value, setValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -46,6 +52,15 @@ export function PromptInput({
   // without this a duplicated key/click event can call onSubmit twice with the
   // same still-captured textarea value.
   const sendLockRef = useRef(false);
+
+  useImperativeHandle(draftRef, () => ({
+    insertDraft(text) {
+      if (sendLockRef.current || !text.trim()) return false;
+      setValue((draft) => draft.trim() ? `${draft}\n\n${text.trim()}` : text.trim());
+      ref.current?.focus();
+      return true;
+    },
+  }), [ref]);
 
   // Voice dictation → drop the transcript into the box (review-first), append to
   // anything already typed, then focus so the user can edit and send.
@@ -195,6 +210,8 @@ export function PromptInput({
         />
 
         <div className="flex items-center justify-between px-2.5 pb-2.5 gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+          {toolbarAction}
           {voice.state === "recording" ? (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-danger">
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger animate-pulse" />
@@ -209,7 +226,7 @@ export function PromptInput({
             <span className="min-w-0 truncate text-[11px] text-danger" title={voice.error}>
               {voice.error}
             </span>
-          ) : (
+          ) : !toolbarAction ? (
             <span
               className="text-[11px] font-mono text-fg-tertiary min-w-0 truncate"
               title="Ctrl + Enter — отправить"
@@ -222,7 +239,8 @@ export function PromptInput({
                 ↵
               </kbd>
             </span>
-          )}
+          ) : null}
+          </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
             {voice.supported && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { Lightbulb, Loader2 } from "lucide-react";
+import { ArrowDownLeft, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { ProductAdviceItem } from "@/lib/api/product-advice";
@@ -20,45 +20,24 @@ export function MaxProductAdvisor({
   return (
     <section
       data-testid="max-product-advisor"
-      aria-labelledby="max-product-advisor-heading"
-      className="mx-3 mb-3 overflow-hidden rounded-xl border border-border-default bg-surface-raised text-fg-primary shadow-sm"
+      aria-label="Рекомендации для приложения"
+      className="max-chat-advice-items"
     >
-      <header className="flex items-center gap-2.5 border-b border-border-subtle px-3.5 py-3">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#4f81f7]/10 text-accent-secondary">
-          <Lightbulb className="size-3.5" aria-hidden="true" />
-        </span>
-        <div>
-          <h2
-            id="max-product-advisor-heading"
-            className="text-xs font-semibold"
-          >
-            Что улучшить дальше
-          </h2>
-          <p className="mt-0.5 text-[10px] leading-4 text-fg-tertiary">
-            Подсказки по вашему приложению
-          </p>
-        </div>
-      </header>
-
-      <div className="divide-y divide-border-subtle">
+      <div>
         {visibleItems.map((item) => {
           const applying = applyingId === item.id;
           return (
             <div
               key={item.id}
               data-advice-id={item.id}
-              className="grid gap-2.5 px-3.5 py-3 sm:grid-cols-[1fr_auto] sm:items-center"
+              className="max-chat-advice-item"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-surface-base px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-fg-secondary">
-                    {item.kind === "feature" ? "Добавить" : "Улучшить"}
-                  </span>
-                  <h3 className="text-xs font-semibold">{item.title}</h3>
+                  <span className="max-chat-advice-kind">{item.kind === "feature" ? "Новая возможность" : "Улучшить"}</span>
                 </div>
-                <p className="mt-1 text-[11px] leading-4 text-fg-secondary">
-                  {item.benefit}
-                </p>
+                <h3>{item.title}</h3>
+                <p>{item.benefit}</p>
               </div>
               <Button
                 type="button"
@@ -67,15 +46,15 @@ export function MaxProductAdvisor({
                 disabled={applying}
                 aria-busy={applying}
                 onClick={() => void onApply(item)}
-                className="min-h-11 w-full border-border-default bg-surface-raised px-3 text-[11px] text-accent-secondary hover:border-[#4f81f7] hover:bg-surface-overlay sm:w-auto"
+                className="min-h-11 max-chat-advice-insert"
               >
                 {applying ? (
                   <>
                     <Loader2 className="animate-spin" aria-hidden="true" />
-                    Добавляем…
+                    Вставляем…
                   </>
                 ) : (
-                  "Добавить"
+                  <><ArrowDownLeft aria-hidden="true" /> Вставить в чат</>
                 )}
               </Button>
             </div>

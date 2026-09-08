@@ -3,18 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PanelLeftClose } from "lucide-react";
+import { ArrowDown, PanelLeftClose } from "lucide-react";
 import { toast } from "sonner";
 import {
   connectAppIntegration,
   getIntegrationCatalog,
 } from "@/lib/api/app-integrations";
 import { listMessages } from "@/lib/api/messages";
+import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import {
   getProductAdviceSnapshotId,
-  requestProductAdvice,
-  submitProductAdvice,
-  type ProductAdviceItem,
 } from "@/lib/api/product-advice";
 import type {
   AgentStep,
@@ -39,7 +37,10 @@ import {
   redactChatSecrets,
   resolveChatCredential,
 } from "@/lib/max-chat-credentials";
-import { MaxProductAdvisor } from "@/components/max/MaxProductAdvisor";
+import { MaxChatComposer } from "@/components/max/MaxChatComposer";
+import { useChatScroll } from "@/hooks/useChatScroll";
+import { Button } from "@/components/ui/button";
+import { isChatMessageStreaming } from "@/lib/chat-message-status";
 
 type DiscoveryChoices = {
   choices: string[];
@@ -63,12 +64,14 @@ export function ChatPanel({
   mode = "default",
   basePath = `/projects/${projectId}`,
   embedded = false,
+  currentSnapshotId,
 }: {
   projectId: string;
   projectSlug: string;
   mode?: "default" | "max";
   basePath?: string;
   embedded?: boolean;
+  currentSnapshotId?: string | null;
 }) {
   // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
   // The client no longer picks a model; this label is just sent through for
@@ -227,11 +230,9 @@ export function ChatPanel({
     void submitWithCredentialIntake("Постройте сейчас", []);
   };
 
-  // Determine streaming state from data: an assistant message with
-  // tokens_out === null is mid-stream.
+  // Durable server status wins; interrupted runs may never receive usage totals.
   const last = messages?.[messages.length - 1];
-  const isStreaming =
-    last?.role === "assistant" && last.tokens_out === null;
+  const isStreaming = isChatMessageStreaming(last);
   const streamingId = isStreaming ? last?.id : null;
 
   // Progressive-discovery quick replies (P1): chips belong to the LATEST
@@ -268,27 +269,14 @@ export function ChatPanel({
   });
   const showSurvey = !!survey && survey.length > 0 && !surveyDismissed;
 
-  const adviceSnapshotId =
-    mode === "max" ? getProductAdviceSnapshotId(messages ?? []) : null;
-  const productAdvice = useQuery({
-    queryKey: ["product-advice", projectId, adviceSnapshotId],
-    queryFn: () => requestProductAdvice(projectId),
-    enabled: !!adviceSnapshotId && !isStreaming && !showSurvey,
-    staleTime: Infinity,
-    retry: 1,
-    refetchOnWindowFocus: false,
+  const { data: currentConfig } = useQuery({
+    queryKey: ["max-config", projectId],
+    queryFn: () => getMaxProjectConfig(projectId),
+    enabled: mode === "max",
   });
-  const [applyingAdviceId, setApplyingAdviceId] = useState<string | null>(null);
-
-  const handleApplyAdvice = async (item: ProductAdviceItem) => {
-    if (applyingAdviceId !== null) return;
-    setApplyingAdviceId(item.id);
-    try {
-      await submitProductAdvice(item, submitWithCredentialIntake);
-    } finally {
-      setApplyingAdviceId(null);
-    }
-  };
+  const adviceSnapshotId = mode === "max" && !showSurvey
+    ? getProductAdviceSnapshotId(messages ?? [], currentSnapshotId) : null;
+  const Composer = mode === "max" ? MaxChatComposer : PromptInput;
 
   const clearSurvey = () => {
     qc.setQueryData(["onboarding-survey", projectId], null);
@@ -313,12 +301,7 @@ export function ChatPanel({
     });
   };
 
-  // Auto-scroll on new messages / chunks.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages?.length, last?.content, chips, productAdvice.data?.items.length]);
+  const chatScroll = useChatScroll(scrollRef, `${messages?.length}:${last?.content}:${chips?.choices.join("|")}`);
 
   // `/deep-research` entry hands the user's task over via `?p=`: auto-fire it
   // ONCE on a fresh (empty) project so they land mid-agent-run — the cloud
@@ -366,7 +349,7 @@ export function ChatPanel({
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
-    <div className={`flex h-full min-h-0 flex-col ${embedded ? "max-studio-chat bg-[#191b20]" : "border-r border-[#2b2d32] bg-[#121519]"}`}>
+    <div className={`flex h-full min-h-0 flex-col ${embedded ? "max-studio-chat max-editor-chat bg-surface-raised" : "border-r border-[#2b2d32] bg-[#121519]"}`}>
       {!embedded && (
         <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#2b2d32] px-4">
           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -386,6 +369,7 @@ export function ChatPanel({
 
       <div
         ref={scrollRef}
+        onScroll={chatScroll.onScroll}
         className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain scrollbar-elegant"
       >
         {isPending && (
@@ -431,20 +415,6 @@ export function ChatPanel({
           />
         ))}
 
-        {mode === "max" &&
-          !showSurvey &&
-          !isStreaming &&
-          productAdvice.data?.items.length ? (
-            <details className={embedded ? "max-editor-advice" : "m-4"}>
-              <summary>Подсказки для улучшения приложения</summary>
-              <MaxProductAdvisor
-              items={productAdvice.data.items}
-              applyingId={applyingAdviceId}
-              onApply={handleApplyAdvice}
-              />
-            </details>
-          ) : null}
-
         {!showSurvey && chips && chips.choices.length > 0 && (
           <DiscoveryFrame
             key={lastAssistantId}
@@ -466,7 +436,15 @@ export function ChatPanel({
       </div>
 
       <div className="shrink-0">
-        <PromptInput
+        {!chatScroll.following && <div className="max-chat-latest">
+          <Button type="button" variant="secondary" size="sm" onClick={chatScroll.scrollToLatest}>
+            <ArrowDown aria-hidden="true" /> К последнему сообщению
+          </Button>
+        </div>}
+        <Composer
+          projectId={projectId}
+          snapshotId={adviceSnapshotId}
+          contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
           onCancel={cancel}
           onCancelPending={cancelPending}

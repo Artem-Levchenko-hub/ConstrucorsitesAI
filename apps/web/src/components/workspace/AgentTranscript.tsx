@@ -165,7 +165,7 @@ export function AgentTranscript({
       visibleSteps.at(-1)?.ok === false);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
+    <div data-agent-transcript={streaming || capacityWaiting ? "working" : "idle"} className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">
       <button
         type="button"
         onClick={() => {
