@@ -71,6 +71,77 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
 describe("image version history", () => {
+  it("keeps the visual rail compact and uses each version's own mobile image", () => {
+    render(<Preview versions={[version(32), version(31, { previews: [
+      { url: "/desktop.png", width: 1280, height: 900, route: "/" },
+      { url: "/mobile.png", width: 390, height: 1200, route: "/" },
+    ] })]} />);
+    const entry = container.querySelector("[data-testid='max-version-31']")!;
+    expect(entry.textContent?.trim()).toBe("v31");
+    expect(entry.querySelector("img")?.getAttribute("src")).toBe("/mobile.png");
+    expect(entry.querySelector("time")).toBeNull();
+    expect(entry.getAttribute("aria-label")).toContain("Версия 31");
+  });
+  it("opens failed attempts separately without replacing the selected version image", () => {
+    render(<Preview versions={[version(32), version(31), version(30, { status: "failed", previews: [], preview_status: "missing" })]} />);
+    expect(container.querySelector("[data-testid='max-version-30']")).toBeNull();
+    click("[data-testid='max-history-activity-open']");
+    const row = document.querySelector("[data-testid='max-history-event-30']")!;
+    expect(row.textContent).toContain("Не завершилась");
+    expect(row.querySelector("[data-testid='max-version-30']")).toBeNull();
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
+    for (const fn of [api.runtime, api.start, api.sync, api.session, api.rollback]) expect(fn).not.toHaveBeenCalled();
+  });
+  it.each(["pending", "missing", "failed"] as const)("separates ready versions with %s captures without inventing an image", (preview_status) => {
+    render(<Preview versions={[version(32), version(31, { previews: [], preview_status })]} selected="v31" />);
+    expect(container.querySelector("[data-testid='max-version-31']")).toBeNull();
+    expect(container.querySelector("[data-testid='max-live-device']")).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(image()).toBeNull();
+    expect(container.querySelector("[data-testid='max-history-unavailable']")).not.toBeNull();
+    expect(container.textContent).not.toContain("Для этой версии нет изображения");
+    if (preview_status === "pending") expect(container.textContent).toContain("Снимок готовится");
+    else expect(container.textContent).not.toContain("Снимок готовится");
+  });
+  it("skips failed, cancelled and image-less entries when navigating historical images", () => {
+    render(<Preview versions={[version(32), version(31), version(30, { status: "failed", previews: [] }), version(29, { status: "cancelled", previews: [] }), version(28, { previews: [], preview_status: "pending" }), version(27)]} />);
+    act(() => container.querySelector("[data-testid='history-image-viewer']")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(image()?.getAttribute("src")).toBe("/images/v27.png");
+    expect(api.runtime).not.toHaveBeenCalled();
+  });
+  it("moves a failed thumbnail out of the rail and offers a retry without a runtime mutation", () => {
+    render(<Preview versions={[version(32), version(31), version(30)]} />);
+    const thumbnail = container.querySelector("[data-testid='max-version-30'] img")!;
+    act(() => thumbnail.dispatchEvent(new Event("error")));
+    expect(container.querySelector("[data-testid='max-version-30']")).toBeNull();
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
+    click("[data-testid='max-history-activity-open']");
+    const row = document.querySelector("[data-testid='max-history-event-30']")!;
+    expect(row.textContent).toContain("Не удалось загрузить снимок");
+    act(() => row.querySelector<HTMLButtonElement>("button[data-retry-image]")!.click());
+    expect(container.querySelector("[data-testid='max-version-30'] img")?.getAttribute("src")).toBe("/images/v30.png");
+    expect(api.start).not.toHaveBeenCalled(); expect(api.sync).not.toHaveBeenCalled();
+  });
+  it("makes a completed capture selectable when metadata arrives, without renumbering", () => {
+    render(<Preview versions={[version(32), version(31, { previews: [], preview_status: "pending" })]} selected="v31" />);
+    expect(image()).toBeNull();
+    render(<Preview versions={[version(32), version(31)]} selected="v31" />);
+    expect(image()?.getAttribute("src")).toBe("/images/v31.png");
+    expect(container.querySelector("[data-testid='max-version-31']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='max-history-unavailable']")).toBeNull();
+  });
+  it("returns focus to the rail when the final pending event becomes a ready capture while its dialog is open", async () => {
+    render(<Preview versions={[version(32), version(31, { previews: [], preview_status: "pending" })]} selected="v32" />);
+    click("[data-testid='max-history-activity-open']");
+    render(<Preview versions={[version(32), version(31)]} selected="v32" />);
+    const close = document.querySelector<HTMLButtonElement>("[data-testid='max-history-activity'] button[aria-label='Закрыть']")
+      ?? [...document.querySelectorAll<HTMLButtonElement>("[data-testid='max-history-activity'] button")].find((button) => button.textContent === "Закрыть");
+    expect(close).toBeDefined();
+    act(() => close!.click());
+    await settle();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(container.querySelector("[data-testid='max-version-rail']")?.contains(document.activeElement)).toBe(true);
+  });
   it("mounts only one preview on mobile and closes it with Escape", async () => {
     vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     render(<MaxWorkspaceShell project={project} email="a@example.com" />);
@@ -271,7 +342,7 @@ describe("image version history", () => {
     render(<Preview versions={[version(33, { status: "failed", previews: [], preview_status: "missing" }), version(32), version(31)]} selected={null} />);
     await waitForDom(() => expect(container.querySelector("iframe")).not.toBeNull());
     expect(container.querySelector("[data-testid='max-version-32']")?.getAttribute("aria-pressed")).toBe("true");
-    expect(container.querySelector("[data-testid='max-version-33']")?.getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector("[data-testid='max-version-33']")).toBeNull();
   });
   it("collapses a long prompt behind a short title and discloses its exact original text", () => {
     const prompt = "Измени заголовок приложения.\n\nСохрани список задач, SDK и авторизацию без изменений. ".repeat(8);
@@ -280,7 +351,8 @@ describe("image version history", () => {
     expect(toggle).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(toggle.textContent!.length).toBeLessThan(110);
-    expect(toggle.textContent).toContain("Измени заголовок приложения.");
+    expect(toggle.textContent).toContain("Подробнее");
+    expect(container.querySelector("[data-testid='max-preview-header']")?.textContent).not.toContain("Измени заголовок приложения.");
     const controls = toggle.getAttribute("aria-controls");
     expect(controls).toBeTruthy();
     click("[data-testid='max-version-prompt-toggle']");
@@ -288,7 +360,7 @@ describe("image version history", () => {
     const panel = document.getElementById(controls!);
     expect(panel).not.toBeNull();
     expect([...panel!.querySelectorAll("*")].some((node) => node.textContent === prompt)).toBe(true);
-    expect(panel!.textContent).toContain("sha31");
+    expect(panel!.textContent).toContain("06.09.2026");
     expect(image()?.getAttribute("src")).toBe("/images/v31.png");
     click("[data-testid='max-version-prompt-toggle']");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -317,9 +389,12 @@ describe("image version history", () => {
     render(<Preview versions={versions} />); const old = image()!;
     click("[data-testid='max-version-29']"); act(() => old.dispatchEvent(new Event("error")));
     expect(image()?.getAttribute("src")).toBe("/images/v29.png");
-    act(() => image()!.dispatchEvent(new Event("error"))); expect(container.textContent).toContain("Не удалось загрузить изображение");
-    click("[data-testid='max-version-30']"); expect(container.textContent).toContain("Изображение не сохранилось");
-    expect(container.querySelector("iframe")).toBeNull(); expect(container.querySelector<HTMLButtonElement>("[data-testid='max-restore-version']")?.disabled).toBe(true);
+    act(() => image()!.dispatchEvent(new Event("error"))); expect(container.textContent).toContain("Не удалось загрузить снимок");
+    expect(container.querySelector("[data-testid='max-version-30']")).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("[data-testid='max-live-device']")).toBeNull();
+    click("[data-testid='max-history-retry-image']");
+    expect(image()?.getAttribute("src")).toBe("/images/v29.png");
   });
   it("loads older permanent version numbers beyond 30 and preserves selection when HEAD/technical snapshots change", async () => {
     const first = Array.from({ length: 30 }, (_, i) => version(32 - i));
@@ -342,7 +417,11 @@ describe("image version history", () => {
   });
   it("keeps queued, failed and unchanged versions with their own number", () => {
     render(<Preview versions={[version(34, { status: "queued", previews: [], preview_status: "pending" }), version(33, { status: "failed", previews: [], preview_status: "missing" }), version(32, { status: "unchanged", snapshot_id: "s31", is_current: false }), version(31)]} selected="v34" />);
-    expect(container.textContent).toContain("В очереди"); expect(container.textContent).toContain("Ошибка"); expect(container.textContent).toContain("Без изменений");
+    click("[data-testid='max-history-activity-open']");
+    const activity = document.querySelector("[data-testid='max-history-activity']")!;
+    expect(activity.textContent).toContain("В очереди"); expect(activity.textContent).toContain("Не завершилась");
+    expect(activity.querySelector("[data-testid='max-history-event-34']")).not.toBeNull();
+    expect(activity.querySelector("[data-testid='max-history-event-33']")).not.toBeNull();
     click("[data-testid='max-version-32']"); expect(image()?.getAttribute("src")).toBe("/images/v32.png");
   });
   it("generic fullstack history never starts or shows HEAD, including pending and missing IDs", async () => {
@@ -397,9 +476,10 @@ describe("image version history", () => {
   });
   it("keeps missing version selection isolated, with an explicit return to live preview", async () => {
     render(<Preview versions={[version(32)]} selected="unknown" />); await settle();
-    expect(container.textContent).toContain("нет изображения"); expect(container.querySelector("iframe")).toBeNull();
+    expect(container.textContent).toContain("Версия недоступна"); expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("[data-testid='max-live-device']")).toBeNull();
     expect(container.querySelector("[aria-label='Предыдущая версия']")).toBeNull();
-    act(() => container.querySelector("[data-testid='history-image-viewer']")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    act(() => container.querySelector("[data-testid='max-history-unavailable']")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
     expect(container.querySelector("iframe")).toBeNull();
     expect(api.runtime).not.toHaveBeenCalled();
     click("[data-testid='max-return-current-version']");
@@ -425,7 +505,8 @@ describe("image version history", () => {
     function Submit() { const { submit } = usePromptStream("p", "app"); return <button data-testid="submit" onClick={() => void submit("Добавь каталог", "model")}>Отправить</button>; }
     render(<><MaxWorkspaceShell project={project} email="a@example.com" /><Submit /></>); await settle(); await settle();
     click("[data-testid='submit']"); await settle(); await settle();
-    expect(container.querySelector("[data-testid='max-version-33']")?.textContent).toContain("В очереди");
+    click("[data-testid='max-history-activity-open']");
+    expect(document.querySelector("[data-testid='max-history-event-33']")?.textContent).toContain("В очереди");
   });
 
   it("keeps viewport and version controls in generic image history", () => {
@@ -477,10 +558,11 @@ describe("image version history", () => {
     api.versions.mockResolvedValue({ versions: [version(33, { status: "queued", previews: [], preview_status: "pending" })], next_cursor: null });
     function Stream() { usePromptStream("p", "app"); return null; }
     render(<><MaxWorkspaceShell project={project} email="a@example.com" /><Stream /></>); await settle(); await settle();
-    expect(container.querySelector("[data-testid='max-version-33']")?.textContent).toContain("В очереди");
+    click("[data-testid='max-history-activity-open']");
+    expect(document.querySelector("[data-testid='max-history-event-33']")?.textContent).toContain("В очереди");
     api.versions.mockResolvedValue({ versions: [version(33, { status: type === "llm.error" ? "failed" : "cancelled", previews: [], preview_status: "missing" })], next_cursor: null });
     act(() => socket!.onmessage!({ data: JSON.stringify({ type, data: { message_id: "a", error: "failure" } }) })); await settle(); await settle();
-    expect(container.querySelector("[data-testid='max-version-33']")?.textContent).toContain(type === "llm.error" ? "Ошибка" : "Отменена");
+    expect(document.querySelector("[data-testid='max-history-event-33']")?.textContent).toContain(type === "llm.error" ? "Не завершилась" : "Отменена");
   });
   it("resolves API-relative authenticated images against the configured API origin", () => {
     render(<Preview versions={[version(31, { previews: [{ url: "/api/projects/p/snapshots/s31/previews/0", width: 390, height: 1000, route: "/" }] })]} />);

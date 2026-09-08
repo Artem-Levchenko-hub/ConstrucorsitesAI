@@ -1,10 +1,14 @@
 "use client";
 
+import { useRef, useState } from "react";
+import { Check, Clock3 } from "lucide-react";
 import type { ProjectVersion } from "@/lib/api/types";
-import { projectVersionTitle, versionStatusLabel, versionImageUrl } from "@/lib/project-version";
-import { cn } from "@/lib/utils";
+import { versionImageUrl } from "@/lib/project-version";
+import { maxHistoryState, maxVersionImage } from "@/lib/max-version-history";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-export function MaxVersionRail({ versions, selectedVersionId, loading, error, hasOlder, loadingOlder, onLoadOlder, onSelect }: {
+export function MaxVersionRail({ versions, selectedVersionId, loading, error, hasOlder, loadingOlder, onLoadOlder, onSelect, failedImages, onImageError, onRetryImages }: {
   versions: ProjectVersion[];
   selectedVersionId: string | null;
   loading: boolean;
@@ -13,21 +17,56 @@ export function MaxVersionRail({ versions, selectedVersionId, loading, error, ha
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
   onSelect: (versionId: string | null) => void;
+  failedImages: ReadonlySet<string>;
+  onImageError: (url: string) => void;
+  onRetryImages: () => void;
 }) {
-  return <nav className="max-projects-scroll h-full w-[90px] shrink-0 overflow-y-auto overscroll-contain border-r border-border-subtle px-1 py-2" aria-label="История версий" aria-busy={loading} data-testid="max-version-rail">
-    {loading ? <p role="status" className="p-2 text-[10px]">Загружаем историю…</p> : !versions.length && <p className="p-2 text-[10px] text-fg-tertiary">{error ? "История недоступна" : "Версии появятся здесь"}</p>}
-    <ol className="space-y-1">{versions.map((version) => <li key={version.id}>
-      <button type="button" onClick={() => onSelect(version.id)} aria-pressed={selectedVersionId === version.id || (selectedVersionId === null && version.is_current)} aria-label={`Версия ${version.number}: ${projectVersionTitle(version)}, ${versionStatusLabel[version.status]}`} title={`v${version.number} · ${projectVersionTitle(version)} · ${new Date(version.created_at).toLocaleString("ru-RU")}`} data-testid={`max-version-${version.number}`} className={cn("w-full rounded-lg p-1.5 text-left text-[9px] hover:bg-surface-overlay focus-visible:outline-accent", (selectedVersionId === version.id || (selectedVersionId === null && version.is_current)) && "bg-accent/10")}>
-        {version.previews[0] && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={versionImageUrl(version.previews[0].url)} alt="" loading="lazy" className="mb-1 h-10 w-full rounded object-cover object-top" />
-        )}
-        <span className="block font-semibold text-accent">v{version.number}{version.is_current ? " · текущая" : ""}</span>
-        <span className="block truncate text-fg-secondary">{projectVersionTitle(version)}</span>
-        <span className="block text-fg-tertiary">{versionStatusLabel[version.status]}</span>
-        <time dateTime={version.created_at} className="block text-fg-tertiary">{new Date(version.created_at).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })}</time>
-      </button>
-    </li>)}</ol>
-    {(hasOlder || error) && onLoadOlder && <button type="button" onClick={onLoadOlder} disabled={loadingOlder} data-testid="max-history-load-older" className="my-2 min-h-9 w-full rounded border border-border-default px-1 text-[10px] text-fg-secondary disabled:opacity-50">{loadingOlder ? "Загружаем…" : error ? "Повторить" : "Более ранние"}</button>}
+  const [activityOpen, setActivityOpen] = useState(false);
+  const activityTrigger = useRef<HTMLButtonElement>(null);
+  const rail = useRef<HTMLElement>(null);
+  const available = versions.filter((version) => {
+    const image = maxVersionImage(version);
+    return image && !failedImages.has(image.url);
+  });
+  const other = versions.filter((version) => !available.includes(version));
+  return <nav ref={rail} tabIndex={-1} className="max-version-rail" aria-label="История версий" aria-busy={loading} data-testid="max-version-rail">
+    <p className="max-version-rail-heading">Версии</p>
+    <div className="max-projects-scroll max-version-rail-scroll">
+      {loading && !versions.length ? <p role="status" className="max-version-rail-empty">Загружаем…</p> : !available.length && <p className="max-version-rail-empty">{error ? "История недоступна" : "Готовые снимки появятся здесь"}</p>}
+      <ol className="max-version-items">{available.map((version) => {
+        const image = maxVersionImage(version)!;
+        const selected = selectedVersionId === version.id || (selectedVersionId === null && version.is_current);
+        return <li key={version.id}>
+          <button type="button" onClick={() => onSelect(version.id)} aria-pressed={selected} aria-label={`Версия ${version.number}${version.is_current ? ", текущая" : ""}`} title={`Версия ${version.number}${version.is_current ? " · текущая" : ""}`} data-testid={`max-version-${version.number}`} className="max-version-item">
+            {/* Authenticated, immutable capture: preserve the API image URL. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img key={image.url} src={versionImageUrl(image.url)} alt="" loading="lazy" onError={() => onImageError(image.url)} />
+            <span className="max-version-item-label"><span>v{version.number}</span>{version.is_current && <Check aria-hidden="true" className="size-3.5" />}</span>
+          </button>
+        </li>;
+      })}</ol>
+      {(hasOlder || error) && onLoadOlder && <Button variant="outline" size="sm" type="button" onClick={onLoadOlder} disabled={loadingOlder} data-testid="max-history-load-older" className="max-version-older">{loadingOlder ? "Загружаем…" : error ? "Повторить" : "Ранее"}</Button>}
+    </div>
+    {other.length > 0 && <Button ref={activityTrigger} type="button" variant="outline" size="sm" className="max-version-activity-trigger" onClick={() => setActivityOpen(true)} data-testid="max-history-activity-open" aria-haspopup="dialog" aria-label={`Подготовка и попытки: ${other.length}`}>
+      <Clock3 aria-hidden="true" /><span>Попытки <strong>{other.length}</strong></span>
+    </Button>}
+    <Dialog open={activityOpen} onOpenChange={setActivityOpen}>
+      <DialogContent data-product-shell data-max-editor className="max-editor-version-dialog max-history-activity" data-testid="max-history-activity" onCloseAutoFocus={(event) => { event.preventDefault(); (activityTrigger.current ?? rail.current)?.focus(); }}>
+        <DialogHeader>
+          <DialogTitle>Подготовка и попытки</DialogTitle>
+          <DialogDescription>Здесь — незавершённые запросы и версии, снимки которых пока недоступны. Готовые снимки находятся в ленте.</DialogDescription>
+        </DialogHeader>
+        {other.length ? <ul>{other.map((version) => {
+          const image = maxVersionImage(version);
+          const state = maxHistoryState(version, !!image && failedImages.has(image.url));
+          return <li key={version.id} data-testid={`max-history-event-${version.number}`}>
+            <div className="max-history-event-heading"><strong>v{version.number}</strong><span className="max-history-status" data-tone={state.tone}>{state.label}</span></div>
+            <p>{state.hint}</p>
+            <details><summary>Подробнее о запросе</summary><time dateTime={version.created_at}>{new Date(version.created_at).toLocaleString("ru-RU")}</time><p className="max-history-original-prompt">{version.prompt_text || "Текст запроса не сохранился."}</p></details>
+            {!!image && failedImages.has(image.url) && <Button variant="outline" size="sm" data-retry-image onClick={onRetryImages}>Повторить загрузку</Button>}
+          </li>;
+        })}</ul> : <p>Все доступные снимки — в ленте версий.</p>}
+      </DialogContent>
+    </Dialog>
   </nav>;
 }

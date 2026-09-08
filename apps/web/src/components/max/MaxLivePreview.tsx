@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
   Check,
-  ChevronDown,
   CircleAlert,
   ExternalLink,
   Loader2,
@@ -33,7 +32,8 @@ import {
 } from "@/lib/api/max-studio";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project, ProjectVersion } from "@/lib/api/types";
-import { projectVersionTitle } from "@/lib/project-version";
+import { versionStatusLabel } from "@/lib/project-version";
+import { maxHistoryState, maxVersionImage } from "@/lib/max-version-history";
 import { VersionImagePreview } from "../workspace/VersionImagePreview";
 import { shortSha } from "@/lib/utils";
 import { MaxVersionRail } from "./MaxVersionRail";
@@ -48,12 +48,6 @@ const PREVIEW_RETRY_LIMIT = 8;
 const PREVIEW_RETRY_DELAY_MS = 1_500;
 const previewRetryDelay = (attempt: number) =>
   Math.min(PREVIEW_RETRY_DELAY_MS * 2 ** attempt, 10_000);
-
-function phonePreview(version?: ProjectVersion | null) {
-  return version?.previews.slice().sort((a, b) =>
-    Math.abs(a.width - SCREEN_WIDTH) - Math.abs(b.width - SCREEN_WIDTH),
-  )[0];
-}
 
 function isTransientPreviewError(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true;
@@ -103,12 +97,30 @@ export function MaxLivePreview({
   onLoadOlder?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const [imageFailures, setImageFailures] = useState({ projectId: project.id, urls: new Set<string>() });
+  if (imageFailures.projectId !== project.id) setImageFailures({ projectId: project.id, urls: new Set() });
+  const failedImages = imageFailures.projectId === project.id ? imageFailures.urls : new Set<string>();
+  const onImageError = (url: string) => setImageFailures((previous) => ({
+    projectId: project.id,
+    urls: new Set([...(previous.projectId === project.id ? previous.urls : []), url]),
+  }));
+  const retryImages = () => {
+    setImageFailures({ projectId: project.id, urls: new Set() });
+    void queryClient.invalidateQueries({ queryKey: ["project-versions", project.id] });
+  };
+  const gallery = versions.filter((version) => {
+    const image = maxVersionImage(version);
+    return image && !failedImages.has(image.url);
+  });
   const selectedIndex = versions.findIndex((version) => version.id === selectedVersionId);
   const selectedSnapshot = versions[selectedIndex] ?? null;
-  const historicalImage = phonePreview(selectedSnapshot);
+  const historicalImage = maxVersionImage(selectedSnapshot);
+  const imageFailed = !!historicalImage && failedImages.has(historicalImage.url);
   // Queued/failed entries can share the applied snapshot. Only the server's
   // current marker identifies the version whose application is running.
   const viewingHistorical = selectedVersionId !== null && (!historyCurrent || selectedSnapshot?.is_current !== true);
+  const historyUnavailable = viewingHistorical && (!historicalImage || imageFailed);
+  const unavailableState = maxHistoryState(selectedSnapshot, imageFailed);
   const displayedVersion = selectedVersionId !== null
     ? selectedSnapshot
     : historyCurrent ? versions.find((version) => version.is_current) ?? null : null;
@@ -311,8 +323,9 @@ export function MaxLivePreview({
   const showPreviewError = Boolean(previewError) && !preparing;
   const displayPreviewUrl = previewUrl ?? lastWorkingUrl;
   const selectedVersion = selectedSnapshot?.number ?? null;
-  const previousVersion = selectedIndex >= 0 ? versions[selectedIndex + 1] : undefined;
-  const nextVersion = selectedIndex > 0 ? versions[selectedIndex - 1] : undefined;
+  const galleryIndex = gallery.findIndex((version) => version.id === selectedVersionId);
+  const previousVersion = galleryIndex >= 0 ? gallery[galleryIndex + 1] : undefined;
+  const nextVersion = galleryIndex > 0 ? gallery[galleryIndex - 1] : undefined;
   const restoreTargetSnapshot = versions.find((version) => version.id === restoreTargetId) ?? null;
   const restoreTargetVersion = restoreTargetSnapshot?.number ?? null;
   const preparationLabel = !runtimeRunning
@@ -372,22 +385,22 @@ export function MaxLivePreview({
             {viewingHistorical ? "История версий" : "Живое превью"}
           </p>
           {displayedVersion ? (
-            <h2 className="mt-1 min-w-0 text-sm font-semibold">
-              <button
+            <div className="max-version-header-summary">
+              <h2>v{displayedVersion.number}{!viewingHistorical && " · текущая"}</h2>
+              <Button
+                variant="outline"
+                size="sm"
                 type="button"
                 ref={promptToggle}
                 onClick={() => setPromptTargetId(promptOpen ? null : displayedVersion.id)}
                 aria-expanded={promptOpen}
                 aria-controls={promptContentId}
-                aria-label={`Промпт версии v${displayedVersion.number}`}
-                title={projectVersionTitle(displayedVersion)}
-                className="flex min-h-9 w-full min-w-0 items-center gap-1.5 rounded text-left focus-visible:outline-accent"
+                aria-label={`Подробнее о версии v${displayedVersion.number}`}
                 data-testid="max-version-prompt-toggle"
               >
-                <span className="truncate">v{displayedVersion.number} · {projectVersionTitle(displayedVersion)}</span>
-                <ChevronDown className="size-4 shrink-0 text-fg-secondary" />
-              </button>
-            </h2>
+                Подробнее
+              </Button>
+            </div>
           ) : <h2 className="mt-1 truncate text-sm font-semibold">{viewingHistorical ? "Версия недоступна" : "Текущая версия"}</h2>}
         </div>
         <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
@@ -429,6 +442,7 @@ export function MaxLivePreview({
 
       <div className="mt-3 flex min-h-0 flex-1">
         {(versions.length > 0 || historyError || (snapshotsLoading && !!currentSnapshotId)) && <MaxVersionRail
+          key={project.id}
           versions={historyCurrent ? versions : versions.map((version) => ({ ...version, is_current: false }))}
           error={historyError}
           hasOlder={hasOlder}
@@ -437,6 +451,9 @@ export function MaxLivePreview({
           selectedVersionId={selectedVersionId}
           loading={snapshotsLoading}
           onSelect={onSelectVersion}
+          failedImages={failedImages}
+          onImageError={onImageError}
+          onRetryImages={retryImages}
         />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
         <div
@@ -444,7 +461,12 @@ export function MaxLivePreview({
           className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"
           data-testid="max-live-device-stage"
         >
-          <div
+          {historyUnavailable ? <section className="max-history-unavailable" data-testid="max-history-unavailable" aria-live="polite">
+            <CircleAlert aria-hidden="true" />
+            <h3>{unavailableState.label}</h3>
+            <p>{unavailableState.hint}</p>
+            {(!selectedSnapshot || ["ready", "unchanged"].includes(selectedSnapshot.status)) && <Button variant="outline" size="sm" onClick={retryImages} data-testid="max-history-retry-image">{imageFailed ? "Повторить загрузку" : "Обновить историю"}</Button>}
+          </section> : <div
             className="relative shrink-0"
             style={{
               width: DEVICE_WIDTH * deviceScale,
@@ -484,11 +506,12 @@ export function MaxLivePreview({
                         images={historicalImage ? [historicalImage] : []}
                         previewStatus={selectedSnapshot?.preview_status ?? (snapshotsLoading ? "pending" : "missing")}
                         status={selectedSnapshot?.status}
-                        previous={phonePreview(previousVersion)}
-                        next={phonePreview(nextVersion)}
+                        previous={maxVersionImage(previousVersion)}
+                        next={maxVersionImage(nextVersion)}
                         onPrevious={previousVersion ? () => onSelectVersion(previousVersion.id) : undefined}
                         onNext={nextVersion ? () => onSelectVersion(nextVersion.id) : undefined}
                         showControls={false}
+                        onImageError={onImageError}
                       />
                     </div>
                   ) : displayPreviewUrl ? (
@@ -593,7 +616,7 @@ export function MaxLivePreview({
                 <div className="pointer-events-none absolute inset-0 rounded-[48px] ring-1 ring-inset ring-white/10" aria-hidden="true" />
               </div>
             </div>
-          </div>
+          </div>}
         </div>
         <div className="mt-1 flex h-12 shrink-0 items-center justify-center text-center" data-testid="max-preview-actions">
           {viewingHistorical ? (
@@ -607,7 +630,7 @@ export function MaxLivePreview({
               >
                 Живое превью
               </button>
-              <button
+              {!historyUnavailable && <button
                 type="button"
                 onClick={() => setRestoreTargetId(selectedSnapshot?.id ?? null)}
                 disabled={restoringSnapshot || !selectedSnapshot?.can_restore || !selectedSnapshot.snapshot_id}
@@ -616,7 +639,7 @@ export function MaxLivePreview({
               >
                 {restoringSnapshot && <Loader2 className="size-3 animate-spin" />}
                 Восстановить v{selectedVersion}
-              </button>
+              </button>}
             </div>
           ) : (
             <button
@@ -641,12 +664,13 @@ export function MaxLivePreview({
       <Dialog open={promptOpen} onOpenChange={(open) => { if (!open) setPromptTargetId(null); }}>
         <DialogContent data-product-shell data-max-editor id={promptContentId} className="max-editor-version-dialog max-h-[80dvh] max-w-xl overflow-y-auto" data-testid="max-version-prompt" onCloseAutoFocus={(event) => { event.preventDefault(); promptToggle.current?.focus(); }}>
           <DialogHeader>
-            <DialogTitle>Запрос к версии v{displayedVersion?.number}</DialogTitle>
+            <DialogTitle>Версия v{displayedVersion?.number}</DialogTitle>
             <DialogDescription>
-              Исходный промпт{displayedVersion?.commit_sha ? ` · коммит ${shortSha(displayedVersion.commit_sha)}` : ""}
+              {displayedVersion && <><time dateTime={displayedVersion.created_at}>{new Date(displayedVersion.created_at).toLocaleString("ru-RU")}</time>{` · ${versionStatusLabel[displayedVersion.status]}`}</>}
               {viewingHistorical && historicalImage?.reconstructed && <span className="mt-2 block">Восстановлено из кода · данные для предпросмотра</span>}
             </DialogDescription>
           </DialogHeader>
+          <h3 className="text-sm font-semibold">Ваш запрос</h3>
           <p className="whitespace-pre-wrap break-words text-sm leading-6" data-testid="max-version-prompt-text">{displayedVersion?.prompt_text || "Текст запроса не сохранился."}</p>
           <DialogFooter><Button variant="outline" onClick={() => setPromptTargetId(null)}>Закрыть</Button></DialogFooter>
         </DialogContent>

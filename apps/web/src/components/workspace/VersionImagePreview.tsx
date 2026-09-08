@@ -6,7 +6,7 @@ import type { ProjectVersion, VersionPreviewImage } from "@/lib/api/types";
 import { versionStatusLabel, versionImageUrl } from "@/lib/project-version";
 
 /** Image-only history. Loading an artifact never calls a render/runtime endpoint. */
-export function VersionImagePreview({ identity, label, images, previewStatus, status, previous, next, onPrevious, onNext, showControls = true }: {
+export function VersionImagePreview({ identity, label, images, previewStatus, status, previous, next, onPrevious, onNext, onImageError, showControls = true }: {
   identity: string;
   label: string;
   images: VersionPreviewImage[];
@@ -16,6 +16,7 @@ export function VersionImagePreview({ identity, label, images, previewStatus, st
   next?: VersionPreviewImage;
   onPrevious?: () => void;
   onNext?: () => void;
+  onImageError?: (url: string) => void;
   showControls?: boolean;
 }) {
   useEffect(() => {
@@ -24,10 +25,10 @@ export function VersionImagePreview({ identity, label, images, previewStatus, st
     });
     return () => { for (const img of preload) img.onload = img.onerror = null; };
   }, [previous?.url, next?.url]);
-  return <ImagePage key={identity} {...{ label, images, previewStatus, status, onPrevious, onNext, showControls }} />;
+  return <ImagePage key={identity} {...{ label, images, previewStatus, status, onPrevious, onNext, onImageError, showControls }} />;
 }
 
-function ImagePage({ label, images, previewStatus, status, onPrevious, onNext, showControls }: Omit<Parameters<typeof VersionImagePreview>[0], "identity" | "previous" | "next">) {
+function ImagePage({ label, images, previewStatus, status, onPrevious, onNext, onImageError, showControls }: Omit<Parameters<typeof VersionImagePreview>[0], "identity" | "previous" | "next">) {
   const touch = useRef<{ x: number; y: number } | null>(null);
   const [screen, setScreen] = useState(0);
   const currentImage = images[screen] ?? images[0];
@@ -54,12 +55,12 @@ function ImagePage({ label, images, previewStatus, status, onPrevious, onNext, s
       </div>}
       {showControls && images.length > 1 && <select className="mx-3 my-2 rounded bg-[#2b2d32] p-2 text-xs" aria-label="Экран версии" value={screen} onChange={(event) => setScreen(Number(event.target.value))}>{images.map((image, index) => <option key={`${image.route}:${index}`} value={index}>{image.route || `Экран ${index + 1}`}{image.width > 0 ? ` · ${image.width}px` : ""}</option>)}</select>}
       {showControls && currentImage?.reconstructed && <p className="shrink-0 px-3 py-2 text-center text-[10px] text-[#9fa1b1]">Восстановлено из кода · данные для предпросмотра</p>}
-      {currentImage ? <ArtifactImage key={currentImage.url} image={currentImage} label={label} /> : <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-[#9fa1b1]" role="status">{previewStatus === "pending" ? "Изображение готовится" : previewStatus === "failed" ? "Изображение не сохранилось" : "Для этой версии нет изображения"}</div>}
+      {currentImage ? <ArtifactImage key={currentImage.url} image={currentImage} label={label} onImageError={onImageError} /> : <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-[#9fa1b1]" role="status">{previewStatus === "pending" ? "Изображение готовится" : previewStatus === "failed" ? "Изображение не сохранилось" : "Для этой версии нет изображения"}</div>}
     </section>
   );
 }
 
-function ArtifactImage({ image, label }: { image: VersionPreviewImage; label: string }) {
+function ArtifactImage({ image, label, onImageError }: { image: VersionPreviewImage; label: string; onImageError?: (url: string) => void }) {
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [attempt, setAttempt] = useState(0);
   return <div className="min-h-0 flex-1 overscroll-contain" style={{ overflowY: "auto" }} data-testid="history-image-scroll" aria-busy={state === "loading"}>
@@ -67,7 +68,7 @@ function ArtifactImage({ image, label }: { image: VersionPreviewImage; label: st
     {state === "failed" ? <div className="p-8 text-center text-sm"><p role="status">Не удалось загрузить изображение</p><button type="button" className="mt-3 underline" onClick={() => { setState("loading"); setAttempt((n) => n + 1); }}>Повторить загрузку</button></div> : (
       // Immutable server capture, rendered at its natural aspect ratio.
       // eslint-disable-next-line @next/next/no-img-element
-      <img key={attempt} src={versionImageUrl(image.url)} width={image.width || undefined} height={image.height || undefined} alt={`Снимок: ${label}`} data-testid="history-image" style={{ width: "100%", height: "auto", display: "block" }} onLoad={() => setState("ready")} onError={() => setState("failed")} />
+      <img key={attempt} src={versionImageUrl(image.url)} width={image.width || undefined} height={image.height || undefined} alt={`Снимок: ${label}`} data-testid="history-image" style={{ width: "100%", height: "auto", display: "block" }} onLoad={() => setState("ready")} onError={() => { setState("failed"); onImageError?.(image.url); }} />
     )}
   </div>;
 }
