@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 89,
+  "version": 90,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2690,6 +2690,18 @@
    "evidence": "API и оба workers 85593d30 доставлены: точный image/release, health и публичные маршруты подтверждены, gate снят. CI34278360238 success: API3264 passed / 12 skipped / 8 xfailed; orchestrator1244 passed / 30 skipped / 15 xfailed плюс9 live Docker checks. Зависший unit job повторён на том же SHA; причина зависания не установлена. BEFORE50, AFTER212 и offline50 consumer tests в production-образе прошли; Ruff/mypy276 clean. AST функций/классов неизменен, независимое review No findings. Web, orchestrator, прочие процессы и dirty документы сохранены; пользовательских генераций для проверки не запускали.",
    "impact": "Изменение семейства браузерных контейнеров больше не требует синхронного редактирования четырёх копий списка. Runtime speedup не заявляется.",
    "next_vector": "Отдельно вынести WebSocket transport с сохранением reconnect/replay и интерфейса. Итоговый аудит всей программы ещё впереди.",
+   "category": "верификация",
+   "period": "09.09"
+  },
+  {
+   "id": "H145",
+   "title": "Соединение генерации выделено в отдельный модуль интерфейса",
+   "description": "Перенесли WebSocket transport из большого React hook без изменения протокола, событий, таймеров и интерфейса. Тело hook и транспорт сохранены; новый модуль можно проверять напрямую.",
+   "status": "testing",
+   "score": null,
+   "evidence": "Исходные19 и новые15 тестов прошли. Полный web:487 passed / 77 files; ESLint/typecheck clean. Browser1440/390 сохранил F5, watermark7, выбранную историю и terminal; console errors0. Независимое review No findings. Локальная компиляция и46 static pages прошли, Windows standalone packaging завершился EPERM symlink. Нужны Linux web/image gates и web-only поставка.",
+   "impact": "Управление соединением можно читать и тестировать отдельно от состояния React и истории версий. Общее ускорение генерации этим переносом не заявляется.",
+   "next_vector": "Закончить Linux-проверки и поставку. Сверить итоговую матрицу рефакторинга; предсуществующие cleanup gaps рассматривать отдельным изменением поведения.",
    "category": "верификация",
    "period": "09.09"
   }

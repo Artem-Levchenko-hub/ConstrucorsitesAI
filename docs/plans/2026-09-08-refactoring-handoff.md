@@ -64,7 +64,15 @@ review: No findings. Доказательства:
 [Task10B verification](2026-09-08-task10b-browser-container-verification.md).
 Следующий product diff — Task11 после синхронизации delivery docs и H144.
 
-Task 11: кандидат — только openRealStream/StreamHandle, не весь lifecycle.
+**Task11 transport выполняется:** openRealStream/StreamHandle перенесены
+отдельно, весь hook и транспорт сохраняют прежнее поведение. AFTER19 и
+новые15 tests прошли; full web487/77, ESLint/typecheck clean, independent
+review No findings. Browser1440/390 AFTER совпал с BEFORE. Windows standalone
+packaging завершился прежним EPERM symlink; нужна Linux web/image сборка.
+Commit/push и web-only delivery ещё впереди. Продолжить с
+[Task11 verification](2026-09-09-task11-transport-verification.md).
+
+Граница исходного Task11 baseline — только openRealStream/StreamHandle, не весь lifecycle.
 Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
 (14 actual AST transport + 5 real hook), 27.54 s; read-only review No findings.
 Воспроизведён предсуществующий gap: heartbeat после unmount и позднее открытие
@@ -77,13 +85,17 @@ reconnect after_seq=7, выбранная v31, terminal→F5, без console err
 Команды и ограничения — в artifact browser-report.md. Не превращать
 характеризацию текущего дефекта в постоянный тест желаемого поведения.
 
-Task 12 требует измеренного IO/build hot path; пользовательские генерации
-самостоятельно не запускать. Task 13 и вся программа ещё не завершены.
+Task12: read-only разбор run d6356635 не дал внутренней детализации ensure43s
+и release25.7s; IO hot path не доказан. Нельзя удалять финальную сборку как
+предполагаемый дубль. Пользовательские генерации самостоятельно не запускать.
+Task13: три независимых cumulative reviews179a3b3f..85593d30 — No findings;
+matrix draft20 явно отделяет fixtures от customer-flow. Это ещё не полная
+приёмка всей программы. Артефакты: `.artifacts/refactor-task13-20260908/`.
 
 Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
 генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
 Не повторять Task 4/5. H140 уже опубликован, public version 72, 136 прежних
-записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены. H143 опубликован: public version 75, 139 прежних записей сохранены; следующая H144. H134–H136 не публиковать целиком
+записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены. H143 опубликован: public version 75, 139 прежних записей сохранены; H144 опубликован: public version76, 140 прежних записей сохранены; следующая H145. H134–H136 не публиковать целиком
 вместе с репозиторным JSON.
 
 ### Предыдущая поставка Task 5
