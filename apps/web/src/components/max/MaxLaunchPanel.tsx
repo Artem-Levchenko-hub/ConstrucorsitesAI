@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, Server, X } from "lucide-react";
+import { ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, Server, X } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,13 @@ import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getLastDeploy } from "@/lib/api/runtime";
 import type { DeployPhase, Project } from "@/lib/api/types";
-import { getMaxJourney, getMaxJourneyItemHref } from "@/lib/max-journey";
+import { getMaxJourney } from "@/lib/max-journey";
 import { isMaxDeployActive } from "@/lib/max-launch-state";
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLaunchButton } from "./MaxLaunchButton";
+import { MaxPublicationRequirements, PUBLICATION_REQUIREMENTS } from "./MaxPublicationRequirements";
 import "./max-studio.css";
 import "./max-project-workspace.css";
 
@@ -34,6 +35,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, refetchInterval: busyDeploy ? 2_000 : 10_000 });
   const items = readiness.data?.items ?? [];
   const available = readiness.isSuccess && items.length > 0;
+  const requiredDone = PUBLICATION_REQUIREMENTS.filter(required => items.find(item => item.id === required.id)?.done).length;
   const journey = getMaxJourney(project.id, items);
   const currentStage = available ? journey.currentStage : undefined;
   const stateError = readiness.isError || deploy.isError;
@@ -63,8 +65,8 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
     <aside data-product-shell data-max-studio data-testid="max-launch-panel" className={`max-launch-panel max-studio-launch${standalone ? " max-studio-launch-standalone" : ""}`}>
       {!standalone && <header className="max-launch-dialog-heading"><div><p className="max-project-eyebrow">{project.name}</p><h2>Запуск в MAX</h2></div><button type="button" onClick={onClose ?? toggleTimeline} aria-label="Свернуть панель запуска" className="max-project-back"><X className="size-5" /></button></header>}
       <div className="max-launch-panel-scroll max-studio-launch-body">
-        <div className="max-launch-readiness"><span>Готовность к запуску</span><strong>{readiness.isError ? "Статус недоступен" : available ? `Готово ${journey.completedCount} из ${journey.total}` : "Проверяем…"}</strong>
-          {!readiness.isError && <progress data-testid="max-launch-progress" aria-label="Готовность к запуску" value={available ? journey.progress : 0} max={100} />}
+        <div className="max-launch-readiness"><span>Готовность к публикации</span><strong>{readiness.isError ? "Статус недоступен" : available ? `Готово ${requiredDone} из ${PUBLICATION_REQUIREMENTS.length}` : "Проверяем…"}</strong>
+          {!readiness.isError && <progress data-testid="max-launch-progress" aria-label="Готовность к публикации" value={available ? requiredDone / PUBLICATION_REQUIREMENTS.length * 100 : 0} max={100} />}
         </div>
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
@@ -85,7 +87,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
           {productionUrl && <div className="max-launch-address"><a data-testid="max-launch-app-url" href={productionUrl} target="_blank" rel="noreferrer">{productionUrl}</a><Button variant="ghost" size="icon" aria-label="Скопировать адрес приложения" onClick={() => void copyUrl()}><Copy className="size-4" /></Button></div>}
           {published && !items.find(item => item.id === "max_url")?.done && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в MAX Partner, затем подтвердите его в настройках.</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}?panel=max`}>Подтвердить адрес</Link></div>}
         </section>
-        {available && <details className="max-launch-checks"><summary>Пройдено {journey.completedCount} из {journey.total} проверок <span>Подробнее</span></summary><ol aria-label="Шаги публикации в MAX">{journey.stages.map(step => <li key={step.id} aria-current={step.status === "current" ? "step" : undefined} data-status={step.status} data-testid={`max-launch-step-${step.id}`}><span className={step.done ? "text-success-fg" : "text-fg-secondary"}>{step.done ? <Check className="size-4" /> : step.position}</span><Link href={step.href} onClick={onClose}>{step.label}</Link><small>{step.done ? "Готово" : "Настроить"}</small></li>)}</ol></details>}
+        <MaxPublicationRequirements projectId={project.id} items={items} status={readiness.isError ? "error" : available ? "ready" : "loading"} />
         <section aria-label="Другие разделы проекта" data-testid="max-launch-actions" className="max-launch-options">
           <header><h3>Сервисы и размещение</h3><p>Необязательно для запуска</p></header>
           <div className="max-launch-option"><Plug className="size-4" /><div><h4>Подключить сервисы</h4><p>Платежи, CRM и аналитика</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=services`}>Выбрать сервисы</Link></Button></div>

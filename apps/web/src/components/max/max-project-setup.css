@@ -30,7 +30,8 @@
 .max-setup-section { animation: max-setup-enter .16s ease-out; }
 .max-project-setup .max-setup-intro h3 { font-size: 20px; line-height: 1.35; font-weight: 600; letter-spacing: -.02em; }
 .max-setup-purpose { display: block; margin-bottom: 8px; font-size: 11px; line-height: 1.5; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--color-accent-secondary); }
-.max-setup-purpose[data-publication=true] { color: var(--color-fg-primary); }
+.max-setup-purpose[data-publication=true] { color: var(--color-accent-secondary); }
+.max-project-setup .max-setup-required { display: block; color: var(--color-accent-secondary); font-size: 12px; font-weight: 600; line-height: 1.6; }
 .max-setup-intro p { max-width: 640px; margin-top: 7px; font-size: 13px; line-height: 1.65; color: var(--color-fg-secondary); }
 .max-setup-group { min-width: 0; margin: 25px 0 0; padding: 0; border: 0; }
 .max-setup-group + .max-setup-group { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--color-border-default); }

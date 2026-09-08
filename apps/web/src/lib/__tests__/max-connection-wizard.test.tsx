@@ -123,6 +123,21 @@ describe("MAX connection wizard", () => {
     expect(api.saveAttached).not.toHaveBeenCalled();
   });
 
+  it("keeps back and connect in the same step action group and returns without submitting", async () => {
+    await render();
+    await click("Бот готов — далее");
+    const actions = container.querySelector('[role="group"][aria-label="Действия шага"]');
+    expect(actions).not.toBeNull();
+    expect(actions!.contains(button("Подключить бота")!)).toBe(true);
+    const back = actions!.querySelector<HTMLButtonElement>('button[aria-label="Назад к созданию бота"]');
+    expect(back).not.toBeNull();
+    await fillToken("test-secret-not-submitted");
+    await act(async () => back!.click());
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+    expect(button("Бот готов — далее")).toBeDefined();
+    expectNoWrites();
+  });
+
   it("starts at publication for a connected bot without a permanent HTTPS address", async () => {
     api.integration.mockResolvedValue(connected);
     await render();

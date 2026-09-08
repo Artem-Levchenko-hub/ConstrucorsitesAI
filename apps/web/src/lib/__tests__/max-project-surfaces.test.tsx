@@ -51,6 +51,37 @@ it("does not call an older release the current version in launch", async () => {
   await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
   expect(container.textContent).not.toContain("Production URL готов");
 });
+
+it("shows publication blockers without expanding details and links each unfinished requirement to its editor", async () => {
+  const state = readiness();
+  state.items = state.items.map(item => ({ ...item, done: item.id === "build" }));
+  api.readiness.mockResolvedValue(state);
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.querySelector('[data-requirement="build"][data-state="done"]')).not.toBeNull());
+  const requirements = container.querySelector('[aria-label="Обязательно до публикации"]');
+  expect(requirements).not.toBeNull();
+  expect(requirements!.closest("details")).toBeNull();
+  expect(requirements!.querySelectorAll('[data-requirement]')).toHaveLength(4);
+  expect(requirements!.querySelector('[data-requirement="business"] a')?.getAttribute("href")).toBe("/max/project-surfaces?data=owner");
+  expect(requirements!.querySelector('[data-requirement="legal"] a')?.getAttribute("href")).toBe("/max/project-surfaces?data=policies");
+  expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
+  expect(requirements!.querySelector('[data-requirement="max_url"]')).toBeNull();
+  expect(container.querySelector('[aria-label="После публикации"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
+});
+
+it.each(["loading", "error"])("never marks stale requirements complete while readiness is %s", async state => {
+  if (state === "error") {
+    client.setQueryData(["max-readiness", project.id], readiness(true));
+    client.setQueryDefaults(["max-readiness", project.id], { staleTime: 0 });
+    api.readiness.mockRejectedValue(new Error("offline"));
+  } else api.readiness.mockImplementation(() => new Promise(() => {}));
+  await mount(<MaxLaunchPanel project={project} />);
+  if (state === "error") await settle(() => expect(container.textContent).toContain("Статус недоступен"));
+  const requirements = container.querySelector('[aria-label="Обязательно до публикации"]');
+  expect(requirements).not.toBeNull();
+  expect(requirements!.querySelectorAll('[data-state="done"]')).toHaveLength(0);
+  expect(requirements!.querySelectorAll('[data-state="unknown"]')).toHaveLength(4);
+});
 it("keeps unknown launch readiness distinct from completed preparation", async () => {
   api.readiness.mockImplementation(() => new Promise(() => {}));
   await mount(<MaxLaunchPanel project={project} />);

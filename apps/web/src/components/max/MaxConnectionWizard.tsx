@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Bot, Check, Copy, ExternalLink, KeyRound, Loader2, Rocket, Smartphone } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Check, Copy, ExternalLink, KeyRound, Loader2, Rocket, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -155,8 +155,10 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
           {data.status === "error" && <p role="alert" className="max-connect-error">{data.last_error || "Подключение требует проверки. Обновите токен или проверьте бота."}</p>}
           {tokenField}
           {cabinetLink}
-          <div className="max-connect-primary"><Button disabled={busy || token.trim().length < 10} onClick={() => connect.mutate()}>{connect.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <KeyRound aria-hidden="true" />}Подключить бота</Button></div>
-          {!data.connected && <button type="button" className="max-connect-back" disabled={busy} onClick={() => { setBotPrepared(false); setToken(""); connect.reset(); }}>Назад к созданию бота</button>}
+          <div className="max-connect-primary" role="group" aria-label="Действия шага">
+            {!data.connected && <Button variant="outline" className="max-connect-back" aria-label="Назад к созданию бота" disabled={busy} onClick={() => { setBotPrepared(false); setToken(""); connect.reset(); }}><ArrowLeft aria-hidden="true" />Назад</Button>}
+            <Button disabled={busy || token.trim().length < 10} onClick={() => connect.mutate()}>{connect.isPending ? <Loader2 className="animate-spin" aria-hidden="true" /> : <KeyRound aria-hidden="true" />}Подключить бота</Button>
+          </div>
         </>}
         {step === 3 && <>
           <h2 id="max-connect-step-title">Опубликуйте приложение</h2>

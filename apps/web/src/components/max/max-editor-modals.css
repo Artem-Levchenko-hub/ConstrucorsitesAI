@@ -39,13 +39,13 @@
 .max-connect-cabinet { display: inline-flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid #c4d0e5; border-radius: 8px; padding: 10px 14px; min-height: 42px; color: #2456b6; font-size: 14px; font-weight: 550; margin: 16px 0; }
 .max-connect-cabinet:hover { background: #edf3ff; }
 .max-connect-cabinet svg, .max-connect-primary svg, .max-connect-address svg { width: 17px; height: 17px; }
-.max-connect-primary { position: sticky; z-index: 1; bottom: -28px; display: flex; justify-content: flex-end; margin: 20px -28px -28px; padding: 16px 28px 28px; background: #fff; border-top: 1px solid #e3e8f0; box-shadow: 0 -8px 16px #ffffffed; }
+.max-connect-primary { position: sticky; z-index: 1; bottom: -28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 20px -28px -28px; padding: 16px 28px 28px; background: #fff; border-top: 1px solid #e3e8f0; box-shadow: 0 -8px 16px #ffffffed; }
 .max-connect-primary button { min-height: 44px; padding-inline: 20px; font-size: 14px; border-radius: 8px; }
 .max-connect-token { margin-block: 24px 12px; }
 .max-connect-token label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
 .max-connect-token input { height: 48px; font-size: 15px; border: 1px solid #b9c7df; background: #fff; }
 .max-connect-step p.max-connect-hint, .max-connect-hint { font-size: 12px; line-height: 1.6; color: #60718d; margin-top: 8px; }
-.max-connect-back { min-height: 36px; margin-top: 12px; color: #325db1; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; }
+.max-connect-primary .max-connect-back { margin-right: auto; flex-shrink: 0; }
 .max-connect-address { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: #edf3ff; border-left: 3px solid #285af0; padding: 16px; margin: 24px 0 16px; }
 .max-connect-address code { flex: 1; min-width: 180px; overflow-wrap: anywhere; font-family: inherit; color: #234b9b; font-size: 15px; }
 .max-connect-path { margin-block: 12px; padding: 16px; border: 1px dashed #c4d0e5; border-radius: 8px; }
@@ -79,7 +79,8 @@
   .max-connect-progress small { font-size: 10px; }
   .max-connect-step h2 { font-size: 24px; }
   .max-connect-step p.max-connect-lead { font-size: 15px; }
-  .max-connect-primary button { width: 100%; }
+  .max-connect-primary button { flex: 1; min-width: 0; padding-inline: 12px; }
+  .max-connect-primary .max-connect-back { flex: none; }
   .max-connect-primary { bottom: -20px; margin-inline: -18px; margin-bottom: -20px; padding: 14px 18px 20px; }
   .max-connect-illustration { padding: 20px 14px; }
 }

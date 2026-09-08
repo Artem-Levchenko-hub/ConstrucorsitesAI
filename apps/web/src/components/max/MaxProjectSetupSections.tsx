@@ -26,7 +26,7 @@ function Group({ title, children, description }: { title: string; children: Reac
 }
 
 function Intro({ title, children, publication = false }: { title: string; children: ReactNode; publication?: boolean }) {
-  return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Перед публичным запуском" : "Необязательно для запуска"}</span><h3>{title}</h3><p>{children}</p></div>;
+  return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Есть обязательные пункты для публикации" : "Можно заполнить позже"}</span><h3>{title}</h3><p>{children}</p></div>;
 }
 
 export function MaxProjectSetupSections({ section, current, onChange }: {
@@ -155,13 +155,13 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   if (section === "owner") return <section className="max-setup-section">
-    <Intro title="Кто отвечает за приложение" publication>Для публикации нужны имя или наименование владельца и email поддержки. Пока вы создаёте и проверяете приложение, этот раздел можно пропустить.</Intro>
+    <Intro title="Кто отвечает за приложение" publication>Здесь обязательны только два поля: имя или наименование владельца и email поддержки. ИНН, ОГРН, адрес, телефон и срок ответа не блокируют публикацию в Studio.</Intro>
     <p className="max-setup-notice">Сведения будут видны пользователям в документах и поддержке. Их сохранение не запускает ИИ и не расходует баланс.</p>
     <Group title="Реквизиты владельца" description="Укажите реквизиты, применимые к вашей форме деятельности: физлицо, ИП или организация.">
       <div className="max-setup-field max-setup-wide">
         <Label htmlFor="max-legal-name">ИП, ООО или ФИО владельца</Label>
-        <Input id="max-legal-name" value={current.operator.legal_name} onChange={event => onChange({ ...current, operator: { ...current.operator, legal_name: event.target.value } })} />
-        <p className="max-setup-hint">Нужно для публикации</p>
+        <Input id="max-legal-name" aria-describedby="max-legal-name-requirement" value={current.operator.legal_name} onChange={event => onChange({ ...current, operator: { ...current.operator, legal_name: event.target.value } })} />
+        <p id="max-legal-name-requirement" className="max-setup-required">Обязательно для публикации</p>
       </div>
       <div className="max-setup-field">
         <Label htmlFor="max-inn">ИНН</Label>
@@ -179,9 +179,9 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
     <Group title="Связь с поддержкой" description="Укажите действующие контакты, по которым вы готовы отвечать.">
       <div className="max-setup-field">
         <Label htmlFor="max-support-email">Email поддержки</Label>
-        <Input id="max-support-email" type="email" value={current.support.email ?? ""} placeholder="support@example.ru"
+        <Input id="max-support-email" type="email" aria-describedby="max-support-email-requirement" value={current.support.email ?? ""} placeholder="support@example.ru"
           onChange={event => onChange({ ...current, support: { ...current.support, email: event.target.value || null } })} />
-        <p className="max-setup-hint">Нужно для публикации</p>
+        <p id="max-support-email-requirement" className="max-setup-required">Обязательно для публикации</p>
       </div>
       <div className="max-setup-field">
         <Label htmlFor="max-support-phone">Телефон поддержки</Label>
@@ -197,7 +197,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   return <section className="max-setup-section">
-    <Intro title="Правила для пользователей" publication>Проверьте данные для документов перед публикацией. Отметьте только функции, которые действительно есть в приложении — включать всё не нужно.</Intro>
+    <Intro title="Правила для пользователей" publication>Для публикации обязательно подтвердите корректность данных владельца ниже. Продажи, контент, рассылки и согласие на обработку данных отмечайте только если они нужны вашему приложению — включать всё не нужно.</Intro>
     <Group title="Только если используется" description="Эти настройки добавляют разделы документов, но сами по себе не подключают оплату, модерацию или рассылки.">
       <div className="max-setup-policy-list max-setup-wide">{CHECKS.map(item => {
         const checked = Boolean(current.legal[item.key]);
@@ -218,7 +218,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
     <Group title="Подтверждение и согласия">
       <label className="max-setup-consent max-setup-wide">
         <input type="checkbox" checked={current.legal.terms_accepted} onChange={event => onChange({ ...current, legal: { ...current.legal, terms_accepted: event.target.checked } })} />
-        <span><span>Подтверждаю корректность данных владельца</span><small>Владелец отвечает за актуальность реквизитов и соответствие документов своей деятельности.</small></span>
+        <span><span>Подтверждаю корректность данных владельца</span><small className="max-setup-required">Обязательно для публикации</small><small>Владелец отвечает за актуальность реквизитов и соответствие документов своей деятельности.</small></span>
       </label>
       <label className="max-setup-consent max-setup-wide">
         <input type="checkbox" checked={current.legal.personal_data_consent} onChange={event => onChange({ ...current, legal: { ...current.legal, personal_data_consent: event.target.checked } })} />

@@ -195,7 +195,7 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <DialogDescription className="max-setup-description">
-              Уточняйте приложение по желанию. Владелец, поддержка и документы понадобятся только перед публичным запуском.
+              Для публикации заполните имя или название владельца, email поддержки и подтвердите данные во вкладке «Политики». Остальное — по необходимости.
             </DialogDescription>
           </DialogHeader>
 
