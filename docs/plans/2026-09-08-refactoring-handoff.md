@@ -1,6 +1,26 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
-## Актуально: Task 5 и исправляющий пакет доставлены
+## Актуально: Task 4, Task 5 и исправляющий пакет доставлены
+
+Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
+доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
+`/web-health` подтверждает revision и ok; публичные страницы проходят smoke,
+gate снят. API/workers остаются `4960f6b9`, orchestrator `1011a0fd`; их процессы
+и пять dirty серверных документов не менялись.
+
+Новый HEAD в Edge: 2 HTTP/1 отмена → 1/0 на 1440 и 390 px. Исторический выбор,
+terminal, пагинация, A→B→A и F5 сохранены; console errors/overflow нет.
+Полный web на Node 20: 472 passed; CI `34262431711` web и production image-build
+success. API job этого run ещё выполнялся при доставке (API-код не изменён).
+Независимое source/helper review: No findings. Полные доказательства:
+[Task 4 verification](2026-09-08-task4-history-verification.md).
+
+**Следующий пакет:** Task 6 по исходному плану, только после чтения актуального
+checkout/CI/report. Task 3 числовой контракт не согласован. Не повторять Task 4/5.
+Публичный отчёт дополнять только H140; H138/H139 уже опубликованы, а H134–H136
+по-прежнему не публиковать целиком вместе с репозиторным JSON.
+
+### Предыдущая поставка Task 5
 
 8 сентября выполнение возобновлено. Task 5 `777f3f61` и отдельное исправление
 baseline `4960f6b99909e44efc421b6e2c99140d55cbd43b` отправлены и доставлены.
@@ -16,17 +36,14 @@ gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их ru
 этим пакетом не менялся. Пять dirty secondbrain-документов сохранены побайтно.
 Резервная копия и результат: `/opt/omnia-runtime/releases/startup-latency-4960f6b9`.
 
-**Task 4 подготовлен:** устранено доказанное дублирование обновления истории. Временный
+**Baseline Task 4:** доказано дублирование обновления истории. Временный
 стенд `.artifacts/refactor-task4-20260908/README.md` содержит 7 baseline-тестов:
 новый HEAD 2 запроса/1 отмена; две страницы и rollback 3/1; тот же HEAD 1/0;
 отдельный terminal 1/0. Это вызовы API-функции и AbortSignal в тесте реальных
 компонентов, не измерение серверных HTTP-запросов. Сохранять выбор версии,
 все страницы, terminal reconciliation и защиту от поздних ответов A→B→A.
-Новый regression suite: 13/13; полный web на Node 20 — 472 passed / 75 suites.
-Независимое review: No findings. Browser fixture и Linux build/поставка ещё
-завершаются; Windows standalone build заблокирован symlink EPERM.
-Продолжать с [Task 4 verification](2026-09-08-task4-history-verification.md),
-не считать этот пакет доставленным до точного web runtime/readback.
+Новый regression suite: 13/13; итоговая поставка приведена выше. Исходные
+измерения сохранены отдельно от результата оптимизации.
 
 Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6–13 не
 выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная

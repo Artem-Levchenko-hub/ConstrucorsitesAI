@@ -61,7 +61,53 @@ Production QA-ссылка открывает MAX регистрацию: авт
 доступа в текущей сессии нет. Изолированная браузерная проверка с transport
 fixtures не заменяет live customer-flow. Пользовательскую генерацию не запускать.
 
-Полный web gate, браузерные результаты, commit/push и точная web-only поставка
-дописываются после получения доказательств. На момент этой записи Task 4
-ещё не доставлен; API/worker/generation-worker остаются `4960f6b9`, orchestrator
-`1011a0fd`. Task 3 требует отдельного решения; Tasks 6–13 не завершены.
+Изолированный Edge проверил реальные Shell, ChatPanel, stream hook, preview и
+CSS на 1440×1000 и 390×844. Для baseline загружались неизменённые два файла
+из `d88ca6fe`; после — текущий исходный код. Новый HEAD: **2 HTTP / 1 отмена →
+1 HTTP / 0 отмен** на обеих ширинах. Выбор v31 сохранён после появления v33;
+terminal и следующая страница делают по одному запросу; A→B→A и F5 возвращают
+актуальную v33. Ошибок консоли и горизонтального overflow нет.
+
+React Profiler сохранён для mount/progress/selection/HEAD/terminal/pagination/F5.
+Количество HEAD commits не изменилось: desktop 2, mobile 4. Единичные dev-mode
+измерения CPU шумные (22.5→24.3 ms и 22.7→24.5 ms), ускорение render не доказано.
+Полные результаты и 8 PNG: `.artifacts/refactor-task4-20260908/browser-report.md`,
+`browser-before-results.json`, `browser-after-results.json`. HTTP fixtures не
+проверяют серверное завершение генерации: статус тестового запуска после F5
+остаётся running. Локальный fixture-сервер остановлен после проверки.
+
+## Доставленный результат
+
+Коммит `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e` отправлен в `origin/main`.
+CI `34262431711`: web typecheck/test/build **success**, image-build **success**,
+orchestrator, workflow lint, gateway и syntax **success**. Общий API job на
+момент поставки ещё выполнялся; его исходники этим web-пакетом не менялись.
+Это не заявление о завершении всего CI run. Ранее тот же API-код прошёл
+полный gate на `4960f6b9` (3129 passed / 12 skipped / 8 xfailed).
+
+Production web-only поставка выполнена через документированный compose `full`.
+Фактический образ (пересобран и отдельно проверен непосредственно перед rollout):
+`sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
+Предварительный staging-образ имел другой image ID, поэтому доказательством
+runtime служит именно этот ID плюс label и `/web-health` release `10c4ef12`.
+
+- Изолированный запуск без внешней сети и credentials: `/api/health` = ok.
+- Перед обновлением и внутри короткого write gate активных запусков/операций/
+  leases не было. После успешной проверки gate снят, helper exit 0.
+- Публичные `/login`, `/max/register`, `/max/product`, `/max/guide`: HTTP 200;
+  `/max`: ожидаемый 307 на регистрацию. Эти же маршруты проверены до изменения.
+- Внешний `/web-health`: status ok, service web, точный `10c4ef12`.
+- API `/api/health`: ok, release `4960f6b9`; database/redis/worker/
+  generation_worker/deploy_control_plane/preview_storage = ok.
+- API/worker/generation-worker и прочие full-контейнеры сохранили image, ID,
+  StartedAt; orchestrator сохранил PID/start и `1011a0fd`. Только web перезапущен.
+- Пять dirty secondbrain-файлов сохранены побайтно; SHA256 исходного diff
+  `0faee2b7c90dfd954d0def658d80cd89f21312061c500b2d9efd6ae06f1d250d`.
+- Приватные backups env/nginx/diff и result:
+  `/opt/omnia-runtime/releases/task4-web-10c4ef12`. БД/миграции не менялись.
+
+Общий production-smoke workflow всё ещё требует один устаревший release SHA
+для разных компонентов; этот контракт не ослаблялся ради зелёного статуса.
+Проверены фактические отдельные revisions. Авторизованный live customer-flow
+и ускорение старта ячеек этим пакетом не заявляются. Task 3 требует отдельного
+решения; Tasks 6–13 не завершены.
