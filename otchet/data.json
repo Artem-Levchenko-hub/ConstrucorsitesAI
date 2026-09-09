@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 94,
+  "version": 95,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Project Cell получил отдельный PostgreSQL с полными правами",
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
+   {
+    "s": "testing",
+    "t": "Рефакторинг убрал три копии библиотеки: минус 52 КБ рабочего кода",
+    "d": "163 теста до/после, проверка типов, линтер, установленный пакет и независимое Astra review прошли. Содержимое проектов сохраняется по прежнему эталону; CI и production-доставка ещё ожидаются."
+   },
    {
     "s": "worked",
     "t": "Управление запуском предпросмотра выделено из большого компонента",
@@ -2743,6 +2748,18 @@
    "evidence": "Source2ae98520 committed/pushed/deployed web-only; image sha256:790e7eb01bc76efa05333230a5acccb9342903c5f9c638d85c23c47960cd3328. Exact local/public release+healthy, routes200/307, API6checks ok, nginx/write gate restored and POST health405. API/workers85593d30, orchestratorb99af471, other IDs/StartedAt and dirty documents preserved. CI34353326482 web/image-build success; API job still running at recording, backend source unchanged from full-green BASE CI34349089108. BEFORE66+8/AFTER74; full Node20:496/78. Browser1440/390 equal requests, iframe/history/unmount, errors0/overflow0/live PNG equal; independent Astra No findings. Two nginx reload readback timing issues resolved with verified final state; docs/plans/2026-09-09-task11-preview-runtime-verification.md.",
    "impact": "Следующий агент может разобраться в запуске и опросе предпросмотра через один hook из65 строк. PreviewFrame стал короче на46 строк; общий объём кода не уменьшен и ускорение генерации не заявляется. Пользовательские генерации не запускались.",
    "next_vector": "Владелец уточнил приоритет: меньше кода и контекста для агентов. Этот перенос дал +19 production строк; следующий простой extraction отложен. Дальше — доказанная дедупликация с net-сокращением. Task3/6/7/12 и полная customer-flow матрица остаются незавершёнными."
+  },
+  {
+   "id": "H148",
+   "title": "Три лишние копии библиотеки убраны без изменения файлов проектов",
+   "description": "Четыре одинаковых anime.min.js заменены одной копией через существующий materializer. Новые проекты получают прежние самостоятельные файлы; пользовательские правки, экспорт и откат сохраняются.",
+   "status": "testing",
+   "score": null,
+   "category": "верификация / рефакторинг",
+   "period": "09.09",
+   "evidence": "163 теста до и после изменения, Ruff, mypy (276 файлов), установленный wheel вне checkout: public import и три хэша, все пять шаблонов materialize/Git bytes+modes/export. Frozen golden сохранён. Независимое Astra review исходников и сценария поставки: No findings. Полный CI и production-доставка ожидаются; docs/plans/2026-09-09-task5-anime-verification.md.",
+   "impact": "Рабочий код меньше на 52 181 байт и 25 строк, на три файла меньше. Удалены дубли сторонней библиотеки и отдельная ветка чтения; нового слоя нет. Ускорение агентов или полной генерации не заявляется.",
+   "next_vector": "Завершить полный API CI, проверить точный образ, доставить API/workers и подтвердить health/HTTP bytes. Весь план и customer-flow матрица остаются незавершёнными."
   }
  ],
  "vectors": [
@@ -2953,6 +2970,10 @@
     [
      "Task11 preview runtime: отдельный hook, 496 web tests, браузер до/после и web-only production delivery (09.09)",
      true
+    ],
+    [
+     "Task5 anime: одна копия, прежние standalone файлы, проверка wheel/image и API/workers delivery (09.09)",
+     false
       ]
    ],
    "hyp_ids": [
@@ -2968,7 +2989,8 @@
      "H130",
     "H137",
     "H146",
-    "H147"
+    "H147",
+    "H148"
    ]
   },
   {

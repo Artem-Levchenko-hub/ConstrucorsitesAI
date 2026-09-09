@@ -133,6 +133,7 @@ async def test_committed_custom_kit_survives_http_export_and_rollback() -> None:
     custom = {
         "assets/omnia-kit.css": "/* owner CSS */\nbody { color: red; }\n",
         "assets/omnia-kit.js": "window.ownerVersion = 'custom';\n",
+        "assets/anime.min.js": "window.anime = 'owner version';\n",
         ".owner-config": "persist this custom file\n",
     }
     edited = repo.commit_files(project_id, custom, "Owner kit edits", parent_sha=initial)

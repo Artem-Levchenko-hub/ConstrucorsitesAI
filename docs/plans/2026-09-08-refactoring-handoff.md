@@ -36,21 +36,20 @@ Task11 preview runtime сократил PreviewFrame на46 строк, доба
 - API/worker/generation-worker `85593d30`, orchestrator `b99af471`.
   Остальные IDs/StartedAt, orchestrator PID и dirty документы сохранены.
 - CI34353326482: web/image-build/orchestrator/gateway/syntax/workflow success;
-  API job на момент записи ещё выполнялся. Backend source не менялся;
-  полный BASE CI34349089108 success. Pending job не объявлять пройденным.
+  API job отменён следующим docs push. Backend source не менялся;
+  полный BASE CI34349089108 success. Отменённый job не считать пройденным.
 - Запись: `/opt/omnia-runtime/releases/task11-preview-2ae98520-retry1/result.json`.
   Две задержки readback после nginx reload разобраны в verification doc;
   итог подтверждён отдельно, без скрытого неудачного deployment.
 
 ## Следующий шаг
 
-После свежего Task0 проверить реальное сокращение в существующем механизме
-дедупликации. Кандидат для read-only карты — четыре одинаковых `anime.min.js`
-в static templates: можно ли использовать уже имеющийся materializer и получить
-те же самостоятельные файлы без новой прослойки. Один hash не разрешает удаление:
-сначала consumers, golden/init/export/wheel/image baseline, затем маленький R-пакет.
-Он ещё не реализован. Если сокращение не доказано, не создавать abstraction ради
-продолжения. Другие кандидаты выбирать по тому же критерию.
+Task5 extension реализован: четыре одинаковых `anime.min.js` заменены одной
+копией через существующий materializer. Итог −52 181 source bytes/−25 строк;
+163 теста до/после, lint/type и установленный wheel прошли. [Проверки](2026-09-09-task5-anime-verification.md).
+Независимое Astra review: No findings. Завершить commit/push, полный API CI и поставку API/workers;
+до закрытия delivery loop не начинать другой пакет. Нужен тот же результат
+golden/init/export/rollback/image, без новых прослоек и изменений поведения.
 
 Task3 требует числового контракта; Task6/7 — model smoke, который владелец запускает
 сам; Task12 — измеренной причины IO задержки. Cleanup/stale-probe usePromptStream
