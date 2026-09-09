@@ -435,7 +435,7 @@ export function ChatPanel({
         )}
       </div>
 
-      <div className="shrink-0">
+      <div className="relative shrink-0">
         {!chatScroll.following && <div className="max-chat-latest">
           <Button type="button" variant="secondary" size="sm" onClick={chatScroll.scrollToLatest}>
             <ArrowDown aria-hidden="true" /> К последнему сообщению

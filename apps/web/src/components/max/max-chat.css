@@ -49,7 +49,12 @@
 [data-max-editor] .max-editor-message-body { color: var(--color-fg-primary); line-height: 1.7; }
 [data-max-editor] .max-editor-message-body > .text-fg-secondary { color: var(--color-fg-primary); }
 [data-max-editor] .max-studio-chat [data-chat-role=user] .max-editor-message-body { border-left: 2px solid var(--color-accent); background: var(--color-accent-subtle); border-radius: 0 8px 8px 0; }
-.max-chat-latest { display: flex; justify-content: center; padding: 6px 16px; background: var(--color-surface-raised); }
+.max-chat-latest {
+  position: absolute; bottom: 100%; left: 0; right: 0; z-index: 10;
+  display: flex; justify-content: center; padding: 6px 16px;
+  background: transparent; pointer-events: none;
+}
+.max-chat-latest > button { pointer-events: auto; }
 [data-max-editor] .max-chat-technical-details { border: 1px solid var(--color-border-default); border-radius: 7px; margin-block: 10px; font-size: 13px; }
 [data-max-editor] .max-chat-technical-details summary { padding: 10px 12px; cursor: pointer; font-weight: 500; color: var(--color-fg-secondary); }
 [data-max-editor] .max-chat-technical-details[open] summary { border-bottom: 1px solid var(--color-border-subtle); margin-bottom: 10px; }
