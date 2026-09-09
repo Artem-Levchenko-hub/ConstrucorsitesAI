@@ -21,6 +21,7 @@ Task11 preview runtime сократил PreviewFrame на46 строк, доба
 | --- | --- |
 | P01 / Task2 | Metadata-only PostgreSQL probe. [Проверка](2026-09-08-p01-postgres-probe-verification.md). |
 | Task5 | Общие template CSS/JS, прежние standalone outputs. [Проверка](2026-09-08-task5-template-verification.md), [baseline corrections](2026-09-08-baseline-corrections.md). Не повторять. |
+| Task5 extension | Одна anime вместо четырёх: −52 181 bytes/−25 строк; прежние файлы и custom export/rollback. [Проверка и доставка](2026-09-09-task5-anime-verification.md). |
 | Task4 | Убраны повторные запросы истории. [Проверка](2026-09-08-task4-history-verification.md). |
 | Task8 | Общая SQL-подготовка artifacts, прежняя транзакция. [Проверка](2026-09-08-task8-artifacts-verification.md). |
 | Task9 | Cancellation helper в существующем service. [Проверка](2026-09-08-task9-cancellation-verification.md). |
@@ -30,26 +31,25 @@ Task11 preview runtime сократил PreviewFrame на46 строк, доба
 
 ## Текущая поставка
 
-- Web source `2ae9852010c0df7c12291cdcbb8526f9b97b8771`, image
+- API/worker/generation-worker `50565efd0c6de2b8c6ee66546d6b4fb16cd05673`, image
+  `sha256:47ac83c1f70ee7351812128fcfc56869e8bdd020fe3143ff45207c4fb2cf4664`.
+  CI34356863327: все7 jobs success; полная API suite3264 passed/12 skipped/8 xfailed.
+  163 теста до/после, wheel/image, Astra review, точные runtime identity,
+  health6/6 и публичные bytes/MIME/cache/CORS подтверждены; write gate снят.
+- Web `2ae9852010c0df7c12291cdcbb8526f9b97b8771`, image
   `sha256:790e7eb01bc76efa05333230a5acccb9342903c5f9c638d85c23c47960cd3328`.
-  Exact release/healthy/routes200/307 подтверждены, write gate снят.
-- API/worker/generation-worker `85593d30`, orchestrator `b99af471`.
-  Остальные IDs/StartedAt, orchestrator PID и dirty документы сохранены.
-- CI34353326482: web/image-build/orchestrator/gateway/syntax/workflow success;
-  API job отменён следующим docs push. Backend source не менялся;
-  полный BASE CI34349089108 success. Отменённый job не считать пройденным.
-- Запись: `/opt/omnia-runtime/releases/task11-preview-2ae98520-retry1/result.json`.
-  Две задержки readback после nginx reload разобраны в verification doc;
-  итог подтверждён отдельно, без скрытого неудачного deployment.
+  Orchestrator `b99af471`. Их identities, остальные IDs/StartedAt и пять dirty
+  документов сохранены. Общая compose SHA меняет desired metadata web;
+  работающий web остаётся на своём проверенном image/release.
+- Запись: `/opt/omnia-runtime/releases/task5-anime-50565efd/result.json`.
+  Preview delivery: `/opt/omnia-runtime/releases/task11-preview-2ae98520-retry1/result.json`.
 
 ## Следующий шаг
 
-Task5 extension реализован: четыре одинаковых `anime.min.js` заменены одной
-копией через существующий materializer. Итог −52 181 source bytes/−25 строк;
-163 теста до/после, lint/type и установленный wheel прошли. [Проверки](2026-09-09-task5-anime-verification.md).
-Независимое Astra review: No findings. Завершить commit/push, полный API CI и поставку API/workers;
-до закрытия delivery loop не начинать другой пакет. Нужен тот же результат
-golden/init/export/rollback/image, без новых прослоек и изменений поведения.
+Task5 extension доставлен; его не повторять. После свежего Task0 выбрать
+следующую узкую границу с доказанным сокращением кода или лишней работы.
+Следующий простой extraction Task11 отложен: нужно настоящее упрощение при
+прежнем поведении. Нового разрешённого удаления лишь по source scan не найдено.
 
 Task3 требует числового контракта; Task6/7 — model smoke, который владелец запускает
 сам; Task12 — измеренной причины IO задержки. Cleanup/stale-probe usePromptStream
@@ -78,7 +78,7 @@ Task3 требует числового контракта; Task6/7 — model sm
    Перед restart — active generation/operation/activity guard; не прерывать
    генерации и не запускать свои. Доставлять затронутые сервисы, проверять image
    и release. Разные component SHA сами по себе не требуют общего перезапуска.
-7. H147 относится к preview runtime. В `/otchet` публиковать только новый
+7. H147 — preview runtime, H148 — anime dedup. В `/otchet` публиковать только новый
    согласованный фрагмент, сохраняя прежнюю историю; не заменять публичный JSON
    целиком репозиторным с неопубликованными H134–H136. Следующий ID сверять
    по свежему repo/public JSON. Общий production-smoke требует единого SHA:
