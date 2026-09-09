@@ -1,317 +1,89 @@
-# START HERE — передача безопасного рефакторинга Omnia
-
-## Продолжение 9 сентября: Task11 preview runtime
-
-Свежий BASE `9d6a361b`: local/upstream/server checkout совпали; runtime API/оба
-workers `85593d30`, web `c03dd088`, orchestrator `b99af471`. Старые runtime SHA
-ниже относятся к прежним поставкам. Продолжение выполняется только GPT-6 Astra.
-
-Подготовлен отдельный R-пакет: управление запуском и polling предпросмотра
-вынесено из PreviewFrame в usePreviewRuntime, без смены поведения/интерфейса.
-BEFORE66 + новые8, AFTER74, браузер1440/390 и независимое source review прошли.
-Полная web suite Node20: 496/496; Linux сборка и доставка ещё не объявлены завершёнными. Следующая
-контрольная точка — завершить этот delivery loop до новых runtime изменений.
-[Подробные доказательства и границы](2026-09-09-task11-preview-runtime-verification.md).
-
-## Актуально: P01, Task4/5/8/9/10A/10B и Task11 transport доставлены
-
-Текущее runtime: API/worker/generation-worker `85593d30`, web `ff442154`,
-orchestrator `1011a0fd`. Ниже сохранена история отдельных поставок; прежние
-SHA в их разделах не являются текущими. Полная программа не завершена;
-[итоговая матрица и оставшиеся проверки](2026-09-09-refactoring-scope-review.md).
-
-Task 4 web runtime: `10c4ef128006cfedc5e1a781b9dfaa8e1d94b77e`, pushed и
-доставлен web-only, image `sha256:0b65efaeeada358406021164c68710d397e10063d4066d5abffa8b2922dabe70`.
-`/web-health` подтверждает revision и ok; публичные страницы проходят smoke,
-gate снят. На момент поставки Task 4 API/workers были `4960f6b9`, orchestrator `1011a0fd`; их процессы
-и пять dirty серверных документов не менялись.
-
-Новый HEAD в Edge: 2 HTTP/1 отмена → 1/0 на 1440 и 390 px. Исторический выбор,
-terminal, пагинация, A→B→A и F5 сохранены; console errors/overflow нет.
-Полный web на Node 20: 472 passed; CI `34262431711` web и production image-build
-success. API job этого run ещё выполнялся при доставке (API-код не изменён).
-Независимое source/helper review: No findings. Полные доказательства:
-[Task 4 verification](2026-09-08-task4-history-verification.md).
-
-**Task 8 доставлен:** общий SQL-блок подготовки Snapshot/Project/Run вынесен
-в service с сохранением прежней транзакции. API/worker/generation-worker:
-`e03793b4178a6b3b301bbf4db7cce3515ecadbb4`, image
-`sha256:bc2526f3f95ee05a11daa4d16bd5e07d06bbb7e98def17166f6c1725dd9f5cfe`.
-CI `34265225657` полностью success: 41 artifact check и 3170 API passed /
-12 skipped / 8 xfailed. Ruff/mypy275 clean, independent review No findings.
-Production health/release ok, write gate снят; web/orchestrator и прочие
-consumers не перезапускались. Подробности:
-[Task 8 verification](2026-09-08-task8-artifacts-verification.md).
-
-**Task 9 доставлен:** locked cancellation helper теперь находится в
-существующем generation_runs service; worker больше не импортирует эту private
-router функцию. API/worker/generation-worker: `f00cdfac10f5f07279d98d523bbe659570571601`,
-image `sha256:54fece6119511cc929c452f19d14cf32232bd74bf75606f4be79f9d592f16c47`.
-CI `34267815377` полностью success: cancellation/consumers 20 passed;
-полный API 3188 passed / 12 skipped / 8 xfailed. Ruff/mypy275 clean,
-независимое review No findings. Exact release/health ok, write gate снят;
-web/orchestrator и остальные процессы не перезапускались. Доказательства:
-[Task 9 verification](2026-09-08-task9-cancellation-verification.md).
-
-### Текущий пакет и подготовка следующих
-
-**Task 10A доставлен:** общий exact-edit validator вынесен из agent_builder
-и project_cell_executor после исходного Cell baseline: 26 passed, CI34272760186.
-Финальный код `66411078d497460b484eb773b9658efe6b0f8250`, CI34273376561 полностью
-success: 26 exact-edit и 3214 API passed / 12 skipped / 8 xfailed.
-23 локальных baseline, 149 смежных тестов, Ruff/mypy276 и независимое review
-прошли. API/worker/generation-worker работают на `66411078`, image
-`sha256:f03c21b54cf16d9956860bbc40923556c77d8ab8bb33e4ccc1ee671198e65afb`.
-Health/release и публичные маршруты проверены, write gate снят. Web/orchestrator,
-другие consumers и пять dirty документов сохранены. Поставка дождалась
-самостоятельной генерации владельца; та завершилась до обновления API.
-Доказательства: [Task 10A verification](2026-09-08-task10-exact-edit-verification.md).
-
-**Task 10B доставлен:** четыре одинаковых browser-container tuple заменены
-общим списком и прежними import aliases. BEFORE: 50 passed (2.88 s);
-AFTER с rollback/agent suites: 212 passed (66.99 s). Ruff/mypy276 clean;
-AST функций/классов совпадает. Backend/DB/design/prompt facets и MAX guards
-не менялись. Runtime `85593d30630c0a6e5d25d492f454e68cf17208ee`, API image
-`sha256:14ec518c7ea80506676d10f8002aed0b03b64a49701fb93376d3397b4526b54c`.
-CI34278360238 success: API3264/12skip/8xfail; orchestrator1244/30skip/15xfail
-и9 live Docker checks. Unit job оркестратора в первой попытке завис до первого
-прогресса; повтор того же SHA прошёл, причина не установлена. API и оба workers
-доставлены, offline50/health/release/routes проверены, gate снят. Web/orchestrator,
-прочие процессы и dirty documents сохранены. Независимое source и cumulative
-review: No findings. Доказательства:
-[Task10B verification](2026-09-08-task10b-browser-container-verification.md).
-Следующий product diff — Task11 после синхронизации delivery docs и H144.
-
-**Task11 transport доставлен:** openRealStream/StreamHandle перенесены
-отдельно, весь hook и транспорт сохраняют прежнее поведение. AFTER19 и
-новые15 tests прошли; full web487/77, ESLint/typecheck clean, independent
-review No findings. Browser1440/390 AFTER совпал с BEFORE. Windows standalone
-packaging завершился прежним EPERM symlink; Linux web/image gates
-CI34282672170 прошли. Source `ff4421549c05c1022665cce3b1d4130b694f2b0e`
-pushed и доставлен web-only, image
-`sha256:279e096fa8c5768e7ad14a7057d88d88c6354dfffc167722fde5936e36e0c748`.
-Exact release/health/routes и isolated image health проверены, gate снят.
-API85593d30, orchestrator1011a0fd, остальные процессы и dirty docs сохранены.
-Full-range web review179a3b3f..ff442154: No findings. Доказательства:
-[Task11 verification](2026-09-09-task11-transport-verification.md).
-Итог CI34282672170: все jobs success, включая полный API3264/12skip/8xfail
-779.01s; последний job завершился 2026-09-08 22:11:13 UTC.
-
-Граница исходного Task11 baseline — только openRealStream/StreamHandle, не весь lifecycle.
-Artifact `.artifacts/refactor-task11-20260908/README.md`: 19 passed, 2 suites
-(14 actual AST transport + 5 real hook), 27.54 s; read-only review No findings.
-Воспроизведён предсуществующий gap: heartbeat после unmount и позднее открытие
-сокета из deferred F5 probe. Это не новый refactor regression; исправление
-cleanup — отдельная B-поставка по правилам плана. Смена projectId внутри того
-же hook не доказывает ошибку стандартной навигации Next, где dynamic segment
-пересоздаёт поддерево. BEFORE browser harness прошёл 1440/390: active F5,
-reconnect after_seq=7, выбранная v31, terminal→F5, без console errors/overflow.
-Это реальные UI/transport с HTTP/WebSocket fixtures; native WS server не проверен.
-Команды и ограничения — в artifact browser-report.md. Не превращать
-характеризацию текущего дефекта в постоянный тест желаемого поведения.
-
-Task12: read-only разбор run d6356635 не дал внутренней детализации ensure43s
-и release25.7s; IO hot path не доказан. Нельзя удалять финальную сборку как
-предполагаемый дубль. Пользовательские генерации самостоятельно не запускать.
-Task13: независимые cumulative API/orchestrator reviews179a3b3f..85593d30
-и полный web review179a3b3f..ff442154 — No findings. Повторный canonical
-source scan выполнен; дополнительное удаление не обосновано. Матрица20
-явно отделяет fixtures от customer-flow. Это приёмка выполненных пакетов,
-а не полная приёмка всей программы. Канонический отчёт:
-`docs/plans/2026-09-09-refactoring-scope-review.md`.
-
-Task 6/7 отложены: план требует согласованного model smoke, а владелец запускает
-генерации сам. Промпты не менялись. Task 3 числовой контракт не согласован.
-Не повторять Task 4/5. H140 уже опубликован, public version 72, 136 прежних
-записей сохранены; H141 опубликован: public version 73, 137 прежних записей сохранены; H142 опубликован: public version 74, 138 прежних записей сохранены. H143 опубликован: public version 75, 139 прежних записей сохранены; H144 опубликован: public version76, 140 прежних записей сохранены; следующая H145. H134–H136 не публиковать целиком
-вместе с репозиторным JSON.
-
-### Предыдущая поставка Task 5
-
-8 сентября выполнение возобновлено. Task 5 `777f3f61` и отдельное исправление
-baseline `4960f6b99909e44efc421b6e2c99140d55cbd43b` отправлены и доставлены.
-Полный CI `34258366570` success: API 3129 passed / 12 skipped / 8 xfailed;
-orchestrator 1244 passed / 30 skipped / 15 xfailed плюс 9 реальных Docker-проверок.
-Первый job orchestrator завис без вывода и был остановлен после успеха API;
-отдельный повтор того же SHA прошёл. Причина зависания не установлена.
-
-Production API/worker/generation-worker работают на `4960f6b9`, образ
-`sha256:8a44eb141a52c21e9d9615a7991c8b21316a6b7c2e1609c717d04ab58658b670`.
-API health/release и публичные SHA256 трёх kit-ресурсов проверены. Maintenance
-gate снят. Orchestrator остаётся `1011a0fd`, web `179a3b3f`: их runtime-код
-этим пакетом не менялся. Пять dirty secondbrain-документов сохранены побайтно.
-Резервная копия и результат: `/opt/omnia-runtime/releases/startup-latency-4960f6b9`.
-
-**Baseline Task 4:** доказано дублирование обновления истории. Временный
-стенд `.artifacts/refactor-task4-20260908/README.md` содержит 7 baseline-тестов:
-новый HEAD 2 запроса/1 отмена; две страницы и rollback 3/1; тот же HEAD 1/0;
-отдельный terminal 1/0. Это вызовы API-функции и AbortSignal в тесте реальных
-компонентов, не измерение серверных HTTP-запросов. Сохранять выбор версии,
-все страницы, terminal reconciliation и защиту от поздних ответов A→B→A.
-Новый regression suite: 13/13; итоговая поставка приведена выше. Исходные
-измерения сохранены отдельно от результата оптимизации.
-
-Task 3 числовая сериализация отложена: отдельного решения нет. Tasks 6/7, 10B и 11–13 не
-выполнены. Не объявлять весь план завершённым и не повторять Task 5. Полная
-генерация пользователя не запускалась; live business-flow не заявляется.
-
-Канонический checkout `C:/Users/Артём/ConstrucorsitesAI`, ветка
-`codex/project-cell-cloud-20260902`, upstream `origin/main`. Свежесть проверять
-перед продолжением. Runtime-доказательства: [Task 5](2026-09-08-task5-template-verification.md)
-и [исправляющий пакет](2026-09-08-baseline-corrections.md). Правило публичного отчёта:
-синхронизировать только H138/H139; не публиковать весь repo JSON с ранее
-неопубликованными H134–H136.
-
-<details>
-<summary>Исторические точки остановки до этой доставки</summary>
-
-## Продолжение 08.09: Task 5 подготовлен, доставка заблокирована
-
-Код Task 5 отправлен в origin/main: `777f3f61ba377da9fb2eae0008f47f4f7faa0704`.
-Локально прошли 147 проверок, Ruff/mypy, независимое ревью и установленный wheel.
-В CI `34249743033` прошли обязательные API-регрессии, новые consumers, wheel и
-обычная сборка Docker-образа с автономной проверкой всех шаблонов. Полная API-suite
-выявила 14 ошибок; 13 воспроизведены также на исходном `810f0fbb`.
-
-Среди прежних ошибок есть настоящий баг передачи вопросов онбординга клиенту и
-недостающая проверка кабинета в offline harness. У владельца запрошено разрешение
-на отдельный исправляющий пакет: утверждённый план не разрешает молча менять
-поведение продукта или ослаблять проверки. Ответ пока не получен. Отдельно
-ожидается решение о точности JSON-сумм для Task 3.
-
-**Production не обновлён:** API/worker остаются на `179a3b3f`, orchestrator на
-`1011a0fd`. Для Task 5 собран и проверен отдельный образ, контейнеры не
-перезапускались. Следующий шаг — разрешить и исправить baseline failures,
-получить зелёный полный gate, затем закончить доставку Task 5. Не повторять его
-реализацию и не объявлять весь план выполненным.
-
-Подробности: [Task 5: проверки и блокеры](2026-09-08-task5-template-verification.md).
-Рабочий checkout: `C:/Users/Артём/ConstrucorsitesAI`, ветка
-`codex/project-cell-cloud-20260902`, upstream `origin/main`. Более ранний снимок
-передачи ниже сохранён для истории.
-
-## Точка остановки
-
-**8 сентября 2026: остановлено по просьбе владельца для передачи другому агенту. Только GPT-6 Astra.**
-
-P01 (Task 2: проверка наличия PostgreSQL без выгрузки тома) реализован, проверен, отправлен в origin/main и доставлен в production. **Следующий пакет — Task 5: убрать дубли static-template ресурсов. Его реализация НЕ начата:** нет новой карты consumers, frozen golden fixtures, materializer или изменений шаблонов. После объявления следующего пакета выполнена только свежая проверка Git; затем владелец попросил остановиться и сохранить передачу.
-
-Текущая поставка передачи содержит только документы и запись отчёта; runtime-код не меняется. Не повторять P01 и не считать весь рефакторинг завершённым. Новая задача/агент и фоновое продолжение не создавались.
-
-## Что читать
-
-1. Этот файл: точка остановки, актуальные ограничения, доставка.
-2. [Полный утверждённый план: безопасный тотальный рефакторинг](2026-09-08-safe-total-refactoring-plan.md) — Tasks 0–13, границы R/O против B/N, 20 сценариев сохранения функциональности.
-3. [P01: проверка и production-доставка](2026-09-08-p01-postgres-probe-verification.md) — факты, команды, CI, замеры и ограничения.
-
-Все необходимые инструкции для продолжения сохранены в Git, а не только во внешней папке Codex.
-
-## Дополнение владельца: целевое качество 10/10
-
-Владелец отдельно попросил довести качество кода до 10/10, чтобы следующим агентам становилось проще работать. Продолжать по десяти критериям раздела 3 полного плана: ясная ответственность, именование, один владелец общей логики, явные зависимости/side effects, отсутствие лишних абстракций, осмысленные границы, обоснованная оптимизация, сохранённые тесты и безопасность, неизменность контрактов, краткая актуальная карта подсистемы.
-
-Критерий результата — следующему агенту проще найти вход, понять контракт, локально изменить и доказать корректность. Не выдавать механическое сокращение строк за качество, не удалять возможности ради оценки. 10/10 — цель, текущая оценка не выставлена; недоступное независимое review и непроверенные сценарии записывать как gaps. Это дополнение не отменяет остановку для передачи: Task 5 остаётся следующим, ещё не начатым пакетом.
-
-## Ревизии и окружение на момент подготовки передачи
-
-| Объект | Проверенное состояние |
-|---|---|
-| Локальный checkout | C:/Users/79133/ConstrucorsitesAI-fresh |
-| Локальная ветка / upstream | codex/data-versioning-20260908 / origin/main |
-| BASE этой docs-поставки | 303274b29c377ce40a1d302eb4f686b5c102454a |
-| После fetch перед документированием | local HEAD = upstream = server checkout = BASE; ahead/behind 0/0; локальное дерево чистое |
-| Код и полный CI P01 | 1011a0fdf7cc4f636e7550937c0e89447fc21bcd; CI 34235756123 success |
-| Отчёт P01 | 303274b2; diff runtime-кода относительно 1011a0fd отсутствует |
-| Production checkout / ветка | /opt/omnia; codex/production-p01-20260908, upstream origin/main |
-| Orchestrator runtime | host omnia-orchestrator.service; release SHA 1011a0fd |
-| Остальные web/API/workers | релиз 179a3b3f; P01 их не пересобирал/не перезапускал |
-
-Это снимок, а не разрешение считать следующий checkout свежим. Текущий docs-коммит определяется через git log: его SHA нельзя вписать в собственное содержимое. Перед новой работой повторить весь mandatory preflight из AGENTS.md, включая сервер.
-
-На сервере сохранены пять unrelated tracked изменений:
-
-- secondbrain/knowledge/concepts/daily-ingestion-process.md
-- secondbrain/knowledge/concepts/proxyapi-anthropic-route.md
-- secondbrain/knowledge/concepts/secondbrain-runtime.md
-- secondbrain/knowledge/index.md
-- secondbrain/knowledge/log.md
-
-Также git status показывает untracked резервные env-файлы в apps/llm-gateway/deploy/full и apps/orchestrator, backups/, материалы secondbrain и файл с пробелами в имени. Не читать их содержимое ради рефакторинга, не добавлять в commit и не удалять. Это не часть нашей поставки. Проверять отсутствие пересечения целевых файлов перед каждым ff-only merge; при новом/непонятном пересечении остановиться.
-
-## Что сделано и что осталось
-
-| Пакет | Статус |
-|---|---|
-| Task 0 / подготовка | Выполнена для P01; повторять перед новой задачей |
-| Task 1 / измерения | Узкая IO/metadata проверка P01; полноценная трасса всей генерации не получена |
-| Task 2 / P01 | Доставлен, с явно записанным отсутствием отдельного независимого reviewer |
-| Task 5 / static-template dedup | Следующий; код и golden ещё не начаты |
-| Tasks 3–4, 6–13 | Не завершены этой сессией; не вычёркивать из программы |
-| Новый адаптивный rollback / P12 старого аудита | Не часть текущего рефакторинга, требуется отдельное согласование |
-| Общий production-smoke exact-SHA monitor | Предсуществующее расхождение, отдельная незавершённая задача |
-
-Порядок Task 5 раньше Tasks 3–4 разрешён планом: это независимый R-пакет, направленный на уменьшение дублирующегося кода, а не изменение поведения.
-
-## Первый конкретный шаг следующего агента: Task 5
-
-После свежего preflight прочитать API guidance и составить read-only карту всех потребителей статических шаблонов. Начальные точки:
-
-- apps/api/src/omnia_api/templates/{blank,landing,portfolio,blog}/assets/omnia-kit.css и omnia-kit.js;
-- apps/api/src/omnia_api/services/repo.py;
-- init/create/select mode, export, restore, managed asset injection;
-- apps/api/Dockerfile, фактическое package-data/wheel inclusion, CI;
-- apps/api/tests/test_select_mode.py и обнаруженные kit/template consumer tests.
-
-Далее, строго последовательно:
-
-1. На новом BASE установить, какие ресурсы действительно совпадают побайтово; не использовать старую оценку как delete list.
-2. ДО рефакторинга сохранить независимый golden: каждый путь и SHA256 полного materialized дерева, включая dotfiles; отдельно file modes, если они значимы.
-3. Написать characterization/regression tests реального init/export и collisions с пользовательскими файлами.
-4. Оставить один поддерживаемый источник только доказанных дублей внутри API package; materializer создаёт самостоятельные файлы на прежних путях.
-5. Не обновлять shared-копией уже созданные проекты; не менять старые snapshots, версии и данные.
-6. Проверить empty/existing destinations, all consumers, экспорт и standalone результат. Никаких CDN/runtime symlinks.
-7. Собрать реальный wheel/API image с обычным build context. Изолированные DB/Docker проверки обязательны там, где нужны; одних mocks недостаточно.
-8. Полная подходящая suite, lint/typecheck, diff sanity, Astra review, отчёт, commit/push, документированная поставка и health. Только затем следующий пакет.
-
-Предлагаемые файлы (ещё НЕ созданы): services/template_materialization.py, templates/shared-assets/, tests/test_template_materialization.py в API.
-
-## Нерушимые границы
-
-- Только GPT-6 Astra для реализации, проверки, review и доставки. Старое Sol/Terra/Luna распределение этим явно заменено; не запускать их автоматически.
-- Сохранить весь текущий функционал, UX/дизайн, пользовательские тексты/языки, версионирование, историю, права и бизнес-данные.
-- Сохранить даже действующие запреты: например, MAX restore 409 нельзя молча превратить в новый работающий rollback.
-- Не удалять/перезаписывать live БД, snapshots, volumes; не выполнять destructive migrations, reset/stash/rebase/force-push или общий Docker prune.
-- Не менять зависимости, схемы, billing, retry/terminal semantics и публикацию результата под видом сокращения кода.
-- Не запускать пользовательскую генерацию самостоятельно: владелец решил запускать её сам.
-- Не заявлять ускорение всей генерации или полное отсутствие ошибок по результату одного локального пакета.
-
-## Проверки и ограничения среды
-
-- P01: локально 1248 passed / 26 skipped / 15 xfailed; Linux CI 1244 passed / 30 skipped / 15 xfailed; отдельно 9/9 real-Docker cases. Это результаты P01, не тесты будущего Task 5.
-- Локальный orchestrator использует Python 3.14.3 / Windows cp1251. Полный suite прошёл с -X utf8; шесть первоначальных nginx-fixture failures были связаны с кодировкой, их source не менялся.
-- Mypy запускать из apps/orchestrator: запуск из root не читает нужный pyproject и даёт другие diagnostics.
-- Локальный Docker daemon не работает: Desktop завершается с ошибкой отсутствующего registry key. Не ремонтировать Windows/registry попутно; P01 real-Docker проверен в изолированном Ubuntu GitHub Actions.
-- API tests/conftest.py очищает тестовую схему. Никогда не передавать production DATABASE_URL / DATABASE_TEST_URL в тесты; PostgreSQL/Redis только disposable.
-- Context7 и Sequential Thinking как инструменты в этой среде не найдены. Можно проверить доступность заново в новой среде; не имитировать вызовы и не откладывать работу бесконечно.
-- Отдельный Astra reviewer не запустился из-за agent thread limit. Primary Astra проверил/доработал код, но это не независимое второе review. Лимит не обходился созданием пользовательской задачи.
-- API/worker/web и orchestrator имеют разные deployment SHAs; до P01 global production-smoke ожидал устаревший bd3f499c268ff840634b0778143cc0ebcacd84e7. Не подменять проверку, не ослаблять smoke и не рестартовать всё ради метки.
-
-## Доставка следующего runtime-пакета
-
-Документированный SSH: i48ptgvnis@170.168.72.200. Серверный repo: /opt/omnia.
-
-Production compose: apps/llm-gateway/deploy/full/docker-compose.yml, project full, контейнеры omnia-prod-*. НЕ infra/docker-compose.yml. Orchestrator отдельно: omnia-orchestrator.service, cwd /opt/omnia/apps/orchestrator, фактический env /opt/omnia/apps/orchestrator/.env.
-
-В текущем checkout push выполнялся как git push origin HEAD:main — обычный fast-forward, без force и без переименования upstream. Сначала проверить configured upstream и свежесть заново. На сервере документированный git fetch + git merge --ff-only origin/main допустим только без пересечения сохраняемых изменений.
-
-Перед runtime restart проверить aggregate active generation_runs, project_cell_operations и project_cell_activity_leases; не прерывать активную работу. API image могут использовать api/worker/generation-worker — установить фактических consumers, не ограничиваться прежним сокращённым списком.
-
-После поставки проверить component release identity и relevant health; для docs-only передачи source checkout обновляется без runtime restart. Использовать health как доказательство доступности, не как доказательство успешной новой генерации.
-
-Важный отчётный нюанс: публичный /otchet содержит только утверждённые записи. В репозитории H134–H136 были ранее не опубликованы; P01 публично добавил только H137. Не заменять весь /var/www/otchet/data.json репозиторной копией. Публиковать лишь новый согласованный фрагмент, сохраняя прочую историю и проверяя HTTP readback.
-
-## Готовое поручение для новой задачи
-
-> Продолжи безопасный тотальный рефакторинг Omnia исключительно на GPT-6 Astra. Прочитай docs/plans/2026-09-08-refactoring-handoff.md и полный docs/plans/2026-09-08-safe-total-refactoring-plan.md. Подтверди свежесть local/upstream/production. P01 уже доставлен — не переделывай его. Начни с Task 5: карта consumers и golden materialization, затем безопасная дедупликация static-template ресурсов. Сохрани 100% текущего функционала, версионирование, UX и бизнес-данные. Выполняй только разрешённые R/O-пакеты, по одному, с проверкой и полным циклом доставки. Пользовательскую генерацию не запускай. Фиксируй факты, оставшиеся риски и точную следующую точку в этих документах.
-
-</details>
+# START HERE — безопасный рефакторинг Omnia
+
+Актуально на 9 сентября 2026. [Полный план](2026-09-08-safe-total-refactoring-plan.md).
+Реализация, проверки, независимое review и доставка — только GPT-6 Astra.
+
+## Приоритет владельца
+
+Меньше поддерживаемого кода, минимализм и меньше контекста для следующих агентов.
+Выбирать устранение доказанных дублей, лишних действий и ненужных прослоек.
+Сам перенос функции не считать сокращением: production source измерять отдельно
+от тестов, документов и готовых пользовательских файлов, сохраняя читаемость.
+
+Task11 preview runtime сократил PreviewFrame на46 строк, добавив hook65 строк:
+итог **+19 строк рабочего кода**. Это отделение обязанности, без доказанного
+сокращения или ускорения. Следующий простой перенос envelope→AgentStep отложен
+после уточнения владельца; новый продуктовый код для него не писался.
+
+## Доставлено
+
+| Пакет | Граница и доказательства |
+| --- | --- |
+| P01 / Task2 | Metadata-only PostgreSQL probe. [Проверка](2026-09-08-p01-postgres-probe-verification.md). |
+| Task5 | Общие template CSS/JS, прежние standalone outputs. [Проверка](2026-09-08-task5-template-verification.md), [baseline corrections](2026-09-08-baseline-corrections.md). Не повторять. |
+| Task4 | Убраны повторные запросы истории. [Проверка](2026-09-08-task4-history-verification.md). |
+| Task8 | Общая SQL-подготовка artifacts, прежняя транзакция. [Проверка](2026-09-08-task8-artifacts-verification.md). |
+| Task9 | Cancellation helper в существующем service. [Проверка](2026-09-08-task9-cancellation-verification.md). |
+| Task10A/10B | Exact-edit validator и browser-container список. [10A](2026-09-08-task10-exact-edit-verification.md), [10B](2026-09-08-task10b-browser-container-verification.md). |
+| Task11 transport | Отдельный WebSocket transport. [Проверка](2026-09-09-task11-transport-verification.md). |
+| Task11 preview runtime | usePreviewRuntime, web496/78, focused74, browser1440/390, Astra No findings. [Проверка и доставка](2026-09-09-task11-preview-runtime-verification.md). |
+
+## Текущая поставка
+
+- Web source `2ae9852010c0df7c12291cdcbb8526f9b97b8771`, image
+  `sha256:790e7eb01bc76efa05333230a5acccb9342903c5f9c638d85c23c47960cd3328`.
+  Exact release/healthy/routes200/307 подтверждены, write gate снят.
+- API/worker/generation-worker `85593d30`, orchestrator `b99af471`.
+  Остальные IDs/StartedAt, orchestrator PID и dirty документы сохранены.
+- CI34353326482: web/image-build/orchestrator/gateway/syntax/workflow success;
+  API job на момент записи ещё выполнялся. Backend source не менялся;
+  полный BASE CI34349089108 success. Pending job не объявлять пройденным.
+- Запись: `/opt/omnia-runtime/releases/task11-preview-2ae98520-retry1/result.json`.
+  Две задержки readback после nginx reload разобраны в verification doc;
+  итог подтверждён отдельно, без скрытого неудачного deployment.
+
+## Следующий шаг
+
+После свежего Task0 проверить реальное сокращение в существующем механизме
+дедупликации. Кандидат для read-only карты — четыре одинаковых `anime.min.js`
+в static templates: можно ли использовать уже имеющийся materializer и получить
+те же самостоятельные файлы без новой прослойки. Один hash не разрешает удаление:
+сначала consumers, golden/init/export/wheel/image baseline, затем маленький R-пакет.
+Он ещё не реализован. Если сокращение не доказано, не создавать abstraction ради
+продолжения. Другие кандидаты выбирать по тому же критерию.
+
+Task3 требует числового контракта; Task6/7 — model smoke, который владелец запускает
+сам; Task12 — измеренной причины IO задержки. Cleanup/stale-probe usePromptStream
+остаются отдельным B-пакетом. [Матрица20](2026-09-09-refactoring-scope-review.md)
+сохраняет gaps: весь план и оценка10/10 не объявлены завершёнными.
+
+## Правила продолжения
+
+1. Проверить root/branch/upstream/status, fetch all prune, local/remote/server SHA.
+   Чужие изменения не stash/reset/rebase. Рабочая копия:
+   `C:/Users/79133/ConstrucorsitesAI-refactor-preview-20260909`, ветка
+   `codex/refactor-preview-lifecycle-20260909`, upstream `origin/main`.
+2. Один writer, только Astra; независимое review и честная фиксация недоступных
+   проверок. По одному пакету до полного delivery loop.
+3. Сохранять UX/тексты, историю/данные, API/ошибки/списания, permissions,
+   fences/leases, native/text/one-shot и действующие запреты, включая MAX restore409.
+   Не включать B/N, новые зависимости, миграции или общий Docker prune.
+4. API tests — только disposable DB: conftest очищает схему. Web CI —
+   Node20/pnpm9.15.0. Node25 Web Storage failures не чинить продуктовым кодом;
+   Windows packaging может дать EPERM, тогда обязателен Linux image gate.
+5. SSH `i48ptgvnis@170.168.72.200`, repo `/opt/omnia`; production compose
+   `apps/llm-gateway/deploy/full/docker-compose.yml`, project `full`.
+   Orchestrator — host `omnia-orchestrator.service`. `infra/` не production.
+6. Серверные пять dirty secondbrain документов, env backups и пользовательские
+   данные не трогать. Fetch + ff-only merge — без пересечения изменений.
+   Перед restart — active generation/operation/activity guard; не прерывать
+   генерации и не запускать свои. Доставлять затронутые сервисы, проверять image
+   и release. Разные component SHA сами по себе не требуют общего перезапуска.
+7. H147 относится к preview runtime. В `/otchet` публиковать только новый
+   согласованный фрагмент, сохраняя прежнюю историю; не заменять публичный JSON
+   целиком репозиторным с неопубликованными H134–H136. Следующий ID сверять
+   по свежему repo/public JSON. Общий production-smoke требует единого SHA:
+   это отдельное ограничение, его не ослаблять ради зелёного статуса.
+
+Подробная история прежних остановок сохранена в Git и verification docs;
+она убрана из входного файла, чтобы следующий агент не повторял выполненное.

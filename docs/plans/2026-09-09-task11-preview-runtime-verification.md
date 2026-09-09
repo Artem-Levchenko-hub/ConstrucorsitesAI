@@ -78,9 +78,35 @@ readback не запускают незаблокированный rollback. Ba
 
 ## Доставка
 
-Поставка ожидается: source ещё не объявляется работающим в production.
-Нужны commit/push, Linux web/image gates, изолированная проверка образа,
-web-only compose rollout и точные image/release/health доказательства.
+Source `2ae9852010c0df7c12291cdcbb8526f9b97b8771` committed/pushed в origin/main
+и доставлен web-only. CI34353326482: web и image-build success; также прошли
+orchestrator/gateway/синтаксис/workflow. API job на момент этой записи ещё
+выполнялся; API/оркестратор/gateway/workflow source не менялся относительно
+BASE, полный CI34349089108 на BASE success. Новый полный API gate здесь не
+заявляется пройденным до его фактического результата.
+
+Итоговый образ: `sha256:790e7eb01bc76efa05333230a5acccb9342903c5f9c638d85c23c47960cd3328`.
+Linux production build и изолированный запуск без сети/секретов с read-only
+файловой системой прошли. Running container image ID совпал с проверенным
+образом; локальный и публичный `/web-health` подтверждают точный source SHA,
+контейнер healthy. `/login`, `/max/register`, `/max/product`, `/max/guide` —200;
+`/max` —прежний307. `/api/health`: все6 checks ok, прежние component SHAs.
+
+Первая попытка остановилась до env/web изменения: мгновенный probe после
+nginx reload ещё не увидел503. Nginx восстановлен, прежний web ID сохранился.
+Повтор с отдельной записью подтвердил reload convergence: probe1=405,
+probe2=503; generation/operation/activity counts=0. Только web пересоздан.
+После снятия gate helper завершился exit1 на мгновенном финальном readback;
+повторная независимая проверка подтвердила POST `/api/health`=405,
+восстановленные bytes nginx, правильные image/SHA/health и неизменность других
+container IDs/StartedAt, orchestrator PID и dirty secondbrain diff.
+Эта проверка закрыла доставку без ещё одного перезапуска или rollback.
+
+Запись итоговой поставки:
+`/opt/omnia-runtime/releases/task11-preview-2ae98520-retry1/result.json`.
+Первая запись сохранена рядом без перезаписи. Gate снят; новый model/customer
+flow не запускался. Публичный H147 обновляется отдельно от repo JSON, сохраняя
+прежнюю публичную историю и не раскрывая ранее неопубликованные записи.
 
 Исходный runtime: API/worker/generation-worker `85593d30`, web `c03dd088`,
 orchestrator `b99af471`. Серверный checkout и origin/main — BASE; последний
@@ -94,8 +120,9 @@ env/allowlists и незатронутые контейнеры сохраняю
 
 ## Следующая граница
 
-Task11 всё ещё не означает полное разделение usePromptStream/PreviewFrame.
-Применение событий, UI projection и остальные preview обязанности требуют
-отдельного узкого baseline и R-пакета. Task3 числовой контракт, Task6/7 model
+Владелец уточнил приоритет: меньше рабочего кода и контекста для агентов.
+Этот extraction дал +19 production строк; следующий простой перенос
+envelope→AgentStep отложен. Дальше выбирать доказанную дедупликацию или удаление
+ненужной прослойки с измеримым сокращением, сохраняя контракт. Task3 числовой контракт, Task6/7 model
 smoke и Task12 измеренная причина IO задержки остаются отдельными условиями;
 полная матрица20 и оценка10/10 этим переносом не закрываются.

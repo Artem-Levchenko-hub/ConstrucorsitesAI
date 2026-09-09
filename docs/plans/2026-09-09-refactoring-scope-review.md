@@ -1,5 +1,14 @@
 # Task13 — приёмка выполненных пакетов и оставшиеся проверки
 
+Дополнение 9 сентября: Task11 preview runtime `2ae98520` доставлен web-only.
+Добавлены8 real-consumer characterization tests, полный web496/78, browser
+1440/390 BEFORE/AFTER и независимое review. Запуск/опрос runtime отделён от
+PreviewFrame без смены поведения; actual image/release/health подтверждены.
+[Новые доказательства и ограничения](2026-09-09-task11-preview-runtime-verification.md).
+Ниже сохранён исходный срез `179a3b3f..ff442154`; его числа source scan не
+выдаются за повторный подсчёт после нового пакета. Полный Task11 и матрица20
+по-прежнему не завершены.
+
 Срез: 9 сентября 2026, исходники `179a3b3f..ff442154`. P01 и пакеты Task4/5/8/9/10A/10B/Task11 transport доставлены. Production: API/worker/generation-worker `85593d30`, web `ff442154`, orchestrator `1011a0fd`. Ниже сопоставлены конкретные проверки и ограничения. **Вся программа и все20 end-to-end сценариев не объявляются завершёнными.**
 
 ## Индекс доказательств

@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 93,
+  "version": 94,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -9,9 +9,9 @@
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
    {
-    "s": "testing",
+    "s": "worked",
     "t": "Управление запуском предпросмотра выделено из большого компонента",
-    "d": "GPT-6 Astra продолжил Task11: запрос состояния, опрос и запуск preview перенесены в отдельный hook без смены интерфейса. 496 тестов Node20, проверки типов, линтер, браузер1440/390 и независимое ревью прошли; Linux-сборка и production-поставка ожидаются."
+    "d": "GPT-6 Astra доставил Task11 preview runtime: web2ae98520, точные image/release/health подтверждены. 496 тестов Node20, Linux web/image CI, проверки типов, линтер, браузер1440/390 и независимое ревью прошли. Остальные сервисы и пользовательские данные сохранены; весь рефакторинг ещё не завершён."
    },
    {
     "s": "partial",
@@ -2736,13 +2736,13 @@
    "id": "H147",
    "title": "Управление runtime предпросмотра выделено в отдельный hook",
    "description": "Отделили получение состояния, polling и однократный запуск runtime от отображения PreviewFrame. Сохранили query key, двухсекундный интервал, ручной повтор, историю и порядок эффектов.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "09.09",
-   "evidence": "BASE9d6a361b. BEFORE66+8, AFTER74; полный web Node20.20.2:496 passed/78files. ESLint/typecheck/diff clean. Edge1440/390 до/после: одинаковые HTTP/runtime sequences, 1start/4reads, iframe/inspector/history/unmount, errors0/overflow0, live PNG byte-identical. Независимый GPT-6 Astra source review: No findings. Source commit, Linux build и production-поставка ожидаются; docs/plans/2026-09-09-task11-preview-runtime-verification.md.",
+   "evidence": "Source2ae98520 committed/pushed/deployed web-only; image sha256:790e7eb01bc76efa05333230a5acccb9342903c5f9c638d85c23c47960cd3328. Exact local/public release+healthy, routes200/307, API6checks ok, nginx/write gate restored and POST health405. API/workers85593d30, orchestratorb99af471, other IDs/StartedAt and dirty documents preserved. CI34353326482 web/image-build success; API job still running at recording, backend source unchanged from full-green BASE CI34349089108. BEFORE66+8/AFTER74; full Node20:496/78. Browser1440/390 equal requests, iframe/history/unmount, errors0/overflow0/live PNG equal; independent Astra No findings. Two nginx reload readback timing issues resolved with verified final state; docs/plans/2026-09-09-task11-preview-runtime-verification.md.",
    "impact": "Следующий агент может разобраться в запуске и опросе предпросмотра через один hook из65 строк. PreviewFrame стал короче на46 строк; общий объём кода не уменьшен и ускорение генерации не заявляется. Пользовательские генерации не запускались.",
-   "next_vector": "После полной доставки продолжить Task11 отдельным R-пакетом. Числовой контракт Task3, model smoke Task6/7, IO-измерения Task12 и полная customer-flow матрица остаются незавершёнными."
+   "next_vector": "Владелец уточнил приоритет: меньше кода и контекста для агентов. Этот перенос дал +19 production строк; следующий простой extraction отложен. Дальше — доказанная дедупликация с net-сокращением. Task3/6/7/12 и полная customer-flow матрица остаются незавершёнными."
   }
  ],
  "vectors": [
@@ -2947,8 +2947,12 @@
        true
       ],
       [
-       "Адресная Docker-очистка после подтверждённого восстановления, проверки ссылок и maintenance gate",
-       false
+     "Адресная Docker-очистка после подтверждённого восстановления, проверки ссылок и maintenance gate",
+     false
+    ],
+    [
+     "Task11 preview runtime: отдельный hook, 496 web tests, браузер до/после и web-only production delivery (09.09)",
+     true
       ]
    ],
    "hyp_ids": [
@@ -2962,8 +2966,9 @@
      "H128",
      "H129",
      "H130",
-     "H137",
-     "H146"
+    "H137",
+    "H146",
+    "H147"
    ]
   },
   {
