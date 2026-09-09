@@ -1,10 +1,11 @@
 # Task13 — приёмка выполненных пакетов и оставшиеся проверки
 
-Дополнение Task11 message cache: source `bf428456`, −32 production строки,
-полный web502/78, focused47, browser1440/390 и Astra review прошли; CI web/image
-зелёные. Exact image build/smoke прошли, но повторная ручная остановка backend
-сорвала switch; web откачен к прежней проверенной версии. Это незавершённая поставка,
-а не новый закрытый пакет. [Точка продолжения](2026-09-09-task11-message-cache-verification.md).
+Дополнение Task11 message cache: source `bf428456`, web delivery `c2da4f71`,
+−32 production строки/−1101 нормализованный байт. Полный web502/78, focused47,
+browser1440/390, Astra review, CI web/image, exact image и runtime health прошли.
+После двух прерванных попыток из-за ручных остановок backend параллельная задача
+завершилась; новая web-only поставка успешна. Прежние service IDs/состояние и данные
+сохранены. [Проверка и доставка](2026-09-09-task11-message-cache-verification.md).
 
 Дополнение 9 сентября: Task11 preview runtime `2ae98520` доставлен web-only.
 Добавлены8 real-consumer characterization tests, полный web496/78, browser
@@ -90,7 +91,7 @@ Task4 отдельно доказал уменьшение HTTP работы и�
 
 - Task3: согласовать числовую точность/округление агрегатов расходов и проверить golden JSON на disposable PostgreSQL. Billing contract не менялся.
 - Task6/7: язык и сокращение внутренних инструкций требуют согласованного model smoke. Пользователь запускает генерации самостоятельно; prompts не менялись.
-- Task11: транспорт и preview runtime доставлены. Последний перенос дал net+19 production строк; следующий простой extraction отложен ради доказанного сокращения. Unmount/stale-probe cleanup gaps остаются отдельным изменением поведения.
+- Task11: transport, preview runtime и message cache доставлены. Preview дал net+19 строк; message cache убрал32 строки. Дальнейшие пакеты должны доказывать сокращение при прежнем поведении. Unmount/stale-probe cleanup gaps остаются отдельным изменением поведения.
 - Task12: доступные логи не показывают внутренние затраты43-секундного ensure и25.7-секундного release. Удаление build/capture или новый cache без измерений не обоснованы.
 - Task13: по выполненным пакетам есть source review, регрессионные gates и production delivery. Колонка непроверенного сохраняется: нет нового полного набора model/customer flows, cross-user бизнес-БД, реального crash recovery и signed MAX publication. Отметки100% или10/10 не выставляются.
 

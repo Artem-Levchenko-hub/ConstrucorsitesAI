@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 97,
+  "version": 98,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -9,9 +9,9 @@
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
    {
-    "s": "testing",
+    "s": "worked",
     "t": "Код чата стал короче на32 строки при прежнем поведении",
-    "d": "502 web-теста, types/lint, браузер, Astra review, CI web/image и точная сборка прошли. Повторная ручная остановка backend сорвала поставку; защита вернула прежний здоровый web. bf428456 в main, production ещё на старой версии. Требуется согласовать обслуживание сервера и завершить delivery."
+    "d": "GPT-6 Astra завершил web-поставку c2da4f71. 502 теста, types/lint, браузер до/после, независимое ревью и CI web/image прошли. Сервер подтвердил новую версию web, шесть здоровых API-проверок и сохранность остальных сервисов. Прежние неудачные попытки сохранены в истории."
    },
    {
     "s": "worked",
@@ -2770,13 +2770,13 @@
    "id": "H149",
    "title": "Повторяющиеся обновления сообщений чата сведены к одной операции",
    "description": "Девять одинаковых обходов кэша сообщений заменены одной небольшой функцией внутри прежнего hook. Условия событий, очередь, история, ошибки и отмена сохранены.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "09.09",
-   "evidence": "Source bf4284569e75eb40c3fc6fd81e67a83dbb7e57a0 committed/pushed main. BEFORE/AFTER47, full Node20 web502/78, types/lint, hook browser1440/390 identical; Astra review No findings. CI34363742655 web/image and four other jobs passed; API job not complete when recorded, no result claimed. Exact image sha256:e027539f89266fce09c339a8c1d3742dc62c2715ba1709bbaa5a0d378d04e405 build/isolated startup passed. Initial API502 then repeat manual backend stop14:36:29-58UTC caused rollback after new web health passed. Old web2ae/image790e restored healthy; nginx/env bytes exact, POST405 unconfirmed because API502. No switch.complete or H149 publication. /opt/omnia-runtime/releases/task11-message-cache-bf428456-retry1/result.json status rolled_back. Maintenance operator unknown; explicit coordination required before retry. docs/plans/2026-09-09-task11-message-cache-verification.md.",
-   "impact": "Рабочий код чата короче на32 строки. Нового модуля или зависимости нет; ускорение генерации не заявляется.",
-   "next_vector": "Сначала явно согласовать серверное обслуживание и завершить текущую web-поставку. Временного возвращения backend в healthy недостаточно: его дважды вручную останавливали. Проверить State.Status/API health до gate, сохранить failed records, после поставки опубликовать H149. Другие пакеты не начинать."
+   "evidence": "Code bf4284569e75eb40c3fc6fd81e67a83dbb7e57a0; delivered web c2da4f71ae8a61faf5c7e3995350f5c850b397f2, exact image sha256:d72f73045b6306a782e0028b075314120d58ff03965d474c5440f6bc0f24d896. BEFORE/AFTER47, full Node20 web502/78, types/lint, actual hook browser1440/390 identical; Astra review No findings. CI34365432898 web/image passed; unchanged backend uses full-green baseline34356863327. Exact archive and isolated startup passed. Web healthy/release exact, public API6/6, four routes200, other IDs/StartedAt/Status and dirtydocs preserved; nginx restored and POST405 verified. Two earlier interrupted attempts and rollback retained; parallel task completed before successful resumption. Record /opt/omnia-runtime/releases/task11-message-cache-c2da4f71-retry1/result.json; docs/plans/2026-09-09-task11-message-cache-verification.md.",
+   "impact": "Рабочий код чата короче на32 строки и1101 байт после нормализации переводов строк. Девять повторов обновления сообщения теперь используют одну небольшую функцию в том же файле. Сценарии очереди, ошибок и отмены сохранены; ускорение генерации не заявляется.",
+   "next_vector": "Следующий узкий R-кандидат: убрать повторную инициализацию корзин статистики без изменения запросов, арифметики и JSON. Task3 SQL требует отдельного числового контракта; Task6/7 model smoke запускает владелец; Task12 нужны измерения IO; Task13 сохраняет пробелы пользовательской матрицы."
   }
  ],
  "vectors": [
@@ -2994,7 +2994,7 @@
     ],
     [
      "Task11 message cache: меньше повторов, прежние события и очередь, web-only production delivery (09.09)",
-     false
+     true
       ]
    ],
    "hyp_ids": [

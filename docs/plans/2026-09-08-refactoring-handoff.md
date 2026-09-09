@@ -28,51 +28,39 @@ Task11 preview runtime сократил PreviewFrame на46 строк, доба
 | Task10A/10B | Exact-edit validator и browser-container список. [10A](2026-09-08-task10-exact-edit-verification.md), [10B](2026-09-08-task10b-browser-container-verification.md). |
 | Task11 transport | Отдельный WebSocket transport. [Проверка](2026-09-09-task11-transport-verification.md). |
 | Task11 preview runtime | usePreviewRuntime, web496/78, focused74, browser1440/390, Astra No findings. [Проверка и доставка](2026-09-09-task11-preview-runtime-verification.md). |
+| Task11 message cache | Девять повторов обновления сообщения заменены одной локальной функцией: −32 строки/−1101 нормализованный байт; web502/78, browser1440/390. [Проверка и доставка](2026-09-09-task11-message-cache-verification.md). |
 
 ## Текущая поставка
 
-- **Task11 message cache ещё не доставлен:** source `bf428456` отправлен в main,
-  −32 production строки/−1101 нормализованный UTF-8 байт; 47 до/после, полный
-  web502/78, types/lint, browser1440/390 и Astra review прошли. CI34363742655:
-  web/image и ещё четыре jobs прошли; результат API job здесь не заявляется.
-  После первоначального API502 backend восстановили извне, exact web build/smoke
-  прошли. Повторная ручная остановка backend в14:36 UTC сорвала switch: старый
-  web2ae восстановлен, nginx/env byte-equal; API502 не позволил подтвердить405.
-  Запись retry1/result.json — rolled_back. Инициатор не установлен; до следующей
-  попытки явно согласовать обслуживание. H149 остаётся testing и публично
-  не опубликован. [Доказательства и точка продолжения](2026-09-09-task11-message-cache-verification.md).
-- Ниже — последние **доставленные** component identities. После ручной остановки
-  API и оба worker не работают; их прежние успешные health-проверки не описывают
-  текущее состояние. Web продолжает работать.
+- Web `c2da4f71ae8a61faf5c7e3995350f5c850b397f2`, код изменения `bf428456`, image
+  `sha256:d72f73045b6306a782e0028b075314120d58ff03965d474c5440f6bc0f24d896`.
+  Exact archive/image startup, CI34365432898 web/image, локальный web502/78,
+  types/lint, browser1440/390 и Astra review прошли. Runtime identity/healthy,
+  API6/6, четыре публичных маршрута200 и снятый gate405 подтверждены.
 - API/worker/generation-worker `50565efd0c6de2b8c6ee66546d6b4fb16cd05673`, image
-  `sha256:47ac83c1f70ee7351812128fcfc56869e8bdd020fe3143ff45207c4fb2cf4664`.
-  CI34356863327: все7 jobs success; полная API suite3264 passed/12 skipped/8 xfailed.
-  163 теста до/после, wheel/image, Astra review, точные runtime identity,
-  health6/6 и публичные bytes/MIME/cache/CORS подтверждены; write gate снят.
-- Web `2ae9852010c0df7c12291cdcbb8526f9b97b8771`, image
-  `sha256:790e7eb01bc76efa05333230a5acccb9342903c5f9c638d85c23c47960cd3328`.
-  Orchestrator `b99af471`. Их identities, остальные IDs/StartedAt и пять dirty
-  документов сохранены. Общая compose SHA меняет desired metadata web;
-  работающий web остаётся на своём проверенном image/release.
-- Запись: `/opt/omnia-runtime/releases/task5-anime-50565efd/result.json`.
-  Preview delivery: `/opt/omnia-runtime/releases/task11-preview-2ae98520-retry1/result.json`.
+  `sha256:47ac83c1f70ee7351812128fcfc56869e8bdd020fe3143ff45207c4fb2cf4664`;
+  orchestrator `b99af471`. Все работают. Full API baselineCI34356863327:
+  3264 passed/12 skipped/8 xfailed; в текущем web-пакете backend не менялся.
+  Их IDs/StartedAt/Status, host PID и пять dirty документов сохранены при поставке.
+- Успешная запись: `/opt/omnia-runtime/releases/task11-message-cache-c2da4f71-retry1/result.json`.
+  Две прежние ошибки из-за ручных остановок backend сохранены в verification doc;
+  параллельная задача завершилась до новой попытки. Разные component SHA ожидаемы:
+  общая compose SHA меняет desired metadata, но обновлялся только web.
+- H149 публикуется отдельным добавлением с HTTP readback; запись `publication.json`
+  рядом с runtime result. Не заменять публичный отчёт всем репозиторным JSON.
 
 ## Следующий шаг
 
-Сначала завершить delivery Task11 message cache: явно согласовать серверное
-обслуживание, заново сверить состояние, дождаться/восстановить backend и повторить
-подготовку web в новой записи, сохранив обе ошибки. Проверять State.Status и свежий
-API health до gate; одна временная зелёная проверка не заменяет координацию.
-Затем scoped web deploy,
-точные image/release/health и отдельная публикация H149. Другой пакет до этого
-не начинать. Task5 extension уже доставлен; его не повторять.
+Task11 message cache доставлен; его и прежние Task5 пакеты не повторять.
+После нового Task0 — узкий R-кандидат в `get_max_usage`: одна инициализация
+нулевой корзины стадии вместо двух одинаковых словарей (оценка −14 строк).
+Сначала BEFORE полного JSON, затем тот же AFTER; все запросы, фильтры,
+арифметика, порядок и сериализация остаются прежними. Новый слой не нужен.
 
-Task3 SQL требует числового контракта: настоящий сериализатор сохраняет
-`0.1+0.2` как `0.30000000000000004`, Decimal SUM дал бы `0.3`. Нельзя менять
-арифметику/порядок по умолчанию. Отдельный узкий кандидат — одна инициализация
-нулевой корзины стадии (−14 строк); он не реализован и не завершает SQL-агрегацию.
-Task6/7 — model smoke, который владелец запускает
-сам; Task12 — измеренной причины IO задержки. Cleanup/stale-probe usePromptStream
+Это не Task3 SQL-агрегация: настоящий сериализатор сохраняет `0.1+0.2` как
+`0.30000000000000004`, Decimal SUM дал бы `0.3`. SQL/точность/порядок нельзя
+менять по умолчанию. Task6/7 требуют model smoke, который владелец запускает сам;
+Task12 — измеренной причины IO задержки. Cleanup/stale-probe usePromptStream
 остаются отдельным B-пакетом. [Матрица20](2026-09-09-refactoring-scope-review.md)
 сохраняет gaps: весь план и оценка10/10 не объявлены завершёнными.
 
@@ -98,7 +86,7 @@ Task6/7 — model smoke, который владелец запускает
    Перед restart — active generation/operation/activity guard; не прерывать
    генерации и не запускать свои. Доставлять затронутые сервисы, проверять image
    и release. Разные component SHA сами по себе не требуют общего перезапуска.
-7. H147 — preview runtime, H148 — anime dedup, H149 — message cache (пока testing).
+7. H147 — preview runtime, H148 — anime dedup, H149 — message cache (доставлен).
    В `/otchet` публиковать только новый
    согласованный фрагмент, сохраняя прежнюю историю; не заменять публичный JSON
    целиком репозиторным с неопубликованными H134–H136. Следующий ID сверять
