@@ -1,5 +1,18 @@
 # START HERE — передача безопасного рефакторинга Omnia
 
+## Продолжение 9 сентября: Task11 preview runtime
+
+Свежий BASE `9d6a361b`: local/upstream/server checkout совпали; runtime API/оба
+workers `85593d30`, web `c03dd088`, orchestrator `b99af471`. Старые runtime SHA
+ниже относятся к прежним поставкам. Продолжение выполняется только GPT-6 Astra.
+
+Подготовлен отдельный R-пакет: управление запуском и polling предпросмотра
+вынесено из PreviewFrame в usePreviewRuntime, без смены поведения/интерфейса.
+BEFORE66 + новые8, AFTER74, браузер1440/390 и независимое source review прошли.
+Полная web suite Node20: 496/496; Linux сборка и доставка ещё не объявлены завершёнными. Следующая
+контрольная точка — завершить этот delivery loop до новых runtime изменений.
+[Подробные доказательства и границы](2026-09-09-task11-preview-runtime-verification.md).
+
 ## Актуально: P01, Task4/5/8/9/10A/10B и Task11 transport доставлены
 
 Текущее runtime: API/worker/generation-worker `85593d30`, web `ff442154`,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Clapperboard,
   ExternalLink,
@@ -29,7 +29,7 @@ import {
 } from "@/lib/editor-bridge";
 import { listSnapshots } from "@/lib/api/snapshots";
 import { listMessages, reportClientError } from "@/lib/api/messages";
-import { getRuntime, startRuntime } from "@/lib/api/runtime";
+import { usePreviewRuntime } from "@/hooks/usePreviewRuntime";
 import { getProject } from "@/lib/api/projects";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceStore } from "@/store/workspace";
@@ -211,51 +211,8 @@ export function PreviewFrame({
       setViewMode("code");
     }
   }, [isCode, setViewMode]);
-  const {
-    data: runtime,
-    isError: runtimeError,
-    isLoading: runtimeLoading,
-  } = useQuery({
-    queryKey: ["runtime", project.id],
-    queryFn: () => getRuntime(project.id),
-    enabled: isFullstack && !viewingOld,
-    // Keep polling until the container is actually serving (or hard-failed).
-    // The orchestrator can bring the dev container up via auto-provision
-    // (e.g. right after a build) without a guaranteed `runtime.started` WS
-    // event, so a one-shot read can miss the transition and leave the preview
-    // stuck on the startup panel. Poll through any non-terminal state so the
-    // live iframe appears on its own. (R-10: converge to the real state.)
-    refetchInterval: (q) => {
-      const s = q.state.data?.state;
-      return s === "running" || s === "failed" ? false : 2_000;
-    },
-    retry: false,
-  });
-
-  // V2: provision the dev container on open so the live Next.js app appears
-  // by itself — no need to hunt for the TopBar "Запустить". `provision` is
-  // idempotent; we fire it once. If the orchestrator is down the mutation
-  // errors and the in-frame panel below shows a "Запустить" retry instead of
-  // a blank iframe.
-  const startMut = useMutation({
-    mutationFn: () => startRuntime(project.id),
-    onSuccess: (s) => qc.setQueryData(["runtime", project.id], s),
-  });
-  const autoStarted = useRef(false);
-  const runtimeState = runtime?.state;
-  useEffect(() => {
-    if (viewingOld || !isFullstack || autoStarted.current || runtimeLoading) return;
-    const idle =
-      runtimeError ||
-      runtimeState === "stopped" ||
-      runtimeState === "failed" ||
-      runtimeState === undefined;
-    if (idle) {
-      autoStarted.current = true;
-      startMut.mutate();
-    }
-  }, [viewingOld, isFullstack, runtimeLoading, runtimeError, runtimeState, startMut]);
-
+  const { runtime, runtimeState, starting: runtimeStarting, start: startPreviewRuntime } =
+    usePreviewRuntime(project.id, isFullstack, viewingOld);
 
   const [device, setDevice] = useState<Device>(defaultDevice);
   const [iframeKey, setIframeKey] = useState(0);
@@ -965,11 +922,8 @@ export function PreviewFrame({
                     <RuntimeStartupPanel
                       key="runtime"
                       state={runtimeState}
-                      starting={startMut.isPending}
-                      onStart={() => {
-                        autoStarted.current = true;
-                        startMut.mutate();
-                      }}
+                      starting={runtimeStarting}
+                      onStart={startPreviewRuntime}
                     />
                   ) : visible && !suppressStarter ? (
                     <motion.iframe

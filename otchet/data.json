@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 92,
+  "version": 93,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Project Cell получил отдельный PostgreSQL с полными правами",
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
+   {
+    "s": "testing",
+    "t": "Управление запуском предпросмотра выделено из большого компонента",
+    "d": "GPT-6 Astra продолжил Task11: запрос состояния, опрос и запуск preview перенесены в отдельный hook без смены интерфейса. 496 тестов Node20, проверки типов, линтер, браузер1440/390 и независимое ревью прошли; Linux-сборка и production-поставка ожидаются."
+   },
    {
     "s": "partial",
     "t": "Системная очистка освободила 3,50 ГиБ без удаления проектов",
@@ -2726,6 +2731,18 @@
    "evidence": "GPT-6 Astra: свободное место непосредственно до/после 25257684992 → 29019627520 байт, прирост 3761942528 байт / 3,50 ГиБ; заполнение 96% → 95%. Удалены 1053 .deb-архива, индексы APT и 78 старых journal-файлов. Все 65 container IDs, 281 volume name и running StartedAt совпали до/после. API checks ok, web c03dd088 health ok, orchestrator b99af471 active/health ok, существующий MAX canary health ok. Off-host CI34332711275 success для свежего encrypted backup, но свежий restore-test новых ячеек не подтверждён. Полный отчёт: docs/operations/2026-09-09-server-cleanup.md.",
    "impact": "Данные, snapshots, Docker-образы, тома и резервные копии сохранены; перезапусков не было. Кэш пакетов можно скачать заново, старые удалённые журналы этой операцией не восстанавливаются. Основная Docker-очистка не выполнена: общий builder и непроверенные recovery/maintenance условия не позволяют объявить полный результат.",
    "next_vector": "V4"
+  },
+  {
+   "id": "H147",
+   "title": "Управление runtime предпросмотра выделено в отдельный hook",
+   "description": "Отделили получение состояния, polling и однократный запуск runtime от отображения PreviewFrame. Сохранили query key, двухсекундный интервал, ручной повтор, историю и порядок эффектов.",
+   "status": "testing",
+   "score": null,
+   "category": "верификация / рефакторинг",
+   "period": "09.09",
+   "evidence": "BASE9d6a361b. BEFORE66+8, AFTER74; полный web Node20.20.2:496 passed/78files. ESLint/typecheck/diff clean. Edge1440/390 до/после: одинаковые HTTP/runtime sequences, 1start/4reads, iframe/inspector/history/unmount, errors0/overflow0, live PNG byte-identical. Независимый GPT-6 Astra source review: No findings. Source commit, Linux build и production-поставка ожидаются; docs/plans/2026-09-09-task11-preview-runtime-verification.md.",
+   "impact": "Следующий агент может разобраться в запуске и опросе предпросмотра через один hook из65 строк. PreviewFrame стал короче на46 строк; общий объём кода не уменьшен и ускорение генерации не заявляется. Пользовательские генерации не запускались.",
+   "next_vector": "После полной доставки продолжить Task11 отдельным R-пакетом. Числовой контракт Task3, model smoke Task6/7, IO-измерения Task12 и полная customer-flow матрица остаются незавершёнными."
   }
  ],
  "vectors": [
