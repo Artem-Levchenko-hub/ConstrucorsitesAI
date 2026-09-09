@@ -1,6 +1,9 @@
 import { activateMaxIntegration } from "@/lib/api/max-integration";
 import { deployProject, getLastDeploy } from "@/lib/api/runtime";
 import type { DeployStatus } from "@/lib/api/types";
+import { apiFetch } from "@/lib/api/client";
+import type { Project, Snapshot } from "@/lib/api/types";
+import { listRestorations } from "@/lib/api/restorations";
 import { getMaxLaunchErrorDescription } from "@/lib/max-launch-error";
 import { isMaxDeployActive, shouldStartMaxDeploy } from "@/lib/max-launch-state";
 import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
@@ -16,6 +19,7 @@ type SavedLaunch = {
   runId: string | null;
   deadlineAt: number;
   paused: boolean;
+  commitSha?: string;
 };
 
 const key = (projectId: string) => `omnia:max:launch:${projectId}`;
@@ -32,7 +36,8 @@ export function readMaxLaunch(projectId: string): SavedLaunch | null {
       && typeof value.idempotencyKey === "string" && value.idempotencyKey.length > 0
       && (value.runId === null || typeof value.runId === "string")
       && typeof value.deadlineAt === "number" && Number.isFinite(value.deadlineAt)
-      && typeof value.paused === "boolean") return value;
+      && typeof value.paused === "boolean"
+      && (value.commitSha === undefined || /^[0-9a-f]{40}$/.test(value.commitSha))) return value;
   } catch { /* Invalid local checkpoint is replaced only on an explicit launch. */ }
   return null;
 }
@@ -82,9 +87,35 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
     const active = isMaxDeployActive(deployment.phase, deployment.run_id);
     if (shouldStartMaxDeploy(state.phase, deployment.phase, deployment.run_id)
       || (state.phase === "requesting" && !active)) {
+      let pendingRestoration = false;
+      try {
+        const pending = JSON.parse(window.localStorage.getItem(`omnia:restore:request:${projectId}`) ?? "null");
+        pendingRestoration = !!pending && !pending.rejected;
+      } catch { /* Canonical server admission remains authoritative. */ }
+      if (pendingRestoration) {
+        discardCheckpoint = state.phase === "new";
+        throw new Error("Сначала проверьте результат восстановления версии.");
+      }
+      const restorations = await listRestorations(projectId, signal);
+      if (restorations.items.some(item => !["completed", "cancelled", "failed"].includes(item.state))) {
+        discardCheckpoint = state.phase === "new";
+        throw new Error("Сначала завершите или отмените восстановление версии.");
+      }
+      // Resolve the authoritative HEAD once. Retrying a lost POST must never change its body.
+      if (!state.commitSha && state.phase === "new") {
+        const project = await apiFetch<Project>(`/api/projects/${projectId}`, { signal });
+        const snapshots = await apiFetch<Snapshot[]>(`/api/projects/${projectId}/snapshots`, { signal });
+        const target = snapshots.find(snapshot => snapshot.id === project.current_snapshot_id
+          && snapshot.project_id === projectId);
+        if (!target || !/^[0-9a-f]{40}$/.test(target.commit_sha)) {
+          discardCheckpoint = true;
+          throw new Error("Текущая версия не найдена. Обновите редактор перед публикацией.");
+        }
+        state.commitSha = target.commit_sha;
+      }
       state.phase = "requesting";
       save(projectId, state); // Save the key BEFORE POST; a lost response is safely retryable.
-      deployment = await deployProject(projectId, undefined, state.idempotencyKey, { signal });
+      deployment = await deployProject(projectId, state.commitSha, state.idempotencyKey, { signal });
       checkDeadline();
     }
     if (!deployment.run_id || deployment.phase === "idle") {

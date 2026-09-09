@@ -226,6 +226,10 @@ async def _try_preview_project_lock(session: AsyncSession, project_id: UUID) -> 
             "Среда проекта ещё подготавливается. Превью подключится автоматически.",
             503,
         )
+    from omnia_api.services.restorations import assert_no_active_restoration
+
+    await session.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+    await assert_no_active_restoration(session, project_id)
 
 
 async def _unfinished_owner_wake(

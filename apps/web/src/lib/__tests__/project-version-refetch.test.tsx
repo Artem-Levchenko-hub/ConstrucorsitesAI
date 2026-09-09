@@ -22,6 +22,7 @@ vi.mock("@/lib/api/messages", () => ({
   })),
 }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
+vi.mock("@/lib/api/restorations", () => ({ listRestorations: async () => ({ enabled: false, items: [] }) }));
 vi.mock("@/lib/api/projects", () => ({ listProjects: vi.fn(async () => []) }));
 vi.mock("@/lib/api/snapshots", () => ({
   listProjectVersions: vi.fn(), listSnapshots: vi.fn(), rollback: vi.fn(),
@@ -31,8 +32,8 @@ vi.mock("@/lib/api/max-studio", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 vi.mock("@/components/max/MaxEditorLayout", () => ({
-  MaxEditorLayout: ({ children, preview }: { children: ReactNode; preview: ReactNode }) =>
-    <>{children}{preview}</>,
+  MaxEditorLayout: ({ children, preview }: { children: ReactNode; preview: ReactNode | (() => ReactNode) }) =>
+    <>{children}{typeof preview === "function" ? preview() : preview}</>,
 }));
 vi.mock("@/components/workspace/ChatPanel", () => ({
   ChatPanel: ({ projectId, projectSlug }: ChatProps) => {

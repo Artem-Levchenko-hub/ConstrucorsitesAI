@@ -2379,6 +2379,11 @@ async def post_prompt(
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> PromptResponse:
+    from omnia_api.services.restoration_adaptation import (
+        adaptation_reservation_prompt,
+        prepare_adaptation,
+    )
+
     project = await _ensure_owner(session, project_id, current_user.id)
     idempotency_key = payload.idempotency_key or str(uuid4())
     generation_run, replayed = await reserve_generation_run(
@@ -2386,7 +2391,7 @@ async def post_prompt(
         project_id=project_id,
         user_id=current_user.id,
         idempotency_key=idempotency_key,
-        prompt=payload.prompt,
+        prompt=adaptation_reservation_prompt(payload.prompt, payload.restoration_adaptation),
     )
     if replayed:
         if generation_run.response_payload is not None:
@@ -2427,6 +2432,14 @@ async def post_prompt(
             status.HTTP_409_CONFLICT,
             details={"active_run_id": str(generation_run.id)},
         )
+
+    if payload.restoration_adaptation is not None:
+        adaptation = await prepare_adaptation(
+            session, project, current_user.id, payload.restoration_adaptation,
+        )
+        generation_run.agent_state = {
+            **(generation_run.agent_state or {}), "restoration_adaptation": adaptation,
+        }
 
     if payload.max_config_version is not None:
         from omnia_api.models.max_project_config import MaxProjectConfig
@@ -4199,6 +4212,7 @@ async def _process_prompt(
     project_image_gen_enabled: bool = True
     project_discovery_spec: dict[str, object] | None = None
     project_memory_context = ""
+    restoration_adaptation_context = ""
     project_language: str = "ru"
     project_is_imported: bool = False
     _project_cell_executor_handle: project_cell_executor.ProjectCellExecutorHandle | None = None
@@ -4208,6 +4222,11 @@ async def _process_prompt(
 
     try:
         async with factory() as session:
+            from omnia_api.services.restoration_adaptation import append_adaptation_context
+
+            restoration_adaptation_context = await append_adaptation_context(
+                session, run_id, project_id, user_id, current_snapshot_id, "",
+            )
             if current_snapshot_id:
                 snap = await session.get(Snapshot, current_snapshot_id)
                 if snap is not None:
@@ -4699,6 +4718,8 @@ async def _process_prompt(
             )
             if project_memory_context:
                 _seed_block = _seed_block + "\n\n" + project_memory_context
+            if restoration_adaptation_context:
+                _seed_block += restoration_adaptation_context
             # Per-project DESIGN MOOD — make every app look UNIQUE instead of the
             # baked dark zinc/indigo template («дизайн всегда одинаковый»). Seeded
             # curated palette + font + density fed into the BUILD prompt so the
@@ -6729,7 +6750,7 @@ async def _process_prompt(
             # B4 — imported repos use a stack-neutral generic edit identity
             # instead of the Omnia static/Next.js-specific ones.
             is_imported=project_is_imported,
-            project_memory_context=project_memory_context,
+            project_memory_context=project_memory_context + restoration_adaptation_context,
         )
         print(f"[PP] messages_built count={len(messages)} surgical={surgical}", flush=True)
 
@@ -7690,7 +7711,7 @@ async def _process_prompt(
                         build_container_rewrite_messages(
                             _targets,
                             history_serialized,
-                            prompt_text,
+                            prompt_text + restoration_adaptation_context,
                             selected_elements,
                             template=project_template,
                         ),

@@ -1103,6 +1103,7 @@ class Settings(BaseSettings):
     # still exposes the tool only after the orchestrator attests the separate,
     # secretless disposable sandbox; the flag remains an instant kill switch.
     max_project_shell_enabled: bool = Field(default=True)
+    max_code_restoration_enabled: bool = Field(default=False)
 
     # Edit auto-repair (owner 2026-06-28: «надо чтобы он ПРЯМ ЧИНИЛ, а не выдавал
     # „Не удалось завершить правку — нажми Починить“»). When a point-EDIT doesn't

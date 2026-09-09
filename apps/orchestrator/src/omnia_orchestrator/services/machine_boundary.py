@@ -214,7 +214,8 @@ def route_port(path: str, routes: list[dict[str, Any]]) -> int | None:
 
 
 def product_headers(
-    headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any]
+    headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any],
+    data_policy: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     clean = {
         key: value
@@ -230,6 +231,22 @@ def product_headers(
             "X-Omnia-Session-Epoch": str(epoch),
         }
     )
+    if data_policy is not None:
+        if (data_policy.get("project_id") != project_id
+                or type(data_policy.get("epoch")) is not int or data_policy["epoch"] < 1
+                or not isinstance(data_policy.get("token_secret"), str)
+                or not data_policy["token_secret"]
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(user.get("id", "")))):
+            raise ValueError("invalid data policy identity")
+        expires = min(int(time.time()) + 60, int(user.get("expiresAt", int(time.time()) + 60)))
+        if expires <= time.time():
+            raise ValueError("expired data actor")
+        payload = json.dumps({
+            "purpose": "omnia-data", "project_id": project_id, "epoch": data_policy["epoch"],
+            "user_id": str(user["id"]), "expires_at": expires,
+        }, sort_keys=True, separators=(",", ":")).encode().hex()
+        signature = hmac.digest(data_policy["token_secret"].encode(), payload.encode(), "sha256")
+        clean["X-Omnia-Data-Token"] = payload + "." + signature.hex()
     return clean
 
 
@@ -400,12 +417,16 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                 return self._reply(404)
             port = route_target_port
             target = str(config["machine_host"])
-            headers = product_headers(
-                dict(self.headers),
-                project_id=str(config["project_id"]),
-                epoch=int(config["epoch"]),
-                user=user,
-            )
+            try:
+                headers = product_headers(
+                    dict(self.headers),
+                    project_id=str(config["project_id"]),
+                    epoch=int(config["epoch"]),
+                    user=user,
+                    data_policy=config.get("data_policy"),
+                )
+            except (ValueError, TypeError):
+                return self._reply(503, b"Data access policy unavailable")
         connection = http.client.HTTPConnection(target, port, timeout=120)
         try:
             body = self.rfile.read(length) if length else None

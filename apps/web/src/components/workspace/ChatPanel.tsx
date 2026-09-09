@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, PanelLeftClose } from "lucide-react";
@@ -21,7 +21,7 @@ import type {
   SurveyQuestion,
 } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
-import { PromptInput } from "./PromptInput";
+import { PromptInput, type PromptInputHandle } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
 import { DiscoveryFrame } from "./DiscoveryFrame";
 import { OnboardingSurvey } from "./OnboardingSurvey";
@@ -65,6 +65,9 @@ export function ChatPanel({
   basePath = `/projects/${projectId}`,
   embedded = false,
   currentSnapshotId,
+  draftRef,
+  restorationAdaptation,
+  onRestorationAdaptationSubmitted,
 }: {
   projectId: string;
   projectSlug: string;
@@ -72,6 +75,9 @@ export function ChatPanel({
   basePath?: string;
   embedded?: boolean;
   currentSnapshotId?: string | null;
+  draftRef?: Ref<PromptInputHandle>;
+  restorationAdaptation?: PromptSubmitOptions["restorationAdaptation"];
+  onRestorationAdaptationSubmitted?: (operationId: string) => void;
 }) {
   // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
   // The client no longer picks a model; this label is just sent through for
@@ -200,8 +206,19 @@ export function ChatPanel({
     [mode, modelId, projectId, qc, submit],
   );
 
-  const handleSubmit = (text: string, selections: SelectedElement[]) =>
-    submitWithCredentialIntake(text, selections);
+  const handleSubmit = async (text: string, selections: SelectedElement[]) => {
+    if (restorationAdaptation && restorationAdaptation.expected_draft_snapshot_id !== currentSnapshotId) {
+      toast.error("Черновик изменился. Подготовьте адаптацию заново или уберите выбранную версию.");
+      return false;
+    }
+    const accepted = await submitWithCredentialIntake(text, selections, restorationAdaptation ? {
+      restorationAdaptation,
+      idempotencyKey: `restoration-adapt:${restorationAdaptation.operation_id}`,
+      skipClarify: true,
+    } : undefined);
+    if (accepted && restorationAdaptation) onRestorationAdaptationSubmitted?.(restorationAdaptation.operation_id);
+    return accepted;
+  };
 
   // «Починить» on an error card → submit a follow-up fix prompt through the
   // normal pipeline (surgical edit / rebuild as the triage decides).
@@ -442,6 +459,7 @@ export function ChatPanel({
           </Button>
         </div>}
         <Composer
+          draftRef={draftRef}
           projectId={projectId}
           snapshotId={adviceSnapshotId}
           contextVersion={currentConfig?.config_version}

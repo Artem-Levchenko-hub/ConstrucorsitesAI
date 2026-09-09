@@ -182,7 +182,10 @@ def test_warm_release_reuses_verified_image_and_creates_only_release_local_volum
     created = []
     runtime.release_layout = {"data:uploads": "uploads"}
     runtime.volume_mapping = lambda _manifest: {
-        "workspace": {}, "home": {}, "pnpm": {}, "uploads": {},
+        "workspace": {},
+        "home": {},
+        "pnpm": {},
+        "uploads": {},
     }
     runtime._volume = lambda name: created.append(name)
     runtime.ensure_release_runtime_volumes(SimpleNamespace())
@@ -446,6 +449,64 @@ def test_incompatible_update_fails_before_data_or_code_changes():
         assert_compatible_update(old, {**old, "data_contract_digest": "d" * 64})
 
 
+def test_protected_public_schema_probe_uses_controller_socket(tmp_path, monkeypatch):
+    from omnia_orchestrator.services import restoration_database
+
+    runtime = published_backend(tmp_path)
+    calls = []
+    runtime._project_postgres = lambda: SimpleNamespace(
+        exec_run=lambda args, **kwargs: (
+            calls.append((args, kwargs))
+            or SimpleNamespace(exit_code=0, output=b"CREATE TABLE x();")
+        )
+    )
+    monkeypatch.setattr(restoration_database, "load_policy", lambda _: {"epoch": 2})
+    runtime.schema_digest()
+    args, options = calls[0]
+    assert args[args.index("-h") + 1] == "/tmp"
+    assert options["environment"] == {}
+    assert options["user"] == "postgres"
+
+
+def test_public_policy_stops_old_writers_before_changing_credentials(tmp_path, monkeypatch):
+    from omnia_orchestrator.services import restoration_database
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+
+    runtime = published_backend(tmp_path)
+    events = []
+    runtime.quiesce_current = lambda: events.append("quiesce")
+    runtime.remove = lambda: events.append("remove-app-and-pg")
+    monkeypatch.setattr(
+        restoration_database, "stage_policy", lambda *args, **kwargs: events.append("stage-policy")
+    )
+    runtime.stage_public_policy(DataContract(version=1, tables=[]), 4, blocked_deletes=[])
+    assert events == ["quiesce", "remove-app-and-pg", "stage-policy"]
+
+
+def test_public_policy_rollback_rotates_same_epoch_without_data_restore(tmp_path, monkeypatch):
+    from omnia_orchestrator.services import restoration_database
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+
+    runtime = published_backend(tmp_path)
+    events = []
+    runtime.quiesce_current = lambda: events.append("quiesce")
+    runtime.remove = lambda: events.append("remove-app-and-pg")
+    monkeypatch.setattr(
+        restoration_database, "recover_policy", lambda *args, **kwargs: events.append(kwargs)
+    )
+    runtime.stage_public_policy(
+        DataContract(version=1, tables=[]),
+        4,
+        blocked_deletes=[],
+        recovery_operation_id="public-release-recovery",
+    )
+    assert events == [
+        "quiesce",
+        "remove-app-and-pg",
+        {"blocked_deletes": [], "operation_id": "public-release-recovery"},
+    ]
+
+
 def test_publication_rejects_unsafe_slug_and_unscoped_secrets():
     from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
 
@@ -470,3 +531,22 @@ def test_publication_rejects_unsafe_slug_and_unscoped_secrets():
         CellDeployRequest(**{**request, "slug": "../other"})
     with pytest.raises(ValueError):
         CellDeployRequest(**request, runtime_env={"DATABASE_URL": "forbidden"})
+
+
+def test_restoration_publication_requires_its_own_discriminator_without_fake_generation_proofs():
+    from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
+    from tests.test_cell_publication import request
+
+    original = request().model_dump()
+    proof_fields = {"proof_key", "schema_data_digest", "build_ref", "verification_ref"}
+    restored = {key: value for key, value in original.items() if key not in proof_fields}
+    restored.update(restoration_operation_id=UUID(int=20), accepted_fencing_epoch=3)
+    assert CellDeployRequest(**restored).restoration_operation_id == UUID(int=20)
+    with pytest.raises(ValueError):
+        CellDeployRequest(
+            **{key: value for key, value in restored.items() if key != "restoration_operation_id"}
+        )
+    with pytest.raises(ValueError):
+        CellDeployRequest(**{**restored, "proof_key": "a" * 64})
+    with pytest.raises(ValueError):
+        CellDeployRequest(**{**restored, "accepted_fencing_epoch": None})

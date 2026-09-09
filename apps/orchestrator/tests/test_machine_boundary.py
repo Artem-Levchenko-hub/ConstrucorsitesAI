@@ -56,6 +56,39 @@ def test_caller_identity_and_credentials_are_not_forwarded_to_product_code():
     assert headers["Accept"] == "text/html"
 
 
+def test_data_actor_header_is_signed_by_gateway_and_client_injection_is_removed(monkeypatch):
+    boundary = module()
+    monkeypatch.setattr(boundary.time, "time", lambda: 1000)
+    policy = {"project_id": "project-one", "epoch": 7, "token_secret": "test-secret"}
+    headers = boundary.product_headers(
+        {"x-omnia-data-token": "forged"}, project_id="project-one", epoch=7,
+        user={"id": "user-one", "expiresAt": 1030}, data_policy=policy,
+    )
+    payload, signature = headers["X-Omnia-Data-Token"].split(".")
+    assert signature == hmac.digest(b"test-secret", payload.encode(), "sha256").hex()
+    assert json.loads(bytes.fromhex(payload)) == {
+        "purpose": "omnia-data", "project_id": "project-one", "epoch": 7,
+        "user_id": "user-one", "expires_at": 1030,
+    }
+    assert "test-secret" not in json.dumps(headers)
+    assert "forged" not in json.dumps(headers)
+    unsigned = boundary.product_headers(
+        {"X-Omnia-Data-Token": "forged"}, project_id="project-one", epoch=7, user={"id": "u"},
+    )
+    assert "X-Omnia-Data-Token" not in unsigned
+
+
+@pytest.mark.parametrize("policy", [
+    {"project_id": "other", "epoch": 7, "token_secret": "secret"},
+    {"project_id": "project-one", "epoch": True, "token_secret": "secret"},
+    {"project_id": "project-one", "epoch": 7, "token_secret": ""},
+])
+def test_data_actor_policy_mismatch_fails_closed(policy):
+    with pytest.raises(ValueError):
+        module().product_headers({}, project_id="project-one", epoch=7,
+                                 user={"id": "u"}, data_policy=policy)
+
+
 def test_routing_preserves_managed_namespaces_and_uses_longest_product_prefix():
     boundary = module()
     routes = [
@@ -137,6 +170,18 @@ def test_actual_http_boundary_rejects_bad_auth_and_strips_product_credentials():
         assert "Cookie" not in received[0] and "Authorization" not in received[0]
         status, content, _ = request("/__omnia/identity", headers)
         assert status == 200 and json.loads(content)["project_id"] == "project-A"
+        gateway.config["data_policy"] = {
+            "project_id": "project-A", "epoch": 7, "token_secret": "private-data-key",
+        }
+        assert request("/", {**headers, "X-Omnia-Data-Token": "forged"})[0] == 200
+        payload, signature = received[-1]["X-Omnia-Data-Token"].split(".")
+        assert json.loads(bytes.fromhex(payload))["user_id"] == "user-A"
+        assert signature == hmac.digest(b"private-data-key", payload.encode(), "sha256").hex()
+        assert "private-data-key" not in json.dumps(received)
+        gateway.config["data_policy"]["project_id"] = "other-project"
+        count = len(received)
+        assert request("/", headers)[0] == 503
+        assert len(received) == count
     finally:
         for server in (gateway, product):
             server.shutdown()

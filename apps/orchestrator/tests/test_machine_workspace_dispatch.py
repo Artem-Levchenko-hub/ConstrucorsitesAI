@@ -30,6 +30,10 @@ class PortableRuntime:
     async def _ensure(self, manifest, mutation):
         pass
 
+    async def validate_protected_environment(self, state, proposed_manifest):
+        assert state.resource_names.workspace_volume
+        assert proposed_manifest.version == 1
+
     async def _request_status(self, **kwargs):
         return SimpleNamespace(transport_response=None)
 
@@ -49,13 +53,17 @@ class PortableRuntime:
         pass
 
     def parts(self, state):
+        self.backend.workspace_volume = state.resource_names.workspace_volume
         return self.machine, self.backend
+
+    def exists(self, workspace_id):
+        return True
 
     @staticmethod
     def _request_digest(manifest, request):
         return "d" * 64
 
-    def capabilities(self):
+    def capabilities(self, state):
         return {
             "portable_machine": True,
             "manifest_path": ".omnia/cell.json",

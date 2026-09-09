@@ -332,11 +332,16 @@ class DockerMachineBackend:
         return self.environment_volume_names(manifest)
 
     def project_database_env(self) -> dict[str, str]:
+        from omnia_orchestrator.services.restoration_database import load_policy
+
+        policy = load_policy(self)
+        user = "omnia_runtime" if policy else _PROJECT_POSTGRES_USER
+        password = policy["password"] if policy else self.project_postgres_password
         database_url = (
             "postgresql://"
-            + _PROJECT_POSTGRES_USER
+            + user
             + ":"
-            + quote(self.project_postgres_password, safe="")
+            + quote(password, safe="")
             + "@"
             + _PROJECT_POSTGRES_HOST
             + ":"
@@ -348,8 +353,8 @@ class DockerMachineBackend:
             "DATABASE_URL": database_url,
             "PGHOST": _PROJECT_POSTGRES_HOST,
             "PGPORT": str(_PROJECT_POSTGRES_PORT),
-            "PGUSER": _PROJECT_POSTGRES_USER,
-            "PGPASSWORD": self.project_postgres_password,
+            "PGUSER": user,
+            "PGPASSWORD": password,
             "PGDATABASE": _PROJECT_POSTGRES_DB,
         }
 
@@ -417,7 +422,7 @@ class DockerMachineBackend:
             raise ValueError("machine service resource request exceeds admitted bundle budget")
         metadata = self._metadata()
         proxy_ip = metadata.get("proxy_ip", "127.0.0.1")
-        return {
+        options = {
             "name": self.machine_name,
             "detach": True,
             "user": "0:0",
@@ -484,6 +489,19 @@ class DockerMachineBackend:
                 type="json-file", config={"max-size": "1m", "max-file": "2"}
             ),
         }
+        from omnia_orchestrator.services.restoration_database import load_policy, policy_path
+
+        if load_policy(self) is not None:
+            from omnia_orchestrator.services.restoration_node_bridge import NODE_BRIDGE_SOURCE
+
+            bridge = policy_path(self).with_name("data-runtime.cjs")
+            if bridge.is_symlink():
+                raise CellIdentityConflict("unsafe data runtime path")
+            bridge.write_text(NODE_BRIDGE_SOURCE, encoding="utf-8")
+            bridge.chmod(0o644)
+            options["volumes"][str(bridge)] = {"bind": "/opt/omnia-data-runtime.cjs", "mode": "ro"}
+            options["environment"]["NODE_OPTIONS"] += " --require=/opt/omnia-data-runtime.cjs"
+        return options
 
     def ensure(self, manifest: MachineManifest, epoch: int) -> None:
         self.invalidate_retained_preview()
@@ -624,7 +642,9 @@ class DockerMachineBackend:
         machine.start()
 
     def _project_postgres_options(self, namespace_id: str, epoch: int) -> dict[str, Any]:
-        return {
+        from omnia_orchestrator.services.restoration_database import load_policy, policy_path
+
+        options: dict[str, Any] = {
             "name": self.project_postgres_name,
             "detach": True,
             "labels": {
@@ -668,6 +688,23 @@ class DockerMachineBackend:
                 type="json-file", config={"max-size": "1m", "max-file": "2"}
             ),
         }
+        if load_policy(self) is not None:
+            root = policy_path(self).parent
+            options["command"][-1] = "unix_socket_directories=/tmp"
+            options["command"] += [
+                "-c", "hba_file=/etc/omnia-pg-hba.conf",
+                "-c", "config_file=/etc/omnia-postgresql.conf",
+                "-c", "shared_preload_libraries=", "-c", "session_preload_libraries=",
+                "-c", "local_preload_libraries=", "-c", "archive_mode=off",
+                "-c", "archive_command=", "-c", "restore_command=",
+            ]
+            options["volumes"].update({
+                str(root / "postgres-hba.conf"): {"bind": "/etc/omnia-pg-hba.conf", "mode": "ro"},
+                str(root / "postgres-controller.conf"): {
+                    "bind": "/etc/omnia-postgresql.conf", "mode": "ro",
+                },
+            })
+        return options
 
     def _prepare_project_postgres_volume(self) -> None:
         self._volume(self.project_postgres_volume)

@@ -45,6 +45,7 @@ from omnia_api.models.project_cell import (
 )
 from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.project_version import ProjectVersion
+from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.task_board import (
     TaskBoardAttachment,
@@ -95,6 +96,7 @@ __all__ = [
     "ProjectIntegrationBinding",
     "ProjectMemoryRevision",
     "ProjectVersion",
+    "Restoration",
     "Snapshot",
     "Subscription",
     "TaskBoardAttachment",

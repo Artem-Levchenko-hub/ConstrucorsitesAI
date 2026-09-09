@@ -443,6 +443,9 @@ class DockerCellResourceManager:
             if names is None:
                 raise CellResourceError("resource names missing")
             if self.machine_runtime is not None:
+                if state.active_generation_run_id != generation_run_id:
+                    raise CellIdentityConflict("generation release identity mismatch")
+                await self._reconcile_pending_machine_migration(state)
                 await self.machine_runtime.halt(state, retain_trusted=True)
             await self.stateful_begin_or_replay(
                 spec,
@@ -477,6 +480,13 @@ class DockerCellResourceManager:
             checkpoint_ref=checkpoint_ref,
             record_operation=record_operation,
         )
+
+    async def _reconcile_pending_machine_migration(self, state: CellWorkspaceState) -> None:
+        # Preserve the original generation lease until its admitted controller work finishes.
+        # Legacy runtimes have no migration capability.
+        reconcile = getattr(self.machine_runtime, "reconcile_pending_migration", None)
+        if reconcile is not None:
+            await reconcile(state)
 
     async def destroy_compute(
         self,
@@ -623,6 +633,7 @@ class DockerCellResourceManager:
                 )
             self._assert_profile_version(state.profile_version)
             self._reject_unless_allowed(state, mutation, allow_reconcile=True)
+            await self._reconcile_pending_machine_migration(state)
             reconcile_generation_run_id = self._reconcile_generation_run_id(state)
             capacity_lock = self.capacity_lock or self.operation_lock
             async with capacity_lock.hold_named("host-capacity-admission"):
@@ -731,6 +742,7 @@ class DockerCellResourceManager:
             replay = self._replay_if_completed(state, mutation)
             if replay is None:
                 self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+                await self._reconcile_pending_machine_migration(state)
         existing_bundle = await self._bundle_exists(names)
         running_bundle = await self._bundle_running(names)
         reservation_store = self._capacity_reservation_store()
@@ -892,6 +904,7 @@ class DockerCellResourceManager:
         self._assert_profile_version(spec.profile_version)
         await self._preflight_named_resources(spec, names)
         self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        await self._reconcile_pending_machine_migration(state)
         capacity_lock = self.capacity_lock or self.operation_lock
         async with capacity_lock.hold_named("host-capacity-admission"):
             self._capacity_reservation_store().rebind(workspace_id, mutation)
@@ -1704,6 +1717,7 @@ class DockerCellResourceManager:
         self._assert_profile_version(spec.profile_version)
         await self._preflight_named_resources(spec, names)
         self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        await self._reconcile_pending_machine_migration(state)
         capacity_lock = self.capacity_lock or self.operation_lock
         if record_operation:
             async with capacity_lock.hold_named("host-capacity-admission"):
@@ -1771,6 +1785,7 @@ class DockerCellResourceManager:
         names = state.resource_names
         assert names is not None
         await self._preflight_named_resources(spec, names)
+        await self._reconcile_pending_machine_migration(state)
         capacity_lock = self.capacity_lock or self.operation_lock
         if record_operation:
             async with capacity_lock.hold_named("host-capacity-admission"):

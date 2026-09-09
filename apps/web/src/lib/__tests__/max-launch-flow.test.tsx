@@ -22,6 +22,8 @@ let calls: { path: string; method: string; body: unknown }[];
 let pendingReadiness: Promise<Response> | undefined;
 let postDeploy: (() => DeployStatus) | undefined;
 let stallDeployRead: boolean;
+let headSha: string;
+let restoring: boolean;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -31,6 +33,8 @@ beforeEach(() => {
   pendingReadiness = undefined;
   postDeploy = undefined;
   stallDeployRead = false;
+  headSha = "a".repeat(40);
+  restoring = false;
   status = deploy("queued", null);
   window.localStorage.clear();
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
@@ -45,6 +49,12 @@ beforeEach(() => {
     if (path.endsWith("/max/readiness")) {
       if (pendingReadiness) return pendingReadiness;
       response = { ready_to_launch: false, progress: 67, items: ["business", "legal", "build", "bot", "publish", "max_url"].map(id => ({ id, done: !["publish", "max_url"].includes(id), blocking: true, label: id, action: null })) };
+    } else if (path.endsWith("/restorations")) {
+      response = { enabled: true, items: restoring ? [{ state: "applying" }] : [] };
+    } else if (path.endsWith("/snapshots")) {
+      response = [{ id: "current", project_id: projectId, commit_sha: headSha }];
+    } else if (path === `/api/projects/${projectId}`) {
+      response = { id: projectId, current_snapshot_id: "current" };
     } else if (path.endsWith("/runtime")) {
       response = { state: "running" };
     } else if (path.endsWith("/deploy")) {
@@ -89,6 +99,40 @@ it("publishes once when legacy GET says queued but no operation exists", async (
   expect(calls.some(call => call.path.includes("/runtime"))).toBe(false);
   expect(button().disabled).toBe(false);
   expect(localStorage.getItem(`omnia:max:launch:${projectId}`)).toBeNull();
+});
+
+it("pins the current snapshot SHA instead of publishing an implicit moving HEAD", async () => {
+  await mount();
+  await click();
+  expect(posts()[0].body).toMatchObject({ commit_sha: headSha });
+});
+
+it("retains the chosen SHA and key after a lost POST even if HEAD changes", async () => {
+  postDeploy = () => { throw new TypeError("lost response"); };
+  await mount();
+  await click();
+  const original = posts()[0].body;
+  headSha = "b".repeat(40);
+  postDeploy = undefined;
+  await click();
+  expect(posts()).toHaveLength(2);
+  expect(posts()[1].body).toEqual(original);
+  expect(posts()[1].body).toMatchObject({ commit_sha: "a".repeat(40) });
+});
+
+it("does not publish while a durable restoration is active", async () => {
+  restoring = true;
+  await mount();
+  await click();
+  expect(posts()).toHaveLength(0);
+  expect(container.textContent).toContain("восстановление");
+});
+it("refuses publication while a restoration POST is still uncertain in this browser", async () => {
+  localStorage.setItem(`omnia:restore:request:${projectId}`, JSON.stringify({ kind: "prepare", payload: {} }));
+  await mount();
+  await click();
+  expect(posts()).toHaveLength(0);
+  expect(container.textContent).toContain("восстановления");
 });
 
 it("attaches to an actual queued run without creating another deployment", async () => {

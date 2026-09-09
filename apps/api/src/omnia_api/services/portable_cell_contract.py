@@ -6,6 +6,39 @@ from typing import Protocol
 
 RequestedCapability = tuple[str, str, tuple[str, ...]]
 
+DATABASE_ACCESS_GUIDE = """A dedicated PostgreSQL is reachable via DATABASE_URL, isolated from the
+managed MAX core and other projects. Do not assume administrative database access;
+use only the permissions reported by the selected provider. Persistent business
+data requires explicit backward-compatible changes, following the appended policy."""
+
+PROTECTED_DATABASE_GUIDE = """The database uses a protected application role: no DDL, role changes,
+administrative credentials or access to other users' records. DATABASE_URL is the
+only product connection. Keep the trusted Node pg bridge and MAX actor context.
+For an additive schema change, write the complete desired .omnia/data-contract.json
+and run exactly this standalone bash tool command during the active generation:
+omnia-db apply .omnia/data-contract.json
+This is an authenticated controller operation, not a guest executable to install.
+Do not wrap it in sh, chain shell commands, or put it in bootstrap/build/service startup.
+The controller supports new tables with UUID id primary key, a required conventional
+text owner column (owner_id, owner_max_user_id, max_user_id or user_id), and nullable
+scalar fields; existing tables may gain nullable scalar columns. Include all current
+tables/fields unchanged. Retain types, meanings, primary/unique keys and relationships.
+Supported new types are uuid, text, boolean, smallint, integer, bigint, real,
+double precision, numeric, date, time without time zone, timestamp without time zone
+and timestamp with time zone.
+No arbitrary SQL, rename/drop, new required fields on existing tables, enums,
+new relationships/checks/unique constraints or new JSON structures are accepted.
+For new scalar fields, omit values/json_keys/meaning metadata; record their semantics
+in .omnia/data-evolution.md. Existing machine meaning metadata must remain unchanged.
+Unsupported changes need explicit controller support; report the exact blocker,
+preserve current data and do not bypass the role or fabricate a successful migration.
+Example new table within the COMPLETE desired contract:
+{"name":"projects","owner_column":"owner_id","primary_key":["id"],"columns":[
+ {"name":"id","type":"uuid","nullable":false},
+ {"name":"owner_id","type":"text","nullable":false},
+ {"name":"title","type":"text","nullable":true}]}
+Top-level contract shape is {"version":1,"tables":[...]}. This command never publishes."""
+
 
 class PortableGuideExecutor(Protocol):
     @property
@@ -61,13 +94,7 @@ ephemeral. Services may declare depends_on and mounts [{"volume":"data",
 "target":"/data"}]. One named volume has one guest target. Resource limits are
 aggregate; defaults per service: .25 CPU,128 MiB RAM,1 GiB disk admission,64 pids.
 RAM/CPU/pids are enforced; disk is admission/snapshot bounded, not a hard quota.
-A dedicated project PostgreSQL is reachable at 127.0.0.1 via DATABASE_URL with
-development admin access. It is isolated from the managed MAX core PostgreSQL and from
-other projects. Manage your own schema, migrations, roles, settings and bundled
-extensions there. The platform snapshots and restore-smokes its disk. Database
-superuser access does not grant container, host or managed-platform privileges.
-Persistent data still needs backward-compatible migrations. Follow the appended
-MAX DATA EVOLUTION POLICY; admin access is not permission to discard existing data.
+__DATABASE_ACCESS_GUIDE__
 
 MAX AUTH AND MANAGED INTEGRATIONS ARE A SEPARATE TRUSTED BOUNDARY.
 PostgreSQL-backed managed APIs remain in the trusted core. /api/max/* and /api/omnia/* stay
@@ -97,7 +124,7 @@ tool exists. Do not claim deployment, payment or business integrations untested.
 Proof invalidation follows observed before/after source, dependency, schema,
 manifest and environment digests. Clean commands keep their proof. No
 screenshot/see tools are available.
-""".strip()
+""".strip().replace("__DATABASE_ACCESS_GUIDE__", DATABASE_ACCESS_GUIDE)
 
 
 def machine_stack_guide(
@@ -108,7 +135,8 @@ def machine_stack_guide(
     new_product: bool = False,
 ) -> str:
     if capabilities.get("portable_machine") is True and ".omnia/cell.json" in files:
-        return PORTABLE_CELL_GUIDE
+        return (PORTABLE_CELL_GUIDE.replace(DATABASE_ACCESS_GUIDE, PROTECTED_DATABASE_GUIDE)
+                if capabilities.get("database_admin") == "protected" else PORTABLE_CELL_GUIDE)
     return legacy
 
 

@@ -20,8 +20,11 @@ from omnia_api.models.project_cell import (
     ProjectCellProofResult,
     ProjectCellWorkspace,
 )
+from omnia_api.models.project_version import ProjectVersion
+from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+from omnia_api.schemas.restoration import RuntimeRestoration
 from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.project_cell_proofs import (
@@ -168,11 +171,36 @@ async def load_publication_evidence(
 ) -> dict[str, Any]:
     if await project_cell_runtime._active_generation(session, project.id) is not None:
         _unproven("generation_active")
+    from omnia_api.services.restorations import assert_no_active_restoration
+
+    await assert_no_active_restoration(session, project.id)
     snapshot = (
         await session.get(Snapshot, project.current_snapshot_id)
         if project.current_snapshot_id
         else None
     )
+    restoration = (
+        await session.scalar(
+            select(Restoration).where(
+                Restoration.project_id == project.id,
+                Restoration.applied_snapshot_id == project.current_snapshot_id,
+            )
+        )
+        if snapshot is not None
+        else None
+    )
+    if restoration is not None:
+        assert snapshot is not None
+        version = await session.get(ProjectVersion, restoration.applied_version_id)
+        if version is None:
+            _unproven("restored_version_missing")
+        return validate_restoration_publication_evidence(
+            project=project,
+            workspace=workspace,
+            snapshot=snapshot,
+            restoration=restoration,
+            version=version,
+        )
     candidate = await session.scalar(
         select(ProjectCellCandidate).where(
             ProjectCellCandidate.workspace_id == workspace.id,
@@ -216,6 +244,88 @@ async def load_publication_evidence(
     )
 
 
+def validate_restoration_publication_evidence(
+    *,
+    project: Project,
+    workspace: ProjectCellWorkspace,
+    snapshot: Snapshot,
+    restoration: Restoration,
+    version: ProjectVersion,
+) -> dict[str, Any]:
+    """A real restored snapshot uses controller activation provenance, not a fake run."""
+    from omnia_api.services.restorations import validate_runtime_response
+
+    if (
+        workspace.project_id != project.id
+        or workspace.owner_id != project.owner_id
+        or workspace.provider != "docker_owner_canary"
+        or workspace.generation_run_id is not None
+        or workspace.state not in {"ready", "stopped"}
+        or workspace.deleted_at is not None
+        or restoration.state != "completed"
+        or not restoration.apply_digest
+        or restoration.project_id != project.id
+        or restoration.owner_id != project.owner_id
+        or restoration.workspace_id != workspace.id
+        or restoration.candidate_id is None
+        or snapshot.id != project.current_snapshot_id
+        or snapshot.project_id != project.id
+        or restoration.applied_snapshot_id != snapshot.id
+        or restoration.planned_commit_sha != snapshot.commit_sha
+        or snapshot.parent_id != restoration.base_draft_snapshot_id
+        or workspace.fencing_epoch < restoration.fencing_epoch
+        or version.id != restoration.applied_version_id
+        or version.project_id != project.id
+        or version.snapshot_id != snapshot.id
+        or version.commit_sha != snapshot.commit_sha
+        or version.restored_from_snapshot_id != restoration.source_snapshot_id
+        or version.status != "ready"
+    ):
+        _unproven("restoration_identity_mismatch")
+    try:
+        runtime = RuntimeRestoration.model_validate(restoration.runtime_result)
+        validate_runtime_response(restoration.request_payload, runtime)
+        expected = {
+            "operation_id": str(restoration.id),
+            "workspace_id": str(workspace.id),
+            "project_id": str(project.id),
+            "owner_id": str(project.owner_id),
+            "candidate_id": str(restoration.candidate_id),
+            "planned_commit_sha": snapshot.commit_sha,
+            "target_commit_sha": restoration.target_commit_sha,
+            "expected_source_head": restoration.base_commit_sha,
+            "fencing_epoch": restoration.fencing_epoch,
+        }
+        if any(restoration.request_payload.get(key) != value for key, value in expected.items()):
+            _unproven("restoration_request_mismatch")
+        observed = runtime.observed
+        if (
+            runtime.state != "completed"
+            or observed is None
+            or not observed.applied
+            or runtime.report is None
+            or runtime.report.blockers
+            or runtime.report.model_dump(mode="json") != restoration.report
+            or not getattr(observed, "source_revision", None)
+        ):
+            _unproven("restoration_activation_unproven")
+    except (ValueError, KeyError, TypeError):
+        _unproven("restoration_activation_unproven")
+    return {
+        "project_id": str(project.id),
+        "owner_id": str(project.owner_id),
+        "slug": project.slug,
+        "workspace_id": str(workspace.id),
+        "snapshot_id": str(snapshot.id),
+        "commit_sha": snapshot.commit_sha,
+        "candidate_id": str(restoration.candidate_id),
+        "restoration_operation_id": str(restoration.id),
+        "source_revision": observed.source_revision,
+        "fencing_epoch": workspace.fencing_epoch,
+        "accepted_fencing_epoch": restoration.fencing_epoch,
+    }
+
+
 def integration_runtime_env(integration: MaxIntegration) -> dict[str, str]:
     # Private internal transport only; never merge into generated source/env.
     return {
@@ -243,13 +353,16 @@ async def submit_publication(
     pending_wake = await project_cell_runtime._unfinished_owner_wake(session, workspace.id)
     if pending_wake is not None:
         if (
-            workspace.project_id != project.id or workspace.owner_id != project.owner_id
+            workspace.project_id != project.id
+            or workspace.owner_id != project.owner_id
             or workspace.generation_run_id is not None
             or await project_cell_runtime._active_generation(session, project.id) is not None
         ):
             _unproven("workspace_busy")
         await project_cell_runtime._wake_owner_workspace(
-            session, workspace, operation=pending_wake,
+            session,
+            workspace,
+            operation=pending_wake,
         )
         await project_cell_runtime._try_preview_project_lock(session, project.id)
         await session.refresh(project)
@@ -262,7 +375,8 @@ async def submit_publication(
         # Use the existing durable fenced owner lifecycle. Never wake behind
         # the API's fence or create a new generation merely to publish.
         await project_cell_runtime._wake_owner_workspace(
-            session, workspace,
+            session,
+            workspace,
             operation=await project_cell_runtime._unfinished_owner_wake(session, workspace.id),
         )
         await project_cell_runtime._try_preview_project_lock(session, project.id)
@@ -287,12 +401,16 @@ async def submit_publication(
     record = await session.get(MaxProjectConfig, project.id)
     if record is None or record.owner_id != project.owner_id:
         raise ApiError(
-            "conflict", "Укажите владельца, контакт поддержки и подтвердите документы", 409,
+            "conflict",
+            "Укажите владельца, контакт поддержки и подтвердите документы",
+            409,
         )
     config = MaxProjectConfigPayload.model_validate(record.config)
     if not (has_launch_owner_and_support(config) and config.legal.terms_accepted):
         raise ApiError(
-            "conflict", "Укажите владельца, контакт поддержки и подтвердите документы", 409,
+            "conflict",
+            "Укажите владельца, контакт поддержки и подтвердите документы",
+            409,
         )
     return await orchestrator_client.publish_project_cell(
         project.id,

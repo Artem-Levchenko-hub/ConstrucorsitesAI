@@ -80,6 +80,9 @@ export function MaxLivePreview({
   hasOlder,
   loadingOlder,
   onLoadOlder,
+  onPrepareRestoration,
+  restorationEnabled,
+  restorationBusy,
 }: {
   project: Project;
   versions: ProjectVersion[];
@@ -95,6 +98,9 @@ export function MaxLivePreview({
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
+  onPrepareRestoration?: (version: ProjectVersion) => Promise<void>;
+  restorationEnabled?: boolean;
+  restorationBusy?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [imageFailures, setImageFailures] = useState({ projectId: project.id, urls: new Set<string>() });
@@ -374,6 +380,13 @@ export function MaxLivePreview({
     }
   }
 
+  function prepareRestoration(version: ProjectVersion) {
+    if (!restorationEnabled || restorationBusy || !version.snapshot_id) return;
+    void onPrepareRestoration?.(version);
+    // The durable panel lives in the editor, not in the mobile preview dialog.
+    onClose?.();
+  }
+
   return (
     <aside
       className="flex h-full min-h-0 flex-col bg-transparent py-3 sm:py-4"
@@ -454,6 +467,9 @@ export function MaxLivePreview({
           failedImages={failedImages}
           onImageError={onImageError}
           onRetryImages={retryImages}
+          onPrepareRestoration={onPrepareRestoration ? prepareRestoration : undefined}
+          restorationEnabled={restorationEnabled}
+          restorationBusy={restorationBusy}
         />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
         <div
@@ -630,7 +646,15 @@ export function MaxLivePreview({
               >
                 Живое превью
               </button>
-              {!historyUnavailable && <button
+              {onPrepareRestoration ? <button
+                type="button" onClick={() => selectedSnapshot && prepareRestoration(selectedSnapshot)}
+                disabled={!restorationEnabled || restorationBusy || !selectedSnapshot?.snapshot_id}
+                className="inline-flex min-h-11 items-center rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[10px] font-semibold text-accent disabled:opacity-45"
+                data-testid="max-prepare-restoration"
+                title={!selectedSnapshot?.snapshot_id ? "У этой версии нет сохранённых исходников"
+                  : !restorationEnabled ? "Подготовка восстановления сейчас недоступна"
+                    : restorationBusy ? "Сначала завершите текущую операцию восстановления" : undefined}
+              >Подготовить восстановление v{selectedVersion}</button> : !historyUnavailable && <button
                 type="button"
                 onClick={() => setRestoreTargetId(selectedSnapshot?.id ?? null)}
                 disabled={restoringSnapshot || !selectedSnapshot?.can_restore || !selectedSnapshot.snapshot_id}

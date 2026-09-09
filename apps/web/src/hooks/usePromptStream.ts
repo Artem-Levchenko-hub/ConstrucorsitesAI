@@ -30,12 +30,14 @@ import {
 import { USE_MOCKS } from "@/lib/api/mocks";
 import { buildJoyTrigger } from "@/lib/joy-moment";
 import { openRealStream } from "@/lib/prompt-stream-transport";
+import type { RestorationAdaptationReference } from "@/lib/api/messages";
 
 export type PromptSubmitOptions = {
   skipClarify?: boolean;
   designPresetId?: string | null;
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
   idempotencyKey?: string;
+  restorationAdaptation?: RestorationAdaptationReference;
 };
 
 export function usePromptStream(projectId: string, projectSlug: string) {
@@ -774,7 +776,14 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
         if (activeSubmitSignatureRef.current === submitSignature) {
-          return true;
+          // For adaptation only the accepted POST may clear its attachment.
+          return !opts?.restorationAdaptation;
+        }
+        if (opts?.restorationAdaptation) {
+          // Its historical source is bound to the reviewed HEAD. A volatile
+          // browser queue must not acknowledge/clear the durable attachment.
+          toast.info("Дождитесь текущей генерации и снова отправьте запрос на адаптацию.");
+          return false;
         }
         pendingRef.current = { text: promptText, modelId, selections, opts };
         setPendingPrompt(promptText);
@@ -930,7 +939,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
-        if (e instanceof ApiError && e.code === "conflict") {
+        if (e instanceof ApiError && e.code === "conflict" && !opts?.restorationAdaptation) {
           // Another tab/remount already submitted this project. Drop only this
           // optimistic duplicate and keep the project WS attached to the
           // canonical active run instead of turning it into an error bubble.

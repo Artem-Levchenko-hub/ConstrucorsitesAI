@@ -1,8 +1,9 @@
-import { act, createElement } from "react";
+import { act, createElement, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxChatComposer } from "@/components/max/MaxChatComposer";
+import type { PromptInputHandle } from "@/components/workspace/PromptInput";
 
 const response = {
   version: "2", project_id: "app-a", current_snapshot_id: "version-a",
@@ -19,10 +20,12 @@ describe("MAX chat suggestions and draft", () => {
   let requests: string[];
   let sent: string[];
   let fail: boolean;
+  const draftRef = createRef<PromptInputHandle>();
   const render = (snapshotId: string | null = "version-a", isStreaming = false) => {
     act(() => root.render(createElement(QueryClientProvider, { client },
       createElement(MaxChatComposer, {
         projectId: "app-a", snapshotId, isStreaming, pendingPrompt: null,
+        draftRef,
         onSubmit: async (text: string) => { sent.push(text); return true; },
         onCancel: () => {}, onCancelPending: () => {},
       }),
@@ -73,6 +76,19 @@ describe("MAX chat suggestions and draft", () => {
     expect(button("Подсказки").getAttribute("aria-expanded")).toBe("false");
     await click(button("Отправить"));
     expect(sent).toEqual([response.items[0].prompt]);
+  });
+  it("accepts a restoration draft through the external handle without sending or losing edits", () => {
+    render();
+    const input = container.querySelector("textarea")!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Мои уточнения");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => { expect(draftRef.current?.insertDraft("Keep current business data.")).toBe(true); });
+    expect(input.value).toBe("Мои уточнения\n\nKeep current business data.");
+    expect(document.activeElement).toBe(input);
+    expect(sent).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it("appends a suggestion without losing the user's existing draft", async () => {

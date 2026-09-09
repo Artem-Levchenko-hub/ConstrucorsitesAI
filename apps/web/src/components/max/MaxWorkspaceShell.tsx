@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Smartphone } from "lucide-react";
 import Link from "next/link";
@@ -20,6 +20,10 @@ import { MaxLivePreview } from "./MaxLivePreview";
 import { MaxAccountMenu } from "./MaxAccountMenu";
 import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
+import { useMaxRestoration } from "@/lib/use-max-restoration";
+import { MaxRestorationPanel } from "./MaxRestorationPanel";
+import type { PromptInputHandle } from "@/components/workspace/PromptInput";
+import { useMaxAdaptation } from "@/lib/use-max-adaptation";
 
 export function MaxWorkspaceShell({
   project,
@@ -28,6 +32,8 @@ export function MaxWorkspaceShell({
   project: Project;
   email: string;
 }) {
+  const draftRef = useRef<PromptInputHandle>(null);
+  const adaptation = useMaxAdaptation(project.id);
   const [versionSelection, setVersionSelection] = useState<{
     versionId: string;
     projectId: string;
@@ -87,10 +93,7 @@ export function MaxWorkspaceShell({
   if (versionSelection && versionSelection.projectId !== project.id) setVersionSelection(null);
   const selectedVersionId = versionSelection?.projectId === project.id ? versionSelection.versionId : null;
 
-  const rollbackMutation = useMutation({
-    mutationFn: (snapshotId: string) =>
-      rollbackSnapshot(project.id, snapshotId),
-    onSuccess: (snapshot) => {
+  function applyRestoredSnapshot(snapshot: Snapshot) {
       const previousSnapshotId = queryClient.getQueryData<Snapshot[]>(["snapshots", project.id])?.[0]?.id;
       queryClient.setQueryData<Snapshot[]>(
         ["snapshots", project.id],
@@ -117,7 +120,11 @@ export function MaxWorkspaceShell({
       void queryClient.invalidateQueries({
         queryKey: ["max-preview-session", project.id],
       });
-    },
+  }
+
+  const rollbackMutation = useMutation({
+    mutationFn: (snapshotId: string) => rollbackSnapshot(project.id, snapshotId),
+    onSuccess: applyRestoredSnapshot,
     onError: (error) => {
       toast.error("Не удалось восстановить версию", {
         description:
@@ -128,15 +135,20 @@ export function MaxWorkspaceShell({
     },
   });
 
+  const restoration = useMaxRestoration({
+    projectId: project.id, currentSnapshotId, onCompleted: applyRestoredSnapshot,
+  });
+
   function selectVersion(versionId: string | null) {
     setVersionSelection(
       versionId ? { versionId, projectId: project.id } : null,
     );
   }
 
-  const preview = (
+  const preview = (onClose?: () => void) => (
     <MaxLivePreview
       key={project.id}
+      onClose={onClose}
       project={project}
       versions={versions}
       historyCurrent={historyCurrent}
@@ -150,6 +162,9 @@ export function MaxWorkspaceShell({
       onSelectVersion={selectVersion}
       onRestoreSnapshot={async (snapshotId) => { await rollbackMutation.mutateAsync(snapshotId); }}
       restoringSnapshot={rollbackMutation.isPending}
+      onPrepareRestoration={restoration.prepare}
+      restorationEnabled={restoration.enabled}
+      restorationBusy={restoration.busy || restoration.active || restoration.hasPendingRequest}
     />
   );
 
@@ -190,7 +205,19 @@ export function MaxWorkspaceShell({
         </>
       }
     >
+      <div className="flex h-full min-h-0 flex-col">
+      {adaptation.attachment && <div className="mx-4 my-2 rounded-lg border p-3 text-sm" role="status">
+        <p>Выбрана историческая версия. При отправке сервер добавит её исходный код к запросу.</p>
+        <div className="mt-2 flex flex-wrap gap-3">
+          <button type="button" onClick={() => draftRef.current?.insertDraft(adaptation.attachment!.prompt)}>Вставить сохранённый запрос</button>
+          <button type="button" onClick={() => adaptation.clear()}>Убрать выбранную версию</button>
+        </div>
+      </div>}
+      <div className="min-h-0 flex-1">
       <ChatPanel
+        draftRef={draftRef}
+        restorationAdaptation={adaptation.attachment?.reference}
+        onRestorationAdaptationSubmitted={adaptation.clear}
         projectId={project.id}
         projectSlug={project.slug}
         currentSnapshotId={currentSnapshotId}
@@ -198,6 +225,15 @@ export function MaxWorkspaceShell({
         basePath={`/max/${project.id}`}
         embedded
       />
+      </div>
+      <div className="max-h-[45%] shrink-0 overflow-y-auto">
+        <MaxRestorationPanel restoration={restoration} onAdapt={(prompt, reference) => {
+          if (!adaptation.attach(prompt, reference)) toast.error("Не удалось сохранить ссылку на версию. Повторите подготовку.");
+          else if (draftRef.current?.insertDraft(prompt)) toast.success("Запрос и выбранная версия добавлены в редактор. Проверьте и отправьте их.");
+          else toast.error("Не удалось вставить запрос. Дождитесь завершения текущей генерации.");
+        }} />
+      </div>
+      </div>
     </MaxEditorLayout>
   );
 }

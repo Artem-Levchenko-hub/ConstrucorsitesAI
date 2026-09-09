@@ -7,6 +7,165 @@ import pytest
 from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
 
 
+def test_startup_schema_proof_excludes_only_trusted_semantic_overlay():
+    from omnia_orchestrator.services.cell_publication import _physical_schema
+    from tests.test_restoration_database import contracts
+
+    old, current = contracts()
+    changed = current.model_dump(mode="json")
+    changed["tables"][0]["columns"][3]["json_keys"] = ["note"]
+    adapted = type(old).model_validate(changed)
+    assert _physical_schema(current) == _physical_schema(adapted)
+    changed["tables"][0]["columns"][0]["type"] = "text"
+    assert _physical_schema(current) != _physical_schema(type(old).model_validate(changed))
+
+
+def restored_request(**overrides):
+    return request(
+        restoration_operation_id=UUID(int=70),
+        accepted_fencing_epoch=3,
+        proof_key=None,
+        schema_data_digest=None,
+        build_ref=None,
+        verification_ref=None,
+        **overrides,
+    )
+
+
+@pytest.mark.parametrize("changed", [None, "state", "owner_id", "source_revision", "metadata"])
+def test_restored_publication_requires_active_durable_exact_proof(tmp_path, changed):
+    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    value = restored_request()
+    service = CellPublicationService(SimpleNamespace(cell_state_path=tmp_path / "cells"))
+    proof = {
+        "operation_id": str(value.restoration_operation_id),
+        "workspace_id": str(value.workspace_id),
+        "project_id": str(value.project_id),
+        "owner_id": str(value.owner_id),
+        "candidate_id": str(value.candidate_id),
+        "source_commit_sha": value.commit_sha,
+        "fencing_epoch": value.accepted_fencing_epoch,
+        "source_revision": value.source_revision,
+    }
+    active = {**proof, "state": "active"}
+    if changed == "state":
+        active["state"] = "switching"
+    elif changed in {"owner_id", "source_revision"}:
+        active[changed] = "different"
+    path = tmp_path / "code-restoration-artifacts" / str(value.restoration_operation_id)
+    write_controller_json(path / "activation.json", active)
+    metadata = {"restoration_proof": proof if changed != "metadata" else {}}
+    backend = SimpleNamespace(_metadata=lambda: metadata)
+    if changed:
+        with pytest.raises(RuntimeError, match="restoration publication"):
+            service._verify_restoration_source(value, backend)
+    else:
+        service._verify_restoration_source(value, backend)
+
+
+async def test_protected_publication_uses_live_public_contract_not_draft_schema(
+    tmp_path, monkeypatch
+):
+    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    desired = DataContract(version=1, tables=[])
+    monkeypatch.setattr(
+        "omnia_orchestrator.services.cell_publication.catalog_contract",
+        lambda backend, **kwargs: (desired, []),
+    )
+    monkeypatch.setattr("omnia_orchestrator.services.cell_publication.load_policy", lambda _: None)
+    release = {
+        "data_contract": desired.model_dump(mode="json"),
+        "data_contract_digest": "mounts",
+        "schema_digest": "draft-schema",
+    }
+    old = {"data_contract_digest": "mounts", "schema_digest": "live-schema"}
+    await service._check_public_contract(SimpleNamespace(), old, release)
+    assert release["blocked_deletes"] == []
+    assert old["rollback_data_contract"] == desired.model_dump(mode="json")
+    with pytest.raises(RuntimeError):
+        await service._check_public_contract(
+            SimpleNamespace(), {**old, "data_contract_digest": "other"}, release
+        )
+
+
+@pytest.mark.parametrize("incompatible", [False, True])
+async def test_protected_start_installs_public_policy_before_product_services(
+    tmp_path, monkeypatch, incompatible
+):
+    from unittest.mock import AsyncMock
+
+    from omnia_orchestrator.services import cell_publication as module
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from tests.test_project_machine_manifest import payload
+
+    calls = []
+    service = module.CellPublicationService(SimpleNamespace(), root=tmp_path)
+    value = restored_request()
+    service._effective_request = lambda request: request
+    service._write(value.project_id, {"project_id": str(value.project_id), "history": []})
+    desired = DataContract(version=1, tables=[])
+    backend = SimpleNamespace(
+        project_postgres_password="private-test",
+        stage_public_policy=lambda *args, **kwargs: calls.append("stage"),
+        switch_code=lambda *args: calls.append("ensure"),
+        start_service=lambda *args: calls.append("service"),
+        service_status=lambda *args: {"ready": True},
+    )
+    service._backend = lambda *args: backend
+    manager = SimpleNamespace(
+        machine_runtime=SimpleNamespace(
+            _start_boundary=lambda *args, **kwargs: calls.append("boundary")
+        )
+    )
+    monkeypatch.setattr(module, "ensure_managed_infrastructure", AsyncMock())
+    monkeypatch.setattr(
+        module, "load_policy", lambda _: {"contract": desired.model_dump(mode="json")}
+    )
+
+    def read_catalog(backend, *, trusted_contract):
+        assert trusted_contract == desired
+        return desired, ["custom"] if incompatible else []
+
+    monkeypatch.setattr(module, "catalog_contract", read_catalog)
+    monkeypatch.setattr(module, "install_policy", lambda backend: calls.append("install"))
+    release = {
+        "manifest": payload(),
+        "data_contract": desired.model_dump(mode="json"),
+        "blocked_deletes": [],
+        "policy_epoch": 9,
+        "epoch": 2,
+        "image_id": "image",
+        "prod_url": "https://app.example.test",
+    }
+    if incompatible:
+        with pytest.raises(RuntimeError, match="incompatible"):
+            await service._start(manager, object(), release, value, switch=True)
+        assert calls == ["stage", "ensure"]
+    else:
+        await service._start(manager, object(), release, value, switch=True)
+        assert calls[:3] == ["stage", "ensure", "install"]
+        assert calls[-1] == "boundary"
+        assert "service" in calls[3:]
+        assert service._read(value.project_id)["data_seeded"] is True
+
+
+def test_public_recovery_keeps_current_policy_epoch_and_old_contract():
+    from omnia_orchestrator.services.cell_publication import CellPublicationService
+
+    old = {"release_id": "old", "rollback_data_contract": {"version": 1, "tables": []}}
+    failed = {"release_id": "new", "data_contract": {"version": 1, "tables": []}, "policy_epoch": 8}
+    recovered = CellPublicationService._recovery_release(old, failed)
+    assert recovered["policy_epoch"] == 8
+    assert recovered["data_contract"] == old["rollback_data_contract"]
+    assert recovered["policy_recovery_operation_id"] == "publication-rollback:new"
+    assert old.get("data_contract") is None
+
+
 def request(**overrides):
     value = dict(
         workspace_id=UUID(int=1),
@@ -139,18 +298,23 @@ async def test_publication_records_prepare_activate_and_total_timings(tmp_path):
     value = request()
     run_id = str(UUID(int=25))
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
-    service._write(value.project_id, {
-        "project_id": str(value.project_id),
-        "history": [{
-            "idempotency_key": value.idempotency_key,
-            "request_digest": "digest",
-            "response": {
-                "project_id": str(value.project_id),
-                "run_id": run_id,
-                "phase": "queued",
-            },
-        }],
-    })
+    service._write(
+        value.project_id,
+        {
+            "project_id": str(value.project_id),
+            "history": [
+                {
+                    "idempotency_key": value.idempotency_key,
+                    "request_digest": "digest",
+                    "response": {
+                        "project_id": str(value.project_id),
+                        "run_id": run_id,
+                        "phase": "queued",
+                    },
+                }
+            ],
+        },
+    )
 
     async def prepare(*_args):
         return {"prod_url": "https://app.example.test", "image_id": "sha256:" + "a" * 64}
@@ -165,7 +329,9 @@ async def test_publication_records_prepare_activate_and_total_timings(tmp_path):
     result = service.get(value.project_id)
     assert result is not None and result.phase == "done"
     assert [entry.split("=", 1)[0] for entry in result.logs] == [
-        "prepare_ms", "activate_ms", "total_ms",
+        "prepare_ms",
+        "activate_ms",
+        "total_ms",
     ]
 
 

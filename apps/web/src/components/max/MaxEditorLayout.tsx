@@ -37,7 +37,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
   children: ReactNode;
   navigation: ReactNode;
   tools: ReactNode;
-  preview: ReactNode;
+  preview: ReactNode | ((onClose?: () => void) => ReactNode);
   launch: ReactNode;
   launchStatus: string;
   // Kept optional for existing embedding callers; URL-backed state owns the dialog.
@@ -51,6 +51,9 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
   const trigger = useRef<HTMLElement | null>(null);
   const dataSection = entry?.startsWith("data:") ? entry.slice(5) as SetupSection : null;
   const modal = entry && !dataSection && !(entry === "preview" && desktop) ? entry : null;
+  const previewContent = typeof preview === "function"
+    ? preview(modal === "preview" ? () => select(null) : undefined)
+    : preview;
   function open(next: MaxEditorEntry, target?: HTMLElement) {
     if (target) trigger.current = target;
     select(next);
@@ -87,7 +90,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
           <div className="max-editor-section-heading"><h1>Редактор</h1><p>Создавайте и меняйте приложение в диалоге</p></div>
           <div className="max-studio-chat min-h-0 flex-1 overflow-hidden">{children}</div>
         </section>
-        {desktop && <div className="max-editor-desktop-preview">{preview}</div>}
+        {desktop && <div className="max-editor-desktop-preview">{previewContent}</div>}
       </div>
       <Dialog.Root open={!!modal} onOpenChange={value => { if (!value) select(null); }}>
         <Dialog.Portal>
@@ -113,7 +116,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
               <Suspense fallback={<p role="status">Открываем настройки…</p>}>
               {modal === "navigation" && <div data-testid="max-navigation-scroll" className="max-editor-drawer-scroll">{navigation}</div>}
               {modal === "tools" && <div className="max-editor-tools"><p>Файлы, расход на генерацию и дополнительные сервисы.</p>{tools}</div>}
-              {modal === "preview" && <div className="max-editor-modal-preview-content">{preview}</div>}
+              {modal === "preview" && <div className="max-editor-modal-preview-content">{previewContent}</div>}
               {modal === "publish" && launch}
               {modal === "max" && <MaxConnectionWizard projectId={project.id} onNavigate={select} onBusyChange={setModalBusy} />}
               {modal === "hosting" && <><p className="max-editor-modal-lead">Это необязательно. По умолчанию приложение размещается на хостинге Omnia. Свой сервер нужен, только если вы хотите управлять размещением самостоятельно.</p><ExternalDeployWizard projectId={project.id} maxStudio /></>}

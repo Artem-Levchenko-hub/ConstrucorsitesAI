@@ -83,6 +83,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         ),
     )
     backend = SimpleNamespace(
+        root=tmp_path / "public-machines", workspace_id=state.workspace_id,
+        project_id=state.project_id, owner_id=state.owner_id,
         client=client, stem="public-test", guard_image="pinned-guard",
         _lookup=lambda _, name, _kind: containers.get(name),
         address=lambda: "127.0.0.2", labels=lambda kind: {"kind": kind},

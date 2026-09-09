@@ -342,7 +342,9 @@ async def bootstrap_workspace_agent(
         generation_run_id=generation_run_id,
         fencing_epoch=fencing_epoch,
         workspace_revision=workspace_revision,
-        capabilities=(manager.machine_runtime.capabilities() if manager.machine_runtime else {}),
+        capabilities=(
+            manager.machine_runtime.capabilities(state) if manager.machine_runtime else {}
+        ),
     )
 
 
@@ -447,6 +449,7 @@ async def exec_workspace_agent_command(
                     status_code=503,
                 )
             try:
+                await manager.machine_runtime.validate_protected_environment(state, manifest)
                 machine, backend = manager.machine_runtime.parts(state)
                 backend.configure_cache_identity(
                     dependency_digest=_selected_files_digest(
@@ -984,24 +987,34 @@ async def apply_workspace_owner_business_config(
     manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
     if len(json.dumps(request.config).encode()) > 1024 * 1024:
         raise OrchestratorError(
-            code="conflict", message="MAX configuration too large", status_code=413,
+            code="conflict",
+            message="MAX configuration too large",
+            status_code=413,
         )
     async with manager.operation_lock.hold(workspace_id):
         state, _ = await _workspace_volume_identity(manager, workspace_id)
         if state.project_id != request.project_id or state.owner_id != request.owner_id:
             raise OrchestratorError(
-                code="conflict", message="workspace owner identity mismatch", status_code=409,
+                code="conflict",
+                message="workspace owner identity mismatch",
+                status_code=409,
             )
         if state.phase != "completed" or state.active_generation_run_id is not None:
             raise OrchestratorError(
-                code="conflict", message="workspace operation is still active", status_code=409,
+                code="conflict",
+                message="workspace operation is still active",
+                status_code=409,
             )
         if not _portable_active(manager, workspace_id):
             raise OrchestratorError(
-                code="conflict", message="portable runtime required", status_code=409,
+                code="conflict",
+                message="portable runtime required",
+                status_code=409,
             )
         applied = await _require_portable_runtime(manager).apply_owner_business_config(
-            state, version=request.version, config=request.config,
+            state,
+            version=request.version,
+            config=request.config,
         )
         if applied:
             await _publish_draft_preview(manager, workspace_id)
@@ -1386,7 +1399,9 @@ def _workspace_exec_spec(state: CellWorkspaceState, *, state_path: str) -> _Work
 
     if is_workspace_deleted(state_path, state.workspace_id):
         raise OrchestratorError(
-            code="conflict", message="workspace deletion is permanent", status_code=409,
+            code="conflict",
+            message="workspace deletion is permanent",
+            status_code=409,
         )
     if state.project_id is None or state.owner_id is None or state.resource_names is None:
         raise OrchestratorError(
@@ -1474,7 +1489,9 @@ async def _workspace_volume_identity(
 
     if is_workspace_deleted(manager.profile.state_path, workspace_id):
         raise OrchestratorError(
-            code="conflict", message="workspace deletion is permanent", status_code=409,
+            code="conflict",
+            message="workspace deletion is permanent",
+            status_code=409,
         )
     state = manager.state_store.load(workspace_id)
     if (
@@ -1489,6 +1506,13 @@ async def _workspace_volume_identity(
             status_code=404,
         )
     volume_name = state.resource_names.workspace_volume
+    portable = manager.machine_runtime
+    active_code = None
+    if portable is not None and portable.exists(workspace_id):
+        _machine, backend = portable.parts(state)
+        if backend.workspace_volume != volume_name:
+            active_code = backend
+            volume_name = backend.workspace_volume
     volume = await manager.docker.get_volume(volume_name)
     if volume is None:
         raise OrchestratorError(
@@ -1505,6 +1529,8 @@ async def _workspace_volume_identity(
         ),
         "workspace",
     )
+    if active_code is not None:
+        expected = active_code.labels("project-volume")
     if volume.name != volume_name or any(
         volume.labels.get(key) != value for key, value in expected.items()
     ):

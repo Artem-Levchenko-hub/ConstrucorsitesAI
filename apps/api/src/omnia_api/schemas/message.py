@@ -69,6 +69,13 @@ class MessagePublic(BaseModel):
         return sanitize_agent_steps(value)
 
 
+class RestorationAdaptationReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: UUID
+    expected_draft_snapshot_id: UUID
+
+
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=30_000)
     # Stable identity of one UI submit. Retrying the same HTTP request with the
@@ -89,6 +96,7 @@ class PromptRequest(BaseModel):
     # Applying saved MAX data must use the version the owner reviewed. Checked
     # under the same project lock as config saves, before any model dispatch.
     max_config_version: int | None = Field(default=None, ge=1)
+    restoration_adaptation: RestorationAdaptationReference | None = None
     # Onboarding-survey submit (owner 2026-06-19): when the user answers the whole
     # popup at once, the picked design preset rides here so the build uses it
     # directly (the palette question is a preset swatch). Optional → ignored when

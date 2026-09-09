@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type ComponentProps } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Lightbulb, RefreshCw, X } from "lucide-react";
 import { PromptInput, type PromptInputHandle } from "@/components/workspace/PromptInput";
@@ -10,13 +10,16 @@ import { MaxProductAdvisor } from "./MaxProductAdvisor";
 import { cn } from "@/lib/utils";
 import "./max-chat.css";
 
-export function MaxChatComposer({ projectId, snapshotId, contextVersion, ...props }: ComponentProps<typeof PromptInput> & {
+export function MaxChatComposer({ projectId, snapshotId, contextVersion, draftRef: externalDraftRef, ...props }: ComponentProps<typeof PromptInput> & {
   projectId: string;
   snapshotId: string | null;
   contextVersion?: string | number;
 }) {
   const [open, setOpen] = useState(false);
   const draftRef = useRef<PromptInputHandle>(null);
+  useImperativeHandle(externalDraftRef, () => ({
+    insertDraft: (text) => !props.isStreaming && (draftRef.current?.insertDraft(text) ?? false),
+  }), [props.isStreaming]);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();

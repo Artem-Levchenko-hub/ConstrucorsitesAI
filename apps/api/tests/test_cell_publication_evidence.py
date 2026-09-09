@@ -18,6 +18,157 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 
 
+def restored_evidence():
+    from omnia_api.models.project_version import ProjectVersion
+    from omnia_api.models.restoration import Restoration
+
+    data = evidence()
+    project, workspace, snapshot = (data[key] for key in ("project", "workspace", "snapshot"))
+    operation_id, candidate_id, base_id, source_id, version_id = [uuid4() for _ in range(5)]
+    snapshot.parent_id = base_id
+    request = {
+        "operation_id": str(operation_id),
+        "project_id": str(project.id),
+        "owner_id": str(project.owner_id),
+        "workspace_id": str(workspace.id),
+        "candidate_id": str(candidate_id),
+        "planned_commit_sha": snapshot.commit_sha,
+        "target_commit_sha": "c" * 40,
+        "expected_source_head": "d" * 40,
+        "fencing_epoch": 7,
+    }
+    report = {
+        "revision": 1,
+        "mode": "exact",
+        "changes": [],
+        "retained_data": [],
+        "unavailable_features": [],
+        "warnings": [],
+        "blockers": [],
+        "next_actions": [],
+    }
+    runtime = {
+        key: request[key] for key in ("operation_id", "project_id", "owner_id", "workspace_id")
+    }
+    runtime.update(
+        state="completed",
+        phase="complete",
+        revision=3,
+        candidate_id=str(candidate_id),
+        report=report,
+        can_apply=False,
+        can_cancel=False,
+        observed={
+            "candidate_id": str(candidate_id),
+            "source_commit_sha": snapshot.commit_sha,
+            "fencing_epoch": 7,
+            "applied": True,
+            "source_revision": "b" * 64,
+        },
+    )
+    operation = Restoration(
+        id=operation_id,
+        project_id=project.id,
+        owner_id=project.owner_id,
+        workspace_id=workspace.id,
+        state="completed",
+        applied_snapshot_id=snapshot.id,
+        applied_version_id=version_id,
+        source_snapshot_id=source_id,
+        base_draft_snapshot_id=base_id,
+        candidate_id=candidate_id,
+        planned_commit_sha=snapshot.commit_sha,
+        target_commit_sha="c" * 40,
+        base_commit_sha="d" * 40,
+        fencing_epoch=7,
+        apply_digest="claim",
+        request_payload=request,
+        runtime_result=runtime,
+        report=report,
+    )
+    version = ProjectVersion(
+        id=version_id,
+        project_id=project.id,
+        snapshot_id=snapshot.id,
+        commit_sha=snapshot.commit_sha,
+        restored_from_snapshot_id=source_id,
+        base_snapshot_id=base_id,
+        status="ready",
+    )
+    return dict(
+        project=project,
+        workspace=workspace,
+        snapshot=snapshot,
+        restoration=operation,
+        version=version,
+    )
+
+
+def test_completed_restoration_publication_has_distinct_provenance():
+    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+
+    data = restored_evidence()
+    result = validate_restoration_publication_evidence(**data)
+    assert result["restoration_operation_id"] == str(data["restoration"].id)
+    assert result["commit_sha"] == data["snapshot"].commit_sha
+    assert result["source_revision"] == "b" * 64
+    assert result["accepted_fencing_epoch"] == 7 and result["fencing_epoch"] == 8
+    assert not set(result) & {"proof_key", "build_ref", "schema_data_digest", "verification_ref"}
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "state",
+        "head",
+        "owner",
+        "workspace",
+        "candidate",
+        "sha",
+        "epoch",
+        "receipt",
+        "revision",
+        "report",
+        "version",
+        "parent",
+    ],
+)
+def test_restoration_publication_rejects_unbound_evidence(tamper):
+    from copy import deepcopy
+
+    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+
+    data = restored_evidence()
+    operation = data["restoration"]
+    if tamper == "state":
+        operation.state = "reconciling"
+    elif tamper == "head":
+        data["project"].current_snapshot_id = uuid4()
+    elif tamper == "owner":
+        operation.owner_id = uuid4()
+    elif tamper == "workspace":
+        operation.workspace_id = uuid4()
+    elif tamper == "candidate":
+        operation.candidate_id = uuid4()
+    elif tamper == "sha":
+        operation.planned_commit_sha = "e" * 40
+    elif tamper == "epoch":
+        data["workspace"].fencing_epoch = 6
+    elif tamper == "receipt":
+        operation.runtime_result = None
+    elif tamper == "revision":
+        operation.runtime_result["observed"].pop("source_revision")
+    elif tamper == "report":
+        operation.report = deepcopy(operation.report)
+        operation.report["blockers"] = ["unsafe"]
+    elif tamper == "version":
+        data["version"].restored_from_snapshot_id = uuid4()
+    elif tamper == "parent":
+        data["snapshot"].parent_id = uuid4()
+    with pytest.raises(ApiError):
+        validate_restoration_publication_evidence(**data)
+
+
 def evidence():
     project_id, owner_id, workspace_id, run_id, snapshot_id = [uuid4() for _ in range(5)]
     project = Project(
@@ -148,9 +299,13 @@ def test_public_deploy_status_keeps_exact_snapshot_binding():
     from omnia_api.routers.runtime import _to_deploy_status
 
     snapshot_id = uuid4()
-    value = _to_deploy_status({
-        "phase": "done", "snapshot_id": str(snapshot_id), "commit_sha": "a" * 40,
-    })
+    value = _to_deploy_status(
+        {
+            "phase": "done",
+            "snapshot_id": str(snapshot_id),
+            "commit_sha": "a" * 40,
+        }
+    )
     assert value.snapshot_id == snapshot_id
     assert value.commit_sha == "a" * 40
 

@@ -12,7 +12,13 @@ const promptStream = source("src/hooks/usePromptStream.ts");
 describe("MAX credential ingress routing", () => {
   it("routes every MAX composer path through one credential guard", () => {
     expect(chatPanel).toContain("const submitWithCredentialIntake = useCallback(");
-    expect(chatPanel).toContain("submitWithCredentialIntake(text, selections)");
+    expect(chatPanel).toContain(
+      "await submitWithCredentialIntake(text, selections, restorationAdaptation ? {",
+    );
+    const manualSubmit = chatPanel.slice(
+      chatPanel.indexOf("const handleSubmit ="), chatPanel.indexOf("const handleFix ="),
+    );
+    expect(manualSubmit).not.toContain("await submit(");
     expect(chatPanel).toContain("submitWithCredentialIntake(prompt, [])");
     expect(chatPanel).toContain("submitWithCredentialIntake(choice, [])");
     expect(chatPanel).toContain('submitWithCredentialIntake("Постройте сейчас", [])');

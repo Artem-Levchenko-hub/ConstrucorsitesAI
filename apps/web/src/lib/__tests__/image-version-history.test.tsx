@@ -12,6 +12,7 @@ import type { Project, ProjectVersion } from "@/lib/api/types";
 
 const api = vi.hoisted(() => ({ runtime: vi.fn(), start: vi.fn(), sync: vi.fn(), session: vi.fn(), versions: vi.fn(), snapshots: vi.fn(), rollback: vi.fn(), send: vi.fn() }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
+vi.mock("@/lib/api/restorations", () => ({ listRestorations: async () => ({ enabled: false, items: [] }) }));
 vi.mock("@/lib/api/runtime", () => ({ getRuntime: api.runtime, startRuntime: api.start }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: api.sync, createMaxPreviewSession: api.session, getMaxReadiness: async () => ({ items: [] }) }));
 vi.mock("@/lib/api/snapshots", () => ({ listSnapshots: api.snapshots, listProjectVersions: api.versions, rollback: api.rollback }));
@@ -55,6 +56,32 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+it("prepares a source version without its screenshot using the new durable flow", async () => {
+  const prepare = vi.fn(async () => {});
+  const target = version(31, { previews: [], preview_status: "missing", can_restore: false });
+  render(<MaxLivePreview project={project} versions={[version(32), target]} snapshotsLoading={false}
+    currentSnapshotId="s32" selectedVersionId="v31" onSelectVersion={vi.fn()}
+    onRestoreSnapshot={api.rollback} restoringSnapshot={false}
+    onPrepareRestoration={prepare} restorationEnabled restorationBusy={false} />);
+  expect(api.runtime).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
+  click("[data-testid='max-prepare-restoration']");
+  expect(prepare).toHaveBeenCalledExactlyOnceWith(target);
+  expect(api.rollback).not.toHaveBeenCalled();
+});
+
+it("allows explicit preparation from image-less history while preserving server admission", async () => {
+  const prepare = vi.fn(async () => {});
+  const target = version(31, { previews: [], preview_status: "missing", can_restore: false });
+  render(<MaxLivePreview project={project} versions={[target]} snapshotsLoading={false}
+    currentSnapshotId="s32" selectedVersionId="v31" onSelectVersion={vi.fn()}
+    onRestoreSnapshot={api.rollback} restoringSnapshot={false}
+    onPrepareRestoration={prepare} restorationEnabled={false} restorationBusy={false} />);
+  click("[data-testid='max-history-activity-open']");
+  const button = document.querySelector<HTMLButtonElement>("[data-testid='max-history-prepare-v31']");
+  expect(button).not.toBeNull(); expect(button?.disabled).toBe(true);
+  expect(api.runtime).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
+});
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

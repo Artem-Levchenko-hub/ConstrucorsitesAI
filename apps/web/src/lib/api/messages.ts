@@ -7,6 +7,11 @@ import type {
   SelectedElement,
 } from "./types";
 
+export type RestorationAdaptationReference = {
+  operation_id: string;
+  expected_draft_snapshot_id: string;
+};
+
 export async function listMessages(projectId: string): Promise<Message[]> {
   if (USE_MOCKS) return mockApi.listMessages(projectId);
   return apiFetch<Message[]>(`/api/projects/${projectId}/messages`);
@@ -47,6 +52,7 @@ export async function sendPrompt(
     designPresetId?: string | null;
     idempotencyKey?: string;
     maxConfigVersion?: number;
+    restorationAdaptation?: RestorationAdaptationReference;
   },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
@@ -79,6 +85,8 @@ export async function sendPrompt(
     json: {
       prompt,
       idempotency_key: idempotencyKey,
+      ...(opts?.restorationAdaptation
+        ? { restoration_adaptation: opts.restorationAdaptation } : {}),
       ...(opts?.maxConfigVersion !== undefined ? { max_config_version: opts.maxConfigVersion } : {}),
       ...(selectedElements && selectedElements.length
         ? { selected_elements: selectedElements }

@@ -51,6 +51,10 @@ async def teardown_project_cell(session: AsyncSession, project: Project) -> None
         raise ApiError("not_found", "project not found", 404)
     if current_project.owner_id != expected_owner:
         raise ApiError("forbidden", "not your project", 403)
+    from omnia_api.services.restorations import assert_no_active_restoration
+
+    await session.execute(select(Project.id).where(Project.id == project.id).with_for_update())
+    await assert_no_active_restoration(session, project.id)
     active = await session.scalar(select(GenerationRun.id).where(
         GenerationRun.project_id == project.id,
         GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),

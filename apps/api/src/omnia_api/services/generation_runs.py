@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
+from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation
 
 ACTIVE_GENERATION_STATUSES = (
@@ -376,6 +377,12 @@ async def reserve_generation_run(
                 details={"run_id": str(existing.id)},
             )
         return existing, True
+
+    # Restoration uses this same lock order and keeps its claim across worker restarts.
+    from omnia_api.services.restorations import assert_no_active_restoration
+
+    await session.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+    await assert_no_active_restoration(session, project_id)
 
     active = (
         await session.execute(

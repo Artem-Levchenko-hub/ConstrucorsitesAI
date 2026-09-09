@@ -41,6 +41,14 @@ build commands, service startup or request handlers. Use an explicit migration
 step in the authorized development environment. Do not alter platform-owned setup,
 credentials or roles to bypass a failure; report missing migration support.
 Never claim production migration approval from a successful development command.
+When the provider reports protected database access, use its standalone controller
+command `omnia-db apply .omnia/data-contract.json` during the active generation.
+Supply the complete desired contract, preserving all existing definitions. The
+bounded controller permits directly owned new tables and nullable scalar additions.
+No arbitrary SQL, permission escalation or destructive migration is supported.
+Keep it out of dependency hooks, builds and service startup. If the declaration
+is unsupported or the result uncertain, report the blocker and retain the current
+data; an uncertain result must be reconciled before claiming success.
 
 WRITE AND ACCESS RULES
 Use the current trusted MAX identity; authorize every read, update and delete.

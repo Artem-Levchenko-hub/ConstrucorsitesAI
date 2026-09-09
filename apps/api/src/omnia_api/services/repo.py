@@ -370,3 +370,125 @@ def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str
             out[path] = blob.data.decode("utf-8")
         except UnicodeDecodeError:
             continue
+
+
+def prepare_restore_commit(
+    project_id: UUID,
+    target_sha: str,
+    expected_head: str,
+    operation_id: UUID,
+) -> dict[str, Any]:
+    """Pin an operation-owned commit without advancing HEAD; caller serializes writes.
+
+    Export all regular blobs, including empty/binary files. Refuse links rather
+    than silently changing their semantics at the runtime boundary.
+    """
+    import base64
+    import hashlib
+
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        target, base = git.get(target_sha), git.get(expected_head)
+        if not isinstance(target, pygit2.Commit) or not isinstance(base, pygit2.Commit):
+            raise ValueError("restoration source commit missing")
+        reference = f"refs/omnia/restorations/{operation_id.hex}"
+        message = f"Restore {target_sha}\nOperation: {operation_id}\n"
+        try:
+            planned = git[git.references[reference].target]
+        except KeyError:
+            signature = pygit2.Signature(*SIGNATURE, base.commit_time, 0)
+            oid = git.create_commit(None, signature, signature, message, target.tree_id, [base.id])
+            planned = git[oid]
+        if (
+            not isinstance(planned, pygit2.Commit)
+            or planned.message != message
+            or planned.tree_id != target.tree_id
+            or planned.parent_ids != [base.id]
+        ):
+            raise ValueError("restoration operation identity changed")
+        _validate_tree_budget(git, planned.tree_id)
+        files: list[dict[str, Any]] = []
+        pending = [(planned.tree, "")]
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                _validate_repo_path(path)
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                elif isinstance(item, pygit2.Blob) and entry.filemode in {0o100644, 0o100755}:
+                    if item.size > MAX_FILE_BYTES:
+                        raise ValueError("restoration file exceeds size budget")
+                    files.append(
+                        {
+                            "path": path,
+                            "mode": entry.filemode,
+                            "content_base64": base64.b64encode(item.data).decode("ascii"),
+                        }
+                    )
+                else:
+                    raise ValueError("restoration requires regular files; links are unsupported")
+        if reference not in git.references:
+            git.references.create(reference, planned.id, force=False)
+        _validate_tree_budget(git, base.tree_id)
+        current_files: list[dict[str, Any]] = []
+        pending = [(base.tree, "")]
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                _validate_repo_path(path)
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                elif isinstance(item, pygit2.Blob) and entry.filemode in {0o100644, 0o100755}:
+                    if item.size > MAX_FILE_BYTES:
+                        raise ValueError("current restoration source exceeds size budget")
+                    current_files.append(
+                        {
+                            "path": path,
+                            "mode": entry.filemode,
+                            "sha256": hashlib.sha256(item.data).hexdigest(),
+                        }
+                    )
+                else:
+                    raise ValueError("current restoration source requires regular files")
+        _upload(project_id, workdir)
+        return {
+            "commit_sha": str(planned.id),
+            "files": sorted(files, key=lambda row: row["path"]),
+            "current_files": sorted(current_files, key=lambda row: row["path"]),
+        }
+
+
+def activate_restore_commit(
+    project_id: UUID,
+    planned_sha: str,
+    expected_head: str,
+    operation_id: UUID,
+) -> str:
+    """Pin activation evidence; SQL caller owns the canonical snapshot compare-and-set."""
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        reference = f"refs/omnia/restorations/{operation_id.hex}"
+        try:
+            planned = git[git.references[reference].target]
+        except KeyError as exc:
+            raise ValueError("restoration planned commit missing") from exc
+        if (
+            not isinstance(planned, pygit2.Commit)
+            or str(planned.id) != planned_sha
+            or [str(parent) for parent in planned.parent_ids] != [expected_head]
+        ):
+            raise ValueError("restoration operation identity changed")
+        activated_ref = f"refs/omnia/restoration-activations/{operation_id.hex}"
+        if activated_ref in git.references:
+            if git.references[activated_ref].target != planned.id:
+                raise ValueError("restoration activation identity changed")
+            return planned_sha
+        # Canonical HEAD lives in Project.current_snapshot_id, not Git HEAD.
+        # The caller must compare-and-set that row while holding its write lock.
+        git.references.create(activated_ref, planned.id, force=False)
+        _upload(project_id, workdir)
+        return planned_sha

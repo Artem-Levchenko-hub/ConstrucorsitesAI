@@ -20,6 +20,7 @@ from omnia_api.models.project_cell import (
     ProjectCellOperation,
     ProjectCellWorkspace,
 )
+from omnia_api.models.restoration import ACTIVE_RESTORATION_STATES, Restoration
 from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     write_capacity_dispatch_claim,
@@ -140,6 +141,12 @@ async def claim_idle_hibernation_victim(
                 ProjectCellWorkspace.generation_run_id.is_(None),
                 ProjectCellWorkspace.deleted_at.is_(None),
                 ~exists(
+                    select(Restoration.id).where(
+                        Restoration.workspace_id == ProjectCellWorkspace.id,
+                        Restoration.state.in_(ACTIVE_RESTORATION_STATES),
+                    )
+                ),
+                ~exists(
                     select(ProjectCellOperation.id).where(
                         ProjectCellOperation.workspace_id == ProjectCellWorkspace.id,
                         ProjectCellOperation.status.in_(ACTIVE_OPERATION_STATUSES),
@@ -211,6 +218,12 @@ async def claim_stale_generation_lease(
                     ),
                 ),
                 ProjectCellWorkspace.deleted_at.is_(None),
+                ~exists(
+                    select(Restoration.id).where(
+                        Restoration.workspace_id == ProjectCellWorkspace.id,
+                        Restoration.state.in_(ACTIVE_RESTORATION_STATES),
+                    )
+                ),
                 GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
                 (
                     ~exists(
@@ -784,6 +797,12 @@ async def _hibernate_victim_still_idle(
             active_activity.log_bytes = max(active_activity.log_bytes, status.log_bytes)
             await session.flush()
             active_activity = None
+        active_restoration = await session.scalar(
+            select(Restoration.id).where(
+                Restoration.workspace_id == workspace_id,
+                Restoration.state.in_(ACTIVE_RESTORATION_STATES),
+            ).limit(1)
+        )
         other_operation = await session.scalar(
             select(ProjectCellOperation.id)
             .where(
@@ -799,6 +818,7 @@ async def _hibernate_victim_still_idle(
             and workspace.generation_run_id is None
             and active_activity is None
             and other_operation is None
+            and active_restoration is None
         ):
             # Preserve any terminal activity reconciliation performed above;
             # otherwise the partial unique index keeps a ghost active lease.

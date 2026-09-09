@@ -32,6 +32,7 @@ from omnia_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
+from omnia_orchestrator.services.restoration_data_contract import DataContract
 
 
 class PublicationRecoveryRequired(CellResourceError):
@@ -131,6 +132,30 @@ def send_exec_stdin(client: Any, container: Any, argv: list[str], payload: bytes
 class PublishedMachineBackend(DockerMachineBackend):
     release_id: UUID | None = None
     release_layout: dict[str, str] = field(default_factory=dict)
+
+    def stage_public_policy(
+        self,
+        contract: DataContract,
+        epoch: int,
+        *,
+        blocked_deletes: list[str],
+        recovery_operation_id: str | None = None,
+    ) -> None:
+        """Rotate independent public credentials only after all previous writers stop."""
+        from omnia_orchestrator.services.restoration_database import recover_policy, stage_policy
+
+        self.quiesce_current()
+        self.remove()
+        if recovery_operation_id is not None:
+            recover_policy(
+                self,
+                contract,
+                epoch,
+                blocked_deletes=blocked_deletes,
+                operation_id=recovery_operation_id,
+            )
+        else:
+            stage_policy(self, contract, epoch, blocked_deletes=blocked_deletes)
 
     def retire_compute(self) -> None:
         """Delete serving compute after durable disable; keep all data/backups."""
@@ -411,9 +436,12 @@ class PublishedMachineBackend(DockerMachineBackend):
         self._wait_project_postgres_ready(postgres)
 
     def schema_digest(self) -> str:
+        from omnia_orchestrator.services.restoration_database import load_policy
+
         postgres = self._project_postgres()
         if postgres is None:
             raise CellResourceError("production schema probe requires postgres")
+        protected = load_policy(self) is not None
         result = postgres.exec_run(
             [
                 "pg_dumpall",
@@ -422,11 +450,12 @@ class PublishedMachineBackend(DockerMachineBackend):
                 "--no-owner",
                 "--no-privileges",
                 "-h",
-                "127.0.0.1",
+                "/tmp" if protected else "127.0.0.1",
                 "-U",
                 "postgres",
             ],
-            environment={"PGPASSWORD": self.project_postgres_password},
+            environment={} if protected else {"PGPASSWORD": self.project_postgres_password},
+            **({"user": "postgres"} if protected else {}),
         )
         if result.exit_code != 0 or not result.output:
             raise CellResourceError("publication schema inspection failed")

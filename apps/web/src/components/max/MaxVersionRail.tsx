@@ -8,7 +8,7 @@ import { maxHistoryState, maxVersionImage } from "@/lib/max-version-history";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-export function MaxVersionRail({ versions, selectedVersionId, loading, error, hasOlder, loadingOlder, onLoadOlder, onSelect, failedImages, onImageError, onRetryImages }: {
+export function MaxVersionRail({ versions, selectedVersionId, loading, error, hasOlder, loadingOlder, onLoadOlder, onSelect, failedImages, onImageError, onRetryImages, onPrepareRestoration, restorationEnabled, restorationBusy }: {
   versions: ProjectVersion[];
   selectedVersionId: string | null;
   loading: boolean;
@@ -20,6 +20,9 @@ export function MaxVersionRail({ versions, selectedVersionId, loading, error, ha
   failedImages: ReadonlySet<string>;
   onImageError: (url: string) => void;
   onRetryImages: () => void;
+  onPrepareRestoration?: (version: ProjectVersion) => void;
+  restorationEnabled?: boolean;
+  restorationBusy?: boolean;
 }) {
   const [activityOpen, setActivityOpen] = useState(false);
   const activityTrigger = useRef<HTMLButtonElement>(null);
@@ -63,6 +66,12 @@ export function MaxVersionRail({ versions, selectedVersionId, loading, error, ha
             <div className="max-history-event-heading"><strong>v{version.number}</strong><span className="max-history-status" data-tone={state.tone}>{state.label}</span></div>
             <p>{state.hint}</p>
             <details><summary>Подробнее о запросе</summary><time dateTime={version.created_at}>{new Date(version.created_at).toLocaleString("ru-RU")}</time><p className="max-history-original-prompt">{version.prompt_text || "Текст запроса не сохранился."}</p></details>
+            {onPrepareRestoration && version.snapshot_id && <Button variant="outline"
+              data-testid={`max-history-prepare-${version.id}`}
+              disabled={!restorationEnabled || restorationBusy}
+              onClick={() => { setActivityOpen(false); onPrepareRestoration(version); }}>
+              Подготовить восстановление v{version.number}
+            </Button>}
             {!!image && failedImages.has(image.url) && <Button variant="outline" size="sm" data-retry-image onClick={onRetryImages}>Повторить загрузку</Button>}
           </li>;
         })}</ul> : <p>Все доступные снимки — в ленте версий.</p>}

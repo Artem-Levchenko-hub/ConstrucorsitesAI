@@ -11,6 +11,34 @@ from omnia_api.services import agent_builder, agent_native, autoheal, prompt_bui
 POLICY_HEADER = "MAX DATA EVOLUTION POLICY v1"
 
 
+def test_protected_provider_explains_explicit_declarative_migration_without_admin_claim():
+    from omnia_api.services.portable_cell_contract import machine_stack_guide
+
+    guide = machine_stack_guide("legacy", {"portable_machine": True, "database_admin": "protected"},
+                               {".omnia/cell.json": "{}"})
+    assert "omnia-db apply .omnia/data-contract.json" in guide
+    assert "no DDL" in guide
+    assert "development admin access" not in guide
+    assert "superuser access" not in guide
+    assert "nullable scalar columns" in guide
+
+
+def test_unknown_provider_database_access_is_not_advertised_as_admin():
+    from omnia_api.services.portable_cell_contract import machine_stack_guide
+
+    guide = machine_stack_guide("legacy", {"portable_machine": True}, {".omnia/cell.json": "{}"})
+    assert "development admin access" not in guide
+    assert "Do not assume administrative" in guide
+
+
+def test_shared_evolution_guidance_keeps_protected_controller_out_of_service_startup():
+    from omnia_api.services.max_data_evolution import MAX_DATA_EVOLUTION_POLICY
+
+    assert "omnia-db apply .omnia/data-contract.json" in MAX_DATA_EVOLUTION_POLICY
+    assert "No arbitrary SQL" in MAX_DATA_EVOLUTION_POLICY
+    assert "service startup" in MAX_DATA_EVOLUTION_POLICY
+
+
 @pytest.mark.parametrize("model_id", [None, "claude-sonnet-5", "gpt-4.1-mini"])
 @pytest.mark.parametrize("language", ["ru", "en"])
 def test_max_code_writer_receives_policy_despite_model_tier_and_language(model_id, language):

@@ -24,6 +24,7 @@ from omnia_orchestrator.routers import (
     build_exe,
     byo,
     cell_publication,
+    code_restorations,
     health,
     ingress,
     runtime,
@@ -59,13 +60,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from omnia_orchestrator.services.cell_publication import start_publication_recovery
 
     publication_recovery = start_publication_recovery()
+    from omnia_orchestrator.services.code_restorations import start_restoration_recovery
+
+    restoration_recovery = start_restoration_recovery()
     try:
         yield
     finally:
         publication_recovery.cancel()
+        restoration_recovery.cancel()
         import asyncio
 
-        await asyncio.gather(publication_recovery, return_exceptions=True)
+        await asyncio.gather(publication_recovery, restoration_recovery, return_exceptions=True)
+        from omnia_orchestrator.services.code_restorations import get_code_restoration_service
+
+        await get_code_restoration_service().close()
         await stop_hibernate_loop()
 
 
@@ -94,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(byo.router)
     app.include_router(workspace.router)
     app.include_router(cell_publication.router)
+    app.include_router(code_restorations.router)
 
     return app
 
