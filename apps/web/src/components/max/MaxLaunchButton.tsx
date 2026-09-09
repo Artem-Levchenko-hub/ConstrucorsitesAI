@@ -3,13 +3,11 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, Rocket } from "lucide-react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import { getMaxLaunchErrorDescription } from "@/lib/max-launch-error";
-import { finishMaxLaunch, prepareMaxLaunch, readMaxLaunch } from "@/lib/max-launch-runner";
-import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
+import { launchMaxProject, prepareMaxLaunch, readMaxLaunch } from "@/lib/max-launch-runner";
 
 export function MaxLaunchButton({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
@@ -24,24 +22,13 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
     (item) => required.has(item.id) && !item.done,
   );
   const launch = useMutation({
-    mutationFn: () => runMaxLaunchSingleFlight(projectId, () => finishMaxLaunch(projectId,
-      (status) => qc.setQueryData(["deploy", projectId], status))),
+    mutationFn: () => launchMaxProject(projectId,
+      (status) => qc.setQueryData(["deploy", projectId], status)),
     onSuccess: () => {
       window.localStorage.removeItem(`omnia:max:launch:${projectId}`);
       void qc.invalidateQueries({ queryKey: ["max-integration", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-readiness", projectId] });
       void qc.invalidateQueries({ queryKey: ["deploy", projectId] });
-      toast.success("Приложение опубликовано и подключено", {
-        id: `max-launch-success:${projectId}`,
-        description:
-          "Production URL готов, безопасный вход и webhook подключены. Осталось вставить адрес в MAX Partner.",
-      });
-    },
-    onError: (error: unknown) => {
-      toast.error("Автозапуск не завершён", {
-        id: `max-launch-error:${projectId}`,
-        description: getMaxLaunchErrorDescription(error),
-      });
     },
     onSettled: () => {
       launchRequested.current = false;

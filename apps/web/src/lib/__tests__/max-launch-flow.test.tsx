@@ -2,6 +2,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import { MaxLaunchButton } from "@/components/max/MaxLaunchButton";
 import type { DeployStatus } from "@/lib/api/types";
@@ -100,6 +101,19 @@ it("attaches to an actual queued run without creating another deployment", async
   await flush(2_001);
   expect(calls.some(call => call.path.endsWith("/activate"))).toBe(true);
   expect(button().disabled).toBe(false);
+});
+
+it("notifies when publication finishes after the launch control unmounts", async () => {
+  const success = vi.spyOn(toast, "success");
+  status = deploy("queued", "background-release");
+  await mount();
+  await click();
+  await act(async () => root.unmount());
+  status = deploy("done", "background-release");
+  await flush(2_001);
+  expect(success).toHaveBeenCalledWith("Приложение опубликовано", expect.objectContaining({
+    id: `max-launch-result:${projectId}`,
+  }));
 });
 
 it("resumes the saved operation after a page reload without another POST", async () => {

@@ -133,6 +133,42 @@ async def test_publication_failure_has_safe_internal_location_without_exception_
     assert "private-disposable-token" not in service.get(value.project_id).model_dump_json()
 
 
+async def test_publication_records_prepare_activate_and_total_timings(tmp_path):
+    from omnia_orchestrator.services.cell_publication import CellPublicationService
+
+    value = request()
+    run_id = str(UUID(int=25))
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    service._write(value.project_id, {
+        "project_id": str(value.project_id),
+        "history": [{
+            "idempotency_key": value.idempotency_key,
+            "request_digest": "digest",
+            "response": {
+                "project_id": str(value.project_id),
+                "run_id": run_id,
+                "phase": "queued",
+            },
+        }],
+    })
+
+    async def prepare(*_args):
+        return {"prod_url": "https://app.example.test", "image_id": "sha256:" + "a" * 64}
+
+    async def activate(*_args):
+        return None
+
+    service._prepare = prepare
+    service._activate = activate
+    await service._execute(value, run_id)
+
+    result = service.get(value.project_id)
+    assert result is not None and result.phase == "done"
+    assert [entry.split("=", 1)[0] for entry in result.logs] == [
+        "prepare_ms", "activate_ms", "total_ms",
+    ]
+
+
 async def test_crash_after_candidate_start_reconciles_previous_code_without_resetting_data(
     tmp_path, monkeypatch
 ):

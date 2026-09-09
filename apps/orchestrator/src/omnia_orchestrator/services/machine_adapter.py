@@ -430,7 +430,13 @@ class MachineAdapter:
             request.fencing_epoch,
         )
 
-    async def checkpoint(self, state: Any) -> MachineEnvironmentRef | None:
+    async def checkpoint(
+        self,
+        state: Any,
+        *,
+        volumes: tuple[str, ...] | None = None,
+        persist: bool = True,
+    ) -> MachineEnvironmentRef | None:
         if not self.exists(state.workspace_id):
             return None
         machine, backend = self.parts(state)
@@ -446,15 +452,16 @@ class MachineAdapter:
             store.capture,
             manifest_digest=manifest.digest(),
             base_image=backend.base_image,
-            volumes=backend.snapshot_volume_names(manifest),
+            volumes=volumes if volumes is not None else backend.snapshot_volume_names(manifest),
             manifest=manifest,
             previous=MachineEnvironmentRef.model_validate(saved_ref) if saved_ref else None,
         )
-        metadata = backend._metadata()
-        metadata.update(
-            environment_ref=reference.model_dump(mode="json"), restored_image=reference.image_id
-        )
-        write_controller_json(backend.metadata_path, metadata)
+        if persist:
+            metadata = backend._metadata()
+            metadata.update(
+                environment_ref=reference.model_dump(mode="json"), restored_image=reference.image_id
+            )
+            write_controller_json(backend.metadata_path, metadata)
         return cast(MachineEnvironmentRef, reference)
 
     async def checkpoint_payload(self, state: Any) -> bytes | None:

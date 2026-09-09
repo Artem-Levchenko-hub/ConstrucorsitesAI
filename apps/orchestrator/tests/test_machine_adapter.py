@@ -113,6 +113,73 @@ async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tm
     ]
 
 
+async def test_publication_checkpoint_can_capture_only_release_workspace_without_replacing_recovery(
+    tmp_path, monkeypatch
+):
+    api = module()
+    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
+
+    workspace_id = uuid4()
+    manifest = MachineManifest.model_validate(payload())
+    captured = {}
+    reference = MachineEnvironmentRef(
+        workspace_id=workspace_id,
+        image_id="sha256:" + "a" * 64,
+        artifact_ref="b" * 32 + ".tar",
+        sha256="c" * 64,
+        size=1,
+        base_image="base",
+        manifest_digest=manifest.digest(),
+        volumes=(),
+        manifest=manifest,
+    )
+
+    class Store:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def capture(self, **kwargs):
+            captured.update(kwargs)
+            return reference
+
+    backend = SimpleNamespace(
+        base_image="base",
+        disk_bytes=1024,
+        metadata_path=tmp_path / "machine.json",
+        _container=lambda: object(),
+        _metadata=lambda: {"environment_ref": None},
+        snapshot_volume_names=lambda _manifest: (_ for _ in ()).throw(
+            AssertionError("warm publication must use its explicit volume set")
+        ),
+    )
+    runtime = api.MachineAdapter(
+        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "state")),
+        SimpleNamespace(),
+    )
+    runtime.exists = lambda _workspace_id: True
+    runtime.parts = lambda _state: (
+        SimpleNamespace(state=lambda: {"manifest": manifest.model_dump(mode="json")}),
+        backend,
+    )
+    monkeypatch.setattr(api, "MachineEnvironmentStore", Store)
+    monkeypatch.setattr(
+        api,
+        "write_controller_json",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("partial publication capture must not replace recovery checkpoint")
+        ),
+    )
+
+    result = await runtime.checkpoint(
+        SimpleNamespace(workspace_id=workspace_id),
+        volumes=("release-workspace",),
+        persist=False,
+    )
+
+    assert result == reference
+    assert captured["volumes"] == ("release-workspace",)
+
+
 @pytest.mark.parametrize("activation_fails", [False, True])
 async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activation_fails):
     from unittest.mock import AsyncMock

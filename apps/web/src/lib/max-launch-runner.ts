@@ -1,7 +1,10 @@
 import { activateMaxIntegration } from "@/lib/api/max-integration";
 import { deployProject, getLastDeploy } from "@/lib/api/runtime";
 import type { DeployStatus } from "@/lib/api/types";
+import { getMaxLaunchErrorDescription } from "@/lib/max-launch-error";
 import { isMaxDeployActive, shouldStartMaxDeploy } from "@/lib/max-launch-state";
+import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
+import { toast } from "sonner";
 
 const LAUNCH_TIMEOUT_MS = 20 * 60_000;
 const deadlineMessage = "Проверка публикации превысила время ожидания. Откройте статус публикации или повторите проверку.";
@@ -126,4 +129,27 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
   } finally {
     window.clearTimeout(deadline);
   }
+}
+
+/** Own the launch lifetime outside the modal so closing it cannot lose the result notice. */
+export function launchMaxProject(
+  projectId: string,
+  onStatus: (status: DeployStatus) => void,
+) {
+  return runMaxLaunchSingleFlight(projectId, async () => {
+    try {
+      const result = await finishMaxLaunch(projectId, onStatus);
+      toast.success("Приложение опубликовано", {
+        id: `max-launch-result:${projectId}`,
+        description: "Новая версия уже работает по постоянному адресу.",
+      });
+      return result;
+    } catch (error) {
+      toast.error("Публикация не завершена", {
+        id: `max-launch-result:${projectId}`,
+        description: getMaxLaunchErrorDescription(error),
+      });
+      throw error;
+    }
+  });
 }

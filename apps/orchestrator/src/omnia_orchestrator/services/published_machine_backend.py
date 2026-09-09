@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from docker.errors import ImageNotFound  # type: ignore[import-untyped]
+
 from omnia_orchestrator.core.cell_resources import (
     CellIdentityConflict,
     CellResourceError,
@@ -254,16 +256,32 @@ class PublishedMachineBackend(DockerMachineBackend):
             or reference.workspace_id != source.workspace_id
         ):
             raise CellIdentityConflict("publication source identity mismatch")
-        with artifact_path.open("rb") as handle:
-            images = self.client.images.load(handle)
-        if len(images) != 1 or images[0].id != reference.image_id:
+        try:
+            image = self.client.images.get(reference.image_id)
+        except ImageNotFound:
+            with artifact_path.open("rb") as handle:
+                images = self.client.images.load(handle)
+            if len(images) != 1 or images[0].id != reference.image_id:
+                raise CellIdentityConflict("publication image digest mismatch") from None
+            image = images[0]
+        if image.id != reference.image_id:
             raise CellIdentityConflict("publication image digest mismatch")
-        config = images[0].attrs.get("Config") or {}
+        config = image.attrs.get("Config") or {}
         if config.get("Env") or config.get("Entrypoint") or config.get("Cmd"):
             raise CellIdentityConflict("publication image contains runtime configuration")
         labels = config.get("Labels") or {}
         if any(labels.get(key) != value for key, value in source.labels("environment").items()):
             raise CellIdentityConflict("publication image provenance mismatch")
+
+    def ensure_release_runtime_volumes(self, manifest: MachineManifest) -> None:
+        """Create empty release-local caches omitted by warm publication capture."""
+        durable = {
+            self.project_postgres_volume,
+            *(self.release_layout[key] for key in self.release_layout if key.startswith("data:")),
+        }
+        for name in self.volume_mapping(manifest):
+            if name not in durable:
+                self._volume(name)
 
     def seed_volume(self, destination: str, artifact_path: Path) -> None:
         """Only caller-owned fresh staging volumes; repeated seed never clears data."""

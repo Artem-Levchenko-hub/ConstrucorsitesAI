@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 import traceback
 from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
@@ -182,13 +183,21 @@ class CellPublicationService:
         return production_manager(self._manager(source_workspace_id), self.settings)
 
     async def _execute(self, request: CellDeployRequest, run_id: str) -> None:
+        started = time.monotonic()
         try:
             with machine_budget(870):
                 async with asyncio.timeout(870):
                     self._phase(request.project_id, run_id, "building")
                     release = await self._prepare(request, run_id)
-                    self._phase(request.project_id, run_id, "swapping")
+                    prepared = time.monotonic()
+                    self._phase(
+                        request.project_id,
+                        run_id,
+                        "swapping",
+                        logs=[f"prepare_ms={round((prepared - started) * 1000)}"],
+                    )
                     await self._activate(request, release)
+                    activated = time.monotonic()
                     self._phase(
                         request.project_id,
                         run_id,
@@ -196,6 +205,11 @@ class CellPublicationService:
                         prod_url=release["prod_url"],
                         image_tag=release["image_id"],
                         finished_at=_now(),
+                        logs=[
+                            f"prepare_ms={round((prepared - started) * 1000)}",
+                            f"activate_ms={round((activated - prepared) * 1000)}",
+                            f"total_ms={round((activated - started) * 1000)}",
+                        ],
                     )
         except BaseException as exc:
             # Raw Docker/SQL exceptions may contain credentials or project data.
@@ -261,12 +275,29 @@ class CellPublicationService:
             if _workspace_revision(files) != request.source_revision:
                 raise CellIdentityConflict("publication source revision changed")
             manifest = MachineManifest.model_validate(machine.state()["manifest"])
+            seeded = bool(self._read(request.project_id).get("data_seeded"))
             preview = adapter.preview(source_state)
             if preview is None or preview[0] != "running":
                 await adapter.resume_preview(source_state)
             source_schema = await machine_effect(PublishedMachineBackend.schema_digest, source)
             try:
-                reference = await adapter.checkpoint(source_state)
+                # Business data already belongs to the live production identity
+                # after first publication. A warm code update needs the accepted
+                # workspace plus package-manager stores needed by service startup;
+                # exporting Postgres, uploads and the disposable Next cache again
+                # adds minutes and those archives are deliberately discarded.
+                warm_volumes = (
+                    source.workspace_volume,
+                    source.stem + "-home",
+                    source.pnpm_cache_volume,
+                    source.corepack_cache_volume,
+                )
+                capture_volumes = warm_volumes if seeded else None
+                reference = await adapter.checkpoint(
+                    source_state,
+                    volumes=capture_volumes,
+                    persist=not seeded,
+                )
                 if reference is None:
                     raise CellResourceError("publication environment capture missing")
                 store = MachineEnvironmentStore(
@@ -276,7 +307,14 @@ class CellPublicationService:
                     max_bytes=source.disk_bytes,
                 )
                 await machine_effect(store.validate, reference, manifest_digest=manifest.digest())
-                source.validate_restore_reference(reference)
+                if seeded:
+                    if (
+                        reference.workspace_id != source.workspace_id
+                        or {volume.name for volume in reference.volumes} != set(warm_volumes)
+                    ):
+                        raise CellIdentityConflict("publication workspace capture mismatch")
+                else:
+                    source.validate_restore_reference(reference)
             finally:
                 if not adapter.recovery_required(source_state):
                     await adapter.resume_preview(source_state)
@@ -369,6 +407,8 @@ class CellPublicationService:
             await machine_effect(
                 backend.seed_volume, target, store.artifact_path(volume.artifact_ref)
             )
+        if seeded:
+            await machine_effect(backend.ensure_release_runtime_volumes, manifest)
         if not seeded and source.project_postgres_volume not in {v.name for v in reference.volumes}:
             raise CellResourceError("publication requires captured dedicated project database")
         release["needs_password_rotation"] = not seeded

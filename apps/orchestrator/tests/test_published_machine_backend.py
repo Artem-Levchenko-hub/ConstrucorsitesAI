@@ -142,6 +142,53 @@ def test_preparing_next_release_does_not_replace_live_service_metadata(tmp_path)
     assert first._metadata()["services"]["web"]["exec_id"] == "live"
 
 
+def test_warm_release_reuses_verified_image_and_creates_only_release_local_volumes(tmp_path):
+    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
+
+    runtime = published_backend(tmp_path)
+    image_id = "sha256:" + "a" * 64
+    image = SimpleNamespace(
+        id=image_id,
+        attrs={"Config": {"Labels": {"source": "accepted"}}},
+    )
+    loaded = []
+    runtime.client = SimpleNamespace(
+        images=SimpleNamespace(
+            get=lambda _image_id: image,
+            load=lambda _handle: loaded.append(True),
+        )
+    )
+    source = SimpleNamespace(
+        workspace_id=UUID(int=8),
+        project_id=runtime.project_id,
+        owner_id=runtime.owner_id,
+        labels=lambda _kind: {"source": "accepted"},
+    )
+    reference = MachineEnvironmentRef(
+        workspace_id=source.workspace_id,
+        image_id=image_id,
+        artifact_ref="b" * 32 + ".tar",
+        sha256="c" * 64,
+        size=1,
+        base_image="base",
+        manifest_digest="d" * 64,
+        volumes=(),
+    )
+
+    runtime.adopt_source_image(reference, source, tmp_path / "missing.tar")
+
+    assert loaded == []
+
+    created = []
+    runtime.release_layout = {"data:uploads": "uploads"}
+    runtime.volume_mapping = lambda _manifest: {
+        "workspace": {}, "home": {}, "pnpm": {}, "uploads": {},
+    }
+    runtime._volume = lambda name: created.append(name)
+    runtime.ensure_release_runtime_volumes(SimpleNamespace())
+    assert created == ["workspace", "home", "pnpm"]
+
+
 def test_healthy_public_reconcile_preserves_service_processes_and_never_restores_data(tmp_path):
     from omnia_orchestrator.core.project_machine import MachineManifest
     from omnia_orchestrator.services.project_machine import write_controller_json
