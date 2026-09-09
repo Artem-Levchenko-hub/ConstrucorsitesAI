@@ -11,7 +11,7 @@
    {
     "s": "testing",
     "t": "Код чата стал короче на32 строки при прежнем поведении",
-    "d": "Девять повторов заменены одной небольшой функцией. 502 web-теста, проверка типов, линтер, браузер до/после и независимое Astra ревью прошли. CI, проверка образа и поставка ещё выполняются."
+    "d": "502 web-теста, types/lint, браузер, Astra review, CI web/image и точная сборка прошли. Повторная ручная остановка backend сорвала поставку; защита вернула прежний здоровый web. bf428456 в main, production ещё на старой версии. Требуется согласовать обслуживание сервера и завершить delivery."
    },
    {
     "s": "worked",
@@ -2774,9 +2774,9 @@
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "09.09",
-   "evidence": "BASE6c3b9bab. BEFORE/AFTER47 focused tests, full Node20 web502/78, TypeScript and focused ESLint passed. Two history tests failed in a concurrent run and passed unchanged in the isolated full run; cause not established. Actual hook/QueryClient browser1440/390: identical state, no page errors, one queued POST; Astra source/helper review No findings. CI/image and production delivery pending. docs/plans/2026-09-09-task11-message-cache-verification.md.",
+   "evidence": "Source bf4284569e75eb40c3fc6fd81e67a83dbb7e57a0 committed/pushed main. BEFORE/AFTER47, full Node20 web502/78, types/lint, hook browser1440/390 identical; Astra review No findings. CI34363742655 web/image and four other jobs passed; API job not complete when recorded, no result claimed. Exact image sha256:e027539f89266fce09c339a8c1d3742dc62c2715ba1709bbaa5a0d378d04e405 build/isolated startup passed. Initial API502 then repeat manual backend stop14:36:29-58UTC caused rollback after new web health passed. Old web2ae/image790e restored healthy; nginx/env bytes exact, POST405 unconfirmed because API502. No switch.complete or H149 publication. /opt/omnia-runtime/releases/task11-message-cache-bf428456-retry1/result.json status rolled_back. Maintenance operator unknown; explicit coordination required before retry. docs/plans/2026-09-09-task11-message-cache-verification.md.",
    "impact": "Рабочий код чата короче на32 строки. Нового модуля или зависимости нет; ускорение генерации не заявляется.",
-   "next_vector": "Завершить web verification и точную web-only поставку, затем выбирать следующий доказанный дубль. Task3 SQL требует числового контракта, Task6/7 model smoke запускает владелец, Task12 требует измеренной причины IO, Task13 сохраняет непроверенные пользовательские сценарии."
+   "next_vector": "Сначала явно согласовать серверное обслуживание и завершить текущую web-поставку. Временного возвращения backend в healthy недостаточно: его дважды вручную останавливали. Проверить State.Status/API health до gate, сохранить failed records, после поставки опубликовать H149. Другие пакеты не начинать."
   }
  ],
  "vectors": [

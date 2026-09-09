@@ -1,5 +1,11 @@
 # Task13 — приёмка выполненных пакетов и оставшиеся проверки
 
+Дополнение Task11 message cache: source `bf428456`, −32 production строки,
+полный web502/78, focused47, browser1440/390 и Astra review прошли; CI web/image
+зелёные. Exact image build/smoke прошли, но повторная ручная остановка backend
+сорвала switch; web откачен к прежней проверенной версии. Это незавершённая поставка,
+а не новый закрытый пакет. [Точка продолжения](2026-09-09-task11-message-cache-verification.md).
+
 Дополнение 9 сентября: Task11 preview runtime `2ae98520` доставлен web-only.
 Добавлены8 real-consumer characterization tests, полный web496/78, browser
 1440/390 BEFORE/AFTER и независимое review. Запуск/опрос runtime отделён от
