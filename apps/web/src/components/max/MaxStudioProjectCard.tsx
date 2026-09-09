@@ -81,7 +81,7 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
       <div className="max-project-identity">
         <MaxProjectArtwork key={safeProjectPreviewUrl(project.preview_url) ?? "fallback"} project={project} />
         <div className="min-w-0">
-          <h2><Link href={`/max/${project.id}`}>{project.name}</Link></h2>
+          <h2><Link href={`/max/${project.id}`} className="max-project-editor-link" aria-label={`Открыть редактор приложения ${project.name}`}>{project.name}</Link></h2>
           <p>Обновлён {new Date(project.updated_at).toLocaleDateString("ru-RU")}</p>
         </div>
       </div>
