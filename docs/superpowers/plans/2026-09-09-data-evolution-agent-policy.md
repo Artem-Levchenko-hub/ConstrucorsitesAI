@@ -3,6 +3,10 @@
 Approved by the owner on 2026-09-09. Architecture: [client versioning](../specs/2026-09-09-client-versioning-design.md).
 Baseline: `69520471fb09f54c2e012f6a56028c5e93f89295`, tracked checkout clean, `HEAD == origin/main` after fetch.
 
+Status: delivered to production API, worker and generation-worker at
+`665890b577e834eb31ad961006cd015b804edb5a` on 2026-09-09.
+[Verification and remaining risks](../../plans/2026-09-09-data-evolution-policy-verification.md).
+
 ## Deliverable
 
 Ship one shared English policy to MAX code-writing agents, including Project Cell,
