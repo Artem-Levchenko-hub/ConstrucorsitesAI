@@ -90,6 +90,15 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     | null
   >(null);
 
+  const updateMessage = useCallback(
+    (id: string | null, transform: (message: Message) => Message) => {
+      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
+        (prev ?? []).map((m) => m.id === id ? transform(m) : m),
+      );
+    },
+    [qc, projectId],
+  );
+
   const fireQueued = useCallback(() => {
     const p = pendingRef.current;
     if (!p) return;
@@ -207,11 +216,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         // server's cumulative buffer and reset our seq cursor. This is what
         // unfreezes the preview after a page refresh mid-build.
         const mid = event.data.message_id;
-        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-          (prev ?? []).map((m) =>
-            m.id === mid ? { ...m, content: event.data.content } : m,
-          ),
-        );
+        updateMessage(mid, (m) => ({ ...m, content: event.data.content }));
         streamMetaRef.current[mid] = {
           lastSeq: event.data.seq,
           resyncing: false,
@@ -244,11 +249,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           meta.lastSeq = seq;
           streamMetaRef.current[mid] = meta;
         }
-        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-          (prev ?? []).map((m) =>
-            m.id === mid ? { ...m, content: m.content + event.data.delta } : m,
-          ),
-        );
+        updateMessage(mid, (m) => ({ ...m, content: m.content + event.data.delta }));
         return;
       }
 
@@ -271,22 +272,16 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         const joy = buildJoyTrigger(event.data.message_id, turnMode, joyBrief);
         if (joy) qc.setQueryData(["joy", projectId], joy);
 
-        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-          (prev ?? []).map((m) =>
-            m.id === event.data.message_id
-              ? {
-                  ...m,
-                  tokens_in: event.data.tokens_in,
-                  tokens_out: event.data.tokens_out,
-                  generation_status: "completed",
-                  // Client-side annotation: not persisted in the DB row, but
-                  // ChatMessage.tsx surfaces it as "≈ ₽X" so the user sees
-                  // approximate per-prompt cost without opening the wallet.
-                  cost_rub: event.data.cost_rub ?? null,
-                }
-              : m,
-          ),
-        );
+        updateMessage(event.data.message_id, (m) => ({
+          ...m,
+          tokens_in: event.data.tokens_in,
+          tokens_out: event.data.tokens_out,
+          generation_status: "completed",
+          // Client-side annotation: not persisted in the DB row, but
+          // ChatMessage.tsx surfaces it as "≈ ₽X" so the user sees
+          // approximate per-prompt cost without opening the wallet.
+          cost_rub: event.data.cost_rub ?? null,
+        }));
         // B.3 — done implies all multipass stages finished, drop the
         // progress entry so the bar disappears at the same instant the
         // tokens/cost line appears. Removing instead of clearing keeps
@@ -519,21 +514,15 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       if (event.type === "generation.cancelled") {
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
-        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-          (prev ?? []).map((m) =>
-            m.id === event.data.message_id
-              ? {
-                  ...m,
-                  content: m.content.includes("[Отменено пользователем]")
-                    ? m.content
-                    : `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim(),
-                  tokens_out: m.tokens_out ?? 0,
-                  tokens_in: m.tokens_in ?? 0,
-                  generation_status: "cancelled",
-                }
-              : m,
-          ),
-        );
+        updateMessage(event.data.message_id, (m) => ({
+          ...m,
+          content: m.content.includes("[Отменено пользователем]")
+            ? m.content
+            : `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim(),
+          tokens_out: m.tokens_out ?? 0,
+          tokens_in: m.tokens_in ?? 0,
+          generation_status: "cancelled",
+        }));
         qc.removeQueries({
           queryKey: ["passes", projectId, event.data.message_id],
         });
@@ -563,21 +552,15 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       if (event.type === "llm.error") {
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
-        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-          (prev ?? []).map((m) =>
-            m.id === event.data.message_id
-              ? {
-                  ...m,
-                  content: `[Ошибка: ${event.data.error}]`,
-                  generation_status: "failed",
-                  // Без tokens_out !== null ChatPanel считает сообщение
-                  // всё ещё стримящимся — UI не разлочивается.
-                  tokens_out: m.tokens_out ?? 0,
-                  tokens_in: m.tokens_in ?? 0,
-                }
-              : m,
-          ),
-        );
+        updateMessage(event.data.message_id, (m) => ({
+          ...m,
+          content: `[Ошибка: ${event.data.error}]`,
+          generation_status: "failed",
+          // Без tokens_out !== null ChatPanel считает сообщение
+          // всё ещё стримящимся — UI не разлочивается.
+          tokens_out: m.tokens_out ?? 0,
+          tokens_in: m.tokens_in ?? 0,
+        }));
         // B.3 — drop progress so the bar doesn't outlive the error toast.
         qc.removeQueries({
           queryKey: ["passes", projectId, event.data.message_id],
@@ -597,7 +580,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         fireQueued();
       }
     },
-    [qc, projectId, fireQueued],
+    [qc, projectId, fireQueued, updateMessage],
   );
 
   // Silence watchdog: fires `onSilence` if the message gets no update for
@@ -848,18 +831,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // accept. Stream silence is reconciled against durable generation state
       // below and must never manufacture a terminal error.
       const _failPrompt = (reason: string, detail?: string) => {
-        qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-          (prev ?? []).map((m) =>
-            m.id === tempAssistantId
-              ? {
-                  ...m,
-                  content: `[Ошибка: ${reason}${detail ? ` — ${detail}` : ""}]`,
-                  tokens_out: 0,
-                  tokens_in: 0,
-                }
-              : m,
-          ),
-        );
+        updateMessage(tempAssistantId, (m) => ({
+          ...m,
+          content: `[Ошибка: ${reason}${detail ? ` — ${detail}` : ""}]`,
+          tokens_out: 0,
+          tokens_in: 0,
+        }));
         qc.removeQueries({
           queryKey: ["passes", projectId, tempAssistantId],
         });
@@ -998,11 +975,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // `llm.chunk` events for `event.data.message_id` actually find the row).
       // The user row is left as-is — the refetch below replaces both with the
       // canonical server-side records.
-      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-        (prev ?? []).map((m) =>
-          m.id === tempAssistantId ? { ...m, id: message_id } : m,
-        ),
-      );
+      updateMessage(tempAssistantId, (m) => ({ ...m, id: message_id }));
 
       // Now refetch in the background to swap optimistic rows for canonical
       // server records (ids, created_at). Stays non-blocking so streaming
@@ -1036,6 +1009,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       watchMessage,
       recoverSilentStream,
       fireQueued,
+      updateMessage,
     ],
   );
 
@@ -1151,11 +1125,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     if (!["completed", "failed", "cancelled"].includes(generation.status)) {
       // The endpoint acknowledges the request before the worker stops. Keep
       // listening for its terminal event instead of claiming cancellation.
-      qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-        (prev ?? []).map((m) => m.id === messageId
-          ? { ...m, generation_status: generation.status }
-          : m),
-      );
+      updateMessage(messageId, (m) => ({
+        ...m, generation_status: generation.status,
+      }));
       return;
     }
 
@@ -1169,26 +1141,22 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     // 3) Reconcile the canonical message with the confirmed terminal outcome.
     // Completion can win the race with Stop; only cancellation gets a marker.
     let cancelledMessageId: string | null = null;
-    qc.setQueryData<Message[]>(["messages", projectId], (prev) =>
-      (prev ?? []).map((m) => {
-        if (
-          m.id === messageId && m.role === "assistant"
-        ) {
-          cancelledMessageId = m.id;
-          return {
-            ...m,
-            content: generation.status === "cancelled" &&
-              !m.content.includes("[Отменено пользователем]")
-              ? `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim()
-              : m.content,
-            tokens_out: m.tokens_out ?? 0,
-            tokens_in: m.tokens_in ?? 0,
-            generation_status: generation.status,
-          };
-        }
-        return m;
-      }),
-    );
+    updateMessage(messageId, (m) => {
+      if (m.role === "assistant") {
+        cancelledMessageId = m.id;
+        return {
+          ...m,
+          content: generation.status === "cancelled" &&
+            !m.content.includes("[Отменено пользователем]")
+            ? `${m.content.trimEnd()}\n\n[Отменено пользователем]`.trim()
+            : m.content,
+          tokens_out: m.tokens_out ?? 0,
+          tokens_in: m.tokens_in ?? 0,
+          generation_status: generation.status,
+        };
+      }
+      return m;
+    });
     void qc.invalidateQueries({ queryKey: ["messages", projectId] });
     void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
     // B.3 — drop the progress entry for the cancelled message so the bar
@@ -1202,7 +1170,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     // 4) Сбрасываем очередь — Стоп = «всё, прекратить».
     pendingRef.current = null;
     setPendingPrompt(null);
-  }, [qc, projectId]);
+  }, [qc, projectId, updateMessage]);
 
   const cancelPending = useCallback(() => {
     pendingRef.current = null;

@@ -1,13 +1,18 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 96,
+  "version": 97,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
   "title": "Project Cell получил отдельный PostgreSQL с полными правами",
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
+   {
+    "s": "testing",
+    "t": "Код чата стал короче на32 строки при прежнем поведении",
+    "d": "Девять повторов заменены одной небольшой функцией. 502 web-теста, проверка типов, линтер, браузер до/после и независимое Astra ревью прошли. CI, проверка образа и поставка ещё выполняются."
+   },
    {
     "s": "worked",
     "t": "Рефакторинг убрал три копии библиотеки: минус 52 КБ рабочего кода",
@@ -2760,6 +2765,18 @@
    "evidence": "Source 50565efd0c6de2b8c6ee66546d6b4fb16cd05673 committed/pushed/deployed API+workers; image sha256:47ac83c1f70ee7351812128fcfc56869e8bdd020fe3143ff45207c4fb2cf4664. CI34356863327: all7 success; API3264 passed/12 skipped/8 xfailed. BEFORE/AFTER163, Ruff, mypy276, installed wheel and exact image: public3 hashes, all5 materialize/Git bytes+modes/export; frozen golden unchanged. Astra review: No findings. Runtime image/release, health6/6 and anime bytes/MIME/cache/CORS passed; write gate removed405. Web2ae98520, orchestratorb99af471, other IDs and dirty documents preserved. Record /opt/omnia-runtime/releases/task5-anime-50565efd/result.json; docs/plans/2026-09-09-task5-anime-verification.md.",
    "impact": "Рабочий код меньше на 52 181 байт и 25 строк, на три файла меньше. Удалены дубли сторонней библиотеки и отдельная ветка чтения; нового слоя нет. Ускорение агентов или полной генерации не заявляется.",
    "next_vector": "Дальше выбирать доказанное упрощение при прежней функциональности. Task3 — числовой контракт; Task6/7 — model smoke; дальнейший Task11 — реальное сокращение; Task12 — измерения IO; Task13 — полная customer-flow матрица. Весь план и ускорение генерации не объявлены завершёнными."
+  },
+  {
+   "id": "H149",
+   "title": "Повторяющиеся обновления сообщений чата сведены к одной операции",
+   "description": "Девять одинаковых обходов кэша сообщений заменены одной небольшой функцией внутри прежнего hook. Условия событий, очередь, история, ошибки и отмена сохранены.",
+   "status": "testing",
+   "score": null,
+   "category": "верификация / рефакторинг",
+   "period": "09.09",
+   "evidence": "BASE6c3b9bab. BEFORE/AFTER47 focused tests, full Node20 web502/78, TypeScript and focused ESLint passed. Two history tests failed in a concurrent run and passed unchanged in the isolated full run; cause not established. Actual hook/QueryClient browser1440/390: identical state, no page errors, one queued POST; Astra source/helper review No findings. CI/image and production delivery pending. docs/plans/2026-09-09-task11-message-cache-verification.md.",
+   "impact": "Рабочий код чата короче на32 строки. Нового модуля или зависимости нет; ускорение генерации не заявляется.",
+   "next_vector": "Завершить web verification и точную web-only поставку, затем выбирать следующий доказанный дубль. Task3 SQL требует числового контракта, Task6/7 model smoke запускает владелец, Task12 требует измеренной причины IO, Task13 сохраняет непроверенные пользовательские сценарии."
   }
  ],
  "vectors": [
@@ -2974,6 +2991,10 @@
     [
      "Task5 anime: одна копия, прежние standalone файлы, проверка wheel/image и API/workers delivery (09.09)",
      true
+    ],
+    [
+     "Task11 message cache: меньше повторов, прежние события и очередь, web-only production delivery (09.09)",
+     false
       ]
    ],
    "hyp_ids": [
@@ -2990,7 +3011,8 @@
     "H137",
     "H146",
     "H147",
-    "H148"
+    "H148",
+    "H149"
    ]
   },
   {

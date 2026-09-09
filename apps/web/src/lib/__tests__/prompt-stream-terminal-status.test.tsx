@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { ApiError } from "@/lib/api/client";
-import { cancelGeneration, getLatestGeneration } from "@/lib/api/messages";
+import { cancelGeneration, getLatestGeneration, sendPrompt } from "@/lib/api/messages";
 import type { GenerationRun, Message, WsEvent } from "@/lib/api/types";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 
@@ -34,7 +34,7 @@ class TestSocket {
   onclose: (() => void) | null = null;
   onopen: (() => void) | null = null;
   constructor() { TestSocket.instances.push(this); }
-  send() {}
+  send = vi.fn<(data: string) => void>();
   close() { this.readyState = 3; }
   emit(event: WsEvent) { this.onmessage?.({ data: JSON.stringify(event) }); }
 }
@@ -145,5 +145,77 @@ describe("prompt stream terminal reconciliation", () => {
     expect(message().generation_status).toBe("completed");
     expect(isChatMessageStreaming(message())).toBe(false);
     expect(message().content).not.toContain("[Отменено пользователем]");
+  });
+});
+
+describe("message cache update contracts", () => {
+  it("drops duplicate/gap chunks and resumes from the cumulative replay", async () => {
+    const socket = TestSocket.instances.at(-1)!;
+    const emit = async (event: WsEvent) => act(async () => socket.emit(event));
+    await emit({ type: "stream.sync", data: { message_id: "message-1", content: "A", seq: 2 } });
+    for (const seq of [2, 4, 3]) {
+      await emit({ type: "llm.chunk", data: { message_id: "message-1", delta: "ignored", seq } });
+    }
+    expect(message().content).toBe("A");
+    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: "resync" }));
+    await emit({ type: "stream.sync", data: { message_id: "message-1", content: "AB", seq: 4 } });
+    await emit({ type: "llm.chunk", data: { message_id: "message-1", delta: "C", seq: 5 } });
+    expect(message().content).toBe("ABC");
+  });
+
+  it("updates duplicate IDs while preserving unmatched references and handles absent caches", async () => {
+    const original = message();
+    client.setQueryData(["messages", "project-1"], [original, { ...original, content: "second" }, { ...original, id: "unmatched" }]);
+    const unmatched = client.getQueryData<Message[]>(["messages", "project-1"])![2];
+    const socket = TestSocket.instances.at(-1)!;
+    await act(async () => socket.emit({ type: "llm.chunk", data: { message_id: "message-1", delta: "!" } }));
+    const rows = client.getQueryData<Message[]>(["messages", "project-1"])!;
+    expect(rows.map((m) => m.content)).toEqual(["Проверяю каталог!", "second!", "Проверяю каталог"]);
+    expect(rows[2]).toBe(unmatched);
+    await act(async () => socket.emit({ type: "stream.sync", data: { message_id: "absent", content: "ignored", seq: 1 } }));
+    expect(client.getQueryData<Message[]>(["messages", "project-1"])![0]).toBe(rows[0]);
+    client.removeQueries({ queryKey: ["messages", "project-1"] });
+    await act(async () => socket.emit({ type: "stream.sync", data: { message_id: "absent", content: "ignored", seq: 1 } }));
+    expect(client.getQueryData(["messages", "project-1"])).toEqual([]);
+  });
+
+  it.each(["llm.done", "llm.error"] as const)("starts the queued prompt after %s and swaps its temporary ID", async (type) => {
+    vi.mocked(sendPrompt).mockResolvedValue({ run_id: "run-2", message_id: "message-2", snapshot_id: null });
+    await act(async () => { await stream.submit("Follow up", "model"); });
+    expect(stream.pendingPrompt).toBe("Follow up");
+    expect(sendPrompt).not.toHaveBeenCalled();
+    await act(async () => TestSocket.instances.at(-1)!.emit(type === "llm.done"
+      ? { type, data: { message_id: "message-1", tokens_in: 2, tokens_out: 4, cost_rub: 0 } }
+      : { type, data: { message_id: "message-1", error: "failed" } }));
+    expect(stream.pendingPrompt).toBeNull();
+    await act(async () => vi.advanceTimersByTime(0));
+    expect(sendPrompt).toHaveBeenCalledTimes(1);
+    const rows = client.getQueryData<Message[]>(["messages", "project-1"])!;
+    expect(rows.at(-2)).toMatchObject({ role: "user", content: "Follow up" });
+    expect(rows.at(-1)).toMatchObject({ id: "message-2", role: "assistant", content: "", tokens_out: null });
+  });
+
+  it("marks rejected POST placeholder without inventing a generation status", async () => {
+    vi.mocked(sendPrompt).mockRejectedValue(new Error("fixture rejected"));
+    await act(async () => { await stream.submit("Follow up", "model"); });
+    await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: { message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0 } }));
+    await act(async () => vi.advanceTimersByTime(0));
+    const last = client.getQueryData<Message[]>(["messages", "project-1"])!.at(-1)!;
+    expect(last.id).toMatch(/^__opt_asst_/);
+    expect(last).toMatchObject({ content: "[Ошибка: POST /prompt не прошёл — fixture rejected]", tokens_in: 0, tokens_out: 0 });
+    expect(last.generation_status).toBeUndefined();
+  });
+
+  it("clears queued work on cancellation and keeps user rows sharing the ID intact", async () => {
+    const original = message();
+    client.setQueryData(["messages", "project-1"], [{ ...original, role: "user" }, original]);
+    const user = client.getQueryData<Message[]>(["messages", "project-1"])![0];
+    await act(async () => { await stream.submit("Follow up", "model"); });
+    await act(async () => stream.cancel());
+    expect(stream.pendingPrompt).toBeNull();
+    expect(sendPrompt).not.toHaveBeenCalled();
+    const rows = client.getQueryData<Message[]>(["messages", "project-1"])!;
+    expect(rows[0]).toBe(user);
+    expect(rows[1]).toMatchObject({ generation_status: "cancelled", tokens_in: 0, tokens_out: 0 });
   });
 });
