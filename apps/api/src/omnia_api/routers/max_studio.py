@@ -611,21 +611,21 @@ async def get_max_usage(
     )
     run_rows = [row for row in rows if latest_run is not None and row.run_id == latest_run.id]
     visible_rows = run_rows if latest_run is not None else rows
-    grouped: dict[str, dict[str, int | float]] = {}
+    empty_bucket: dict[str, int | float] = {
+        "cost_rub": 0.0,
+        "calls": 0,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "retries": 0,
+    }
+    # The deterministic base is intentionally visible even though it has no LLM
+    # ledger row: users can see that this stage adds zero provider usage.
+    grouped = {"template": empty_bucket.copy()}
     for row in visible_rows:
         stage = row.stage if row.stage in _USAGE_STAGE_LABELS else "other"
-        bucket = grouped.setdefault(
-            stage,
-            {
-                "cost_rub": 0.0,
-                "calls": 0,
-                "tokens_in": 0,
-                "tokens_out": 0,
-                "cache_read_tokens": 0,
-                "cache_write_tokens": 0,
-                "retries": 0,
-            },
-        )
+        bucket = grouped.setdefault(stage, empty_bucket.copy())
         bucket["cost_rub"] = float(bucket["cost_rub"]) + float(row.cost_rub)
         bucket["calls"] = int(bucket["calls"]) + 1
         bucket["tokens_in"] = int(bucket["tokens_in"]) + row.tokens_in
@@ -634,20 +634,6 @@ async def get_max_usage(
         bucket["cache_write_tokens"] = int(bucket["cache_write_tokens"]) + row.cache_write_tokens
         bucket["retries"] = int(bucket["retries"]) + row.retry_count
 
-    # The deterministic base is intentionally visible even though it has no LLM
-    # ledger row: users can see that this stage adds zero provider usage.
-    grouped.setdefault(
-        "template",
-        {
-            "cost_rub": 0.0,
-            "calls": 0,
-            "tokens_in": 0,
-            "tokens_out": 0,
-            "cache_read_tokens": 0,
-            "cache_write_tokens": 0,
-            "retries": 0,
-        },
-    )
     stages = [
         MaxUsageStagePublic(
             id=stage,

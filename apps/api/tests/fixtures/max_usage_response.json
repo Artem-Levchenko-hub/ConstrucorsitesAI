@@ -1,0 +1,123 @@
+{
+  "empty": {
+    "latest_run": false,
+    "rows": [
+    ],
+    "expected": {
+      "total_cost_rub": 0.0,
+      "run_cost_rub": 0.0,
+      "run_id": null,
+      "run_status": null,
+      "stages": [
+        {"id": "template", "label": "Проверенный MAX-шаблон", "cost_rub": 0.0, "calls": 0, "tokens_in": 0, "tokens_out": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "retries": 0}
+      ]
+    }
+  },
+  "empty_run": {
+    "latest_run": true,
+    "rows": [
+    ],
+    "expected": {
+      "total_cost_rub": 0.0,
+      "run_cost_rub": 0.0,
+      "run_id": "00000000-0000-0000-0000-000000000003",
+      "run_status": "running",
+      "stages": [
+        {"id": "template", "label": "Проверенный MAX-шаблон", "cost_rub": 0.0, "calls": 0, "tokens_in": 0, "tokens_out": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "retries": 0}
+      ]
+    }
+  },
+  "no_run": {
+    "latest_run": false,
+    "rows": [
+      [null, "0.1000", null],
+      ["unknown", "0.2000", null]
+    ],
+    "expected": {
+      "total_cost_rub": 0.3,
+      "run_cost_rub": 0.0,
+      "run_id": null,
+      "run_status": null,
+      "stages": [
+        {"id": "template", "label": "Проверенный MAX-шаблон", "cost_rub": 0.0, "calls": 0, "tokens_in": 0, "tokens_out": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "retries": 0},
+        {"id": "other", "label": "Прочие AI-операции", "cost_rub": 0.30000000000000004, "calls": 2, "tokens_in": 20, "tokens_out": 4, "cache_read_tokens": 6, "cache_write_tokens": 8, "retries": 2}
+      ]
+    }
+  },
+  "latest_forward": {
+    "latest_run": true,
+    "rows": [
+      ["native_agent", "0.1000", "latest"],
+      ["native_agent", "0.2000", "latest"],
+      ["native_agent", "0.3000", "latest"],
+      ["template", "1.2500", "latest"],
+      ["build_plan", "2.5000", "latest"],
+      ["verification", "0.0000", "latest"],
+      ["media", "4.0000", "latest"],
+      [null, "0.1000", "latest"],
+      ["unknown", "0.2000", "latest"],
+      ["template", "8.0000", "old"],
+      [null, "16.0000", null]
+    ],
+    "expected": {
+      "total_cost_rub": 32.65,
+      "run_cost_rub": 8.65,
+      "run_id": "00000000-0000-0000-0000-000000000003",
+      "run_status": "running",
+      "stages": [
+        {"id": "template", "label": "Проверенный MAX-шаблон", "cost_rub": 1.25, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "native_agent", "label": "Точечная AI-доработка", "cost_rub": 0.6000000000000001, "calls": 3, "tokens_in": 30, "tokens_out": 6, "cache_read_tokens": 9, "cache_write_tokens": 12, "retries": 3},
+        {"id": "build_plan", "label": "План приложения", "cost_rub": 2.5, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "verification", "label": "Проверка сборки", "cost_rub": 0.0, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "media", "label": "Изображения и видео", "cost_rub": 4.0, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "other", "label": "Прочие AI-операции", "cost_rub": 0.30000000000000004, "calls": 2, "tokens_in": 20, "tokens_out": 4, "cache_read_tokens": 6, "cache_write_tokens": 8, "retries": 2}
+      ]
+    }
+  },
+  "latest_reverse": {
+    "latest_run": true,
+    "rows": [
+      [null, "16.0000", null],
+      ["template", "8.0000", "old"],
+      ["unknown", "0.2000", "latest"],
+      [null, "0.1000", "latest"],
+      ["media", "4.0000", "latest"],
+      ["verification", "0.0000", "latest"],
+      ["build_plan", "2.5000", "latest"],
+      ["template", "1.2500", "latest"],
+      ["native_agent", "0.3000", "latest"],
+      ["native_agent", "0.2000", "latest"],
+      ["native_agent", "0.1000", "latest"]
+    ],
+    "expected": {
+      "total_cost_rub": 32.65,
+      "run_cost_rub": 8.65,
+      "run_id": "00000000-0000-0000-0000-000000000003",
+      "run_status": "running",
+      "stages": [
+        {"id": "template", "label": "Проверенный MAX-шаблон", "cost_rub": 1.25, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "native_agent", "label": "Точечная AI-доработка", "cost_rub": 0.6, "calls": 3, "tokens_in": 30, "tokens_out": 6, "cache_read_tokens": 9, "cache_write_tokens": 12, "retries": 3},
+        {"id": "build_plan", "label": "План приложения", "cost_rub": 2.5, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "verification", "label": "Проверка сборки", "cost_rub": 0.0, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "media", "label": "Изображения и видео", "cost_rub": 4.0, "calls": 1, "tokens_in": 10, "tokens_out": 2, "cache_read_tokens": 3, "cache_write_tokens": 4, "retries": 1},
+        {"id": "other", "label": "Прочие AI-операции", "cost_rub": 0.30000000000000004, "calls": 2, "tokens_in": 20, "tokens_out": 4, "cache_read_tokens": 6, "cache_write_tokens": 8, "retries": 2}
+      ]
+    }
+  },
+  "latest_no_rows": {
+    "latest_run": true,
+    "rows": [
+      ["template", "8.0000", "old"],
+      [null, "16.0000", null]
+    ],
+    "expected": {
+      "total_cost_rub": 24.0,
+      "run_cost_rub": 0.0,
+      "run_id": "00000000-0000-0000-0000-000000000003",
+      "run_status": "running",
+      "stages": [
+        {"id": "template", "label": "Проверенный MAX-шаблон", "cost_rub": 0.0, "calls": 0, "tokens_in": 0, "tokens_out": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "retries": 0}
+      ]
+    }
+  }
+}
