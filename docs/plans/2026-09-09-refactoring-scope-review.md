@@ -1,5 +1,12 @@
 # Task13 — приёмка выполненных пакетов и оставшиеся проверки
 
+Дополнение Task3 usage buckets: source/API `7c689203` доставлен; −14 строк и
+−320 байт рабочего кода. До/после изменения, включая оба точных образа, проходят
+шесть JSON-сценариев и два отказа 404/409. Общий локальный прогон 75 включает эти8.
+Полный CI: API 3272 passed /12 skipped /8 xfailed, все7 jobs success. Runtime image/release/health подтверждены;
+SQL, расчёты и сериализация прежние. [Проверка и доставка](2026-09-09-task3-usage-buckets-verification.md).
+Это отдельное устранение дубля; SQL-агрегация Task3 остаётся открытой.
+
 Дополнение Task11 message cache: source `bf428456`, web delivery `c2da4f71`,
 −32 production строки/−1101 нормализованный байт. Полный web502/78, focused47,
 browser1440/390, Astra review, CI web/image, exact image и runtime health прошли.
@@ -22,6 +29,7 @@ PreviewFrame без смены поведения; actual image/release/health �
 
 | Код | Проверенный пакет и граница |
 |---|---|
+| E3 | `docs/plans/2026-09-09-task3-usage-buckets-verification.md`: одна инициализация стадий вместо повторных словарей, −14 строк / −320 байт. BEFORE/AFTER 8 проверок настоящего endpoint/Pydantic JSON с fake session; общий локальный прогон 75 включает эти восемь. Образы до и после изменения проходят те же 8 сценариев с общей фиксированной fixture. SQL, фильтры, арифметика и сборка ответа побайтово прежние. CI34368867947: полный API3272/12skip/8xfail; source/API7c689203 доставлен, image/release/health подтверждены. |
 | E4 | `docs/plans/2026-09-08-task4-history-verification.md`: `project-version-refetch.test.tsx` 13/13; смежные 68/5 suites; полный web 472/75 на Node20. Edge с реальными UI и HTTP/WS fixtures, 1440/390: HEAD requests 2/1→1/0, две страницы 3/1→2/0; terminal/history/F5/A→B→A. Source `10c4ef12` доставлен. |
 | E5 | `docs/plans/2026-09-08-task5-template-verification.md`: baseline Git-tree fixture `static_templates_810f0fbb.json`; 147 template/select/prompt/export/mapping tests; установленный wheel вне checkout прошёл пять materialize/Git/export fixtures. Correction release `4960f6b9` доставлен; полный API 3129 passed / 12 skipped / 8 xfailed. Последний delivery-раздел заменяет прежние записи о блокировках. |
 | E8 | `docs/plans/2026-09-08-task8-artifacts-verification.md`: `test_generation_artifacts.py` 31 DB-free + 10 disposable PostgreSQL = **41 passed** в CI34265225657. Настоящие AST-участки двух callers Git→SQL→refresh, real pygit2/in-memory MinIO; не весь `_process_prompt`. Source `e03793b4` доставлен. |
@@ -61,7 +69,7 @@ API3264/12skip/8xfail за779.01s, web487/77, orchestrator1244/30skip/15xfail
 | 17 | Source/deps/schema edit и proofs | E8 exact_tree/пустые файлы; E10A byte-exact source edit/fence; backend-specific команды/проверки не объединены. | Нет новой матрицы source-only/deps/schema edits с проверкой всех invalidation dimensions. E12 не даёт grounds удалять build/checkpoint. |
 | 18 | Preview/publish/export | E5 real Git + HTTP export/custom assets и установленный wheel; E10B preview до page.goto/runtime routing50; E4 реальная preview UI с fixtures. Production docs фиксируют public health/routes/kit hashes. | Новое автономное опубликованное приложение, signed MAX customer session, настоящая capture acceptance и весь auth/access publish-flow не проверены. |
 | 19 | RU/non-RU/mixed-language | E10A exact-edit19 вариантов сохраняет Unicode/case/CRLF; E8 literal prompt/model metadata сохраняется. E5 correction включает два RU onboarding wire UI tests. | Это не RU/non-RU/mixed-language model-output матрица. Task6/7 prompts не менялись и модельный smoke отсутствует. |
-| 20 | Чужой project, stale fence, symlink/secret | E9 foreign-project message case +8DB commit/rollback; E10A `test_disposable_db_cell_rejected_fence_does_not_change_local_file` (mock runtime denial) в26. E5 populated-destination collisions отклоняются до writes. | Нет нового комплексного cross-tenant/symlink/secret penetration сценария. Cell контрольнаяDB+fake runtime не доказывают OS/network isolation или отсутствие любых утечек. |
+| 20 | Чужой project, stale fence, symlink/secret | E9 foreign-project message case +8DB commit/rollback; E10A `test_disposable_db_cell_rejected_fence_does_not_change_local_file` (mock runtime denial) в26. E5 populated-destination collisions отклоняются до writes. E3: настоящий usage endpoint возвращает404 при пустом результате fake ownership lookup и409 для non-MAX до запроса Usage. | E3 не выполняет SQL ownership filter, FastAPI authentication или HTTP error envelope. Нет нового комплексного cross-tenant/symlink/secret penetration сценария. Cell контрольнаяDB+fake runtime не доказывают OS/network isolation или отсутствие любых утечек. |
 
 ## Повторный просмотр исходников и результат
 
@@ -89,7 +97,7 @@ Task4 отдельно доказал уменьшение HTTP работы и�
 
 ## Что осталось
 
-- Task3: согласовать числовую точность/округление агрегатов расходов и проверить golden JSON на disposable PostgreSQL. Billing contract не менялся.
+- Task3: дубли инициализации устранены и доставлены (E3). Для SQL-агрегации остаются числовая точность/округление, порядок строк и проверка golden JSON на disposable PostgreSQL. Billing contract не менялся.
 - Task6/7: язык и сокращение внутренних инструкций требуют согласованного model smoke. Пользователь запускает генерации самостоятельно; prompts не менялись.
 - Task11: transport, preview runtime и message cache доставлены. Preview дал net+19 строк; message cache убрал32 строки. Дальнейшие пакеты должны доказывать сокращение при прежнем поведении. Unmount/stale-probe cleanup gaps остаются отдельным изменением поведения.
 - Task12: доступные логи не показывают внутренние затраты43-секундного ensure и25.7-секундного release. Удаление build/capture или новый cache без измерений не обоснованы.

@@ -505,7 +505,8 @@ Sequential Thinking и Context7 проверены в доступном tool in
 
 Актуальный статус — в `2026-09-08-refactoring-handoff.md` и матрице
 `2026-09-09-refactoring-scope-review.md`. P01, Task4/5/8/9/10A/10B,
-Task11 transport и preview runtime доставлены. Дальнейшие Task11 R-пакеты
+Task11 transport, preview runtime, message cache и локальное сокращение usage
+buckets доставлены. SQL-агрегация Task3 остаётся открытой. Дальнейшие Task11 R-пакеты
 требуют отдельного baseline; Task3 — числового контракта, Task6/7 — model smoke,
 Task12 — подтверждённой причины IO задержки. Полная приёмка20 сценариев и
 ускорение всей генерации не доказаны. Исторические сохранённые команды выше

@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-09",
-  "version": 99,
+  "version": 100,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -9,9 +9,9 @@
   "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
   "items": [
    {
-    "s": "testing",
-    "t": "Статистика стала короче на14 строк без изменения расчётов",
-    "d": "Убран повтор начальных значений стадий. Общий прогон 75 тестов, включая восемь новых проверок JSON-ответов, линтер и типы прошли; исходный серверный образ подтверждает те же восемь сценариев. Независимое Astra ревью прошло; полный CI и поставка ещё выполняются."
+    "s": "worked",
+    "t": "Статистика стала короче на 14 строк без изменения расчётов",
+    "d": "Убран повтор начальных значений стадий. Восемь контрольных сценариев прошли до и после: шесть JSON-ответов и два отказа 404/409. Полный прогон API: 3272 теста прошли. Новый API опубликован и проверен на сервере, остальные сервисы сохранили свои версии и состояние."
    },
    {
     "s": "worked",
@@ -2787,13 +2787,13 @@
    "id": "H150",
    "title": "Повтор начальных значений статистики заменён одним определением",
    "description": "В get_max_usage повторяющиеся начальные значения стадий определены один раз. Каждая стадия получает отдельную копию; запросы, расчёты, порядок и ответы сохраняются.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "09.09",
-   "evidence": "BASEfd9d2e10. BEFORE/AFTER8, combined local75 including8new, full Ruff and mypy276 passed; SQL/arithmetic/response construction byte-identical. Exact current API image BEFORE8 passed with frozen fixture f5cdd57… in network-none/read-only container. Independent Astra source/tests/fixture/smoke/helper review No findings; full API CI, AFTER image and delivery pending. docs/plans/2026-09-09-task3-usage-buckets-verification.md.",
-   "impact": "Рабочий код короче на14 строк и320 байт. Нового слоя нет. Числовые значения и вся прежняя логика сохранены; загрузка строк из БД остаётся прежней.",
-   "next_vector": "Завершить review, полный API CI и API-only поставку с прежними версиями workers/web. Task3 SQL-агрегация остаётся открытой из-за числового контракта; Task6/7/12 и полная пользовательская матрица требуют своих проверок."
+   "evidence": "Source/API 7c68920394ca03f2bab637235d0d5ee3468ac242, exact image sha256:aa9c68f7535671e009ee2589331af1b780712123d2ffe3b37d540a322e11ddff. BEFORE/AFTER 8 with frozen fixture f5cdd57c9e9c95496457ccc9df8f9524904e9b4c4747e45a275569985c7fbb2b; combined local 75 includes these 8. Full Ruff/mypy 276; CI34368867947 all 7 jobs success, complete API 3272 passed /12 skipped /8 xfailed in 967.20s. Exact BEFORE/AFTER images pass the same 8 cases with no network/DB. Astra source/tests/helpers review: No findings. SQL, arithmetic and response construction byte-identical. API-only production switch verified 2026-09-09 15:42:07 UTC: exact image/release, healthy, 0 restarts, API6/6, four routes200, nginx restored and POST405. Seven other containers, host orchestrator and dirty documents preserved; workers50565efd, webc2da4f71, orchestratorb99af471. Record /opt/omnia-runtime/releases/task3-usage-buckets-7c689203/result.json; docs/plans/2026-09-09-task3-usage-buckets-verification.md.",
+   "impact": "Рабочий код короче на 14 строк и 320 байт. Нового слоя нет. Числовые значения и прежняя логика сохранены; загрузка строк из БД остаётся прежней.",
+   "next_vector": "SQL-агрегация Task3 остаётся открытой из-за точности и порядка расчётов. Task6/7 требуют модельных проверок владельца; Task12 — измерений IO, Task13 — полной пользовательской матрицы. Следующие сокращения выбирать по доказанным дублям и прежним ответам."
   }
  ],
  "vectors": [
@@ -3015,7 +3015,7 @@
     ],
     [
      "Task3 usage buckets: одно определение начальных значений, прежний JSON и API-only delivery (09.09)",
-     false
+     true
       ]
    ],
    "hyp_ids": [
