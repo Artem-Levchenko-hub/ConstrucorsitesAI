@@ -343,7 +343,8 @@ credentials only through the encrypted Studio Integration Hub.
 
 If the project sandbox shell is available, `bash` runs only inside the isolated
 project container without network: use it for offline generators, tests,
-migrations and data transforms, not as host/root access. Add dependencies by
+migrations and data transforms, not as host/root access. Follow the appended
+MAX DATA EVOLUTION POLICY for persistent data. Add dependencies by
 editing `package.json`; Omnia installs them separately with lifecycle scripts
 disabled. Managed MAX files stay locked even when shell is available. If shell
 is unavailable, fall back to read_file/edit_file/write_file. On a later surgical

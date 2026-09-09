@@ -62,10 +62,12 @@ ephemeral. Services may declare depends_on and mounts [{"volume":"data",
 aggregate; defaults per service: .25 CPU,128 MiB RAM,1 GiB disk admission,64 pids.
 RAM/CPU/pids are enforced; disk is admission/snapshot bounded, not a hard quota.
 A dedicated project PostgreSQL is reachable at 127.0.0.1 via DATABASE_URL with
-full admin access. It is isolated from the managed MAX core PostgreSQL and from
+development admin access. It is isolated from the managed MAX core PostgreSQL and from
 other projects. Manage your own schema, migrations, roles, settings and bundled
 extensions there. The platform snapshots and restore-smokes its disk. Database
 superuser access does not grant container, host or managed-platform privileges.
+Persistent data still needs backward-compatible migrations. Follow the appended
+MAX DATA EVOLUTION POLICY; admin access is not permission to discard existing data.
 
 MAX AUTH AND MANAGED INTEGRATIONS ARE A SEPARATE TRUSTED BOUNDARY.
 PostgreSQL-backed managed APIs remain in the trusted core. /api/max/* and /api/omnia/* stay

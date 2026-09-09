@@ -47,7 +47,9 @@ def _repair_prompt(error: str, file: str | None) -> str:
     )
 
 
-async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
+async def maybe_autoheal_on_open(
+    project_id: UUID, slug: str, *, template: str = "",
+) -> dict[str, Any]:
     """If the opened project's dev build is RED, repair it in the background.
 
     Returns a small summary dict. Never raises — the caller fires this and forgets.
@@ -85,8 +87,16 @@ async def maybe_autoheal_on_open(project_id: UUID, slug: str) -> dict[str, Any]:
 
     executor = agent_builder.make_container_executor(project_id=project_id, slug=slug)
     try:
+        system_prompt = agent_builder.EDIT_SYSTEM_PROMPT
+        if template == "max_miniapp":
+            from omnia_api.services.max_data_evolution import build_max_agent_guide
+            from omnia_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
+
+            legacy = agent_builder.load_stack_system_prompt("max-miniapp-nextjs") or ""
+            guide = await build_max_agent_guide(f"{legacy}\n\n{MAX_MODEL_DIRECTIVE}")
+            system_prompt = agent_builder.build_edit_system_prompt(guide)
         result = await agent_builder.run_agent_build(
-            system_prompt=agent_builder.EDIT_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             user_prompt=_repair_prompt(error, file),
             model=_HEAL_MODEL,
             execute=executor,

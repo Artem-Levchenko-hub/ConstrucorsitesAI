@@ -4740,15 +4740,11 @@ async def _process_prompt(
                 async with factory() as _integration_session:
                     _integration_guide = await generation_context(_integration_session, project_id)
                 _stack_guide += "\n\n" + _integration_guide
-                if _project_cell_executor_handle is not None:
-                    from omnia_api.services.portable_cell_contract import (
-                        machine_stack_guide_from_executor,
-                    )
+                from omnia_api.services.max_data_evolution import build_max_agent_guide
 
-                    _stack_guide = await machine_stack_guide_from_executor(
-                        _stack_guide,
-                        _project_cell_executor_handle,
-                    )
+                _stack_guide = await build_max_agent_guide(
+                    _stack_guide, _project_cell_executor_handle,
+                )
             # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
             # perf canons aligned with the gates) when enabled. None → unchanged.
             _skills = (
@@ -5880,7 +5876,11 @@ async def _process_prompt(
                         pass
                     try:
                         _rep = await agent_builder.run_agent_build(
-                            system_prompt=agent_builder.EDIT_SYSTEM_PROMPT,
+                            system_prompt=(
+                                agent_builder.build_edit_system_prompt(_stack_guide)
+                                if project_template == "max_miniapp"
+                                else agent_builder.EDIT_SYSTEM_PROMPT
+                            ),
                             user_prompt=_repair_user,
                             model=_escalate_model or _agent_model,
                             escalate_model=_escalate_model,
@@ -7692,6 +7692,7 @@ async def _process_prompt(
                             history_serialized,
                             prompt_text,
                             selected_elements,
+                            template=project_template,
                         ),
                         model_for_role("freeform_writer", override=force_model),
                         str(user_id),

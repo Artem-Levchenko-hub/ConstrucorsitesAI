@@ -38,6 +38,7 @@ from omnia_api.services.design_presets import (
     PRESETS,
     format_preset_block,
 )
+from omnia_api.services.max_data_evolution import MAX_DATA_EVOLUTION_POLICY
 
 _IDENTITY = """\
 Ты — Omnia.AI, AI-конструктор сайтов и веб-продуктов для русского рынка.
@@ -3351,6 +3352,7 @@ _BRIEF_ONLY_DROP: frozenset[str] = frozenset({
     _ENTITIES_UI,
     _SPA_STACK,
     _MAX_MINIAPP_STACK,
+    MAX_DATA_EVOLUTION_POLICY,
     _TGBOT_STACK,
     _API_STACK,
 })
@@ -3734,6 +3736,7 @@ def build_system_prompt(
             image_block,
             _FUNCTIONAL_CONTRACT,
             _MAX_MINIAPP_STACK,
+            MAX_DATA_EVOLUTION_POLICY,
             _SELF_CHECK,
             _PALETTE_TAIL_REMINDER,
             _RESPONSE,
@@ -4332,6 +4335,10 @@ def _build_edit_messages(
         if _wants_img:
             _blocks.append(_IMAGE_GEN_HINT)
         _blocks.append(_EDIT_RESPONSE)
+    # Imported MAX source still uses MAX data rules; identity selection above
+    # must not bypass policy delivery.
+    if template == "max_miniapp":
+        _blocks.append(MAX_DATA_EVOLUTION_POLICY)
     # Phase A3 — keep edits in-language for non-RU projects.
     # Empty for RU (default) → system string is byte-identical to pre-A3.
     _lang_directive = _language_directive(language)
@@ -4454,15 +4461,18 @@ def build_container_rewrite_messages(
     history: Sequence[dict[str, str]],
     user_prompt: str,
     selected_elements: Sequence[dict[str, Any]] | None,
+    *,
+    template: str = "",
 ) -> list[dict[str, str]]:
     """Fallback when a surgical ``<edit>`` can't land on a CONTAINER app (React /
     Next / entities — no ``index.html``): ask for the WHOLE target file(s) back
     with ONLY the requested change applied. Reliable (plain generation, no
     byte-exact SEARCH to reproduce); the caller guards against a silent rewrite
     via a content-preservation ratio before committing."""
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": _CONTAINER_REWRITE_SYSTEM}
-    ]
+    system = _CONTAINER_REWRITE_SYSTEM
+    if template == "max_miniapp":
+        system += f"\n\n{_MAX_MINIAPP_EDIT_GUARD}\n\n{MAX_DATA_EVOLUTION_POLICY}"
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
     if target_files:
         files_block = "\n\n".join(
             f'<file path="{path}">\n{content}\n</file>'

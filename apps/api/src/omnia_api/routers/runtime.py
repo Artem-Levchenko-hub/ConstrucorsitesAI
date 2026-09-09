@@ -226,7 +226,9 @@ async def start_runtime(
 
         async def _autoheal_bg() -> None:
             try:
-                _h = await autoheal_svc.maybe_autoheal_on_open(project_id, project.slug)
+                _h = await autoheal_svc.maybe_autoheal_on_open(
+                    project_id, project.slug, template=project.template,
+                )
                 print(f"[AUTOHEAL] {project.slug}: {_h}", flush=True)
             except Exception as _ah_exc:
                 print(f"[AUTOHEAL] skipped: {_ah_exc!r}", flush=True)

@@ -137,6 +137,8 @@ async def test_runtime_actual_start_keeps_resync_autoheal_facet(template, monkey
     assert status.state == "running"
     provision.assert_awaited_once()
     expected = 1 if template in BROWSER_CONTAINERS else 0
+    if expected:
+        heal.assert_awaited_once_with(project.id, project.slug, template=template)
     assert read.call_count == reload.await_count == heal.await_count == expected
     expected_template = {
         "api": "fastapi-postgres",
