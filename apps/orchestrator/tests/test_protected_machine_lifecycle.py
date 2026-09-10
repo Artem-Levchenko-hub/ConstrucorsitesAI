@@ -85,6 +85,81 @@ def test_active_code_volume_accepts_combined_cell_and_machine_identity(tmp_path)
         validate_retained_runtime(backend, reference.manifest)
 
 
+@pytest.mark.parametrize("explicit_metadata", [True, False])
+def test_retained_runtime_accepts_only_configured_pinned_base(tmp_path, explicit_metadata):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+    from omnia_orchestrator.services.protected_machine_lifecycle import validate_retained_runtime
+    from tests.test_docker_machine_backend import retained_preview_fixture
+
+    backend, reference, volumes, image, _ = retained_preview_fixture(tmp_path)
+    old_names = backend.environment_volume_names(reference.manifest)
+    backend.base_image = "registry.example/project-machine@sha256:" + "a" * 64
+    for old, current in zip(
+        old_names, backend.environment_volume_names(reference.manifest), strict=True
+    ):
+        volume = volumes.pop(old)
+        volume.attrs["Name"] = current
+        volumes[current] = volume
+    metadata = backend._metadata()
+    metadata["restored_image"] = backend.base_image if explicit_metadata else None
+    write_controller_json(backend.metadata_path, metadata)
+    # Manifest digest identifies the configured image reference, not Image.id.
+    image.attrs["Config"] = {"Env": ["PATH=/usr/bin"], "Cmd": ["python3"], "Labels": {}}
+    lookups = []
+    backend.client.images.get = lambda ref: (lookups.append(ref), image)[1]
+
+    validate_retained_runtime(backend, reference.manifest)
+
+    assert lookups == [backend.base_image]
+    assert image.id != "sha256:" + "a" * 64
+
+
+@pytest.mark.parametrize("image_ref", ["project-machine:latest", "other@sha256:" + "b" * 64])
+def test_retained_runtime_rejects_untrusted_image_reference(tmp_path, image_ref):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+    from omnia_orchestrator.services.protected_machine_lifecycle import validate_retained_runtime
+    from tests.test_docker_machine_backend import retained_preview_fixture
+
+    backend, reference, *_ = retained_preview_fixture(tmp_path)
+    metadata = backend._metadata()
+    metadata["restored_image"] = image_ref
+    write_controller_json(backend.metadata_path, metadata)
+    with pytest.raises(CellIdentityConflict, match="not immutable"):
+        validate_retained_runtime(backend, reference.manifest)
+
+
+def test_configured_mutable_base_is_not_trusted(tmp_path):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+    from omnia_orchestrator.services.protected_machine_lifecycle import validate_retained_runtime
+    from tests.test_docker_machine_backend import retained_preview_fixture
+
+    backend, reference, *_ = retained_preview_fixture(tmp_path)
+    backend.base_image = "project-machine:latest"
+    metadata = backend._metadata()
+    metadata["restored_image"] = backend.base_image
+    write_controller_json(backend.metadata_path, metadata)
+    with pytest.raises(CellIdentityConflict, match="not immutable"):
+        validate_retained_runtime(backend, reference.manifest)
+
+
+@pytest.mark.parametrize("fault", ["ownership", "runtime_config", "changed_id"])
+def test_resolved_base_id_does_not_bypass_captured_image_validation(tmp_path, fault):
+    from omnia_orchestrator.services.protected_machine_lifecycle import validate_retained_runtime
+    from tests.test_docker_machine_backend import retained_preview_fixture
+
+    backend, reference, _, image, _ = retained_preview_fixture(tmp_path)
+    backend.base_image = "project-machine@sha256:" + "a" * 64
+    # Both lookups resolve to this image; metadata contains its captured ID only.
+    if fault == "ownership":
+        image.attrs["Config"]["Labels"]["omnia.owner_id"] = str(uuid4())
+    elif fault == "runtime_config":
+        image.attrs["Config"]["Env"] = ["UNTRUSTED=value"]
+    else:
+        image.id = "sha256:" + "e" * 64
+    with pytest.raises(CellIdentityConflict):
+        validate_retained_runtime(backend, reference.manifest)
+
+
 @pytest.fixture
 def migration_runtime(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock

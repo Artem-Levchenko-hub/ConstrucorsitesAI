@@ -6,8 +6,8 @@ from typing import Protocol
 
 RequestedCapability = tuple[str, str, tuple[str, ...]]
 
-DATABASE_ACCESS_GUIDE = """A dedicated PostgreSQL is reachable via DATABASE_URL, isolated from the
-managed MAX core and other projects. Do not assume administrative database access;
+DATABASE_ACCESS_GUIDE = """A dedicated project PostgreSQL is reachable via DATABASE_URL,
+isolated from the managed MAX core and other projects. Do not assume administrative database access;
 use only the permissions reported by the selected provider. Persistent business
 data requires explicit backward-compatible changes, following the appended policy."""
 

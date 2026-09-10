@@ -53,13 +53,25 @@ def validate_retained_runtime(backend: Any, manifest: Any) -> None:
         or metadata.get("quiesce_state") in {"pending", "failed"}
     ):
         raise CellResourceError("protected runtime requires explicit recovery")
-    image_id = metadata.get("restored_image") or backend.base_image
-    if not isinstance(image_id, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
+    image_ref = metadata.get("restored_image") or backend.base_image
+    is_image_id = isinstance(image_ref, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image_ref)
+    trusted_base = image_ref == backend.base_image
+    pinned_base = (
+        trusted_base
+        and isinstance(image_ref, str)
+        and re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image_ref) is not None
+    )
+    if not is_image_id and not pinned_base:
         raise CellIdentityConflict("protected runtime image is not immutable")
-    image = backend.client.images.get(image_id)
-    if image.id != image_id:
+    image = backend.client.images.get(image_ref)
+    # A repository manifest digest resolves to a distinct image config digest.
+    if (
+        not isinstance(image.id, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", image.id) is None
+        or (is_image_id and image.id != image_ref)
+    ):
         raise CellIdentityConflict("protected runtime image changed")
-    if image_id != backend.base_image:
+    if not trusted_base:
         config = image.attrs.get("Config", {})
         labels = config.get("Labels") or {}
         if any(labels.get(key) != value for key, value in backend.labels("environment").items()):
