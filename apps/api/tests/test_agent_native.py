@@ -908,6 +908,63 @@ async def test_native_infra_breaker_aborts_after_dead_turns(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("coordinator", "source_gap", "segments", "expected_segments", "expected_stop"),
+    [
+        (True, None, 3, 1, "exploring"),
+        (True, "Product contract still missing", 1, 1, "exploring"),
+        (False, None, 1, 1, "exploring"),
+    ],
+)
+async def test_exploration_hands_complete_source_to_coordinator_without_new_segment(
+    monkeypatch: pytest.MonkeyPatch,
+    coordinator: bool,
+    source_gap: str | None,
+    segments: int,
+    expected_segments: int,
+    expected_stop: str,
+) -> None:
+    monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", str(coordinator).lower())
+    from omnia_api.core.config import get_settings
+
+    get_settings.cache_clear()
+    calls = 0
+
+    async def fake_call(
+        client: Any, url: str, convo: Any, system: str, **kwargs: Any,
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(("write_file", {"path": "src/app/page.tsx", "content": "restored page"}))
+        if calls == 2:
+            return _turn(("build", {}))
+        return _turn(("read_file", {"path": "src/app/page.tsx"}))
+
+    async def execute(action: Any) -> dict[str, Any]:
+        return {"ok": True, "content": "restored page"}
+
+    def completion_check(files: Mapping[str, str], evidence: Mapping[str, int]) -> str | None:
+        assert files["src/app/page.tsx"] == "restored page"
+        return source_gap
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native.run_native_build(
+        system="MAX VERIFICATION OVERRIDE", task="Restore historical page",
+        execute=execute, portable_cell=True, completion_check=completion_check,
+        initial_files={"src/app/page.tsx": "current page"}, max_steps=40, max_segments=segments,
+    )
+    assert not result.done  # Only the independent finalizer may accept the product.
+    assert result.needs_finalization is (coordinator and source_gap is None)
+    assert result.segments == expected_segments
+    assert result.stop_reason == expected_stop
+    assert calls == 1 + agent_native._NO_WRITE_ABORT_AT * expected_segments
+    if result.needs_finalization:
+        assert result.proof_checkpoint is not None
+        assert result.proof_checkpoint.source_complete
+
+
+@pytest.mark.asyncio
 async def test_native_no_write_guard_nudges_then_aborts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

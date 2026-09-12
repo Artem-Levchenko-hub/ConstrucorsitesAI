@@ -1412,6 +1412,14 @@ async def _run_native_segment(
                     evidence=_evidence(),
                 )
             if no_write_turns >= _NO_WRITE_ABORT_AT:
+                if coordinated_max:
+                    # Exploration exhaustion is also a provider stop. Reuse the
+                    # source gate; only finalization may prove a ready product.
+                    return await _finish_without_provider(
+                        steps=step + 1,
+                        reason="exploring",
+                        detail="stuck without user-facing product progress",
+                    )
                 return AgentResult(
                     done=False,
                     summary=(
