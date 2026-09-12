@@ -596,31 +596,81 @@ for path,digest,mode in json.load(sys.stdin):
         from omnia_orchestrator.services.cell_publication_capacity import production_manager
 
         candidate_manager = production_manager(manager, self.settings)
-        state = candidate_manager.state_store.load(candidate_id)
-        if state is None:
-            return
-        if state.project_id != request.project_id or state.owner_id != request.owner_id:
-            raise CellIdentityConflict("candidate cleanup identity mismatch")
-        mutation = LifecycleMutation(
-            uuid5(request.operation_id, "cleanup"),
-            state.fencing_epoch + 1,
-            hashlib.sha256(str(request.operation_id).encode()).hexdigest(),
-        )
+        operation_id = uuid5(request.operation_id, "cleanup")
+        digest = hashlib.sha256(str(request.operation_id).encode()).hexdigest()
         async with candidate_manager.operation_lock.hold(candidate_id):
-            await candidate_manager.destroy_compute_without_lock(
-                candidate_id,
-                mutation,
-                checkpoint_ref=None,
-                record_operation=True,
-                capture=False,
+            state = candidate_manager.state_store.load(candidate_id)
+            if state is None:
+                return
+            if (
+                candidate_id != uuid5(request.operation_id, "candidate")
+                or state.workspace_id != candidate_id
+                or state.project_id != request.project_id
+                or state.owner_id != request.owner_id
+                or state.active_generation_run_id is not None
+                or state.active_generation_fencing_epoch is not None
+            ):
+                raise CellIdentityConflict("candidate cleanup identity mismatch")
+            previous = state.operation(operation_id)
+            if previous is not None and (
+                previous.operation_id != operation_id
+                or not previous.matches_replay_envelope(
+                    kind="destroy",
+                    request_digest=digest,
+                    fencing_epoch=state.fencing_epoch,
+                    checkpoint_ref=None,
+                )
+                or previous.generation_run_id is not None
+                or state.last_operation_id != operation_id
+            ):
+                raise CellIdentityConflict("candidate cleanup replay identity mismatch")
+            mutation = LifecycleMutation(
+                operation_id,
+                previous.fencing_epoch if previous is not None else state.fencing_epoch + 1,
+                digest,
             )
-        # Volumes contain only disposable data. Check every label before removal.
-        for volume in await candidate_manager.docker.list_workspace_volumes(candidate_id):
-            if volume.labels.get("omnia.project_id") != str(
-                request.project_id
-            ) or volume.labels.get("omnia.owner_id") != str(request.owner_id):
-                raise CellIdentityConflict("candidate volume cleanup identity mismatch")
-            await candidate_manager.docker.remove_volume(volume.name)
+            if previous is not None and previous.status == "completed":
+                # prepare may already have destroyed compute before returning needs_changes.
+                # Its durable receipt is also the receipt for cancel: no new fence or halt.
+                if (
+                    previous.phase != "completed"
+                    or previous.bundle_state != "retained"
+                    or state.phase != "completed"
+                    or state.bundle_state != "retained"
+                    or state.resource_names is None
+                ):
+                    raise CellIdentityConflict("candidate cleanup completion mismatch")
+                await candidate_manager._preflight_named_resources(
+                    candidate_manager._spec_from_state(state), state.resource_names
+                )
+                if await candidate_manager.docker.list_workspace_containers(
+                    candidate_id
+                ) or await candidate_manager.docker.list_workspace_networks(candidate_id):
+                    raise CellIdentityConflict("completed candidate cleanup still has compute")
+                # Destroy records completion before releasing its reservation. A crash
+                # in that final gap must not strand capacity or repeat runtime teardown.
+                capacity_lock = candidate_manager.capacity_lock or candidate_manager.operation_lock
+                async with capacity_lock.hold_named("host-capacity-admission"):
+                    candidate_manager._release_capacity(candidate_id, mutation)
+            else:
+                await candidate_manager.destroy_compute_without_lock(
+                    candidate_id,
+                    mutation,
+                    checkpoint_ref=None,
+                    record_operation=True,
+                    capture=False,
+                )
+            # Keep the candidate lock through retries of partially removed volumes.
+            volumes = await candidate_manager.docker.list_workspace_volumes(candidate_id)
+            for volume in volumes:
+                if (
+                    volume.labels.get("omnia.workspace_id") != str(candidate_id)
+                    or volume.labels.get("omnia.project_id") != str(request.project_id)
+                    or volume.labels.get("omnia.owner_id") != str(request.owner_id)
+                ):
+                    raise CellIdentityConflict("candidate volume cleanup identity mismatch")
+            for volume in volumes:
+                await candidate_manager.docker.remove_volume(volume.name)
 
     async def cancel(self, request: CodeRestorationCancel, prepared: dict[str, Any] | None) -> None:
         directory = self._directory(request.operation_id)
