@@ -1090,8 +1090,12 @@ class MachineAdapter:
             validate_retained_runtime,
         )
         from omnia_orchestrator.services.restoration_database import load_policy
+        from omnia_orchestrator.services.restoration_protection import (
+            require_backend_protection_ready,
+        )
 
         machine, backend = self.parts(state)
+        require_backend_protection_ready(backend)
         if not isinstance(backend, DockerMachineBackend) or load_policy(backend) is None:
             return
         saved = machine.state()
@@ -1113,8 +1117,12 @@ class MachineAdapter:
         from omnia_orchestrator.services.protected_machine_lifecycle import (
             reconcile_generation_migration,
         )
+        from omnia_orchestrator.services.restoration_protection import (
+            reconcile_generation_protection,
+        )
 
         if self.exists(state.workspace_id):
+            await reconcile_generation_protection(self, state)
             await reconcile_generation_migration(self, state)
 
     async def resume_preview(self, state: Any, *, epoch: int | None = None) -> None:
@@ -1123,8 +1131,12 @@ class MachineAdapter:
             validate_retained_runtime,
         )
         from omnia_orchestrator.services.restoration_database import load_policy
+        from omnia_orchestrator.services.restoration_protection import (
+            require_backend_protection_ready,
+        )
 
         machine, backend = self.parts(state)
+        require_backend_protection_ready(backend)
         saved = machine.state()
         manifest = MachineManifest.model_validate(saved["manifest"])
         metadata = backend._metadata()

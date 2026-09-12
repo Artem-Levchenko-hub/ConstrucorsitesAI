@@ -370,10 +370,13 @@ async def _prepare_executor(
     hot_reload_results: list[dict[str, object]] | None = None,
     capacity_dispatch_token: UUID | None = None,
     capabilities: dict[str, object] | None = None,
+    restoration_adaptation: bool = False,
 ) -> _ExecutorHarness:
     owner = await _new_user(db_session, "owner")
     project = await _new_project(db_session, owner)
     run = await _new_run(db_session, project, owner)
+    if restoration_adaptation:
+        run.agent_state = {"restoration_adaptation": {"source_commit_sha": "a" * 40}}
     await db_session.commit()
     expected_project_id = project.id
     expected_project_slug = project.slug
@@ -439,9 +442,11 @@ async def _prepare_executor(
         *,
         generation_run_id: UUID | None,
         fencing_epoch: int,
+        protect_existing_data: bool = False,
     ) -> ProjectCellAgentWorkspaceSnapshot:
         assert generation_run_id == expected_run_id
         assert fencing_epoch == 1
+        assert protect_existing_data is restoration_adaptation
         return ProjectCellAgentWorkspaceSnapshot(
             files=dict(cell_files),
             seeded_from_project=not bool(cell_files),
@@ -883,6 +888,65 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
     assert persisted is not None and persisted.status == "running"
     winner = tokens[results.index("admitted")]
     assert persisted.agent_state["capacity_admitted_dispatch_token"] == str(winner)
+
+
+async def test_adaptation_bootstraps_protection_before_returning_executor(
+    monkeypatch, db_session, test_engine,
+):
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine,
+        restoration_adaptation=True,
+        snapshot_files={".omnia/cell.json": '{"version":1}'},
+        capabilities={"portable_machine": True, "database_admin": "protected"},
+    )
+    assert harness.handle.capabilities["database_admin"] == "protected"
+    assert harness.legacy_actions == []
+    assert harness.exec_calls == []
+
+
+@pytest.mark.parametrize("capabilities", [
+    {}, {"portable_machine": True},
+    {"portable_machine": True, "database_admin": "full"},
+    {"portable_machine": False, "database_admin": "protected"},
+])
+async def test_adaptation_refuses_missing_or_unprotected_bootstrap(
+    monkeypatch, db_session, test_engine, capabilities,
+):
+    with pytest.raises(
+        project_cell_executor.ProjectCellExecutorUnavailable, match="не подтверждена",
+    ):
+        await _prepare_executor(
+            monkeypatch, db_session, test_engine,
+            restoration_adaptation=True,
+            snapshot_files={".omnia/cell.json": '{"version":1}'},
+            capabilities=capabilities,
+        )
+
+
+async def test_adaptation_cannot_fall_back_to_legacy_execution(
+    monkeypatch, db_session, test_engine,
+):
+    owner = await _new_user(db_session, "owner")
+    project = await _new_project(db_session, owner)
+    run = await _new_run(db_session, project, owner)
+    run.agent_state = {"restoration_adaptation": {"source_commit_sha": "a" * 40}}
+    await db_session.commit()
+    monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
+
+    async def legacy_readiness(*_args):
+        return ProjectCellControlReadiness(
+            selected=False, ready=False, provider="legacy", reason="not_selected",
+        )
+
+    async def forbidden_legacy(_action):
+        pytest.fail("adaptation must never obtain a legacy executor")
+
+    monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", legacy_readiness)
+    with pytest.raises(project_cell_executor.ProjectCellExecutorUnavailable, match="без защиты"):
+        await project_cell_executor.maybe_create_project_cell_executor(
+            project_id=project.id, project_slug=project.slug, project_template="max_miniapp",
+            user_id=owner.id, generation_run_id=run.id, legacy_execute=forbidden_legacy,
+        )
 
 
 async def test_portable_executor_advertises_capabilities_and_dispatches_manifest_build(

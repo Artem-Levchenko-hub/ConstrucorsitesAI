@@ -28,13 +28,18 @@ from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationApply,
     CodeRestorationCancel,
     CodeRestorationPrepare,
+    RestorationDatabaseState,
 )
 from omnia_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
     write_controller_json,
 )
-from omnia_orchestrator.services.restoration_catalog import candidate_contract, catalog_contract
+from omnia_orchestrator.services.restoration_catalog import (
+    candidate_contract,
+    catalog_contract,
+    database_state,
+)
 from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
 from omnia_orchestrator.services.restoration_database import (
     admin_args,
@@ -141,14 +146,17 @@ def preparation_report(
     blockers: list[str] | None = None,
     retained: list[str] | None = None,
     blocked_deletes: list[str] | None = None,
+    observed_database_state: RestorationDatabaseState = "unknown",
 ) -> dict[str, Any]:
     blocked = blockers or []
     return {
         "revision": 1,
-        "mode": "adapted",
+        "mode": "adapted" if blocked else "exact",
+        "database_state": observed_database_state,
         "changes": [
             "Код выбранной версии собирается с её сохранёнными зависимостями.",
             "Доступ к данным выполняется через текущую проверку пользователя и ограниченные права.",
+            *([] if blocked else ["Исторический код подготовлен без запуска AI-агента."]),
         ],
         "retained_data": [
             "Текущая база и действующая публикация не заменяются.",
@@ -160,6 +168,9 @@ def preparation_report(
         "warnings": [
             "Сборка подготовлена заново; это не побайтовое восстановление исторического окружения.",
             "Платежи, сообщения и уже выполненные действия не отменяются.",
+            "Состояние БД проверено на копии при подготовке; новые записи не отменяются."
+            if observed_database_state != "unknown"
+            else "Наличие записей в БД не подтверждено; пустая база не предполагается.",
         ],
         "blockers": blocked,
         "next_actions": ["Подготовьте совместимую правку выбранной версии и повторите проверку."]
@@ -283,6 +294,7 @@ class CodeRestorationEngine:
                 # Only the dedicated database is copied. The trusted MAX core,
                 # live managed database, credentials and queues are never attached.
                 dump = await machine_effect(self._dump, source)
+            observed_database_state: RestorationDatabaseState = "unknown"
             try:
                 candidate = await self._candidate(manager, request, candidate_id, manifest)
                 await machine_effect(self._seed_source, candidate, request)
@@ -325,10 +337,6 @@ class CodeRestorationEngine:
                     tables=[table for table in old_contract.tables if table.name not in managed],
                 )
                 assessment = assess_contract(old_contract, current_contract)
-                if assessment.blockers:
-                    raise PreparationNeedsChanges(
-                        "Несовместимая структура данных: " + ", ".join(assessment.blockers)
-                    )
                 # pg_dump includes policy references, but deliberately exports no
                 # roles. Create only the known inert role; credentials are issued
                 # for this candidate later, never copied from the live database.
@@ -349,6 +357,12 @@ class CodeRestorationEngine:
                 if copied_blockers or copied != current_contract:
                     raise PreparationNeedsChanges(
                         "Структура копии данных не совпала с проверенной базой."
+                    )
+                observed_database_state = await machine_effect(database_state, candidate)
+                # Empty rows do not make incompatible schema safe for future writes.
+                if assessment.blockers:
+                    raise PreparationNeedsChanges(
+                        "Несовместимая структура данных: " + ", ".join(assessment.blockers)
                     )
                 await machine_effect(candidate.remove)
                 await machine_effect(
@@ -395,6 +409,7 @@ class CodeRestorationEngine:
                     "report": preparation_report(
                         retained=assessment.retained_columns,
                         blocked_deletes=assessment.blocked_deletes,
+                        observed_database_state=observed_database_state,
                     ),
                     "request_digest": request.digest(),
                     "workspace_revision": current_revision,
@@ -415,7 +430,9 @@ class CodeRestorationEngine:
                 return {
                     "state": "needs_changes",
                     "candidate_id": None,
-                    "report": preparation_report(blockers=[str(error)]),
+                    "report": preparation_report(
+                        blockers=[str(error)], observed_database_state=observed_database_state
+                    ),
                 }
             finally:
                 if not prepared_path.exists():

@@ -151,6 +151,36 @@ async def test_prepare_durable_retry_and_private_response(tmp_path):
     assert "files" not in json.dumps(ready)
 
 
+@pytest.mark.parametrize("database_state", ["empty", "present", "unknown", None])
+async def test_database_observation_survives_coordinator_restart(tmp_path, database_state):
+    class ObservingEngine(Engine):
+        async def prepare(self, value):
+            result = await super().prepare(value)
+            if database_state is not None:
+                result["report"]["database_state"] = database_state
+            return result
+
+    engine = ObservingEngine()
+    value = request()
+    svc = service(tmp_path, engine)
+    await svc.prepare(value)
+    await svc.drain()
+    ready = await status(service(tmp_path, engine), value)
+    assert ready["state"] == "ready"
+    assert ready["report"]["database_state"] == (database_state or "unknown")
+    assert engine.calls == ["prepare"]
+
+
+@pytest.mark.parametrize("database_state", [False, [], "assumed_empty"])
+async def test_invalid_database_observation_cannot_be_ready(tmp_path, database_state):
+    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+
+    prepared = await Engine().prepare(request())
+    prepared["report"]["database_state"] = database_state
+    with pytest.raises(ValueError, match="invalid restoration report"):
+        CodeRestorationService._report(prepared)
+
+
 async def test_changed_envelope_or_owner_rejected(tmp_path):
     svc = service(tmp_path, Engine())
     value = request()

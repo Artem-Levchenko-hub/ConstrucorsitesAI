@@ -6,6 +6,7 @@ export type RestoreState = "preparing" | "checking" | "ready" | "needs_changes"
 export interface RestoreReport {
   revision: number;
   mode: "exact" | "adapted";
+  database_state?: "empty" | "present" | "unknown";
   changes: string[];
   retained_data: string[];
   unavailable_features: string[];

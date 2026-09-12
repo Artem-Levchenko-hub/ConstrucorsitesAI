@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, PanelLeftClose } from "lucide-react";
@@ -41,6 +41,13 @@ import { MaxChatComposer } from "@/components/max/MaxChatComposer";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { readMaxLaunch } from "@/lib/max-launch-runner";
+import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
+import type { Message, Snapshot } from "@/lib/api/types";
+
+export type ChatPanelAdaptationHandle = {
+  submitAdaptation: (attachment: MaxAdaptationAttachment) => Promise<boolean>;
+};
 
 type DiscoveryChoices = {
   choices: string[];
@@ -66,8 +73,7 @@ export function ChatPanel({
   embedded = false,
   currentSnapshotId,
   draftRef,
-  restorationAdaptation,
-  onRestorationAdaptationSubmitted,
+  adaptationRef,
 }: {
   projectId: string;
   projectSlug: string;
@@ -76,8 +82,7 @@ export function ChatPanel({
   embedded?: boolean;
   currentSnapshotId?: string | null;
   draftRef?: Ref<PromptInputHandle>;
-  restorationAdaptation?: PromptSubmitOptions["restorationAdaptation"];
-  onRestorationAdaptationSubmitted?: (operationId: string) => void;
+  adaptationRef?: Ref<ChatPanelAdaptationHandle>;
 }) {
   // Server orchestrates per-role models (Opus director, DeepSeek polish, …).
   // The client no longer picks a model; this label is just sent through for
@@ -91,6 +96,8 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const credentialSubmitPending = useRef(false);
+  const adaptationSubmitPending = useRef(false);
+  const acceptedAdaptations = useRef(new Set<string>());
   const qc = useQueryClient();
 
   const { data: messages, isPending } = useQuery({
@@ -206,19 +213,47 @@ export function ChatPanel({
     [mode, modelId, projectId, qc, submit],
   );
 
-  const handleSubmit = async (text: string, selections: SelectedElement[]) => {
-    if (restorationAdaptation && restorationAdaptation.expected_draft_snapshot_id !== currentSnapshotId) {
-      toast.error("Черновик изменился. Подготовьте адаптацию заново или уберите выбранную версию.");
-      return false;
-    }
-    const accepted = await submitWithCredentialIntake(text, selections, restorationAdaptation ? {
-      restorationAdaptation,
-      idempotencyKey: `restoration-adapt:${restorationAdaptation.operation_id}`,
-      skipClarify: true,
-    } : undefined);
-    if (accepted && restorationAdaptation) onRestorationAdaptationSubmitted?.(restorationAdaptation.operation_id);
-    return accepted;
-  };
+  const handleSubmit = (text: string, selections: SelectedElement[]) =>
+    submitWithCredentialIntake(text, selections);
+
+  // Only an explicit button calls this handle. Restoring its durable attachment
+  // on mount never sends a model request and never replaces the user's draft.
+  useImperativeHandle(adaptationRef, () => ({
+    async submitAdaptation(attachment) {
+      const reference = attachment.reference;
+      const head = qc.getQueryData<Snapshot[]>(["snapshots", projectId])?.[0]?.id ?? currentSnapshotId;
+      if (attachment.projectId !== projectId || reference.expected_draft_snapshot_id !== head) {
+        toast.error("Черновик изменился. Подготовьте восстановление выбранной версии заново.");
+        return false;
+      }
+      if (acceptedAdaptations.current.has(reference.operation_id)) return true;
+      const history = qc.getQueryData<Message[]>(["messages", projectId]);
+      if (adaptationSubmitPending.current || credentialSubmitPending.current || isPending
+        || pendingPrompt || isChatMessageStreaming(history?.[history.length - 1])) {
+        toast.info("Дождитесь завершения текущего запроса и повторите адаптацию.");
+        return false;
+      }
+      try {
+        if (readMaxLaunch(projectId)) {
+          toast.info("Сначала проверьте результат публикации приложения.");
+          return false;
+        }
+        adaptationSubmitPending.current = true;
+        const accepted = await submitWithCredentialIntake(attachment.prompt, [], {
+          restorationAdaptation: reference,
+          idempotencyKey: `restoration-adapt:${reference.operation_id}`,
+          skipClarify: true,
+        });
+        if (accepted) acceptedAdaptations.current.add(reference.operation_id);
+        return accepted;
+      } catch {
+        toast.error("Не удалось подтвердить запуск адаптации. Повторите попытку — второй запрос не будет создан.");
+        return false;
+      } finally {
+        adaptationSubmitPending.current = false;
+      }
+    },
+  }), [projectId, currentSnapshotId, qc, isPending, pendingPrompt, submitWithCredentialIntake]);
 
   // «Починить» on an error card → submit a follow-up fix prompt through the
   // normal pipeline (surgical edit / rebuild as the triage decides).

@@ -1065,8 +1065,10 @@ async def project_cell_agent_bootstrap(
     *,
     generation_run_id: UUID | None,
     fencing_epoch: int,
+    protect_existing_data: bool = False,
 ) -> ProjectCellAgentWorkspaceSnapshot:
     _validate_fencing_epoch(fencing_epoch)
+    request_options: dict[str, Any] = {"timeout": 940.0} if protect_existing_data else {}
     payload = await _request(
         "POST",
         f"/internal/workspaces/{workspace_id}/agent/bootstrap",
@@ -1075,7 +1077,9 @@ async def project_cell_agent_bootstrap(
                 str(generation_run_id) if generation_run_id is not None else None
             ),
             "fencing_epoch": fencing_epoch,
+            **({"protect_existing_data": True} if protect_existing_data else {}),
         },
+        **request_options,
     )
     return ProjectCellAgentWorkspaceSnapshot.from_json(payload)
 

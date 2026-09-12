@@ -63,7 +63,7 @@ def test_development_pid_one_handles_stop_signal_without_waiting_for_kill(tmp_pa
     assert stopped.value.code == 0
 
 
-def retained_preview_fixture(tmp_path):
+def retained_preview_fixture(tmp_path, *, restored_code=False):
     import docker
 
     from omnia_orchestrator.services.machine_environment import (
@@ -73,13 +73,15 @@ def retained_preview_fixture(tmp_path):
     from omnia_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
+    if restored_code:
+        runtime.workspace_volume = runtime.stem + "-code-" + "e" * 32
     manifest = MachineManifest.model_validate(payload())
     volumes = {}
     for index, name in enumerate(runtime.environment_volume_names(manifest)):
         mountpoint = tmp_path / f"volume-{index}"
         mountpoint.mkdir()
         labels = runtime.labels("project-volume")
-        if name == runtime.workspace_volume:
+        if name == runtime.workspace_volume and not restored_code:
             labels = {
                 "omnia.managed": "true", "omnia.project_cell": "true",
                 "omnia.workspace_id": str(runtime.workspace_id),
@@ -168,6 +170,24 @@ def test_completed_halt_receipt_is_consumed_once(tmp_path):
     assert runtime._metadata().get("retained_preview_receipt")
     assert runtime.consume_retained_preview(reference, epoch=7)
     assert "retained_preview_receipt" not in runtime._metadata()
+    assert not runtime.consume_retained_preview(reference, epoch=7)
+
+
+def test_restored_code_volume_can_record_and_consume_halt_receipt(tmp_path):
+    runtime, reference, *_ = retained_preview_fixture(tmp_path, restored_code=True)
+    assert runtime.record_retained_preview(reference, epoch=7)
+    assert runtime.consume_retained_preview(reference, epoch=7)
+    assert not runtime.consume_retained_preview(reference, epoch=7)
+
+
+@pytest.mark.parametrize("key", ["omnia.owner_id", "omnia.project_id", "omnia.workspace_id"])
+def test_restored_code_volume_still_requires_exact_ownership(tmp_path, key):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    runtime, reference, volumes, *_ = retained_preview_fixture(tmp_path, restored_code=True)
+    volumes[runtime.workspace_volume].attrs["Labels"][key] = str(uuid4())
+    with pytest.raises(CellIdentityConflict, match="retained volume ownership"):
+        runtime.record_retained_preview(reference, epoch=7)
     assert not runtime.consume_retained_preview(reference, epoch=7)
 
 

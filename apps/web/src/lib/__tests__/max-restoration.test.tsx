@@ -72,7 +72,7 @@ it("discovers the server operation on F5 without creating another preparation", 
   expect(container.textContent).toContain("Сделать текущей в редакторе");
   expect(api.prepareRestoration).not.toHaveBeenCalled(); expect(completed).not.toHaveBeenCalled();
 });
-it.each(["cancelled", "reconciling"] as const)("prefills adaptation only after confirmed cancellation: %s", async (state) => {
+it.each(["cancelled", "reconciling"] as const)("starts adaptation only after confirmed cancellation: %s", async (state) => {
   const blocked = { ...operation("needs_changes"), can_cancel: true,
     report: { ...operation().report!, blockers: ["new_required_column:contacts.surname"] } };
   vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
@@ -85,9 +85,9 @@ it.each(["cancelled", "reconciling"] as const)("prefills adaptation only after c
   expect(api.cancelRestoration).toHaveBeenCalledWith("a", "op-a");
   if (state === "cancelled") {
     expect(adapt).toHaveBeenCalledOnce();
-    expect(adapt.mock.calls[0][0]).toContain("new_required_column:contacts.surname");
-    expect(adapt.mock.calls[0][0]).toContain("s3");
-    expect(adapt.mock.calls[0][0]).toContain("Do not publish");
+    expect(adapt.mock.calls[0][0]).toContain("Сохрани все текущие записи");
+    expect(adapt.mock.calls[0][0]).not.toContain("op-a");
+    expect(adapt.mock.calls[0][0]).toContain("Не публикуй приложение");
     expect(adapt.mock.calls[0][1]).toEqual({
       operation_id: "op-a", expected_draft_snapshot_id: "s11",
     });
@@ -95,7 +95,7 @@ it.each(["cancelled", "reconciling"] as const)("prefills adaptation only after c
   expect(api.prepareRestoration).not.toHaveBeenCalled();
   expect(api.applyRestoration).not.toHaveBeenCalled();
 });
-it("does not insert a late adaptation request into another project's editor", async () => {
+it("does not start a late adaptation request in another project's editor", async () => {
   const blocked = { ...operation("needs_changes"), can_cancel: true };
   vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
   vi.mocked(api.getRestoration).mockResolvedValue(blocked);

@@ -75,7 +75,8 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     refetchInterval: query => query.state.data && !terminal(query.state.data.state) ? 2_000 : false,
   });
   const operation = detail.data?.project_id === projectId && detail.data.id === operationId ? detail.data : null;
-  const headChanged = operation?.state === "ready" && operation.base_draft_snapshot_id !== currentSnapshotId;
+  const headChanged = !!operation && ["ready", "needs_changes"].includes(operation.state)
+    && operation.base_draft_snapshot_id !== currentSnapshotId;
 
   useEffect(() => {
     if (!operation || operation.state !== "completed" || !operation.applied_snapshot) return;
@@ -163,6 +164,13 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     const next = await execute({ kind: "cancel", operationId: operation.id });
     return next?.state === "cancelled";
   }
+  function observeCancelled(next: api.RestoreOperation) {
+    if (next.project_id !== projectId || next.state !== "cancelled") return;
+    qc.setQueryData<api.RestoreOperation>(["restoration", projectId, next.id], previous => newer(previous, next));
+    const request = saved.data ?? readRequest(projectId);
+    if (request?.kind === "cancel" && request.operationId === next.id) saveRequest(null);
+    void qc.invalidateQueries({ queryKey: ["restorations", projectId] });
+  }
   async function retry() {
     const request = saved.data ?? readRequest(projectId);
     if (request && !request.rejected) await execute(request);
@@ -174,7 +182,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     preparing: busyProjects.has(projectId) && saved.data?.kind === "prepare",
     active: !!operation && !terminal(operation.state), running: !!operation && running(operation.state),
     error: saved.data?.error ?? (list.error || detail.error)?.message ?? null,
-    hasPendingRequest: !!saved.data && !saved.data.rejected, prepare, apply, cancel, retry,
+    hasPendingRequest: !!saved.data && !saved.data.rejected, prepare, apply, cancel, observeCancelled, retry,
   };
 }
 export type MaxRestorationController = ReturnType<typeof useMaxRestoration>;

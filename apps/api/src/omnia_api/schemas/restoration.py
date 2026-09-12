@@ -39,6 +39,8 @@ class RestoreReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1, strict=True)
     mode: Literal["exact", "adapted"]
+    # Informational observation at preparation, never permission to reset data.
+    database_state: Literal["empty", "present", "unknown"] = "unknown"
     changes: list[str] = Field(default_factory=list)
     retained_data: list[str] = Field(default_factory=list)
     unavailable_features: list[str] = Field(default_factory=list)

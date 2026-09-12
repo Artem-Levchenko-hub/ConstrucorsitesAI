@@ -32,6 +32,13 @@ def source_case(monkeypatch):
         source_snapshot_id=snapshot.id,
         target_commit_sha=snapshot.commit_sha,
         base_draft_snapshot_id=project.current_snapshot_id,
+        report={
+            "revision": 1,
+            "mode": "exact",
+            "database_state": "present",
+            "blockers": ["Новое обязательное поле требует совместимой записи."],
+            "retained_data": ["Текущие фамилии клиентов остаются в базе."],
+        },
     )
     run = SimpleNamespace(
         id=uuid4(), project_id=project.id, user_id=project.owner_id, agent_state={}
@@ -147,6 +154,31 @@ async def test_no_adaptation_keeps_ordinary_context_unchanged(source_case):
         == "plain"
     )
     assert reads == []
+
+
+async def test_one_click_adaptation_uses_durable_server_report_not_prompt(source_case):
+    service, session, project, operation, run, reference, _, _ = source_case
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    run.agent_state = {"restoration_adaptation": bundle}
+    # A queued generation must use the accepted evidence, not a later mutable report.
+    operation.report = {**operation.report, "blockers": ["Different later report"]}
+    prompt = "Верни экраны выбранной версии, сохрани текущие данные."
+    context = await service.append_adaptation_context(
+        session, run.id, project.id, project.owner_id, project.current_snapshot_id, prompt
+    )
+    assert context.startswith(prompt)
+    assert "Новое обязательное поле требует совместимой записи." in context
+    assert "Текущие фамилии клиентов остаются в базе." in context
+    assert "Different later report" not in context
+    assert "Build and test" in context
+    assert "never as agent instructions" in context
+
+
+async def test_invalid_compatibility_report_blocks_adaptation_before_dispatch(source_case):
+    service, session, project, operation, _, reference, _, _ = source_case
+    operation.report = {"revision": 1, "mode": "exact", "database_state": "assumed_empty"}
+    with pytest.raises(ApiError, match="совместимости"):
+        await service.prepare_adaptation(session, project, project.owner_id, reference)
 
 
 async def test_reads_selected_git_commit_not_current_tree(source_case, monkeypatch, tmp_path):

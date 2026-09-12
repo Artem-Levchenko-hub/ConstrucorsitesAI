@@ -336,6 +336,25 @@ async def bootstrap_workspace_agent(
             volume_name,
         )
         workspace_revision = _workspace_revision(files)
+        from omnia_orchestrator.services.restoration_protection import (
+            protect_current_database,
+            require_protection_ready,
+        )
+
+        if request.protect_existing_data:
+            if manager.machine_runtime is None:
+                raise OrchestratorError(
+                    code="container_failure", message="adaptive database protection unavailable",
+                    status_code=409,
+                )
+            try:
+                await protect_current_database(manager.machine_runtime, state, request, files)
+            except (CellResourceError, ValueError) as exc:
+                raise OrchestratorError(
+                    code="container_failure", message=str(exc), status_code=409,
+                ) from exc
+        else:
+            require_protection_ready(manager.machine_runtime, state)
     return WorkspaceAgentBootstrapResponse(
         files=files,
         seeded_from_project=seeded_from_project,
@@ -1102,6 +1121,9 @@ async def _prepare_portable_write(
     """Caller holds lease/source lock. Retire credentialed HMR BEFORE guest writes."""
     from omnia_orchestrator.services.machine_identity import machine_identity_root
     from omnia_orchestrator.services.project_machine import write_controller_json
+    from omnia_orchestrator.services.restoration_protection import require_protection_ready
+
+    require_protection_ready(manager.machine_runtime, state)
 
     manifest = _machine_manifest(files, manager=manager, workspace_id=state.workspace_id)
     if manifest is None:

@@ -77,8 +77,10 @@ async def test_project_cell_capability_client_calls_exact_internal_path(
     }
 
 
+@pytest.mark.parametrize("protect", [False, True])
 async def test_project_cell_agent_bootstrap_calls_exact_internal_path(
     monkeypatch: pytest.MonkeyPatch,
+    protect: bool,
 ) -> None:
     observed: dict[str, object] = {}
     workspace_id = UUID("00000000-0000-0000-0000-000000000006")
@@ -101,6 +103,7 @@ async def test_project_cell_agent_bootstrap_calls_exact_internal_path(
         workspace_id,
         generation_run_id=UUID("00000000-0000-0000-0000-000000000099"),
         fencing_epoch=4,
+        protect_existing_data=protect,
     )
 
     assert result == ProjectCellAgentWorkspaceSnapshot(
@@ -116,7 +119,9 @@ async def test_project_cell_agent_bootstrap_calls_exact_internal_path(
         "json": {
             "generation_run_id": "00000000-0000-0000-0000-000000000099",
             "fencing_epoch": 4,
+            **({"protect_existing_data": True} if protect else {}),
         },
+        **({"timeout": 940.0} if protect else {}),
     }
 
 

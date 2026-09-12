@@ -393,6 +393,10 @@ async def run(args):
                 require(
                     prepared["state"] == "ready", "Preparation did not pass; inspect private report"
                 )
+                require(
+                    prepared["report"]["database_state"] == "present",
+                    "Preparation did not report the current business rows",
+                )
                 if prepare_only:
                     prepared_candidates[version] = (prepare, prepared)
                     return current

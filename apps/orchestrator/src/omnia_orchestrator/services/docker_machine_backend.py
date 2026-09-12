@@ -1305,7 +1305,12 @@ class DockerMachineBackend:
                 volume = self.client.volumes.get(item.name)
                 attrs = volume.attrs
                 expected = self.labels("project-volume")
-                if item.name == self.workspace_volume:
+                # Activated restoration code has its own owned project volume.
+                # The original Cell workspace uses the older workspace labels.
+                restored_code = re.fullmatch(
+                    re.escape(self.stem) + r"-code-[0-9a-f]{32}", item.name,
+                )
+                if item.name == self.workspace_volume and restored_code is None:
                     expected = {
                         "omnia.managed": "true", "omnia.project_cell": "true",
                         "omnia.workspace_id": str(self.workspace_id),

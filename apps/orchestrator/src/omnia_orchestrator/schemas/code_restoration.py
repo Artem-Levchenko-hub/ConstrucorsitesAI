@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+RestorationDatabaseState = Literal["empty", "present", "unknown"]
 MAX_SOURCE_BYTES = 32 * 1024 * 1024
 
 

@@ -7,12 +7,62 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from omnia_orchestrator.schemas.code_restoration import RestorationDatabaseState
 from omnia_orchestrator.services.restoration_data_contract import (
     DataContract,
     _json_guard,
     json_guard_function_name,
 )
 from omnia_orchestrator.services.restoration_database import admin_sql
+
+# Observe the isolated imported database, not the filtered ownership contract.
+# Only the controller signing table is excluded, never an application-name prefix.
+DATABASE_INVENTORY_SQL = """
+SELECT json_build_object(
+ 'unsupported', EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+    AND n.nspname !~ '^pg_(toast|temp)_?'
+    AND NOT (n.nspname='omnia_guard' AND c.relname='identity')
+    AND (c.relkind IN ('v','m','p','f') OR
+      (c.relkind='r' AND (n.nspname<>'public' OR
+       EXISTS(SELECT FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)))))
+   OR EXISTS(SELECT FROM pg_largeobject_metadata),
+ 'tables', coalesce((SELECT json_agg(c.relname ORDER BY c.relname)
+   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='public' AND c.relkind='r'), '[]'));
+"""
+
+
+def database_presence_query(payload: dict[str, Any]) -> str | None:
+    """Return one snapshot's existence query; unknown inventories never mean empty."""
+    from omnia_orchestrator.services.restoration_data_contract import qi
+
+    names = payload.get("tables")
+    if payload.get("unsupported") is not False or not isinstance(names, list) or len(names) > 200:
+        return None
+    if any(not isinstance(name, str) for name in names) or len(set(names)) != len(names):
+        return None
+    predicates = [f"EXISTS(SELECT 1 FROM public.{qi(name)})" for name in names]
+    return "SELECT " + (" OR ".join(predicates) if predicates else "false") + ";"
+
+
+def database_state(backend: Any) -> RestorationDatabaseState:
+    """Informational row presence in an isolated copy, never permission to reset data."""
+    try:
+        payload = json.loads(admin_sql(backend, DATABASE_INVENTORY_SQL, max_bytes=64 * 1024))
+        if not isinstance(payload, dict):
+            return "unknown"
+        query = database_presence_query(payload)
+        if query is None:
+            return "unknown"
+        observed = admin_sql(backend, query, max_bytes=32).strip()
+        if observed == b"t":
+            return "present"
+        return "empty" if observed == b"f" else "unknown"
+    except Exception:
+        # A failed probe is not evidence of no data. Do not expose SQL errors/values.
+        return "unknown"
+
 
 CATALOG_SQL = """
 SELECT json_build_object('event_triggers', EXISTS(

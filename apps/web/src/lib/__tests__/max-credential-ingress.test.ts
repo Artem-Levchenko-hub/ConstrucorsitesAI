@@ -13,7 +13,7 @@ describe("MAX credential ingress routing", () => {
   it("routes every MAX composer path through one credential guard", () => {
     expect(chatPanel).toContain("const submitWithCredentialIntake = useCallback(");
     expect(chatPanel).toContain(
-      "await submitWithCredentialIntake(text, selections, restorationAdaptation ? {",
+      "submitWithCredentialIntake(text, selections)",
     );
     const manualSubmit = chatPanel.slice(
       chatPanel.indexOf("const handleSubmit ="), chatPanel.indexOf("const handleFix ="),

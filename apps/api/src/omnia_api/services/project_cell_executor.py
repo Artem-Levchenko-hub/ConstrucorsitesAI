@@ -448,7 +448,7 @@ async def maybe_create_project_cell_executor(
     agent_emit: Callable[[dict[str, object]], Awaitable[None]] | None = None,
     capacity_dispatch_token: UUID | None = None,
 ) -> ProjectCellExecutorHandle | None:
-    if project_template != "max_miniapp" or not project_slug:
+    if project_template != "max_miniapp":
         return None
 
     profile_version = (
@@ -470,8 +470,19 @@ async def maybe_create_project_cell_executor(
             await session.refresh(run)
         if project is None or user is None or run is None:
             return None
+        # Read the durable server-verified marker again on every worker attempt.
+        # A browser flag or instruction in prompt prose never grants this path.
+        protect_existing_data = "restoration_adaptation" in (run.agent_state or {})
+        if not project_slug:
+            if protect_existing_data:
+                raise ProjectCellExecutorUnavailable("Адаптация требует защищённую среду проекта.")
+            return None
         readiness = await inspect_project_cell_control(user, project_id)
         if not readiness.selected:
+            if protect_existing_data:
+                raise ProjectCellExecutorUnavailable(
+                    "Адаптация недоступна без защиты текущей базы в Project Cell."
+                )
             existing_cell_id = await session.scalar(
                 select(ProjectCellWorkspace.id).where(
                     ProjectCellWorkspace.project_id == project_id,
@@ -636,6 +647,7 @@ async def maybe_create_project_cell_executor(
             workspace_id,
             generation_run_id=generation_run_id,
             fencing_epoch=response.fencing_epoch,
+            **({"protect_existing_data": True} if protect_existing_data else {}),
         )
     except (OrchestratorUnavailable, OrchestratorBadRequest) as exc:
         raise ProjectCellExecutorUnavailable(exc.message) from exc
@@ -654,6 +666,13 @@ async def maybe_create_project_cell_executor(
     runtime_log_tail = ""
     preview_synced = False
     capabilities = dict(snapshot.capabilities)
+    if protect_existing_data and (
+        capabilities.get("database_admin") != "protected"
+        or not portable_selected(capabilities, workspace_files)
+    ):
+        raise ProjectCellExecutorUnavailable(
+            "Защита текущей базы не подтверждена. Агент адаптации не запущен."
+        )
     last_identity: ProofIdentity | None = None
 
     def _is_portable() -> bool:

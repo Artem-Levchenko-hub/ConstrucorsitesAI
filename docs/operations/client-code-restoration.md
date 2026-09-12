@@ -17,12 +17,35 @@ evidence identify the code that actually runs.
 5. Test the draft, then publish explicitly. Its public database is independent;
    republishing preserves writes made by public users.
 
-When compatibility needs changes, **«Отменить подготовку и адаптировать версию»**
-first confirms cancellation and then adds an editable request to the composer.
-The user submits it explicitly. A structured reference binds the request to the
-selected historical version and expected draft. The API provides its verified
-historical source to the generator; a UUID in prompt prose is not source access.
-Historical contents are reference data, never higher-priority instructions.
+When compatibility needs changes, **«Адаптировать и восстановить»** saves the
+explicit request, confirms cancellation and submits one adaptation generation.
+It preserves any typed composer draft. Refreshing never submits a generation;
+an explicit retry reconciles the exact cancelled operation and reuses its
+idempotency key. An active generation, publication or changed draft blocks submission.
+A structured reference binds the selected historical version and expected draft.
+The API provides verified historical source and the accepted compatibility report
+in an immutable private bundle. Historical contents are reference data, never
+higher-priority instructions. The agent adapts historical code to current data,
+preserving values, meaning and ownership. Unsupported semantic changes remain a
+reported limitation; a prompt alone cannot guarantee lossless conversion.
+
+The report also records whether the inspected application database has rows:
+`empty`, `present` or `unknown`. This is an actual existence check on the isolated
+current-data copy, not a table-size estimate. Unsupported objects or a failed
+inspection return `unknown`. This observation does not classify external files,
+other databases or all project data. New writes may arrive after inspection.
+An empty database never permits a reset or bypasses compatibility checks. Both
+empty and populated compatible applications use ordinary restoration without AI;
+incompatible applications require explicit adaptation.
+
+An adaptation run requests database protection during agent bootstrap, using the
+server-saved adaptation reference. The controller checks the current schema and
+retained volumes, stops existing writers, and journals the transition to restricted
+database access. It retains the current database and business volumes. The agent
+receives an executor only after the controller confirms protection; legacy runtimes
+and unsupported schemas fail before adaptive tools run. Interrupted transitions
+keep the original generation lease for reconciliation and never restore owner
+credentials as a shortcut. Publication remains separate.
 
 ## Runtime boundary
 

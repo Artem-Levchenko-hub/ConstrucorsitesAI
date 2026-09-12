@@ -253,10 +253,13 @@ class CodeRestorationService:
     @staticmethod
     def _report(prepared: dict[str, Any]) -> dict[str, Any]:
         report = prepared["report"]
+        database_state = report.get("database_state", "unknown")
         if (
             type(report.get("revision")) is not int
             or report["revision"] < 1
             or report.get("mode") not in {"exact", "adapted"}
+            or not isinstance(database_state, str)
+            or database_state not in {"empty", "present", "unknown"}
             or any(
                 not isinstance(report.get(name), list)
                 or any(not isinstance(item, str) for item in report[name])
@@ -264,7 +267,10 @@ class CodeRestorationService:
             )
         ):
             raise ValueError("invalid restoration report")
-        return {name: report[name] for name in ("revision", "mode", *_REPORT_LISTS)}
+        return {
+            **{name: report[name] for name in ("revision", "mode", *_REPORT_LISTS)},
+            "database_state": database_state,
+        }
 
     @staticmethod
     def _observed(value: dict[str, Any], request: CodeRestorationApply) -> dict[str, Any]:

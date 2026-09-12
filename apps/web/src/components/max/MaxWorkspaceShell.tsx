@@ -7,7 +7,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 
 import { MaxEditorLayout } from "./MaxEditorLayout";
-import { ChatPanel } from "@/components/workspace/ChatPanel";
+import { ChatPanel, type ChatPanelAdaptationHandle } from "@/components/workspace/ChatPanel";
 import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { listProjects } from "@/lib/api/projects";
 import { listProjectVersions, listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
@@ -22,8 +22,9 @@ import { MaxProjectNav } from "./MaxProjectNav";
 import { MaxUsageBreakdown } from "./MaxUsageBreakdown";
 import { useMaxRestoration } from "@/lib/use-max-restoration";
 import { MaxRestorationPanel } from "./MaxRestorationPanel";
-import type { PromptInputHandle } from "@/components/workspace/PromptInput";
-import { useMaxAdaptation } from "@/lib/use-max-adaptation";
+import { useMaxAdaptation, type MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
+import { cancelRestoration, getRestoration } from "@/lib/api/restorations";
+import { Button } from "@/components/ui/button";
 
 export function MaxWorkspaceShell({
   project,
@@ -32,7 +33,9 @@ export function MaxWorkspaceShell({
   project: Project;
   email: string;
 }) {
-  const draftRef = useRef<PromptInputHandle>(null);
+  const adaptationRef = useRef<ChatPanelAdaptationHandle>(null);
+  const adaptationPending = useRef(false);
+  const [adaptationSubmitting, setAdaptationSubmitting] = useState(false);
   const adaptation = useMaxAdaptation(project.id);
   const [versionSelection, setVersionSelection] = useState<{
     versionId: string;
@@ -139,6 +142,49 @@ export function MaxWorkspaceShell({
     projectId: project.id, currentSnapshotId, onCompleted: applyRestoredSnapshot,
   });
 
+  async function submitAdaptation(attachment: MaxAdaptationAttachment) {
+    if (adaptationPending.current) return;
+    adaptationPending.current = true;
+    setAdaptationSubmitting(true);
+    try {
+      // A lost cancel response or F5 can leave an intent saved before cancellation.
+      // Reconcile that exact operation only on this explicit click, never on mount.
+      if (attachment.projectId !== project.id || attachment.reference.expected_draft_snapshot_id !== currentSnapshotId) {
+        toast.error("Черновик изменился. Подготовьте восстановление выбранной версии заново.");
+        return;
+      }
+      const reference = attachment.reference;
+      let operation = await getRestoration(attachment.projectId, reference.operation_id);
+      const matches = () => operation.id === reference.operation_id
+        && operation.project_id === attachment.projectId
+        && operation.base_draft_snapshot_id === reference.expected_draft_snapshot_id;
+      if (!matches()) throw new Error("Данные подготовки изменились. Подготовьте выбранную версию заново.");
+      if (operation.state !== "cancelled" && operation.can_cancel) {
+        operation = await cancelRestoration(attachment.projectId, reference.operation_id);
+      }
+      if (!matches() || operation.state !== "cancelled") {
+        toast.info("Отмена подготовки ещё не подтверждена. Повторите проверку позже.");
+        return;
+      }
+      restoration.observeCancelled(operation);
+      if (!adaptation.attach(attachment.prompt, reference, "ready")) {
+        toast.error("Не удалось сохранить запрос. Повторите попытку.");
+        return;
+      }
+      if (await adaptationRef.current?.submitAdaptation(attachment)) {
+        adaptation.clear(attachment.reference.operation_id);
+        toast.success("Адаптация запущена. Результат появится в редакторе.");
+      } else {
+        toast.error("Запуск адаптации не подтверждён. Запрос сохранён; можно повторить попытку.");
+      }
+    } catch {
+      toast.error("Не удалось подтвердить отмену подготовки. Запрос сохранён; повторите попытку.");
+    } finally {
+      adaptationPending.current = false;
+      setAdaptationSubmitting(false);
+    }
+  }
+
   function selectVersion(versionId: string | null) {
     setVersionSelection(
       versionId ? { versionId, projectId: project.id } : null,
@@ -207,17 +253,17 @@ export function MaxWorkspaceShell({
     >
       <div className="flex h-full min-h-0 flex-col">
       {adaptation.attachment && <div className="mx-4 my-2 rounded-lg border p-3 text-sm" role="status">
-        <p>Выбрана историческая версия. При отправке сервер добавит её исходный код к запросу.</p>
+        <p>{adaptationSubmitting ? "Запускаем адаптацию выбранной версии…"
+          : "Запрос на адаптацию сохранён. Если запуск не подтверждён, повторите попытку — второй запрос не будет создан."}</p>
         <div className="mt-2 flex flex-wrap gap-3">
-          <button type="button" onClick={() => draftRef.current?.insertDraft(adaptation.attachment!.prompt)}>Вставить сохранённый запрос</button>
-          <button type="button" onClick={() => adaptation.clear()}>Убрать выбранную версию</button>
+          <Button type="button" variant="outline" className="min-h-11 max-w-full whitespace-normal text-left" disabled={adaptationSubmitting || restoration.busy} onClick={() => void submitAdaptation(adaptation.attachment!)}>Повторить запуск адаптации</Button>
+          <Button type="button" variant="ghost" className="min-h-11" disabled={adaptationSubmitting || restoration.busy} onClick={() => adaptation.clear()}>Убрать запрос</Button>
         </div>
       </div>}
       <div className="min-h-0 flex-1">
       <ChatPanel
-        draftRef={draftRef}
-        restorationAdaptation={adaptation.attachment?.reference}
-        onRestorationAdaptationSubmitted={adaptation.clear}
+        key={project.id}
+        adaptationRef={adaptationRef}
         projectId={project.id}
         projectSlug={project.slug}
         currentSnapshotId={currentSnapshotId}
@@ -227,11 +273,15 @@ export function MaxWorkspaceShell({
       />
       </div>
       <div className="max-h-[45%] shrink-0 overflow-y-auto">
-        <MaxRestorationPanel restoration={restoration} onAdapt={(prompt, reference) => {
-          if (!adaptation.attach(prompt, reference)) toast.error("Не удалось сохранить ссылку на версию. Повторите подготовку.");
-          else if (draftRef.current?.insertDraft(prompt)) toast.success("Запрос и выбранная версия добавлены в редактор. Проверьте и отправьте их.");
-          else toast.error("Не удалось вставить запрос. Дождитесь завершения текущей генерации.");
-        }} />
+        <MaxRestorationPanel restoration={restoration}
+          onPrepareAdapt={(prompt, reference) => {
+            const saved = adaptation.attach(prompt, reference, "cancelling");
+            if (!saved) toast.error("Не удалось сохранить запрос. Подготовка не отменена; повторите попытку.");
+            return saved;
+          }}
+          onAdapt={async (prompt, reference) => {
+            await submitAdaptation({ projectId: project.id, prompt, reference, phase: "ready" });
+          }} />
       </div>
       </div>
     </MaxEditorLayout>
