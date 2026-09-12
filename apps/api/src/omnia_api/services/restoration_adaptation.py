@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID
@@ -25,12 +26,66 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.message import RestorationAdaptationReference
 from omnia_api.schemas.restoration import RestoreReport
 from omnia_api.services import repo
+from omnia_api.services.project_versions import resolve_version
 from omnia_api.services.secret_safety import contains_provider_secret, is_secret_file
 
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_SOURCE_FILES = 128
 _DERIVED = {"node_modules", ".next", ".git", "dist", "build", "__pycache__"}
 _LOCKS = {"pnpm-lock.yaml", "package-lock.json", "yarn.lock", "uv.lock"}
+_JS_NON_CODE = re.compile(
+    r"//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"
+    r'''"(?:\\[\s\S]|[^"\\])*(?:"|\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\Z)|'''
+    r"`(?:\\[\s\S]|[^`\\])*(?:`|\Z)|"
+    r"/(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*\]|[^/\\[\r\n])+/[a-z]*|/[^\n]*"
+)
+_ENV_DECLARATION = re.compile(
+    r"^[ \t]*(?:const|let|var)[ \t]+[A-Za-z_$][\w$]*[ \t]*=[ \t]*"
+    r"(?P<reference>process\.env\.[A-Z_][A-Z0-9_]*)[ \t]*;[ \t]*$",
+    re.MULTILINE,
+)
+_SIMPLE_TEMPLATE_EXPRESSION = re.compile(
+    r'''\$\{(?:[^{}'"`\\]|"(?:\\[^`]|[^"`\\])*"|'(?:\\[^`]|[^'`\\])*')*\}'''
+)
+
+
+def _source_secret_scan_text(path: PurePosixPath, content: str) -> str:
+    """Exclude complete environment reads, without changing historical source.
+
+    This is a deliberately narrow recognizer, not a JS parser. Strings/comments
+    cannot authorize an exception. Complex template interpolation is ambiguous
+    here, so it leaves the original conservative secret check in force.
+    """
+    if path.suffix.lower() not in {".ts", ".mts", ".cts"}:
+        return content
+    if "\u2028" in content or "\u2029" in content or re.search(r"\r(?!\n)", content):
+        return content
+    code = list(content)
+    for match in _JS_NON_CODE.finditer(content):
+        literal = match.group()
+        if literal.startswith("/") and not literal.startswith(("//", "/*")):
+            # A slash may be division or a regex. If its span crosses a quote,
+            # we cannot safely infer the next literal's boundary.
+            if any(quote in literal for quote in ("'", '"', "`")):
+                return content
+        if literal.startswith("`"):
+            simple = _SIMPLE_TEMPLATE_EXPRESSION.sub("", literal)
+            if "${" in simple or not literal.endswith("`") or len(literal) == 1:
+                return content
+        for index in range(match.start(), match.end()):
+            if code[index] not in "\r\n":
+                code[index] = " "
+    scan = list(content)
+    for match in _ENV_DECLARATION.finditer("".join(code)):
+        # The statement boundary must also exist in the original source: do not
+        # turn `process.env.TOKEN /* comment */;` into a supported declaration.
+        statement = content[match.start():match.end()]
+        reference_end = match.end("reference") - match.start()
+        if not re.fullmatch(r"[ \t]*;[ \t]*(?://[^\r\n]*)?", statement[reference_end:]):
+            continue
+        start, end = match.span("reference")
+        scan[start:end] = " " * (end - start)
+    return "".join(scan)
 
 
 def _conflict(message: str) -> ApiError:
@@ -71,14 +126,14 @@ def _source_files(files: dict[str, str]) -> tuple[dict[str, str], list[str]]:
         ):
             excluded.append(path)
             continue
-        if contains_provider_secret(content):
-            raise _conflict("В историческом коде найден секрет. Удалите его перед адаптацией.")
         size += len(path.encode()) + len(content.encode())
         if len(safe) >= MAX_SOURCE_FILES or size > MAX_SOURCE_BYTES:
             raise _conflict(
                 "Исторический исходник превышает лимит адаптации (128 файлов, 256 КиБ). "
                 "Нужна отдельная подготовка исходников; код не был обрезан и генерация не запущена."
             )
+        if contains_provider_secret(_source_secret_scan_text(parts, content)):
+            raise _conflict("В историческом коде найден секрет. Удалите его перед адаптацией.")
         safe[path] = content
     if not safe:
         raise _conflict("У выбранной версии нет доступного текстового исходного кода.")
@@ -138,9 +193,27 @@ async def prepare_adaptation(
         or version is None
         or source.project_id != project.id
         or version.project_id != project.id
-        or version.snapshot_id != source.id
-        or version.commit_sha != source.commit_sha
         or source.commit_sha != operation.target_commit_sha
+    ):
+        raise _conflict("Исторический исходник больше недоступен. Выберите доступную версию.")
+    if version.generation_run_id is not None:
+        source_run = await session.get(GenerationRun, version.generation_run_id)
+        if (
+            source_run is None
+            or source_run.project_id != project.id
+            or source_run.user_id != owner_id
+        ):
+            raise _conflict("Историческая генерация больше недоступна в этом проекте.")
+    elif version.commit_sha != source.commit_sha:
+        raise _conflict("Исторический исходник больше недоступен. Выберите доступную версию.")
+    # Generated allocations keep their original queued/base fields. Resolve the
+    # same completed snapshot that version history and restoration preparation use.
+    status, resolved = await resolve_version(session, version)
+    if (
+        status != "ready"
+        or resolved is None
+        or resolved.id != source.id
+        or resolved.commit_sha != operation.target_commit_sha
     ):
         raise _conflict("Исторический исходник больше недоступен. Выберите доступную версию.")
     try:

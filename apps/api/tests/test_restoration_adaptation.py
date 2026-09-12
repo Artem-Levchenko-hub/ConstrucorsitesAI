@@ -5,11 +5,105 @@ import pytest
 
 from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
+from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.project_version import ProjectVersion
 from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.message import RestorationAdaptationReference
+
+
+@pytest.mark.parametrize("path", [
+    "src/app/api/max/session/route.ts",
+    "src/app/api/omnia/integrations/[...path]/route.ts",
+    "src/app/api/omnia/preview-session/route.ts",
+    "src/lib/max/bot-api.ts",
+])
+def test_canonical_environment_credentials_are_source_references(path):
+    from omnia_api.services.max_project_kit import _template_file
+    from omnia_api.services.restoration_adaptation import _source_files
+
+    content = _template_file(path)
+    files, excluded = _source_files({path: content})
+    assert files == {path: content}
+    assert excluded == []
+
+
+@pytest.mark.parametrize("content", [
+    "const token = process.env.MAX_BOT_TOKEN;",
+    "  const secret = process.env.AUTH_SECRET; // read configured value\n",
+    "const url = `https://example.test/${method}`;\nconst token = process.env.MAX_BOT_TOKEN;",
+])
+def test_complete_environment_reference_declarations_preserve_source(content):
+    from omnia_api.services.restoration_adaptation import _source_files
+    from omnia_api.services.secret_safety import contains_provider_secret
+
+    # The general prompt detector remains conservative; only source has syntax context.
+    assert contains_provider_secret(content)
+    assert _source_files({"source.ts": content}) == ({"source.ts": content}, [])
+
+
+@pytest.mark.parametrize("content", [
+    'const text = "token = process.env.MAX_BOT_TOKEN";',
+    "const text = `\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
+    "/*\nconst token = process.env.MAX_BOT_TOKEN;\n*/",
+    "// token = process.env.MAX_BOT_TOKEN",
+    "token = process.env.MAX_BOT_TOKEN",
+    "const token = process.env.MAX_BOT_TOKEN.secretCredential1234;",
+    "const token = process.env.MAX_BOT_TOKEN + suffix;",
+    "const token = process.env.MAX_BOT_TOKEN; // password: abcdefghijklmnop123456",
+    "const token = process.env.MAX_BOT_TOKEN;\npassword: abcdefghijklmnop123456",
+    "const token = process.env.MAX_BOT_TOKEN;\n"
+    "const key = 'sk-' + 'not-a-literal';\nsecret: abcdefghijklmnop123456",
+    "const token = process.env.MAX_BOT_TOKEN;\nconst value = 'sk-" + "a" * 24 + "';",
+    "const text = `outer ${`inner`}\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
+    "const regex = /abc/; const text = `\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
+    'const number = 10 / fn("x/"); const text = `\n'
+    "const token = process.env.MAX_BOT_TOKEN;\n`;",
+])
+def test_source_environment_exception_does_not_hide_other_secret_matches(content):
+    from omnia_api.services.restoration_adaptation import _source_files
+
+    with pytest.raises(ApiError) as caught:
+        _source_files({"source.ts": content})
+    assert caught.value.code == "conflict"
+
+
+def test_environment_reference_exception_does_not_apply_to_plain_text():
+    from omnia_api.services.restoration_adaptation import _source_files
+
+    with pytest.raises(ApiError):
+        _source_files({"README.md": "const token = process.env.MAX_BOT_TOKEN;"})
+
+
+@pytest.mark.parametrize("path", ["source.jsx", "source.tsx", "source.js"])
+def test_jsx_text_cannot_authorize_environment_reference_exception(path):
+    from omnia_api.services.restoration_adaptation import _source_files
+
+    with pytest.raises(ApiError):
+        _source_files({
+            path: "const page = <pre>\nconst token = process.env.MAX_BOT_TOKEN;\n</pre>;",
+        })
+
+
+@pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
+def test_unrecognized_js_line_terminator_leaves_secret_check_conservative(separator):
+    from omnia_api.services.restoration_adaptation import _source_files
+
+    content = "// comment" + separator + "const text = `\n"
+    content += "const token = process.env.MAX_BOT_TOKEN;\n`;"
+    with pytest.raises(ApiError):
+        _source_files({"source.ts": content})
+
+
+def test_source_budget_rejects_before_allocating_lexical_scan(monkeypatch):
+    from omnia_api.services import restoration_adaptation as service
+
+    monkeypatch.setattr(
+        service, "_source_secret_scan_text", lambda *_: pytest.fail("oversized scan")
+    )
+    with pytest.raises(ApiError):
+        service._source_files({"large.ts": "x" * (service.MAX_SOURCE_BYTES + 1)})
 
 
 @pytest.fixture
@@ -21,7 +115,8 @@ def source_case(monkeypatch):
     )
     snapshot = SimpleNamespace(id=uuid4(), project_id=project.id, commit_sha="a" * 40)
     version = SimpleNamespace(
-        id=uuid4(), project_id=project.id, snapshot_id=snapshot.id, commit_sha=snapshot.commit_sha
+        id=uuid4(), project_id=project.id, snapshot_id=snapshot.id, commit_sha=snapshot.commit_sha,
+        generation_run_id=None, status="ready", base_snapshot_id=None,
     )
     operation = SimpleNamespace(
         id=uuid4(),
@@ -53,6 +148,7 @@ def source_case(monkeypatch):
 
     class Session:
         real_reader = staticmethod(service.repo.read_files)
+        data = rows
 
         async def refresh(self, row):
             pass
@@ -74,6 +170,54 @@ def source_case(monkeypatch):
         operation_id=operation.id, expected_draft_snapshot_id=project.current_snapshot_id
     )
     return service, Session(), project, operation, run, reference, historical, reads
+
+
+@pytest.mark.parametrize("invalid", [
+    None, "run_owner", "run_project", "missing_run", "failed", "unchanged",
+    "resolved_source", "operation_sha", "version_project",
+])
+async def test_generated_version_uses_resolved_completed_source(source_case, invalid):
+    service, session, project, operation, _, reference, historical, reads = source_case
+    source = await session.get(Snapshot, operation.source_snapshot_id)
+    base = Snapshot(id=uuid4(), project_id=project.id, commit_sha="b" * 40)
+    assistant = Message(id=uuid4(), project_id=project.id, role="assistant", content="Done",
+                        snapshot_id=source.id)
+    generated = GenerationRun(id=uuid4(), project_id=project.id, user_id=project.owner_id,
+                              status="completed", assistant_message_id=assistant.id, agent_state={})
+    version = ProjectVersion(id=operation.source_version_id, project_id=project.id, number=1,
+        generation_run_id=generated.id, snapshot_id=base.id, base_snapshot_id=base.id,
+        commit_sha=base.commit_sha, status="queued")
+    session.data.update({
+        (Snapshot, base.id): base, (Message, assistant.id): assistant,
+        (GenerationRun, generated.id): generated, (ProjectVersion, version.id): version,
+    })
+    if invalid == "run_owner":
+        generated.user_id = uuid4()
+    elif invalid == "run_project":
+        generated.project_id = uuid4()
+    elif invalid == "missing_run":
+        session.data.pop((GenerationRun, generated.id))
+    elif invalid == "failed":
+        generated.status = "failed"
+    elif invalid == "unchanged":
+        base.commit_sha = source.commit_sha
+    elif invalid == "resolved_source":
+        assistant.snapshot_id = base.id
+    elif invalid == "operation_sha":
+        operation.target_commit_sha = "c" * 40
+    elif invalid == "version_project":
+        version.project_id = uuid4()
+    if invalid is not None:
+        with pytest.raises(ApiError):
+            await service.prepare_adaptation(session, project, project.owner_id, reference)
+        assert reads == []
+        return
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    assert bundle["source_snapshot_id"] == str(source.id)
+    assert bundle["source_commit_sha"] == source.commit_sha
+    assert bundle["files"] == historical
+    assert reads == [(project.id, source.commit_sha)]
+    assert version.status == "queued" and version.snapshot_id == base.id
 
 
 @pytest.mark.parametrize("execution_backend", ["worker", "api"])
