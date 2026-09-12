@@ -117,6 +117,83 @@ def test_completed_restoration_publication_has_distinct_provenance():
 
 
 @pytest.mark.parametrize(
+    "runtime_state,persisted_state",
+    [
+        (None, None),
+        (None, "unknown"),
+        ("unknown", None),
+        ("unknown", "unknown"),
+        ("empty", "empty"),
+        ("present", "present"),
+    ],
+)
+def test_publication_normalizes_legacy_report_defaults(runtime_state, persisted_state):
+    from copy import deepcopy
+
+    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+
+    data = restored_evidence()
+    operation = data["restoration"]
+    operation.report = deepcopy(operation.report)
+    if runtime_state is not None:
+        operation.runtime_result["report"]["database_state"] = runtime_state
+    if persisted_state is not None:
+        operation.report["database_state"] = persisted_state
+    result = validate_restoration_publication_evidence(**data)
+    assert result["restoration_operation_id"] == str(operation.id)
+
+
+@pytest.mark.parametrize(
+    "runtime_state,persisted_state",
+    [
+        ("empty", "present"),
+        ("present", "empty"),
+        ("unknown", "present"),
+        ("present", None),
+        (None, "empty"),
+    ],
+)
+def test_publication_rejects_different_explicit_database_observations(
+    runtime_state, persisted_state
+):
+    from copy import deepcopy
+
+    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+
+    data = restored_evidence()
+    operation = data["restoration"]
+    operation.report = deepcopy(operation.report)
+    if runtime_state is not None:
+        operation.runtime_result["report"]["database_state"] = runtime_state
+    if persisted_state is not None:
+        operation.report["database_state"] = persisted_state
+    with pytest.raises(ApiError) as error:
+        validate_restoration_publication_evidence(**data)
+    assert error.value.details == {"reason": "restoration_activation_unproven"}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"database_state": "unverified"},
+        {"database_state": None},
+        {"revision": "1"},
+        {"blockers": None},
+        {"unrecognized": True},
+        {"warnings": ["different"]},
+    ],
+)
+def test_publication_rejects_invalid_or_changed_persisted_report(change):
+    data = restored_evidence()
+    data["restoration"].report = {**data["restoration"].report, **change}
+    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+
+    with pytest.raises(ApiError) as error:
+        validate_restoration_publication_evidence(**data)
+    assert error.value.details == {"reason": "restoration_activation_unproven"}
+
+
+@pytest.mark.parametrize(
     "tamper",
     [
         "state",

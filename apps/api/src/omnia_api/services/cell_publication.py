@@ -24,7 +24,7 @@ from omnia_api.models.project_version import ProjectVersion
 from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-from omnia_api.schemas.restoration import RuntimeRestoration
+from omnia_api.schemas.restoration import RestoreReport, RuntimeRestoration
 from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.project_cell_proofs import (
@@ -284,6 +284,9 @@ def validate_restoration_publication_evidence(
         _unproven("restoration_identity_mismatch")
     try:
         runtime = RuntimeRestoration.model_validate(restoration.runtime_result)
+        # Persisted reports may predate additive informational fields. Compare
+        # their validated defaults while retaining all explicit evidence values.
+        persisted_report = RestoreReport.model_validate(restoration.report, strict=True)
         validate_runtime_response(restoration.request_payload, runtime)
         expected = {
             "operation_id": str(restoration.id),
@@ -305,7 +308,7 @@ def validate_restoration_publication_evidence(
             or not observed.applied
             or runtime.report is None
             or runtime.report.blockers
-            or runtime.report.model_dump(mode="json") != restoration.report
+            or runtime.report != persisted_report
             or not getattr(observed, "source_revision", None)
         ):
             _unproven("restoration_activation_unproven")

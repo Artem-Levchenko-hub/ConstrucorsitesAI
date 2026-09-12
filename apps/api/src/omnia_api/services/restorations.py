@@ -565,9 +565,17 @@ async def _dispatch(
     if (
         result.revision == operation.runtime_revision
         and operation.runtime_result is not None
-        and result.model_dump(mode="json") != operation.runtime_result
     ):
-        return await _unconfirmed(session, project_id, owner_id, operation_id)
+        try:
+            # JSON validation retains strict flags/identity checks and supplies
+            # defaults introduced after the prior durable receipt was written.
+            previous = RuntimeRestoration.model_validate_json(
+                json.dumps(operation.runtime_result), strict=True
+            )
+        except (ValueError, TypeError):
+            return await _unconfirmed(session, project_id, owner_id, operation_id)
+        if result != previous:
+            return await _unconfirmed(session, project_id, owner_id, operation_id)
     if operation.state in {"completed", "cancelled", "failed"}:
         return public_operation(operation)
     operation.runtime_revision = result.revision

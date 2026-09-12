@@ -129,6 +129,7 @@ jobs:
           tests/test_preview_live_capture.py
           tests/test_snapshot_restore.py
           tests/test_rollback_container_hot_reload.py
+          tests/test_cell_publication_evidence.py
       - name: Run MAX portable starter contract
         working-directory: apps/api
         run: >-

@@ -312,6 +312,58 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
     assert current.commit_sha != old.commit_sha  # Existing source history is preserved.
 
 
+@pytest.mark.parametrize(
+    "case", ["legacy", "empty", "present", "different_state", "invalid_extra", "invalid_flag"]
+)
+async def test_db_same_revision_receipt_normalizes_only_valid_legacy_defaults(db_session, case):
+    from copy import deepcopy
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from omnia_api.models.restoration import Restoration
+    from omnia_api.services import restorations as service
+
+    owner, project, _, current, _, workspace, request = await restoration_fixture(db_session)
+    runtime = FakeRuntime()
+    operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
+    row = await db_session.get(Restoration, operation.id)
+    receipt = deepcopy(row.runtime_result)
+    if case == "legacy":
+        receipt["report"].pop("database_state")
+        row.report = {key: value for key, value in row.report.items() if key != "database_state"}
+    elif case in {"empty", "present"}:
+        receipt["report"]["database_state"] = case
+        runtime.result.report.database_state = case
+    elif case == "different_state":
+        receipt["report"]["database_state"] = "present"
+    elif case == "invalid_extra":
+        receipt["unexpected"] = True
+    else:
+        receipt["can_apply"] = 1
+    row.runtime_result = receipt
+    # JSON dirty detection uses Python equality (True == 1); persist the raw
+    # malformed receipt so the test exercises strict validation after DB reload.
+    flag_modified(row, "runtime_result")
+    await db_session.commit()
+    await db_session.refresh(row)
+    assert row.runtime_result == receipt
+    if case == "invalid_flag":
+        assert type(row.runtime_result["can_apply"]) is int
+    result = await service.get_restoration(db_session, project.id, owner.id, row.id, runtime)
+    await db_session.refresh(row)
+    if case in {"legacy", "empty", "present"}:
+        assert result.state == "ready" and result.can_apply
+        assert row.runtime_result["report"]["database_state"] == (
+            "unknown" if case == "legacy" else case
+        )
+        assert row.runtime_revision == 1
+    else:
+        assert result.state == "reconciling" and not result.can_apply
+        assert row.runtime_result == receipt
+    assert runtime.prepares == 1 and runtime.applies == 0
+    assert project.current_snapshot_id == current.id and workspace.fencing_epoch == 7
+
+
 async def test_db_lost_apply_reply_reconciles_without_second_activation(db_session):
     from omnia_api.schemas.restoration import RestoreApplyRequest
     from omnia_api.services import restorations as service
