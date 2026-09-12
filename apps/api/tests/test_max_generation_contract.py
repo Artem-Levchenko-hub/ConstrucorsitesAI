@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,53 @@ COMPLEX_BRIEF = """
 ])
 def test_capabilities_match_explicit_words_and_respect_negation(brief, expected):
     assert [key for key, _, _ in requested_max_capabilities(brief)] == expected
+
+
+@pytest.mark.parametrize("brief", [
+    # Exact opening of the MAX restoration panel's adaptation request.
+    "Верни экраны и функции выбранной исторической версии в новый черновик. "
+    "Адаптируй её исходный код к текущей базе данных.",
+    "Верни интерфейс и поведение исторической версии из приложенного системного источника.\n"
+    "Это небольшое приложение личных задач. Сделай минимальное исправление текущего кода.\n"
+    "Верни src/app/page.tsx точно из исторического источника, без изменения этого файла.\n"
+    "Текущую реальную БД и права доступа сохрани: таблица public.tasks, id uuid, owner_id text,\n"
+    "title text, done boolean, category text NOT NULL БЕЗ DEFAULT. Существующие id, владельцы,\n"
+    "названия, done и категории нельзя менять или удалять. Старый интерфейс без поля категории.\n"
+    "Для новых задач пользователь явно выбрал категорию «Личное»: передавай её в SQL INSERT\n"
+    "как значение из серверной логики, не добавляй DEFAULT и не ослабляй NOT NULL.\n"
+    "Сохрани текущий API контракт: GET /api/tasks -> {items}, POST -> {item}201,\n"
+    "PATCH -> {item}200, DELETE ->204; id приходит как UUID от приложения, owner_id только\n"
+    "из проверенной MAX-сессии. Сохрани настоящие чтение/запись PostgreSQL, изоляцию владельцев,\n"
+    "каноническую MAX-сессию и проектный контракт данных с category. Не делай заглушек.\n"
+    "Не публикуй приложение. Нужен новый проверенный черновик; исторические версии сохрани.\n",
+], ids=["panel-opening", "adaptation-prompt"])
+def test_historical_restoration_request_does_not_require_action_history(brief: str) -> None:
+    assert "history" not in {key for key, _, _ in requested_max_capabilities(brief)}
+
+
+@pytest.mark.parametrize("noun", [
+    "история", "истории", "историю", "историей", "историй", "историями", "историях",
+    "history", "timeline",
+])
+def test_explicit_history_nouns_remain_requested(noun: str) -> None:
+    assert "history" in {key for key, _, _ in requested_max_capabilities(f"Добавь {noun} задач.")}
+
+
+def test_historical_restore_with_explicit_task_history_keeps_requirement() -> None:
+    brief = "Верни историческую версию приложения. Добавь историю задач."
+    assert "history" in {key for key, _, _ in requested_max_capabilities(brief)}
+
+
+def test_full_restoration_panel_prompt_does_not_invent_product_capabilities() -> None:
+    panel = (
+        Path(__file__).resolve().parents[2]
+        / "web/src/components/max/MaxRestorationPanel.tsx"
+    ).read_text(encoding="utf-8")
+    prompt_array = re.search(r'const prompt = (\[[\s\S]*?\])\.join\("\\n\\n"\);', panel)
+    assert prompt_array is not None
+    parts = json.loads(re.sub(r",\s*]$", "]", prompt_array[1]))
+    assert len(parts) == 3 and all(isinstance(part, str) for part in parts)
+    assert requested_max_capabilities("\n\n".join(parts)) == []
 
 
 def test_portable_completion_requires_manifest_tests_and_runtime():

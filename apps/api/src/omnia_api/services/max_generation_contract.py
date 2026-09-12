@@ -46,7 +46,7 @@ _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "history",
         "история действий",
-        (r"истори", r"history", r"timeline"),
+        (r"истори(?:я|и|ю|ей|й|ями|ях)\b", r"history", r"timeline"),
         ("истори", "history", "timeline"),
     ),
     (
