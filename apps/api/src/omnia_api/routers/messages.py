@@ -124,6 +124,7 @@ from omnia_api.services.generation_runs import (
     apply_cancelled_generation_locked,
     finalize_generation_run,
     load_generation_dispatch,
+    record_generation_product_failure,
     reserve_generation_run,
     set_generation_run_status,
     store_generation_dispatch,
@@ -1230,6 +1231,22 @@ def _humanize_step(tool: str, path: str) -> str:
     if tool == "runtime_check" and path:
         return f"{verb} {path}"
     return verb
+
+
+def _agent_product_failure(
+    res: Any, *, verification_failed: bool, finalization_complete: bool,
+) -> str | None:
+    """A restored working baseline is not proof that the requested edit succeeded."""
+    if finalization_complete:
+        return None
+    if verification_failed:
+        return "final verification did not succeed"
+    if not getattr(res, "done", False):
+        reason = str(getattr(res, "stop_reason", ""))
+        if not re.fullmatch(r"[a-z_]{1,64}", reason):
+            reason = "incomplete"
+        return f"agent did not finish the requested changes ({reason})"
+    return None
 
 
 def _agent_result_message(res: Any, *, is_edit: bool) -> str:
@@ -5954,6 +5971,9 @@ async def _process_prompt(
                     )
             # ──────────────────────────────────────────────────────────────────
 
+            # Keep the failed candidate's outcome even if restoring the old tree
+            # makes the later runtime/typecheck flags green again.
+            _agent_verification_failed = not (_typecheck_ok and _runtime_ok)
             # Final green-tree invariant. A bounded native run may stop for a
             # budget/provider reason, but Studio must never keep its red tree. The
             # earlier rollback covers a non-done AgentResult; this guard covers a
@@ -6571,6 +6591,20 @@ async def _process_prompt(
                         if _is_edit
                         else "Готово — приложение собрано и проверено."
                     )
+
+            if get_settings().use_native_agent:
+                _product_failure = _agent_product_failure(
+                    _agent_res,
+                    verification_failed=_agent_verification_failed,
+                    finalization_complete=_max_finalization_proof is not None,
+                )
+                if _product_failure is not None:
+                    # Persist before the assistant becomes final. The next-submit
+                    # admission path and tracked-task finalizer must see the same
+                    # failure after normal return, rollback, or lease cleanup.
+                    async with factory() as session:
+                        await record_generation_product_failure(session, run_id, _product_failure)
+                        await session.commit()
 
             # Universal release proof. The specialised realtime/isolation gates
             # above cover only two stacks; every container build (including MAX)

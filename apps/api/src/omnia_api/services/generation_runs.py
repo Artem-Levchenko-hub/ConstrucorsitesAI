@@ -27,6 +27,39 @@ ACTIVE_GENERATION_STATUSES = (
 INTERRUPTED_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
 
 
+async def record_generation_product_failure(
+    session: AsyncSession, run_id: UUID, error: str,
+) -> None:
+    """Record failure before finalising the message, without releasing execution ownership.
+
+    The caller commits before tokens_out/llm.done. Lifecycle completion still waits
+    for the executor cleanup; both completion paths consume this durable outcome.
+    """
+    run = await session.scalar(
+        select(GenerationRun).where(GenerationRun.id == run_id)
+        .execution_options(populate_existing=True).with_for_update()
+    )
+    if run is None or run.status in {"completed", "failed", "cancelled"}:
+        return
+    run.agent_state = {
+        **(run.agent_state or {}),
+        "product_outcome": {"status": "failed", "error": error[:2000]},
+    }
+
+
+def _generation_completion_error(run: GenerationRun, message: Message | None) -> str | None:
+    outcome = (run.agent_state or {}).get("product_outcome")
+    if isinstance(outcome, dict) and outcome.get("status") == "failed":
+        error = outcome.get("error")
+        return (
+            error[:2000] if isinstance(error, str) and error
+            else "generation did not complete successfully"
+        )
+    if run.response_mode == "build" and (message is None or message.snapshot_id is None):
+        return "build finished without a committed snapshot"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationDispatch:
     schema_version: int
@@ -393,6 +426,8 @@ async def reserve_generation_run(
             )
             .order_by(GenerationRun.created_at.desc())
             .limit(1)
+            .execution_options(populate_existing=True)
+            .with_for_update()
         )
     ).scalar_one_or_none()
 
@@ -402,10 +437,10 @@ async def reserve_generation_run(
     if active is not None and active.assistant_message_id is not None:
         assistant = await session.get(Message, active.assistant_message_id)
         if assistant is not None and assistant.tokens_out is not None:
-            build_failed = active.response_mode == "build" and assistant.snapshot_id is None
-            active.status = "failed" if build_failed else "completed"
-            if build_failed and not active.error:
-                active.error = "build finished without a committed snapshot"
+            completion_error = _generation_completion_error(active, assistant)
+            active.status = "failed" if completion_error else "completed"
+            if completion_error and not active.error:
+                active.error = completion_error
             active.finished_at = datetime.now(UTC)
             await session.flush()
             await compile_terminal_run_memory(session, active)
@@ -565,11 +600,11 @@ async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
         if run.assistant_message_id is not None
         else None
     )
-    build_failed = run.response_mode == "build" and (message is None or message.snapshot_id is None)
-    run.status = "failed" if build_failed else "completed"
+    completion_error = _generation_completion_error(run, message)
+    run.status = "failed" if completion_error else "completed"
     run.finished_at = datetime.now(UTC)
-    if build_failed and not run.error:
-        run.error = "build finished without a committed snapshot"
+    if completion_error and not run.error:
+        run.error = completion_error
     await compile_terminal_run_memory(session, run)
     await session.commit()
     return run.status
@@ -585,7 +620,8 @@ async def finalize_generation_run(
     or an unavailable container.  Historically that was recorded as
     ``completed`` even though no snapshot existed.  Build turns are successful
     only when their assistant message points at a committed snapshot; clarify
-    turns and legitimate edit no-ops remain successful without one.
+    turns and legitimate edit no-ops remain successful without one. An explicit
+    failed product outcome takes precedence even if a snapshot was committed.
     """
 
     if session is not None:

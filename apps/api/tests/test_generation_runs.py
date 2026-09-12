@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.deps import get_current_user
 from omnia_api.core.errors import ApiError
@@ -25,6 +26,7 @@ from omnia_api.services.generation_runs import (
     _finalize_generation_run,
     finalize_generation_run,
     reconcile_completed_build_runs,
+    record_generation_product_failure,
     recover_interrupted_generation_runs,
     reserve_generation_run,
 )
@@ -676,6 +678,171 @@ async def test_build_without_snapshot_is_failed_product_outcome(
     assert run.status == "failed"
     assert run.finished_at is not None
     assert run.error == "build finished without a committed snapshot"
+
+
+@pytest.mark.parametrize("via_admission", [False, True], ids=["tracked-finalizer", "next-submit"])
+@pytest.mark.parametrize("has_snapshot", [False, True], ids=["no-snapshot", "partial-snapshot"])
+@pytest.mark.parametrize("failure", [
+    "agent did not finish the requested changes (max_steps)",
+    "final verification did not succeed",
+])
+async def test_explicit_failed_edit_cannot_be_completed(
+    db_session: AsyncSession, via_admission: bool, has_snapshot: bool, failure: str,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    snapshot = None
+    if has_snapshot:
+        snapshot = Snapshot(project_id=project.id, commit_sha="a" * 40)
+        db_session.add(snapshot)
+        await db_session.flush()
+    assistant = Message(project_id=project.id, role="assistant", content="Правка не завершена",
+        snapshot_id=snapshot.id if snapshot else None)
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
+        idempotency_key="failed-native-edit", prompt_hash="hash", status="running",
+        response_mode="edit",
+        agent_state={"existing_dispatch_marker": "preserved"})
+    db_session.add(run)
+    await db_session.commit()
+
+    await record_generation_product_failure(db_session, run.id, failure)
+    await db_session.commit()
+    await db_session.refresh(run)
+    assert run.status == "running"  # The executor must still finish its cleanup.
+    assert run.agent_state["existing_dispatch_marker"] == "preserved"
+    assert run.agent_state["product_outcome"] == {"status": "failed", "error": failure}
+    assistant.tokens_out = 0
+    await db_session.commit()
+    if via_admission:
+        next_run, replayed = await reserve_generation_run(db_session, project_id=project.id,
+            user_id=owner.id, idempotency_key="after-failed-edit", prompt="Retry the edit")
+        assert not replayed and next_run.id != run.id
+        await db_session.commit()
+    else:
+        assert await finalize_generation_run(run.id, db_session) == "failed"
+    await db_session.refresh(run)
+    assert run.status == "failed" and run.error == failure and run.finished_at is not None
+    # A late tracked callback after the admission fast path cannot overwrite failure.
+    assert await finalize_generation_run(run.id, db_session) == "failed"
+
+
+@pytest.mark.parametrize("via_admission", [False, True], ids=["tracked-finalizer", "next-submit"])
+async def test_successful_edit_noop_remains_completed_without_snapshot(
+    db_session: AsyncSession, via_admission: bool,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(
+        project_id=project.id, role="assistant", content="Уже настроено", tokens_out=0,
+    )
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
+        idempotency_key="successful-noop", prompt_hash="hash", status="running",
+        response_mode="edit")
+    db_session.add(run)
+    await db_session.commit()
+    assert messages._agent_product_failure(SimpleNamespace(done=True), verification_failed=False,
+        finalization_complete=False) is None
+    if via_admission:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="after-noop", prompt="Next change")
+        await db_session.commit()
+    else:
+        assert await finalize_generation_run(run.id, db_session) == "completed"
+    await db_session.refresh(run)
+    assert run.status == "completed" and run.error is None
+
+
+@pytest.mark.parametrize("status", ["cancelled", "failed", "completed"])
+async def test_late_product_failure_does_not_overwrite_terminal_outcome(status: str) -> None:
+    state = {"existing": "unchanged"}
+    run = SimpleNamespace(status=status, agent_state=state)
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.return_value = run
+    await record_generation_product_failure(session, uuid.uuid4(), "late error")
+    assert run.status == status and run.agent_state is state
+
+
+async def test_next_submit_refreshes_failure_from_another_session(
+    db_session: AsyncSession, test_engine,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(project_id=project.id, role="assistant", content="")
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
+        idempotency_key="stale-edit", prompt_hash="hash", status="running", response_mode="edit")
+    db_session.add(run)
+    await db_session.commit()
+    run_id, project_id, owner_id, message_id = run.id, project.id, owner.id, assistant.id
+    # The admission session already knows this row's old JSON before the worker commits.
+    assert run.agent_state == {}
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as worker:
+        await record_generation_product_failure(worker, run_id, "edit did not finish")
+        await worker.commit()
+        message = await worker.get(Message, message_id)
+        assert message is not None
+        message.tokens_out = 0
+        await worker.commit()
+    # Refresh only the message; deliberately keep the stale run identity-map entry.
+    await db_session.refresh(assistant)
+    assert assistant.tokens_out == 0 and run.agent_state == {}
+    await reserve_generation_run(db_session, project_id=project_id, user_id=owner_id,
+        idempotency_key="after-stale-edit", prompt="Next edit")
+    await db_session.commit()
+    await db_session.refresh(run)
+    assert run.status == "failed" and run.error == "edit did not finish"
+
+
+async def test_next_submit_locks_run_until_after_reading_final_message(
+    db_session: AsyncSession, test_engine, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner, project = await _owner_and_project(db_session)
+    assistant = Message(project_id=project.id, role="assistant", content="")
+    db_session.add(assistant)
+    await db_session.flush()
+    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
+        idempotency_key="racing-edit", prompt_hash="hash", status="running", response_mode="edit")
+    db_session.add(run)
+    await db_session.commit()
+    run_id, project_id, owner_id, message_id = run.id, project.id, owner.id, assistant.id
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    at_message, proceed = asyncio.Event(), asyncio.Event()
+    async with factory() as admission, factory() as worker:
+        original_get = admission.get
+
+        async def paused_get(entity, ident, **kwargs):
+            if entity is Message and ident == message_id:
+                at_message.set()
+                await proceed.wait()
+            return await original_get(entity, ident, **kwargs)
+
+        monkeypatch.setattr(admission, "get", paused_get)
+        task = asyncio.create_task(reserve_generation_run(admission, project_id=project_id,
+            user_id=owner_id, idempotency_key="racing-next-edit", prompt="Next edit"))
+        try:
+            await asyncio.wait_for(at_message.wait(), timeout=10)
+            # Force the exact race: failure cannot commit between the active-row
+            # read and final-message read while admission owns that same row lock.
+            await worker.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            with pytest.raises(DBAPIError) as rejected:
+                await record_generation_product_failure(worker, run_id, "edit did not finish")
+            assert getattr(rejected.value.orig, "sqlstate", None) == "55P03"
+            await worker.rollback()
+        finally:
+            proceed.set()
+            try:
+                with pytest.raises(ApiError) as conflict:
+                    await asyncio.wait_for(task, timeout=10)
+                assert conflict.value.status_code == 409
+            finally:
+                await admission.rollback()
+        # Once admission releases the lock, persist the failure normally.
+        await record_generation_product_failure(worker, run_id, "edit did not finish")
+        await worker.commit()
+        assert await finalize_generation_run(run_id, worker) == "failed"
 
 
 async def test_build_with_snapshot_is_completed_product_outcome(
