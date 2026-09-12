@@ -85,7 +85,7 @@ it.each(["cancelled", "reconciling"] as const)("starts adaptation only after con
   expect(api.cancelRestoration).toHaveBeenCalledWith("a", "op-a");
   if (state === "cancelled") {
     expect(adapt).toHaveBeenCalledOnce();
-    expect(adapt.mock.calls[0][0]).toContain("Сохрани все текущие записи");
+    expect(adapt.mock.calls[0][0]).toContain("Сохрани все текущие пользовательские данные");
     expect(adapt.mock.calls[0][0]).not.toContain("op-a");
     expect(adapt.mock.calls[0][0]).toContain("Не публикуй приложение");
     expect(adapt.mock.calls[0][1]).toEqual({
