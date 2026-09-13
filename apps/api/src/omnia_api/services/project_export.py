@@ -21,6 +21,7 @@ this can never produce a WORSE download than today.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 # apps/api/src/omnia_api/services/ -> parents[4] == apps/  (same as agent_builder)
@@ -79,6 +80,19 @@ def read_template_tree(template_dir: Path) -> dict[str, str | bytes]:
             out[rel] = data.decode("utf-8")
         except UnicodeDecodeError:
             out[rel] = data
+    # Only our mounted/source collection has shared data. Arbitrary complete
+    # template directories and historical exports keep their own bytes.
+    if template_dir.resolve().parent == _TEMPLATES_DIR.resolve():
+        shared = _TEMPLATES_DIR / "shared-public"
+        manifest = json.loads((shared / "manifest.json").read_text(encoding="utf-8"))
+        if template_dir.name in manifest["templates"]:
+            for name in manifest["assets"]:
+                if not isinstance(name, str) or Path(name).name != name or not name.endswith(".js"):
+                    raise ValueError("invalid shared public asset name")
+                asset = shared / name
+                if asset.is_symlink() or not asset.is_file():
+                    raise FileNotFoundError(f"shared template asset unavailable: {name}")
+                out[f"public/{name}"] = asset.read_bytes().decode("utf-8")
     return out
 
 

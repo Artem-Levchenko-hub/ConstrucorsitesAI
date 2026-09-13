@@ -33,6 +33,7 @@ from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.internal_auth import verify_internal_token
 from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.core.stack_registry import get_stack
+from omnia_orchestrator.core.template_materialization import materialized_template
 from omnia_orchestrator.core.workspace_provider import (
     ControlAction,
     WorkspaceProvider,
@@ -1324,9 +1325,13 @@ async def _ensure_seed_workspace_files(
             seeded_from_project = bool(seeded_files)
     if not seeded_files or manager.machine_runtime is not None:
         template_root = trusted_template_source(_PROJECT_CELL_TEMPLATE_DIR)
+
+        def collect_template_files() -> tuple[dict[str, str], set[str]]:
+            with materialized_template(template_root) as standalone:
+                return _collect_workspace_text_files(standalone)
+
         template_files, _dropped = await asyncio.to_thread(
-            _collect_workspace_text_files,
-            template_root,
+            collect_template_files,
         )
         pristine = not seeded_files or seeded_files == template_files
         if not seeded_files:

@@ -55,7 +55,12 @@ uv sync --quiet
 TEMPLATE_IMAGE=omnia-template-nextjs-postgres-drizzle:dev
 if ! docker image inspect "$TEMPLATE_IMAGE" >/dev/null 2>&1; then
     echo "[3/5] building template image (60-180s, first run)"
-    docker build -t "$TEMPLATE_IMAGE" -f templates/nextjs-postgres-drizzle/Dockerfile.dev templates/nextjs-postgres-drizzle/
+    (
+        context=$(mktemp -d)
+        trap 'rm -rf -- "$context"' EXIT
+        python3 scripts/materialize-template.py nextjs-postgres-drizzle "$context"
+        docker build -t "$TEMPLATE_IMAGE" -f "$context/Dockerfile.dev" "$context"
+    )
 else
     echo "[3/5] template image cached"
 fi

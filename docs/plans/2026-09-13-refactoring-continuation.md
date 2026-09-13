@@ -93,7 +93,67 @@ deferred once/retry и blank/imported/empty-slug gates. BEFORE15passed;
 AFTER со stack routing и тремя Cell negative cases: **83 passed /2 прежних xfail**.
 Полные API Ruff/mypy283 прошли. Независимое Astra review: No findings; после
 разворачивания helper AST совпадает с BASE, отдельно повторены BEFORE/AFTER15.
-Полный CI и доставка этого пакета пока не завершены.
+CI `34760360496`: все семь jobs success, API **3578 passed /12 skipped /8 xfailed**,
+orchestrator **1641 passed /31 skipped /15 xfailed**. Изолированный API image:
+**80 passed /2 xfailed**. Поставлен `0dacd38fe255258c2f2435f7a0b49232cfee4147`,
+image `sha256:aeea5e394e9e9b77bc838356454c6f679059be6a5a535b9212147af175fc0d87`.
+Deploy exit0; API/worker/generation-worker подтвердили exact revision/image,
+public API6/6, web200 и POST405. Web/controller и пять серверных документов
+сохранены. H152 опубликован: public version84, 148 прежних записей сохранены.
+Receipt: `/opt/omnia-runtime/release-evidence/refactor-0dacd38fe255258c2f2435f7a0b49232cfee4147/supplemental-verification.json`.
+
+## Пакет 3: один источник публичных JS четырёх шаблонов
+
+Task5 extension, BASE `0dacd38fe255258c2f2435f7a0b49232cfee4147`.
+`omnia-inspector.js`, `omnia-brief-narration.js`, `omnia-remix-cta.js` хранятся
+в одном `templates/shared-public` с data-only manifest для MAX, entities,
+postgres-drizzle и realtime. Убраны девять лишних копий. Net production,
+включая helper/integrations/scripts, без tests/CI/docs: **−207366 bytes /−4903 строки**.
+
+Штатный CLI `python3 scripts/materialize-template.py TEMPLATE DESTINATION`
+создаёт самостоятельное дерево в новом/пустом каталоге. Изменены все выявленные
+seed/build/export consumers: provisioning, image freshness/build, production
+builder, Project Cell pristine comparison, boundary QA reader, API export,
+bulk/smoke scripts. Пользовательский overlay остаётся поверх шаблона; missing-only
+seed сохраняет существующие, включая пустые, файлы. API читает только общие данные,
+не импортирует orchestrator. Dockerfiles и managed MAX kit/security не менялись.
+Сырые source-каталоги теперь требуют материализации; прямые рецепты обновлены.
+
+Полные 309 tracked path/hash/mode записей четырёх исходных деревьев заморожены
+до изменений. Исключения — только три явно перечисленных README с новыми рецептами;
+восемь Dockerfiles и остальные runtime bytes/modes должны совпадать.
+Локальный gate: **112 orchestrator +48 API passed**; три DB-dependent API cases
+не запускались локально и входят в полный CI. Ruff, mypy API283/orchestrator87,
+shell syntax и diff check прошли. Проверены реальные callers и ошибки,
+конкурентная пересборка, время жизни build context при cancellation, пользовательские
+overlays, Project Cell seed/pristine и реальные участки shell commands с fake Docker.
+
+Браузер BEFORE/AFTER: четыре шаблона × desktop1440/mobile390, **96 групп проверок**
+и **232 локальных HTTP-запроса** на каждый прогон, ошибок нет. Совпали selection
+payload, postMessage/origin checks, narration/replay, Remix navigation и геометрия.
+Все 12 AFTER physical files совпали с frozen Windows CRLF golden; Git LF baseline
+отличается только окончаниями строк. Файлы не нормализовались для сокрытия разницы.
+Это поведение JS в локальном harness, не бизнес-приёмка сгенерированного приложения.
+
+BEFORE Docker: восемь dev/prod images, **24 HTTP asset hash checks** прошли,
+live template tags не изменились. Первая попытка QA не дошла до сборки из-за
+неподдерживаемого `tarfile` API старого серверного Python; исправлен QA script.
+Основной повтор прошёл семь образов, но пропустил штатный шаг создания `drizzle`
+в prod context. После добавления того же шага, который уже есть в builder,
+отдельный drizzle-prod retry прошёл. Исходные failed receipts сохранены;
+Dockerfiles и product code для исправления QA не менялись.
+
+Независимое review обнаружило пропущенные readers Project Cell/boundary QA и
+рецепты ещё на этапе проектирования; они включены до удаления копий. В review
+реализации исправлена отсутствующая установка зависимостей в realtime README,
+после чего пять затронутых golden/CLI tests прошли. Исправлена также новая CI
+проверка экспорта: её ожидания независимо фиксируют восемь прежних исключений
+`.omnia`, а не меняют API ради полного orchestrator tree. Семь export tests,
+включая реальный smoke script вне checkout на чистом временном mounted tree,
+прошли. Независимое финальное Astra review: **No findings**; отдельно проверены
+12 исходных JS, 309 hashes/modes, восемь Dockerfiles и 301 экспортируемый файл.
+Полный CI, Linux image/mounted-export smoke, AFTER Docker и production delivery
+пока ожидаются.
 
 ## Следующие подтверждённые кандидаты
 

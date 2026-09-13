@@ -16,21 +16,36 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from omnia_orchestrator.core.template_materialization import materialize_template
+
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 _ENTITIES = _TEMPLATES / "nextjs-entities"
 _DRIZZLE = _TEMPLATES / "nextjs-postgres-drizzle"
+_REALTIME = _TEMPLATES / "nextjs-realtime"
+_MAX = _TEMPLATES / "max-miniapp-nextjs"
 _SCRIPT_REL = "public/omnia-brief-narration.js"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def standalone_templates(tmp_path_factory):
+    root = tmp_path_factory.mktemp("public-contract")
+    with pytest.MonkeyPatch.context() as patch:
+        for key in ("_ENTITIES", "_DRIZZLE", "_REALTIME", "_MAX"):
+            source = globals()[key]
+            destination = root / source.name
+            materialize_template(source, destination)
+            patch.setitem(globals(), key, destination)
+        yield
 
 
 def test_brief_narration_copies_stay_in_sync() -> None:
     """Both Next.js container templates ship a byte-identical script (R-04 DRY)."""
     canonical = (_ENTITIES / _SCRIPT_REL).read_bytes()
-    copy = (_DRIZZLE / _SCRIPT_REL).read_bytes()
-    assert copy == canonical, (
-        "omnia-brief-narration.js drifted between nextjs-entities and "
-        "nextjs-postgres-drizzle — keep the copies byte-identical "
-        "(copy the nextjs-entities one over the drizzle one)."
-    )
+    for template in (_DRIZZLE, _REALTIME, _MAX):
+        assert (template / _SCRIPT_REL).read_bytes() == canonical
+
 
 
 def test_brief_narration_contract() -> None:
@@ -69,7 +84,7 @@ def test_brief_narration_contract() -> None:
 
 def test_brief_narration_wired_into_both_layouts() -> None:
     """Each flagship layout loads the script (else the file ships dead)."""
-    for tpl in (_ENTITIES, _DRIZZLE):
+    for tpl in (_ENTITIES, _DRIZZLE, _REALTIME, _MAX):
         layout = (tpl / "src/app/layout.tsx").read_text(encoding="utf-8")
         assert 'src="/omnia-brief-narration.js"' in layout, (
             f"{tpl.name}/src/app/layout.tsx must <Script src> the brief narration."

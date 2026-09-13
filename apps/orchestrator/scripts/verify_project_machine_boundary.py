@@ -16,6 +16,7 @@ import docker
 
 from omnia_orchestrator.core.cell_resources import LifecycleMutation
 from omnia_orchestrator.core.project_machine import MachineManifest
+from omnia_orchestrator.core.template_materialization import materialized_template
 from omnia_orchestrator.routers.runtime import _max_preview_bootstrap_signature
 from omnia_orchestrator.services import machine_adapter
 from omnia_orchestrator.services.cell_state import CellCredentialStore
@@ -29,6 +30,11 @@ from omnia_orchestrator.services.machine_network_allocation import create_pool_n
 
 def template_text_files(template: Path) -> dict[str, str]:
     """Return authored template sources, never local install/build caches."""
+    with materialized_template(template) as standalone:
+        return _standalone_text_files(standalone)
+
+
+def _standalone_text_files(template: Path) -> dict[str, str]:
     files: dict[str, str] = {}
     for path in template.rglob("*"):
         relative = path.relative_to(template)

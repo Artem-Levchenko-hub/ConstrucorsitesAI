@@ -34,6 +34,7 @@ from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.core.stack_registry import get_stack
+from omnia_orchestrator.core.template_materialization import materialize_template
 from omnia_orchestrator.services import deploy_state, nginx_writer
 from omnia_orchestrator.services.port_allocator import get_prod_port_allocator
 from omnia_orchestrator.services.provisioner import _template_source_dir
@@ -426,12 +427,7 @@ async def _run(
                 status_code=422,
             )
         template_dir = _template_source_dir(template)
-        shutil.copytree(
-            template_dir,
-            build_dir,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("node_modules", ".next", ".git", "__pycache__"),
-        )
+        materialize_template(template_dir, build_dir)
 
         # 2. Overlay the live app files from the dev container.
         await docker_client.unpause_container(dev_name)

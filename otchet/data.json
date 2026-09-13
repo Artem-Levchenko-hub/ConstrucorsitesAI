@@ -2811,13 +2811,25 @@
    "id": "H152",
    "title": "Общая подготовка окружения вместо двух одинаковых блоков",
    "description": "Обычный и отложенный запуск используют один локальный helper. События, gates и установка готовности после успеха сохранены.",
+   "status": "worked",
+   "score": null,
+   "category": "верификация / рефакторинг",
+   "period": "13.09",
+   "evidence": "Code/production 0dacd38fe255258c2f2435f7a0b49232cfee4147; image sha256:aeea5e394e9e9b77bc838356454c6f679059be6a5a535b9212147af175fc0d87. CI 34760360496: все 7 jobs success, API 3578 passed / 12 skipped / 8 xfailed, orchestrator 1641 passed / 31 skipped / 15 xfailed. BEFORE 15; AFTER 83 passed / 2 existing xfail; isolated Linux image 80 passed / 2 xfailed. API Ruff/mypy 283; Astra review No findings. Deploy exit 0; exact API/worker/generation-worker revision and image, public API 6/6, web 200, POST 405; nginx and five dirty server documents preserved, web/controller unchanged. Supplemental receipt: /opt/omnia-runtime/release-evidence/refactor-0dacd38fe255258c2f2435f7a0b49232cfee4147/supplemental-verification.json.",
+   "impact": "Рабочий код короче на 24 строки и 1 138 байт; один локальный owner, нового слоя нет. Ускорение не заявляется.",
+   "next_vector": "Общий источник трёх публичных JS для четырёх шаблонов с проверкой сборки, экспорта и пользовательских overrides; затем MAX config, snapshot mapping и pass usage."
+  },
+  {
+   "id": "H153",
+   "title": "Три общих JS вместо двенадцати копий в шаблонах",
+   "description": "Единый источник данных для четырёх шаблонов; materialization подключена к созданию, сборке и экспорту, включая Project Cell. Пользовательские файлы сохраняются.",
    "status": "testing",
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "13.09",
-   "evidence": "BASE f43c7f227d1bb8d9fca50797aedabaee66f58c67. BEFORE15passed; AFTER83passed2existingxfail. Реальный _process_prompt, порядок/ошибки/deferred/gates; внешние IO заменены fakes. API Ruff/mypy283passed. Astra review No findings; AST эквивалентен после разворачивания helper. CI и delivery ожидаются.",
-   "impact": "Рабочий код короче на 24 строки и 1 138 байт; один локальный owner, нового слоя нет. Ускорение не заявляется.",
-   "next_vector": "После доставки: чтение MAX config в трёх callers; затем четыре snapshot mapping и два pass usage helper."
+   "evidence": "BASE 0dacd38f. 112 orchestrator + 48 API passed; Ruff/mypy 87/283, shell syntax и diff check прошли. Frozen 309 Git entries; восемь Dockerfiles неизменны. Browser BEFORE/AFTER: 96 групп и 232 HTTP на прогон, ошибок нет, 12 physical hashes совпали с Windows golden. BEFORE Docker: 8 dev/prod images, 24 HTTP asset checks прошли; QA compatibility/omitted mkdir errors сохранены и исправлены в отдельных попытках. Full CI, AFTER Docker, Linux mounted export и production delivery ожидаются.",
+   "impact": "Рабочие исходники короче на 4 903 строки и 207 366 байт с учётом helper и интеграций; новые слои между сервисами не добавлены. Ускорение генерации не заявляется.",
+   "next_vector": "Завершить review и delivery; затем остаточные дубли MAX config, snapshot mapping и pass usage."
   }
  ],
  "vectors": [

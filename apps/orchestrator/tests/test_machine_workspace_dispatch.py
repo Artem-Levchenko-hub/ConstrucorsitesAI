@@ -120,15 +120,20 @@ async def test_new_pristine_seed_gets_main_stack_machine_before_writes(
 ):
     from pathlib import Path
 
+    from omnia_orchestrator.core.template_materialization import materialize_template
+
     workspace_id = uuid4()
     _provider, manager, _docker, _run_id = await _ready_provider(tmp_path, workspace_id)
     manager.machine_runtime = PortableRuntime()
     state = manager.state_store.load(workspace_id)
     template = Path(__file__).parents[1] / "templates" / "max-miniapp-nextjs"
+    project_copy = tmp_path / "project-copy"
+    if copied_template:
+        materialize_template(template, project_copy)
     monkeypatch.setattr(
         workspace,
         "_project_workspace_dir",
-        lambda _: template if copied_template else tmp_path / "absent",
+        lambda _: project_copy if copied_template else tmp_path / "absent",
     )
     monkeypatch.setattr(
         workspace,
@@ -142,6 +147,8 @@ async def test_new_pristine_seed_gets_main_stack_machine_before_writes(
     assert json.loads(files[".omnia/cell.json"])["services"][0]["argv"] == ["pnpm", "start"]
     assert "src/app/page.tsx" not in files
     assert "AUTH_SECRET" not in "\n".join(files.values())
+    for name in ("omnia-inspector.js", "omnia-brief-narration.js", "omnia-remix-cta.js"):
+        assert files[f"public/{name}"]
 
 
 @pytest.mark.usefixtures("_internal_settings")

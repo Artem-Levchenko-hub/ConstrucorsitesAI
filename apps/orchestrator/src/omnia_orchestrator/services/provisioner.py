@@ -45,6 +45,11 @@ from omnia_orchestrator.core.docker_client import (
 from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.core.stack_registry import get_stack
+from omnia_orchestrator.core.template_materialization import (
+    materialize_template,
+    seed_shared_public_files,
+    shared_public_files,
+)
 from omnia_orchestrator.schemas.runtime import (
     ProvisionRequest,
     ProvisionResponse,
@@ -213,12 +218,10 @@ def _template_source_dir(template: str) -> Path:
 
 def _copy_template(src: Path, dest: Path) -> None:
     """Seed missing template files without overwriting the project workspace."""
-    def _ignore(_dir: str, names: list[str]) -> list[str]:
-        return [n for n in names if n in {"node_modules", ".next", ".git", "__pycache__"}]
-
     if not dest.exists():
-        shutil.copytree(src, dest, ignore=_ignore)
+        materialize_template(src, dest)
         return
+    shared_public_files(src)  # Validate canonical assets before mutating an existing workspace.
     skipped = {"node_modules", ".next", ".git", "__pycache__"}
     for source in src.rglob("*"):
         rel = source.relative_to(src)
@@ -230,6 +233,7 @@ def _copy_template(src: Path, dest: Path) -> None:
         elif not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    seed_shared_public_files(src, dest)
 
 
 def _workspace_text_files(root: Path) -> dict[str, str]:

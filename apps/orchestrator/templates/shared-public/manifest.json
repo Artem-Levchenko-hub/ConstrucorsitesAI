@@ -1,0 +1,13 @@
+{
+  "templates": [
+    "max-miniapp-nextjs",
+    "nextjs-entities",
+    "nextjs-postgres-drizzle",
+    "nextjs-realtime"
+  ],
+  "assets": [
+    "omnia-inspector.js",
+    "omnia-brief-narration.js",
+    "omnia-remix-cta.js"
+  ]
+}

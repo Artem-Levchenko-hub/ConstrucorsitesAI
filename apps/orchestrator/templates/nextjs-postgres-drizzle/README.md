@@ -35,8 +35,14 @@ Orchestrator конкатенирует:
 
 ## Локальный smoke (для разработчиков шаблона)
 
+Исходный каталог использует общие assets. Сначала создайте самостоятельную копию;
+её можно запускать или передавать в `docker build`.
+
 ```bash
-cd apps/orchestrator/templates/nextjs-postgres-drizzle
+cd apps/orchestrator
+standalone=$(mktemp -d)
+python3 scripts/materialize-template.py nextjs-postgres-drizzle "$standalone"
+cd "$standalone"
 pnpm install
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/dev pnpm dev
 # http://localhost:3000 — стартовая страница

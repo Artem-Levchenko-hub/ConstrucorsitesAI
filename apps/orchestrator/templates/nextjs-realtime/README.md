@@ -57,7 +57,14 @@ Orchestrator конкатенирует:
 
 ## Как запускается
 
+Исходный каталог использует общие assets; запускайте материализованную копию.
+
 ```bash
+cd apps/orchestrator
+standalone=$(mktemp -d)
+python3 scripts/materialize-template.py nextjs-realtime "$standalone"
+cd "$standalone"
+pnpm install
 # dev (HMR):
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/dev AUTH_SECRET=dev pnpm dev
 # http://localhost:3000

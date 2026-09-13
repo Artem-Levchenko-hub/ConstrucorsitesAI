@@ -2,6 +2,15 @@ from pathlib import Path
 
 from scripts.verify_project_machine_boundary import fixture_profile, template_text_files
 
+from omnia_orchestrator.core.template_materialization import TEMPLATES, shared_public_files
+
+
+def test_real_max_fixture_includes_materialized_public_assets():
+    template = TEMPLATES / "max-miniapp-nextjs"
+    files = template_text_files(template)
+    for relative, asset in shared_public_files(template).items():
+        assert files[relative] == asset.read_text(encoding="utf-8")
+
 
 def test_template_text_files_excludes_local_install_and_build_caches(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()

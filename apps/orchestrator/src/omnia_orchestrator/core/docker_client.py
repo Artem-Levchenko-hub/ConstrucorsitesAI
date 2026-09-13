@@ -32,6 +32,10 @@ import structlog
 
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import OrchestratorError
+from omnia_orchestrator.core.template_materialization import (
+    materialized_template,
+    shared_public_files,
+)
 
 log = structlog.get_logger("omnia_orchestrator.docker")
 
@@ -140,6 +144,10 @@ def _newest_source_mtime(template_dir: Path) -> float:
                 newest = max(newest, p.stat().st_mtime)
         except OSError:
             continue
+    shared = shared_public_files(template_dir)
+    if shared:
+        inputs = [*shared.values(), next(iter(shared.values())).parent / "manifest.json"]
+        newest = max(newest, *(path.stat().st_mtime for path in inputs))
     return newest
 
 
@@ -195,13 +203,15 @@ async def ensure_template_image_fresh(template_dir: Path | str, image_tag: str) 
             docker_config_dir.mkdir(parents=True, exist_ok=True)
             build_env = os.environ.copy()
             build_env["DOCKER_CONFIG"] = str(docker_config_dir)
-            proc = subprocess.run(
-                ["docker", "build", "-f", str(dockerfile), "-t", image_tag, str(template_dir)],
-                capture_output=True,
-                text=True,
-                timeout=900,
-                env=build_env,
-            )
+            with materialized_template(template_dir) as context:
+                proc = subprocess.run(
+                    ["docker", "build", "-f", str(context / dockerfile.name),
+                     "-t", image_tag, str(context)],
+                    capture_output=True,
+                    text=True,
+                    timeout=900,
+                    env=build_env,
+                )
             return proc.returncode, (proc.stderr or proc.stdout or "")[-500:]
 
         try:

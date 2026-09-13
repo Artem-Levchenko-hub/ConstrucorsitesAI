@@ -274,6 +274,18 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/api/tests/fixtures/static_templates_810f0fbb.json,dst=/smoke/golden.json,readonly" \
             --entrypoint /app/.venv/bin/python omnia-api:prod \
             /smoke/verify.py /smoke/golden.json --package-root /app/src
+      - name: Verify shared public assets through the mounted API export
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --pids-limit 128 --memory 512m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=128m --workdir /tmp \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/templates,dst=/orchestrator/templates,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/api/scripts/verify_shared_public_export.py,dst=/smoke/verify.py,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/shared_public_git_golden.json,dst=/smoke/golden.json,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/shared_public_readme_overrides.json,dst=/smoke/readmes.json,readonly" \
+            --entrypoint /app/.venv/bin/python omnia-api:prod \
+            /smoke/verify.py /smoke/golden.json /smoke/readmes.json
 
   workflow-lint:
     runs-on: ubuntu-latest

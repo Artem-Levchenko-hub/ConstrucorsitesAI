@@ -62,7 +62,7 @@
 
 ## Доставка / прод (CLAUDE.md)
 - atomic commit + трейлер `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`; push main (через origin/main, `git fetch` сперва — main двигают 4 агента; rebase при race).
-- Деплой: api/worker → `cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --build api worker`; gateway → `… up -d --build gateway`; **фикс ШАБЛОНА `apps/orchestrator/templates/*` → ПЕРЕСБОРКА base-образа на VPS** (`cd /opt/omnia/apps/orchestrator && docker build -t omnia-template-nextjs-postgres-drizzle:dev -f templates/nextjs-postgres-drizzle/Dockerfile.dev templates/nextjs-postgres-drizzle/`), git pull НЕ достаточно.
+- Деплой: api/worker → `cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --build api worker`; gateway → `… up -d --build gateway`; **фикс ШАБЛОНА `apps/orchestrator/templates/*` → ПЕРЕСБОРКА base-образа на VPS** (`(cd /opt/omnia/apps/orchestrator && context=$(mktemp -d) && trap 'rm -rf -- "$context"' EXIT && python3 scripts/materialize-template.py nextjs-postgres-drizzle "$context" && docker build -t omnia-template-nextjs-postgres-drizzle:dev -f "$context/Dockerfile.dev" "$context")`), git pull НЕ достаточно.
 - Прод-compose = `apps/llm-gateway/deploy/full` (контейнеры `omnia-prod-*`), НЕ `infra/`. Прод git: `git fetch && git merge --ff-only origin/main` (не pull). Health-check: curl прод 200 ИЗВНЕ (с VPS NAT-hairpin даёт ложный 000).
 
 ## ЗАПРЕТЫ

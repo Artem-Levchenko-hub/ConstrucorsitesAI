@@ -120,6 +120,8 @@ def test_inject_inspector_appends_when_no_body() -> None:
 
 
 def test_inspector_copies_stay_in_sync() -> None:
+    from omnia_api.services.project_export import read_template_tree
+
     repo = Path(__file__).resolve().parents[3]  # apps/api/tests/<file> -> repo root
     canonical = repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
     copies = [
@@ -133,10 +135,11 @@ def test_inspector_copies_stay_in_sync() -> None:
     ]
     want = canonical.read_bytes()
     for copy in copies:
-        assert copy.read_bytes() == want, (
+        actual = read_template_tree(copy.parent.parent)["public/omnia-inspector.js"]
+        assert actual == want.decode(), (
             f"omnia-inspector.js drifted between apps/api and {copy.name}'s template "
             f"({copy.parent.parent.name}) — keep all copies byte-identical "
-            "(copy apps/api/.../static/omnia-inspector.js over the template ones)."
+            "(update the canonical shared-public source and the API static asset together)."
         )
 
 

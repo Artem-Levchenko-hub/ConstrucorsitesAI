@@ -2,7 +2,8 @@
 # Build (or rebuild) every orchestrator template image.
 #
 # Iterates `apps/orchestrator/templates/*/` and runs `docker build` for each
-# template that has a `Dockerfile.dev`. Tag scheme: `omnia-template-<dir>:dev`.
+# template that has a `Dockerfile.dev`, using a materialized standalone context.
+# Tag scheme: `omnia-template-<dir>:dev`.
 # Same tag the provisioner looks for at run time.
 #
 # Idempotent: with --skip-cached, images already present are left alone.
@@ -43,6 +44,8 @@ fi
 FAILED=()
 BUILT=()
 SKIPPED=()
+context_root=$(mktemp -d)
+trap 'rm -rf -- "$context_root"' EXIT
 
 for dir in templates/*/; do
     name=$(basename "$dir")
@@ -60,7 +63,9 @@ for dir in templates/*/; do
     fi
 
     echo "[build] $tag"
-    if docker build -t "$tag" -f "$dockerfile" "$dir"; then
+    context="$context_root/$name"
+    if python3 scripts/materialize-template.py "$name" "$context" && \
+       docker build -t "$tag" -f "$context/Dockerfile.dev" "$context"; then
         BUILT+=("$name")
     else
         echo "[fail] $name" >&2
