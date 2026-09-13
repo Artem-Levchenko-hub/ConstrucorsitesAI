@@ -78,3 +78,45 @@ location /llm/ {
 
 Never use `docker compose down -v` during an update: it removes production
 volumes.
+
+## Production smoke
+
+`.github/workflows/production-smoke.yml` запускает внешнюю проверку каждые пять
+минут. Она проверяет web/API, шесть зависимостей API, версии компонентов,
+страницу `/mvp`, health постоянного MAX-проекта и отказ webhook без авторизации.
+Проверка генерации через модель и пользовательских данных выполняется отдельным
+generation canary из шага 7.
+
+Настройки находятся в GitHub Actions repository variables:
+
+| Переменная | Ожидаемое значение |
+| --- | --- |
+| `PRODUCTION_EXPECTED_WEB_RELEASE_SHA` | Полный SHA работающего web image |
+| `PRODUCTION_EXPECTED_API_RELEASE_SHA` | Полный SHA работающего API image |
+| `PRODUCTION_EXPECTED_WORKER_RELEASE_SHA` | Полный SHA общего image worker и generation-worker |
+| `PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA` | Полный SHA работающего host-orchestrator |
+| `PRODUCTION_MAX_CANARY_URL` | Базовый адрес постоянного опубликованного служебного MAX-проекта |
+
+Все SHA содержат ровно 40 шестнадцатеричных символов. API-only поставка сохраняет
+прежние ожидаемые версии web и orchestrator. Ожидаемые значения обновляются после
+подтверждения фактических образов и readiness. Прежняя общая переменная
+`PRODUCTION_EXPECTED_RELEASE_SHA` этим workflow больше не используется.
+
+Контрольный MAX-проект сохраняется между запусками. Перед заменой его адреса
+подтвердите `/api/health` → 200 с `status=ok`, `platform=max-miniapp`, а также
+неавторизованный `POST /api/max/webhook` с `{}` → 401. Одноразовый проект,
+удаляемый cleanup генерационного теста, для этого адреса не подходит. Новый MAX
+в Project Cell требует первой принятой сборки перед штатным start/deploy.
+
+Ошибки имеют имена, например `api.release_mismatch`,
+`api.readiness.generation_worker`, `max_health.http_502`. Тела ответов и адреса
+в диагностический вывод не попадают. Отсутствующий canary, неизвестная версия
+или успешный неавторизованный webhook оставляют проверку красной.
+
+Запуски по расписанию сохраняют прежнее управление incident issue. Push и
+ручной запуск проверяют те же условия без создания issues и комментариев.
+Для проверки с уже заданными переменными и без сторонних Python-зависимостей:
+
+```bash
+PYTHONPATH=apps/api/src python3 -S -m omnia_api.ops.production_smoke
+```
