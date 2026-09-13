@@ -247,6 +247,12 @@ async def test_real_production_builder_materializes_before_live_public_overlay(
     monkeypatch.setattr(builder.docker_client, "unpause_container", AsyncMock())
 
     async def copy_live(_container, source, destination):
+        if source == "/app/src" and name != "max-miniapp-nextjs":
+            await asyncio.to_thread(Path(destination, "src/lib/utils.ts").write_bytes, b"")
+            if name != "nextjs-realtime":
+                await asyncio.to_thread(
+                    Path(destination, "src/app/omnia-brief.ts").write_bytes, b"// live brief\n",
+                )
         if source == "/app/public":
             await asyncio.to_thread(
                 Path(destination, "public/omnia-inspector.js").write_bytes,
@@ -258,6 +264,10 @@ async def test_real_production_builder_materializes_before_live_public_overlay(
     async def build(context_dir, dockerfile, _tag):
         context = Path(context_dir)
         contexts.append(context)
+        if name != "max-miniapp-nextjs":
+            assert (context / "src/lib/utils.ts").read_bytes() == b""
+            if name != "nextjs-realtime":
+                assert (context / "src/app/omnia-brief.ts").read_bytes() == b"// live brief\n"
         assert (context / "public/omnia-inspector.js").read_bytes() == b"// customized\n"
         for asset in ["omnia-brief-narration.js", "omnia-remix-cta.js"]:
             data = (context / "public" / asset).read_bytes().replace(b"\r\n", b"\n")

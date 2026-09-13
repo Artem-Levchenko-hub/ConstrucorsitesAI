@@ -56,6 +56,30 @@ npm run dev          # или: uvicorn app.main:app --reload
 """
 
 
+def _shared_asset_path(shared: Path, relative: str) -> Path:
+    path = shared / relative
+    for ancestor in (path, *path.parents):
+        if ancestor == shared.parent:
+            break
+        if ancestor.is_symlink():
+            raise ValueError("invalid shared source symlink")
+    if not path.resolve().is_relative_to(shared.resolve()):
+        raise ValueError("invalid shared source containment")
+    if not path.is_file():
+        raise FileNotFoundError(f"shared template asset unavailable: {relative}")
+    return path
+
+
+def _validate_source_path(relative: str) -> None:
+    if (
+        not relative.startswith("src/")
+        or "\\" in relative
+        or any(part in {"", ".", ".."} or ":" in part for part in relative.split("/"))
+        or Path(relative).suffix not in {".ts", ".tsx"}
+    ):
+        raise ValueError("invalid shared source path")
+
+
 def read_template_tree(template_dir: Path) -> dict[str, str | bytes]:
     """Read a skeleton template tree into ``{repo-relative path: content}``,
     skipping dependency/build/VCS dirs and oversized blobs. Text decodes to str;
@@ -89,10 +113,13 @@ def read_template_tree(template_dir: Path) -> dict[str, str | bytes]:
             for name in manifest["assets"]:
                 if not isinstance(name, str) or Path(name).name != name or not name.endswith(".js"):
                     raise ValueError("invalid shared public asset name")
-                asset = shared / name
-                if asset.is_symlink() or not asset.is_file():
-                    raise FileNotFoundError(f"shared template asset unavailable: {name}")
+                asset = _shared_asset_path(shared, name)
                 out[f"public/{name}"] = asset.read_bytes().decode("utf-8")
+            for relative, templates in manifest.get("source_files", {}).items():
+                if template_dir.name in templates:
+                    _validate_source_path(relative)
+                    asset = _shared_asset_path(shared, f"source/{relative}")
+                    out[relative] = asset.read_bytes().decode("utf-8")
     return out
 
 

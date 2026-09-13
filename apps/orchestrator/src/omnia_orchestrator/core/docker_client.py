@@ -146,7 +146,9 @@ def _newest_source_mtime(template_dir: Path) -> float:
             continue
     shared = shared_public_files(template_dir)
     if shared:
-        inputs = [*shared.values(), next(iter(shared.values())).parent / "manifest.json"]
+        inputs = [
+            *shared.values(), template_dir.resolve().parent / "shared-public/manifest.json",
+        ]
         newest = max(newest, *(path.stat().st_mtime for path in inputs))
     return newest
 

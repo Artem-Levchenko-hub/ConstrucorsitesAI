@@ -13,6 +13,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as _CONTAINER_NEXT
 from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
+from omnia_api.schemas.snapshot import snapshot_public_dict as _snapshot_dict
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.project_versions import record_restored_version
 from omnia_api.services.queue import enqueue_preview
@@ -45,20 +46,6 @@ def with_rollback_deletions(
     out = {p: "" for p in old_files if p not in target_files}
     out.update(target_files)
     return out
-
-
-def _snapshot_dict(s: Snapshot) -> dict[str, object]:
-    return {
-        "id": s.id,
-        "project_id": s.project_id,
-        "commit_sha": s.commit_sha,
-        "prompt_text": s.prompt_text,
-        "model_id": s.model_id,
-        "parent_id": s.parent_id,
-        "preview_url": preview_public_url(s.preview_key),
-        "is_rollback_target": s.is_rollback_target,
-        "created_at": s.created_at,
-    }
 
 
 @router.post("/{project_id}/rollback", response_model=SnapshotPublic)

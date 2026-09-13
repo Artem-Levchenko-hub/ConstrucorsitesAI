@@ -1,0 +1,212 @@
+{
+  "src/components/ui/dropdown-menu.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "6db92a37b5ad5673b58923525fb57d2e9b254e65ab5a2d1cbe6f9d57ffff948e",
+    "mode": "100644"
+  },
+  "src/components/ui/select.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "495ebffd1c7bec0b4ba19c8b93c186febe25f78e60d1e59d55156607c2790f9a",
+    "mode": "100644"
+  },
+  "src/components/ui/sheet.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "4277184fb27ea1068e4835b255620f881b833402f67ebe0dda509b0e890bfed4",
+    "mode": "100644"
+  },
+  "src/components/ui/dialog.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "cfec6f8e66c820c47e91f482066755bfc506ea040b3ad279500be5e0bf13df57",
+    "mode": "100644"
+  },
+  "src/lib/utils.ts": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "d1d0dffc5e73e91dc163f33ce821c6f4bc5f4e59fabb0438a67c60ac803e4504",
+    "mode": "100644"
+  },
+  "src/components/ui/table.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "7fcf54708dac2663ea2afcc9365a4c11e00e2b691779a7357479c113323ba243",
+    "mode": "100644"
+  },
+  "src/components/ui/card.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "e37bfe698af8cd1bc934a7973168d62fec1a97b9987c2ff844553ce900c2e40e",
+    "mode": "100644"
+  },
+  "src/components/ui/button.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "da5966348189ab94762863c43da114b791f7c41adbaebd452e623e43091c1ddc",
+    "mode": "100644"
+  },
+  "src/components/ui/tooltip.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "8ac45a88e3472d8b22da5e4496029aa9abb2433cbeb081c09ddfa9809538e09b",
+    "mode": "100644"
+  },
+  "src/components/ui/tabs.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "3357615afd6f4f1300700d17f30ee337fa9101eab2439831b7c755f1423bb53c",
+    "mode": "100644"
+  },
+  "src/components/ui/badge.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "67dcdb7c9e9b7f53cff003e50453cb15613db85b5b462c25e2bee71ddeee2570",
+    "mode": "100644"
+  },
+  "src/components/ui/sonner.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "86892a421696dc118a9938c3669e3459ecd4eb027976496b35142a8ecdf2c167",
+    "mode": "100644"
+  },
+  "src/components/ui/avatar.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "0962d62568a9d3d9756a042ef69946793d2069102da17f913fa8f14826e3d3a6",
+    "mode": "100644"
+  },
+  "src/components/ui/checkbox.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "168b36177e11496ac47227f4ee9e3084b9a3d1ab040399e88947683348223c9d",
+    "mode": "100644"
+  },
+  "src/components/ui/input.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "dd6504ef843f8f622193d173221d18d6b2cb50bf46850a68635328072ee60249",
+    "mode": "100644"
+  },
+  "src/app/api/auth/register/route.ts": {
+    "templates": [
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "15a0d0b3ca300563687d08ec830af15c929dbdd10c2c4a080b79624921def8c5",
+    "mode": "100644"
+  },
+  "src/components/Protected.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle"
+    ],
+    "sha256": "d02d398ab3dd78a8a1c9eb89a44d5ce840812aad0bdf0765b2060bfe18c0dad9",
+    "mode": "100644"
+  },
+  "src/components/ui/textarea.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "0093c4ccb5c0511511be08a399575f07fdd667ddd3ff47a8fdfea0d2e1c6e1f1",
+    "mode": "100644"
+  },
+  "src/components/ui/separator.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "f1f2550f7a16e2685fe5864a186cdca23084a08155de573b4d2dbdb650dcdf53",
+    "mode": "100644"
+  },
+  "src/components/ui/label.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle",
+      "nextjs-realtime"
+    ],
+    "sha256": "afc154e5bca909e293e5c5cedb6cb492e151a3b018af067446082c0323ecdd3f",
+    "mode": "100644"
+  },
+  "src/components/SignOutButton.tsx": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle"
+    ],
+    "sha256": "28d88196893bf721f9b39ac2d17b11fb800e553fb0cd913fe553c4442d8c17c9",
+    "mode": "100644"
+  },
+  "src/app/omnia-brief.ts": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle"
+    ],
+    "sha256": "9256acbf93804c170b902eafc679cb0cbd5d3e74fb559726589afd2a690e82a6",
+    "mode": "100644"
+  },
+  "src/lib/db/index.ts": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle"
+    ],
+    "sha256": "fe15000f3167d38ab548262b041d8bf17d007ed1a87049c5c416e3eb431ff741",
+    "mode": "100644"
+  },
+  "src/app/signout/route.ts": {
+    "templates": [
+      "nextjs-entities",
+      "nextjs-postgres-drizzle"
+    ],
+    "sha256": "798043e76949d8e5559fd180660f9efad0fc7dd8e4e9c1ba91b7603a6cf4e179",
+    "mode": "100644"
+  }
+}

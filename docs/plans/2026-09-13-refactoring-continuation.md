@@ -153,7 +153,7 @@ Dockerfiles и product code для исправления QA не менялис
 прошли. Независимое финальное Astra review: **No findings**; отдельно проверены
 12 исходных JS, 309 hashes/modes, восемь Dockerfiles и 301 экспортируемый файл.
 Полный CI, Linux image/mounted-export smoke, AFTER Docker и production delivery
-пока ожидаются.
+подтверждены ниже; исходные промежуточные результаты сохранены для проверки.
 
 Первый CI `34762926416` выявил ещё одну устаревшую предпосылку registry test:
 все каталоги `templates` считались стеками. Data-only `shared-public` теперь
@@ -164,17 +164,76 @@ orchestrator: **1 failed /1665 passed /31 skipped /15 xfailed**; после ло
 успешно проверил mounted export четырёх шаблонов вне checkout без сети.
 Отдельный canonical Git/LF browser AFTER также подтвердил все 12 SHA и 96 групп
 поведения: Windows archive запускался с `-c core.autocrlf=false`, без изменения
-конфигурации Git или исходных файлов. Поставка ждёт зелёного CI исправленной ревизии.
+конфигурации Git или исходных файлов. Итог исправленной ревизии приведён ниже.
 
-## Следующие подтверждённые кандидаты
+## Пакет 3: итоговая поставка
 
-1. Task9: три одинаковых чтения MAX config и рендера starter files в `messages.py`.
-   Общий helper должен заново читать config при каждом вызове; rollback и ошибки
-   остаются у callers. Кэширование не входит в пакет.
-2. Task13: четыре одинаковых raw snapshot mapping. Общий конкретный owner в
-   `schemas/snapshot.py`; отдельный event JSON с `.isoformat()` не объединять.
-3. Task13: два одинаковых pass usage helper; общий owner `llm_client.py`.
-   Отличающийся подсчёт passes в multipass остаётся отдельным.
+Production `8d8911718d457145486c9b61b3ceded011b4267c`, API image
+`sha256:6b67a580fb62caa908f8ca486b2059a9cb0ec565e1efee65328751b19b857928`.
+CI34763263203: все семь jobs success; API3585 passed/12 skipped/8 xfailed,
+orchestrator1666 passed/31 skipped/15 xfailed. AFTER восемь dev/prod сборок,
+24 HTTP asset hashes; canonical Git/LF browser96 групп,232запроса,0ошибок.
+Между c688c3d9 и8d изменились только registry test и документ; runtime bytes
+для Docker/browser proof одинаковы. Mounted-export smoke отдельно выполнен
+на точном API image8d: четыре шаблона,301файл и custom/empty overrides.
 
-Объединение exception cleanup в orchestrator даёт лишь шесть строк сокращения;
-дополнительная поставка сейчас не приоритетнее двух кандидатов API.
+Первая поставка остановилась на проверке чтения fixtures пользователем сервиса:
+существующий каталог имел0700. Откат восстановил прежние API images/controller
+и снял gate. Reviewed retry проверил прежние байты всех release paths и сторонний
+diff, под gate применил только собственный patch и исправил один каталог на0755.
+Retry1 exit0; API/worker/generation-worker/orchestrator8d,6/6 health, web200,
+POST405,24host source hashes, неизменные nginx и пять сторонних документов.
+Receipt: `/opt/omnia-runtime/release-evidence/sharedjs-delivery-8d8911718d457145486c9b61b3ceded011b4267c-retry1/supplemental-verification.json`.
+H153 опубликован: version85,149предыдущих записей сохранены,HTTP readback совпал.
+
+## Финальный пакет: API и одинаковые файлы Next.js
+
+Один writer последовательно выполнил API и TS части; отдельное review каждой
+части, затем один полный CI и общая API/controller поставка. Целевые проверки
+обеих частей сохраняются. Последующие CI, точная production revision и результаты
+Linux/browser проверок фиксируются в H154 [публичного отчёта](https://constructor.lead-generator.ru/otchet/)
+и `/opt/omnia-runtime/release-evidence/`; локальные результаты ниже не заменяют доставку.
+
+API: текущий config MAX читается заново общим helper; четыре raw snapshot mapper
+имеют одного владельца в schemas/snapshot.py; два точных pass usage aggregate
+используют llm_client.py. Сохранены native UUID/datetime, порядок float sum,
+особый multipass pass-count и импорт snapshot alias из restorations._with_snapshot.
+BEFORE74; AFTER76, включая два обнаруженных consumer восстановления;182смежных
+passed, три DB cases явно отложены до disposable CI. Полные API Ruff/mypy283 прошли.
+Net API source: −76строк/−3427canonical Git bytes. SQL/transactions/auth не менялись.
+Независимое review: No findings; после раскрытия MAX helper весь AST messages.py
+совпадает с BASE пакета, прежние snapshot/usage mapping и frozen assertions сохранены.
+
+TS:24общих источника вместо66физических файлов трёх non-MAX шаблонов.
+18групп UI/utils имеют три участника,6групп auth/DB/brief — два. Явная карта
+участников и исходных Git hashes/modes заморожена отдельно от runtime manifest.
+Сохранены309полных template files и301API export files с прежними тремя README
+исключениями. Пользовательские custom/empty files и результат inject_brief_module
+остаются поверх шаблона. Package/lock/Dockerfiles, MAX kit и бизнес-политики прежние.
+
+Существующий materializer и независимый API reader разрешают только вложенные
+src/*.ts/tsx пути без выхода из общего каталога; symlink root/ancestors/leaf
+отклоняются. Manifest mtime берётся явно, shared UI edit затрагивает три non-MAX
+образа. Dependency guard читает полное материализованное дерево; negative test
+с удалённой Radix dependency подтверждает, что проверка не ослабла после удаления копий.
+Net TS source: −2720строк/−84376canonical Git bytes; вместе с API −2796/−87803.
+
+Orchestrator160passed/3Windows symlink skips; API54passed и последующий
+изменённый export sub-suite14passed/3skips (пересекаются, не суммировать).
+Все шесть symlink cases требуют Linux gate: Windows отказал в создании ссылок,
+WinError1314. Ruff, mypy API283/orchestrator87 и diff check прошли.
+BEFORE standalone TypeScript: три собственных immutable dev images,198Git source
+hashes и tsc exit0. Не все шаблоны имеют tracked lock: фактические зависимости
+и image lock hashes проверяются отдельно; отсутствие lock не маскируется новым файлом.
+
+## Что не означает завершение этой чистки
+
+Реальные дубли API standalone inspector и protected MAX raw tsconfig остаются
+за отдельными границами сборки. Небольшая валидация общего manifest сохраняется
+в двух самостоятельно устанавливаемых Python-сервисах; нового runtime coupling нет.
+Task6/7 требуют модельной приёмки владельцем, Task3SQL SUM — решения о точности,
+Task12 — измерения причины IO. Task9/11 большие функции полностью не переработаны.
+Свежий AST-срез API после helper: messages.py9243строки, _process_prompt5150,
+post_prompt872. Удаление точных дублей не означает завершённую декомпозицию router.
+Полная матрица20 бизнес/model/crash/signedMAX сценариев не закрывается этой чисткой.
+Ни ускорение генерации, ни «все дубли удалены», ни100%плана не заявляются.

@@ -31,6 +31,16 @@ def set_free_generation(value: bool) -> None:
     _free_generation.set(value)
 
 
+def aggregate_pass_usage(*usages: dict[str, Any] | None) -> dict[str, Any]:
+    """Sum tokens / cost across pass usages. None entries treated as zeros."""
+    return {
+        "tokens_in": sum(int((u or {}).get("tokens_in", 0)) for u in usages),
+        "tokens_out": sum(int((u or {}).get("tokens_out", 0)) for u in usages),
+        "cost_rub": sum(float((u or {}).get("cost_rub", 0.0)) for u in usages),
+        "passes": len([u for u in usages if u is not None]),
+    }
+
+
 class LLMError(Exception):
     pass
 

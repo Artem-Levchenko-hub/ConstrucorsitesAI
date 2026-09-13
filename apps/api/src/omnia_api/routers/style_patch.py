@@ -23,6 +23,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
 from omnia_api.schemas.snapshot import SnapshotPublic
+from omnia_api.schemas.snapshot import snapshot_public_dict as _snapshot_dict
 from omnia_api.schemas.style_patch import StylePatchRequest
 from omnia_api.services import orchestrator_client
 from omnia_api.services import overrides as ov
@@ -53,20 +54,6 @@ def _expand_hex(h: str) -> str:
 
 def _is_banned(h: str) -> bool:
     return _expand_hex(h) in BANNED_HEXES
-
-
-def _snapshot_dict(s: Snapshot) -> dict[str, object]:
-    return {
-        "id": s.id,
-        "project_id": s.project_id,
-        "commit_sha": s.commit_sha,
-        "prompt_text": s.prompt_text,
-        "model_id": s.model_id,
-        "parent_id": s.parent_id,
-        "preview_url": preview_public_url(s.preview_key),
-        "is_rollback_target": s.is_rollback_target,
-        "created_at": s.created_at,
-    }
 
 
 @router.post("/{project_id}/style-patch", response_model=SnapshotPublic)

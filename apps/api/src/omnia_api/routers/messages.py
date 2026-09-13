@@ -4956,6 +4956,31 @@ async def _process_prompt(
             _agent_model = model_for_role("agent", override=force_model)
             # Stall recovery resolves through the same role registry.
             _escalate_model = model_for_role("agent_escalation", override=force_model)
+
+            async def _render_current_max_starter_files() -> dict[str, str]:
+                from omnia_api.models.max_project_config import MaxProjectConfig
+                from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+                from omnia_api.services.max_project_kit import render_max_starter_files
+
+                async with factory() as _max_session:
+                    _max_record = await _max_session.get(MaxProjectConfig, project_id)
+                _max_config = (
+                    MaxProjectConfigPayload.model_validate(_max_record.config)
+                    if _max_record is not None
+                    else MaxProjectConfigPayload(
+                        app_name=project_name or "MAX Mini App",
+                        app_type="custom",
+                        summary=prompt_text[:1000] or "Сервис внутри MAX",
+                    )
+                )
+                return render_max_starter_files(
+                    _max_config, project_id,
+                    portable=bool(
+                        _project_cell_executor_handle is not None
+                        and _project_cell_executor_handle.is_portable()
+                    ),
+                )
+
             _max_seed_files: dict[str, str] = {}
             # A new MAX project starts from the verified platform CORE with no
             # product page, then ALWAYS continues through the bounded native Google
@@ -4967,28 +4992,7 @@ async def _process_prompt(
                 and not _max_has_generated_snapshot
             ):
                 try:
-                    from omnia_api.models.max_project_config import MaxProjectConfig
-                    from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-                    from omnia_api.services.max_project_kit import render_max_starter_files
-
-                    async with factory() as _max_session:
-                        _max_record = await _max_session.get(MaxProjectConfig, project_id)
-                    _max_config = (
-                        MaxProjectConfigPayload.model_validate(_max_record.config)
-                        if _max_record is not None
-                        else MaxProjectConfigPayload(
-                            app_name=project_name or "MAX Mini App",
-                            app_type="custom",
-                            summary=prompt_text[:1000] or "Сервис внутри MAX",
-                        )
-                    )
-                    _starter_files = render_max_starter_files(
-                        _max_config, project_id,
-                        portable=bool(
-                            _project_cell_executor_handle is not None
-                            and _project_cell_executor_handle.is_portable()
-                        ),
-                    )
+                    _starter_files = await _render_current_max_starter_files()
                     if _design_contract:
                         from omnia_api.services.design_plugin import seed_design_memory
 
@@ -5399,28 +5403,7 @@ async def _process_prompt(
                 # buildable platform core, remove every generated product path,
                 # and do not publish the core as a successful application.
                 try:
-                    from omnia_api.models.max_project_config import MaxProjectConfig
-                    from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-                    from omnia_api.services.max_project_kit import render_max_starter_files
-
-                    async with factory() as _max_session:
-                        _max_record = await _max_session.get(MaxProjectConfig, project_id)
-                    _max_config = (
-                        MaxProjectConfigPayload.model_validate(_max_record.config)
-                        if _max_record is not None
-                        else MaxProjectConfigPayload(
-                            app_name=project_name or "MAX Mini App",
-                            app_type="custom",
-                            summary=prompt_text[:1000] or "Сервис внутри MAX",
-                        )
-                    )
-                    _safe_files = render_max_starter_files(
-                        _max_config, project_id,
-                        portable=bool(
-                            _project_cell_executor_handle is not None
-                            and _project_cell_executor_handle.is_portable()
-                        ),
-                    )
+                    _safe_files = await _render_current_max_starter_files()
                     _new_paths = sorted(
                         {path for path in _agent_res.files if path not in _safe_files}
                         | {"src/app/page.tsx"}
@@ -5985,28 +5968,7 @@ async def _process_prompt(
                     elif project_template == "max_miniapp":
                         # A brand-new MAX project has no product snapshot yet. Its
                         # safe fallback is the versioned core without a product page.
-                        from omnia_api.models.max_project_config import MaxProjectConfig
-                        from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-                        from omnia_api.services.max_project_kit import render_max_starter_files
-
-                        async with factory() as _max_session:
-                            _max_record = await _max_session.get(MaxProjectConfig, project_id)
-                        _max_config = (
-                            MaxProjectConfigPayload.model_validate(_max_record.config)
-                            if _max_record is not None
-                            else MaxProjectConfigPayload(
-                                app_name=project_name or "MAX Mini App",
-                                app_type="custom",
-                                summary=prompt_text[:1000] or "Сервис внутри MAX",
-                            )
-                        )
-                        _safe_files = render_max_starter_files(
-                            _max_config, project_id,
-                            portable=bool(
-                                _project_cell_executor_handle is not None
-                                and _project_cell_executor_handle.is_portable()
-                            ),
-                        )
+                        _safe_files = await _render_current_max_starter_files()
                         _new_paths = sorted(
                             {path for path in files if path not in _safe_files}
                             | {"src/app/page.tsx"}

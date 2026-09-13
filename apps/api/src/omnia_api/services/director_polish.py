@@ -41,6 +41,7 @@ from typing import Any
 from uuid import UUID
 
 from omnia_api.core.config import model_for_role
+from omnia_api.services.llm_client import aggregate_pass_usage as _aggregate_usage
 from omnia_api.services.llm_client import stream_chat_completion
 from omnia_api.services.vendor_profiles import vendor_directive
 
@@ -154,16 +155,6 @@ def _build_polish_messages(
         }
     )
     return msgs
-
-
-def _aggregate_usage(*usages: dict[str, Any] | None) -> dict[str, Any]:
-    """Sum tokens / cost across pass usages. None entries treated as zeros."""
-    return {
-        "tokens_in": sum(int((u or {}).get("tokens_in", 0)) for u in usages),
-        "tokens_out": sum(int((u or {}).get("tokens_out", 0)) for u in usages),
-        "cost_rub": sum(float((u or {}).get("cost_rub", 0.0)) for u in usages),
-        "passes": len([u for u in usages if u is not None]),
-    }
 
 
 async def director_polish_generate(

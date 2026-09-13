@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
+
+from omnia_orchestrator.core import template_materialization
 
 # templates/ sits next to the orchestrator package dir; this file is
 # apps/orchestrator/tests/, so templates is ../templates.
@@ -34,10 +37,30 @@ _PKG_NAME_RE = re.compile(r"^(?:@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~
 # Node builtins + path aliases that are never package.json deps.
 _NODE_BUILTINS = frozenset(
     {
-        "fs", "path", "crypto", "os", "http", "https", "stream", "util",
-        "events", "url", "child_process", "zlib", "buffer", "net", "tls",
-        "dns", "assert", "querystring", "readline", "process", "perf_hooks",
-        "timers", "worker_threads", "module",
+        "fs",
+        "path",
+        "crypto",
+        "os",
+        "http",
+        "https",
+        "stream",
+        "util",
+        "events",
+        "url",
+        "child_process",
+        "zlib",
+        "buffer",
+        "net",
+        "tls",
+        "dns",
+        "assert",
+        "querystring",
+        "readline",
+        "process",
+        "perf_hooks",
+        "timers",
+        "worker_threads",
+        "module",
     }
 )
 
@@ -72,6 +95,11 @@ def _next_templates() -> list[Path]:
 
 @pytest.mark.parametrize("template", _next_templates(), ids=lambda p: p.name)
 def test_every_src_import_is_declared(template: Path) -> None:
+    with template_materialization.materialized_template(template) as standalone:
+        _assert_src_imports_declared(standalone)
+
+
+def _assert_src_imports_declared(template: Path) -> None:
     data = json.loads((template / "package.json").read_text(encoding="utf-8"))
     declared = set(data.get("dependencies", {})) | set(data.get("devDependencies", {}))
 
@@ -98,3 +126,22 @@ def test_guard_sees_some_templates() -> None:
     # Self-check: the parametrize discovered real templates (a glob typo that
     # silently matched nothing would make the guard above vacuously pass).
     assert len(_next_templates()) >= 3
+
+
+def test_dependency_guard_reads_shared_sources_when_raw_template_is_sparse(tmp_path, monkeypatch):
+    root = tmp_path / "templates"
+    template = root / "nextjs-entities"
+    shutil.copytree(
+        _TEMPLATES_DIR / template.name,
+        template,
+        ignore=shutil.ignore_patterns("node_modules", ".next", ".git", "__pycache__"),
+    )
+    shutil.copytree(_TEMPLATES_DIR / "shared-public", root / "shared-public")
+    package = template / "package.json"
+    data = json.loads(package.read_text())
+    del data["dependencies"]["@radix-ui/react-dropdown-menu"]
+    package.write_text(json.dumps(data))
+    assert not (template / "src/components/ui/dropdown-menu.tsx").exists()
+    monkeypatch.setattr(template_materialization, "TEMPLATES", root)
+    with pytest.raises(AssertionError, match="@radix-ui/react-dropdown-menu"):
+        test_every_src_import_is_declared(template)

@@ -1,7 +1,6 @@
 import asyncio
 import re
 from collections.abc import Iterator
-from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, status
@@ -13,13 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.minio import get_minio_client, preview_public_url
+from omnia_api.core.minio import get_minio_client
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.schemas.snapshot import SnapshotPublic, SnapshotWithFiles
+from omnia_api.schemas.snapshot import SnapshotPublic, SnapshotWithFiles, snapshot_public_dict
 from omnia_api.services import repo as repo_svc
 
 router = APIRouter(prefix="/api/projects", tags=["snapshots"])
+
+_public_dict = snapshot_public_dict
 
 
 async def _project_owned_by(
@@ -29,20 +30,6 @@ async def _project_owned_by(
     if project is None or project.owner_id != user_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
-
-
-def _public_dict(s: Snapshot) -> dict[str, Any]:
-    return {
-        "id": s.id,
-        "project_id": s.project_id,
-        "commit_sha": s.commit_sha,
-        "prompt_text": s.prompt_text,
-        "model_id": s.model_id,
-        "parent_id": s.parent_id,
-        "preview_url": preview_public_url(s.preview_key),
-        "is_rollback_target": s.is_rollback_target,
-        "created_at": s.created_at,
-    }
 
 
 @router.get("/{project_id}/snapshots", response_model=list[SnapshotPublic])

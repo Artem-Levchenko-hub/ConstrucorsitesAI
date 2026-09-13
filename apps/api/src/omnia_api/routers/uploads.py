@@ -26,6 +26,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
 from omnia_api.schemas.snapshot import SnapshotPublic
+from omnia_api.schemas.snapshot import snapshot_public_dict as _snapshot_dict
 from omnia_api.schemas.upload import (
     ElementDeleteRequest,
     ElementMoveRequest,
@@ -48,20 +49,6 @@ async def _owned_project(session: SessionDep, project_id: UUID, user_id: UUID) -
     if project is None or project.owner_id != user_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
-
-
-def _snapshot_dict(s: Snapshot) -> dict[str, object]:
-    return {
-        "id": s.id,
-        "project_id": s.project_id,
-        "commit_sha": s.commit_sha,
-        "prompt_text": s.prompt_text,
-        "model_id": s.model_id,
-        "parent_id": s.parent_id,
-        "preview_url": preview_public_url(s.preview_key),
-        "is_rollback_target": s.is_rollback_target,
-        "created_at": s.created_at,
-    }
 
 
 @router.post("/{project_id}/uploads")

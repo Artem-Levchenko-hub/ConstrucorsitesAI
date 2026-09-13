@@ -2823,13 +2823,13 @@
    "id": "H153",
    "title": "Три общих JS вместо двенадцати копий в шаблонах",
    "description": "Единый источник данных для четырёх шаблонов; materialization подключена к созданию, сборке и экспорту, включая Project Cell. Пользовательские файлы сохраняются.",
-   "status": "testing",
+   "status": "worked",
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "13.09",
-   "evidence": "BASE 0dacd38f. 112 orchestrator + 48 API passed; Ruff/mypy 87/283, shell syntax и diff check прошли. Frozen 309 Git entries; восемь Dockerfiles неизменны. Browser BEFORE/AFTER: 96 групп и 232 HTTP на прогон, ошибок нет, 12 physical hashes совпали с Windows golden. BEFORE Docker: 8 dev/prod images, 24 HTTP asset checks прошли; QA compatibility/omitted mkdir errors сохранены и исправлены в отдельных попытках. Full CI, AFTER Docker, Linux mounted export и production delivery ожидаются.",
+   "evidence": "Source c688c3d9; pushed/production 8d8911718d457145486c9b61b3ceded011b4267c. CI34763263203: all7jobs success, API3585passed12skipped8xfailed; orchestrator1666passed31skipped15xfailed. BEFORE/AFTER eight real dev/prod Dockerimages and24HTTP asset hashes perphase; four templates x desktop/mobile96browser assertion groups/232HTTP requests,0errors,12canonical Git SHA identical. Frozen309path/hash/mode records and301API export files; actual immutableAPIimage6b67a580fb62caa908f8ca486b2059a9cb0ec565e1efee65328751b19b857928 mounted-export smoke passed. Astra review No findings. Firstdeployment rolledback on0700fixtures permissionguard; precise0755directoryrepair, reviewed retry1 exit0. Exact API/worker/generation-worker/orchestrator8d, public6of6/web200/POST405, host24sourcehashes/nginx/5dirtyserverdocs preserved. Receipt /opt/omnia-runtime/release-evidence/sharedjs-delivery-8d8911718d457145486c9b61b3ceded011b4267c-retry1/supplemental-verification.json.",
    "impact": "Рабочие исходники короче на 4 903 строки и 207 366 байт с учётом helper и интеграций; новые слои между сервисами не добавлены. Ускорение генерации не заявляется.",
-   "next_vector": "Завершить review и delivery; затем остаточные дубли MAX config, snapshot mapping и pass usage."
+   "next_vector": "Three API helper extractions and24nonMAX identical TS/TSX groups; preserve full materialized trees and existing runtime behavior. No model/business acceptance or runtime speedup claimed."
   }
  ],
  "vectors": [

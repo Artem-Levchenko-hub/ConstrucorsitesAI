@@ -13,6 +13,30 @@ TEMPLATES = Path(__file__).resolve().parents[3] / "templates"
 _SKIP = frozenset({"node_modules", ".next", ".git", "__pycache__"})
 
 
+def _shared_asset_path(shared: Path, relative: str) -> Path:
+    path = shared / relative
+    for ancestor in (path, *path.parents):
+        if ancestor == shared.parent:
+            break
+        if ancestor.is_symlink():
+            raise ValueError("invalid shared source symlink")
+    if not path.resolve().is_relative_to(shared.resolve()):
+        raise ValueError("invalid shared source containment")
+    if not path.is_file():
+        raise FileNotFoundError(f"shared template asset unavailable: {relative}")
+    return path
+
+
+def _validate_source_path(relative: str) -> None:
+    if (
+        not relative.startswith("src/")
+        or "\\" in relative
+        or any(part in {"", ".", ".."} or ":" in part for part in relative.split("/"))
+        or Path(relative).suffix not in {".ts", ".tsx"}
+    ):
+        raise ValueError("invalid shared source path")
+
+
 def shared_public_files(source: Path) -> dict[str, Path]:
     """Resolve data from the trusted collection only, never by directory name alone."""
     source = source.resolve()
@@ -26,10 +50,11 @@ def shared_public_files(source: Path) -> dict[str, Path]:
     for name in manifest["assets"]:
         if not isinstance(name, str) or Path(name).name != name or not name.endswith(".js"):
             raise ValueError("invalid shared public asset name")
-        path = shared / name
-        if path.is_symlink() or not path.is_file():
-            raise FileNotFoundError(f"shared template asset unavailable: {name}")
-        files[f"public/{name}"] = path
+        files[f"public/{name}"] = _shared_asset_path(shared, name)
+    for relative, templates in manifest.get("source_files", {}).items():
+        if source.name in templates:
+            _validate_source_path(relative)
+            files[relative] = _shared_asset_path(shared, f"source/{relative}")
     return files
 
 
