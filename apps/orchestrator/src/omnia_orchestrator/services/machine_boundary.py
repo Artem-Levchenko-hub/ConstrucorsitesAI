@@ -7,6 +7,7 @@ import hmac
 import http.client
 import http.cookies
 import http.server
+import ipaddress
 import json
 import os
 import re
@@ -213,6 +214,40 @@ def route_port(path: str, routes: list[dict[str, Any]]) -> int | None:
     return None
 
 
+def https_origin_from_host(values: list[str] | None) -> str | None:
+    """Canonical origin from one HTTP Host; never use caller forwarding headers."""
+    if values is None or len(values) != 1:
+        return None
+    value = values[0]
+    if not value or len(value) > 260 or not value.isascii():
+        return None
+    try:
+        parsed = urlsplit("https://" + value)
+        host, port = parsed.hostname, parsed.port
+        if (
+            parsed.netloc != value or parsed.username is not None
+            or parsed.password is not None or parsed.path or parsed.query or parsed.fragment
+            or not host or (port is not None and not 1 <= port <= 65535)
+        ):
+            return None
+        if value.startswith("["):
+            if not re.fullmatch(r"\[[0-9a-fA-F:.]+\](?::[0-9]{1,5})?", value):
+                return None
+            canonical_host = "[" + ipaddress.IPv6Address(host).compressed + "]"
+        else:
+            if len(host) > 253 or any(not re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label,
+            ) for label in host.split(".")):
+                return None
+            canonical_host = host
+        # A dangling colon is not a valid authority, even though urlsplit allows it.
+        if value.endswith(":"):
+            return None
+        return "https://" + canonical_host + (f":{port}" if port not in {None, 443} else "")
+    except ValueError:
+        return None
+
+
 def product_headers(
     headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any],
     data_policy: dict[str, Any] | None = None,
@@ -367,6 +402,28 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                 for key, value in self.headers.items()
                 if key.casefold() not in _HOP and not key.casefold().startswith("x-omnia-")
             }
+            incoming_origin = https_origin_from_host(self.headers.get_all("Host"))
+            configured_origin = config.get("public_origin", "")
+            request_origin = incoming_origin
+            if public:
+                request_origin = (
+                    https_origin_from_host([configured_origin[8:]])
+                    if isinstance(configured_origin, str) and configured_origin.startswith("https://")
+                    else None
+                )
+            secure_mutation = (
+                (path == "/api/omnia/data" or path.startswith("/api/omnia/data/"))
+                and self.command not in {"GET", "HEAD", "OPTIONS"}
+            )
+            if secure_mutation and (
+                incoming_origin is None or request_origin is None
+                or self.headers.get_all("Origin") != [request_origin]
+            ):
+                return self._reply(403, b"Same-origin request required")
+            if request_origin is not None:
+                # Host is replaced by the upstream HTTP client. Preserve its
+                # validated browser-facing origin only in this trusted header.
+                headers["X-Omnia-Request-Origin"] = request_origin
             if public:
                 headers = {
                     key: value for key, value in headers.items()

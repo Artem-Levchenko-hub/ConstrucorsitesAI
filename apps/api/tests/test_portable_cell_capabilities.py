@@ -49,6 +49,25 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
     assert "Do NOT call or retry probe/verify_isolation" in prompt
 
 
+@pytest.mark.parametrize("secure", [True, False, None, "true"])
+def test_secure_data_guide_requires_verified_capability_and_keeps_sql_policy(secure):
+    from omnia_api.services.portable_cell_contract import machine_stack_guide
+
+    capabilities = {
+        "portable_machine": True, "database_admin": "protected", "secure_data_crud": secure,
+    }
+    guide = machine_stack_guide("legacy", capabilities, {".omnia/cell.json": "{}"})
+    assert "omnia-db apply .omnia/data-contract.json" in guide
+    assert ("@/lib/omnia/data-client" in guide) is (secure is True)
+    if secure is True:
+        for expected in (
+            "secureCollection<T>(collection)", "update(id, revision, fullPayload)",
+            "delete(id, revision)", "503", "owner-only", "Sensitive payloads must",
+        ):
+            assert expected in guide
+    assert machine_stack_guide("legacy", capabilities, {}) == "legacy"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("portable,new_product", [(True, False), (False, False), (False, True)])
 async def test_prompt_assembly_awaits_real_executor_snapshot(portable, new_product):

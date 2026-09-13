@@ -9,8 +9,9 @@ from omnia_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, Ma
 
 @pytest.mark.parametrize("old_runtime", ["dev-command", "image"])
 @pytest.mark.parametrize("public_mode", [True, False])
+@pytest.mark.parametrize("secure_data", [True, False])
 def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
-    tmp_path, monkeypatch, old_runtime, public_mode,
+    tmp_path, monkeypatch, old_runtime, public_mode, secure_data,
 ):
     password = "disposable-qa-password"
     manager = SimpleNamespace(
@@ -23,6 +24,7 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
     image_id = "sha256:" + "a" * 64
     adapter = MachineAdapter(manager, SimpleNamespace(
         cell_public_core_image=image_id, cell_preview_core_image=image_id,
+        cell_data_vault_address="https://vault.example.test" if secure_data else "",
     ))
     state = SimpleNamespace(
         workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(),
@@ -36,6 +38,28 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
     backend._lookup = lambda _, name, _kind: containers.get(name)
     if public_mode:
         assert adapter._public_auth_secret(state, backend, env) == secret
+    runtime_env = {
+        **(env if public_mode else {}),
+        "OMNIA_DATA_KEY_FILE": "/tmp/untrusted-keys.json",
+        "OMNIA_DATA_VAULT_TOKEN": "untrusted-value",
+        "OMNIA_DATA_FUTURE_SETTING": "untrusted-value",
+        "OMNIA_TRUSTED_GATEWAY": "0",
+    }
+    from omnia_orchestrator.services import app_data_runtime
+
+    key_path = tmp_path / "runtime" / str(state.project_id) / ("ring-" + "c" * 64 + ".json")
+    prepared = []
+
+    def prepare_keys(settings, project_id, postgres, marker):
+        assert secure_data, "disabled secure data must never access the key provider"
+        assert settings is adapter.settings
+        assert project_id == state.project_id
+        assert postgres is containers["qa-pg"]
+        assert marker == adapter.root / str(state.workspace_id) / "data-key-binding.json"
+        prepared.append(key_path)
+        return key_path
+
+    monkeypatch.setattr(app_data_runtime, "prepare_core_keys", prepare_keys)
     removed, created = [], []
 
     def core(config):
@@ -63,10 +87,11 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
         return replacement
 
     backend.client = SimpleNamespace(
-        containers=SimpleNamespace(create=create),
+        containers=SimpleNamespace(create=create, get=containers.__getitem__),
         images=SimpleNamespace(get=lambda _: SimpleNamespace(
             id=image_id, labels={"omnia.max-core.protocol": "1",
-                                 "omnia.max-core.preview-protocol": "1"})),
+                                 "omnia.max-core.preview-protocol": "1",
+                                 "omnia.max-core.secure-data-protocol": "1"})),
     )
     backend.labels = lambda kind: {"kind": kind}
     backend._network = lambda *_a, **_kw: SimpleNamespace(connect=lambda _: None)
@@ -97,7 +122,7 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
         with pytest.raises(ObserveStartup):
             adapter._start_boundary(
                 state, None, backend, 1, public_mode=public_mode,
-                runtime_env=env if public_mode else None,
+                runtime_env=runtime_env,
             )
     assert removed == [original] and len(created) == 1
     assert created[0]["mem_limit"] == 768 * 1024**2
@@ -108,10 +133,76 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
     assert created[0]["command"][-1].endswith("exec node server.js")
     assert adapter.secret(state.workspace_id) == secret
     assert containers["qa-product"] is product and containers["qa-pg"] is pg
+    created_env = created[0]["environment"]
+    assert created_env["OMNIA_TRUSTED_GATEWAY"] == "1"
+    assert "OMNIA_DATA_VAULT_TOKEN" not in created_env
+    assert "OMNIA_DATA_FUTURE_SETTING" not in created_env
+    if secure_data:
+        assert prepared == [key_path, key_path]
+        assert created_env["OMNIA_DATA_KEY_FILE"] == "/run/omnia-data/keys.json"
+        assert created[0]["volumes"] == {
+            str(key_path): {"bind": "/run/omnia-data/keys.json", "mode": "ro"},
+        }
+        assert created[0]["labels"]["omnia.max-core.data-key"] == key_path.stem
+        previous_core = containers["qa-max-core"]
+        key_path = key_path.with_name("ring-" + "d" * 64 + ".json")
+        for _ in range(2):
+            with pytest.raises(ObserveStartup):
+                adapter._start_boundary(
+                    state, None, backend, 1, public_mode=public_mode,
+                    runtime_env=runtime_env,
+                )
+        assert removed == [original, previous_core]
+        assert len(created) == 2
+        assert created[1]["labels"]["omnia.max-core.data-key"] == key_path.stem
+        assert created[1]["volumes"] == {
+            str(key_path): {"bind": "/run/omnia-data/keys.json", "mode": "ro"},
+        }
+        assert created[1]["environment"]["AUTH_SECRET"] == secret
+        assert adapter.secret(state.workspace_id) == secret
+        assert containers["qa-product"] is product and containers["qa-pg"] is pg
+        assert all(options["name"] == "qa-max-core" for options in created)
+    else:
+        assert not prepared
+        assert "OMNIA_DATA_KEY_FILE" not in created_env
+        assert "volumes" not in created[0]
     if not public_mode:
         assert created[0]["environment"]["OMNIA_OWNER_PREVIEW"] == "1"
         assert "MAX_BOT_TOKEN" not in created[0]["environment"]
         assert "OMNIA_PUBLIC_APP_ORIGIN" not in created[0]["environment"]
+
+
+@pytest.mark.parametrize("public_mode", [True, False])
+@pytest.mark.parametrize("secure_protocol", [None, "0"])
+def test_missing_secure_protocol_rejected_before_keys_or_auth(
+    monkeypatch, public_mode, secure_protocol,
+):
+    from omnia_orchestrator.core.cell_resources import CellResourceError
+    from omnia_orchestrator.services import app_data_runtime
+
+    image_id = "sha256:" + "a" * 64
+    adapter = MachineAdapter(SimpleNamespace(), SimpleNamespace(
+        cell_public_core_image=image_id, cell_preview_core_image=image_id,
+        cell_data_vault_address="https://vault.example.test",
+    ))
+
+    def untouched(*_args, **_kwargs):
+        pytest.fail("incompatible image must be rejected before keys, auth, or containers")
+
+    monkeypatch.setattr(app_data_runtime, "prepare_core_keys", untouched)
+    monkeypatch.setattr(adapter, "_public_auth_secret", untouched)
+    monkeypatch.setattr(adapter, "secret", untouched)
+    labels = {"omnia.max-core.protocol": "1", "omnia.max-core.preview-protocol": "1"}
+    if secure_protocol is not None:
+        labels["omnia.max-core.secure-data-protocol"] = secure_protocol
+    backend = SimpleNamespace(client=SimpleNamespace(
+        images=SimpleNamespace(get=lambda _: SimpleNamespace(id=image_id, labels=labels)),
+        containers=SimpleNamespace(get=untouched, create=untouched),
+    ))
+    with pytest.raises(CellResourceError, match="secure data protocol"):
+        adapter._start_boundary(
+            SimpleNamespace(resource_names=None), None, backend, 1, public_mode=public_mode,
+        )
 
 
 @pytest.mark.parametrize("image_ref, protocol", [("", "1"), ("untrusted:latest", "1"),

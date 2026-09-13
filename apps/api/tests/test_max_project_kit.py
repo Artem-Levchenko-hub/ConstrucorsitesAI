@@ -67,6 +67,14 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     files = render_max_managed_files(_config(), project_id)
 
     assert set(files) == {
+        "src/app/api/omnia/data/[...path]/route.ts",
+        "src/lib/secure-data/crypto.ts",
+        "src/lib/secure-data/store.ts",
+        "src/lib/secure-data/validation.ts",
+        "src/lib/secure-data/http.ts",
+        "src/lib/secure-data/runtime.ts",
+        "src/lib/omnia/data-client.ts",
+        "drizzle/0003_secure_records.sql",
         "postcss.config.mjs",
         "src/app/layout.tsx",
         "src/app/api/omnia/health/route.ts",

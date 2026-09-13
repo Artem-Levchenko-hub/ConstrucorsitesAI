@@ -355,15 +355,28 @@ async def bootstrap_workspace_agent(
                 ) from exc
         else:
             require_protection_ready(manager.machine_runtime, state)
+        if manager.machine_runtime is not None and ".omnia/cell.json" in files:
+            from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
+            from omnia_orchestrator.services.fresh_database_protection import prepare_new_database
+
+            _, backend = manager.machine_runtime.parts(state)
+            if isinstance(backend, DockerMachineBackend):
+                try:
+                    await machine_effect(prepare_new_database, backend, fencing_epoch)
+                except (CellResourceError, CellIdentityConflict, ValueError) as exc:
+                    raise OrchestratorError(
+                        code="container_failure", message=str(exc), status_code=409,
+                    ) from exc
+        capabilities = (
+            manager.machine_runtime.capabilities(state) if manager.machine_runtime else {}
+        )
     return WorkspaceAgentBootstrapResponse(
         files=files,
         seeded_from_project=seeded_from_project,
         generation_run_id=generation_run_id,
         fencing_epoch=fencing_epoch,
         workspace_revision=workspace_revision,
-        capabilities=(
-            manager.machine_runtime.capabilities(state) if manager.machine_runtime else {}
-        ),
+        capabilities=capabilities,
     )
 
 

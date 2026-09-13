@@ -39,6 +39,25 @@ Example new table within the COMPLETE desired contract:
  {"name":"title","type":"text","nullable":true}]}
 Top-level contract shape is {"version":1,"tables":[...]}. This command never publishes."""
 
+SECURE_DATA_GUIDE = """SECURE APPLICATION DATA — trusted encrypted CRUD is enabled.
+Sensitive payloads must use the platform API; do not put them into direct SQL,
+managed action/event payloads, browser storage or plaintext files.
+Import secureCollection from @/lib/omnia/data-client and use
+secureCollection<T>(collection). The owner-only operations are create(payload),
+list(), get(id), update(id, revision, fullPayload), and delete(id, revision).
+Use the returned record revision for update/delete; handle conflicts by reloading
+the current record and asking the user to resolve competing changes. update takes
+the complete payload: preserve fields already stored when building fullPayload.
+Ownership comes from the verified MAX session, never a request-body user id.
+Collections do not grant administrator access, team sharing or role-based access.
+Use the supplied SDK and existing MAX session initialization. Do not implement
+custom encryption, copy keys into generated code, or replace the managed routes.
+Per-app encryption keys remain outside generated code. If secure keys are unavailable,
+the API returns 503; show the unavailable state and offer retry. Never fall back to
+plaintext storage or claim a successful save without a successful API response.
+Verify create/read/update/delete, reload persistence, revision conflicts and denial
+of another user's records. Encryption does not replace these access checks."""
+
 
 class PortableGuideExecutor(Protocol):
     @property
@@ -135,8 +154,11 @@ def machine_stack_guide(
     new_product: bool = False,
 ) -> str:
     if capabilities.get("portable_machine") is True and ".omnia/cell.json" in files:
-        return (PORTABLE_CELL_GUIDE.replace(DATABASE_ACCESS_GUIDE, PROTECTED_DATABASE_GUIDE)
-                if capabilities.get("database_admin") == "protected" else PORTABLE_CELL_GUIDE)
+        guide = (PORTABLE_CELL_GUIDE.replace(DATABASE_ACCESS_GUIDE, PROTECTED_DATABASE_GUIDE)
+                 if capabilities.get("database_admin") == "protected" else PORTABLE_CELL_GUIDE)
+        if capabilities.get("secure_data_crud") is True:
+            guide += "\n\n" + SECURE_DATA_GUIDE
+        return guide
     return legacy
 
 

@@ -72,6 +72,7 @@ class MachineAdapter:
             "dedicated_postgres": True,
             "database_url_env": "DATABASE_URL",
             "database_admin": "protected" if protected else "full",
+            "secure_data_crud": bool(getattr(self.settings, "cell_data_vault_address", "")),
             "commands": ["bash", "build", "runtime_check"],
             "task_roles": ["bootstrap", "fast_check", "full_build"],
             "framework": "nextjs",
@@ -659,6 +660,9 @@ class MachineAdapter:
         image_tag = get_stack("max-miniapp-nextjs").image_tag
         preview_image = getattr(self.settings, "cell_preview_core_image", "")
         compiled_core = public_mode or bool(preview_image)
+        secure_data_enabled = bool(getattr(self.settings, "cell_data_vault_address", ""))
+        if secure_data_enabled and not compiled_core:
+            raise CellResourceError("secure data requires the immutable compiled MAX core")
         if compiled_core:
             from omnia_orchestrator.services.docker_machine_backend import _PIN
 
@@ -671,8 +675,28 @@ class MachineAdapter:
                 raise CellResourceError("compiled public MAX core image protocol mismatch")
             if not public_mode and image.labels.get("omnia.max-core.preview-protocol") != "1":
                 raise CellResourceError("compiled MAX core image lacks owner preview protocol")
+            if (secure_data_enabled
+                    and image.labels.get("omnia.max-core.secure-data-protocol") != "1"):
+                raise CellResourceError("compiled MAX core image lacks secure data protocol")
             image_tag = image.id
             # Validate image before any auth rotation or old-core removal.
+        from omnia_orchestrator.services.app_data_keys import AppDataKeyError
+        from omnia_orchestrator.services.app_data_runtime import CORE_KEY_FILE, prepare_core_keys
+
+        key_path = None
+        if secure_data_enabled:
+            try:
+                key_path = prepare_core_keys(
+                    self.settings, state.project_id,
+                    client.containers.get(names.postgres_container),
+                    self.root / str(state.workspace_id) / "data-key-binding.json",
+                )
+            except AppDataKeyError as exc:
+                raise CellResourceError(str(exc)) from None
+        key_digest = key_path.stem if key_path else ""
+        # Provider settings/paths never come from app runtime integration values.
+        runtime_env = {k: v for k, v in (runtime_env or {}).items()
+                       if not k.startswith("OMNIA_DATA_") and k != "OMNIA_TRUSTED_GATEWAY"}
         secret = (self._public_auth_secret(state, backend, runtime_env or {})
                   if public_mode else self.secret(state.workspace_id))
         core_name = backend.stem + "-max-core"
@@ -689,6 +713,7 @@ class MachineAdapter:
                 if (env.get("NODE_OPTIONS") != public_options
                         or config.get("Cmd") != list(_PUBLIC_CORE_COMMAND)
                         or core.attrs.get("Image") != image_tag
+                        or config.get("Labels", {}).get("omnia.max-core.data-key", "") != key_digest
                         or (not public_mode and (
                             env.get("OMNIA_OWNER_PREVIEW") != "1"
                             or env.get("AUTH_SECRET") != secret
@@ -705,6 +730,7 @@ class MachineAdapter:
                 **({"command": list(_PUBLIC_CORE_COMMAND)} if compiled_core else {}),
                 name=core_name,
                 labels={**backend.labels("managed-max-core"),
+                        **({"omnia.max-core.data-key": key_digest} if key_path else {}),
                         **({"omnia.max-core.protocol": "1"} if compiled_core else {})},
                 detach=True,
                 network=names.internal_network,
@@ -721,6 +747,8 @@ class MachineAdapter:
                     f"@{names.postgres_container}:5432/postgres",
                     "REDIS_URL": f"redis://{names.redis_container}:6379/0",
                     **(runtime_env or {}),
+                    "OMNIA_TRUSTED_GATEWAY": "1",
+                    **({"OMNIA_DATA_KEY_FILE": CORE_KEY_FILE} if key_path else {}),
                     **({"NODE_OPTIONS": public_options, "NODE_ENV": "production",
                         "HOSTNAME": "0.0.0.0", "PORT": "3000"} if compiled_core else {}),
                     **({"OMNIA_OWNER_PREVIEW": "1"} if compiled_core and not public_mode else {}),
@@ -729,6 +757,8 @@ class MachineAdapter:
                 memswap_limit=self._max_core_memory_bytes(),
                 nano_cpus=int(self._max_core_cpu_cores() * 1_000_000_000),
                 pids_limit=256,
+                **({"volumes": {str(key_path): {"bind": CORE_KEY_FILE, "mode": "ro"}}}
+                   if key_path else {}),
             )
             # Only the immutable managed core can call its fixed platform API.
             # Generated project code still has the namespace DROP guard.
