@@ -1,71 +1,33 @@
-"""Characterize real caller publication regions, not a full model/generation run.
-
-Compile the original statements from Git commit through snapshot refresh. This
-keeps both real callers in scope before/after extraction without invoking models,
-runtime services or thousands of unrelated postprocessing lines. Expected rows
-and ordering below are declared independently of the extracted source.
-"""
+"""Actual publication owners: frozen Git/SQL/quota order and failure contracts."""
 
 from __future__ import annotations
 
-import ast
 import copy
 from contextlib import asynccontextmanager
-from pathlib import Path
+from functools import partial
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from omnia_api.core.config import get_settings
+from omnia_api.models.account import BusinessEntitlement
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
-from omnia_api.routers import messages
 from omnia_api.services import repo
-
-
-def caller_region(path):
-    tree = ast.parse(Path(messages.__file__).read_text(encoding="utf-8"))
-    process = next(
-        n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_process_prompt"
-    )
-    quota = next(
-        n
-        for n in process.body
-        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_consume_free_generation"
-    )
-    prefix = "AI(agent): " if path == "agent" else "AI: "
-    matches = []
-    for parent in ast.walk(process):
-        body = getattr(parent, "body", None)
-        if not isinstance(body, list):
-            continue
-        for index, node in enumerate(body):
-            if (
-                isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "new_sha" for t in node.targets)
-                and any(isinstance(n, ast.Constant) and n.value == prefix for n in ast.walk(node))
-            ):
-                following = body[index + 1]
-                assert isinstance(following, ast.AsyncWith)
-                assert "await session.refresh(snapshot)" in ast.unparse(following)
-                matches.append([node, following])
-    assert len(matches) == 1, "Publication seam changed; review scope explicitly"
-    wrapper = ast.AsyncFunctionDef(
-        name="characterize",
-        args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
-        body=[
-            quota,
-            *matches[0],
-            ast.Return(ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])),
-        ],
-        decorator_list=[],
-    )
-    module = ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[]))
-    return compile(module, str(messages.__file__), "exec")
+from omnia_api.services.generation import agent_publication, stream_publication
+from omnia_api.services.generation.contracts import (
+    GenerationIds,
+    GenerationRuntime,
+    ProjectGenerationFacts,
+    SourceBaseline,
+)
+from omnia_api.services.generation.progress import GenerationProgress
+from omnia_api.services.generation.publication import consume_free_generation
 
 
 def records():
@@ -176,8 +138,8 @@ def context(rows, factory, trace, monkeypatch, **overrides):
         return real_commit(*args, **kwargs)
 
     monkeypatch.setattr(repo, "commit_files", commit)
-    env = dict(vars(messages))
-    settings = messages.get_settings().model_copy(update={"use_clean_chat_content": True})
+    env = {"rows": rows, "monkeypatch": monkeypatch}
+    settings = get_settings().model_copy(update={"use_clean_chat_content": True})
     env.update(
         factory=factory,
         project_id=project.id,
@@ -206,8 +168,75 @@ def context(rows, factory, trace, monkeypatch, **overrides):
 
 
 async def execute(path, env):
-    exec(caller_region(path), env)
-    return await env["characterize"]()
+    """Invoke actual publication and quota owners, preserving frozen row expectations."""
+    rows = env["rows"]
+    owner, project, _parent, message, run = rows[:5]
+    ids = GenerationIds(run.id, project.id, owner.id, uuid4(), message.id)
+    facts = ProjectGenerationFacts(
+        "blank", project.slug, project.name, None, None, False, "ru", False, "", ""
+    )
+    baseline = SourceBaseline(
+        env["current_snapshot_id"], env["current_sha"], {"old.txt": "preserve", "page.txt": "old"}
+    )
+    captured = {}
+
+    async def capture_snapshot(*args, **kwargs):
+        result = await real_create(*args, **kwargs)
+        captured.update(snapshot=result[0], project=result[1], new_sha=kwargs["commit_sha"])
+        return result
+
+    async def noop(*args, **kwargs):
+        pass
+
+    target = agent_publication if path == "agent" else stream_publication
+    # Nested scope restores imported collaborators between repeated executions.
+    with env["monkeypatch"].context() as patch:
+        real_create = target.create_generation_snapshot
+        patch.setattr(target, "create_generation_snapshot", capture_snapshot)
+        patch.setattr(target, "get_settings", env["get_settings"])
+        patch.setattr(target, "enqueue_preview", lambda *_: None)
+        patch.setattr(target, "publish_event", noop)
+        patch.setattr(target, "_snapshot_payload", lambda row: {"id": str(row.id)})
+        common = dict(
+            _consume_free_generation=partial(
+                consume_free_generation,
+                is_free=env["is_free"],
+                free_business_id=env["free_business_id"],
+                user_id=owner.id,
+            ),
+            accumulated=env["accumulated"],
+            baseline=baseline,
+            factory=env["factory"],
+            files=env["files"],
+            ids=ids,
+            model_id=env["model_id"],
+            project_info=facts,
+            prompt_text=env["prompt_text"],
+        )
+        if path == "agent":
+            await target.publish_agent_candidate(
+                **common,
+                _att_capture=None,
+                _attestation_stack="",
+                _orch_name=None,
+                _max_finalization_proof=env["_max_finalization_proof"],
+                progress=GenerationProgress(
+                    env["factory"], run.id, project.id, message.id, env["_agent_step_log"]
+                ),
+                runtime=GenerationRuntime(),
+            )
+        else:
+            await target.publish_streamed_candidate(
+                **common,
+                _acc_fingerprint=None,
+                _gen_mode="freeform",
+                force_model=env["force_model"],
+                orchestrate=env["orchestrate"],
+                routing_model=env["routing_model"],
+                surgical=env["surgical"],
+                usage_data=env["usage_data"],
+            )
+    return captured
 
 
 @pytest.mark.parametrize("path", ["agent", "oneshot"])
@@ -318,7 +347,7 @@ async def test_caller_reexecution_preserves_existing_non_idempotent_semantics(pa
 @pytest.mark.parametrize("is_free", [False, True])
 async def test_caller_free_business_counter_precedes_user(path, is_free, monkeypatch):
     rows, trace = records(), []
-    business = messages.BusinessEntitlement(business_id=uuid4(), free_generations_used=8)
+    business = BusinessEntitlement(business_id=uuid4(), free_generations_used=8)
     session = OfflineSession(rows, trace)
     env, _calls, _original = context(
         rows,

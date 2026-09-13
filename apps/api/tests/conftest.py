@@ -66,6 +66,23 @@ def isolated_project_repo_storage(monkeypatch: pytest.MonkeyPatch) -> None:
 def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep API unit tests isolated from real Redis queues and pub/sub."""
     from omnia_api.routers import hero_media, messages, projects, rollback, style_patch, uploads
+    from omnia_api.services.generation import (
+        agent_pipeline,
+        agent_publication,
+        asset_composition,
+        container_realization,
+        lifecycle,
+        lightweight_turns,
+        progress,
+        static_acceptance,
+        static_quality,
+        stream_attempt,
+        stream_candidate,
+        stream_publication,
+        streamed_pipeline,
+        supervisor,
+        surgical_recovery,
+    )
 
     def discard_background_job(*_args: object, **_kwargs: object) -> None:
         return None
@@ -81,12 +98,36 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
         (uploads, "enqueue_preview"),
         (hero_media, "enqueue_hero_media_render"),
         (hero_media, "enqueue_preview"),
-        (messages, "enqueue_entity_gate"),
-        (messages, "enqueue_preview"),
+        (agent_publication, "enqueue_preview"),
+        (container_realization, "enqueue_entity_gate"),
+        (container_realization, "enqueue_preview"),
+        (stream_publication, "enqueue_preview"),
     ):
         monkeypatch.setattr(module, attribute, discard_background_job)
 
-    for module in (projects, style_patch, rollback, uploads, hero_media, messages):
+    for module in (
+        projects,
+        style_patch,
+        rollback,
+        uploads,
+        hero_media,
+        messages,
+        agent_pipeline,
+        agent_publication,
+        asset_composition,
+        container_realization,
+        lifecycle,
+        lightweight_turns,
+        progress,
+        static_acceptance,
+        static_quality,
+        streamed_pipeline,
+        stream_attempt,
+        stream_candidate,
+        stream_publication,
+        supervisor,
+        surgical_recovery,
+    ):
         monkeypatch.setattr(module, "publish_event", discard_event)
 
 

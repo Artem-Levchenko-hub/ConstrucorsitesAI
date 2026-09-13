@@ -46,7 +46,7 @@ PRESET = "saas-product"  # a preset whose palette is emerald, NOT violet — con
 def _build(*, regen_carries_spec: bool) -> Callable[[int], str]:
     """A loop builder: attempt 1 is the raw initial build (spec-blind, the
     generation that triggered the mismatch); attempt 2+ is the regenerate, which
-    forwards the spec exactly as ``messages._catalog_fallback_generate`` does
+    forwards the spec exactly as ``stream_support._catalog_fallback_generate`` does
     when ``regen_carries_spec`` is True."""
 
     def build_prompt(attempt: int) -> str:

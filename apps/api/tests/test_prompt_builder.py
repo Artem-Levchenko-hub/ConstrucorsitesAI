@@ -1,11 +1,11 @@
 import pytest
 
-from omnia_api.routers.messages import (
+from omnia_api.services import skill_library
+from omnia_api.services.generation.file_transforms import (
     _ensure_kit_linked,
     _salvage_html,
     _text_preserved_ratio,
 )
-from omnia_api.services import skill_library
 from omnia_api.services.prompt_builder import (
     HISTORY_LIMIT,
     KIT_FILES,

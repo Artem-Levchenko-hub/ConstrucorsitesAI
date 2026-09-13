@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from omnia_api.services import dev_container
+from omnia_api.services.generation import lifecycle
 from omnia_api.workers import preview
 
 
@@ -21,9 +22,7 @@ async def test_resolve_live_url_running_returns_internal_url(monkeypatch) -> Non
         return {"state": "running", "container_name": "omnia-dev-shop-abc123"}
 
     monkeypatch.setattr(dev_container.orchestrator_client, "get_status", fake_status)
-    assert await dev_container.resolve_live_url(pid) == (
-        "http://omnia-dev-shop-abc123:3000"
-    )
+    assert await dev_container.resolve_live_url(pid) == ("http://omnia-dev-shop-abc123:3000")
 
 
 async def test_resolve_live_url_paused_returns_none(monkeypatch) -> None:
@@ -73,16 +72,13 @@ async def test_resolve_live_url_appends_route(monkeypatch) -> None:
         "http://omnia-dev-crm-abc:3000/dashboard"
     )
     # default stays byte-identical to the historical bare URL
-    assert await dev_container.resolve_live_url(uuid4()) == (
-        "http://omnia-dev-crm-abc:3000"
-    )
+    assert await dev_container.resolve_live_url(uuid4()) == ("http://omnia-dev-crm-abc:3000")
 
 
 def test_container_next_matches_messages_router() -> None:
     """Keep the worker's container-template list in sync with the router's."""
-    from omnia_api.routers import messages
 
-    assert preview.CONTAINER_NEXT == messages.CONTAINER_NEXT
+    assert preview.CONTAINER_NEXT == lifecycle.CONTAINER_NEXT
 
 
 class _FakePage:
@@ -118,6 +114,7 @@ async def test_await_container_ready_swallows_timeout() -> None:
 # resolved <img src="{public_minio}/..."> photos never paint inside chromium →
 # image-less thumbnail / design-judge view even when the deployed page is fine.
 # Fix repoints the in-memory render copy to the internal MinIO endpoint.
+
 
 def test_rewrite_minio_public_to_internal(monkeypatch) -> None:
     """A resolved public MinIO <img src> is repointed to internal minio:9000."""

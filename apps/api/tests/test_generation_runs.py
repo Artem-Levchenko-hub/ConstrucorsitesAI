@@ -22,6 +22,7 @@ from omnia_api.models.project_memory import ProjectMemoryRevision
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import messages
+from omnia_api.services.generation import acceptance, agent_messages, lifecycle, supervisor
 from omnia_api.services.generation_runs import (
     _finalize_generation_run,
     finalize_generation_run,
@@ -83,6 +84,7 @@ async def test_generation_dispatch_requires_exact_owned_json_shape(prompt: str) 
     with pytest.raises(ValueError, match="ownership"):
         load_generation_dispatch(run)
 
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -104,7 +106,9 @@ async def _owner_and_project(
 
 
 async def test_process_failure_preserves_primary_error_after_finalization(
-    db_session, test_engine, monkeypatch,
+    db_session,
+    test_engine,
+    monkeypatch,
 ):
     from omnia_api.core import db
     from omnia_api.core.config import get_settings
@@ -114,24 +118,34 @@ async def test_process_failure_preserves_primary_error_after_finalization(
     db_session.add(assistant)
     await db_session.flush()
     run = GenerationRun(
-        project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
-        idempotency_key="primary-error", prompt_hash="a" * 64,
-        status="running", response_mode="build",
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="primary-error",
+        prompt_hash="a" * 64,
+        status="running",
+        response_mode="build",
     )
     db_session.add(run)
     await db_session.commit()
     monkeypatch.setenv("USE_PROJECT_MEMORY", "true")
     get_settings.cache_clear()
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(lifecycle, "get_engine", lambda: test_engine)
     monkeypatch.setattr(db, "get_engine", lambda: test_engine)
 
     async def fail(*args, **kwargs):
         raise RuntimeError("PROVIDER_AUTH_FAILED: access denied")
 
-    monkeypatch.setattr(messages, "render_project_memory_context", fail)
-    await messages._process_prompt(
-        run.id, project.id, owner.id, uuid.uuid4(), assistant.id, None,
-        "Build a catalog", "test-model",
+    monkeypatch.setattr(lifecycle, "render_project_memory_context", fail)
+    await lifecycle._process_prompt(
+        run.id,
+        project.id,
+        owner.id,
+        uuid.uuid4(),
+        assistant.id,
+        None,
+        "Build a catalog",
+        "test-model",
     )
     await finalize_generation_run(run.id)
     await db_session.refresh(run)
@@ -378,25 +392,27 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     if worker_backend:
         project.template = "max_miniapp"
         await db_session.commit()
-    settings = get_settings().model_copy(update=dict(
-        use_generation_worker=worker_backend,
-        unlimited_generations=False,
-        force_model=None,
-        use_progressive_discovery=False,
-        use_clarify_interview=False,
-        use_auto_stack_routing=False,
-        use_followup_appification=False,
-        use_result_type_router=False,
-    ))
+    settings = get_settings().model_copy(
+        update=dict(
+            use_generation_worker=worker_backend,
+            unlimited_generations=False,
+            force_model=None,
+            use_progressive_discovery=False,
+            use_clarify_interview=False,
+            use_auto_stack_routing=False,
+            use_followup_appification=False,
+            use_result_type_router=False,
+        )
+    )
     spawned: list[dict[str, object]] = []
 
     def _spawn(**kwargs: object) -> None:
         spawned.append(kwargs)
 
     app.dependency_overrides[get_current_user] = _current_user
-    monkeypatch.setattr(messages, "get_settings", lambda: settings)
-    monkeypatch.setattr(messages, "_spawn_process_prompt", _spawn)
-    monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    monkeypatch.setattr(acceptance, "get_settings", lambda: settings)
+    monkeypatch.setattr(acceptance, "_spawn_process_prompt", _spawn)
+    monkeypatch.setattr(acceptance, "get_redis", lambda: _NoopRedis())
     payload = {
         "prompt": "Собери статический сайт",
         "skip_clarify": True,
@@ -495,10 +511,10 @@ async def test_failed_first_build_explanation_does_not_spawn_another_build(
         text_spawns.append((text, run_id))
 
     app.dependency_overrides[get_current_user] = _current_user
-    monkeypatch.setattr(messages, "get_settings", lambda: settings)
-    monkeypatch.setattr(messages, "_spawn_process_prompt", _spawn_build)
-    monkeypatch.setattr(messages, "_spawn_text_turn", _spawn_text)
-    monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    monkeypatch.setattr(acceptance, "get_settings", lambda: settings)
+    monkeypatch.setattr(acceptance, "_spawn_process_prompt", _spawn_build)
+    monkeypatch.setattr(acceptance, "_spawn_text_turn", _spawn_text)
+    monkeypatch.setattr(acceptance, "get_redis", lambda: _NoopRedis())
     try:
         response = await client.post(
             f"/api/projects/{project.id}/prompt",
@@ -557,12 +573,12 @@ async def test_tracked_prompt_cancels_the_actual_work(
     async def _clear(_run_id: uuid.UUID) -> None:
         return None
 
-    monkeypatch.setattr(messages, "set_generation_run_status", _status)
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", _wait)
-    monkeypatch.setattr(messages, "_finalize_cancelled_generation", _finalise)
-    monkeypatch.setattr(messages, "clear_generation_cancel", _clear)
+    monkeypatch.setattr(supervisor, "set_generation_run_status", _status)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", _wait)
+    monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", _finalise)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", _clear)
 
-    await messages._run_tracked_prompt(
+    await supervisor._run_tracked_prompt(
         _work(),
         run_id=run_id,
         project_id=project_id,
@@ -600,12 +616,12 @@ async def test_tracked_prompt_uses_product_outcome_finalizer(
     async def _clear(_run_id: uuid.UUID) -> None:
         return None
 
-    monkeypatch.setattr(messages, "set_generation_run_status", _status)
-    monkeypatch.setattr(messages, "finalize_generation_run", _finalize)
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", _never_cancel)
-    monkeypatch.setattr(messages, "clear_generation_cancel", _clear)
+    monkeypatch.setattr(supervisor, "set_generation_run_status", _status)
+    monkeypatch.setattr(supervisor, "finalize_generation_run", _finalize)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", _never_cancel)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", _clear)
 
-    await messages._run_tracked_prompt(
+    await supervisor._run_tracked_prompt(
         _work(),
         run_id=run_id,
         project_id=project_id,
@@ -682,12 +698,18 @@ async def test_build_without_snapshot_is_failed_product_outcome(
 
 @pytest.mark.parametrize("via_admission", [False, True], ids=["tracked-finalizer", "next-submit"])
 @pytest.mark.parametrize("has_snapshot", [False, True], ids=["no-snapshot", "partial-snapshot"])
-@pytest.mark.parametrize("failure", [
-    "agent did not finish the requested changes (max_steps)",
-    "final verification did not succeed",
-])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "agent did not finish the requested changes (max_steps)",
+        "final verification did not succeed",
+    ],
+)
 async def test_explicit_failed_edit_cannot_be_completed(
-    db_session: AsyncSession, via_admission: bool, has_snapshot: bool, failure: str,
+    db_session: AsyncSession,
+    via_admission: bool,
+    has_snapshot: bool,
+    failure: str,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     snapshot = None
@@ -695,14 +717,24 @@ async def test_explicit_failed_edit_cannot_be_completed(
         snapshot = Snapshot(project_id=project.id, commit_sha="a" * 40)
         db_session.add(snapshot)
         await db_session.flush()
-    assistant = Message(project_id=project.id, role="assistant", content="Правка не завершена",
-        snapshot_id=snapshot.id if snapshot else None)
+    assistant = Message(
+        project_id=project.id,
+        role="assistant",
+        content="Правка не завершена",
+        snapshot_id=snapshot.id if snapshot else None,
+    )
     db_session.add(assistant)
     await db_session.flush()
-    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
-        idempotency_key="failed-native-edit", prompt_hash="hash", status="running",
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="failed-native-edit",
+        prompt_hash="hash",
+        status="running",
         response_mode="edit",
-        agent_state={"existing_dispatch_marker": "preserved"})
+        agent_state={"existing_dispatch_marker": "preserved"},
+    )
     db_session.add(run)
     await db_session.commit()
 
@@ -715,8 +747,13 @@ async def test_explicit_failed_edit_cannot_be_completed(
     assistant.tokens_out = 0
     await db_session.commit()
     if via_admission:
-        next_run, replayed = await reserve_generation_run(db_session, project_id=project.id,
-            user_id=owner.id, idempotency_key="after-failed-edit", prompt="Retry the edit")
+        next_run, replayed = await reserve_generation_run(
+            db_session,
+            project_id=project.id,
+            user_id=owner.id,
+            idempotency_key="after-failed-edit",
+            prompt="Retry the edit",
+        )
         assert not replayed and next_run.id != run.id
         await db_session.commit()
     else:
@@ -729,24 +766,45 @@ async def test_explicit_failed_edit_cannot_be_completed(
 
 @pytest.mark.parametrize("via_admission", [False, True], ids=["tracked-finalizer", "next-submit"])
 async def test_successful_edit_noop_remains_completed_without_snapshot(
-    db_session: AsyncSession, via_admission: bool,
+    db_session: AsyncSession,
+    via_admission: bool,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     assistant = Message(
-        project_id=project.id, role="assistant", content="Уже настроено", tokens_out=0,
+        project_id=project.id,
+        role="assistant",
+        content="Уже настроено",
+        tokens_out=0,
     )
     db_session.add(assistant)
     await db_session.flush()
-    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
-        idempotency_key="successful-noop", prompt_hash="hash", status="running",
-        response_mode="edit")
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="successful-noop",
+        prompt_hash="hash",
+        status="running",
+        response_mode="edit",
+    )
     db_session.add(run)
     await db_session.commit()
-    assert messages._agent_product_failure(SimpleNamespace(done=True), verification_failed=False,
-        finalization_complete=False) is None
+    assert (
+        agent_messages._agent_product_failure(
+            SimpleNamespace(done=True),
+            verification_failed=False,
+            finalization_complete=False,
+        )
+        is None
+    )
     if via_admission:
-        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
-            idempotency_key="after-noop", prompt="Next change")
+        await reserve_generation_run(
+            db_session,
+            project_id=project.id,
+            user_id=owner.id,
+            idempotency_key="after-noop",
+            prompt="Next change",
+        )
         await db_session.commit()
     else:
         assert await finalize_generation_run(run.id, db_session) == "completed"
@@ -765,14 +823,22 @@ async def test_late_product_failure_does_not_overwrite_terminal_outcome(status: 
 
 
 async def test_next_submit_refreshes_failure_from_another_session(
-    db_session: AsyncSession, test_engine,
+    db_session: AsyncSession,
+    test_engine,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     assistant = Message(project_id=project.id, role="assistant", content="")
     db_session.add(assistant)
     await db_session.flush()
-    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
-        idempotency_key="stale-edit", prompt_hash="hash", status="running", response_mode="edit")
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="stale-edit",
+        prompt_hash="hash",
+        status="running",
+        response_mode="edit",
+    )
     db_session.add(run)
     await db_session.commit()
     run_id, project_id, owner_id, message_id = run.id, project.id, owner.id, assistant.id
@@ -789,22 +855,36 @@ async def test_next_submit_refreshes_failure_from_another_session(
     # Refresh only the message; deliberately keep the stale run identity-map entry.
     await db_session.refresh(assistant)
     assert assistant.tokens_out == 0 and run.agent_state == {}
-    await reserve_generation_run(db_session, project_id=project_id, user_id=owner_id,
-        idempotency_key="after-stale-edit", prompt="Next edit")
+    await reserve_generation_run(
+        db_session,
+        project_id=project_id,
+        user_id=owner_id,
+        idempotency_key="after-stale-edit",
+        prompt="Next edit",
+    )
     await db_session.commit()
     await db_session.refresh(run)
     assert run.status == "failed" and run.error == "edit did not finish"
 
 
 async def test_next_submit_locks_run_until_after_reading_final_message(
-    db_session: AsyncSession, test_engine, monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, project = await _owner_and_project(db_session)
     assistant = Message(project_id=project.id, role="assistant", content="")
     db_session.add(assistant)
     await db_session.flush()
-    run = GenerationRun(project_id=project.id, user_id=owner.id, assistant_message_id=assistant.id,
-        idempotency_key="racing-edit", prompt_hash="hash", status="running", response_mode="edit")
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        assistant_message_id=assistant.id,
+        idempotency_key="racing-edit",
+        prompt_hash="hash",
+        status="running",
+        response_mode="edit",
+    )
     db_session.add(run)
     await db_session.commit()
     run_id, project_id, owner_id, message_id = run.id, project.id, owner.id, assistant.id
@@ -820,8 +900,15 @@ async def test_next_submit_locks_run_until_after_reading_final_message(
             return await original_get(entity, ident, **kwargs)
 
         monkeypatch.setattr(admission, "get", paused_get)
-        task = asyncio.create_task(reserve_generation_run(admission, project_id=project_id,
-            user_id=owner_id, idempotency_key="racing-next-edit", prompt="Next edit"))
+        task = asyncio.create_task(
+            reserve_generation_run(
+                admission,
+                project_id=project_id,
+                user_id=owner_id,
+                idempotency_key="racing-next-edit",
+                prompt="Next edit",
+            )
+        )
         try:
             await asyncio.wait_for(at_message.wait(), timeout=10)
             # Force the exact race: failure cannot commit between the active-row
@@ -964,8 +1051,11 @@ async def test_startup_recovery_releases_interrupted_run(
 async def test_api_restart_does_not_finalize_worker_owned_generation(db_session, run_status):
     owner, project = await _owner_and_project(db_session)
     run = GenerationRun(
-        project_id=project.id, user_id=owner.id, idempotency_key="worker-owned",
-        prompt_hash="a" * 64, status=run_status,
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="worker-owned",
+        prompt_hash="a" * 64,
+        status=run_status,
     )
     run.execution_backend = "worker"
     db_session.add(run)
@@ -978,10 +1068,14 @@ async def test_api_restart_does_not_finalize_worker_owned_generation(db_session,
 
 @pytest.mark.parametrize("existing_product", [False, True])
 async def test_config_application_rejects_stale_data_before_dispatch(
-    client, db_session, monkeypatch, existing_product,
+    client,
+    db_session,
+    monkeypatch,
+    existing_product,
 ):
     from omnia_api.core.config import get_settings
     from omnia_api.models.max_project_config import MaxProjectConfig
+
     owner, project = await _owner_and_project(db_session)
     project.template = "max_miniapp"
     if existing_product:
@@ -989,13 +1083,19 @@ async def test_config_application_rejects_stale_data_before_dispatch(
         db_session.add(product)
         await db_session.flush()
         saved_config = Snapshot(
-            project_id=project.id, commit_sha="b" * 40, prompt_text=None, parent_id=product.id,
+            project_id=project.id,
+            commit_sha="b" * 40,
+            prompt_text=None,
+            parent_id=product.id,
         )
         db_session.add(saved_config)
         await db_session.flush()
         project.current_snapshot_id = saved_config.id
     record = MaxProjectConfig(
-        project_id=project.id, owner_id=owner.id, config_version=2, managed_kit_version=16,
+        project_id=project.id,
+        owner_id=owner.id,
+        config_version=2,
+        managed_kit_version=16,
         config={"app_name": "After", "app_type": "custom", "summary": "Saved"},
     )
     db_session.add(record)
@@ -1004,20 +1104,32 @@ async def test_config_application_rejects_stale_data_before_dispatch(
     async def current_user():
         return owner
 
-    settings = get_settings().model_copy(update=dict(
-        use_generation_worker=False, unlimited_generations=True,
-        use_progressive_discovery=False, use_clarify_interview=False, use_auto_stack_routing=False,
-        use_followup_appification=False, use_result_type_router=False,
-    ))
+    settings = get_settings().model_copy(
+        update=dict(
+            use_generation_worker=False,
+            unlimited_generations=True,
+            use_progressive_discovery=False,
+            use_clarify_interview=False,
+            use_auto_stack_routing=False,
+            use_followup_appification=False,
+            use_result_type_router=False,
+        )
+    )
     spawn = Mock()
     app.dependency_overrides[get_current_user] = current_user
-    monkeypatch.setattr(messages, "get_settings", lambda: settings)
-    monkeypatch.setattr(messages, "_spawn_process_prompt", spawn)
-    monkeypatch.setattr(messages, "get_redis", lambda: _NoopRedis())
+    monkeypatch.setattr(acceptance, "get_settings", lambda: settings)
+    monkeypatch.setattr(acceptance, "_spawn_process_prompt", spawn)
+    monkeypatch.setattr(acceptance, "get_redis", lambda: _NoopRedis())
     try:
-        rejected = await client.post(f"/api/projects/{project.id}/prompt", json={
-            "prompt":"Примени данные приложения", "skip_clarify":True,
-            "idempotency_key":"config-apply-version-check", "max_config_version":1})
+        rejected = await client.post(
+            f"/api/projects/{project.id}/prompt",
+            json={
+                "prompt": "Примени данные приложения",
+                "skip_clarify": True,
+                "idempotency_key": "config-apply-version-check",
+                "max_config_version": 1,
+            },
+        )
         assert rejected.status_code == 409
         assert "Данные приложения изменились" in rejected.text
         spawn.assert_not_called()
@@ -1026,17 +1138,29 @@ async def test_config_application_rejects_stale_data_before_dispatch(
         await db_session.rollback()
         await db_session.refresh(owner)
         await db_session.refresh(project)
-        accepted = await client.post(f"/api/projects/{project.id}/prompt", json={
-            "prompt":"Примени данные приложения", "skip_clarify":True,
-            "idempotency_key":"config-apply-version-check", "max_config_version":2})
+        accepted = await client.post(
+            f"/api/projects/{project.id}/prompt",
+            json={
+                "prompt": "Примени данные приложения",
+                "skip_clarify": True,
+                "idempotency_key": "config-apply-version-check",
+                "max_config_version": 2,
+            },
+        )
         assert accepted.status_code == 202, accepted.text
         assert accepted.json()["mode"] == ("edit" if existing_product else "build")
         record = await db_session.get(MaxProjectConfig, project.id)
         record.config_version = 3
         await db_session.commit()
-        replay = await client.post(f"/api/projects/{project.id}/prompt", json={
-            "prompt":"Примени данные приложения", "skip_clarify":True,
-            "idempotency_key":"config-apply-version-check", "max_config_version":2})
+        replay = await client.post(
+            f"/api/projects/{project.id}/prompt",
+            json={
+                "prompt": "Примени данные приложения",
+                "skip_clarify": True,
+                "idempotency_key": "config-apply-version-check",
+                "max_config_version": 2,
+            },
+        )
         assert replay.status_code == 202 and replay.json()["run_id"] == accepted.json()["run_id"]
         assert spawn.call_count == 1
     finally:

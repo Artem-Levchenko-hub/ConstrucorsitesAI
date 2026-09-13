@@ -9,7 +9,7 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.user import User
-from omnia_api.routers import messages
+from omnia_api.services.generation import lifecycle, supervisor
 from omnia_api.services.generation_runs import (
     GenerationDispatch,
     recover_interrupted_generation_runs,
@@ -78,7 +78,7 @@ async def test_live_worker_survives_api_recovery_and_duplicate_delivery(
     run.execution_backend = "worker"
     await db_session.commit()
     monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
     entered, finish = asyncio.Event(), asyncio.Event()
     executions = []
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -96,15 +96,15 @@ async def test_live_worker_survives_api_recovery_and_duplicate_delivery(
     async def tracked(work, **kwargs):
         await work
 
-    monkeypatch.setattr(messages, "_process_prompt", work)
-    monkeypatch.setattr(messages, "_run_tracked_prompt", tracked)
+    monkeypatch.setattr(lifecycle, "_process_prompt", work)
+    monkeypatch.setattr(supervisor, "_run_tracked_prompt", tracked)
     task = asyncio.create_task(generation.execute_dispatch(run.id))
     try:
         await asyncio.wait_for(entered.wait(), 5)
         assert not await generation.execute_dispatch(run.id)
         async with factory() as api_session:
             assert await recover_interrupted_generation_runs(api_session) == 0
-        assert await messages.resume_capacity_queued_generations() == 0
+        assert await supervisor.resume_capacity_queued_generations() == 0
         finish.set()
         assert await asyncio.wait_for(task, 5)
         await db_session.refresh(run)
@@ -121,7 +121,7 @@ async def test_claimed_orphan_is_not_replayed(db_session, test_engine, monkeypat
     run.execution_started_at = datetime.now(UTC)
     await db_session.commit()
     monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
     assert not await generation.execute_dispatch(run.id)
     await db_session.refresh(run)
     assert run.status == "failed"
@@ -134,7 +134,7 @@ async def test_cancel_before_dispatch_never_executes(db_session, test_engine, mo
     run.status = "cancel_requested"
     await db_session.commit()
     monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
     executions = []
 
     async def work(**kwargs):
@@ -143,8 +143,8 @@ async def test_cancel_before_dispatch_never_executes(db_session, test_engine, mo
     async def tracked(work, **kwargs):
         await work
 
-    monkeypatch.setattr(messages, "_process_prompt", work)
-    monkeypatch.setattr(messages, "_run_tracked_prompt", tracked)
+    monkeypatch.setattr(lifecycle, "_process_prompt", work)
+    monkeypatch.setattr(supervisor, "_run_tracked_prompt", tracked)
     await generation.execute_dispatch(run.id)
     assert executions == []
     await db_session.refresh(run)
@@ -163,13 +163,20 @@ async def test_terminal_run_cleanup_waits_for_execution_lock(db_session, test_en
     run.error = "original failure"
     run.finished_at = datetime.now(UTC)
     workspace = ProjectCellWorkspace(
-        project_id=run.project_id, owner_id=run.user_id, provider="docker", state="ready",
+        project_id=run.project_id,
+        owner_id=run.user_id,
+        provider="docker",
+        state="ready",
     )
     db_session.add(workspace)
     await db_session.flush()
     operation = ProjectCellOperation(
-        workspace_id=workspace.id, generation_run_id=run.id, execution_run_id=run.id,
-        kind="release", status="running", request_digest="a" * 64,
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        execution_run_id=run.id,
+        kind="release",
+        status="running",
+        request_digest="a" * 64,
         idempotency_key="terminal-release",
     )
     db_session.add(operation)
@@ -193,13 +200,15 @@ async def test_terminal_run_cleanup_waits_for_execution_lock(db_session, test_en
 
 
 async def test_database_deadline_cancels_real_task_without_rewriting_failure(
-    db_session, test_engine, monkeypatch,
+    db_session,
+    test_engine,
+    monkeypatch,
 ):
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
     await db_session.commit()
     monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
     entered, cancelled = asyncio.Event(), asyncio.Event()
 
     async def work(**kwargs):
@@ -215,9 +224,9 @@ async def test_database_deadline_cancels_real_task_without_rewriting_failure(
     async def clear(*args):
         pass
 
-    monkeypatch.setattr(messages, "_process_prompt", work)
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", no_redis_signal)
-    monkeypatch.setattr(messages, "clear_generation_cancel", clear)
+    monkeypatch.setattr(lifecycle, "_process_prompt", work)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", no_redis_signal)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", clear)
     task = asyncio.create_task(generation.execute_dispatch(run.id))
     try:
         await asyncio.wait_for(entered.wait(), 5)
@@ -238,7 +247,9 @@ async def test_database_deadline_cancels_real_task_without_rewriting_failure(
 
 
 async def test_dispatcher_retries_unclaimed_work_after_connection_failure(
-    db_session, test_engine, monkeypatch,
+    db_session,
+    test_engine,
+    monkeypatch,
 ):
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"

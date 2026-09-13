@@ -10,8 +10,9 @@ import pytest
 from omnia_api.core.errors import ApiError
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.routers import messages, rollback, runtime
+from omnia_api.routers import rollback, runtime
 from omnia_api.schemas.runtime import RuntimeStatus
+from omnia_api.services.generation import lifecycle
 from omnia_api.workers import preview
 
 BROWSER_CONTAINERS = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
@@ -19,7 +20,7 @@ NON_BROWSER = ("blank", "landing", "portfolio", "blog", "api", "tgbot", "code")
 
 
 def test_current_ordered_browser_facets_are_exact():
-    assert messages.CONTAINER_NEXT == BROWSER_CONTAINERS
+    assert lifecycle.CONTAINER_NEXT == BROWSER_CONTAINERS
     assert preview.CONTAINER_NEXT == BROWSER_CONTAINERS
     assert runtime._CONTAINER_NEXT == BROWSER_CONTAINERS
     assert rollback._CONTAINER_NEXT == BROWSER_CONTAINERS

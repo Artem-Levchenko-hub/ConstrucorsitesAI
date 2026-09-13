@@ -30,8 +30,8 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
-from omnia_api.routers.messages import _wait_for_capacity_dispatch_lease_loss
 from omnia_api.services.agent_builder import Action
+from omnia_api.services.generation.supervisor import _wait_for_capacity_dispatch_lease_loss
 from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
 from omnia_api.services.project_cell_access import decide_project_cell_access
 from omnia_api.services.project_cell_capacity import (

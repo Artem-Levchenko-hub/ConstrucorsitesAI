@@ -8,11 +8,12 @@ from uuid import uuid4
 
 import pytest
 
+from omnia_api.services.generation import agent_messages, container_realization, runtime, supervisor
+
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-at-least-32-bytes")
 
 from omnia_api.core.errors import ApiError
-from omnia_api.routers import messages
 from omnia_api.services.agent_builder import Action
 from omnia_api.services.generation_runs import promote_generation_after_admission
 
@@ -34,18 +35,17 @@ async def test_failed_repair_restores_changed_deleted_and_empty_source_files():
         return SimpleNamespace(failure=None)
 
     handle = SimpleNamespace(export_files=export, stage_patch=stage, sync_preview=sync)
-    await messages._restore_project_cell_source(handle, baseline)
+    await runtime._restore_project_cell_source(handle, baseline)
     assert tree == baseline
 
 
 def test_cancel_protocol_signals_only_genuinely_running_generation() -> None:
-    assert messages._generation_cancel_protocol("pending") == "terminal_without_signal"
+    assert supervisor._generation_cancel_protocol("pending") == "terminal_without_signal"
     assert (
-        messages._generation_cancel_protocol("queued_for_capacity")
-        == "terminal_without_signal"
+        supervisor._generation_cancel_protocol("queued_for_capacity") == "terminal_without_signal"
     )
-    assert messages._generation_cancel_protocol("running") == "signal_running"
-    assert messages._generation_cancel_protocol("cancel_requested") == "already_requested"
+    assert supervisor._generation_cancel_protocol("running") == "signal_running"
+    assert supervisor._generation_cancel_protocol("cancel_requested") == "already_requested"
 
 
 class _PromotionSession:
@@ -183,7 +183,7 @@ async def test_capacity_dispatch_uses_a_database_session_lock() -> None:
     session = SimpleNamespace(execute=AsyncMock())
     session.execute.return_value = SimpleNamespace(scalar_one=lambda: True)
 
-    claimed = await messages._try_claim_capacity_dispatch(session, run_id)
+    claimed = await supervisor._try_claim_capacity_dispatch(session, run_id)
 
     assert claimed is True
     statement = session.execute.await_args.args[0]
@@ -193,9 +193,9 @@ async def test_capacity_dispatch_uses_a_database_session_lock() -> None:
 def test_capacity_dispatch_lock_key_is_stable_and_signed_bigint() -> None:
     run_id = uuid4()
 
-    key = messages._capacity_dispatch_lock_key(run_id)
+    key = supervisor._capacity_dispatch_lock_key(run_id)
 
-    assert key == messages._capacity_dispatch_lock_key(run_id)
+    assert key == supervisor._capacity_dispatch_lock_key(run_id)
     assert -(2**63) <= key < 2**63
 
 
@@ -212,11 +212,11 @@ async def test_capacity_dispatch_watcher_closes_after_queue_is_admitted(
     async def renew(_run_id, _token) -> str:
         return next(states)
 
-    monkeypatch.setattr(messages.asyncio, "sleep", no_sleep)
-    monkeypatch.setattr(messages, "_renew_capacity_dispatch_claim", renew)
+    monkeypatch.setattr(supervisor.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(supervisor, "_renew_capacity_dispatch_claim", renew)
 
     result = await asyncio.wait_for(
-        messages._wait_for_capacity_dispatch_lease_loss(uuid4(), uuid4()),
+        supervisor._wait_for_capacity_dispatch_lease_loss(uuid4(), uuid4()),
         timeout=0.1,
     )
 
@@ -235,10 +235,10 @@ async def test_capacity_dispatch_watcher_reports_loss_before_admission(
     async def lost(_run_id, _token) -> str:
         return "lost"
 
-    monkeypatch.setattr(messages.asyncio, "sleep", no_sleep)
-    monkeypatch.setattr(messages, "_renew_capacity_dispatch_claim", lost)
+    monkeypatch.setattr(supervisor.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(supervisor, "_renew_capacity_dispatch_claim", lost)
 
-    result = await messages._wait_for_capacity_dispatch_lease_loss(uuid4(), uuid4())
+    result = await supervisor._wait_for_capacity_dispatch_lease_loss(uuid4(), uuid4())
 
     assert result == "lost"
 
@@ -261,13 +261,13 @@ async def test_closed_capacity_watcher_does_not_cancel_admitted_work(
 
     finalize = AsyncMock()
     cancelled = AsyncMock()
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", never_cancel)
-    monkeypatch.setattr(messages, "_wait_for_capacity_dispatch_lease_loss", closed)
-    monkeypatch.setattr(messages, "finalize_generation_run", finalize)
-    monkeypatch.setattr(messages, "_finalize_cancelled_generation", cancelled)
-    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", never_cancel)
+    monkeypatch.setattr(supervisor, "_wait_for_capacity_dispatch_lease_loss", closed)
+    monkeypatch.setattr(supervisor, "finalize_generation_run", finalize)
+    monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", cancelled)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", AsyncMock())
 
-    await messages._run_tracked_prompt(
+    await supervisor._run_tracked_prompt(
         work(),
         run_id=uuid4(),
         project_id=uuid4(),
@@ -290,7 +290,7 @@ async def test_local_admission_signal_wins_if_database_heartbeat_fails_after_adm
     work_completed = asyncio.Event()
 
     async def work() -> None:
-        messages.capacity_admission_event(run_id).set()
+        supervisor.capacity_admission_event(run_id).set()
         heartbeat_failed.set()
         await asyncio.sleep(0)
         work_completed.set()
@@ -304,17 +304,17 @@ async def test_local_admission_signal_wins_if_database_heartbeat_fails_after_adm
 
     finalize = AsyncMock()
     cancelled = AsyncMock()
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", never_cancel)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", never_cancel)
     monkeypatch.setattr(
-        messages,
+        supervisor,
         "_wait_for_capacity_dispatch_lease_loss",
         failed_heartbeat,
     )
-    monkeypatch.setattr(messages, "finalize_generation_run", finalize)
-    monkeypatch.setattr(messages, "_finalize_cancelled_generation", cancelled)
-    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+    monkeypatch.setattr(supervisor, "finalize_generation_run", finalize)
+    monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", cancelled)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", AsyncMock())
 
-    await messages._run_tracked_prompt(
+    await supervisor._run_tracked_prompt(
         work(),
         run_id=run_id,
         project_id=uuid4(),
@@ -353,19 +353,19 @@ async def test_queued_terminal_without_cancel_signal_allows_inflight_cleanup(
         return "lost"
 
     terminalize = AsyncMock()
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", wait_for_cancel)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", wait_for_cancel)
     monkeypatch.setattr(
-        messages,
+        supervisor,
         "_wait_for_capacity_dispatch_lease_loss",
         never_lose_lease,
     )
-    monkeypatch.setattr(messages, "_finalize_cancelled_generation", terminalize)
-    monkeypatch.setattr(messages, "set_generation_run_status", AsyncMock())
-    monkeypatch.setattr(messages, "_emergency_error", AsyncMock())
-    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+    monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", terminalize)
+    monkeypatch.setattr(supervisor, "set_generation_run_status", AsyncMock())
+    monkeypatch.setattr(supervisor, "_emergency_error", AsyncMock())
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", AsyncMock())
 
     tracked = asyncio.create_task(
-        messages._run_tracked_prompt(
+        supervisor._run_tracked_prompt(
             work(),
             run_id=run_id,
             project_id=uuid4(),
@@ -404,13 +404,13 @@ async def test_lost_capacity_watcher_cancels_only_waiter_without_terminalizing_r
 
     terminalize = AsyncMock()
     finalize = AsyncMock()
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", never_cancel)
-    monkeypatch.setattr(messages, "_wait_for_capacity_dispatch_lease_loss", lost)
-    monkeypatch.setattr(messages, "_finalize_cancelled_generation", terminalize)
-    monkeypatch.setattr(messages, "finalize_generation_run", finalize)
-    monkeypatch.setattr(messages, "clear_generation_cancel", AsyncMock())
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", never_cancel)
+    monkeypatch.setattr(supervisor, "_wait_for_capacity_dispatch_lease_loss", lost)
+    monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", terminalize)
+    monkeypatch.setattr(supervisor, "finalize_generation_run", finalize)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", AsyncMock())
 
-    await messages._run_tracked_prompt(
+    await supervisor._run_tracked_prompt(
         waiting_work(),
         run_id=uuid4(),
         project_id=uuid4(),
@@ -445,17 +445,17 @@ async def test_prepare_max_runtime_context_selects_project_cell_once_without_leg
         pytest.fail("legacy ensure_provisioned path must stay unused for selected cell")
 
     monkeypatch.setattr(
-        messages.project_cell_executor,
+        runtime.project_cell_executor,
         "maybe_create_project_cell_executor",
         fake_maybe_create,
     )
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_sandbox_capabilities",
         lambda *args, **kwargs: pytest.fail("legacy sandbox attestation must stay unused"),
     )
 
-    result = await messages._prepare_max_runtime_context(
+    result = await runtime._prepare_max_runtime_context(
         project_id=uuid4(),
         project_slug="max-cell",
         user_id=uuid4(),
@@ -503,27 +503,27 @@ async def test_prepare_max_runtime_context_re_raises_project_cell_failure_withou
         emitted.append((event, dict(data)))
 
     async def fake_maybe_create(**_kwargs):
-        raise messages.project_cell_executor.ProjectCellExecutorUnavailable("bootstrap failed")
+        raise runtime.project_cell_executor.ProjectCellExecutorUnavailable("bootstrap failed")
 
     async def fake_ensure() -> None:
         pytest.fail("legacy ensure_provisioned path must stay unused after cell failure")
 
     monkeypatch.setattr(
-        messages.project_cell_executor,
+        runtime.project_cell_executor,
         "maybe_create_project_cell_executor",
         fake_maybe_create,
     )
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_sandbox_capabilities",
         lambda *args, **kwargs: pytest.fail("legacy sandbox attestation must stay unused"),
     )
 
     with pytest.raises(
-        messages.project_cell_executor.ProjectCellExecutorUnavailable,
+        runtime.project_cell_executor.ProjectCellExecutorUnavailable,
         match="bootstrap failed",
     ):
-        await messages._prepare_max_runtime_context(
+        await runtime._prepare_max_runtime_context(
             project_id=uuid4(),
             project_slug="max-cell",
             user_id=uuid4(),
@@ -563,17 +563,17 @@ async def test_execute_max_agent_action_routes_selected_runtime_check_without_le
         return {"ok": True, "detail": "cell runtime"}
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "create_max_preview_session",
         lambda *args, **kwargs: pytest.fail("legacy MAX preview bootstrap must stay unused"),
     )
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "get_status",
         lambda *args, **kwargs: pytest.fail("legacy status lookup must stay unused"),
     )
 
-    result = await messages._execute_max_agent_action(
+    result = await runtime._execute_max_agent_action(
         Action(name="runtime_check", args={"path": "/"}),
         project_id=uuid4(),
         project_slug="max-cell",
@@ -601,7 +601,7 @@ async def test_portable_action_uses_provider_boundary_not_next_source_lock_or_au
         ),
         Action(name="bash", args={"cmd": "pip install flask"}),
     ):
-        result = await messages._execute_max_agent_action(
+        result = await runtime._execute_max_agent_action(
             action,
             project_id=uuid4(),
             project_slug="portable",
@@ -623,7 +623,7 @@ async def test_execute_max_agent_action_rejects_removed_see_before_any_dispatch(
     def forbidden_execute(_action: Action) -> None:
         pytest.fail("removed visual action must not reach any executor")
 
-    result = await messages._execute_max_agent_action(
+    result = await runtime._execute_max_agent_action(
         Action(name="see", args={"path": "/"}),
         project_id=uuid4(),
         project_slug="max-no-see",
@@ -655,17 +655,17 @@ async def test_build_agent_seed_parts_reads_from_selected_cell_without_legacy_io
         raise AssertionError(f"unexpected action: {action}")
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_list_dir",
         lambda *args, **kwargs: pytest.fail("legacy list_dir must stay unused"),
     )
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_read_file",
         lambda *args, **kwargs: pytest.fail("legacy read_file must stay unused"),
     )
 
-    parts = await messages._build_agent_seed_parts(
+    parts = await runtime._build_agent_seed_parts(
         uuid4(),
         "max-cell",
         project_cell_handle=SimpleNamespace(execute=fake_execute),
@@ -698,12 +698,12 @@ async def test_project_cell_build_routes_through_handle_without_legacy_build(
         return {"ok": True, "detail": "build ok"}
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_build",
         lambda *args, **kwargs: pytest.fail("legacy build must stay unused"),
     )
 
-    result = await messages._project_cell_build(SimpleNamespace(execute=fake_execute))
+    result = await runtime._project_cell_build(SimpleNamespace(execute=fake_execute))
 
     assert result == {"ok": True, "detail": "build ok"}
     assert calls == ["build"]
@@ -720,17 +720,17 @@ async def test_project_cell_runtime_check_routes_through_handle_without_legacy_s
         return {"ok": True, "detail": "runtime ok"}
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "runtime_status",
         lambda *args, **kwargs: pytest.fail("legacy runtime_status must stay unused"),
     )
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "get_status",
         lambda *args, **kwargs: pytest.fail("legacy get_status must stay unused"),
     )
 
-    result = await messages._project_cell_runtime_check(
+    result = await runtime._project_cell_runtime_check(
         SimpleNamespace(execute=fake_execute),
         path="/",
     )
@@ -759,9 +759,9 @@ async def test_apply_project_cell_preview_files_mirrors_cell_before_preview(
         preview_calls.append((slug, dict(files), tuple(empty_files)))
         return {"state": "hot_reloaded"}
 
-    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", fake_hot_reload)
+    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", fake_hot_reload)
 
-    await messages._apply_project_cell_preview_files(
+    await runtime._apply_project_cell_preview_files(
         project_id=uuid4(),
         project_slug="max-cell",
         files={"src/app/page.tsx": "v2\n", "obsolete.txt": ""},
@@ -785,9 +785,9 @@ async def test_apply_project_cell_preview_files_preserves_explicit_empty_files_i
         preview_calls.append((slug, dict(files), tuple(empty_files)))
         return {"state": "hot_reloaded"}
 
-    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", fake_hot_reload)
+    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", fake_hot_reload)
 
-    await messages._apply_project_cell_preview_files(
+    await runtime._apply_project_cell_preview_files(
         project_id=uuid4(),
         project_slug="max-cell",
         files={"empty.txt": "", "deleted.txt": ""},
@@ -825,13 +825,13 @@ async def test_abort_unsafe_max_backend_restores_cell_and_preview(
         return SimpleNamespace(generated_files={}, failure=None)
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "hot_reload",
         lambda *args, **kwargs: pytest.fail("direct hot_reload should not run with a cell handle"),
     )
 
     with pytest.raises(ApiError) as caught:
-        await messages._abort_unsafe_max_backend(
+        await runtime._abort_unsafe_max_backend(
             project_id=uuid4(),
             project_slug="max-cell",
             current_files={"src/app/page.tsx": "safe page\n"},
@@ -854,7 +854,7 @@ async def test_abort_unsafe_max_backend_restores_cell_and_preview(
 
 def test_max_shell_kill_switch_allows_owner_cell_without_attestation() -> None:
     assert (
-        messages._resolve_max_shell_enabled(
+        runtime._resolve_max_shell_enabled(
             max_shell_requested=False,
             sandbox_attested=True,
             project_cell_handle=SimpleNamespace(),
@@ -862,7 +862,7 @@ def test_max_shell_kill_switch_allows_owner_cell_without_attestation() -> None:
         is False
     )
     assert (
-        messages._resolve_max_shell_enabled(
+        runtime._resolve_max_shell_enabled(
             max_shell_requested=True,
             sandbox_attested=False,
             project_cell_handle=SimpleNamespace(),
@@ -894,12 +894,12 @@ async def test_run_max_shell_action_uses_project_cell_executor_without_sandbox(
         return SimpleNamespace(generated_files={}, failure=None)
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_exec_sandbox",
         lambda *args, **kwargs: pytest.fail("sandbox path must stay unused for Project Cell"),
     )
 
-    result = await messages._run_max_shell_action(
+    result = await runtime._run_max_shell_action(
         action=Action(name="bash", args={"cmd": "pnpm test"}),
         project_id=uuid4(),
         project_slug="max-cell",
@@ -943,10 +943,10 @@ async def test_run_max_shell_action_keeps_sandbox_for_non_cell(
         assert base_workspace_revision == "a" * 64
         return {"state": "hot_reloaded"}
 
-    monkeypatch.setattr(messages.orchestrator_client, "agent_exec_sandbox", fake_sandbox)
-    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", fake_hot_reload)
+    monkeypatch.setattr(runtime.orchestrator_client, "agent_exec_sandbox", fake_sandbox)
+    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", fake_hot_reload)
 
-    result = await messages._run_max_shell_action(
+    result = await runtime._run_max_shell_action(
         action=Action(name="bash", args={"cmd": "pnpm test"}),
         project_id=uuid4(),
         project_slug="max-sandbox",
@@ -997,17 +997,17 @@ async def test_run_max_shell_action_rolls_back_rejected_cell_diff(
         return SimpleNamespace(generated_files={}, failure=None)
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "agent_exec_sandbox",
         lambda *args, **kwargs: pytest.fail("sandbox path must stay unused for Project Cell"),
     )
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "hot_reload",
         lambda *args, **kwargs: pytest.fail("rollback must go through Project Cell helper"),
     )
 
-    result = await messages._run_max_shell_action(
+    result = await runtime._run_max_shell_action(
         action=Action(name="bash", args={"cmd": "pnpm test"}),
         project_id=uuid4(),
         project_slug="max-cell",
@@ -1052,12 +1052,12 @@ async def test_rollback_project_cell_shell_files_preserves_zero_byte_snapshot(
         return SimpleNamespace(generated_files={}, failure=None)
 
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        runtime.orchestrator_client,
         "hot_reload",
         lambda *args, **kwargs: pytest.fail("rollback must stay on Project Cell path"),
     )
 
-    rolled_back = await messages._rollback_project_cell_shell_files(
+    rolled_back = await runtime._rollback_project_cell_shell_files(
         project_id=uuid4(),
         project_slug="max-cell",
         snapshot_files={"empty.txt": ""},
@@ -1094,16 +1094,20 @@ async def test_run_app_self_repair_uses_project_cell_preview_apply_without_hot_r
         assert kwargs["file_path"] == "src/app/page.tsx"
         return {"src/app/page.tsx": "fixed\n"}
 
-    monkeypatch.setattr(messages, "_probe_app_error", fake_probe_app_error)
-    monkeypatch.setattr(messages, "_apply_project_cell_preview_files", fake_apply_preview_files)
-    monkeypatch.setattr(messages.app_doctor, "propose_fix", fake_propose_fix)
+    monkeypatch.setattr(container_realization, "_probe_app_error", fake_probe_app_error)
     monkeypatch.setattr(
-        messages.orchestrator_client,
+        container_realization,
+        "_apply_project_cell_preview_files",
+        fake_apply_preview_files,
+    )
+    monkeypatch.setattr(container_realization.app_doctor, "propose_fix", fake_propose_fix)
+    monkeypatch.setattr(
+        runtime.orchestrator_client,
         "hot_reload",
         lambda *args, **kwargs: pytest.fail("legacy hot_reload must stay unused"),
     )
 
-    repaired, final_error, category = await messages._run_app_self_repair(
+    repaired, final_error, category = await container_realization._run_app_self_repair(
         project_id=uuid4(),
         slug="max-cell",
         files={"src/app/page.tsx": "broken\n"},
@@ -1122,8 +1126,8 @@ def test_hard_coverage_failure_is_captured_for_release_attestation() -> None:
     hard = SimpleNamespace(hard_missing=lambda: ["products"], passed=False, checks=[])
     soft = SimpleNamespace(hard_missing=lambda: [], passed=False, checks=[])
 
-    capture = messages._capture_hard_coverage_attestation(None, hard, enabled=True)
+    capture = agent_messages._capture_hard_coverage_attestation(None, hard, enabled=True)
 
     assert capture == [("coverage", hard)]
-    assert messages._capture_hard_coverage_attestation(None, soft, enabled=True) is None
-    assert messages._capture_hard_coverage_attestation(None, hard, enabled=False) is None
+    assert agent_messages._capture_hard_coverage_attestation(None, soft, enabled=True) is None
+    assert agent_messages._capture_hard_coverage_attestation(None, hard, enabled=False) is None

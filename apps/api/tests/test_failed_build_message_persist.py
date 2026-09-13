@@ -28,7 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.user import User
-from omnia_api.routers.messages import _failed_build_body, _finalize_message
+from omnia_api.services.generation.agent_messages import _failed_build_body
+from omnia_api.services.generation.publication import _finalize_message
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,7 +50,7 @@ def test_failed_build_body_writes_error_when_nothing_streamed() -> None:
 
 def test_failed_build_body_preserves_partial_content() -> None:
     """If the model streamed real partial output, keep it (don't clobber)."""
-    partial = "<file path=\"src/app/page.tsx\">half a file"
+    partial = '<file path="src/app/page.tsx">half a file'
     assert _failed_build_body(partial, "stream dropped") == partial
 
 

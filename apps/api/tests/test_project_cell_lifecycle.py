@@ -951,7 +951,9 @@ async def test_reconcile_cannot_switch_durable_target(
 )
 def test_public_code_has_no_lifecycle_caller() -> None:
     repo = Path(__file__).resolve().parents[1]
+    generation_paths = sorted((repo / "src/omnia_api/services/generation").glob("*.py"))
     for relative_path in (
+        *generation_paths,
         "src/omnia_api/routers/messages.py",
         "src/omnia_api/services/agent_native.py",
         "src/omnia_api/services/agent_builder.py",

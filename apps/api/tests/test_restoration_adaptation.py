@@ -13,12 +13,15 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.message import RestorationAdaptationReference
 
 
-@pytest.mark.parametrize("path", [
-    "src/app/api/max/session/route.ts",
-    "src/app/api/omnia/integrations/[...path]/route.ts",
-    "src/app/api/omnia/preview-session/route.ts",
-    "src/lib/max/bot-api.ts",
-])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/app/api/max/session/route.ts",
+        "src/app/api/omnia/integrations/[...path]/route.ts",
+        "src/app/api/omnia/preview-session/route.ts",
+        "src/lib/max/bot-api.ts",
+    ],
+)
 def test_canonical_environment_credentials_are_source_references(path):
     from omnia_api.services.max_project_kit import _template_file
     from omnia_api.services.restoration_adaptation import _source_files
@@ -29,11 +32,14 @@ def test_canonical_environment_credentials_are_source_references(path):
     assert excluded == []
 
 
-@pytest.mark.parametrize("content", [
-    "const token = process.env.MAX_BOT_TOKEN;",
-    "  const secret = process.env.AUTH_SECRET; // read configured value\n",
-    "const url = `https://example.test/${method}`;\nconst token = process.env.MAX_BOT_TOKEN;",
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "const token = process.env.MAX_BOT_TOKEN;",
+        "  const secret = process.env.AUTH_SECRET; // read configured value\n",
+        "const url = `https://example.test/${method}`;\nconst token = process.env.MAX_BOT_TOKEN;",
+    ],
+)
 def test_complete_environment_reference_declarations_preserve_source(content):
     from omnia_api.services.restoration_adaptation import _source_files
     from omnia_api.services.secret_safety import contains_provider_secret
@@ -43,24 +49,27 @@ def test_complete_environment_reference_declarations_preserve_source(content):
     assert _source_files({"source.ts": content}) == ({"source.ts": content}, [])
 
 
-@pytest.mark.parametrize("content", [
-    'const text = "token = process.env.MAX_BOT_TOKEN";',
-    "const text = `\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
-    "/*\nconst token = process.env.MAX_BOT_TOKEN;\n*/",
-    "// token = process.env.MAX_BOT_TOKEN",
-    "token = process.env.MAX_BOT_TOKEN",
-    "const token = process.env.MAX_BOT_TOKEN.secretCredential1234;",
-    "const token = process.env.MAX_BOT_TOKEN + suffix;",
-    "const token = process.env.MAX_BOT_TOKEN; // password: abcdefghijklmnop123456",
-    "const token = process.env.MAX_BOT_TOKEN;\npassword: abcdefghijklmnop123456",
-    "const token = process.env.MAX_BOT_TOKEN;\n"
-    "const key = 'sk-' + 'not-a-literal';\nsecret: abcdefghijklmnop123456",
-    "const token = process.env.MAX_BOT_TOKEN;\nconst value = 'sk-" + "a" * 24 + "';",
-    "const text = `outer ${`inner`}\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
-    "const regex = /abc/; const text = `\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
-    'const number = 10 / fn("x/"); const text = `\n'
-    "const token = process.env.MAX_BOT_TOKEN;\n`;",
-])
+@pytest.mark.parametrize(
+    "content",
+    [
+        'const text = "token = process.env.MAX_BOT_TOKEN";',
+        "const text = `\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
+        "/*\nconst token = process.env.MAX_BOT_TOKEN;\n*/",
+        "// token = process.env.MAX_BOT_TOKEN",
+        "token = process.env.MAX_BOT_TOKEN",
+        "const token = process.env.MAX_BOT_TOKEN.secretCredential1234;",
+        "const token = process.env.MAX_BOT_TOKEN + suffix;",
+        "const token = process.env.MAX_BOT_TOKEN; // password: abcdefghijklmnop123456",
+        "const token = process.env.MAX_BOT_TOKEN;\npassword: abcdefghijklmnop123456",
+        "const token = process.env.MAX_BOT_TOKEN;\n"
+        "const key = 'sk-' + 'not-a-literal';\nsecret: abcdefghijklmnop123456",
+        "const token = process.env.MAX_BOT_TOKEN;\nconst value = 'sk-" + "a" * 24 + "';",
+        "const text = `outer ${`inner`}\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
+        "const regex = /abc/; const text = `\nconst token = process.env.MAX_BOT_TOKEN;\n`;",
+        'const number = 10 / fn("x/"); const text = `\n'
+        "const token = process.env.MAX_BOT_TOKEN;\n`;",
+    ],
+)
 def test_source_environment_exception_does_not_hide_other_secret_matches(content):
     from omnia_api.services.restoration_adaptation import _source_files
 
@@ -81,9 +90,11 @@ def test_jsx_text_cannot_authorize_environment_reference_exception(path):
     from omnia_api.services.restoration_adaptation import _source_files
 
     with pytest.raises(ApiError):
-        _source_files({
-            path: "const page = <pre>\nconst token = process.env.MAX_BOT_TOKEN;\n</pre>;",
-        })
+        _source_files(
+            {
+                path: "const page = <pre>\nconst token = process.env.MAX_BOT_TOKEN;\n</pre>;",
+            }
+        )
 
 
 @pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
@@ -115,8 +126,13 @@ def source_case(monkeypatch):
     )
     snapshot = SimpleNamespace(id=uuid4(), project_id=project.id, commit_sha="a" * 40)
     version = SimpleNamespace(
-        id=uuid4(), project_id=project.id, snapshot_id=snapshot.id, commit_sha=snapshot.commit_sha,
-        generation_run_id=None, status="ready", base_snapshot_id=None,
+        id=uuid4(),
+        project_id=project.id,
+        snapshot_id=snapshot.id,
+        commit_sha=snapshot.commit_sha,
+        generation_run_id=None,
+        status="ready",
+        base_snapshot_id=None,
     )
     operation = SimpleNamespace(
         id=uuid4(),
@@ -172,25 +188,53 @@ def source_case(monkeypatch):
     return service, Session(), project, operation, run, reference, historical, reads
 
 
-@pytest.mark.parametrize("invalid", [
-    None, "run_owner", "run_project", "missing_run", "failed", "unchanged",
-    "resolved_source", "operation_sha", "version_project",
-])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        "run_owner",
+        "run_project",
+        "missing_run",
+        "failed",
+        "unchanged",
+        "resolved_source",
+        "operation_sha",
+        "version_project",
+    ],
+)
 async def test_generated_version_uses_resolved_completed_source(source_case, invalid):
     service, session, project, operation, _, reference, historical, reads = source_case
     source = await session.get(Snapshot, operation.source_snapshot_id)
     base = Snapshot(id=uuid4(), project_id=project.id, commit_sha="b" * 40)
-    assistant = Message(id=uuid4(), project_id=project.id, role="assistant", content="Done",
-                        snapshot_id=source.id)
-    generated = GenerationRun(id=uuid4(), project_id=project.id, user_id=project.owner_id,
-                              status="completed", assistant_message_id=assistant.id, agent_state={})
-    version = ProjectVersion(id=operation.source_version_id, project_id=project.id, number=1,
-        generation_run_id=generated.id, snapshot_id=base.id, base_snapshot_id=base.id,
-        commit_sha=base.commit_sha, status="queued")
-    session.data.update({
-        (Snapshot, base.id): base, (Message, assistant.id): assistant,
-        (GenerationRun, generated.id): generated, (ProjectVersion, version.id): version,
-    })
+    assistant = Message(
+        id=uuid4(), project_id=project.id, role="assistant", content="Done", snapshot_id=source.id
+    )
+    generated = GenerationRun(
+        id=uuid4(),
+        project_id=project.id,
+        user_id=project.owner_id,
+        status="completed",
+        assistant_message_id=assistant.id,
+        agent_state={},
+    )
+    version = ProjectVersion(
+        id=operation.source_version_id,
+        project_id=project.id,
+        number=1,
+        generation_run_id=generated.id,
+        snapshot_id=base.id,
+        base_snapshot_id=base.id,
+        commit_sha=base.commit_sha,
+        status="queued",
+    )
+    session.data.update(
+        {
+            (Snapshot, base.id): base,
+            (Message, assistant.id): assistant,
+            (GenerationRun, generated.id): generated,
+            (ProjectVersion, version.id): version,
+        }
+    )
     if invalid == "run_owner":
         generated.user_id = uuid4()
     elif invalid == "run_project":
@@ -385,14 +429,16 @@ def test_reference_is_part_of_reservation_identity(source_case):
 async def test_actual_dispatch_context_statements_keep_public_prompt_separate(source_case):
     """Execute the real caller's context seam, not a model or external worker.
 
-    Both worker and legacy API dispatch enter _process_prompt. These original AST
-    statements cover its private load and edit model input; no copied prompt logic.
+    Both dispatch paths enter lifecycle. Original statements from lifecycle,
+    agent_preparation and agent_prompt cover the context handoff and edit input;
+    no copied prompt logic or replacement production records.
     """
     import ast
     import asyncio
     from pathlib import Path
 
-    from omnia_api.routers import messages
+    from omnia_api.services.generation import agent_preparation, agent_prompt, lifecycle
+    from omnia_api.services.generation.contracts import ProjectGenerationFacts
 
     service, session, project, _, run, reference, historical, _ = source_case
     run.agent_state = {
@@ -403,7 +449,7 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
             reference,
         )
     }
-    tree = ast.parse(await asyncio.to_thread(Path(messages.__file__).read_text, encoding="utf-8"))
+    tree = ast.parse(await asyncio.to_thread(Path(lifecycle.__file__).read_text, encoding="utf-8"))
     process = next(
         n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_process_prompt"
     )
@@ -416,21 +462,43 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
         and isinstance(n.value.value.func, ast.Name)
         and n.value.value.func.id == "append_adaptation_context"
     ]
-    inject = [
+    facts = [
         n
         for n in ast.walk(process)
+        if isinstance(n, ast.Assign)
+        and isinstance(n.value, ast.Call)
+        and isinstance(n.value.func, ast.Name)
+        and n.value.func.id == "ProjectGenerationFacts"
+    ]
+    preparation = ast.parse(
+        await asyncio.to_thread(
+            Path(agent_preparation.__file__).read_text,
+            encoding="utf-8",
+        )
+    )
+    prompt = ast.parse(
+        await asyncio.to_thread(
+            Path(agent_prompt.__file__).read_text,
+            encoding="utf-8",
+        )
+    )
+    inject = [
+        n
+        for n in ast.walk(preparation)
         if isinstance(n, ast.If)
-        and isinstance(n.test, ast.Name)
-        and n.test.id == "restoration_adaptation_context"
+        and isinstance(n.test, ast.Attribute)
+        and isinstance(n.test.value, ast.Name)
+        and n.test.value.id == "project_info"
+        and n.test.attr == "restoration_context"
     ]
     edit = [
         n
-        for n in ast.walk(process)
+        for n in ast.walk(prompt)
         if isinstance(n, ast.Assign)
         and any(isinstance(t, ast.Name) and t.id == "_agent_user" for t in n.targets)
         and "ТОЧЕЧНОЕ" in ast.unparse(n)
     ]
-    assert len(load) == len(inject) == len(edit) == 1
+    assert len(load) == len(facts) == len(inject) == len(edit) == 1
     wrapper = ast.AsyncFunctionDef(
         name="context_seam",
         args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
@@ -441,6 +509,7 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
                 value=ast.Constant(value="CURRENT FILES"),
             ),
             *load,
+            *facts,
             *inject,
             *edit,
             ast.Return(
@@ -455,6 +524,16 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
     scope = {
         "append_adaptation_context": service.append_adaptation_context,
         "session": session,
+        "ProjectGenerationFacts": ProjectGenerationFacts,
+        "project_template": project.template,
+        "project_slug": "adaptation",
+        "project_name": "Adaptation",
+        "project_design_preset_id": None,
+        "project_discovery_spec": None,
+        "project_image_gen_enabled": False,
+        "project_language": "ru",
+        "project_is_imported": False,
+        "project_memory_context": "",
         "run_id": run.id,
         "project_id": project.id,
         "user_id": project.owner_id,
@@ -466,7 +545,7 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
     exec(
         compile(
             ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[])),
-            str(messages.__file__),
+            str(lifecycle.__file__),
             "exec",
         ),
         scope,
@@ -491,9 +570,9 @@ async def test_disposable_db_worker_reads_private_accepted_bundle(
 
     from omnia_api.models.message import Message
     from omnia_api.models.user import User
-    from omnia_api.routers import messages
     from omnia_api.schemas.message import GenerationRunPublic
     from omnia_api.services import restoration_adaptation as service
+    from omnia_api.services.generation import lifecycle, supervisor
     from omnia_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
     from omnia_api.workers import generation
 
@@ -584,8 +663,8 @@ async def test_disposable_db_worker_reads_private_accepted_bundle(
         await work
 
     monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
-    monkeypatch.setattr(messages, "_process_prompt", model_body)
-    monkeypatch.setattr(messages, "_run_tracked_prompt", tracked)
+    monkeypatch.setattr(lifecycle, "_process_prompt", model_body)
+    monkeypatch.setattr(supervisor, "_run_tracked_prompt", tracked)
     assert await asyncio.wait_for(generation.execute_dispatch(run.id), 5)
     assert len(inputs) == 1 and "export const OldCalendar = 'historical';" in inputs[0]
     await db_session.refresh(run)
@@ -601,7 +680,7 @@ async def test_actual_container_rewrite_fallback_keeps_private_historical_source
     import asyncio
     from pathlib import Path
 
-    from omnia_api.routers import messages
+    from omnia_api.services.generation import surgical_recovery
     from omnia_api.services.prompt_builder import build_container_rewrite_messages
 
     service, session, project, _, run, reference, historical, _ = source_case
@@ -621,7 +700,12 @@ async def test_actual_container_rewrite_fallback_keeps_private_historical_source
         project.current_snapshot_id,
         "",
     )
-    tree = ast.parse(await asyncio.to_thread(Path(messages.__file__).read_text, encoding="utf-8"))
+    tree = ast.parse(
+        await asyncio.to_thread(
+            Path(surgical_recovery.__file__).read_text,
+            encoding="utf-8",
+        )
+    )
     calls = [
         node
         for node in ast.walk(tree)
@@ -636,10 +720,9 @@ async def test_actual_container_rewrite_fallback_keeps_private_historical_source
         "history_serialized": [],
         "prompt_text": "Adapt calendar",
         "selected_elements": [],
-        "project_template": "max_miniapp",
-        "restoration_adaptation_context": context,
+        "project_info": SimpleNamespace(template="max_miniapp", restoration_context=context),
     }
-    result = eval(compile(ast.Expression(calls[0]), str(messages.__file__), "eval"), scope)
+    result = eval(compile(ast.Expression(calls[0]), str(surgical_recovery.__file__), "eval"), scope)
     contents = "\n".join(message["content"] for message in result)
     assert historical["src/components/OldCalendar.tsx"] in contents
     assert "export default () => 'current';" in contents

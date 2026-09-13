@@ -4,6 +4,7 @@ import ast
 import inspect
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
+from pathlib import Path
 from types import ModuleType
 from uuid import UUID, uuid4
 
@@ -20,9 +21,7 @@ from omnia_api.services.project_cell_control import (
 
 _CONTROL_MODULE = "omnia_api.services.project_cell_control"
 _ORCHESTRATOR_CLIENT_MODULE = "omnia_api.services.orchestrator_client"
-_CONTROL_CALLS = frozenset(
-    {"inspect_project_cell_control", "get_project_cell_capabilities"}
-)
+_CONTROL_CALLS = frozenset({"inspect_project_cell_control", "get_project_cell_capabilities"})
 
 
 def _dotted_name(expression: ast.expr) -> str:
@@ -44,9 +43,7 @@ def _public_prompt_boundary_violations(tree: ast.AST) -> list[str]:
             for alias in node.names:
                 if alias.name == _CONTROL_MODULE:
                     violations.add(f"import:{alias.name}@{node.lineno}")
-                    forbidden_module_aliases.add(
-                        alias.asname or alias.name.rsplit(".", 1)[-1]
-                    )
+                    forbidden_module_aliases.add(alias.asname or alias.name.rsplit(".", 1)[-1])
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             for alias in node.names:
@@ -210,8 +207,7 @@ async def test_selected_owner_accepts_only_valid_future_ready_contract(
             "ready": False,
             "state": "unsupported",
         },
-        _capability(UUID("00000000-0000-0000-0000-000000000005"))
-        | {"project_id": uuid4()},
+        _capability(UUID("00000000-0000-0000-0000-000000000005")) | {"project_id": uuid4()},
         _capability(UUID("00000000-0000-0000-0000-000000000005"), provider=7),
         _capability(UUID("00000000-0000-0000-0000-000000000005"), enabled=1),
         _capability(UUID("00000000-0000-0000-0000-000000000005"), ready="false"),
@@ -367,6 +363,10 @@ async def public_prompt(project_id):
 
 
 def test_public_prompt_router_has_no_project_cell_control_import_or_call() -> None:
-    router_tree = ast.parse(inspect.getsource(messages))
-
-    assert _public_prompt_boundary_violations(router_tree) == []
+    sources = {"router": inspect.getsource(messages)}
+    generation = Path(messages.__file__).parents[1] / "services" / "generation"
+    sources.update(
+        {path.name: path.read_text(encoding="utf-8") for path in generation.glob("*.py")}
+    )
+    for owner, source in sources.items():
+        assert _public_prompt_boundary_violations(ast.parse(source)) == [], owner

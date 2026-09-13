@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.routers import messages
+from omnia_api.services.generation import runtime
 from omnia_api.services.max_project_kit import _template_file
 from tests.test_project_cell_executor import _prepare_executor
 
@@ -16,7 +16,8 @@ CONFIG_PATH = "src/lib/omnia/max-config.ts"
 
 @pytest.mark.parametrize("fail_delivery", [False, True])
 async def test_legacy_generation_restores_saved_config_after_provisioning(
-    monkeypatch, fail_delivery,
+    monkeypatch,
+    fail_delivery,
 ):
     source = 'export const omniaMaxConfig = {app_name: "Saved", content: [{id: "tea"}]};\n'
     tree = {CONFIG_PATH: "template defaults", "src/app/page.tsx": "existing product"}
@@ -35,18 +36,24 @@ async def test_legacy_generation_restores_saved_config_after_provisioning(
         assert tree[SDK_PATH] == _template_file(SDK_PATH)
         return ""
 
-    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", reload)
-    monkeypatch.setattr(messages.orchestrator_client, "agent_list_dir", read)
-    monkeypatch.setattr(messages.orchestrator_client, "agent_read_file", read)
+    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", reload)
+    monkeypatch.setattr(runtime.orchestrator_client, "agent_list_dir", read)
+    monkeypatch.setattr(runtime.orchestrator_client, "agent_read_file", read)
     if fail_delivery:
         with pytest.raises(RuntimeError, match="delivery failed"):
-            await messages._build_agent_seed_parts(
-                uuid4(), "legacy", refresh_managed_sdk=True, max_config_source=source,
+            await runtime._build_agent_seed_parts(
+                uuid4(),
+                "legacy",
+                refresh_managed_sdk=True,
+                max_config_source=source,
             )
         assert not seed_reads
     else:
-        await messages._build_agent_seed_parts(
-            uuid4(), "legacy", refresh_managed_sdk=True, max_config_source=source,
+        await runtime._build_agent_seed_parts(
+            uuid4(),
+            "legacy",
+            refresh_managed_sdk=True,
+            max_config_source=source,
         )
         assert seed_reads and tree[CONFIG_PATH] == source
         assert tree["src/app/page.tsx"] == "existing product"
@@ -81,20 +88,26 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         snapshot_files=AsyncMock(side_effect=lambda: dict(tree)),
         stage_patch=stage,
     )
-    monkeypatch.setattr(messages, "_project_cell_list_dir", read)
-    monkeypatch.setattr(messages, "_project_cell_read_file", read)
+    monkeypatch.setattr(runtime, "_project_cell_list_dir", read)
+    monkeypatch.setattr(runtime, "_project_cell_read_file", read)
     if fail_delivery:
         with pytest.raises(RuntimeError, match="delivery failed"):
-            await messages._build_agent_seed_parts(
-                uuid4(), "existing", project_cell_handle=handle, refresh_managed_sdk=True,
+            await runtime._build_agent_seed_parts(
+                uuid4(),
+                "existing",
+                project_cell_handle=handle,
+                refresh_managed_sdk=True,
             )
         assert not seed_reads
         assert tree[SDK_PATH] == "old SDK"
         assert tree[PROVIDER_PATH] == "old session bootstrap"
         return
     for _ in range(2):
-        await messages._build_agent_seed_parts(
-            uuid4(), "existing", project_cell_handle=handle, refresh_managed_sdk=True,
+        await runtime._build_agent_seed_parts(
+            uuid4(),
+            "existing",
+            project_cell_handle=handle,
+            refresh_managed_sdk=True,
         )
     canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
     assert writes == [(canonical, ())]
@@ -103,7 +116,9 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
 
 
 async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ):
     from omnia_api.services import project_cell_executor
     from omnia_api.services.max_managed_generation import refresh_integration_sdk
@@ -116,7 +131,10 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
         "package.json": '{"custom":true}',
     }
     harness = await _prepare_executor(
-        monkeypatch, db_session, test_engine, snapshot_files=original,
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files=original,
         capabilities={"portable_machine": True},
     )
     handle = harness.handle
@@ -128,16 +146,20 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     canonical[CONFIG_PATH] = saved_source
     assert await handle.snapshot_files() == {**original, **canonical}
     assert await handle.export_files() == canonical
-    assert harness.write_calls == [{
-        "generation_run_id": harness.run_id,
-        "fencing_epoch": 1,
-        "expected_revision": f"{1:064x}",
-        "files": canonical,
-        "deletes": [],
-    }]
+    assert harness.write_calls == [
+        {
+            "generation_run_id": harness.run_id,
+            "fencing_epoch": 1,
+            "expected_revision": f"{1:064x}",
+            "files": canonical,
+            "deletes": [],
+        }
+    ]
     assert harness.hot_reload_calls == []
     monkeypatch.setattr(
-        project_cell_executor.get_settings(), "use_max_finalization_coordinator", False,
+        project_cell_executor.get_settings(),
+        "use_max_finalization_coordinator",
+        False,
     )
     await handle.sync_preview()
     assert harness.hot_reload_calls[0] == canonical

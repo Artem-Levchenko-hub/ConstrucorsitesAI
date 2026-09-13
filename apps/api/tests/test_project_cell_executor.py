@@ -27,6 +27,7 @@ from omnia_api.models.user import User
 from omnia_api.routers import messages
 from omnia_api.services import project_cell_capacity, project_cell_executor
 from omnia_api.services.agent_builder import Action
+from omnia_api.services.generation import supervisor
 from omnia_api.services.generation_runs import (
     finalize_generation_run,
     promote_generation_after_admission,
@@ -774,8 +775,12 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         calls.append("reconcile")
         if old_ensure_status == "absent":
             return replace(
-                response(request), state="retained", has_workspace=False,
-                has_agent_home=False, has_postgres=False, has_redis=False,
+                response(request),
+                state="retained",
+                has_workspace=False,
+                has_agent_home=False,
+                has_postgres=False,
+                has_redis=False,
             )
         return response(request)
 
@@ -801,12 +806,16 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         if request.generation_run_id == old_run.id:
             calls.append("repair")
             if not capacity_available:
-                raise ProjectCellCapacityWait(ProjectCellCapacityRejection(
-                    operation_id=request.operation_id,
-                    fencing_epoch=request.fencing_epoch,
-                    request_digest=request.request_digest,
-                    effect_applied=False, reason="insufficient_cpu", retry_after_seconds=1,
-                ))
+                raise ProjectCellCapacityWait(
+                    ProjectCellCapacityRejection(
+                        operation_id=request.operation_id,
+                        fencing_epoch=request.fencing_epoch,
+                        request_digest=request.request_digest,
+                        effect_applied=False,
+                        reason="insufficient_cpu",
+                        retry_after_seconds=1,
+                    )
+                )
             return response(request)
         assert request.generation_run_id == new_run.id
         assert calls[-1] == "release"
@@ -823,9 +832,7 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
 
     async def bootstrap(_workspace_id, *, generation_run_id, fencing_epoch):
         assert generation_run_id == new_run.id
-        assert fencing_epoch == {"completed": 3, "indeterminate": 4, "absent": 6}[
-            old_ensure_status
-        ]
+        assert fencing_epoch == {"completed": 3, "indeterminate": 4, "absent": 6}[old_ensure_status]
         raise RuntimeError("test reached new bootstrap")
 
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
@@ -837,7 +844,9 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
     )
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", bootstrap)
     monkeypatch.setattr(
-        project_cell_capacity, "hibernate_one_idle_workspace", hibernate,
+        project_cell_capacity,
+        "hibernate_one_idle_workspace",
+        hibernate,
     )
     with pytest.raises(RuntimeError, match="test reached new bootstrap"):
         await project_cell_executor.maybe_create_project_cell_executor(
@@ -852,7 +861,9 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         (
             ["reconcile", "repair", "hibernate", "repair"]
             if old_ensure_status == "absent"
-            else ["reconcile"] if old_ensure_status == "indeterminate" else []
+            else ["reconcile"]
+            if old_ensure_status == "indeterminate"
+            else []
         )
         + ["release"] * (2 if release_response_lost else 1)
         + ["ensure"]
@@ -891,10 +902,14 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
 
 
 async def test_adaptation_bootstraps_protection_before_returning_executor(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ):
     harness = await _prepare_executor(
-        monkeypatch, db_session, test_engine,
+        monkeypatch,
+        db_session,
+        test_engine,
         restoration_adaptation=True,
         snapshot_files={".omnia/cell.json": '{"version":1}'},
         capabilities={"portable_machine": True, "database_admin": "protected"},
@@ -904,19 +919,29 @@ async def test_adaptation_bootstraps_protection_before_returning_executor(
     assert harness.exec_calls == []
 
 
-@pytest.mark.parametrize("capabilities", [
-    {}, {"portable_machine": True},
-    {"portable_machine": True, "database_admin": "full"},
-    {"portable_machine": False, "database_admin": "protected"},
-])
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        {},
+        {"portable_machine": True},
+        {"portable_machine": True, "database_admin": "full"},
+        {"portable_machine": False, "database_admin": "protected"},
+    ],
+)
 async def test_adaptation_refuses_missing_or_unprotected_bootstrap(
-    monkeypatch, db_session, test_engine, capabilities,
+    monkeypatch,
+    db_session,
+    test_engine,
+    capabilities,
 ):
     with pytest.raises(
-        project_cell_executor.ProjectCellExecutorUnavailable, match="не подтверждена",
+        project_cell_executor.ProjectCellExecutorUnavailable,
+        match="не подтверждена",
     ):
         await _prepare_executor(
-            monkeypatch, db_session, test_engine,
+            monkeypatch,
+            db_session,
+            test_engine,
             restoration_adaptation=True,
             snapshot_files={".omnia/cell.json": '{"version":1}'},
             capabilities=capabilities,
@@ -924,7 +949,9 @@ async def test_adaptation_refuses_missing_or_unprotected_bootstrap(
 
 
 async def test_adaptation_cannot_fall_back_to_legacy_execution(
-    monkeypatch, db_session, test_engine,
+    monkeypatch,
+    db_session,
+    test_engine,
 ):
     owner = await _new_user(db_session, "owner")
     project = await _new_project(db_session, owner)
@@ -935,7 +962,10 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
 
     async def legacy_readiness(*_args, **_selection):
         return ProjectCellControlReadiness(
-            selected=False, ready=False, provider="legacy", reason="not_selected",
+            selected=False,
+            ready=False,
+            provider="legacy",
+            reason="not_selected",
         )
 
     async def forbidden_legacy(_action):
@@ -944,8 +974,12 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
     monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", legacy_readiness)
     with pytest.raises(project_cell_executor.ProjectCellExecutorUnavailable, match="без защиты"):
         await project_cell_executor.maybe_create_project_cell_executor(
-            project_id=project.id, project_slug=project.slug, project_template="max_miniapp",
-            user_id=owner.id, generation_run_id=run.id, legacy_execute=forbidden_legacy,
+            project_id=project.id,
+            project_slug=project.slug,
+            project_template="max_miniapp",
+            user_id=owner.id,
+            generation_run_id=run.id,
+            legacy_execute=forbidden_legacy,
         )
 
 
@@ -1942,17 +1976,17 @@ async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
     )
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_bootstrap", forbidden_bootstrap)
     monkeypatch.setattr(messages, "request_generation_cancel", signal_cancel)
-    monkeypatch.setattr(messages, "publish_event", noop)
-    monkeypatch.setattr(messages, "_wait_for_generation_cancel", wait_for_cancel)
-    monkeypatch.setattr(messages, "_wait_for_capacity_dispatch_lease_loss", never_lose_lease)
-    monkeypatch.setattr(messages, "_finalize_cancelled_generation", noop)
-    monkeypatch.setattr(messages, "set_generation_run_status", noop)
-    monkeypatch.setattr(messages, "_emergency_error", noop)
-    monkeypatch.setattr(messages, "clear_generation_cancel", noop)
-    monkeypatch.setattr(messages, "finalize_generation_run", finalize_with_test_database)
+    monkeypatch.setattr(supervisor, "publish_event", noop)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", wait_for_cancel)
+    monkeypatch.setattr(supervisor, "_wait_for_capacity_dispatch_lease_loss", never_lose_lease)
+    monkeypatch.setattr(supervisor, "_finalize_cancelled_generation", noop)
+    monkeypatch.setattr(supervisor, "set_generation_run_status", noop)
+    monkeypatch.setattr(supervisor, "_emergency_error", noop)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", noop)
+    monkeypatch.setattr(supervisor, "finalize_generation_run", finalize_with_test_database)
 
     task = asyncio.create_task(
-        messages._run_tracked_prompt(
+        supervisor._run_tracked_prompt(
             outer_project_cell_flow(),
             run_id=run.id,
             project_id=project.id,

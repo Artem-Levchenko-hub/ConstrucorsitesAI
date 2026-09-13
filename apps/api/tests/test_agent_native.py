@@ -8,11 +8,10 @@ grinding the step budget — the 2026-07-08 hibernate-mid-build incident).
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import importlib
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -23,6 +22,7 @@ import pytest
 from omnia_api.services import agent_native
 from omnia_api.services.agent_builder import AgentResult
 from omnia_api.services.agent_native import NativeMessagesAttemptAuth, _module_not_found_hint
+from omnia_api.services.generation import runtime
 
 _RUNNER_SRC = Path(__file__).resolve().parents[2] / "agent-runner" / "src"
 _GATEWAY_SRC = Path(__file__).resolve().parents[2] / "llm-gateway" / "src"
@@ -196,9 +196,23 @@ def test_max_native_toolset_can_opt_into_project_shell() -> None:
 
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
     """The verified core is a seed, never a replacement for the Google agent."""
-    source = (
-        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "routers" / "messages.py"
-    ).read_text(encoding="utf-8")
+    generation = (
+        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services" / "generation"
+    )
+    source = "\n".join(
+        (generation / name).read_text(encoding="utf-8")
+        for name in (
+            "agent_pipeline.py",
+            "agent_preparation.py",
+            "agent_prompt.py",
+            "agent_runtime.py",
+            "agent_generation.py",
+            "agent_seed.py",
+            "agent_recovery.py",
+            "agent_verification.py",
+            "runtime.py",
+        )
+    )
 
     assert 'stop_reason="deterministic_template"' not in source
     assert "_merge_seeded_agent_files" in source
@@ -208,14 +222,14 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "completion_check=_completion_check" in source
     assert "_agent_step_budget" in source
     assert "configured_steps=_agent_steps" in source
-    assert "max_steps=_agent_steps" in source
+    assert "max_steps=plan.steps" in source
     assert "max_segments=_native_max_segments" in source
     assert "_agent_res.segments" in source
     assert '"autonomous_recovery"' not in source
     assert "_seg < 2" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
-    assert '_bounded_stop and project_template != "max_miniapp"' in source
+    assert '_bounded_stop and project_info.template != "max_miniapp"' in source
     assert "MAX_SECURITY_LOCKED_FILES" in source
     assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
@@ -228,7 +242,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "_recover_max_resume_prompt" in source
     assert '_starter_patch = {**_starter_files, "src/app/page.tsx": ""}' in source
     assert '"rm -f -- src/app/page.tsx"' not in source
-    assert "{} if not _max_has_generated_snapshot else dict(current_files)" in source
+    assert "{} if not _max_has_generated_snapshot else dict(baseline.files)" in source
     assert "normalize_max_globals_css" in source
     assert "seed_design_memory" in source
     assert "await asyncio.sleep(2)" in source
@@ -246,11 +260,25 @@ def test_first_max_native_build_has_bounded_automatic_continuation_default() -> 
 
 
 def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None:
-    source = (
-        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "routers" / "messages.py"
-    ).read_text(encoding="utf-8")
+    generation = (
+        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services" / "generation"
+    )
+    source = "\n".join(
+        (generation / name).read_text(encoding="utf-8")
+        for name in (
+            "agent_pipeline.py",
+            "agent_preparation.py",
+            "agent_prompt.py",
+            "agent_runtime.py",
+            "agent_generation.py",
+            "agent_seed.py",
+            "agent_recovery.py",
+            "agent_verification.py",
+            "runtime.py",
+        )
+    )
 
-    assert "for path, content in {**current_files, **files}.items()" in source
+    assert "for path, content in {**baseline.files, **files}.items()" in source
     assert 'path: current_files.get(path, "") for path in rollback_paths' in source
     assert "await orchestrator_client.hot_reload(" in source
     assert "files.clear()" in source
@@ -261,7 +289,7 @@ def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None
     verdict_source = source[
         source.index("def _backend_verdict()") : source.index("_guard_attempt = 0")
     ]
-    assert 'if project_template == "max_miniapp":' in verdict_source
+    assert 'if project_info.template == "max_miniapp":' in verdict_source
     assert "and _max_shell_enabled" not in verdict_source
 
 
@@ -269,7 +297,6 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from omnia_api.core.errors import ApiError
-    from omnia_api.routers import messages
 
     calls: list[dict[str, Any]] = []
 
@@ -284,7 +311,7 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
         )
         return {"state": "hot_reloaded"}
 
-    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", _hot_reload)
+    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", _hot_reload)
     generated = {
         "src/app/page.tsx": "partial UI",
         "src/app/api/report/route.js": "unsafe",
@@ -292,7 +319,7 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
 
     with pytest.raises(ApiError) as exc:
         asyncio.run(
-            messages._abort_unsafe_max_backend(
+            runtime._abort_unsafe_max_backend(
                 project_id=UUID(int=1),
                 project_slug="max-app",
                 current_files={"src/app/page.tsx": "safe UI"},
@@ -323,13 +350,12 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from omnia_api.core.errors import ApiError
-    from omnia_api.routers import messages
 
     async def _hot_reload(project_id, slug, files, *, empty_files=()):
         assert empty_files == ()
         raise RuntimeError("orchestrator down")
 
-    monkeypatch.setattr(messages.orchestrator_client, "hot_reload", _hot_reload)
+    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", _hot_reload)
     generated = {
         "src/app/page.tsx": "partial UI",
         "src/app/api/report/route.js": "unsafe",
@@ -337,7 +363,7 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
 
     with pytest.raises(ApiError) as exc:
         asyncio.run(
-            messages._abort_unsafe_max_backend(
+            runtime._abort_unsafe_max_backend(
                 project_id=UUID(int=2),
                 project_slug="max-app",
                 current_files={"src/app/page.tsx": "safe UI"},
@@ -355,33 +381,10 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
 
 
 def _load_messages_helpers(*function_names: str) -> dict[str, Any]:
-    source = (
-        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "routers" / "messages.py"
-    ).read_text(encoding="utf-8")
-    tree = ast.parse(source, filename="messages.py")
-    body: list[ast.stmt] = []
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "_CONTINUE_KEYWORDS"
-            for target in node.targets
-        ):
-            body.append(node)
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == "_CONTINUE_KEYWORDS"
-        ):
-            body.append(node)
-        elif isinstance(node, ast.FunctionDef) and node.name in function_names:
-            body.append(node)
-    namespace: dict[str, Any] = {"Sequence": Sequence, "Any": Any}
-    code = compile(
-        ast.Module(body=body, type_ignores=[]),
-        "messages_resume_helpers",
-        "exec",
-    )
-    exec(code, namespace)
-    return namespace
+    from omnia_api.services.generation import agent_messages, file_transforms
+
+    owners = {"_merge_seeded_agent_files": file_transforms}
+    return {name: getattr(owners.get(name, agent_messages), name) for name in function_names}
 
 
 def test_failed_max_resume_recovers_the_original_brief() -> None:
@@ -931,7 +934,11 @@ async def test_exploration_hands_complete_source_to_coordinator_without_new_segm
     calls = 0
 
     async def fake_call(
-        client: Any, url: str, convo: Any, system: str, **kwargs: Any,
+        client: Any,
+        url: str,
+        convo: Any,
+        system: str,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         nonlocal calls
         calls += 1
@@ -950,9 +957,14 @@ async def test_exploration_hands_complete_source_to_coordinator_without_new_segm
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
     result = await agent_native.run_native_build(
-        system="MAX VERIFICATION OVERRIDE", task="Restore historical page",
-        execute=execute, portable_cell=True, completion_check=completion_check,
-        initial_files={"src/app/page.tsx": "current page"}, max_steps=40, max_segments=segments,
+        system="MAX VERIFICATION OVERRIDE",
+        task="Restore historical page",
+        execute=execute,
+        portable_cell=True,
+        completion_check=completion_check,
+        initial_files={"src/app/page.tsx": "current page"},
+        max_steps=40,
+        max_segments=segments,
     )
     assert not result.done  # Only the independent finalizer may accept the product.
     assert result.needs_finalization is (coordinator and source_gap is None)
@@ -969,7 +981,7 @@ async def test_native_no_write_guard_nudges_then_aborts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Endless successful READS (no writes) → nudge from turn 6, abort at 12 as
-    'exploring' — messages.py's honest-result branches consume that."""
+    'exploring' — runtime.py's honest-result branches consume that."""
 
     async def fake_call(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
@@ -1185,12 +1197,19 @@ async def test_max_auxiliary_rewrites_are_not_product_progress(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", [
-    "src/app/api/products/route.ts", "src/lib/db/schema.ts",
-    "src/lib/warehouse.ts", "tests/warehouse.test.mjs", "drizzle/0001_stock.sql",
-])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/app/api/products/route.ts",
+        "src/lib/db/schema.ts",
+        "src/lib/warehouse.ts",
+        "tests/warehouse.test.mjs",
+        "drizzle/0001_stock.sql",
+    ],
+)
 async def test_max_backend_implementation_resets_stall_guard(
-    monkeypatch: pytest.MonkeyPatch, path: str,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
 ) -> None:
     calls = 0
 
@@ -1209,8 +1228,11 @@ async def test_max_backend_implementation_resets_stall_guard(
         return {"ok": True, "content": action.args.get("content", "source")}
 
     result = await agent_native.run_native_build(
-        system="MAX VERIFICATION OVERRIDE", task="build warehouse", execute=execute,
-        completion_check=lambda files, evidence: None, max_steps=17,
+        system="MAX VERIFICATION OVERRIDE",
+        task="build warehouse",
+        execute=execute,
+        completion_check=lambda files, evidence: None,
+        max_steps=17,
     )
     assert calls == 17
     assert result.stop_reason != "exploring"
@@ -1575,6 +1597,7 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
 async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
     from omnia_api.core.config import get_settings
+
     get_settings.cache_clear()
     calls = 0
 
@@ -1597,9 +1620,13 @@ async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monke
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
     result = await agent_native.run_native_build(
-        system="MAX VERIFICATION OVERRIDE", task="Склад", execute=execute,
-        portable_cell=True, allow_max_bash=True,
-        completion_check=lambda files, evidence: None, max_steps=6,
+        system="MAX VERIFICATION OVERRIDE",
+        task="Склад",
+        execute=execute,
+        portable_cell=True,
+        allow_max_bash=True,
+        completion_check=lambda files, evidence: None,
+        max_steps=6,
     )
     assert result.done
     assert calls == 3
@@ -1609,6 +1636,7 @@ async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monke
 async def test_portable_provider_failure_preserves_cause_without_proof_work(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
     from omnia_api.core.config import get_settings
+
     get_settings.cache_clear()
 
     async def fail(*args, **kwargs):
@@ -1619,8 +1647,11 @@ async def test_portable_provider_failure_preserves_cause_without_proof_work(monk
 
     monkeypatch.setattr(agent_native, "_call_messages", fail)
     result = await agent_native.run_native_build(
-        system="MAX VERIFICATION OVERRIDE", task="Склад", execute=execute,
-        portable_cell=True, max_segments=3,
+        system="MAX VERIFICATION OVERRIDE",
+        task="Склад",
+        execute=execute,
+        portable_cell=True,
+        max_segments=3,
     )
     assert result.stop_reason == "provider_error"
     assert "PROVIDER_AUTH_FAILED" in result.summary

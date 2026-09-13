@@ -11,8 +11,31 @@ from omnia_api.core.config import Settings
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
-from omnia_api.routers import messages
 from omnia_api.services import restoration_adaptation
+from omnia_api.services.generation import (
+    acceptance,
+    agent_generation,
+    agent_pipeline,
+    agent_preparation,
+    agent_prompt,
+    agent_publication,
+    agent_recovery,
+    agent_runtime,
+    agent_verification,
+    asset_composition,
+    container_realization,
+    lifecycle,
+    onboarding,
+    progress,
+    runtime,
+    static_acceptance,
+    static_quality,
+    stream_attempt,
+    stream_preparation,
+    stream_publication,
+    streamed_pipeline,
+    surgical_recovery,
+)
 
 
 class BoundaryReached(BaseException):
@@ -71,7 +94,29 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
             "use_max_finalization_coordinator": False,
         }
     )
-    monkeypatch.setattr(messages, "get_settings", lambda: settings)
+    for owner in (
+        acceptance,
+        agent_generation,
+        agent_pipeline,
+        agent_preparation,
+        agent_prompt,
+        agent_publication,
+        agent_recovery,
+        agent_runtime,
+        agent_verification,
+        asset_composition,
+        container_realization,
+        lifecycle,
+        onboarding,
+        static_acceptance,
+        static_quality,
+        streamed_pipeline,
+        stream_attempt,
+        stream_preparation,
+        stream_publication,
+        surgical_recovery,
+    ):
+        monkeypatch.setattr(owner, "get_settings", lambda: settings)
 
     class Session:
         async def __aenter__(self):
@@ -104,13 +149,13 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
         def expunge(self, value):
             pass
 
-    monkeypatch.setattr(messages, "get_engine", lambda: object())
-    monkeypatch.setattr(messages, "async_sessionmaker", lambda *a, **k: Session)
+    monkeypatch.setattr(lifecycle, "get_engine", lambda: object())
+    monkeypatch.setattr(lifecycle, "async_sessionmaker", lambda *a, **k: Session)
     monkeypatch.setattr(
         restoration_adaptation, "append_adaptation_context", AsyncMock(return_value="")
     )
-    monkeypatch.setattr(messages, "clear_stream_state", AsyncMock())
-    monkeypatch.setattr(messages, "generation_event_envelope", lambda event: {})
+    monkeypatch.setattr(lifecycle, "clear_stream_state", AsyncMock())
+    monkeypatch.setattr(progress, "generation_event_envelope", lambda event: {})
 
     async def append(session, **kwargs):
         payload = kwargs["payload"]
@@ -161,21 +206,21 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
     async def stop_async(*args, **kwargs):
         stop()
 
-    monkeypatch.setattr(messages, "append_generation_event", append)
-    monkeypatch.setattr(messages.stack_routing, "ensure_provisioned", ensure)
-    monkeypatch.setattr(messages, "publish_event", publish)
-    monkeypatch.setattr(messages, "set_generation_run_status", status)
+    monkeypatch.setattr(progress, "append_generation_event", append)
+    monkeypatch.setattr(lifecycle.stack_routing, "ensure_provisioned", ensure)
+    monkeypatch.setattr(lifecycle, "publish_event", publish)
+    monkeypatch.setattr(lifecycle, "set_generation_run_status", status)
     # Stop at the next consumer boundary; no model, repository or workspace mutation.
-    monkeypatch.setattr(messages.repo_svc, "read_files", stop)
-    monkeypatch.setattr(messages, "_build_agent_seed_parts", stop_async)
+    monkeypatch.setattr(lifecycle.repo_svc, "read_files", stop)
+    monkeypatch.setattr(agent_preparation, "_build_agent_seed_parts", stop_async)
     monkeypatch.setattr(
-        messages.project_cell_executor,
+        runtime.project_cell_executor,
         "maybe_create_project_cell_executor",
         AsyncMock(return_value=None),
     )
 
     if path == "deferred_retry":
-        original_prepare = messages._prepare_max_runtime_context
+        original_prepare = agent_runtime._prepare_max_runtime_context
 
         # Test-only retry exercises the real closure's flag after a failed await.
         # The ordinary deferred case already calls it twice via prepare and seed.
@@ -188,9 +233,9 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
                 fault = None
                 return await original_prepare(**kwargs)
 
-        monkeypatch.setattr(messages, "_prepare_max_runtime_context", prepare_with_retry)
+        monkeypatch.setattr(agent_runtime, "_prepare_max_runtime_context", prepare_with_retry)
 
-    call = messages._process_prompt(
+    call = lifecycle._process_prompt(
         rid,
         pid,
         uid,

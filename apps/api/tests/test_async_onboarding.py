@@ -17,8 +17,8 @@ from uuid import uuid4
 import pytest
 
 from omnia_api.core import redis as event_bus
-from omnia_api.routers import messages as m
 from omnia_api.services.discovery import PlannedQuestion
+from omnia_api.services.generation import lightweight_turns
 
 
 class _FakeSession:
@@ -37,7 +37,7 @@ class _FakeSession:
         return False
 
     async def get(self, model: object, _id: object) -> object:
-        return self._project if model is m.Project else self._msg
+        return self._project if model is lightweight_turns.Project else self._msg
 
     async def commit(self) -> None:
         self.committed = True
@@ -59,11 +59,13 @@ def _patch_common(
         return None
 
     monkeypatch.setattr(event_bus, "get_redis", _Redis)
-    monkeypatch.setattr(m, "publish_event", event_bus.publish_event)
-    monkeypatch.setattr(m, "_maybe_result_type_question", _no_type_q)
-    monkeypatch.setattr(m, "get_engine", lambda: None)
+    monkeypatch.setattr(lightweight_turns, "publish_event", event_bus.publish_event)
+    monkeypatch.setattr(lightweight_turns, "_maybe_result_type_question", _no_type_q)
+    monkeypatch.setattr(lightweight_turns, "get_engine", lambda: None)
     monkeypatch.setattr(
-        m, "async_sessionmaker", lambda *_a, **_k: (lambda: _FakeSession(project, msg))
+        lightweight_turns,
+        "async_sessionmaker",
+        lambda *_a, **_k: lambda: _FakeSession(project, msg),
     )
     return events
 
@@ -79,13 +81,13 @@ async def test_run_async_onboarding_streams_and_stashes(
             PlannedQuestion(message="Какой тон?", choices=("Строгий", "Тёплый")),
         ]
 
-    monkeypatch.setattr(m, "plan_discovery_questions", _fake_plan)
+    monkeypatch.setattr(lightweight_turns, "plan_discovery_questions", _fake_plan)
 
     project = SimpleNamespace(discovery_plan=None)
     msg = SimpleNamespace(content="", tokens_in=None, tokens_out=None)
     events = _patch_common(monkeypatch, project, msg)
 
-    await m._run_async_onboarding(uuid4(), uuid4(), "магазин кроссовок", "ru")
+    await lightweight_turns._run_async_onboarding(uuid4(), uuid4(), "магазин кроссовок", "ru")
 
     types = [t for t, _ in events]
     # Placeholder streams FIRST (bubble isn't blank for the ~minute Opus thinks),
@@ -96,7 +98,7 @@ async def test_run_async_onboarding_streams_and_stashes(
     assert types.index("onboarding.survey") < types.index("llm.done")
 
     # The placeholder chunk carries the "подбираю вопросы" copy, not the question.
-    assert events[0][1]["delta"] == m._ASYNC_ONBOARDING_PLACEHOLDER
+    assert events[0][1]["delta"] == lightweight_turns._ASYNC_ONBOARDING_PLACEHOLDER
 
     # Plan stashed on the project; the assistant message got the first question.
     assert project.discovery_plan is not None
@@ -128,13 +130,13 @@ async def test_run_async_onboarding_fail_soft_uses_fallback(
     async def _boom_plan(_prompt: str, language: str = "ru") -> list[PlannedQuestion]:
         raise RuntimeError("gateway down")
 
-    monkeypatch.setattr(m, "plan_discovery_questions", _boom_plan)
+    monkeypatch.setattr(lightweight_turns, "plan_discovery_questions", _boom_plan)
 
     project = SimpleNamespace(discovery_plan=None)
     msg = SimpleNamespace(content="", tokens_in=None, tokens_out=None)
     events = _patch_common(monkeypatch, project, msg)
 
-    await m._run_async_onboarding(uuid4(), uuid4(), "что-нибудь", "ru")
+    await lightweight_turns._run_async_onboarding(uuid4(), uuid4(), "что-нибудь", "ru")
 
     types = [t for t, _ in events]
     # Never hangs: the turn is finalized despite the gateway failure.
@@ -142,6 +144,6 @@ async def test_run_async_onboarding_fail_soft_uses_fallback(
     assert "onboarding.survey" in types
     # A real (deterministic) plan was still stashed and a question streamed.
     assert project.discovery_plan
-    assert msg.content and msg.content != m._ASYNC_ONBOARDING_PLACEHOLDER
+    assert msg.content and msg.content != lightweight_turns._ASYNC_ONBOARDING_PLACEHOLDER
     survey_ev = next(d for t, d in events if t == "onboarding.survey")
     assert all(isinstance(question, dict) for question in survey_ev["survey"])

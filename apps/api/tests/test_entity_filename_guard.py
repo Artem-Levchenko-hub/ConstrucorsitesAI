@@ -16,7 +16,7 @@ declared `name` before commit + hot_reload, deterministically and fail-soft.
 
 from __future__ import annotations
 
-from omnia_api.routers.messages import _normalize_entity_filenames
+from omnia_api.services.generation.file_transforms import _normalize_entity_filenames
 
 
 def test_lowercase_plural_filename_is_realigned_to_internal_name() -> None:

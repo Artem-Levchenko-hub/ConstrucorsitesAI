@@ -51,8 +51,8 @@ from omnia_api.routers import transcribe as transcribe_router
 from omnia_api.routers import uploads as uploads_router
 from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
-from omnia_api.routers.messages import resume_capacity_queued_generations
 from omnia_api.services import readiness
+from omnia_api.services.generation.supervisor import resume_capacity_queued_generations
 from omnia_api.services.generation_runs import recover_interrupted_generation_runs
 from omnia_api.services.project_cells import recover_interrupted_cell_operations
 from omnia_api.services.ws_hub import hub

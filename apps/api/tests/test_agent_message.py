@@ -8,10 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.routers.messages import (
+from omnia_api.services.generation.agent_messages import (
     _agent_product_failure,
     _agent_result_message,
     _agent_step_budget,
+    _is_continue_request,
 )
 
 
@@ -21,33 +22,59 @@ def _res(**kw) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-@pytest.mark.parametrize("reason", [
-    "max_steps", "provider_error", "infra_error", "verification_rolled_back",
-    "unsafe_changes_rolled_back", "provider_stopped_rolled_back",
-])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "max_steps",
+        "provider_error",
+        "infra_error",
+        "verification_rolled_back",
+        "unsafe_changes_rolled_back",
+        "provider_stopped_rolled_back",
+    ],
+)
 def test_unfinished_edit_is_a_failed_product_outcome(reason: str) -> None:
-    assert _agent_product_failure(
-        _res(stop_reason=reason), verification_failed=False, finalization_complete=False,
-    ) is not None
+    assert (
+        _agent_product_failure(
+            _res(stop_reason=reason),
+            verification_failed=False,
+            finalization_complete=False,
+        )
+        is not None
+    )
 
 
 def test_red_verification_remains_failed_even_when_agent_claimed_done() -> None:
-    assert _agent_product_failure(
-        _res(done=True), verification_failed=True, finalization_complete=False,
-    ) == "final verification did not succeed"
+    assert (
+        _agent_product_failure(
+            _res(done=True),
+            verification_failed=True,
+            finalization_complete=False,
+        )
+        == "final verification did not succeed"
+    )
 
 
 def test_proven_done_noop_is_not_a_failed_edit() -> None:
-    assert _agent_product_failure(
-        _res(done=True, files={}), verification_failed=False, finalization_complete=False,
-    ) is None
+    assert (
+        _agent_product_failure(
+            _res(done=True, files={}),
+            verification_failed=False,
+            finalization_complete=False,
+        )
+        is None
+    )
 
 
 def test_successful_coordinator_repair_can_complete_a_bounded_agent_exit() -> None:
-    assert _agent_product_failure(
-        _res(stop_reason="max_steps", needs_finalization=True),
-        verification_failed=True, finalization_complete=True,
-    ) is None
+    assert (
+        _agent_product_failure(
+            _res(stop_reason="max_steps", needs_finalization=True),
+            verification_failed=True,
+            finalization_complete=True,
+        )
+        is None
+    )
 
 
 def test_max_build_restores_proven_single_pass_budget() -> None:
@@ -128,8 +155,6 @@ def test_edit_max_steps_message_is_edit_flavoured() -> None:
 
 
 # ── continue/resume detection — «продолжи» finishes a partial build ──────────
-
-from omnia_api.routers.messages import _is_continue_request  # noqa: E402
 
 
 def test_continue_detected() -> None:

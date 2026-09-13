@@ -81,7 +81,7 @@ async def _abandon_operations(session: AsyncSession, run_id: UUID) -> None:
 
 
 async def _fail_orphan(run_id: UUID, message: str) -> None:
-    from omnia_api.routers.messages import _emergency_error
+    from omnia_api.services.generation.supervisor import _emergency_error
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
@@ -99,10 +99,8 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
 
 
 async def execute_dispatch(run_id: UUID) -> bool:
-    from omnia_api.routers.messages import (
-        _process_prompt,
-        _run_tracked_prompt,
-    )
+    from omnia_api.services.generation.lifecycle import _process_prompt
+    from omnia_api.services.generation.supervisor import _run_tracked_prompt
 
     engine = get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)

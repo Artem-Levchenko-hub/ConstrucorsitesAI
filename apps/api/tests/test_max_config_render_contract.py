@@ -15,7 +15,6 @@ from omnia_api.core import config as core_config
 from omnia_api.core.config import Settings
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.project import Project
-from omnia_api.routers import messages
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.services import (
     agent_native,
@@ -23,6 +22,33 @@ from omnia_api.services import (
     max_data_evolution,
     max_project_kit,
     restoration_adaptation,
+)
+from omnia_api.services.generation import (
+    acceptance,
+    agent_generation,
+    agent_pipeline,
+    agent_preparation,
+    agent_prompt,
+    agent_publication,
+    agent_recovery,
+    agent_runtime,
+    agent_seed,
+    agent_verification,
+    asset_composition,
+    container_realization,
+    lifecycle,
+    onboarding,
+    progress,
+    static_acceptance,
+    static_quality,
+    stream_attempt,
+    stream_preparation,
+    stream_publication,
+    streamed_pipeline,
+    surgical_recovery,
+)
+from omnia_api.services.generation import (
+    runtime as generation_runtime,
 )
 
 
@@ -135,23 +161,46 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         raise AssertionError("network forbidden")
 
     monkeypatch.setattr(socket.socket, "connect", no_network)
-    monkeypatch.setattr(messages, "get_settings", lambda: settings)
+    for owner in (
+        acceptance,
+        agent_generation,
+        agent_pipeline,
+        agent_preparation,
+        agent_prompt,
+        agent_publication,
+        agent_recovery,
+        agent_runtime,
+        agent_verification,
+        asset_composition,
+        container_realization,
+        lifecycle,
+        onboarding,
+        static_acceptance,
+        static_quality,
+        streamed_pipeline,
+        stream_attempt,
+        stream_preparation,
+        stream_publication,
+        surgical_recovery,
+    ):
+        monkeypatch.setattr(owner, "get_settings", lambda: settings)
     monkeypatch.setattr(core_config, "get_settings", lambda: settings)
-    monkeypatch.setattr(messages, "get_engine", lambda: object())
-    monkeypatch.setattr(messages, "async_sessionmaker", lambda *a, **k: Session)
+    monkeypatch.setattr(lifecycle, "get_engine", lambda: object())
+    monkeypatch.setattr(lifecycle, "async_sessionmaker", lambda *a, **k: Session)
     monkeypatch.setattr(
         restoration_adaptation, "append_adaptation_context", AsyncMock(return_value="")
     )
-    monkeypatch.setattr(messages, "clear_stream_state", AsyncMock())
-    monkeypatch.setattr(messages, "publish_event", AsyncMock())
+    monkeypatch.setattr(lifecycle, "clear_stream_state", AsyncMock())
+    monkeypatch.setattr(lifecycle, "publish_event", AsyncMock())
     monkeypatch.setattr(
-        messages, "append_generation_event", AsyncMock(return_value=SimpleNamespace())
+        progress, "append_generation_event", AsyncMock(return_value=SimpleNamespace())
     )
-    monkeypatch.setattr(messages, "generation_event_envelope", lambda event: {})
-    monkeypatch.setattr(messages, "set_generation_run_status", AsyncMock())
-    monkeypatch.setattr(messages, "_build_agent_seed_parts", AsyncMock(return_value=[]))
-    monkeypatch.setattr(messages, "_apply_project_cell_preview_files", AsyncMock())
-    monkeypatch.setattr(messages.stack_routing, "ensure_provisioned", AsyncMock())
+    monkeypatch.setattr(progress, "generation_event_envelope", lambda event: {})
+    monkeypatch.setattr(lifecycle, "set_generation_run_status", AsyncMock())
+    monkeypatch.setattr(agent_preparation, "_build_agent_seed_parts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(agent_seed, "_apply_project_cell_preview_files", AsyncMock())
+    monkeypatch.setattr(agent_recovery, "_apply_project_cell_preview_files", AsyncMock())
+    monkeypatch.setattr(lifecycle.stack_routing, "ensure_provisioned", AsyncMock())
     monkeypatch.setattr(integration_generation, "generation_context", AsyncMock(return_value=""))
     monkeypatch.setattr(max_data_evolution, "build_max_agent_guide", AsyncMock(return_value=""))
 
@@ -168,7 +217,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         else None
     )
     monkeypatch.setattr(
-        messages,
+        agent_runtime,
         "_prepare_max_runtime_context",
         AsyncMock(
             return_value={
@@ -182,14 +231,14 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
             }
         ),
     )
-    monkeypatch.setattr(messages, "_project_cell_build", AsyncMock(return_value={"ok": True}))
+    monkeypatch.setattr(agent_runtime, "_project_cell_build", AsyncMock(return_value={"ok": True}))
     monkeypatch.setattr(
-        messages.orchestrator_client, "agent_build", AsyncMock(return_value={"ok": True})
+        generation_runtime.orchestrator_client, "agent_build", AsyncMock(return_value={"ok": True})
     )
 
     async def model(**kwargs):
         state["model_ran"] = True
-        return messages.agent_builder.AgentResult(
+        return lifecycle.agent_builder.AgentResult(
             done=caller == "verification_rollback",
             summary="Baseline result",
             files=dict(product),
@@ -199,12 +248,12 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
 
     monkeypatch.setattr(agent_native, "run_native_build", model)
 
-    async def runtime(*args, **kwargs):
+    async def runtime_status(*args, **kwargs):
         state["runtime_probed"] = True
         return {"ok": False, "status_code": 500, "error": "baseline-runtime-red"}
 
-    monkeypatch.setattr(messages, "_project_cell_runtime_check", runtime)
-    monkeypatch.setattr(messages.orchestrator_client, "runtime_status", runtime)
+    monkeypatch.setattr(agent_runtime, "_project_cell_runtime_check", runtime_status)
+    monkeypatch.setattr(generation_runtime.orchestrator_client, "runtime_status", runtime_status)
 
     real_render = max_project_kit.render_max_starter_files
 
@@ -244,7 +293,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         monkeypatch.setattr(builtins, "print", observe_handler)
 
     with pytest.raises(RenderBoundary):
-        await messages._process_prompt(
+        await lifecycle._process_prompt(
             rid,
             pid,
             uid,

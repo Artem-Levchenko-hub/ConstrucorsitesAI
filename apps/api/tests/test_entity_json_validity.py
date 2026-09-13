@@ -39,7 +39,7 @@ import json
 
 import pytest
 
-from omnia_api.routers.messages import _normalize_entity_filenames
+from omnia_api.services.generation.file_transforms import _normalize_entity_filenames
 
 # The exact malformed payload dumped by the live writer (03_writer_raw.html):
 # an unterminated `access` string that swallows the rest of the object.
@@ -85,7 +85,7 @@ def test_invalid_entity_json_is_flagged_in_build_log(capsys: pytest.CaptureFixtu
     of shipping with zero signal. The file is still emitted verbatim — repair /
     regen / build-fail is the policy-adjacent action that stays deferred — so
     this only removes the silence, it does not change what ships."""
-    from omnia_api.routers.messages import _warn_unparseable_entity_json
+    from omnia_api.services.generation.file_transforms import _warn_unparseable_entity_json
 
     files = {
         "entities/Client.json": _BROKEN_CLIENT,

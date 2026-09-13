@@ -12,7 +12,7 @@ from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.user import User
-from omnia_api.routers import messages
+from omnia_api.services.generation import supervisor
 from omnia_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
 
 pytestmark = pytest.mark.asyncio
@@ -81,17 +81,17 @@ async def test_two_api_schedulers_claim_one_dispatch_and_recover_expired_lease(
     await db_session.commit()
     spawned: list[dict[str, object]] = []
 
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
     monkeypatch.setattr(
-        messages,
+        supervisor,
         "_spawn_process_prompt",
         lambda **kwargs: spawned.append(dict(kwargs)),
     )
-    messages._PROMPT_TASKS.clear()
+    supervisor._PROMPT_TASKS.clear()
 
     claimed = await asyncio.gather(
-        messages.resume_capacity_queued_generations(),
-        messages.resume_capacity_queued_generations(),
+        supervisor.resume_capacity_queued_generations(),
+        supervisor.resume_capacity_queued_generations(),
     )
 
     assert sorted(claimed) == [0, 1]
@@ -109,7 +109,7 @@ async def test_two_api_schedulers_claim_one_dispatch_and_recover_expired_lease(
         persisted.agent_state = state
         await session.commit()
 
-    assert await messages.resume_capacity_queued_generations() == 1
+    assert await supervisor.resume_capacity_queued_generations() == 1
     assert [item["run_id"] for item in spawned] == [run.id, run.id]
     assert spawned[1]["capacity_dispatch_token"] != first_token
 
@@ -146,8 +146,8 @@ async def test_queued_cancellation_is_atomic_and_not_resumed_after_restart(
     assistant_message_id = run.assistant_message_id
     assert assistant_message_id is not None
 
-    monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
-    await messages._finalize_cancelled_generation(
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+    await supervisor._finalize_cancelled_generation(
         run.project_id,
         assistant_message_id,
         run.id,
@@ -163,4 +163,4 @@ async def test_queued_cancellation_is_atomic_and_not_resumed_after_restart(
         assert cancelled_operation is not None
         assert cancelled_operation.status == "cancelled"
 
-    assert await messages.resume_capacity_queued_generations() == 0
+    assert await supervisor.resume_capacity_queued_generations() == 0
