@@ -14,6 +14,7 @@ from omnia_api.services.generation.contracts import (
 )
 from omnia_api.services.generation.runtime import _restore_project_cell_source
 from omnia_api.services.max_finalization import ProofBundle
+from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 _log = logging.getLogger("omnia_api.routers.messages")
 
@@ -91,7 +92,8 @@ async def finalize_max_candidate(
             )
             if _finalization.status is not MaxFinalizationStatus.COMPLETE:
                 raise RuntimeError("MAX_FINALIZATION_FAILED: " + _finalization.redacted_detail)
-        except Exception:
+        except Exception as exc:
+            raise_if_terminal_cell_error(exc)
             if baseline.sha and _max_has_generated_snapshot:
                 try:
                     _published_source = await asyncio.to_thread(

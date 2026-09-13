@@ -1021,3 +1021,92 @@ async def test_real_empty_response_fallback_persists_effective_model_and_usage(
         == "\ndef recovered():\n    return 17\n"
     )
     assert next(payload for kind, payload in flow.events if kind == "llm.done")["tokens_out"] == 47
+
+
+async def test_real_terminal_cell_failure_stops_native_and_waits_release_without_snapshot(
+    flow_factory, monkeypatch
+):
+    flow = await flow_factory("nextjs_entities")
+    settings = config.get_settings().model_copy(update={"use_native_agent": True})
+    set_generation_settings(monkeypatch, settings)
+    monkeypatch.setattr(agent_native, "get_settings", lambda: settings)
+    calls = []
+    release_started = asyncio.Event()
+    finish_release = asyncio.Event()
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("fatal infrastructure triggered another runtime/model/publication operation")
+
+    async def snapshot():
+        return {"README.md": "Preserve this source"}
+
+    async def execute(action):
+        calls.append(action.name)
+        raise orchestrator_client.OrchestratorBadRequest(
+            "private controller diagnostic",
+            status_code=409,
+            upstream_code="protected_environment_recovery_required",
+        )
+
+    async def release():
+        calls.append("release_started")
+        release_started.set()
+        await finish_release.wait()
+        calls.append("release_finished")
+
+    handle = project_cell_executor.ProjectCellExecutorHandle(
+        execute=execute,
+        sync_preview=forbidden,
+        snapshot_files=snapshot,
+        stage_patch=forbidden,
+        stage_files=forbidden,
+        apply_external_files=forbidden,
+        export_files=forbidden,
+        workspace_id=uuid4(),
+        create_preview_session=forbidden,
+        release=release,
+    )
+
+    async def select_cell(**kwargs):
+        return handle
+
+    async def provider(*args, **kwargs):
+        calls.append("model")
+        return {
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "tool_use", "id": "read", "name": "read_file", "input": {"path": "a.ts"}},
+                {"type": "tool_use", "id": "second", "name": "list_dir", "input": {"path": "."}},
+            ],
+        }
+
+    async def before_selection_runtime(*args, **kwargs):
+        assert not calls
+        return ""
+
+    monkeypatch.setattr(messages.stack_routing, "ensure_provisioned", before_selection_runtime)
+    monkeypatch.setattr(orchestrator_client, "agent_list_dir", before_selection_runtime)
+    monkeypatch.setattr(orchestrator_client, "agent_read_file", before_selection_runtime)
+    monkeypatch.setattr(project_cell_executor, "maybe_create_project_cell_executor", select_cell)
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    work = asyncio.create_task(flow.run())
+    try:
+        await asyncio.wait_for(release_started.wait(), 5)
+        assert not work.done()
+        finish_release.set()
+        await asyncio.wait_for(work, 5)
+    finally:
+        finish_release.set()
+        if not work.done():
+            work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+    run, project, message, owner, snapshots, _events = await flow.saved()
+    assert calls == ["model", "read_file", "release_started", "release_finished"]
+    assert run.status == "failed" and run.error == "protected_environment_recovery_required"
+    assert "private controller diagnostic" not in message.content
+    assert project.current_snapshot_id == flow.parent_id and message.snapshot_id is None
+    assert owner.free_generations_used == 3 and len(snapshots) == 1
+    assert not flow.visible_publications and "llm.done" not in flow.trace
+    assert repo.read_files(flow.project_id, flow.parent_sha) == {
+        "README.md": "Preserve this source"
+    }

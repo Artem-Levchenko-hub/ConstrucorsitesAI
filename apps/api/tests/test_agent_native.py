@@ -2127,3 +2127,86 @@ def test_generate_media_returns_url_in_model_visible_field() -> None:
     assert res["url"] in str(res["content"])
     body = agent_native._obs_to_tool_result("tu_1", res)["content"]
     assert res["url"] in body  # end-to-end: model truly receives the URL
+
+
+@pytest.mark.asyncio
+async def test_classified_protected_environment_failure_stops_before_another_tool_or_model(
+    monkeypatch,
+):
+    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append("model")
+        return _turn(("read_file", {"path": "a.ts"}), ("list_dir", {"path": "."}))
+
+    async def execute(action):
+        calls.append(action.name)
+        raise OrchestratorBadRequest(
+            "private diagnostic must not be copied",
+            status_code=409,
+            upstream_code="protected_environment_recovery_required",
+        )
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
+        await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=40)
+    assert calls == ["model", "read_file"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fatal_at", ["build", "runtime_check"])
+async def test_terminal_infrastructure_during_local_proof_cannot_start_another_segment(
+    monkeypatch, fatal_at
+):
+    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append("model")
+        return _turn(("write_file", {"path": "a.ts", "content": "value"}))
+
+    async def execute(action):
+        calls.append(action.name)
+        if action.name == fatal_at:
+            raise OrchestratorBadRequest(
+                "private", status_code=409, upstream_code="protected_environment_recovery_required"
+            )
+        return {"ok": True}
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
+        await agent_native.run_native_build(
+            system="s",
+            task="t",
+            execute=execute,
+            max_steps=1,
+            max_segments=3,
+            completion_check=lambda *_: "runtime_check required",
+        )
+    assert calls == (
+        ["model", "write_file", "build"]
+        if fatal_at == "build"
+        else ["model", "write_file", "build", "runtime_check"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_activity_envelope_conflict_is_terminal_to_native_loop(monkeypatch):
+    from omnia_api.services.project_cell_activity import ProjectCellActivityConflict
+
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append("model")
+        return _turn(("read_file", {"path": "a.ts"}))
+
+    async def execute(action):
+        raise ProjectCellActivityConflict("activity replay envelope mismatch")
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    with pytest.raises(ProjectCellActivityConflict, match="activity replay envelope mismatch"):
+        await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=10)
+    assert calls == ["model"]

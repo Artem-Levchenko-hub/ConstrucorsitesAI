@@ -28,6 +28,7 @@ import structlog
 
 from omnia_api.core.config import get_settings
 from omnia_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
+from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 log = structlog.get_logger(__name__)
 
@@ -944,6 +945,7 @@ async def _run_native_segment(
         try:
             final_build = await execute(Action(name="build", args={}, raw=""))
         except Exception as exc:
+            raise_if_terminal_cell_error(exc)
             final_build = {"ok": False, "error": f"final build probe crashed: {exc}"}
         if final_build.get("environment_mutated"):
             _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
@@ -985,6 +987,7 @@ async def _run_native_segment(
                 try:
                     proof = await execute(action)
                 except Exception as exc:
+                    raise_if_terminal_cell_error(exc)
                     proof = {"ok": False, "error": f"local proof crashed: {exc}"}
                 local_proofs += 1
                 if emit:
@@ -1230,6 +1233,7 @@ async def _run_native_segment(
                     try:
                         obs = await execute(action)
                     except Exception as exc:  # a tool crash must not kill the build
+                        raise_if_terminal_cell_error(exc)
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
                 if obs.get("environment_mutated"):
                     _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")

@@ -29,6 +29,7 @@ from omnia_api.services.generation.runtime import (
     _abort_unsafe_max_backend,
     _apply_project_cell_preview_files,
 )
+from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 _log = logging.getLogger("omnia_api.routers.messages")
 
@@ -181,6 +182,7 @@ async def check_backend_and_normalize_css(
     except ApiError:
         raise
     except Exception as _guard_exc:  # never let advisory checks break a build
+        raise_if_terminal_cell_error(_guard_exc)
         print(f"[PP] agent_gate_feedback skipped: {_guard_exc!r}", flush=True)
 
     # Tailwind expands its @import into hundreds of CSS rules. A model
@@ -218,6 +220,7 @@ async def check_backend_and_normalize_css(
                 )
                 print("[PP] MAX CSS imports normalized before runtime", flush=True)
         except Exception as _css_safety_exc:
+            raise_if_terminal_cell_error(_css_safety_exc)
             print(f"[PP] MAX CSS normalization skipped: {_css_safety_exc!r}", flush=True)
 
 
@@ -293,6 +296,7 @@ async def probe_agent_candidate(
                 # Hold a ref so the task isn't GC'd mid-flight; discard on done.
                 _warm_task.add_done_callback(lambda _t: None)
     except Exception as _sm_exc:
+        raise_if_terminal_cell_error(_sm_exc)
         print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)
 
     # Honesty gate: a page that SERVES can still be typecheck-RED — a client
@@ -319,6 +323,7 @@ async def probe_agent_candidate(
         else:
             print("[PP] agentic_typecheck clean", flush=True)
     except Exception as _tc_exc:
+        raise_if_terminal_cell_error(_tc_exc)
         print(f"[PP] agentic_typecheck skipped: {_tc_exc!r}", flush=True)
 
     return CandidateProbeResult(accumulated, _runtime_ok, _typecheck_ok, _rt_error, _tc_error)
@@ -400,6 +405,7 @@ async def repair_legacy_edit(
                     edit_mode=True,
                 )
             except Exception as _rep_exc:
+                raise_if_terminal_cell_error(_rep_exc)
                 print(f"[PP] edit_auto_repair run failed: {_rep_exc!r}", flush=True)
                 break
             if _rep.files:
@@ -413,7 +419,8 @@ async def repair_legacy_edit(
                     if _runtime_ok
                     else str(_rt2.get("error") or _rt2.get("status_code") or "5xx")
                 )
-            except Exception:
+            except Exception as exc:
+                raise_if_terminal_cell_error(exc)
                 _runtime_ok = True
             try:
                 _tc2 = await operations.probe_build()
@@ -423,7 +430,8 @@ async def repair_legacy_edit(
                     if _typecheck_ok
                     else (str(_tc2.get("detail") or "").splitlines() or [""])[0][:240]
                 )
-            except Exception:
+            except Exception as exc:
+                raise_if_terminal_cell_error(exc)
                 _typecheck_ok = True
         if files and _typecheck_ok and _runtime_ok:
             accumulated = "Готово — правка применена."
@@ -469,6 +477,7 @@ async def apply_legacy_design_and_result_text(
                     )
                     print("[PP] design_dna injected globals.css", flush=True)
         except Exception as _dd_exc:
+            raise_if_terminal_cell_error(_dd_exc)
             print(f"[PP] design_dna skipped: {_dd_exc!r}", flush=True)
 
     # Honest result: a loop-guard abort (looping/exploring) that STILL
@@ -630,6 +639,7 @@ async def check_runtime_security_gates(
                             )
                             _att_capture = _att_gates
                         except Exception as _att_exc:  # never break a build
+                            raise_if_terminal_cell_error(_att_exc)
                             print(f"[ATTEST] skipped: {_att_exc}", flush=True)
                     if not _runtime_verdict.passed:
                         accumulated += (
@@ -669,6 +679,7 @@ async def check_runtime_security_gates(
                     _hc = await operations.probe_build()
                     _heal_green = bool(_hc.get("ok", False))
                 except Exception as _hc_exc:
+                    raise_if_terminal_cell_error(_hc_exc)
                     print(
                         f"[PP] runtime_gate heal verify skipped: {_hc_exc!r}",
                         flush=True,
@@ -682,6 +693,7 @@ async def check_runtime_security_gates(
                     )
                     break
     except Exception as _rg_exc:  # a gate must never crash the build
+        raise_if_terminal_cell_error(_rg_exc)
         print(f"[PP] runtime_gate skipped: {_rg_exc!r}", flush=True)
 
     return _att_capture, _attestation_stack, accumulated
@@ -822,6 +834,7 @@ async def check_coverage_gate(
                     _cc = await operations.probe_build()
                     _cov_green = bool(_cc.get("ok", False))
                 except Exception as _cc_exc:
+                    raise_if_terminal_cell_error(_cc_exc)
                     print(
                         f"[PP] coverage heal verify skipped: {_cc_exc!r}",
                         flush=True,
@@ -835,6 +848,7 @@ async def check_coverage_gate(
                     )
                     break
     except Exception as _cov_exc:  # a gate must never crash the build
+        raise_if_terminal_cell_error(_cov_exc)
         print(f"[PP] coverage_gate skipped: {_cov_exc!r}", flush=True)
 
     if (

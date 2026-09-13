@@ -32,6 +32,7 @@ from omnia_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellAgentExecResponse,
     ProjectCellAgentOperationStatus,
     ProjectCellPreviewSession,
     ProjectCellWorkspaceIdentity,
@@ -49,6 +50,7 @@ from omnia_api.services.project_cell_capacity import (
     wait_for_capacity,
 )
 from omnia_api.services.project_cell_control import inspect_project_cell_control
+from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 from omnia_api.services.project_cell_lifecycle import execute_cell_operation
 from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 from omnia_api.services.project_cells import (
@@ -365,6 +367,13 @@ class ProjectCellExecutorHandle:
     run_role: (
         Callable[[ProjectCellCommandRole, UUID], Awaitable[ProjectCellCommandObservation]] | None
     ) = None
+    replay_role_response: (
+        Callable[
+            [ProjectCellCommandRole, ProjectCellAgentExecResponse, ProofIdentity],
+            Awaitable[ProjectCellCommandObservation],
+        ]
+        | None
+    ) = None
     runtime_probe: Callable[[str], Awaitable[Any]] | None = None
     operation_status: Callable[[UUID], Awaitable[ProjectCellAgentOperationStatus]] | None = None
     capabilities: dict[str, object] = dataclass_field(default_factory=dict)
@@ -481,7 +490,8 @@ async def maybe_create_project_cell_executor(
             select(ProjectCellWorkspace.id).where(ProjectCellWorkspace.project_id == project_id)
         )
         readiness = await inspect_project_cell_control(
-            user, project_id,
+            user,
+            project_id,
             project_cell_enabled=project.project_cell_enabled is True,
             has_workspace=existing_cell_id is not None,
         )
@@ -736,7 +746,6 @@ async def maybe_create_project_cell_executor(
         role: ProjectCellCommandRole,
         operation_id: UUID,
     ) -> ProjectCellCommandObservation:
-        nonlocal dirty, last_identity, preview_synced, synced_files, workspace_revision
         timeout = {
             ProjectCellCommandRole.BOOTSTRAP: 900,
             ProjectCellCommandRole.FAST_CHECK: 480,
@@ -752,8 +761,15 @@ async def maybe_create_project_cell_executor(
             task_role=role.value,
             operation_id=operation_id,
         )
-        workspace_revision = result.workspace_revision
+        return await _accept_role_response(role, result)
+
+    async def _accept_role_response(
+        role: ProjectCellCommandRole,
+        result: ProjectCellAgentExecResponse,
+    ) -> ProjectCellCommandObservation:
+        nonlocal dirty, last_identity, preview_synced, synced_files, workspace_revision
         observation = _command_observation(result, role)
+        workspace_revision = result.workspace_revision
         last_identity = observation.after
         if observation.invalidated_dimensions:
             preview_synced = False
@@ -763,6 +779,18 @@ async def maybe_create_project_cell_executor(
             dirty = False
             preview_synced = True
         return observation
+
+    async def _replay_role_response(
+        role: ProjectCellCommandRole,
+        response: ProjectCellAgentExecResponse,
+        expected: ProofIdentity,
+    ) -> ProjectCellCommandObservation:
+        observation = _command_observation(response, role)
+        if observation.before != expected:
+            raise ProjectCellExecutorUnavailable("command replay proof identity mismatch")
+        # Validate the retained result before updating any local revision or
+        # refreshing workspace files; replay never sends another command.
+        return await _accept_role_response(role, response)
 
     async def _operation_status(operation_id: UUID) -> ProjectCellAgentOperationStatus:
         return await project_cell_agent_operation_status(workspace_id, operation_id)
@@ -1175,6 +1203,7 @@ async def maybe_create_project_cell_executor(
                 "infra_dead": True,
             }
         except OrchestratorBadRequest as exc:
+            raise_if_terminal_cell_error(exc)
             infra_dead = "container_not_running" in str(exc.details or "")
             return {
                 "ok": False,
@@ -1182,6 +1211,7 @@ async def maybe_create_project_cell_executor(
                 **({"infra_dead": True} if infra_dead else {}),
             }
         except Exception as exc:
+            raise_if_terminal_cell_error(exc)
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     async def _execute(action: Action) -> dict[str, Any]:
@@ -1205,6 +1235,7 @@ async def maybe_create_project_cell_executor(
         release=_release,
         current_identity=_current_identity,
         run_role=_run_role,
+        replay_role_response=_replay_role_response,
         runtime_probe=_runtime_probe,
         operation_status=_operation_status,
         capabilities=capabilities,

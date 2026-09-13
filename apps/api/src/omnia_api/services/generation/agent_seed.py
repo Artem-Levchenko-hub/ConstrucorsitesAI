@@ -17,6 +17,7 @@ from omnia_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _split_project_cell_preview_patch,
 )
+from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 _log = logging.getLogger("omnia_api.routers.messages")
 
@@ -146,6 +147,7 @@ async def stage_max_starter(
                     flush=True,
                 )
         except Exception as _starter_exc:
+            raise_if_terminal_cell_error(_starter_exc)
             print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)
             # Never spend a model call against an unverified or legacy UI
             # base. The user can retry after infrastructure recovery without

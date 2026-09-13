@@ -13,15 +13,22 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.project_cell import ProjectCellActivityLease
+from omnia_api.models.project_cell import ProjectCellActivityLease, ProjectCellWorkspace
 from omnia_api.services.agent_progress import bounded_redacted_text
+from omnia_api.services.project_cell_errors import (
+    PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+    ProjectCellInfrastructureError,
+    terminal_cell_error,
+)
 from omnia_api.services.project_cell_proofs import require_sha256_digest
 
 _MAX_DIAGNOSTIC_BYTES = 4096
 
 
-class ProjectCellActivityConflict(RuntimeError):
-    pass
+class ProjectCellActivityConflict(ProjectCellInfrastructureError):
+    def __init__(self, message: str) -> None:
+        super().__init__("activity_conflict")
+        self.args = (message,)
 
 
 class ActivityKind(StrEnum):
@@ -271,10 +278,22 @@ async def run_with_activity_lease[T](
     emit: Callable[[str, Mapping[str, object]], Awaitable[None]],
     heartbeat_seconds: int = 15,
     terminal_state: Callable[[T], ActivityState] | None = None,
+    replay_terminal: Callable[[Any], Awaitable[T]] | None = None,
 ) -> T:
     """Run or reattach work while mirroring bounded journal progress into the DB."""
     now = datetime.now(lease.deadline_at.tzinfo)
+    existing_state = ActivityState.ACTIVE.value
+    diagnostic = None
     async with session_factory() as session:
+        workspace = await session.get(ProjectCellWorkspace, lease.workspace_id)
+        if (
+            workspace is None
+            or workspace.fencing_epoch != lease.fencing_epoch
+            or workspace.generation_run_id != lease.generation_run_id
+        ):
+            raise ProjectCellActivityConflict(
+                "activity replay envelope mismatch: workspace lease changed"
+            )
         existing = await session.get(ProjectCellActivityLease, lease.operation_id)
         if existing is None:
             await start_activity(
@@ -293,10 +312,50 @@ async def run_with_activity_lease[T](
             existing.workspace_id != lease.workspace_id
             or existing.fencing_epoch != lease.fencing_epoch
             or existing.proof_key != lease.proof_key
-            or existing.state != ActivityState.ACTIVE.value
+            or existing.generation_run_id != lease.generation_run_id
+            or existing.kind != lease.kind.value
         ):
             raise ProjectCellActivityConflict("activity replay envelope mismatch")
+        if existing is not None:
+            existing_state = existing.state
+            diagnostic = existing.redacted_diagnostic
         await session.commit()
+
+    if existing_state != ActivityState.ACTIVE.value:
+        if diagnostic == PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED:
+            raise ProjectCellInfrastructureError(diagnostic, lease.operation_id)
+        if existing_state == ActivityState.CANCELLED.value:
+            raise asyncio.CancelledError
+        if replay_terminal is not None:
+            try:
+                status = await poll_status(lease.operation_id)
+            except Exception as exc:
+                terminal = terminal_cell_error(exc, operation_id=lease.operation_id)
+                raise terminal or ProjectCellInfrastructureError(
+                    "activity_replay_unavailable",
+                    lease.operation_id,
+                ) from None
+            if (
+                status.operation_id != lease.operation_id
+                or status.state not in {"completed", existing_state}
+                or status.terminal_response is None
+            ):
+                raise ProjectCellInfrastructureError(
+                    "activity_replay_unavailable", lease.operation_id
+                )
+            try:
+                result = await replay_terminal(status)
+            except Exception as exc:
+                terminal = terminal_cell_error(exc, operation_id=lease.operation_id)
+                raise terminal or ProjectCellInfrastructureError(
+                    "activity_replay_unavailable",
+                    lease.operation_id,
+                ) from None
+            expected_state = terminal_state(result) if terminal_state else ActivityState.COMPLETED
+            if expected_state.value != existing_state:
+                raise ProjectCellActivityConflict("activity replay terminal outcome mismatch")
+            return result
+        raise ProjectCellInfrastructureError(f"activity_{existing_state}", lease.operation_id)
 
     async def heartbeat_loop() -> None:
         while True:
@@ -355,29 +414,37 @@ async def run_with_activity_lease[T](
         )
         raise
     except Exception as exc:
-        async with session_factory() as session:
-            await finish_activity(
-                session,
-                operation_id=lease.operation_id,
-                state=ActivityState.FAILED,
-                finished_at=datetime.now(lease.deadline_at.tzinfo),
-                diagnostic=type(exc).__name__,
+        terminal_error = terminal_cell_error(exc, operation_id=lease.operation_id)
+        try:
+            async with session_factory() as session:
+                await finish_activity(
+                    session,
+                    operation_id=lease.operation_id,
+                    state=ActivityState.FAILED,
+                    finished_at=datetime.now(lease.deadline_at.tzinfo),
+                    diagnostic=terminal_error.code if terminal_error else type(exc).__name__,
+                )
+                await session.commit()
+            await emit(
+                "tool.finished",
+                {
+                    "operation_id": str(lease.operation_id),
+                    "phase": lease.phase or lease.kind.value,
+                    "state": ActivityState.FAILED.value,
+                },
             )
-            await session.commit()
-        await emit(
-            "tool.finished",
-            {
-                "operation_id": str(lease.operation_id),
-                "phase": lease.phase or lease.kind.value,
-                "state": ActivityState.FAILED.value,
-            },
-        )
+        except Exception:
+            if terminal_error is None:
+                raise
+            # Failure persistence or event storage must not demote a known
+            # fatal controller error into a repairable model observation.
+            # CancelledError deliberately remains outside this guard.
+        if terminal_error is not None:
+            raise terminal_error from None
         raise
     else:
         result_state = (
-            terminal_state(result)
-            if terminal_state is not None
-            else ActivityState.COMPLETED
+            terminal_state(result) if terminal_state is not None else ActivityState.COMPLETED
         )
         if result_state is ActivityState.ACTIVE:
             raise ValueError("terminal_state must return a terminal activity state")

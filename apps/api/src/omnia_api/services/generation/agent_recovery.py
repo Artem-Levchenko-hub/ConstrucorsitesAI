@@ -18,6 +18,7 @@ from omnia_api.services.generation.contracts import (
     VerificationRecovery,
 )
 from omnia_api.services.generation.runtime import _apply_project_cell_preview_files
+from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 from omnia_api.services.project_cell_executor import ProjectCellExecutorHandle
 
 _log = logging.getLogger("omnia_api.routers.messages")
@@ -104,6 +105,7 @@ async def recover_stopped_candidate(
                     },
                 )
         except Exception as _rollback_exc:
+            raise_if_terminal_cell_error(_rollback_exc)
             print(f"[PP] hard-limit rollback failed: {_rollback_exc!r}", flush=True)
     elif _must_restore_previous and _first_max_without_product:
         # Config sync creates a legitimate snapshot before the first AI
@@ -156,6 +158,7 @@ async def recover_stopped_candidate(
                     flush=True,
                 )
         except Exception as _rollback_exc:
+            raise_if_terminal_cell_error(_rollback_exc)
             print(
                 f"[PP] first-MAX safe fallback failed: {_rollback_exc!r}",
                 flush=True,
@@ -258,6 +261,7 @@ async def recover_rejected_candidate(
                     "опубликованы, чтобы не сломать приложение."
                 )
         except Exception as _verification_rollback_exc:
+            raise_if_terminal_cell_error(_verification_rollback_exc)
             files = {}
             accumulated = (
                 "Финальная проверка не прошла; изменения не "

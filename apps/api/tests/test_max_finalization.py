@@ -236,3 +236,129 @@ async def test_source_gap_returns_to_edit_without_running_commands(
 
     assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
     assert harness.roles == []
+
+
+async def test_changed_full_envelope_does_not_reuse_failed_bootstrap_command(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    from dataclasses import replace
+
+    import pytest
+
+    from omnia_api.services.generation_metrics import GenerationPhase
+    from omnia_api.services.project_cell_proofs import ProofDimension
+
+    harness = await _new_harness(db_session, test_engine)
+    coordinator = harness.coordinator
+    original = await coordinator.executor.current_identity()
+    changed = replace(original, workspace_revision="9" * 64)
+    assert original.dimension_key(ProofDimension.BOOTSTRAP) == changed.dimension_key(
+        ProofDimension.BOOTSTRAP
+    )
+    operations = []
+
+    async def command(role, operation_id):
+        operations.append(operation_id)
+        if len(operations) == 1:
+            raise RuntimeError("first transport interruption")
+        return ProjectCellCommandObservation(
+            operation_id, role, True, False, "green", changed, changed, frozenset()
+        )
+
+    coordinator.executor = replace(coordinator.executor, run_role=command)
+    with pytest.raises(RuntimeError, match="first transport interruption"):
+        await coordinator._execute_role(
+            identity=original,
+            dimension=ProofDimension.BOOTSTRAP,
+            role=ProjectCellCommandRole.BOOTSTRAP,
+            phase=GenerationPhase.PREPARE,
+        )
+    result = await coordinator._execute_role(
+        identity=changed,
+        dimension=ProofDimension.BOOTSTRAP,
+        role=ProjectCellCommandRole.BOOTSTRAP,
+        phase=GenerationPhase.PREPARE,
+    )
+    assert result.ok
+    assert len(set(operations)) == 2
+
+
+async def test_persisted_fatal_bootstrap_blocks_source_repair_after_restart(
+    db_session, test_engine
+):
+    from dataclasses import replace
+
+    import pytest
+
+    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+
+    harness = await _new_harness(db_session, test_engine)
+    calls = []
+
+    async def command(role, operation_id):
+        calls.append(role)
+        raise OrchestratorBadRequest(
+            "private diagnostic",
+            status_code=409,
+            upstream_code="protected_environment_recovery_required",
+        )
+
+    coordinator = harness.coordinator
+    coordinator.executor = replace(coordinator.executor, run_role=command)
+    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
+        await coordinator.fast_check()
+    restarted = MaxFinalizationCoordinator(
+        session_factory=coordinator.session_factory,
+        generation_run_id=coordinator.generation_run_id,
+        project_id=coordinator.project_id,
+        project_slug=coordinator.project_slug,
+        executor=coordinator.executor,
+    )
+
+    async def incomplete_source():
+        return {".omnia/cell.json": "{}"}
+
+    restarted.executor = replace(restarted.executor, snapshot_files=incomplete_source)
+
+    async def source_repair(*args):
+        calls.append("MODEL REPAIR")
+
+    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
+        await restarted.finalize_with_repair(prompt="Build tracker", repair=source_repair)
+    assert calls == [ProjectCellCommandRole.BOOTSTRAP]
+
+
+async def test_source_change_keeps_bootstrap_dimension_cache_but_rechecks_source(
+    db_session, test_engine
+):
+    from dataclasses import replace
+
+    harness = await _new_harness(db_session, test_engine)
+    coordinator = harness.coordinator
+    current = await coordinator.executor.current_identity()
+    calls = []
+
+    async def identity():
+        return current
+
+    async def command(role, operation_id):
+        calls.append((role, operation_id))
+        return ProjectCellCommandObservation(
+            operation_id, role, True, False, "green", current, current, frozenset()
+        )
+
+    coordinator.executor = replace(
+        coordinator.executor, current_identity=identity, run_role=command
+    )
+    first = await coordinator.fast_check()
+    current = replace(current, workspace_revision="9" * 64)
+    second = await coordinator.fast_check()
+    third = await coordinator.fast_check()
+    assert first.outcome == second.outcome == third.outcome == "green"
+    assert [role for role, _ in calls] == [
+        ProjectCellCommandRole.BOOTSTRAP,
+        ProjectCellCommandRole.FAST_CHECK,
+        ProjectCellCommandRole.FAST_CHECK,
+    ]
+    assert len({operation for _, operation in calls}) == 3

@@ -2031,3 +2031,70 @@ async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
         ("ensure", "completed"),
         ("release", "completed"),
     ]
+
+
+async def test_executor_does_not_turn_protected_environment_failure_into_model_observation(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/app/page.tsx": "product"},
+        capabilities={"portable_machine": True},
+    )
+
+    async def fail_exec(*args, **kwargs):
+        raise OrchestratorBadRequest(
+            "private diagnostic",
+            status_code=409,
+            upstream_code="protected_environment_recovery_required",
+        )
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", fail_exec)
+    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
+        await harness.handle.execute(Action(name="build", args={}))
+
+
+async def test_saved_role_response_replays_without_command_and_rejects_other_identity(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    from dataclasses import replace
+
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/app/page.tsx": "product"},
+        capabilities={"portable_machine": True},
+    )
+    original_exec = project_cell_executor.project_cell_agent_exec
+    saved = []
+
+    async def capture(*args, **kwargs):
+        result = await original_exec(*args, **kwargs)
+        saved.append(result)
+        return result
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", capture)
+    role = project_cell_executor.ProjectCellCommandRole.FULL_BUILD
+    operation_id = uuid4()
+    original = await harness.handle.run_role(role, operation_id)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("terminal replay sent another command")
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", forbidden)
+    replay = await harness.handle.replay_role_response(role, saved[0], original.before)
+    assert replay == original and len(harness.exec_calls) == 1
+    with pytest.raises(
+        project_cell_executor.ProjectCellExecutorUnavailable, match="proof identity mismatch"
+    ):
+        await harness.handle.replay_role_response(
+            role, saved[0], replace(original.before, fencing_epoch=2)
+        )
+    assert len(harness.exec_calls) == 1

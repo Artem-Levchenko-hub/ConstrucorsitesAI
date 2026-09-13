@@ -45,6 +45,10 @@ from omnia_api.services.project_cell_activity import (
     start_activity,
 )
 from omnia_api.services.project_cell_candidates import prepare_candidate, promote_candidate
+from omnia_api.services.project_cell_errors import (
+    PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+    ProjectCellInfrastructureError,
+)
 from omnia_api.services.project_cell_executor import (
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
@@ -190,7 +194,30 @@ class MaxFinalizationCoordinator:
         self._last_files: dict[str, str] | None = None
         self._last_prompt: str | None = None
 
+    async def _raise_persisted_infrastructure_failure(self) -> None:
+        # A restart or edited source cannot make a protected controller failure
+        # repairable by the model. Only a new generation after operator recovery
+        # can attempt this infrastructure again.
+        async with self.session_factory() as session:
+            operation_id = await session.scalar(
+                select(ProjectCellActivityLease.operation_id)
+                .where(
+                    ProjectCellActivityLease.workspace_id == self.executor.workspace_id,
+                    ProjectCellActivityLease.generation_run_id == self.generation_run_id,
+                    ProjectCellActivityLease.state == ActivityState.FAILED.value,
+                    ProjectCellActivityLease.redacted_diagnostic
+                    == PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+                )
+                .order_by(ProjectCellActivityLease.started_at)
+                .limit(1)
+            )
+        if operation_id is not None:
+            raise ProjectCellInfrastructureError(
+                PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED, operation_id
+            )
+
     async def fast_check(self) -> ProjectCellProofResult:
+        await self._raise_persisted_infrastructure_failure()
         identity = await self._identity()
         proof = await self._proof(identity)
         bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
@@ -218,6 +245,7 @@ class MaxFinalizationCoordinator:
         files: Mapping[str, str],
         prompt: str,
     ) -> MaxFinalizationOutcome:
+        await self._raise_persisted_infrastructure_failure()
         self._last_files = dict(files)
         self._last_prompt = prompt
         identity = await self._identity()
@@ -351,6 +379,7 @@ class MaxFinalizationCoordinator:
         cancellation stay terminal. Every pass observes the actual workspace;
         unchanged source cannot earn another build or an infinite model loop.
         """
+        await self._raise_persisted_infrastructure_failure()
         files = await self.executor.snapshot_files()
         for attempt in range(3):
             outcome = await self.finalize(files=files, prompt=prompt)
@@ -524,8 +553,12 @@ class MaxFinalizationCoordinator:
         role: ProjectCellCommandRole,
         phase: GenerationPhase,
     ) -> ProjectCellCommandObservation:
-        dimension_key = identity.dimension_key(dimension)
-        operation_id = uuid5(self.generation_run_id, f"{dimension.value}:{dimension_key}")
+        # Proof reuse is dimension-specific; commands carry the full fenced
+        # envelope and must never alias after another identity field changes.
+        operation_id = uuid5(
+            self.generation_run_id,
+            f"command:{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:{role.value}",
+        )
         await self._phase_started(phase, self._checkpoint(identity, phase, operation_id))
         run_role = self.executor.run_role
         operation_status = self.executor.operation_status
@@ -534,6 +567,20 @@ class MaxFinalizationCoordinator:
 
         async def run_command() -> ProjectCellCommandObservation:
             return await run_role(role, operation_id)
+
+        async def replay_command(status: object) -> ProjectCellCommandObservation:
+            from omnia_api.services.orchestrator_client import ProjectCellAgentOperationStatus
+
+            replay = self.executor.replay_role_response
+            if not isinstance(status, ProjectCellAgentOperationStatus) or replay is None:
+                raise ProjectCellInfrastructureError("activity_replay_unavailable", operation_id)
+            response = status.terminal_response
+            if response is None or response.operation_id != operation_id:
+                raise ProjectCellInfrastructureError("activity_replay_unavailable", operation_id)
+            observation = await replay(role, response, identity)
+            if observation.before != identity:
+                raise MaxFinalizationConflict("command replay proof identity mismatch")
+            return observation
 
         observation = await run_with_activity_lease(
             session_factory=self.session_factory,
@@ -549,6 +596,7 @@ class MaxFinalizationCoordinator:
                 + timedelta(seconds=get_settings().max_generation_deadline_seconds),
             ),
             work=run_command,
+            replay_terminal=replay_command,
             poll_status=operation_status,
             emit=self.emit,
             heartbeat_seconds=get_settings().project_cell_heartbeat_seconds,
@@ -561,7 +609,9 @@ class MaxFinalizationCoordinator:
             ),
         )
         await self._counter(
-            "bootstrap" if dimension is ProofDimension.BOOTSTRAP else "full_build"
+            "bootstrap"
+            if dimension is ProofDimension.BOOTSTRAP
+            else "full_build"
             if dimension is ProofDimension.FULL_BUILD
             else "fast_check"
         )
@@ -811,10 +861,7 @@ class MaxFinalizationCoordinator:
                     )
                     await session.commit()
                     return
-                if (
-                    allow_completed_replay
-                    and existing.state == ActivityState.COMPLETED.value
-                ):
+                if allow_completed_replay and existing.state == ActivityState.COMPLETED.value:
                     return
                 raise MaxFinalizationConflict("terminal activity has no proof result")
             try:
@@ -885,9 +932,7 @@ class MaxFinalizationCoordinator:
                 record_phase_started(run, phase)
             root = dict(run.agent_state)
             raw_finalization = root.get("max_finalization")
-            finalization = (
-                dict(raw_finalization) if isinstance(raw_finalization, dict) else {}
-            )
+            finalization = dict(raw_finalization) if isinstance(raw_finalization, dict) else {}
             finalization["checkpoint"] = checkpoint.to_json()
             root["max_finalization"] = finalization
             run.agent_state = root
@@ -897,9 +942,7 @@ class MaxFinalizationCoordinator:
             {
                 "phase": phase.value,
                 "proof_key": checkpoint.proof_key,
-                "operation_id": (
-                    str(checkpoint.operation_id) if checkpoint.operation_id else None
-                ),
+                "operation_id": (str(checkpoint.operation_id) if checkpoint.operation_id else None),
             },
         )
 
@@ -962,8 +1005,7 @@ class MaxFinalizationCoordinator:
                 "Repair the test/manifest that removed the production build. "
                 "Do not run next dev against the production .next directory after building. "
                 "Use an isolated test distDir or test next start on a separate port, "
-                "and terminate the test server. Then the coordinator will rebuild.\n"
-                + detail
+                "and terminate the test server. Then the coordinator will rebuild.\n" + detail
             )
         outcome = await self._outcome(
             MaxFinalizationStatus.NEEDS_EDIT if missing_build else MaxFinalizationStatus.FAILED,
@@ -1033,9 +1075,7 @@ async def watch_generation_deadline(
     current = now or datetime.now(UTC)
     async with session_factory() as session:
         run = await session.scalar(
-            select(GenerationRun)
-            .where(GenerationRun.id == generation_run_id)
-            .with_for_update()
+            select(GenerationRun).where(GenerationRun.id == generation_run_id).with_for_update()
         )
         if run is None or run.status not in {
             "pending",
@@ -1045,9 +1085,7 @@ async def watch_generation_deadline(
         }:
             return False
         started = run.started_at or run.created_at
-        deadline = started + timedelta(
-            seconds=get_settings().max_generation_deadline_seconds
-        )
+        deadline = started + timedelta(seconds=get_settings().max_generation_deadline_seconds)
         if current < deadline:
             return False
         raw_state = run.agent_state.get("max_finalization", {})
