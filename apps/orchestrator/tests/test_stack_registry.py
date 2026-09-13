@@ -45,7 +45,8 @@ def test_every_registered_stack_has_a_template_dir_on_disk(name: str) -> None:
 
 
 def test_all_shipped_template_dirs_are_registered() -> None:
-    on_disk = {p.name for p in _TEMPLATES_DIR.iterdir() if p.is_dir()}
+    # Shared JS data is not a runnable stack; retain the strict check for all others.
+    on_disk = {p.name for p in _TEMPLATES_DIR.iterdir() if p.is_dir() and p.name != "shared-public"}
     assert on_disk == set(STACKS), (
         "every template dir must have a registry entry (and vice versa); "
         f"on_disk={sorted(on_disk)} registered={sorted(STACKS)}"

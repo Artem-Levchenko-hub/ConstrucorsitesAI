@@ -155,6 +155,17 @@ Dockerfiles и product code для исправления QA не менялис
 Полный CI, Linux image/mounted-export smoke, AFTER Docker и production delivery
 пока ожидаются.
 
+Первый CI `34762926416` выявил ещё одну устаревшую предпосылку registry test:
+все каталоги `templates` считались стеками. Data-only `shared-public` теперь
+явно исключён, строгая проверка всех остальных каталогов сохранена. До исправления
+orchestrator: **1 failed /1665 passed /31 skipped /15 xfailed**; после локально
+все **28 registry tests passed**. Production source этим исправлением не меняется.
+Готовый API image `sha256:1b9d83b6ed00d932ffa7d842fbf43df1552a3a852a1135e8f6a483285caee97b`
+успешно проверил mounted export четырёх шаблонов вне checkout без сети.
+Отдельный canonical Git/LF browser AFTER также подтвердил все 12 SHA и 96 групп
+поведения: Windows archive запускался с `-c core.autocrlf=false`, без изменения
+конфигурации Git или исходных файлов. Поставка ждёт зелёного CI исправленной ревизии.
+
 ## Следующие подтверждённые кандидаты
 
 1. Task9: три одинаковых чтения MAX config и рендера starter files в `messages.py`.
