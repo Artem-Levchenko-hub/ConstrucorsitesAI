@@ -28,7 +28,10 @@ _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "sleep",
         "сон и восстановление",
-        (r"\bсон\b", r"\bсн(?:а|ом|е|у)\b", r"sleep", r"восстановлен"),
+        (
+            r"\bсон\b", r"\bсн(?:а|ом|е|у)\b", r"sleep",
+            r"восстановлен\w*\s+(?:после\s+)?(?:трениров|физическ\w*\s+нагруз)",
+        ),
         ("сон", "сна", "sleep", "восстановлен"),
     ),
     (
@@ -76,8 +79,14 @@ _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "booking",
         "запись и бронирование",
-        (r"бронир", r"запис[ьи]", r"booking", r"slot"),
-        ("бронир", "запис", "booking", "slot"),
+        (
+            r"бронир", r"booking", r"appointment", r"slot",
+            r"онлайн[- ]?запис",
+            r"запис(?:ь|и|аться)\s+(?:(?:клиент|пациент|посетител)\w*\s+)?"
+            r"(?:на|к|в)\s+(?!(?:диск|сервер|носител|экран|страниц|файл|таблиц|"
+            r"баз|устройств|памят|буфер|документ|приложени)\w*\b)\w+",
+        ),
+        ("бронир", "запис", "booking", "appointment", "slot"),
     ),
     (
         "catalog",
@@ -279,6 +288,31 @@ def _fake_user_data_paths(files: Mapping[str, str]) -> list[str]:
     return sorted(hits)
 
 
+_EXCLUSION_PREFIX = (
+    r"\b(?:без|without|no|никак\w*|не\s+(?!только\b)(?:нуж\w*|добав\w*|дела\w*|"
+    r"показыв\w*|требу\w*|превращ\w*|реализ\w*|созда\w*)|"
+    r"do\s+not\s+(?:add|include))\b"
+)
+
+
+def _without_excluded_lists(prompt: str) -> str:
+    """Keep explicit negative headings attached to their Markdown list items."""
+    result = []
+    excluded_list = False
+    for line in prompt.splitlines():
+        if excluded_list and not line.strip():
+            result.append(line)
+            continue
+        if excluded_list and re.match(r"^\s*(?:[-*•]|\d+[.)])\s+", line):
+            continue
+        excluded_list = bool(
+            line.rstrip().endswith(":")
+            and re.match(r"\s*(?:#{1,6}\s+)?" + _EXCLUSION_PREFIX, line, re.IGNORECASE)
+        )
+        result.append(line)
+    return "\n".join(result)
+
+
 def _explicit_capability_mentions(prompt: str, pattern: str) -> bool:
     # Match word beginnings, not arbitrary substrings: демонстрационные and
     # интеграционные are not requests for рацион (nutrition).
@@ -292,8 +326,7 @@ def _explicit_capability_mentions(prompt: str, pattern: str) -> bool:
         # Deliberately narrow negation handling: no inferred requirements from
         # explicit exclusions. A later positive mention can still request it.
         negated_before = re.search(
-            r"\b(?:без|without|no|не\s+(?!только\b)(?:нуж\w*|добав\w*|дела\w*|"
-            r"показыв\w*|требу\w*)|do\s+not\s+(?:add|include))\b[^.!?;\n]*$",
+            _EXCLUSION_PREFIX + r"[^.!?;\n]*$",
             before, re.IGNORECASE,
         )
         negated_after = re.match(
@@ -308,6 +341,7 @@ def _explicit_capability_mentions(prompt: str, pattern: str) -> bool:
 def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, ...]]]:
     """Return only explicitly named product capabilities, in stable order."""
 
+    prompt = _without_excluded_lists(prompt)
     found: list[tuple[str, str, tuple[str, ...]]] = []
     for key, label, prompt_patterns, source_needles in _CAPABILITIES:
         if any(_explicit_capability_mentions(prompt, pattern) for pattern in prompt_patterns):

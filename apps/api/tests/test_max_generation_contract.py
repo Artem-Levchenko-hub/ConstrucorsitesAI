@@ -37,6 +37,47 @@ def test_capabilities_match_explicit_words_and_respect_negation(brief, expected)
 
 
 @pytest.mark.parametrize("brief", [
+    "Создай восстановление задач после перезапуска. Не создавай демо-записи.",
+    "Не превращай приложение в фитнес или лояльность. Создай список задач.",
+    "Не нужны:\n- профиль пользователя;\n- история действий;\n- лояльность.\n\n"
+    "Сделай создание задач и сохранение статуса.",
+    "Не превращай приложение в:\n- фитнес;\n- лояльность.\n\nСделай задачи.",
+])
+def test_task_brief_does_not_invent_excluded_or_technical_capabilities(brief):
+    assert requested_max_capabilities(brief) == []
+
+
+@pytest.mark.parametrize("brief, expected", [
+    ("Не нужны:\n- история;\n- профиль.\n\nДобавь поиск.", ["search"]),
+    ("Не нужны:\n- история.\n\nНо добавь историю задач.", ["history"]),
+    ("Нужны:\n- история;\n- профиль пользователя.", ["history", "profile"]),
+    ("Добавь сон и восстановление после тренировок.", ["workouts", "sleep"]),
+    ("Добавь запись на приём и бронирование времени.", ["booking"]),
+])
+def test_excluded_lists_preserve_separate_positive_product_requirements(brief, expected):
+    assert [key for key, _, _ in requested_max_capabilities(brief)] == expected
+
+
+@pytest.mark.parametrize("brief, expected", [
+    ("Сделай запись на маникюр.", ["booking"]),
+    ("Нужна запись клиентов в салон.", ["booking"]),
+    ("Добавь запись к психологу.", ["booking"]),
+    ("Запись на диск и записи в базе данных.", []),
+    ("Нужен интерфейс без лишнего шума:\n- профиль пользователя;\n- история действий.",
+     ["history", "profile"]),
+    ("Не нужны:\n\n- профиль;\n- история.\n\nДобавь поиск.", ["search"]),
+])
+def test_booking_intent_and_list_heading_boundaries(brief, expected):
+    assert [key for key, _, _ in requested_max_capabilities(brief)] == expected
+
+
+def test_english_appointment_surface_satisfies_explicit_booking_requirement():
+    files = _complete_files()
+    files["src/app/page.tsx"] = files["src/app/page.tsx"].replace("ИИ тренер", "Appointments")
+    assert max_source_completion_gap("Show appointments", files) is None
+
+
+@pytest.mark.parametrize("brief", [
     # Exact opening of the MAX restoration panel's adaptation request.
     "Верни экраны и функции выбранной исторической версии в новый черновик. "
     "Адаптируй её исходный код к текущей базе данных.",
