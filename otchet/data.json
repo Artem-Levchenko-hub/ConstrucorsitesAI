@@ -2794,6 +2794,18 @@
    "evidence": "Source/API 7c68920394ca03f2bab637235d0d5ee3468ac242, exact image sha256:aa9c68f7535671e009ee2589331af1b780712123d2ffe3b37d540a322e11ddff. BEFORE/AFTER 8 with frozen fixture f5cdd57c9e9c95496457ccc9df8f9524904e9b4c4747e45a275569985c7fbb2b; combined local 75 includes these 8. Full Ruff/mypy 276; CI34368867947 all 7 jobs success, complete API 3272 passed /12 skipped /8 xfailed in 967.20s. Exact BEFORE/AFTER images pass the same 8 cases with no network/DB. Astra source/tests/helpers review: No findings. SQL, arithmetic and response construction byte-identical. API-only production switch verified 2026-09-09 15:42:07 UTC: exact image/release, healthy, 0 restarts, API6/6, four routes200, nginx restored and POST405. Seven other containers, host orchestrator and dirty documents preserved; workers50565efd, webc2da4f71, orchestratorb99af471. Record /opt/omnia-runtime/releases/task3-usage-buckets-7c689203/result.json; docs/plans/2026-09-09-task3-usage-buckets-verification.md.",
    "impact": "Рабочий код короче на 14 строк и 320 байт. Нового слоя нет. Числовые значения и прежняя логика сохранены; загрузка строк из БД остаётся прежней.",
    "next_vector": "SQL-агрегация Task3 остаётся открытой из-за точности и порядка расчётов. Task6/7 требуют модельных проверок владельца; Task12 — измерений IO, Task13 — полной пользовательской матрицы. Следующие сокращения выбирать по доказанным дублям и прежним ответам."
+  },
+  {
+   "id": "H151",
+   "title": "Удалён старый неиспользуемый сборщик инструкций catalog",
+   "description": "Действующие пути используют services/lean_prompt.py; прежняя частная реализация удалена после проверки всех tracked callers и точных payload.",
+   "status": "testing",
+   "score": null,
+   "category": "верификация / рефакторинг",
+   "period": "13.09",
+   "evidence": "BASE deddd35bd41f9f424b52226b3e8bde5e8423b770. До/после160passed, включая48полных payload реального build_messages. Ruff и mypy283passed. Полный CI, независимое review и delivery фиксируются после завершения. docs/plans/2026-09-13-refactoring-continuation.md.",
+   "impact": "Рабочий код короче на95строк без нового слоя. Действующие инструкции и пользовательский запрос побайтово сохранены на48сценариях. Ускорение генерации не заявляется.",
+   "next_vector": "Два доказанных дубля в messages.py: legacy provisioning и чтение MAX config для starter files. SQL/языковой model smoke/IO измерения и общая приёмка остаются открыты."
   }
  ],
  "vectors": [
