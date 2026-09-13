@@ -315,16 +315,19 @@ def test_queue_points_entity_gate_at_worker_job() -> None:
     assert "def enqueue_entity_gate" in src
 
 
-def test_messages_enqueues_entity_gate_on_entity_template() -> None:
-    """messages.py must enqueue the gate (de-orphaned) and scope it to the
+def test_container_realization_enqueues_entity_gate_on_entity_template() -> None:
+    """Container realization must enqueue the gate (de-orphaned) and scope it to the
     entity/fullstack templates that skip acceptance.evaluate."""
-    src = (_SRC / "routers" / "messages.py").read_text(encoding="utf-8")
+    src = (_SRC / "services" / "generation" / "container_realization.py").read_text(
+        encoding="utf-8"
+    )
     tree = ast.parse(src)
     expected_scope = ast.dump(ast.parse(
         'project.template in ("nextjs_entities", "fullstack")', mode="eval",
     ).body)
     expected_call = ast.dump(ast.parse(
-        "asyncio.to_thread(enqueue_entity_gate, assistant_message_id, project_id, project.slug)",
+        "asyncio.to_thread(enqueue_entity_gate, ids.assistant_message_id, "
+        "ids.project_id, project.slug)",
         mode="eval",
     ).body)
     scoped_calls = [
