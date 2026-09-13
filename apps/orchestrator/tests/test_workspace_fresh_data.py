@@ -6,9 +6,11 @@ from uuid import uuid4
 import pytest
 
 from omnia_orchestrator.core.errors import OrchestratorError
+from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.routers import workspace
 from omnia_orchestrator.schemas.workspace import WorkspaceAgentBootstrapRequest
 from omnia_orchestrator.services.restoration_database import load_policy
+from tests.test_project_machine_manifest import payload
 from tests.test_restoration_machine_policy import backend
 
 
@@ -53,7 +55,8 @@ async def test_bootstrap_advertises_fresh_protection_under_lease_lock(
     )))
     monkeypatch.setattr(workspace, "_require_active_generation_lease", lambda _: (run_id, 7))
     monkeypatch.setattr(workspace, "_ensure_seed_workspace_files", AsyncMock(return_value=(
-        {".omnia/cell.json": "{}"} if portable else {}, False,
+        {".omnia/cell.json": MachineManifest.model_validate(payload()).model_dump_json()}
+        if portable else {}, False,
     )))
     with pytest.raises(OrchestratorError, match="workspace generation lease mismatch"):
         await workspace.bootstrap_workspace_agent(

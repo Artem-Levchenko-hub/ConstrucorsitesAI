@@ -15,6 +15,7 @@ from uuid import UUID, uuid4, uuid5
 
 from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
+    CellProtectedEnvironmentRecoveryRequired,
     CellResourceError,
     LifecycleMutation,
 )
@@ -524,6 +525,13 @@ class MachineAdapter:
 
     async def validate_restore_payload(self, state: Any, payload: bytes | None) -> None:
         if payload is None:
+            from omnia_orchestrator.services.restoration_database import load_policy
+
+            _machine, backend = self.parts(state)
+            if isinstance(backend, DockerMachineBackend) and load_policy(backend) is not None:
+                raise CellProtectedEnvironmentRecoveryRequired(
+                    "protected runtime cannot restore a checkpoint without machine evidence"
+                )
             return
         value = json.loads(payload)
         if set(value) != {"manifest", "reference"}:
@@ -1130,14 +1138,22 @@ class MachineAdapter:
             return
         saved = machine.state()
         if not saved.get("manifest"):
-            raise CellResourceError(
+            from omnia_orchestrator.services.fresh_database_protection import (
+                validate_initial_runtime_resume,
+            )
+
+            if await machine_effect(
+                validate_initial_runtime_resume, backend, proposed_manifest, machine.lease_epoch(),
+            ):
+                return
+            raise CellProtectedEnvironmentRecoveryRequired(
                 "protected retained manifest is missing; explicit recovery required"
             )
         current = MachineManifest.model_validate(saved["manifest"])
         try:
             await machine_effect(validate_retained_runtime, backend, current)
         except NotFound as exc:
-            raise CellResourceError(
+            raise CellProtectedEnvironmentRecoveryRequired(
                 "protected retained material is missing; explicit recovery required"
             ) from exc
         if backend.volume_mapping(current) != backend.volume_mapping(proposed_manifest):

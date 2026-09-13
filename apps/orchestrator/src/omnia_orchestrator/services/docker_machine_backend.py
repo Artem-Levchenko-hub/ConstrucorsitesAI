@@ -714,6 +714,11 @@ class DockerMachineBackend:
         return options
 
     def _prepare_project_postgres_volume(self) -> None:
+        from omnia_orchestrator.services.fresh_database_protection import (
+            record_initial_volume_intent,
+        )
+
+        record_initial_volume_intent(self)
         self._volume(self.project_postgres_volume)
         self._ensure_project_postgres_permissions()
         self._initialize_project_postgres_volume()

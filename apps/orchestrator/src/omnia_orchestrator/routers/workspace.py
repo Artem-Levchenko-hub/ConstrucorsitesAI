@@ -19,6 +19,7 @@ from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
+    CellProtectedEnvironmentRecoveryRequired,
     CellResourceError,
     CellResourceNames,
     CellRestoreFailed,
@@ -90,6 +91,16 @@ from omnia_orchestrator.services.workspace_provider_factory import (
 )
 
 router = APIRouter(prefix="/internal", tags=["workspace"])
+
+
+def _machine_resource_failure(exc: CellResourceError | ValueError) -> OrchestratorError:
+    return OrchestratorError(
+        code=(
+            "protected_environment_recovery_required"
+            if isinstance(exc, CellProtectedEnvironmentRecoveryRequired) else "container_failure"
+        ),
+        message=str(exc), status_code=409,
+    )
 _MAX_AGENT_FILES = 5_000
 _MAX_AGENT_FILE_BYTES = 2 * 1024 * 1024
 _MAX_AGENT_TOTAL_BYTES = 64 * 1024 * 1024
@@ -351,9 +362,7 @@ async def bootstrap_workspace_agent(
             try:
                 await protect_current_database(manager.machine_runtime, state, request, files)
             except (CellResourceError, ValueError) as exc:
-                raise OrchestratorError(
-                    code="container_failure", message=str(exc), status_code=409,
-                ) from exc
+                raise _machine_resource_failure(exc) from exc
         else:
             require_protection_ready(manager.machine_runtime, state)
         if manager.machine_runtime is not None and ".omnia/cell.json" in files:
@@ -363,11 +372,13 @@ async def bootstrap_workspace_agent(
             _, backend = manager.machine_runtime.parts(state)
             if isinstance(backend, DockerMachineBackend):
                 try:
-                    await machine_effect(prepare_new_database, backend, fencing_epoch)
+                    await machine_effect(
+                        prepare_new_database, backend, fencing_epoch,
+                        manifest=MachineManifest.model_validate_json(files[".omnia/cell.json"]),
+                        generation_run_id=generation_run_id,
+                    )
                 except (CellResourceError, CellIdentityConflict, ValueError) as exc:
-                    raise OrchestratorError(
-                        code="container_failure", message=str(exc), status_code=409,
-                    ) from exc
+                    raise _machine_resource_failure(exc) from exc
         capabilities = (
             manager.machine_runtime.capabilities(state) if manager.machine_runtime else {}
         )
@@ -509,9 +520,7 @@ async def exec_workspace_agent_command(
                 )
                 result = await manager.machine_runtime.execute(state, manifest, request)
             except (CellResourceError, ValueError) as exc:
-                raise OrchestratorError(
-                    code="container_failure", message=str(exc), status_code=409
-                ) from exc
+                raise _machine_resource_failure(exc) from exc
             updated_files = await _read_agent_workspace_files(manager, volume_name)
             status = await machine.request_status(
                 operation_id=request.operation_id,
@@ -781,9 +790,7 @@ async def apply_workspace_draft(
                     else _draft_preview_url(workspace_id)
                 )
             except (CellResourceError, ValueError) as exc:
-                raise OrchestratorError(
-                    code="container_failure", message=str(exc), status_code=409
-                ) from exc
+                raise _machine_resource_failure(exc) from exc
             updated_files = await _read_agent_workspace_files(manager, volume_name)
             return WorkspaceDraftApplyResponse(
                 state="draft_running" if result.exit_code == 0 else "draft_failed",
