@@ -4237,6 +4237,36 @@ async def _process_prompt(
     _max_finalization_proof: Any = None
     _max_generation_deadline_task: asyncio.Task[None] | None = None
 
+    async def _provision_legacy_runtime_with_progress() -> None:
+        await _record_agent_step(
+            {
+                "step": None,
+                "kind": "step",
+                "action": "Подготавливаю среду проекта",
+                "tool": "runtime",
+                "path": "",
+                "detail": "Запускаю контейнер и жду готовности перед сборкой.",
+                "ok": True,
+            }
+        )
+        await stack_routing.ensure_provisioned(
+            project_id,
+            project_slug,
+            project_template,
+            require_ready=True,
+        )
+        await _record_agent_step(
+            {
+                "step": None,
+                "kind": "step",
+                "action": "Среда готова",
+                "tool": "runtime",
+                "path": "",
+                "detail": "Контейнер запущен, начинаю сборку приложения.",
+                "ok": True,
+            }
+        )
+
     try:
         async with factory() as session:
             from omnia_api.services.restoration_adaptation import append_adaptation_context
@@ -4310,34 +4340,7 @@ async def _process_prompt(
             and not project_is_imported
             and not _defer_max_runtime_provision
         ):
-            await _record_agent_step(
-                {
-                    "step": None,
-                    "kind": "step",
-                    "action": "Подготавливаю среду проекта",
-                    "tool": "runtime",
-                    "path": "",
-                    "detail": "Запускаю контейнер и жду готовности перед сборкой.",
-                    "ok": True,
-                }
-            )
-            await stack_routing.ensure_provisioned(
-                project_id,
-                project_slug,
-                project_template,
-                require_ready=True,
-            )
-            await _record_agent_step(
-                {
-                    "step": None,
-                    "kind": "step",
-                    "action": "Среда готова",
-                    "tool": "runtime",
-                    "path": "",
-                    "detail": "Контейнер запущен, начинаю сборку приложения.",
-                    "ok": True,
-                }
-            )
+            await _provision_legacy_runtime_with_progress()
 
         if current_sha:
             current_files = await asyncio.to_thread(repo_svc.read_files, project_id, current_sha)
@@ -4535,34 +4538,7 @@ async def _process_prompt(
                 nonlocal _legacy_runtime_ready
                 if _legacy_runtime_ready:
                     return
-                await _record_agent_step(
-                    {
-                        "step": None,
-                        "kind": "step",
-                        "action": "Подготавливаю среду проекта",
-                        "tool": "runtime",
-                        "path": "",
-                        "detail": "Запускаю контейнер и жду готовности перед сборкой.",
-                        "ok": True,
-                    }
-                )
-                await stack_routing.ensure_provisioned(
-                    project_id,
-                    project_slug,
-                    project_template,
-                    require_ready=True,
-                )
-                await _record_agent_step(
-                    {
-                        "step": None,
-                        "kind": "step",
-                        "action": "Среда готова",
-                        "tool": "runtime",
-                        "path": "",
-                        "detail": "Контейнер запущен, начинаю сборку приложения.",
-                        "ok": True,
-                    }
-                )
+                await _provision_legacy_runtime_with_progress()
                 _legacy_runtime_ready = True
 
             async def _probe_runtime_status(path: str = "/") -> dict[str, Any]:

@@ -2799,13 +2799,25 @@
    "id": "H151",
    "title": "Удалён старый неиспользуемый сборщик инструкций catalog",
    "description": "Действующие пути используют services/lean_prompt.py; прежняя частная реализация удалена после проверки всех tracked callers и точных payload.",
+   "status": "worked",
+   "score": null,
+   "category": "верификация / рефакторинг",
+   "period": "13.09",
+   "evidence": "Code/production f43c7f227d1bb8d9fca50797aedabaee66f58c67; image sha256:6315986fc756457ae9d3fdfff56456fb57033e7f2666edac50c764805d14be65. CI34758726269 all7success: API3563passed12skipped8xfailed. Local before/after160, isolated Linux image160, independent Astra No findings. Actual API/worker/generation-worker revision verified; public API6/6 and POST405. Source image bytes exact; five server documents, web and orchestrator preserved. First wrong-health probe caused recovered rollback; second attempt succeeded, immediate nginx-reload check needed later confirmation. Receipt /opt/omnia-runtime/release-evidence/refactor-f43c7f227d1bb8d9fca50797aedabaee66f58c67-retry1/supplemental-verification.json.",
+   "impact": "Рабочий код короче на 95 строк и 4 633 байта без нового слоя. Действующие инструкции и пользовательский запрос побайтово сохранены на 48 сценариях. Ускорение генерации не заявляется.",
+   "next_vector": "Два доказанных дубля в messages.py: legacy provisioning и чтение MAX config для starter files. SQL/языковой model smoke/IO измерения и общая приёмка остаются открыты."
+  },
+  {
+   "id": "H152",
+   "title": "Общая подготовка окружения вместо двух одинаковых блоков",
+   "description": "Обычный и отложенный запуск используют один локальный helper. События, gates и установка готовности после успеха сохранены.",
    "status": "testing",
    "score": null,
    "category": "верификация / рефакторинг",
    "period": "13.09",
-   "evidence": "BASE deddd35bd41f9f424b52226b3e8bde5e8423b770. До/после160passed, включая48полных payload реального build_messages. Ruff и mypy283passed. Полный CI, независимое review и delivery фиксируются после завершения. docs/plans/2026-09-13-refactoring-continuation.md.",
-   "impact": "Рабочий код короче на95строк без нового слоя. Действующие инструкции и пользовательский запрос побайтово сохранены на48сценариях. Ускорение генерации не заявляется.",
-   "next_vector": "Два доказанных дубля в messages.py: legacy provisioning и чтение MAX config для starter files. SQL/языковой model smoke/IO измерения и общая приёмка остаются открыты."
+   "evidence": "BASE f43c7f227d1bb8d9fca50797aedabaee66f58c67. BEFORE15passed; AFTER83passed2existingxfail. Реальный _process_prompt, порядок/ошибки/deferred/gates; внешние IO заменены fakes. API Ruff/mypy283passed. Astra review No findings; AST эквивалентен после разворачивания helper. CI и delivery ожидаются.",
+   "impact": "Рабочий код короче на 24 строки и 1 138 байт; один локальный owner, нового слоя нет. Ускорение не заявляется.",
+   "next_vector": "После доставки: чтение MAX config в трёх callers; затем четыре snapshot mapping и два pass usage helper."
   }
  ],
  "vectors": [
