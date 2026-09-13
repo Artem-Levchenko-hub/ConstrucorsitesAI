@@ -16,7 +16,7 @@ from omnia_api.models.user import User
 from omnia_api.schemas.runtime import RuntimeStatus
 from omnia_api.services import orchestrator_client
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
-from omnia_api.services.project_cell_access import decide_project_cell_access
+from omnia_api.services.project_cell_access import decide_project_cell_selection
 from omnia_api.services.project_cell_lifecycle import (
     execute_cell_operation,
     replay_indeterminate_cell_operation,
@@ -38,7 +38,7 @@ _CELL_OWNERSHIP_MISMATCH = "Project Cell workspace identity mismatch"
 @dataclass(frozen=True, slots=True)
 class ProjectCellPublicSelection:
     selected: bool
-    source: Literal["legacy", "durable_workspace", "owner_canary"]
+    source: Literal["legacy", "durable_workspace", "owner_canary", "project_admitted"]
     owner: User
     workspace: ProjectCellWorkspace | None
 
@@ -75,7 +75,9 @@ async def resolve_project_cell_public_selection(
             workspace=workspace,
         )
 
-    access = decide_project_cell_access(resolved_owner)
+    access = decide_project_cell_selection(
+        resolved_owner, project_cell_enabled=project.project_cell_enabled is True,
+    )
     if (
         project.template == "max_miniapp"
         and access.enabled
@@ -83,7 +85,7 @@ async def resolve_project_cell_public_selection(
     ):
         return ProjectCellPublicSelection(
             selected=True,
-            source="owner_canary",
+            source="project_admitted" if project.project_cell_enabled is True else "owner_canary",
             owner=resolved_owner,
             workspace=None,
         )

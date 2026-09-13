@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import ssl
 import stat
 import sys
 import time
@@ -44,6 +45,7 @@ class VaultDataKeyConfig:
     key_name: str
     wrapped_root: Path
     runtime_root: Path
+    ca_file: Path | None = None
 
 
 def _no_symlinks(path: Path) -> None:
@@ -66,6 +68,36 @@ def _private_directory(path: Path) -> None:
         raise AppDataKeyError("Key storage directory is invalid")
     if sys.platform != "win32" and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
         raise AppDataKeyError("Key storage directory must be owned by host and private")
+
+
+def _vault_tls_context(ca_file: Path | None) -> ssl.SSLContext | bool:
+    """Load an explicit CA from checked bytes; do not inherit environment trust overrides."""
+    if ca_file is None:
+        return True
+    try:
+        _no_symlinks(ca_file)
+        descriptor = os.open(
+            ca_file,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+        )
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise AppDataKeyError("Vault CA file must be regular")
+            if sys.platform != "win32" and (
+                info.st_uid not in {0, os.geteuid()} or info.st_mode & 0o022
+            ):
+                raise AppDataKeyError("Vault CA file ownership or permissions are unsafe")
+            certificate = stream.read(_MAX_BYTES + 1)
+            if len(certificate) > _MAX_BYTES:
+                raise AppDataKeyError("Vault CA file exceeds size limit")
+        # Use these exact checked bytes, avoiding a second path lookup by OpenSSL.
+        context = ssl.create_default_context(cadata=certificate.decode("ascii"))
+        if not context.get_ca_certs():
+            raise AppDataKeyError("Vault CA file contains no CA certificates")
+        return context
+    except (OSError, ValueError, UnicodeError):
+        raise AppDataKeyError("Vault CA file is missing, unreadable, or invalid") from None
 
 
 def _require_tmpfs(path: Path) -> None:
@@ -210,6 +242,7 @@ class AppDataKeyManager:
         ):
             raise AppDataKeyError("Durable and ephemeral key storage must be separate")
         self._client = client
+        self._tls_context = _vault_tls_context(config.ca_file)
 
     def prepare(self, project_id: str, *, allow_create: bool = False) -> Path:
         """Unwrap existing keys. Creation requires an explicitly new project identity."""
@@ -324,7 +357,11 @@ class AppDataKeyManager:
                     raise AppDataKeyError("Vault token file is invalid")
                 if self._client is not None:
                     return self._materialize(self._client, token, ring, ring_path, rotate)
-                with httpx.Client(verify=True, trust_env=False, follow_redirects=False) as client:
+                with httpx.Client(
+                    verify=self._tls_context,
+                    trust_env=False,
+                    follow_redirects=False,
+                ) as client:
                     return self._materialize(client, token, ring, ring_path, rotate)
         except (OSError, UnicodeError):
             raise AppDataKeyError("Project key storage operation failed") from None

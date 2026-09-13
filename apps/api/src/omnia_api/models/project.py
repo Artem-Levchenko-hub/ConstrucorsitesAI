@@ -25,6 +25,10 @@ class Project(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     template: Mapped[str] = mapped_column(Text, nullable=False)
+    # Server-owned provider assignment. Never inferred from a later account rollout.
+    project_cell_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False,
+    )
     language: Mapped[str] = mapped_column(Text, nullable=False, server_default="ru", default="ru")
     # Import provenance (migration 0019). "native" = created/generated inside
     # Omnia; "imported" = seeded from an external GitHub repo via tarball clone.

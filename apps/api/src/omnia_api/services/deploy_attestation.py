@@ -23,7 +23,7 @@ from omnia_api.services.attestation import (
     now_iso,
     verify_digest,
 )
-from omnia_api.services.project_cell_access import decide_project_cell_access
+from omnia_api.services.project_cell_access import decide_project_cell_selection
 from omnia_api.services.release_proof import run_release_proof
 
 
@@ -71,7 +71,9 @@ async def resolve_deploy_proof(
         )
         owner = await session.get(User, project.owner_id)
         if workspace_id is not None or (
-            owner is not None and decide_project_cell_access(owner).enabled
+            owner is not None and decide_project_cell_selection(
+                owner, project_cell_enabled=project.project_cell_enabled is True,
+            ).enabled
         ):
             return DeployProof(False, "project_cell_publish_unavailable")
     target_sha = requested_sha

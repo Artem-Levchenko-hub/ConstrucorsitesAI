@@ -16,6 +16,7 @@ CORE_KEY_FILE = "/run/omnia-data/keys.json"
 
 
 def key_manager(settings: Any) -> AppDataKeyManager:
+    ca_file = getattr(settings, "cell_data_vault_ca_file", "")
     return AppDataKeyManager(VaultDataKeyConfig(
         address=settings.cell_data_vault_address,
         token_file=Path(settings.cell_data_vault_token_file),
@@ -23,6 +24,7 @@ def key_manager(settings: Any) -> AppDataKeyManager:
         key_name=settings.cell_data_vault_key,
         wrapped_root=Path(settings.cell_data_wrapped_key_root),
         runtime_root=Path(settings.cell_data_runtime_key_root),
+        ca_file=Path(ca_file) if ca_file else None,
     ))
 
 

@@ -477,18 +477,20 @@ async def maybe_create_project_cell_executor(
             if protect_existing_data:
                 raise ProjectCellExecutorUnavailable("Адаптация требует защищённую среду проекта.")
             return None
-        readiness = await inspect_project_cell_control(user, project_id)
+        existing_cell_id = await session.scalar(
+            select(ProjectCellWorkspace.id).where(ProjectCellWorkspace.project_id == project_id)
+        )
+        readiness = await inspect_project_cell_control(
+            user, project_id,
+            project_cell_enabled=project.project_cell_enabled is True,
+            has_workspace=existing_cell_id is not None,
+        )
         if not readiness.selected:
             if protect_existing_data:
                 raise ProjectCellExecutorUnavailable(
                     "Адаптация недоступна без защиты текущей базы в Project Cell."
                 )
-            existing_cell_id = await session.scalar(
-                select(ProjectCellWorkspace.id).where(
-                    ProjectCellWorkspace.project_id == project_id,
-                )
-            )
-            if existing_cell_id is not None:
+            if existing_cell_id is not None or project.project_cell_enabled is True:
                 raise ProjectCellExecutorUnavailable(
                     "Project already belongs to a Project Cell; legacy execution is disabled"
                 )

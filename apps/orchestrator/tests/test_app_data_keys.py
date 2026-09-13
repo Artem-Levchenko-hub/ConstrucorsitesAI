@@ -3,16 +3,92 @@
 import base64
 import json
 import os
+import ssl
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+import certifi
 import httpx
 import pytest
 
 from omnia_orchestrator.services import app_data_keys as keys
 
 _REAL_TMPFS_CHECK = keys._require_tmpfs
+
+
+@pytest.fixture
+def ca_file(tmp_path):
+    # Public CA certificate shipped with the installed HTTPX dependency; no network/secrets.
+    certificate = Path(certifi.where()).read_text().split("-----BEGIN CERTIFICATE-----", 1)[1]
+    certificate = certificate.split("-----END CERTIFICATE-----", 1)[0]
+    path = tmp_path / "vault-ca.pem"
+    path.write_text("-----BEGIN CERTIFICATE-----" + certificate + "-----END CERTIFICATE-----\n")
+    path.chmod(0o644)
+    return path
+
+
+def test_custom_ca_reaches_real_http_client_with_verified_tls(provider, ca_file, monkeypatch):
+    fixture_manager, config, _, _ = provider
+    requests = []
+
+    def client(**kwargs):
+        context = kwargs["verify"]
+        assert isinstance(context, ssl.SSLContext)
+        assert context.check_hostname is True
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.cert_store_stats()["x509_ca"] == 1
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        requests.append(kwargs)
+        return fixture_manager._client
+
+    monkeypatch.setenv("SSL_CERT_FILE", "/invalid-environment-override.pem")
+    monkeypatch.setattr(keys.httpx, "Client", client)
+    manager = keys.AppDataKeyManager(replace(config, ca_file=ca_file))
+    assert manager.prepare(str(uuid4()), allow_create=True).is_file()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "invalid-pem", "oversized", "relative"])
+def test_invalid_custom_ca_fails_sanitized_before_vault(provider, tmp_path, kind):
+    _, config, calls, _ = provider
+    path = tmp_path / "private-ca-location.pem"
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "invalid-pem":
+        path.write_text("private-certificate-content")
+    elif kind == "oversized":
+        path.write_bytes(b"a" * (1024 * 1024 + 1))
+    elif kind == "relative":
+        path = Path("private-ca-location.pem")
+    with pytest.raises(keys.AppDataKeyError) as error:
+        keys.AppDataKeyManager(replace(config, ca_file=path))
+    assert "private-ca-location" not in str(error.value)
+    assert "private-certificate-content" not in str(error.value)
+    assert not calls
+
+
+def test_custom_ca_symlink_rejected(provider, ca_file, tmp_path):
+    _, config, calls, _ = provider
+    link = tmp_path / "ca-link.pem"
+    try:
+        link.symlink_to(ca_file)
+    except OSError:
+        pytest.skip("Host does not grant symlink creation")
+    with pytest.raises(keys.AppDataKeyError):
+        keys.AppDataKeyManager(replace(config, ca_file=link))
+    assert not calls
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux filesystem permissions")
+def test_custom_ca_writable_by_other_users_rejected(provider, ca_file):
+    _, config, calls, _ = provider
+    ca_file.chmod(0o666)
+    with pytest.raises(keys.AppDataKeyError):
+        keys.AppDataKeyManager(replace(config, ca_file=ca_file))
+    assert not calls
 
 
 @pytest.fixture

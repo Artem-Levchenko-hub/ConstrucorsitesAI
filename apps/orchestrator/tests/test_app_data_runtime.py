@@ -1,7 +1,27 @@
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
+
+@pytest.mark.parametrize("configured", ["", "/etc/omnia/app-data/vault-ca.pem"])
+def test_key_manager_wires_optional_ca_from_settings(monkeypatch, configured):
+    from omnia_orchestrator.core.config import Settings
+    from omnia_orchestrator.services import app_data_runtime as runtime
+
+    monkeypatch.setenv("CELL_DATA_VAULT_CA_FILE", configured)
+    settings = Settings(_env_file=None, database_url="postgresql://qa/qa", internal_token="qa")
+    captured = []
+    sentinel = object()
+
+    def construct(config):
+        captured.append(config)
+        return sentinel
+
+    monkeypatch.setattr(runtime, "AppDataKeyManager", construct)
+    assert runtime.key_manager(settings) is sentinel
+    assert captured[0].ca_file == (Path(configured) if configured else None)
 
 
 def test_disabled_provider_has_no_key_mount_or_database_probe():

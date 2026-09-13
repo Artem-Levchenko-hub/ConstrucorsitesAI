@@ -7,7 +7,10 @@ from uuid import UUID
 
 from omnia_api.models.user import User
 from omnia_api.services.orchestrator_client import get_project_cell_capabilities
-from omnia_api.services.project_cell_access import decide_project_cell_access
+from omnia_api.services.project_cell_access import (
+    decide_project_cell_access,
+    decide_project_cell_selection,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,8 +33,17 @@ def _selected_failure(reason: str) -> ProjectCellControlReadiness:
 async def inspect_project_cell_control(
     user: User,
     project_id: UUID,
+    *,
+    project_cell_enabled: bool = False,
+    has_workspace: bool = False,
 ) -> ProjectCellControlReadiness:
-    access = decide_project_cell_access(user)
+    access = (
+        decide_project_cell_selection(
+            user, project_cell_enabled=project_cell_enabled, has_workspace=has_workspace,
+        )
+        if project_cell_enabled is True or has_workspace is True
+        else decide_project_cell_access(user)
+    )
     if not access.enabled or access.provider == "legacy":
         return ProjectCellControlReadiness(
             selected=False,
@@ -39,6 +51,13 @@ async def inspect_project_cell_control(
             provider="legacy",
             reason=access.reason,
         )
+
+    # Provider assignment is durable, but it does not authorize a suspended or
+    # unverified account to start a generation. Stay selected and fail closed.
+    if user.status != "active" or user.is_anon:
+        return _selected_failure("account_ineligible")
+    if user.email is None or user.email_verified_at is None:
+        return _selected_failure("email_unverified")
 
     try:
         capability = await get_project_cell_capabilities(project_id)

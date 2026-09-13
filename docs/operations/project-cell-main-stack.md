@@ -60,8 +60,25 @@ The verified production host service reads `/opt/omnia/apps/orchestrator/.env`
 with WorkingDirectory `/opt/omnia/apps/orchestrator`. The older
 `/opt/omnia-runtime/.env.orchestrator` is a different unused file, not a symlink;
 preserve it. Inspect the effective unit/environment again before editing.
-Preserve all existing owner-canary lists and
-secrets. No expansion to other users is authorized by this feature.
+Preserve all existing owner-canary lists and secrets. General availability for
+new MAX projects is controlled separately by
+`PROJECT_CELL_GENERAL_AVAILABILITY_ENABLED=true` in the production Compose env.
+It admits active, registered accounts with verified email without adding their
+addresses to the canary list. Each project keeps its own workspace and ownership
+checks; the switch grants no access to another user's application or data.
+
+Migration `0062_project_cell_rollout` adds a server-owned
+`projects.project_cell_enabled` marker, false for existing rows. Normal creation
+of an eligible MAX project persists enrollment; imports and forks are not
+automatically enrolled. A real durable workspace and already enrolled projects
+remain on the Cell path if the GA switch is later disabled. Disabling GA stops
+new enrollment; it is not a migration back to legacy storage. The downgrade
+refuses to discard the marker while enrolled projects exist.
+
+Existing legacy projects keep their previous runtime and data path. Moving them
+requires an explicit data-preserving migration; broadening an account allowlist
+does not perform that migration. Capacity admission, queues, authenticated owner
+checks, fencing and resource limits remain in force for all users.
 
 Build the base from the approved immutable Node22 image and pin the output image:
 

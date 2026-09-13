@@ -50,6 +50,7 @@ from omnia_api.services.design_presets import PRESETS
 from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.max_access import require_max_studio_access
 from omnia_api.services.preset_classifier import classify_preset_sync
+from omnia_api.services.project_cell_access import admit_new_project_cell
 from omnia_api.services.project_cell_deletion import teardown_project_cell
 from omnia_api.services.queue import enqueue_build_exe, enqueue_preview
 from omnia_api.services.run_bundle import build_launchers
@@ -130,6 +131,7 @@ async def create_project(
         slug=slug,
         template=payload.template,
         design_preset_id=preset_id,
+        project_cell_enabled=(payload.template == "max_miniapp" and admit_new_project_cell(owner)),
     )
     session.add(project)
     await session.flush()

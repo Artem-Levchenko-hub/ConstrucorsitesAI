@@ -1046,6 +1046,8 @@ class Settings(BaseSettings):
     # nobody (today's behaviour). Env: AGENTIC_BUILDER_CANARY_USERS.
     agentic_builder_canary_users: str = Field(default="")
     project_cell_docker_canary_enabled: bool = Field(default=False)
+    # Admission for newly created MAX projects only; persisted assignments survive rollback.
+    project_cell_general_availability_enabled: bool = Field(default=False)
     project_cell_canary_emails: str = Field(default="")
     use_generation_worker: bool = Field(default=False)
     use_max_finalization_coordinator: bool = Field(default=False)

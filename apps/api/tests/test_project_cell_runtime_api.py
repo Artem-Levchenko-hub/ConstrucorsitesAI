@@ -129,12 +129,19 @@ async def test_durable_cell_public_flow_survives_disabled_owner_flag(
 
 
 @pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("admitted", [False, True])
 async def test_selected_owner_without_workspace_never_starts_legacy(
-    client, db_session, monkeypatch, active,
+    client, db_session, monkeypatch, active, admitted,
 ):
     _, project, _, _ = await _seed(
-        db_session, monkeypatch, cell=False, enabled=True, active=active,
+        db_session, monkeypatch, cell=False, enabled=not admitted, active=active,
     )
+    if admitted:
+        project.project_cell_enabled = True
+        await db_session.commit()
+        await db_session.refresh(project)
+        assert project.project_cell_enabled is True
+        monkeypatch.setattr(get_settings(), "project_cell_general_availability_enabled", False)
     _deny_legacy(monkeypatch)
     base = f"/api/projects/{project.id}"
     status = await client.get(base + "/runtime")
@@ -246,8 +253,11 @@ async def test_cell_config_saves_while_asleep_without_cpu_admission(
     assert workspace.state == "stopped" and workspace.generation_run_id is None
 
 
-async def test_non_owner_cannot_access_cell_preview(client, db_session, monkeypatch):
-    _, project, _, _ = await _seed(db_session, monkeypatch)
+@pytest.mark.parametrize("admitted", [False, True])
+async def test_non_owner_cannot_access_cell_preview(client, db_session, monkeypatch, admitted):
+    _, project, _, _ = await _seed(db_session, monkeypatch, cell=not admitted)
+    if admitted:
+        project.project_cell_enabled = True
     other = User(email="other-cell-owner@example.com", password_hash="x")
     db_session.add(other)
     await db_session.commit()
@@ -283,6 +293,8 @@ async def test_competing_preview_start_returns_retryable_busy_without_waiting(
 
 async def test_unselected_project_keeps_legacy_runtime(client, db_session, monkeypatch):
     _, project, _, _ = await _seed(db_session, monkeypatch, cell=False)
+    monkeypatch.setattr(get_settings(), "project_cell_general_availability_enabled", True)
+    assert project.project_cell_enabled is False
     legacy = AsyncMock(return_value={"state": "stopped", "keep_alive": False})
     monkeypatch.setattr(oc, "get_status", legacy)
     response = await client.get(f"/api/projects/{project.id}/runtime")

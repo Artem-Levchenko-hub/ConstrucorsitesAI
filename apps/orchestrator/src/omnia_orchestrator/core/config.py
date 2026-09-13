@@ -280,6 +280,8 @@ class Settings(BaseSettings):
     # Host-only Vault Transit credentials. Empty address leaves secure CRUD unavailable.
     cell_data_vault_address: str = ""
     cell_data_vault_token_file: str = "/etc/omnia/app-data/vault-token"
+    # Optional explicit PEM CA for a private Vault listener; empty uses HTTPX's default trust.
+    cell_data_vault_ca_file: str = ""
     cell_data_vault_mount: str = "transit"
     cell_data_vault_key: str = "omnia-app-data"
     cell_data_wrapped_key_root: str = "/opt/omnia-runtime/app-data-wrapped-keys"

@@ -400,7 +400,7 @@ async def _prepare_executor(
         revision_number += 1
         return _current_revision()
 
-    async def ready_readiness(_user, _project_id):
+    async def ready_readiness(_user, _project_id, **_selection):
         return ProjectCellControlReadiness(
             selected=True,
             ready=True,
@@ -813,7 +813,7 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         calls.append("ensure")
         return response(request)
 
-    async def readiness(*_args):
+    async def readiness(*_args, **_selection):
         return ProjectCellControlReadiness(
             selected=True,
             ready=True,
@@ -933,7 +933,7 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
     await db_session.commit()
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
 
-    async def legacy_readiness(*_args):
+    async def legacy_readiness(*_args, **_selection):
         return ProjectCellControlReadiness(
             selected=False, ready=False, provider="legacy", reason="not_selected",
         )
@@ -1597,7 +1597,7 @@ async def test_disabled_routing_never_falls_back_for_a_durable_cell(
     await db_session.commit()
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
 
-    async def disabled_readiness(_user, _project_id):
+    async def disabled_readiness(_user, _project_id, **_selection):
         return ProjectCellControlReadiness(
             selected=False,
             ready=False,
@@ -1640,7 +1640,7 @@ async def test_selected_but_unready_project_cell_raises_unavailable(
 
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
 
-    async def unready_readiness(_user, _project_id):
+    async def unready_readiness(_user, _project_id, **_selection):
         return ProjectCellControlReadiness(
             selected=True,
             ready=False,
@@ -1680,7 +1680,7 @@ async def test_bootstrap_rejects_mismatched_active_lease_before_agent_activation
     await db_session.commit()
     run_id = run.id
 
-    async def ready_readiness(_user, _project_id):
+    async def ready_readiness(_user, _project_id, **_selection):
         return ProjectCellControlReadiness(
             selected=True,
             ready=True,
@@ -1767,7 +1767,7 @@ async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
     run = await _new_run(db_session, project, owner, label="bootstrap-bad-request")
     await db_session.commit()
 
-    async def ready_readiness(_user, _project_id):
+    async def ready_readiness(_user, _project_id, **_selection):
         return ProjectCellControlReadiness(
             selected=True,
             ready=True,
@@ -1861,7 +1861,7 @@ async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
     executed_kinds: list[str] = []
     signalled_runs: list[UUID] = []
 
-    async def ready_readiness(_user, _project_id):
+    async def ready_readiness(_user, _project_id, **_selection):
         return ProjectCellControlReadiness(
             selected=True,
             ready=True,
