@@ -64,8 +64,11 @@ def modules(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
     result = {
         name: importlib.import_module("omnia_api.routers." + name)
-        for name in ("rollback", "style_patch", "uploads", "snapshots", "hero_media", "messages")
+        for name in ("rollback", "style_patch", "uploads", "snapshots", "hero_media")
     }
+    result["generation_publication"] = importlib.import_module(
+        "omnia_api.services.generation.publication"
+    )
     from omnia_api.core import minio
 
     settings = SimpleNamespace(
@@ -130,7 +133,7 @@ def test_existing_serializers_and_json_contract(modules, case):
     assert (
         modules["hero_media"]._snapshot_public(row).model_dump_json() == reference.model_dump_json()
     )
-    event = modules["messages"]._snapshot_payload(row)
+    event = modules["generation_publication"]._snapshot_payload(row)
     assert event == {
         **value,
         "id": str(NEW),
