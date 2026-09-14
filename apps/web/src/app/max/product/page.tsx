@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import { MaxPublicLanding } from "@/components/marketing/MaxPublicLanding";
 
 export const metadata: Metadata = {
-  title: "MAX Studio — приложение для MAX",
-  description: "От идеи до проверяемого MAX-приложения в одном последовательном сценарии.",
+  title: "MAX Studio — создайте приложение для бизнеса без кода",
+  description: "Каталог, запись на услуги или клуб клиентов внутри MAX. Опишите идею, соберите приложение с ИИ и меняйте его в чате. Начните на бесплатном тарифе Free.",
   alternates: { canonical: "/max/product" },
 };
 
