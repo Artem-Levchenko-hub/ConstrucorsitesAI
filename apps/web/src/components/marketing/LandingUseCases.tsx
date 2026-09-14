@@ -20,7 +20,7 @@ export function LandingUseCases() {
             <AppHeader name="Смена" section="Кофейня"/>
             <div className="ml-example-body">
               <span className="ml-example-step">1. Выберите напиток</span>
-              <div className="ml-example-product"><Image src="/landing/cappuccino.png" width={88} height={88} alt="" sizes="88px"/><div><strong>Капучино</strong><span>250 мл · на обычном молоке</span><b>240 ₽</b></div></div>
+              <div className="ml-example-product"><Image src="/landing/cappuccino.jpg" width={88} height={88} alt="" sizes="88px"/><div><strong>Капучино</strong><span>250 мл · на обычном молоке</span><b>240 ₽</b></div></div>
               <div className="ml-example-line"><span>В заказе</span><strong>1 капучино</strong></div>
               <span className="ml-example-step">2. Когда заберёте?</span>
               <div className="ml-example-options"><span>Сейчас</span><span className="is-selected">10:30 <Check size={14}/></span><span>11:00</span></div>
