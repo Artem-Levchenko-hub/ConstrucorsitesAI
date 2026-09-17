@@ -1,7 +1,7 @@
 {
  "meta": {
   "updated": "2026-09-17",
-  "version": 104,
+  "version": 105,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2835,11 +2835,11 @@
    "id": "H154",
    "title": "Красная проверка должна называть стадию, компонент и версии",
    "description": "Production smoke и generation canary падали кодами, по которым нельзя действовать: «web.release_mismatch» без фактической версии и общий «canary_failed» без стадии. Гипотеза: если проверки публикуют безопасную диагностику — ожидаемую и фактическую версию каждого компонента, стадию отказа и разрешённый код причины — разбор красного запуска перестанет требовать доступа к серверу.",
-   "status": "partial",
-   "score": null,
+   "status": "worked",
+   "score": 8,
    "category": "верификация / инфра",
    "period": "17.09",
-   "evidence": "Отказы подтверждены на живых запусках: smoke 35171806210 (17.09 01:46 UTC) повторил те же три кода, что и 35108206175 сутки раньше — web.release_mismatch, max_health.http_502, max_webhook.http_502; ожидания в журнале web=deddd35b, api/worker/orchestrator=d3931113. Generation canary 35069867816 остановился за 1,168 с без события release_health. Сделано: canary переведён с общего PRODUCTION_EXPECTED_RELEASE_SHA на покомпонентные ожидания web/api/worker/generation_worker/orchestrator, generation-worker проверяется явно; введены фиксированные наборы стадий и диагностических кодов; result JSON выгружается артефактом при любом исходе с if-no-files-found: error; первичная причина больше не затирается ошибкой удаления тестового проекта; smoke печатает expected/actual с санитайзером (не-SHA сводится к invalid/missing/unknown). Тесты: 30 новых в test_production_canary_release_matrix.py и test_production_canary_diagnostics.py — сначала красные; 128 тестов четырёх ops-файлов зелёные, ruff check и mypy src чистые.",
+   "evidence": "Отказы подтверждены на живых запусках: smoke 35171806210 (17.09 01:46 UTC) повторил те же три кода, что и 35108206175 сутки раньше — web.release_mismatch, max_health.http_502, max_webhook.http_502; ожидания в журнале web=deddd35b, api/worker/orchestrator=d3931113. Generation canary 35069867816 остановился за 1,168 с без события release_health. Сделано: canary переведён с общего PRODUCTION_EXPECTED_RELEASE_SHA на покомпонентные ожидания web/api/worker/generation_worker/orchestrator, generation-worker проверяется явно; введены фиксированные наборы стадий и диагностических кодов; result JSON выгружается артефактом при любом исходе с if-no-files-found: error; первичная причина больше не затирается ошибкой удаления тестового проекта; smoke печатает expected/actual с санитайзером (не-SHA сводится к invalid/missing/unknown). Тесты: 30 новых в test_production_canary_release_matrix.py и test_production_canary_diagnostics.py — сначала красные; 128 тестов четырёх ops-файлов зелёные, ruff check и mypy src чистые. Влито в main 17.09 (merge 24cbc419, CI success). Живой запуск generation canary 35239996554 выдал вместо общего canary_failed точную причину: stage=release_health, component=web, expected=deddd35b, actual=6e6f11fd, cleanup=ok; остановился до создания проекта, result JSON сохранён артефактом.",
    "impact": "Следующий красный запуск сам скажет, что именно сломано: рядом с несовпадением версии будет видна фактическая версия, а у канарейки — стадия (release_health, login, build, preview…) и код причины вместо одного общего «canary_failed». Отдельная проверка generation-worker закрывает случай, когда его контейнер остался на старом образе после частичного деплоя. Живые причины 502 на MAX-canary и несовпадения версии web не устранены — для них нужен доступ к серверу.",
    "next_vector": "V4"
   },
