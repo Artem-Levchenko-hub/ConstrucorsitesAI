@@ -39,13 +39,19 @@ jobs:
         env:
           PRODUCTION_CANARY_EMAIL: ${{ secrets.PRODUCTION_CANARY_EMAIL }}
           PRODUCTION_CANARY_PASSWORD: ${{ secrets.PRODUCTION_CANARY_PASSWORD }}
-          PRODUCTION_EXPECTED_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_WEB_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WEB_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_API_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_API_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_WORKER_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WORKER_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA }}
         run: |
           set -euo pipefail
           for name in \
             PRODUCTION_CANARY_EMAIL \
             PRODUCTION_CANARY_PASSWORD \
-            PRODUCTION_EXPECTED_RELEASE_SHA; do
+            PRODUCTION_EXPECTED_WEB_RELEASE_SHA \
+            PRODUCTION_EXPECTED_API_RELEASE_SHA \
+            PRODUCTION_EXPECTED_WORKER_RELEASE_SHA \
+            PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA; do
             if [[ -z "${!name}" ]]; then
               echo "::error::${name} is not configured"
               exit 1
@@ -61,9 +67,25 @@ jobs:
         env:
           PRODUCTION_CANARY_EMAIL: ${{ secrets.PRODUCTION_CANARY_EMAIL }}
           PRODUCTION_CANARY_PASSWORD: ${{ secrets.PRODUCTION_CANARY_PASSWORD }}
-          PRODUCTION_EXPECTED_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_WEB_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WEB_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_API_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_API_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_WORKER_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WORKER_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA }}
+          PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA }}
           PRODUCTION_CANARY_RESULT_FILE: ${{ runner.temp }}/production-canary-result.json
         run: uv run python scripts/production_generation_canary.py
+
+      # The red runs are the ones whose diagnostics matter, so the result is
+      # uploaded on failure too, and a missing result is its own failure
+      # rather than a silent pass.
+      - name: Upload canary diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-canary-result
+          path: ${{ runner.temp }}/production-canary-result.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Open one generation-canary incident
         if: failure()

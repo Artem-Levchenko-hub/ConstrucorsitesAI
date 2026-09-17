@@ -173,11 +173,32 @@ def run_smoke(
         if not ok:
             failures.append(code)
 
+    def require_release(code: str, expected: str, actual: object) -> None:
+        """Name the drifted revision without echoing an untrusted body.
+
+        A mismatch alone cannot be acted on: it does not say whether the
+        deployment or the expectation is stale. The expected value is our own
+        configuration, and the observed value is published only when it still
+        looks like a revision.
+        """
+
+        if actual == expected:
+            return
+        if isinstance(actual, str) and re.fullmatch(r"[0-9a-f]{7,40}", actual):
+            reported = actual
+        elif actual is None:
+            reported = "missing"
+        elif actual == "unknown":
+            reported = "unknown"
+        else:
+            reported = "invalid"
+        failures.append(f"{code} expected={expected} actual={reported}")
+
     web = health("web", config.platform_url + "/web-health")
     if web is not None:
         require(web.get("status") == "ok", "web.status")
         require(web.get("service") == "web", "web.service")
-        require(web.get("release_sha") == config.expected["web"], "web.release_mismatch")
+        require_release("web.release_mismatch", config.expected["web"], web.get("release_sha"))
     api = health("api", config.platform_url + "/api/health")
     if api is not None:
         require(api.get("status") == "ok", "api.status")
@@ -185,15 +206,14 @@ def run_smoke(
         checks = api.get("checks")
         for name in READINESS_CHECKS:
             require(isinstance(checks, dict) and checks.get(name) == "ok", f"api.readiness.{name}")
-        require(api.get("release_sha") == config.expected["api"], "api.release_mismatch")
+        require_release("api.release_mismatch", config.expected["api"], api.get("release_sha"))
         dependencies = api.get("dependencies")
         for component in ("worker", "generation_worker", "orchestrator"):
             expected = config.expected["worker" if component == "generation_worker" else component]
-            require(
-                isinstance(dependencies, dict)
-                and dependencies.get(f"{component}_release_sha") == expected,
-                f"{component}.release_mismatch",
-            )
+            observed = dependencies.get(f"{component}_release_sha") if isinstance(
+                dependencies, dict
+            ) else None
+            require_release(f"{component}.release_mismatch", expected, observed)
     mvp = probe("mvp", config.platform_url + "/mvp")
     if mvp is not None:
         require("Путь до полностью рабочего MVP".encode() in mvp, "mvp.text_missing")

@@ -40,9 +40,11 @@ _FAILURE_REPORTS = {
     ),
     "snapshot identity mismatch": "Результат тестовой генерации не прошёл проверку.",
     "generated snapshot has no files": "Тестовая генерация не создала файлы.",
-    "project_invalid": "Тестовый проект вернул неверный идентификатор.",
-    "generation_invalid": "Тестовая генерация вернула неверный идентификатор.",
-    "snapshot_invalid": "Тестовая генерация вернула неверный результат.",
+    "id is not a valid identifier": "Тестовый проект вернул неверный идентификатор.",
+    "run_id is not a valid identifier": "Тестовая генерация вернула неверный идентификатор.",
+    "current_snapshot_id is not a valid identifier": (
+        "Тестовая генерация вернула неверный результат."
+    ),
     "project cleanup failed": "Не удалось удалить тестовый проект.",
     "logout cleanup failed": "Не удалось завершить тестовую сессию.",
 }
@@ -52,15 +54,31 @@ def _emit(event: dict[str, object]) -> None:
     print(json.dumps(event, separators=(",", ":"), sort_keys=True), flush=True)
 
 
-def _write_result(status: str, *, error: str | None = None) -> None:
+_UNDIAGNOSED = {"stage": "unknown", "code": "canary_failed", "cleanup": "unknown"}
+
+
+def _write_result(
+    status: str,
+    *,
+    error: str | None = None,
+    diagnostics: dict[str, object] | None = None,
+) -> None:
+    """Record one safe result the workflow uploads as its diagnostics artifact.
+
+    Only the fixed stage/code vocabulary, the compared revisions and bounded
+    numbers are written. Credentials, cookies, request bodies and signed
+    preview URLs never reach this file.
+    """
+
     result_file = os.getenv("PRODUCTION_CANARY_RESULT_FILE")
     if not result_file:
         return
-    result = {"status": status}
+    result: dict[str, object] = {"status": status}
     if error is not None:
         result["error"] = error
+    result.update(diagnostics if diagnostics is not None else _UNDIAGNOSED)
     Path(result_file).write_text(
-        json.dumps(result, ensure_ascii=False),
+        json.dumps(result, ensure_ascii=False, sort_keys=True),
         encoding="utf-8",
     )
 
@@ -68,24 +86,38 @@ def _write_result(status: str, *, error: str | None = None) -> None:
 def main() -> int:
     try:
         config = CanaryConfig.from_env()
-        ProductionCanary(config, emit=_emit).run()
+        result = ProductionCanary(config, emit=_emit).run()
     except CanaryConfigurationError:
         _write_result(
             "failure",
             error="Не удалось запустить тестовые генерации: неверная конфигурация.",
+            diagnostics={
+                "stage": "unknown",
+                "code": "configuration_invalid",
+                "cleanup": "unknown",
+            },
         )
         print("production canary configuration invalid", file=sys.stderr)
         return 1
     except CanaryFailure as exc:
         error = _FAILURE_REPORTS.get(str(exc), "Техническая ошибка production-canary.")
-        _write_result("failure", error=error)
+        _write_result("failure", error=error, diagnostics=exc.diagnostics())
         print(exc.public_message, file=sys.stderr)
         return 1
     except Exception:
         _write_result("failure", error="Техническая ошибка production-canary.")
         print("production canary failed", file=sys.stderr)
         return 1
-    _write_result("success")
+    _write_result(
+        "success",
+        diagnostics={
+            "stage": "cleanup",
+            "code": "ok",
+            "cleanup": "ok",
+            "elapsed_seconds": result.elapsed_seconds,
+            "releases": dict(sorted(result.releases.items())),
+        },
+    )
     return 0
 
 
