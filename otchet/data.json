@@ -1,7 +1,7 @@
 {
  "meta": {
-  "updated": "2026-09-09",
-  "version": 100,
+  "updated": "2026-09-17",
+  "version": 101,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
@@ -2830,6 +2830,18 @@
    "evidence": "Source c688c3d9; pushed/production 8d8911718d457145486c9b61b3ceded011b4267c. CI34763263203: all7jobs success, API3585passed12skipped8xfailed; orchestrator1666passed31skipped15xfailed. BEFORE/AFTER eight real dev/prod Dockerimages and24HTTP asset hashes perphase; four templates x desktop/mobile96browser assertion groups/232HTTP requests,0errors,12canonical Git SHA identical. Frozen309path/hash/mode records and301API export files; actual immutableAPIimage6b67a580fb62caa908f8ca486b2059a9cb0ec565e1efee65328751b19b857928 mounted-export smoke passed. Astra review No findings. Firstdeployment rolledback on0700fixtures permissionguard; precise0755directoryrepair, reviewed retry1 exit0. Exact API/worker/generation-worker/orchestrator8d, public6of6/web200/POST405, host24sourcehashes/nginx/5dirtyserverdocs preserved. Receipt /opt/omnia-runtime/release-evidence/sharedjs-delivery-8d8911718d457145486c9b61b3ceded011b4267c-retry1/supplemental-verification.json.",
    "impact": "Рабочие исходники короче на 4 903 строки и 207 366 байт с учётом helper и интеграций; новые слои между сервисами не добавлены. Ускорение генерации не заявляется.",
    "next_vector": "Three API helper extractions and24nonMAX identical TS/TSX groups; preserve full materialized trees and existing runtime behavior. No model/business acceptance or runtime speedup claimed."
+  },
+  {
+   "id": "H157",
+   "title": "Убрать защиту данных конечных пользователей и вернуть обычные MAX-проекты с откатами",
+   "description": "Решение владельца 17.09: шифрованное хранилище (Vault, secureCollection) и защищённая БД проекта (роль omnia_runtime, RLS, контракт данных) сейчас не нужны. Новые и существующие MAX-проекты снова получают обычную БД с полным доступом; откаты версий сохраняются и работают на обычной БД.",
+   "status": "testing",
+   "score": null,
+   "category": "генерация / данные / откаты",
+   "period": "17.09",
+   "evidence": "Причина «данные не сохраняются» (разбор в ветке T22): kit выдавал Vault-only secureCollection, а Vault на сервере не настроен → KEY_UNAVAILABLE; в БД проекта «Клиенты» 0 таблиц. Ветка feat/remove-end-user-protection: 404f909b — новые проекты не защищаются, шифрованный CRUD удалён, kit v19 убирает 8 secure-data файлов из существующих проектов; 8cd55e00 — откат и публикация на обычной БД (копия-кандидат + проверка совместимости схемы, живой том БД не перезаписывается); 0b11684f — удалены мёртвые модули защиты; 0355ad63 — jsonb-колонки без объявленных ключей больше не блокируют откат (иначе блокировался бы любой MAX-проект). Итог около −10 тыс. строк. Тесты с PostgreSQL: orchestrator — только 8 прежних падений, API — только 3 прежних test_acceptance (нужен Chromium); ruff/mypy чистые. Скрипт infra/release/convert-protected-project-databases.sh снимает RLS/роль/omnia_guard с 2 живых защищённых проектов; пробный прогон на копии тома «Клиентов» на проде прошёл, оригинал не тронут.",
+   "impact": "Новые MAX-приложения снова пишут данные в свою обычную PostgreSQL, а не в неработающее шифрованное хранилище. Откаты версий остаются и больше не упираются в защитную машинерию. Живое подтверждение сохранения данных будет после деплоя и реальной генерации.",
+   "next_vector": "V8"
   }
  ],
  "vectors": [
@@ -3514,7 +3526,8 @@
     "H133",
     "H134",
     "H135",
-    "H136"
+    "H136",
+    "H157"
    ]
   }
  ],
