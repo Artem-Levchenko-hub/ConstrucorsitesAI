@@ -100,7 +100,12 @@ def test_every_component_requires_exact_nonempty_release(component, path, field,
     failures = run_smoke(
         Configuration.from_env(environment()), HTTPDouble(data), sleep=lambda _: None
     )
-    assert failures == [f"{component}.release_mismatch"]
+    reported = {"f" * 40: "f" * 40, "unknown": "unknown", None: "missing"}[actual]
+    # api, worker and the generation worker ship in one image, so the generation
+    # worker is held to the worker expectation.
+    source = "worker" if component == "generation_worker" else component
+    expected = environment()[f"PRODUCTION_EXPECTED_{source.upper()}_RELEASE_SHA"]
+    assert failures == [f"{component}.release_mismatch expected={expected} actual={reported}"]
 
 
 @pytest.mark.parametrize(
@@ -321,5 +326,32 @@ def test_actual_short_sha_does_not_match_expected_full40():
     data = responses()
     data["/web-health"]["release_sha"] = "a" * 7
     assert run_smoke(Configuration.from_env(environment()), HTTPDouble(data)) == [
-        "web.release_mismatch"
+        f"web.release_mismatch expected={'a' * 40} actual={'a' * 7}"
     ]
+
+
+@pytest.mark.parametrize(
+    "actual,reported",
+    [
+        ("b" * 40, "b" * 40),
+        ("unknown", "unknown"),
+        ("<html>502 Bad Gateway</html>", "invalid"),
+        ("АБВ", "invalid"),
+        (42, "invalid"),
+        ("", "invalid"),
+    ],
+)
+def test_release_mismatch_reports_only_a_safe_actual_revision(actual, reported):
+    """A drifted revision has to be actionable without opening production.
+
+    The expected value is our own configuration and the actual value is echoed
+    only when it looks like a revision, so a broken or hostile upstream body
+    cannot smuggle text into the monitor output.
+    """
+
+    data = responses()
+    data["/web-health"]["release_sha"] = actual
+
+    failures = run_smoke(Configuration.from_env(environment()), HTTPDouble(data))
+
+    assert failures == [f"web.release_mismatch expected={'a' * 40} actual={reported}"]

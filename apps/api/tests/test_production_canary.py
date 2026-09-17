@@ -21,16 +21,26 @@ SIGNED_PREVIEW_URL = (
 )
 
 
+EXPECTED_RELEASES = {
+    "web": RELEASE_SHA,
+    "api": RELEASE_SHA,
+    "worker": RELEASE_SHA,
+    "generation_worker": RELEASE_SHA,
+    "orchestrator": RELEASE_SHA,
+}
+
+
 def _valid_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PRODUCTION_CANARY_EMAIL", "canary@example.com")
     monkeypatch.setenv("PRODUCTION_CANARY_PASSWORD", "secret-password")
-    monkeypatch.setenv("PRODUCTION_EXPECTED_RELEASE_SHA", "a7c4fc22")
+    for component in ("WEB", "API", "WORKER", "ORCHESTRATOR"):
+        monkeypatch.setenv(f"PRODUCTION_EXPECTED_{component}_RELEASE_SHA", RELEASE_SHA)
+    monkeypatch.delenv("PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA", raising=False)
 
 
 def test_config_rejects_missing_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PRODUCTION_CANARY_EMAIL", "canary@example.com")
+    _valid_env(monkeypatch)
     monkeypatch.delenv("PRODUCTION_CANARY_PASSWORD", raising=False)
-    monkeypatch.setenv("PRODUCTION_EXPECTED_RELEASE_SHA", "a7c4fc22")
 
     with pytest.raises(CanaryConfigurationError, match="PRODUCTION_CANARY_PASSWORD"):
         CanaryConfig.from_env()
@@ -40,7 +50,8 @@ def test_config_rejects_missing_credentials(monkeypatch: pytest.MonkeyPatch) -> 
     ("name", "value"),
     [
         ("PRODUCTION_CANARY_BASE_URL", "http://constructor.example"),
-        ("PRODUCTION_EXPECTED_RELEASE_SHA", "A7C4FC22"),
+        ("PRODUCTION_EXPECTED_WEB_RELEASE_SHA", "A7C4FC22"),
+        ("PRODUCTION_EXPECTED_API_RELEASE_SHA", "A7C4FC22"),
         ("PRODUCTION_CANARY_TIMEOUT_SECONDS", "299"),
         ("PRODUCTION_CANARY_TIMEOUT_SECONDS", "3601"),
         ("PRODUCTION_CANARY_TIMEOUT_SECONDS", "not-a-number"),
@@ -122,11 +133,13 @@ def _release_health(service: str) -> dict[str, object]:
             "database": "ok",
             "redis": "ok",
             "worker": "ok",
+            "generation_worker": "ok",
             "deploy_control_plane": "ok",
             "preview_storage": "ok",
         }
         payload["dependencies"] = {
             "worker_release_sha": RELEASE_SHA,
+            "generation_worker_release_sha": RELEASE_SHA,
             "orchestrator_release_sha": RELEASE_SHA,
         }
     return payload
@@ -243,7 +256,7 @@ def test_canary_completes_build_preview_edit_and_mandatory_cleanup() -> None:
         base_url="https://constructor.lead-generator.ru",
         email="canary@example.com",
         password="secret-password",
-        expected_release_sha=RELEASE_SHA,
+        expected_releases=dict(EXPECTED_RELEASES),
         preview_host_suffix=".preview.lead-generator.ru",
         overall_timeout_seconds=300,
         poll_seconds=1,
@@ -255,7 +268,7 @@ def test_canary_completes_build_preview_edit_and_mandatory_cleanup() -> None:
         emit=events.append,
     ).run()
 
-    assert result.release_sha == RELEASE_SHA
+    assert result.releases == EXPECTED_RELEASES
     assert result.project_id == PROJECT_ID
     assert result.build_snapshot_id == BUILD_SNAPSHOT_ID
     assert result.edit_snapshot_id == EDIT_SNAPSHOT_ID
@@ -393,7 +406,7 @@ def _test_config() -> CanaryConfig:
         base_url="https://constructor.lead-generator.ru",
         email="canary@example.com",
         password="secret-password",
-        expected_release_sha=RELEASE_SHA,
+        expected_releases=dict(EXPECTED_RELEASES),
         preview_host_suffix=".preview.lead-generator.ru",
         overall_timeout_seconds=300,
         poll_seconds=30,
@@ -546,7 +559,10 @@ def test_cli_writes_safe_generation_failure_for_daily_report(
 
     assert cli.main() == 1
     assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "cleanup": "unknown",
+        "code": "canary_failed",
         "error": "Тестовая генерация завершилась с ошибкой.",
+        "stage": "unknown",
         "status": "failure",
     }
 
@@ -561,8 +577,17 @@ def test_cli_writes_success_for_daily_report(
         def __init__(self, _config: object, *, emit: object) -> None:
             pass
 
-        def run(self) -> None:
-            return None
+        def run(self) -> canary_module.CanaryResult:
+            return canary_module.CanaryResult(
+                releases=dict(EXPECTED_RELEASES),
+                project_id=PROJECT_ID,
+                build_run_id=BUILD_RUN_ID,
+                edit_run_id=EDIT_RUN_ID,
+                build_snapshot_id=BUILD_SNAPSHOT_ID,
+                edit_snapshot_id=EDIT_SNAPSHOT_ID,
+                cleanup_complete=True,
+                elapsed_seconds=12.5,
+            )
 
     result_path = tmp_path / "production-canary-result.json"
     monkeypatch.setattr(cli, "ProductionCanary", SuccessfulCanary)
@@ -570,7 +595,14 @@ def test_cli_writes_success_for_daily_report(
     monkeypatch.setenv("PRODUCTION_CANARY_RESULT_FILE", str(result_path))
 
     assert cli.main() == 0
-    assert json.loads(result_path.read_text(encoding="utf-8")) == {"status": "success"}
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "cleanup": "ok",
+        "code": "ok",
+        "elapsed_seconds": 12.5,
+        "releases": dict(sorted(EXPECTED_RELEASES.items())),
+        "stage": "cleanup",
+        "status": "success",
+    }
 
 
 @pytest.mark.parametrize(
@@ -638,7 +670,10 @@ def test_cli_writes_configuration_failure_for_daily_report(
 
     assert cli.main() == 1
     assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "cleanup": "unknown",
+        "code": "configuration_invalid",
         "error": "Не удалось запустить тестовые генерации: неверная конфигурация.",
+        "stage": "unknown",
         "status": "failure",
     }
     assert "secret name" not in result_path.read_text(encoding="utf-8")
@@ -664,7 +699,10 @@ def test_cli_writes_fixed_internal_failure_without_exception_detail(
 
     assert cli.main() == 1
     assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "cleanup": "unknown",
+        "code": "canary_failed",
         "error": "Техническая ошибка production-canary.",
+        "stage": "unknown",
         "status": "failure",
     }
     assert "response body" not in result_path.read_text(encoding="utf-8")
