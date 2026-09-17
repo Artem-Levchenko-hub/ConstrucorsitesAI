@@ -1,5 +1,10 @@
 # Chat-3 — LLM Gateway + Orchestrator + Infra (V3 multi-stack pivot)
 
+> **Статус: история, не обязательно к чтению при старте.** Бриф параллельной сессии V3 multi-stack pivot (май 2026); зоны и проверки — в `agents/AGENT-*.md`.
+> Если ниже встречаются другой Git-процесс (например, прямой push в `main`), деплой без разрешённого
+> выпуска или обязательные личные инструменты (`code-canon`, `/safe-commit`, координационный inbox, личные
+> пути), действует общий регламент [`AGENTS.md`](../AGENTS.md).
+
 > **Self-contained.** Прочитай этот файл целиком, потом `docs/10-v3-multistack-pivot.md` (главная спека), `docs/01-api-contract.md` (V3 секция, особенно LLM Gateway endpoints), `docs/07-v2-architecture.md` (V2 runtime — на чём строим). Старые `agents/AGENT-C-LLM-GATEWAY.md` и `agents/AGENT-D-ORCHESTRATOR.md` — справочники по стекам/конвенциям.
 
 ## Кто ты
