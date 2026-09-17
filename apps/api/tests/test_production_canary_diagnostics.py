@@ -262,3 +262,34 @@ def test_workflow_uploads_the_diagnostic_result_even_when_the_canary_fails() -> 
     assert "PRODUCTION_EXPECTED_RELEASE_SHA" not in content
     for component in ("WEB", "API", "WORKER", "ORCHESTRATOR"):
         assert f"PRODUCTION_EXPECTED_{component}_RELEASE_SHA" in content
+
+
+def test_capacity_queue_is_a_waiting_state_not_an_invalid_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Project Cell admission queues a run before it starts; that is not a failure."""
+
+    canary_env(monkeypatch)
+    production = FakeProduction(build_queue_polls=2)
+
+    _run(production)
+
+    assert ("DELETE", f"/api/projects/{PROJECT_ID}") in production.calls
+
+
+def test_failed_run_cancels_its_active_generation_before_deleting_the_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An active run blocks project deletion; cleanup must not leave a paid build behind."""
+
+    canary_env(monkeypatch)
+    production = FakeProduction(build_generation_status="mystery")
+
+    with pytest.raises(CanaryFailure) as failure:
+        _run(production)
+
+    cancel = ("POST", f"/api/projects/{PROJECT_ID}/generation/cancel")
+    delete = ("DELETE", f"/api/projects/{PROJECT_ID}")
+    assert failure.value.stage == "build"
+    assert cancel in production.calls and delete in production.calls
+    assert production.calls.index(cancel) < production.calls.index(delete)

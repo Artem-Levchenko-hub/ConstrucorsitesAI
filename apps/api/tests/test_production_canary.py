@@ -344,6 +344,10 @@ class _FailureScenario:
                     json={"run_id": BUILD_RUN_ID, "mode": "build"},
                 )
             return httpx.Response(202, json={"run_id": EDIT_RUN_ID, "mode": "edit"})
+        if path == f"/api/projects/{PROJECT_ID}/generation/cancel":
+            self.cleanup_timeouts.append(request.extensions["timeout"])
+            self.generation_status = "cancelled"
+            return httpx.Response(202, json={"status": "cancel_requested"})
         if path == f"/api/projects/{PROJECT_ID}/generation":
             is_build = self.prompt_count == 1
             return httpx.Response(

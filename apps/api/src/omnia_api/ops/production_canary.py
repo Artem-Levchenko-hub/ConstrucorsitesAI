@@ -145,6 +145,11 @@ _DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _DNS_TLD_PATTERN = re.compile(r"[a-z]{2,63}")
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _CLEANUP_TIMEOUT_SECONDS = 10.0
+_CANCEL_WAIT_SECONDS = 120.0
+_ACTIVE_GENERATION_STATUSES = frozenset(
+    {"pending", "queued_for_capacity", "running", "cancel_requested"}
+)
+_TERMINAL_GENERATION_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 def validate_preview_host_suffix(host_suffix: str) -> str:
@@ -419,6 +424,8 @@ class ProductionCanary:
         finally:
             self._stage = "cleanup"
             if project_id is not None:
+                # An active run makes deletion return 409 and would keep building.
+                self._cancel_active_generation(project_id)
                 if not self._request_has_status(
                     "DELETE",
                     f"/api/projects/{project_id}",
@@ -542,6 +549,39 @@ class ProductionCanary:
             return False
         return response.status_code == expected_status
 
+    def _generation_status(self, project_id: str) -> object:
+        try:
+            response = self._client.request(
+                "GET",
+                f"/api/projects/{project_id}/generation",
+                timeout=_CLEANUP_TIMEOUT_SECONDS,
+            )
+            payload = response.json() if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
+        return payload.get("status") if isinstance(payload, dict) else None
+
+    def _cancel_active_generation(self, project_id: str) -> None:
+        """Best effort: stop this canary's own run so its project can be deleted."""
+
+        # Unknown statuses are cancelled too: only a known terminal run is safe to leave.
+        if self._generation_status(project_id) in _TERMINAL_GENERATION_STATUSES | {None}:
+            return
+        if not self._request_has_status(
+            "POST",
+            f"/api/projects/{project_id}/generation/cancel",
+            expected_status=202,
+        ):
+            self._event("generation_cancel", "failed", project_id=project_id)
+            return
+        waited_until = self._clock() + _CANCEL_WAIT_SECONDS
+        while self._generation_status(project_id) not in _TERMINAL_GENERATION_STATUSES:
+            if self._clock() >= waited_until:
+                self._event("generation_cancel", "failed", project_id=project_id)
+                return
+            self._sleep(self.config.poll_seconds)
+        self._event("generation_cancel", "ok", project_id=project_id)
+
     def _start_prompt(self, project_id: str, prompt: str, expected_mode: str) -> str:
         response = self._request_json(
             "POST",
@@ -588,7 +628,7 @@ class ProductionCanary:
                     "generation reached a failed terminal status",
                     code=self._request_code(),
                 )
-            if status not in {"pending", "running", "cancel_requested"}:
+            if status not in _ACTIVE_GENERATION_STATUSES:
                 raise self._fail(
                     "generation returned an invalid status",
                     code=self._request_code(invalid=True),

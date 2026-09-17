@@ -45,6 +45,8 @@ class FakeProduction:
     project_create_status: int = 201
     build_generation_status: str = "completed"
     edit_generation_status: str = "completed"
+    build_queue_polls: int = 0
+    cancel_status: int = 202
     runtime_state: str = "running"
     preview_status: int = 200
     delete_status: int = 204
@@ -122,8 +124,20 @@ class FakeProduction:
                 return httpx.Response(202, json={"run_id": BUILD_RUN_ID, "mode": "build"})
             self._edit_prompted = True
             return httpx.Response(202, json={"run_id": EDIT_RUN_ID, "mode": "edit"})
+        if path == f"{project_path}/generation/cancel" and method == "POST":
+            if self.cancel_status == 202:
+                self.build_generation_status = "cancelled"
+                self.edit_generation_status = "cancelled"
+            return httpx.Response(self.cancel_status, json={"status": "cancel_requested"})
         if path == f"{project_path}/generation":
             building = self._project_reads == 0
+            if building and self.build_queue_polls > 0:
+                self.build_queue_polls -= 1
+                return httpx.Response(
+                    200,
+                    json={"id": BUILD_RUN_ID, "status": "queued_for_capacity",
+                          "response_mode": "build"},
+                )
             return httpx.Response(
                 200,
                 json={
