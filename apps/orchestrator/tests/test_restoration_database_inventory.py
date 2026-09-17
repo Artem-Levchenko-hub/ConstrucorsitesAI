@@ -57,16 +57,18 @@ def test_failed_or_ambiguous_probe_is_unknown_without_exposing_values(monkeypatc
     assert catalog.database_state(object()) == "unknown"
 
 
-def test_ready_report_keeps_policy_restrictions_visible_without_claiming_ai_adaptation():
+def test_ready_report_warns_about_cascading_deletes_without_claiming_restrictions():
     report = preparation_report(
         retained=["contacts.surname"],
-        blocked_deletes=["contacts"],
+        cascading_deletes=["contacts"],
         observed_database_state="present",
     )
     assert report["mode"] == "exact"
     assert report["database_state"] == "present"
-    assert "contacts" in " ".join(report["unavailable_features"])
+    assert report["unavailable_features"] == []
+    assert "contacts" in " ".join(report["warnings"])
     assert "contacts.surname" in " ".join(report["retained_data"])
+    assert "ограниченные права" not in json.dumps(report, ensure_ascii=False)
 
 
 @pytest.mark.parametrize("state", ["empty", "present", "unknown"])

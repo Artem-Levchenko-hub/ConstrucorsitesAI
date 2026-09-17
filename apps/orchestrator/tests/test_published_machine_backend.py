@@ -449,64 +449,6 @@ def test_incompatible_update_fails_before_data_or_code_changes():
         assert_compatible_update(old, {**old, "data_contract_digest": "d" * 64})
 
 
-def test_protected_public_schema_probe_uses_controller_socket(tmp_path, monkeypatch):
-    from omnia_orchestrator.services import restoration_database
-
-    runtime = published_backend(tmp_path)
-    calls = []
-    runtime._project_postgres = lambda: SimpleNamespace(
-        exec_run=lambda args, **kwargs: (
-            calls.append((args, kwargs))
-            or SimpleNamespace(exit_code=0, output=b"CREATE TABLE x();")
-        )
-    )
-    monkeypatch.setattr(restoration_database, "load_policy", lambda _: {"epoch": 2})
-    runtime.schema_digest()
-    args, options = calls[0]
-    assert args[args.index("-h") + 1] == "/tmp"
-    assert options["environment"] == {}
-    assert options["user"] == "postgres"
-
-
-def test_public_policy_stops_old_writers_before_changing_credentials(tmp_path, monkeypatch):
-    from omnia_orchestrator.services import restoration_database
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
-
-    runtime = published_backend(tmp_path)
-    events = []
-    runtime.quiesce_current = lambda: events.append("quiesce")
-    runtime.remove = lambda: events.append("remove-app-and-pg")
-    monkeypatch.setattr(
-        restoration_database, "stage_policy", lambda *args, **kwargs: events.append("stage-policy")
-    )
-    runtime.stage_public_policy(DataContract(version=1, tables=[]), 4, blocked_deletes=[])
-    assert events == ["quiesce", "remove-app-and-pg", "stage-policy"]
-
-
-def test_public_policy_rollback_rotates_same_epoch_without_data_restore(tmp_path, monkeypatch):
-    from omnia_orchestrator.services import restoration_database
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
-
-    runtime = published_backend(tmp_path)
-    events = []
-    runtime.quiesce_current = lambda: events.append("quiesce")
-    runtime.remove = lambda: events.append("remove-app-and-pg")
-    monkeypatch.setattr(
-        restoration_database, "recover_policy", lambda *args, **kwargs: events.append(kwargs)
-    )
-    runtime.stage_public_policy(
-        DataContract(version=1, tables=[]),
-        4,
-        blocked_deletes=[],
-        recovery_operation_id="public-release-recovery",
-    )
-    assert events == [
-        "quiesce",
-        "remove-app-and-pg",
-        {"blocked_deletes": [], "operation_id": "public-release-recovery"},
-    ]
-
-
 def test_publication_rejects_unsafe_slug_and_unscoped_secrets():
     from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
 

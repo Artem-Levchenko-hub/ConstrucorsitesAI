@@ -59,8 +59,10 @@ def fixture_files(version: int) -> dict[str, str]:
 import {Pool} from 'pg';
 export const dynamic='force-dynamic';
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:3});
-export async function GET() {
- try {const result=await pool.query('SELECT FIELDS FROM restore_customers ORDER BY name');
+export async function GET(request) {
+ try {const result=await pool.query(
+   'SELECT FIELDS FROM restore_customers WHERE owner_id=$1 ORDER BY name',
+   [request.headers.get('x-omnia-user-id')]);
   return Response.json({version:VERSION,records:result.rows});
  } catch {return Response.json({error:'read failed'},{status:500});}
 }
@@ -73,8 +75,9 @@ export async function POST(request) {
 }
 export async function PATCH(request) {
  try {const input=await request.json();
-  const result=await pool.query('UPDATE restore_customers SET name=$1 WHERE id=$2',
-   [input.name,input.id]);
+  const result=await pool.query(
+   'UPDATE restore_customers SET name=$1 WHERE id=$2 AND owner_id=$3',
+   [input.name,input.id,request.headers.get('x-omnia-user-id')]);
   return Response.json({changed:result.rowCount},{status:result.rowCount?200:404});
  } catch {return Response.json({error:'update failed'},{status:500});}
 }
@@ -633,9 +636,6 @@ async def run(args):
                 record("explicit-v2-republish-preserves-public-only-writes-and-hidden-fields")
             # Exercise the next ordinary generation after a restored environment
             # has been stopped. No LLM or external business integration is called.
-            from omnia_orchestrator.routers.runtime import _workspace_revision
-            from omnia_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
-
             await adapter.halt(state, retain_trusted=True)
             await adapter.resume_preview(state)
             url = "http://" + adapter.preview(state)[1] + ":3000"
@@ -643,9 +643,9 @@ async def run(args):
             status, payload = await asyncio.to_thread(http, url, alice)
             require(
                 status == 200 and len(payload["records"]) == 3,
-                "Protected cold resume lost current records",
+                "Cold resume lost current records",
             )
-            record("protected-cold-resume-keeps-current-data")
+            record("cold-resume-keeps-current-data")
             generation = uuid4()
             await manager.ensure(
                 WorkspaceSpec(
@@ -659,26 +659,13 @@ async def run(args):
             )
             state = manager.state_store.load(workspace)
             _, backend = adapter.parts(state)
-            desired = json.loads(files[".omnia/data-contract.json"])
-            desired["tables"][0]["columns"].append(
-                {"name": "notes", "type": "text", "nullable": True}
+            # Ordinary projects own their schema: an additive migration runs with the
+            # project's own database credentials, not through a platform controller.
+            await machine_effect(
+                admin_sql,
+                backend,
+                "ALTER TABLE restore_customers ADD COLUMN IF NOT EXISTS notes text;",
             )
-            files[".omnia/data-contract.json"] = json.dumps(desired)
-            await manager.docker.write_volume_files(
-                backend.workspace_volume,
-                {".omnia/data-contract.json": files[".omnia/data-contract.json"].encode()},
-            )
-            current_source = await _read_agent_workspace_files(manager, backend.workspace_volume)
-            request = WorkspaceAgentExecRequest(
-                generation_run_id=generation,
-                fencing_epoch=state.fencing_epoch,
-                expected_revision=_workspace_revision(current_source),
-                cmd="omnia-db apply .omnia/data-contract.json",
-                timeout_seconds=900,
-            )
-            async with manager.operation_lock.hold(workspace):
-                result = await adapter.execute(state, MachineManifest.from_files(files), request)
-            require(result.exit_code == 0, "Protected generation migration did not complete")
             present = await machine_effect(
                 admin_sql,
                 backend,

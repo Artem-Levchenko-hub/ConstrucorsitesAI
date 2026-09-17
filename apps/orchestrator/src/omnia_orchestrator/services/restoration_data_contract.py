@@ -1,7 +1,7 @@
-"""A deliberately bounded, enforceable contract for historical PostgreSQL writers.
+"""A deliberately bounded schema-compatibility contract for historical PostgreSQL writers.
 
-Code rollback never runs a down migration. Unknown semantics need adaptation; SQL
-privileges and RLS enforce the supported column/actor contract independently of code.
+Code rollback never runs a down migration. Unknown semantics need adaptation. The
+contract describes compatibility only; it grants or restricts no database access.
 """
 
 from __future__ import annotations
@@ -67,8 +67,8 @@ class DataTable(StrictContract):
             raise ValueError("missing owner column")
         if self.owner_reference and self.owner_reference.column not in names:
             raise ValueError("missing owner reference")
-        if bool(self.owner_column) + bool(self.owner_reference) != 1 and not self.read_only:
-            raise ValueError("writable tables require exactly one actor rule")
+        if self.owner_column and self.owner_reference:
+            raise ValueError("a table has at most one owner rule")
         return self
 
 
@@ -133,12 +133,6 @@ def foreign_key_cycle_nodes(contract: DataContract) -> list[str]:
 
 def assess_contract(old: DataContract, current: DataContract) -> ContractAssessment:
     result = ContractAssessment()
-    result.blockers.extend(
-        "foreign_key_cycle:" + name
-        for name in sorted(
-            set(foreign_key_cycle_nodes(old)) | set(foreign_key_cycle_nodes(current))
-        )
-    )
     current_tables = {table.name: table for table in current.tables}
     old_tables = {table.name: table for table in old.tables}
     for table in old.tables:

@@ -43,26 +43,12 @@ from omnia_orchestrator.services.published_machine_backend import (
     ensure_managed_infrastructure,
     release_volume_mapping,
 )
-from omnia_orchestrator.services.restoration_catalog import catalog_contract
-from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
-from omnia_orchestrator.services.restoration_database import install_policy, load_policy
 
 _ACTIVE = {"queued", "building", "swapping"}
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _physical_schema(contract: DataContract | None) -> dict[str, Any] | None:
-    if contract is None:
-        return None
-    value = contract.model_dump(mode="json")
-    for table in value["tables"]:
-        for column in table["columns"]:
-            column.pop("meaning", None)
-            column.pop("json_keys", None)
-    return value
 
 
 def publication_root(settings: Any) -> Path:
@@ -291,9 +277,6 @@ class CellPublicationService:
             if _workspace_revision(files) != request.source_revision:
                 raise CellIdentityConflict("publication source revision changed")
             self._verify_restoration_source(request, source)
-            source_policy = load_policy(source)
-            if request.restoration_operation_id is not None and source_policy is None:
-                raise CellIdentityConflict("restoration publication database policy missing")
             manifest = MachineManifest.model_validate(machine.state()["manifest"])
             seeded = bool(self._read(request.project_id).get("data_seeded"))
             preview = adapter.preview(source_state)
@@ -328,9 +311,10 @@ class CellPublicationService:
                 )
                 await machine_effect(store.validate, reference, manifest_digest=manifest.digest())
                 if seeded:
-                    if reference.workspace_id != source.workspace_id or {
-                        volume.name for volume in reference.volumes
-                    } != set(warm_volumes):
+                    if (
+                        reference.workspace_id != source.workspace_id
+                        or {volume.name for volume in reference.volumes} != set(warm_volumes)
+                    ):
                         raise CellIdentityConflict("publication workspace capture mismatch")
                 else:
                     source.validate_restore_reference(reference)
@@ -361,19 +345,12 @@ class CellPublicationService:
             "snapshot_id": str(request.snapshot_id),
             "resource_profile": asdict(manager.profile),
         }
-        if source_policy is not None:
-            release["data_contract"] = source_policy["contract"]
-            release["blocked_deletes"] = source_policy["blocked_deletes"]
-            release["policy_epoch"] = len(saved["history"])
         active = saved.get("active_release")
         if active is not None:
             state = manager.state_store.load(production_id)
             old = self._backend(manager, state, active)
-            await self._check_public_contract(old, active, release)
-            previous_policy = load_policy(old)
-            if source_policy is not None and previous_policy is not None:
-                release["policy_epoch"] = max(release["policy_epoch"], previous_policy["epoch"] + 1)
-            self._write(request.project_id, saved)
+            actual = await machine_effect(old.schema_digest)
+            assert_compatible_update({**active, "schema_digest": actual}, release)
         else:
             marker = {
                 "project_id": str(request.project_id),
@@ -437,9 +414,9 @@ class CellPublicationService:
             await machine_effect(backend.ensure_release_runtime_volumes, manifest)
         if not seeded and source.project_postgres_volume not in {v.name for v in reference.volumes}:
             raise CellResourceError("publication requires captured dedicated project database")
-        release["needs_password_rotation"] = not seeded and source_policy is None
+        release["needs_password_rotation"] = not seeded
         # Source secret never enters public/status journal. Retained privately for first activation.
-        if not seeded and source_policy is None:
+        if not seeded:
             write_controller_json(
                 self.root / str(request.project_id) / "seed-secret.json",
                 {"password": source.project_postgres_password},
@@ -484,29 +461,6 @@ class CellPublicationService:
         ):
             raise CellIdentityConflict("restoration publication activation changed")
 
-    async def _check_public_contract(
-        self,
-        backend: Any,
-        active: dict[str, Any],
-        release: dict[str, Any],
-    ) -> None:
-        if not release.get("data_contract"):
-            actual = await machine_effect(backend.schema_digest)
-            assert_compatible_update({**active, "schema_digest": actual}, release)
-            return
-        if active["data_contract_digest"] != release["data_contract_digest"]:
-            raise CellIdentityConflict("publication data mounts changed")
-        policy = load_policy(backend)
-        trusted = DataContract.model_validate(policy["contract"]) if policy is not None else None
-        live, blockers = await machine_effect(catalog_contract, backend, trusted_contract=trusted)
-        assessment = assess_contract(DataContract.model_validate(release["data_contract"]), live)
-        if blockers or assessment.blockers:
-            raise CellIdentityConflict("restored code is incompatible with current public data")
-        release["blocked_deletes"] = assessment.blocked_deletes
-        # A failed first protected update must restore the former code's privileges,
-        # while retaining the same live rows. This private record contains no rows.
-        active.setdefault("rollback_data_contract", live.model_dump(mode="json"))
-
     def _backend(
         self, manager: Any, state: Any, release: dict[str, Any] | None
     ) -> PublishedMachineBackend:
@@ -539,23 +493,6 @@ class CellPublicationService:
         await ensure_managed_infrastructure(manager, state)
         backend = self._backend(manager, state, release)
         manifest = MachineManifest.model_validate(release["manifest"])
-        protected = release.get("data_contract") is not None
-        if protected:
-            desired = DataContract.model_validate(release["data_contract"])
-            previous_policy = load_policy(backend)
-            previous_contract = (
-                DataContract.model_validate(previous_policy["contract"])
-                if previous_policy is not None
-                else desired
-            )
-            if switch or previous_policy is None:
-                await machine_effect(
-                    backend.stage_public_policy,
-                    desired,
-                    release["policy_epoch"],
-                    blocked_deletes=release["blocked_deletes"],
-                    recovery_operation_id=release.get("policy_recovery_operation_id"),
-                )
         target_password = backend.project_postgres_password
         if release.get("needs_password_rotation"):
             secret = json.loads(
@@ -564,22 +501,6 @@ class CellPublicationService:
             backend.project_postgres_password = secret["password"]
         method = backend.switch_code if switch else backend.ensure_published
         await machine_effect(method, manifest, release["image_id"], release["epoch"])
-        public_contract = None
-        if protected:
-            public_contract, blockers = await machine_effect(
-                catalog_contract,
-                backend,
-                trusted_contract=previous_contract,
-            )
-            assessment = assess_contract(desired, public_contract)
-            if blockers or assessment.blockers:
-                raise CellIdentityConflict("restored code is incompatible with current public data")
-            if assessment.blocked_deletes != release["blocked_deletes"]:
-                raise CellIdentityConflict("public delete guard changed after preparation")
-            await machine_effect(install_policy, backend)
-            saved = self._read(request.project_id)
-            saved["data_seeded"] = True
-            self._write(request.project_id, saved)
         if release.get("needs_password_rotation"):
             source_password = backend.project_postgres_password
             backend.project_postgres_password = target_password
@@ -599,15 +520,7 @@ class CellPublicationService:
             status = await machine_effect(backend.service_status, service, release["epoch"])
             if not status["ready"]:
                 raise CellResourceError("public product service readiness failed")
-        if protected:
-            after, blockers = await machine_effect(
-                catalog_contract, backend, trusted_contract=desired
-            )
-            if blockers or _physical_schema(after) != _physical_schema(public_contract):
-                raise CellResourceError("publication startup changed database schema")
-        elif (
-            check_schema and await machine_effect(backend.schema_digest) != release["schema_digest"]
-        ):
+        if check_schema and await machine_effect(backend.schema_digest) != release["schema_digest"]:
             raise CellResourceError("publication startup changed database schema")
         env = {**request.runtime_env, "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"]}
         await machine_effect(
@@ -640,7 +553,8 @@ class CellPublicationService:
             state = manager.state_store.load(production_id)
             if old:
                 old_backend = self._backend(manager, state, old)
-                await self._check_public_contract(old_backend, old, release)
+                actual = await machine_effect(old_backend.schema_digest)
+                assert_compatible_update({**old, "schema_digest": actual}, release)
             saved["activation_pending"] = release["release_id"]
             self._write(request.project_id, saved)
             try:
@@ -701,19 +615,6 @@ class CellPublicationService:
                 self._write(request.project_id, failed)
                 raise
 
-    @staticmethod
-    def _recovery_release(old: dict[str, Any], failed: dict[str, Any]) -> dict[str, Any]:
-        if not failed.get("data_contract"):
-            return old
-        return {
-            **old,
-            "data_contract": old.get("data_contract") or old["rollback_data_contract"],
-            "policy_epoch": failed["policy_epoch"],
-            "blocked_deletes": old.get("blocked_deletes", []),
-            "policy_recovery_operation_id": "publication-rollback:" + failed["release_id"],
-            "needs_password_rotation": False,
-        }
-
     async def _rollback_code(
         self,
         manager: Any,
@@ -730,12 +631,6 @@ class CellPublicationService:
             self.root / str(request.project_id) / "requests" / f"{old['release_id']}.json"
         )
         old_request = CellDeployRequest.model_validate_json(old_request_path.read_text())
-        saved = self._read(request.project_id)
-        failed = saved.get("prepared_release") or {}
-        if failed.get("data_contract"):
-            old = self._recovery_release(old, failed)
-            saved["active_release"] = old
-            self._write(request.project_id, saved)
         backend = await self._start(
             manager, state, old, old_request, switch=True, check_schema=not recovery_required
         )
@@ -988,10 +883,6 @@ class CellPublicationService:
             production_id = UUID(saved["production_workspace_id"])
             async with manager.operation_lock.hold(production_id):
                 state = manager.state_store.load(production_id)
-                if saved.get("activation_pending"):
-                    release = self._recovery_release(release, saved.get("prepared_release") or {})
-                    saved["active_release"] = release
-                    self._write(project_id, saved)
                 backend = await self._start(
                     manager, state, release, request, switch=bool(saved.get("activation_pending"))
                 )

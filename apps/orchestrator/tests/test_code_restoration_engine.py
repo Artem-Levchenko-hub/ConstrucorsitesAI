@@ -417,9 +417,6 @@ def untouched_engine(tmp_path, monkeypatch, *, target_exists=False, physical_epo
     )
     machine = SimpleNamespace(state=lambda: {"epoch": physical_epoch, "manifest": {}})
     engine.manager.machine_runtime.parts = lambda _: (machine, engine.backend)
-    monkeypatch.setattr(
-        "omnia_orchestrator.services.code_restoration_engine.load_policy", lambda _: None
-    )
 
     async def read(*_):
         return {"src/page.tsx": "current"}
@@ -517,4 +514,176 @@ async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, mo
     observed = restarted._read(body.workspace_id, body.operation_id)
     assert observed["state"] == "failed"
     assert observed["observed"]["safe_to_release"] is True
+    assert engine.calls == ["recover"]
+
+
+def plain_prepare_request():
+    import base64
+
+    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+
+    return CodeRestorationPrepare(
+        **request().model_dump(
+            exclude={"candidate_id", "report_revision", "expected_fencing_epoch", "fencing_epoch"}
+        ),
+        fencing_epoch=3,
+        files=[{"path": "src/page.tsx", "content_base64": base64.b64encode(b"old").decode()}],
+    )
+
+
+async def test_prepare_copies_current_data_into_candidate_without_database_policy(
+    tmp_path, monkeypatch
+):
+    from omnia_orchestrator.core.project_machine import MachineManifest
+    from omnia_orchestrator.services import code_restoration_engine as module
+    from omnia_orchestrator.services import project_machine
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from tests.test_project_machine_manifest import payload
+
+    for removed in ("load_policy", "stage_policy", "install_policy", "recover_policy"):
+        assert not hasattr(module, removed)
+    manifest = MachineManifest.model_validate(payload())
+    # An ordinary table without any owner column must not block restoration.
+    contract = DataContract.model_validate({"version": 1, "tables": [{
+        "name": "price_list",
+        "columns": [{"name": "id", "type": "uuid"}, {"name": "title", "type": "text"}],
+    }]})
+    events, statements = [], []
+    engine = object.__new__(CodeRestorationEngine)
+    engine.root = tmp_path
+    engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
+    source = SimpleNamespace(
+        workspace_volume="live-code", is_running=lambda: True, name="source",
+        _metadata=lambda: {"epoch": 3}, _container=lambda: None, _project_postgres=lambda: None,
+    )
+    machine = SimpleNamespace(state=lambda: {"epoch": 3, "manifest": manifest.model_dump()})
+    candidate = SimpleNamespace(
+        name="candidate", workspace_volume="candidate-code", base_image="image",
+        stop=lambda: events.append("stop"),
+        remove=lambda: pytest.fail("candidate must not restart for a database policy"),
+        ensure=lambda *args: pytest.fail("candidate must not restart for a database policy"),
+    )
+    state = SimpleNamespace(workspace_id=UUID(int=2))
+
+    async def read_sources(_volume):
+        return {}
+
+    manager = SimpleNamespace(
+        operation_lock=Lock(),
+        machine_runtime=SimpleNamespace(parts=lambda _: (machine, source)),
+        docker=SimpleNamespace(read_workspace_source_files=read_sources),
+    )
+    engine._manager = lambda _: manager
+    engine._state = lambda *args, **kwargs: state
+    monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
+    monkeypatch.setattr(module, "verify_source_inventory", lambda *_: None)
+    monkeypatch.setattr(project_machine, "machine_remaining_seconds", lambda value: value or 1)
+
+    async def workspace_files(*_):
+        return {"src/page.tsx": "current"}
+
+    monkeypatch.setattr("omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+                        workspace_files)
+
+    def catalog(backend):
+        events.append("catalog:" + backend.name)
+        return contract, []
+
+    def sql(backend, text, **_kwargs):
+        statements.append((backend.name, text))
+        return b""
+
+    monkeypatch.setattr(module, "catalog_contract", catalog)
+    monkeypatch.setattr(module, "candidate_contract", lambda *_: contract)
+    monkeypatch.setattr(module, "admin_sql", sql)
+    monkeypatch.setattr(module, "database_state", lambda _: "present")
+    engine._dump = lambda backend: events.append("dump:" + backend.name) or b"COPY price_list;"
+
+    async def make_candidate(*_):
+        return candidate
+
+    async def start(backend, _manifest, epoch):
+        events.append(f"start:{backend.name}:{epoch}")
+
+    async def cleanup(*_):
+        events.append("cleanup")
+
+    engine._candidate = make_candidate
+    engine._seed_source = lambda *_: events.append("seed")
+    engine._command = lambda backend, argv, *_: events.append("command:" + argv[0])
+    engine._disable_egress = lambda backend: events.append("egress-off")
+    engine._start = start
+    engine._verify_source = lambda *_: events.append("verify")
+    engine._capture_code = lambda *_args, **_kwargs: "digest"
+    engine._cleanup_candidate = cleanup
+    result = await engine.prepare(plain_prepare_request())
+    assert result["state"] == "ready", result["report"]
+    assert statements == [("candidate", "COPY price_list;")]
+    assert "omnia_runtime" not in json.dumps(result)
+    assert "policy" not in json.dumps(result)
+    assert events.index("dump:source") < events.index("egress-off") < events.index(
+        "catalog:candidate"
+    )
+    assert "start:candidate:1" in events
+    assert result["report"]["blockers"] == []
+    assert "live-code" not in json.dumps(statements)
+
+
+async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_path):
+    from omnia_orchestrator.core.project_machine import MachineManifest
+    from tests.test_project_machine_manifest import payload
+
+    manifest = MachineManifest.model_validate(payload()).model_dump(mode="json")
+    events = []
+    metadata_path = tmp_path / "machine" / "metadata.json"
+    machine_path = tmp_path / "machine" / "machine.json"
+    write_controller_json(metadata_path, {"epoch": 3})
+    write_controller_json(machine_path, {"epoch": 3, "manifest": manifest})
+
+    def metadata():
+        return json.loads(metadata_path.read_text())
+
+    backend = SimpleNamespace(
+        metadata_path=metadata_path, _metadata=metadata, workspace_volume="old-code",
+        ensure=lambda _manifest, epoch: events.append(("ensure", backend.workspace_volume, epoch)),
+        remove=lambda: events.append("remove"),
+        import_volume=lambda *_: pytest.fail("the live database is never overwritten"),
+    )
+    machine = SimpleNamespace(
+        path=machine_path, state=lambda: json.loads(machine_path.read_text()),
+    )
+    adapter = SimpleNamespace(
+        parts=lambda _: (machine, backend),
+        _start_boundary=lambda *args: events.append("boundary"),
+    )
+    manager = SimpleNamespace(machine_runtime=adapter)
+    engine = object.__new__(CodeRestorationEngine)
+
+    async def start(_backend, _manifest, epoch):
+        events.append(("start", epoch))
+
+    async def fence(*args):
+        events.append("fence")
+
+    engine._start = start
+    engine._complete_fence = fence
+    prepared = {"manifest": manifest, "base_image": "image"}
+    await engine._activate_code(manager, object(), backend, prepared, "new-code", 4)
+    assert events == [("ensure", "new-code", 4), ("start", 4), "boundary", "fence"]
+    assert metadata()["active_code_volume"] == "new-code"
+    events.clear()
+    old = {"metadata": {"epoch": 3}, "machine": {"epoch": 3, "manifest": manifest},
+           "workspace_volume": "old-code", "contract": {"version": 1, "tables": []},
+           # Intents recorded by the removed protected mode are ignored.
+           "policy": {"epoch": 2, "contract": {"version": 1, "tables": []}}}
+    await engine._recover_old(manager, object(), backend, old, 4)
+    assert events == ["remove", ("ensure", "old-code", 4), ("start", 4), "boundary", "fence"]
+    assert metadata()["active_code_volume"] == "old-code"
+
+
+async def test_prepared_runtime_identity_from_protected_era_still_recovers(tmp_path, monkeypatch):
+    engine, prepared = untouched_engine(tmp_path, monkeypatch)
+    prepared["source_runtime"] = {**prepared["source_runtime"], "policy_epoch": 2}
+    result = await engine.observe(request(), prepared)
+    assert result["applied"] is False and result["safe_to_release"] is True
     assert engine.calls == ["recover"]

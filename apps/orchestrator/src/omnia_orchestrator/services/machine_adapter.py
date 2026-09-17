@@ -15,7 +15,6 @@ from uuid import UUID, uuid4, uuid5
 
 from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
-    CellProtectedEnvironmentRecoveryRequired,
     CellResourceError,
     LifecycleMutation,
 )
@@ -240,16 +239,6 @@ class MachineAdapter:
                     return await self._execute(state, manifest, request)
         except TimeoutError:
             machine, _backend = self.parts(state)
-            from omnia_orchestrator.core.cell_resources import CellIndeterminateOperation
-            from omnia_orchestrator.services.protected_machine_lifecycle import (
-                MIGRATION_COMMAND,
-                pending_migration,
-            )
-
-            if request.cmd == MIGRATION_COMMAND and pending_migration(_backend) is not None:
-                raise CellIndeterminateOperation(
-                    "database migration pending; replay the same declaration"
-                ) from None
             digest = self._request_digest(manifest, request)
             mutation = LifecycleMutation(request.operation_id, request.fencing_epoch, digest)
             with machine_budget(None):
@@ -318,7 +307,6 @@ class MachineAdapter:
         role = request.task_role
         if role == "build" and not any(task.role == "test" for task in manifest.tasks):
             raise ValueError("portable build requires a declared test task")
-        await self.validate_protected_environment(state, manifest)
         if role:
             roles = ("bootstrap", "build", "test") if role == "build" else (role,)
             commands = [
@@ -332,16 +320,6 @@ class MachineAdapter:
         else:
             commands = [("shell", ["sh", "-lc", request.cmd], ".", request.timeout_seconds)]
         machine, _backend = self.parts(state)
-        from omnia_orchestrator.services.protected_machine_lifecycle import (
-            MIGRATION_COMMAND,
-            execute_generation_migration,
-            pending_migration,
-        )
-
-        migration = not role and request.cmd == MIGRATION_COMMAND
-        if (not migration and isinstance(_backend, DockerMachineBackend)
-                and pending_migration(_backend) is not None):
-            raise CellResourceError("database migration pending; replay the admitted command")
         digest = self._request_digest(manifest, request)
         mutation = LifecycleMutation(request.operation_id, request.fencing_epoch, digest)
         await machine.ensure(manifest, mutation)
@@ -376,10 +354,6 @@ class MachineAdapter:
                 output=stored.output,
                 timed_out=stored.timed_out,
             )
-
-        if migration:
-            proof = await execute_generation_migration(self, state, manifest, request)
-            return await finish(exit_code=0, output=json.dumps(proof, ensure_ascii=False))
 
         output: list[str] = []
         heartbeat_seconds = int(
@@ -455,7 +429,6 @@ class MachineAdapter:
 
     async def _activate_runtime(self, state: Any, manifest: MachineManifest, request: Any) -> None:
         """Start services from the exact successful full-build workspace."""
-        await self.validate_protected_environment(state, manifest)
         await self.checkpoint(state)
         machine, backend = self.parts(state)
         mutation = LifecycleMutation(uuid4(), request.fencing_epoch, manifest.digest())
@@ -521,13 +494,6 @@ class MachineAdapter:
 
     async def validate_restore_payload(self, state: Any, payload: bytes | None) -> None:
         if payload is None:
-            from omnia_orchestrator.services.restoration_database import load_policy
-
-            _machine, backend = self.parts(state)
-            if isinstance(backend, DockerMachineBackend) and load_policy(backend) is not None:
-                raise CellProtectedEnvironmentRecoveryRequired(
-                    "protected runtime cannot restore a checkpoint without machine evidence"
-                )
             return
         value = json.loads(payload)
         if set(value) != {"manifest", "reference"}:
@@ -795,18 +761,11 @@ class MachineAdapter:
                 "public_origin": (runtime_env or {}).get("OMNIA_PUBLIC_APP_ORIGIN", ""),
             } if public_mode else {}),
         }
-        from omnia_orchestrator.services.restoration_database import load_policy
-
-        data_policy = load_policy(backend)
-        if data_policy is not None:
-            config["data_policy"] = {
-                name: data_policy[name] for name in ("project_id", "epoch", "token_secret")
-            }
         runtime_stamp = self.root / (
             "public-boundary-runtime" if public_mode else "owner-boundary-runtime"
         ) / f"{state.workspace_id}.json"
         wire_config: dict[str, Any] = config
-        if business_config is not None or public_mode or data_policy is not None:
+        if business_config is not None or public_mode:
             wire_config = {"config": config, "server": boundary_source()}
         # Reconcile trusted code updates as well as configuration changes. Reusing
         # a healthy old gateway must not strand already-published apps on old auth.
@@ -845,7 +804,7 @@ class MachineAdapter:
               "p='/run/omnia-boundary/server.py'; "
               "exec('while not os.path.isfile(p): time.sleep(0.1)'); "
               "runpy.run_path(p,run_name='__main__')"]
-             if business_config is not None or public_mode or data_policy is not None
+             if business_config is not None or public_mode
              else ["python3", "/opt/omnia/machine_boundary.py"]),
             name=gateway_name,
             labels=backend.labels("max-gateway"),
@@ -871,7 +830,7 @@ class MachineAdapter:
             "p='/run/omnia-boundary/.next'; open(p,'wb').write(data); "
             "os.replace(p,'/run/omnia-boundary/config.json')"
         )
-        if business_config is not None or public_mode or data_policy is not None:
+        if business_config is not None or public_mode:
             # Existing pinned guard images stay unchanged. Seed only trusted
             # controller code into gateway tmpfs; no project executable input.
             script = (
@@ -1087,72 +1046,12 @@ class MachineAdapter:
         })
         return True
 
-    async def validate_protected_environment(
-        self, state: Any, proposed_manifest: MachineManifest,
-    ) -> None:
-        """Check current material state before any ensure can create replacement volumes."""
-        from docker.errors import NotFound  # type: ignore[import-untyped]
-
-        from omnia_orchestrator.services.protected_machine_lifecycle import (
-            validate_retained_runtime,
-        )
-        from omnia_orchestrator.services.restoration_database import load_policy
-        from omnia_orchestrator.services.restoration_protection import (
-            require_backend_protection_ready,
-        )
-
-        machine, backend = self.parts(state)
-        require_backend_protection_ready(backend)
-        if not isinstance(backend, DockerMachineBackend) or load_policy(backend) is None:
-            return
-        saved = machine.state()
-        if not saved.get("manifest"):
-            raise CellProtectedEnvironmentRecoveryRequired(
-                "protected retained manifest is missing; explicit recovery required"
-            )
-        current = MachineManifest.model_validate(saved["manifest"])
-        try:
-            await machine_effect(validate_retained_runtime, backend, current)
-        except NotFound as exc:
-            raise CellProtectedEnvironmentRecoveryRequired(
-                "protected retained material is missing; explicit recovery required"
-            ) from exc
-        if backend.volume_mapping(current) != backend.volume_mapping(proposed_manifest):
-            raise CellResourceError("protected material mount changes require explicit admission")
-
-    async def reconcile_pending_migration(self, state: Any) -> None:
-        from omnia_orchestrator.services.protected_machine_lifecycle import (
-            reconcile_generation_migration,
-        )
-        from omnia_orchestrator.services.restoration_protection import (
-            reconcile_generation_protection,
-        )
-
-        if self.exists(state.workspace_id):
-            await reconcile_generation_protection(self, state)
-            await reconcile_generation_migration(self, state)
-
     async def resume_preview(self, state: Any, *, epoch: int | None = None) -> None:
-        from omnia_orchestrator.services.protected_machine_lifecycle import (
-            pending_migration,
-            validate_retained_runtime,
-        )
-        from omnia_orchestrator.services.restoration_database import load_policy
-        from omnia_orchestrator.services.restoration_protection import (
-            require_backend_protection_ready,
-        )
-
         machine, backend = self.parts(state)
-        require_backend_protection_ready(backend)
         saved = machine.state()
         manifest = MachineManifest.model_validate(saved["manifest"])
         metadata = backend._metadata()
-        protected = load_policy(backend) is not None
-        if protected:
-            if pending_migration(backend) is not None:
-                raise CellResourceError("database migration pending; replay the admitted command")
-            await machine_effect(validate_retained_runtime, backend, manifest)
-        elif backend._container() is None and metadata.get("environment_ref"):
+        if backend._container() is None and metadata.get("environment_ref"):
             reference = MachineEnvironmentRef.model_validate(metadata["environment_ref"])
             retained = await machine_effect(
                 backend.consume_retained_preview, reference, epoch=saved["epoch"]

@@ -17,10 +17,11 @@ async def test_row_inventory_includes_unpublished_rows_and_later_writes(database
     assert query is not None
     assert await admin.fetchval(query) is True
     await admin.execute(
-        "DELETE FROM public.invoices; DELETE FROM public.tasks; DELETE FROM public.contacts"
+        "DELETE FROM public.invoices; DELETE FROM public.tasks; DELETE FROM public.contacts; "
+        "DELETE FROM public.price_list"
     )
     assert await admin.fetchval(query) is False
-    # No publication metadata or ownership filter can hide a subsequent business write.
+    # No publication metadata can hide a subsequent business write.
     await admin.execute(
         "INSERT INTO contacts(id,owner_id,name) VALUES(gen_random_uuid(),'new_actor','retained')"
     )
@@ -31,7 +32,8 @@ async def test_row_inventory_includes_unpublished_rows_and_later_writes(database
 async def test_reserved_looking_application_table_is_not_ignored(database):  # noqa: F811
     admin = database.admin
     await admin.execute(
-        "DELETE FROM public.invoices; DELETE FROM public.tasks; DELETE FROM public.contacts"
+        "DELETE FROM public.invoices; DELETE FROM public.tasks; DELETE FROM public.contacts; "
+        "DELETE FROM public.price_list"
     )
     await admin.execute(
         "CREATE TABLE public.omnia_orders (id integer); INSERT INTO public.omnia_orders VALUES(1)"

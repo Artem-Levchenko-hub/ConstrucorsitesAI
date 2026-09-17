@@ -8,21 +8,15 @@ from copy import deepcopy
 from typing import Any
 
 from omnia_orchestrator.schemas.code_restoration import RestorationDatabaseState
-from omnia_orchestrator.services.restoration_data_contract import (
-    DataContract,
-    _json_guard,
-    json_guard_function_name,
-)
+from omnia_orchestrator.services.restoration_data_contract import DataContract
 from omnia_orchestrator.services.restoration_database import admin_sql
 
-# Observe the isolated imported database, not the filtered ownership contract.
-# Only the controller signing table is excluded, never an application-name prefix.
+# Observe the isolated imported database, never an application-name prefix.
 DATABASE_INVENTORY_SQL = """
 SELECT json_build_object(
  'unsupported', EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
    WHERE n.nspname NOT IN ('pg_catalog','information_schema')
     AND n.nspname !~ '^pg_(toast|temp)_?'
-    AND NOT (n.nspname='omnia_guard' AND c.relname='identity')
     AND (c.relkind IN ('v','m','p','f') OR
       (c.relkind='r' AND (n.nspname<>'public' OR
        EXISTS(SELECT FROM pg_inherits i WHERE i.inhrelid=c.oid OR i.inhparent=c.oid)))))
@@ -132,7 +126,7 @@ SELECT json_build_object('event_triggers', EXISTS(
 
 
 def infer_ownership(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Only conventional, explicit actor columns or a directly owned parent."""
+    """Annotate conventional owner columns; tables without one stay ordinary tables."""
     for table in tables:
         names = {column["name"] for column in table["columns"]}
         owner = next(
@@ -157,54 +151,20 @@ def infer_ownership(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
         refs = [ref for ref in table.get("foreign_keys", []) if ref["table"] in parents]
         if len(refs) == 1:
             table["owner_reference"] = {key: refs[0][key] for key in ("column", "table", "target")}
-        else:
-            # Such a table may be a public catalogue. It is never automatically
-            # given write rights without an explicit actor contract.
-            raise ValueError("unknown actor ownership:" + table["name"])
     return tables
 
 
-def catalog_contract(
-    backend: Any,
-    *,
-    trusted_contract: DataContract | None = None,
-) -> tuple[DataContract, list[str]]:
-    contract, blockers = contract_from_catalog(
-        json.loads(admin_sql(backend, CATALOG_SQL)), trusted_contract
-    )
-    from omnia_orchestrator.services.restoration_data_contract import qi, ql
-
-    for table in contract.tables:
-        for column in table.columns:
-            if column.type not in {"json", "jsonb"} or column.json_keys is None:
-                continue
-            keys = "ARRAY[" + ",".join(ql(key) for key in column.json_keys) + "]::text[]"
-            expression = qi(column.name) + "::jsonb"
-            query = (
-                f"SELECT EXISTS(SELECT FROM public.{qi(table.name)} WHERE "
-                f"jsonb_typeof({expression}) <> 'object' OR EXISTS(SELECT FROM "
-                f"jsonb_each(CASE WHEN jsonb_typeof({expression})='object' THEN {expression} "
-                f"ELSE '{{}}'::jsonb END) p WHERE p.key=ANY({keys}) "
-                "AND jsonb_typeof(p.value) IN ('object','array')))"
-            )
-            if admin_sql(backend, query).strip() != b"f":
-                blockers.append(f"nested_json_requires_adaptation:{table.name}.{column.name}")
-    return contract, blockers
+def catalog_contract(backend: Any) -> tuple[DataContract, list[str]]:
+    return contract_from_catalog(json.loads(admin_sql(backend, CATALOG_SQL)))
 
 
-def contract_from_catalog(
-    payload: dict[str, Any],
-    trusted_contract: DataContract | None = None,
-) -> tuple[DataContract, list[str]]:
+def contract_from_catalog(payload: dict[str, Any]) -> tuple[DataContract, list[str]]:
     tables = deepcopy(payload["tables"])
     blockers = ["enabled_event_triggers"] if payload["event_triggers"] else []
     if payload.get("unsupported_relations"):
         blockers.append("unsupported_relations")
-    trusted = {table.name: table for table in trusted_contract.tables} if trusted_contract else {}
     for table in tables:
-        approved = trusted.get(table["name"])
-        triggers = table.pop("triggers", [])
-        if any(not _trusted_json_trigger(table["name"], trigger, approved) for trigger in triggers):
+        if table.pop("triggers", []):
             blockers.append("custom_triggers:" + table["name"])
         for flag in ("custom_indexes", "custom_constraints", "custom_column_behavior"):
             if table.pop(flag, False):
@@ -213,50 +173,7 @@ def contract_from_catalog(
             blockers.append("composite_foreign_keys:" + table["name"])
         for column in table["columns"]:
             column["type"] = normalize_type(column["type"])
-            declared = (
-                next((item for item in approved.columns if item.name == column["name"]), None)
-                if approved
-                else None
-            )
-            if declared and normalize_type(declared.type) == column["type"]:
-                column["meaning"], column["json_keys"] = declared.meaning, declared.json_keys
-    try:
-        owned = infer_ownership(tables)
-    except ValueError as error:
-        return DataContract(version=1), [*blockers, str(error)]
-    from omnia_orchestrator.services.restoration_data_contract import foreign_key_cycle_nodes
-
-    contract = DataContract(version=1, tables=owned)
-    blockers.extend("foreign_key_cycle:" + name for name in foreign_key_cycle_nodes(contract))
-    return contract, blockers
-
-
-def _trusted_json_trigger(table: str, trigger: dict[str, Any], trusted: Any) -> bool:
-    if trusted is None:
-        return False
-    for column in trusted.columns:
-        if column.type not in {"json", "jsonb"} or column.json_keys is None:
-            continue
-        name = json_guard_function_name(table, column.name)
-        expected = {
-            "name": name,
-            "function": name,
-            "schema": "omnia_guard",
-            "owner": "postgres",
-            "source": _json_guard(table, column)[0].split("$json$")[1],
-            "security_definer": True,
-            "language": "plpgsql",
-            "config": ["search_path=pg_catalog, omnia_guard"],
-            "return_type": "trigger",
-            "enabled": "O",
-            "type": 23,
-            "arguments": 0,
-            "predicate": False,
-            "columns": "",
-        }
-        if trigger == expected:
-            return True
-    return False
+    return DataContract(version=1, tables=infer_ownership(tables)), blockers
 
 
 # Runs only inside the candidate with its own data and no public egress.

@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from uuid import uuid4
 
@@ -5,8 +6,7 @@ import pytest
 
 from omnia_orchestrator.core.cell_resources import CellResourceError
 from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
-from omnia_orchestrator.services.restoration_data_contract import DataContract
-from omnia_orchestrator.services.restoration_database import read_controller_output, stage_policy
+from omnia_orchestrator.services.restoration_database import read_controller_output
 
 
 def backend(tmp_path):
@@ -35,41 +35,38 @@ def backend(tmp_path):
     )
 
 
-def test_protected_runtime_gets_nonowner_password_not_former_admin(tmp_path):
+def _stale_policy(value):
+    root = value.root / str(value.workspace_id)
+    root.mkdir(parents=True, exist_ok=True)
+    # Written by the removed protected-database mode; it must never be read again.
+    (root / "data-policy.json").write_text(json.dumps({
+        "workspace_id": str(value.workspace_id), "project_id": str(value.project_id),
+        "owner_id": str(value.owner_id), "epoch": 2, "password": "stale-runtime-password",
+        "token_secret": "stale-token", "contract": {"version": 1, "tables": []},
+        "blocked_deletes": [],
+    }))
+    (root / "postgres-hba.conf").write_text("local all all reject\n")
+
+
+def test_runtime_always_connects_as_project_postgres_user_despite_stale_policy(tmp_path):
     value = backend(tmp_path)
-    policy = stage_policy(value, DataContract(version=1), 2, blocked_deletes=[])
+    _stale_policy(value)
     env = value.project_database_env()
-    assert env["PGUSER"] == "omnia_runtime"
-    assert env["PGPASSWORD"] == policy["password"]
-    assert "old-agent-password" not in str(env)
-    assert value.project_database_env() == env
+    assert env["PGUSER"] == "postgres"
+    assert env["PGPASSWORD"] == "old-agent-password"
+    assert env["DATABASE_URL"].startswith("postgresql://postgres:old-agent-password@")
+    assert "omnia_runtime" not in json.dumps(env)
+    assert "stale-runtime-password" not in json.dumps(env)
+    assert replace(value, owner_id=uuid4()).project_database_env() == env
 
 
-def test_hba_and_config_live_outside_project_and_are_readonly(tmp_path):
+def test_project_postgres_uses_its_own_configuration_despite_stale_policy(tmp_path):
     value = backend(tmp_path)
-    stage_policy(value, DataContract(version=1), 2, blocked_deletes=[])
+    _stale_policy(value)
     options = value._project_postgres_options("guard", 2)
-    assert "unix_socket_directories=/tmp" in options["command"]
-    assert "hba_file=/etc/omnia-pg-hba.conf" in options["command"]
-    binds = {mount["bind"]: mount["mode"] for mount in options["volumes"].values()}
-    assert binds["/etc/omnia-pg-hba.conf"] == "ro"
-    assert binds["/etc/omnia-postgresql.conf"] == "ro"
-    text = (tmp_path / str(value.workspace_id) / "postgres-hba.conf").read_text()
-    assert "host all all 0.0.0.0/0 reject" in text
-    assert "local all postgres trust" in text
-    assert "host all postgres" not in text
-
-
-def test_policy_retry_keeps_credentials_and_rejects_foreign_identity(tmp_path):
-    import pytest
-
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-
-    value = backend(tmp_path)
-    policy = stage_policy(value, DataContract(version=1), 2, blocked_deletes=[])
-    assert stage_policy(value, DataContract(version=1), 2, blocked_deletes=[]) == policy
-    with pytest.raises(CellIdentityConflict):
-        replace(value, owner_id=uuid4()).project_database_env()
+    assert "unix_socket_directories=" in options["command"]
+    assert not any("hba_file" in item or "config_file" in item for item in options["command"])
+    assert [mount["bind"] for mount in options["volumes"].values()] == ["/var/lib/postgresql/data"]
 
 
 def _output(chunks, *, limit=16):

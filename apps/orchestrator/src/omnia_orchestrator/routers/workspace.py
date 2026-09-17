@@ -348,9 +348,6 @@ async def bootstrap_workspace_agent(
             volume_name,
         )
         workspace_revision = _workspace_revision(files)
-        from omnia_orchestrator.services.restoration_protection import require_protection_ready
-
-        require_protection_ready(manager.machine_runtime, state)
         capabilities = (
             manager.machine_runtime.capabilities() if manager.machine_runtime else {}
         )
@@ -465,7 +462,6 @@ async def exec_workspace_agent_command(
                     status_code=503,
                 )
             try:
-                await manager.machine_runtime.validate_protected_environment(state, manifest)
                 machine, backend = manager.machine_runtime.parts(state)
                 backend.configure_cache_identity(
                     dependency_digest=_selected_files_digest(
@@ -1114,10 +1110,6 @@ async def _prepare_portable_write(
     """Caller holds lease/source lock. Retire credentialed HMR BEFORE guest writes."""
     from omnia_orchestrator.services.machine_identity import machine_identity_root
     from omnia_orchestrator.services.project_machine import write_controller_json
-    from omnia_orchestrator.services.restoration_protection import require_protection_ready
-
-    require_protection_ready(manager.machine_runtime, state)
-
     manifest = _machine_manifest(files, manager=manager, workspace_id=state.workspace_id)
     if manifest is None:
         return None

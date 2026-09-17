@@ -44,11 +44,7 @@ from omnia_orchestrator.services.restoration_data_contract import DataContract, 
 from omnia_orchestrator.services.restoration_database import (
     admin_args,
     admin_sql,
-    install_policy,
-    load_policy,
     read_controller_output,
-    recover_policy,
-    stage_policy,
 )
 
 
@@ -77,11 +73,6 @@ def verify_source_inventory(actual: dict[str, bytes], expected: list[dict[str, A
             "Текущие файлы отличаются от сохранённой версии. Сохраните правки; "
             "пользовательские файлы перенесите в отдельное постоянное хранилище."
         )
-
-
-def trusted_policy_contract(backend: Any) -> DataContract | None:
-    policy = load_policy(backend)
-    return DataContract.model_validate(policy["contract"]) if policy is not None else None
 
 
 def source_text(request: CodeRestorationPrepare) -> dict[str, str]:
@@ -145,7 +136,7 @@ def preparation_report(
     *,
     blockers: list[str] | None = None,
     retained: list[str] | None = None,
-    blocked_deletes: list[str] | None = None,
+    cascading_deletes: list[str] | None = None,
     observed_database_state: RestorationDatabaseState = "unknown",
 ) -> dict[str, Any]:
     blocked = blockers or []
@@ -155,17 +146,19 @@ def preparation_report(
         "database_state": observed_database_state,
         "changes": [
             "Код выбранной версии собирается с её сохранёнными зависимостями.",
-            "Доступ к данным выполняется через текущую проверку пользователя и ограниченные права.",
+            "Приложение работает с текущей базой проекта без переноса старых данных.",
             *([] if blocked else ["Исторический код подготовлен без запуска AI-агента."]),
         ],
         "retained_data": [
             "Текущая база и действующая публикация не заменяются.",
             *["Поле сохраняется в базе: " + name for name in retained or []],
         ],
-        "unavailable_features": [
-            "Удаление требует адаптации: " + name for name in blocked_deletes or []
-        ],
+        "unavailable_features": [],
         "warnings": [
+            *[
+                "Удаление в старой версии может затронуть новые связанные данные: " + name
+                for name in cascading_deletes or []
+            ],
             "Сборка подготовлена заново; это не побайтовое восстановление исторического окружения.",
             "Платежи, сообщения и уже выполненные действия не отменяются.",
             "Состояние БД проверено на копии при подготовке; новые записи не отменяются."
@@ -273,13 +266,8 @@ class CodeRestorationEngine:
                         "candidate_id": None,
                         "report": preparation_report(blockers=[str(error)]),
                     }
-                source_policy_contract = trusted_policy_contract(source)
                 source_runtime = self._runtime_identity(source, machine)
-                current_contract, blockers = await machine_effect(
-                    catalog_contract,
-                    source,
-                    trusted_contract=source_policy_contract,
-                )
+                current_contract, blockers = await machine_effect(catalog_contract, source)
                 current_manifest = MachineManifest.model_validate(machine.state()["manifest"])
                 if current_manifest.data_stores or any(
                     service.mounts for service in current_manifest.services
@@ -304,18 +292,6 @@ class CodeRestorationEngine:
                     ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
                     360,
                 )
-                await machine_effect(
-                    self._command,
-                    candidate,
-                    [
-                        "node",
-                        "-e",
-                        "const pg=require('pg'); "
-                        "if(typeof pg.Client.prototype.getTransactionStatus!=="
-                        "'function') process.exit(1);",
-                    ],
-                    15,
-                )
                 # Dependency installation has no customer data. Once data enter the
                 # candidate, its public-egress proxy stays stopped until destruction.
                 await machine_effect(self._disable_egress, candidate)
@@ -337,23 +313,9 @@ class CodeRestorationEngine:
                     tables=[table for table in old_contract.tables if table.name not in managed],
                 )
                 assessment = assess_contract(old_contract, current_contract)
-                # pg_dump includes policy references, but deliberately exports no
-                # roles. Create only the known inert role; credentials are issued
-                # for this candidate later, never copied from the live database.
-                await machine_effect(
-                    admin_sql,
-                    candidate,
-                    "DO $$ BEGIN IF NOT EXISTS "
-                    "(SELECT FROM pg_roles WHERE rolname='omnia_runtime') "
-                    "THEN CREATE ROLE omnia_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
-                    "NOREPLICATION NOBYPASSRLS NOINHERIT; END IF; END $$;",
-                )
+                # The copy lives only in this candidate's own isolated database.
                 await machine_effect(admin_sql, candidate, dump.decode(), max_bytes=4 * 1024 * 1024)
-                copied, copied_blockers = await machine_effect(
-                    catalog_contract,
-                    candidate,
-                    trusted_contract=source_policy_contract,
-                )
+                copied, copied_blockers = await machine_effect(catalog_contract, candidate)
                 if copied_blockers or copied != current_contract:
                     raise PreparationNeedsChanges(
                         "Структура копии данных не совпала с проверенной базой."
@@ -364,17 +326,6 @@ class CodeRestorationEngine:
                     raise PreparationNeedsChanges(
                         "Несовместимая структура данных: " + ", ".join(assessment.blockers)
                     )
-                await machine_effect(candidate.remove)
-                await machine_effect(
-                    stage_policy,
-                    candidate,
-                    old_contract,
-                    2,
-                    blocked_deletes=assessment.blocked_deletes,
-                )
-                await machine_effect(candidate.ensure, manifest, 2)
-                await machine_effect(install_policy, candidate)
-                await machine_effect(self._disable_egress, candidate)
                 tasks = [task for task in manifest.tasks if task.role == "full_build"]
                 if not tasks:
                     tasks = [task for task in manifest.tasks if task.role == "build"]
@@ -386,7 +337,7 @@ class CodeRestorationEngine:
                         min(task.timeout_seconds, 420),
                         task.cwd,
                     )
-                await self._start(candidate, manifest, 2)
+                await self._start(candidate, manifest, 1)
                 await machine_effect(self._verify_source, candidate, request)
                 verify_source_inventory(
                     await manager.docker.read_workspace_source_files(candidate.workspace_volume),
@@ -408,7 +359,7 @@ class CodeRestorationEngine:
                     "candidate_id": str(candidate_id),
                     "report": preparation_report(
                         retained=assessment.retained_columns,
-                        blocked_deletes=assessment.blocked_deletes,
+                        cascading_deletes=assessment.blocked_deletes,
                         observed_database_state=observed_database_state,
                     ),
                     "request_digest": request.digest(),
@@ -418,8 +369,6 @@ class CodeRestorationEngine:
                         item.model_dump(mode="json") for item in request.current_files
                     ],
                     "live_contract": current_contract.model_dump(mode="json"),
-                    "contract": old_contract.model_dump(mode="json"),
-                    "blocked_deletes": assessment.blocked_deletes,
                     "manifest": manifest.model_dump(mode="json"),
                     "code_digest": digest,
                     "base_image": candidate.base_image,
@@ -486,7 +435,6 @@ class CodeRestorationEngine:
                 "pg_dump",
                 "--no-owner",
                 "--no-privileges",
-                "--exclude-table=omnia_guard.identity",
                 *args,
             ],
             environment=env,
@@ -703,7 +651,6 @@ for path,digest,mode in json.load(sys.stdin):
                 "metadata": backend._metadata(),
                 "machine": machine.state(),
                 "workspace_volume": backend.workspace_volume,
-                "policy": load_policy(backend),
                 "contract": prepared["live_contract"],
             }
             intent = {
@@ -727,11 +674,7 @@ for path,digest,mode in json.load(sys.stdin):
                     await manager.docker.read_workspace_source_files(backend.workspace_volume),
                     prepared["current_files"],
                 )
-                live, blockers = await machine_effect(
-                    catalog_contract,
-                    backend,
-                    trusted_contract=trusted_policy_contract(backend),
-                )
+                live, blockers = await machine_effect(catalog_contract, backend)
                 if blockers or live.model_dump(mode="json") != prepared["live_contract"]:
                     raise CellIdentityConflict("restoration data contract changed after checking")
                 archive = directory / "code.tar"
@@ -768,9 +711,7 @@ for path,digest,mode in json.load(sys.stdin):
                 error_path.chmod(0o600)
                 intent["state"] = "reverting"
                 write_controller_json(directory / "activation.json", intent)
-                await self._recover_old(
-                    manager, state, backend, old, request.fencing_epoch, str(request.operation_id)
-                )
+                await self._recover_old(manager, state, backend, old, request.fencing_epoch)
                 intent["state"] = "reverted"
                 write_controller_json(directory / "activation.json", intent)
                 self._discard_code(directory)
@@ -791,13 +732,6 @@ for path,digest,mode in json.load(sys.stdin):
     ) -> None:
         adapter = manager.machine_runtime
         manifest = MachineManifest.model_validate(prepared["manifest"])
-        await machine_effect(
-            stage_policy,
-            backend,
-            DataContract.model_validate(prepared["contract"]),
-            epoch,
-            blocked_deletes=prepared["blocked_deletes"],
-        )
         metadata = backend._metadata()
         metadata.update(
             active_code_volume=volume,
@@ -822,8 +756,8 @@ for path,digest,mode in json.load(sys.stdin):
             cancelled_epoch=0,
         )
         write_controller_json(machine.path, saved)
+        # The live database volume is reused as-is; only the code volume changes.
         await machine_effect(backend.ensure, manifest, epoch)
-        await machine_effect(install_policy, backend)
         await self._start(backend, manifest, epoch)
         await machine_effect(adapter._start_boundary, state, manifest, backend, epoch)
         await self._complete_fence(manager, state, epoch, volume)
@@ -864,7 +798,6 @@ for path,digest,mode in json.load(sys.stdin):
         backend: Any,
         old: dict[str, Any],
         epoch: int,
-        operation_id: str,
     ) -> None:
         await machine_effect(backend.remove)
         previous = dict(old["metadata"])
@@ -878,18 +811,6 @@ for path,digest,mode in json.load(sys.stdin):
             environment_ref=None,
         )
         write_controller_json(backend.metadata_path, previous)
-        original_policy = old.get("policy")
-        if load_policy(backend) is not None:
-            contract = original_policy["contract"] if original_policy else old["contract"]
-            blocked = original_policy["blocked_deletes"] if original_policy else []
-            await machine_effect(
-                recover_policy,
-                backend,
-                DataContract.model_validate(contract),
-                epoch,
-                blocked_deletes=blocked,
-                operation_id=operation_id,
-            )
         backend.workspace_volume = old["workspace_volume"]
         manifest = MachineManifest.model_validate(old["machine"]["manifest"])
         machine, _ = manager.machine_runtime.parts(state)
@@ -897,8 +818,6 @@ for path,digest,mode in json.load(sys.stdin):
         restored_machine.update(epoch=epoch, ready_epoch=epoch, operations={}, cancelled_epoch=0)
         write_controller_json(machine.path, restored_machine)
         await machine_effect(backend.ensure, manifest, epoch)
-        if load_policy(backend) is not None:
-            await machine_effect(install_policy, backend)
         await self._start(backend, manifest, epoch)
         await machine_effect(
             manager.machine_runtime._start_boundary, state, manifest, backend, epoch
@@ -972,9 +891,7 @@ for path,digest,mode in json.load(sys.stdin):
             return self._observed(intent, applied=False)
         intent["state"] = "reverting"
         write_controller_json(path, intent)
-        await self._recover_old(
-            manager, state, backend, old, request.fencing_epoch, str(request.operation_id)
-        )
+        await self._recover_old(manager, state, backend, old, request.fencing_epoch)
         intent["state"] = "reverted"
         write_controller_json(path, intent)
         self._discard_code(path.parent)
@@ -1000,15 +917,21 @@ for path,digest,mode in json.load(sys.stdin):
         state = self._state(manager, request, epoch=request.expected_fencing_epoch)
         machine, backend = manager.machine_runtime.parts(state)
         volume = backend.stem + "-code-" + request.operation_id.hex
-        metadata, saved, policy = backend._metadata(), machine.state(), load_policy(backend)
+        metadata, saved = backend._metadata(), machine.state()
+        # Preparations recorded while databases were protected also carry a
+        # policy epoch; that obsolete field is not part of the runtime identity.
+        recorded = {
+            key: value
+            for key, value in (prepared.get("source_runtime") or {}).items()
+            if key != "policy_epoch"
+        }
         if (
             backend._lookup(backend.client.volumes, volume, "project-volume") is not None
-            or self._runtime_identity(backend, machine) != prepared.get("source_runtime")
+            or self._runtime_identity(backend, machine) != recorded
             or type(metadata.get("epoch")) is not int
             or metadata["epoch"] > request.expected_fencing_epoch
             or type(saved.get("epoch")) is not int
             or saved["epoch"] > request.expected_fencing_epoch
-            or (policy is not None and policy["epoch"] > request.expected_fencing_epoch)
         ):
             raise CellIdentityConflict("missing activation intent has ambiguous effects")
         current = await _read_agent_workspace_files(manager, backend.workspace_volume)
@@ -1029,7 +952,6 @@ for path,digest,mode in json.load(sys.stdin):
                 "old": {
                     "metadata": metadata,
                     "machine": saved,
-                    "policy": policy,
                     "workspace_volume": backend.workspace_volume,
                     "contract": prepared["live_contract"],
                 },
@@ -1038,12 +960,10 @@ for path,digest,mode in json.load(sys.stdin):
 
     @staticmethod
     def _runtime_identity(backend: Any, machine: Any) -> dict[str, Any]:
-        policy = load_policy(backend)
         return {
             "workspace_volume": backend.workspace_volume,
             "metadata_epoch": backend._metadata().get("epoch"),
             "machine_epoch": machine.state().get("epoch"),
-            "policy_epoch": policy["epoch"] if policy else None,
             "containers": [
                 {"id": item.id, "epoch": item.labels.get("omnia.fencing_epoch")}
                 if item is not None

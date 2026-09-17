@@ -157,10 +157,9 @@ def _authentication_files(backend: Any) -> None:
 
 
 def admin_args(backend: Any) -> tuple[list[str], dict[str, str]]:
-    protected = load_policy(backend) is not None
     return (
-        ["-h", "/tmp" if protected else "127.0.0.1", "-U", "postgres", "-d", "postgres"],
-        {} if protected else {"PGPASSWORD": backend.project_postgres_password},
+        ["-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"],
+        {"PGPASSWORD": backend.project_postgres_password},
     )
 
 
