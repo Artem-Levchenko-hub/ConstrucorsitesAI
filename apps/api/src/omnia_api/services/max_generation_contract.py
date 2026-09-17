@@ -148,7 +148,6 @@ def _is_managed_max_backend_path(path: str) -> bool:
 
     return (
         path in _MANAGED_DB_PATHS
-        or path.startswith("src/lib/secure-data/")
         or path.startswith("src/app/api/max/")
         or path.startswith("src/app/api/omnia/")
     )

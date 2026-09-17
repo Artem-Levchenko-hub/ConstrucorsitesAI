@@ -348,39 +348,11 @@ async def bootstrap_workspace_agent(
             volume_name,
         )
         workspace_revision = _workspace_revision(files)
-        from omnia_orchestrator.services.restoration_protection import (
-            protect_current_database,
-            require_protection_ready,
-        )
+        from omnia_orchestrator.services.restoration_protection import require_protection_ready
 
-        if request.protect_existing_data:
-            if manager.machine_runtime is None:
-                raise OrchestratorError(
-                    code="container_failure", message="adaptive database protection unavailable",
-                    status_code=409,
-                )
-            try:
-                await protect_current_database(manager.machine_runtime, state, request, files)
-            except (CellResourceError, ValueError) as exc:
-                raise _machine_resource_failure(exc) from exc
-        else:
-            require_protection_ready(manager.machine_runtime, state)
-        if manager.machine_runtime is not None and ".omnia/cell.json" in files:
-            from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
-            from omnia_orchestrator.services.fresh_database_protection import prepare_new_database
-
-            _, backend = manager.machine_runtime.parts(state)
-            if isinstance(backend, DockerMachineBackend):
-                try:
-                    await machine_effect(
-                        prepare_new_database, backend, fencing_epoch,
-                        manifest=MachineManifest.model_validate_json(files[".omnia/cell.json"]),
-                        generation_run_id=generation_run_id,
-                    )
-                except (CellResourceError, CellIdentityConflict, ValueError) as exc:
-                    raise _machine_resource_failure(exc) from exc
+        require_protection_ready(manager.machine_runtime, state)
         capabilities = (
-            manager.machine_runtime.capabilities(state) if manager.machine_runtime else {}
+            manager.machine_runtime.capabilities() if manager.machine_runtime else {}
         )
     return WorkspaceAgentBootstrapResponse(
         files=files,

@@ -51,18 +51,6 @@ async def test_protected_cold_resume_keeps_current_data_and_never_restores_archi
     assert all(path.read_bytes() == value for path, value in current_files)
 
 
-def test_capability_is_per_workspace_without_changing_legacy_defaults(monkeypatch):
-    runtime = MachineAdapter(SimpleNamespace(), SimpleNamespace())
-    runtime.parts = lambda state: (None, SimpleNamespace(protected=state.protected))
-    monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_database.load_policy",
-        lambda backend: {"epoch": 7} if backend.protected else None,
-    )
-    assert runtime.capabilities()["database_admin"] == "full"
-    assert runtime.capabilities(SimpleNamespace(protected=False))["database_admin"] == "full"
-    assert runtime.capabilities(SimpleNamespace(protected=True))["database_admin"] == "protected"
-
-
 def test_active_code_volume_accepts_combined_cell_and_machine_identity(tmp_path):
     from omnia_orchestrator.services.protected_machine_lifecycle import validate_retained_runtime
     from tests.test_docker_machine_backend import retained_preview_fixture

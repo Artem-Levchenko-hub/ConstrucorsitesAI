@@ -29,9 +29,11 @@ from omnia_api.services import max_project_kit as max_project_kit_svc
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     MAX_MODEL_LOCKED_FILES,
+    MAX_RETIRED_MANAGED_FILES,
     MAX_SECURITY_LOCKED_FILES,
     _template_candidates,
     render_max_managed_files,
+    render_max_managed_kit_update,
     render_max_starter_files,
 )
 
@@ -62,11 +64,12 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
-def test_managed_kit_contains_config_and_required_legal_routes() -> None:
+def test_kit_v19_retires_encrypted_crud_files_instead_of_offering_them() -> None:
     project_id = uuid4()
-    files = render_max_managed_files(_config(), project_id)
-
-    assert set(files) == {
+    assert MAX_MANAGED_KIT_VERSION == 19
+    managed = render_max_managed_files(_config(), project_id)
+    starter = render_max_starter_files(_config(), project_id, portable=True)
+    assert MAX_RETIRED_MANAGED_FILES == {
         "src/app/api/omnia/data/[...path]/route.ts",
         "src/lib/secure-data/crypto.ts",
         "src/lib/secure-data/store.ts",
@@ -75,6 +78,26 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/lib/secure-data/runtime.ts",
         "src/lib/omnia/data-client.ts",
         "drizzle/0003_secure_records.sql",
+    }
+    for files in (managed, starter):
+        assert not MAX_RETIRED_MANAGED_FILES & set(files)
+        assert "secureCollection" not in "".join(files.values())
+    assert not MAX_RETIRED_MANAGED_FILES & MAX_SECURITY_LOCKED_FILES
+    update = render_max_managed_kit_update(_config(), project_id)
+    assert {path: update[path] for path in MAX_RETIRED_MANAGED_FILES} == dict.fromkeys(
+        MAX_RETIRED_MANAGED_FILES, ""
+    )
+    assert {path: value for path, value in update.items() if value} == managed
+    for path in MAX_RETIRED_MANAGED_FILES:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            max_project_kit_svc._template_file(path)
+
+
+def test_managed_kit_contains_config_and_required_legal_routes() -> None:
+    project_id = uuid4()
+    files = render_max_managed_files(_config(), project_id)
+
+    assert set(files) == {
         "postcss.config.mjs",
         "src/app/layout.tsx",
         "src/app/api/omnia/health/route.ts",
@@ -364,7 +387,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     project.current_snapshot_id = initial.id
     await db_session.commit()
 
-    calls: list[dict[str, str]] = []
+    calls: list[dict[str, object]] = []
 
     def fake_commit(project_id, files, message, parent_sha):
         calls.append(
@@ -373,6 +396,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
                 "message": message,
                 "parent_sha": parent_sha,
                 "config": files["src/lib/omnia/max-config.ts"],
+                "retired": sorted(path for path, value in files.items() if value == ""),
             }
         )
         return "2" * 40
@@ -421,6 +445,7 @@ async def test_config_save_is_versioned_and_idempotent(db_session, monkeypatch) 
     refreshed = await db_session.get(MaxProjectConfig, project.id)
 
     assert len(calls) == 2
+    assert calls[1]["retired"] == sorted(MAX_RETIRED_MANAGED_FILES)
     assert refreshed is not None
     assert refreshed.managed_kit_version == MAX_MANAGED_KIT_VERSION
     assert repeated_after_upgrade.synced_snapshot_id == upgraded.synced_snapshot_id

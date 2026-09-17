@@ -115,6 +115,42 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
     assert tree[".omnia/cell.json"] == '{"project":"existing"}'
 
 
+async def test_generation_retires_encrypted_crud_files_from_existing_projects():
+    from omnia_api.services.max_managed_generation import refresh_integration_sdk
+    from omnia_api.services.max_project_kit import MAX_RETIRED_MANAGED_FILES
+
+    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
+    tree = {
+        **canonical,
+        "src/lib/omnia/data-client.ts": "export function secureCollection() {}",
+        "src/lib/secure-data/store.ts": "store",
+        "drizzle/0003_secure_records.sql": "CREATE TABLE omnia_secure_records ();",
+        "src/lib/secure-data-notes.ts": "product file with a similar name",
+        "src/app/page.tsx": "existing product",
+    }
+    writes = []
+
+    async def stage(files, deletes):
+        writes.append((files, deletes))
+        tree.update(files)
+        for path in deletes:
+            tree.pop(path)
+
+    handle = SimpleNamespace(
+        snapshot_files=AsyncMock(side_effect=lambda: dict(tree)), stage_patch=stage,
+    )
+    await refresh_integration_sdk(handle)
+    await refresh_integration_sdk(handle)
+    assert writes == [({}, (
+        "drizzle/0003_secure_records.sql",
+        "src/lib/omnia/data-client.ts",
+        "src/lib/secure-data/store.ts",
+    ))]
+    assert not MAX_RETIRED_MANAGED_FILES & set(tree)
+    assert tree["src/lib/secure-data-notes.ts"] == "product file with a similar name"
+    assert tree["src/app/page.tsx"] == "existing product"
+
+
 async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     monkeypatch,
     db_session,

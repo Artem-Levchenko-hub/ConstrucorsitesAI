@@ -952,13 +952,7 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path)
     def network(name):
         raise ReachedCreate()
 
-    # The existing database volume survives a manifest-only container recreation.
-    runtime.client = SimpleNamespace(
-        networks=SimpleNamespace(get=network),
-        volumes=SimpleNamespace(get=lambda _: SimpleNamespace(
-            attrs={"Labels": runtime.labels("project-volume")},
-        )),
-    )
+    runtime.client = SimpleNamespace(networks=SimpleNamespace(get=network))
     with pytest.raises(ReachedCreate):
         runtime.ensure(after, 7)
     assert operations == [("capture", before.digest()), ("remove", {"expected_epoch": 7})]

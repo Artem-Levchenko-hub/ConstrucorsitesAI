@@ -21,8 +21,8 @@
   "freeform/tgbot/en": "55138c36d092cf7ab5c10bfc1685e4ccf8f3cad104a932dd9dca49cdc55009d2",
   "freeform/api/ru": "bd7c57b96cba4f14c4f7b7ba49d56fa953adb8dbd89fdc7fbeb24febfd35aa6a",
   "freeform/api/en": "428998734096aed2df76ae0a7cc3a35ee0ed4d6c2fa9005701c135c8791c4688",
-  "freeform/max_miniapp/ru": "32b264033fd3f2941cb253c865567e895cd0055a8e4c963ba312a1deaef82d25",
-  "freeform/max_miniapp/en": "1c83b2e851fd7dd6d65740bbfe2d28f4d65791709fba882b24acbf050210860e",
+  "freeform/max_miniapp/ru": "caaeccc37cb82b90637fb45f40604bb9a9a86dd37301c04c271e771c60d5c008",
+  "freeform/max_miniapp/en": "aa0ba2d114b3ed0a760825dc7b3b888f5713efde7831827764dbaaf195c704b9",
   "plain/blank/ru": "45d0af6c448fc80a63f358e80654f50b21b311895168480f46153c13a711088c",
   "plain/blank/en": "eed183b5b11df9315fa0b280d521bd0d8df7c1814626e878298540f95da533e4",
   "plain/landing/ru": "45d0af6c448fc80a63f358e80654f50b21b311895168480f46153c13a711088c",
@@ -33,8 +33,8 @@
   "plain/tgbot/en": "55138c36d092cf7ab5c10bfc1685e4ccf8f3cad104a932dd9dca49cdc55009d2",
   "plain/api/ru": "bd7c57b96cba4f14c4f7b7ba49d56fa953adb8dbd89fdc7fbeb24febfd35aa6a",
   "plain/api/en": "428998734096aed2df76ae0a7cc3a35ee0ed4d6c2fa9005701c135c8791c4688",
-  "plain/max_miniapp/ru": "32b264033fd3f2941cb253c865567e895cd0055a8e4c963ba312a1deaef82d25",
-  "plain/max_miniapp/en": "1c83b2e851fd7dd6d65740bbfe2d28f4d65791709fba882b24acbf050210860e",
+  "plain/max_miniapp/ru": "caaeccc37cb82b90637fb45f40604bb9a9a86dd37301c04c271e771c60d5c008",
+  "plain/max_miniapp/en": "aa0ba2d114b3ed0a760825dc7b3b888f5713efde7831827764dbaaf195c704b9",
   "edit/blank/ru": "349fbea1e2c8445fbbf4cdb2a4fd230deeb335f4bedce3fa0c203d65fdee0219",
   "edit/blank/en": "1da9fe7f99f7ceffcbcd5c43a7a0b5bff684dd60b180e16673e116eff061c99a",
   "edit/landing/ru": "349fbea1e2c8445fbbf4cdb2a4fd230deeb335f4bedce3fa0c203d65fdee0219",
@@ -45,6 +45,6 @@
   "edit/tgbot/en": "1da9fe7f99f7ceffcbcd5c43a7a0b5bff684dd60b180e16673e116eff061c99a",
   "edit/api/ru": "349fbea1e2c8445fbbf4cdb2a4fd230deeb335f4bedce3fa0c203d65fdee0219",
   "edit/api/en": "1da9fe7f99f7ceffcbcd5c43a7a0b5bff684dd60b180e16673e116eff061c99a",
-  "edit/max_miniapp/ru": "d9154f95adcc68c854ec612fc6f82a12d6571bfe26f99a5f70da93ceb350c934",
-  "edit/max_miniapp/en": "4c34cf1dd092c02d3412e7ee643bb81e6636bdd9a125673b4048330cf72f9d0f"
+  "edit/max_miniapp/ru": "490a46ddae3e545a3d350f2107744fad3f23ffa8d27e4c9982ad250c845e76b3",
+  "edit/max_miniapp/en": "ca9f790ae71a939f5999cf0b76688f0943218466c99348e1ee4df918fa2affc6"
 }

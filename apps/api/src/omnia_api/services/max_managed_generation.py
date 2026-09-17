@@ -1,6 +1,6 @@
 """Deliver managed integration SDK and session bootstrap through the generation lease."""
 
-from omnia_api.services.max_project_kit import _template_file
+from omnia_api.services.max_project_kit import MAX_RETIRED_MANAGED_FILES, _template_file
 from omnia_api.services.project_cell_executor import ProjectCellExecutorHandle
 
 INTEGRATION_SDK_PATH = "src/lib/omnia/integration-client.ts"
@@ -26,5 +26,7 @@ async def refresh_integration_sdk(
         for path, canonical in managed_browser_files(max_config_source).items()
         if current.get(path) != canonical
     }
-    if patch:
-        await handle.stage_patch(patch, ())
+    # Retired platform files (encrypted CRUD, kit v18) leave existing projects.
+    retired = tuple(sorted(path for path in MAX_RETIRED_MANAGED_FILES if path in current))
+    if patch or retired:
+        await handle.stage_patch(patch, retired)

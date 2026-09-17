@@ -511,12 +511,6 @@ class DockerMachineBackend:
             raise CellResourceError("quiesce is incomplete; restore a known complete checkpoint")
         # Validate resource contract before the first Docker mutation.
         self.container_options(manifest, "pending", epoch)
-        from omnia_orchestrator.services.fresh_database_protection import (
-            finish_new_database,
-            prepare_new_database,
-        )
-
-        prepare_new_database(self, epoch)
         existing = self._container()
         reuse_existing = False
         if existing is not None:
@@ -626,7 +620,6 @@ class DockerMachineBackend:
             if name != self.workspace_volume:
                 self._volume(name)
         self._ensure_project_postgres(guard.id, epoch)
-        finish_new_database(self, epoch)
         metadata = self._metadata()
         metadata.update(
             proxy_ip=proxy_ip,
@@ -714,11 +707,6 @@ class DockerMachineBackend:
         return options
 
     def _prepare_project_postgres_volume(self) -> None:
-        from omnia_orchestrator.services.fresh_database_protection import (
-            record_initial_volume_intent,
-        )
-
-        record_initial_volume_intent(self)
         self._volume(self.project_postgres_volume)
         self._ensure_project_postgres_permissions()
         self._initialize_project_postgres_volume()

@@ -15,8 +15,10 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 18
-_SECURE_DATA_FILES = frozenset({
+MAX_MANAGED_KIT_VERSION = 19
+# Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
+# platform-owned paths from projects that received them; never reuse 18.
+MAX_RETIRED_MANAGED_FILES = frozenset({
     "src/app/api/omnia/data/[...path]/route.ts",
     "src/lib/secure-data/crypto.ts",
     "src/lib/secure-data/store.ts",
@@ -260,14 +262,22 @@ export default function SupportPage() {
 }
 """,
     }
-    files.update({path: _template_file(path) for path in _SECURE_DATA_FILES})
     _validate_managed_component_graph(files)
     return files
 
 
+def render_max_managed_kit_update(
+    config: MaxProjectConfigPayload, project_id: UUID | str | None = None,
+) -> dict[str, str]:
+    """Managed files plus deletions (empty content) of retired managed paths."""
+    return {
+        **{path: "" for path in sorted(MAX_RETIRED_MANAGED_FILES)},
+        **render_max_managed_files(config, project_id),
+    }
+
+
 MAX_SECURITY_LOCKED_FILES = frozenset(
     {
-        *_SECURE_DATA_FILES,
         "src/components/MaxAppProvider.tsx",
         "src/components/OmniaCompliance.tsx",
         "src/app/layout.tsx",

@@ -42,6 +42,7 @@ from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     render_max_managed_files,
+    render_max_managed_kit_update,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
@@ -320,7 +321,7 @@ async def put_max_config(
     commit_sha = await asyncio.to_thread(
         repo_svc.commit_files,
         project.id,
-        files,
+        render_max_managed_kit_update(payload, project.id),
         "Update MAX business configuration",
         current.commit_sha,
     )

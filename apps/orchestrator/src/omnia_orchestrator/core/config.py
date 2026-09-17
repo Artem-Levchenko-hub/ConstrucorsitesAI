@@ -277,15 +277,6 @@ class Settings(BaseSettings):
     cell_public_core_image: str = Field(default="")
     # Opt-in precompiled owner core; it must support signed private preview bootstrap.
     cell_preview_core_image: str = Field(default="")
-    # Host-only Vault Transit credentials. Empty address leaves secure CRUD unavailable.
-    cell_data_vault_address: str = ""
-    cell_data_vault_token_file: str = "/etc/omnia/app-data/vault-token"
-    # Optional explicit PEM CA for a private Vault listener; empty uses HTTPX's default trust.
-    cell_data_vault_ca_file: str = ""
-    cell_data_vault_mount: str = "transit"
-    cell_data_vault_key: str = "omnia-app-data"
-    cell_data_wrapped_key_root: str = "/opt/omnia-runtime/app-data-wrapped-keys"
-    cell_data_runtime_key_root: str = "/dev/shm/omnia-app-data-keys"
     cell_public_helper_cpu_cores: float = Field(default=0.2, ge=0.2)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
     cell_host_memory_reserve_bytes: int = Field(default=4 * 1024**3, ge=0)

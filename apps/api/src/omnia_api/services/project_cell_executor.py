@@ -481,10 +481,10 @@ async def maybe_create_project_cell_executor(
             return None
         # Read the durable server-verified marker again on every worker attempt.
         # A browser flag or instruction in prompt prose never grants this path.
-        protect_existing_data = "restoration_adaptation" in (run.agent_state or {})
+        restoration_adaptation = "restoration_adaptation" in (run.agent_state or {})
         if not project_slug:
-            if protect_existing_data:
-                raise ProjectCellExecutorUnavailable("Адаптация требует защищённую среду проекта.")
+            if restoration_adaptation:
+                raise ProjectCellExecutorUnavailable("Адаптация требует среду Project Cell.")
             return None
         existing_cell_id = await session.scalar(
             select(ProjectCellWorkspace.id).where(ProjectCellWorkspace.project_id == project_id)
@@ -496,10 +496,8 @@ async def maybe_create_project_cell_executor(
             has_workspace=existing_cell_id is not None,
         )
         if not readiness.selected:
-            if protect_existing_data:
-                raise ProjectCellExecutorUnavailable(
-                    "Адаптация недоступна без защиты текущей базы в Project Cell."
-                )
+            if restoration_adaptation:
+                raise ProjectCellExecutorUnavailable("Адаптация доступна только в Project Cell.")
             if existing_cell_id is not None or project.project_cell_enabled is True:
                 raise ProjectCellExecutorUnavailable(
                     "Project already belongs to a Project Cell; legacy execution is disabled"
@@ -659,7 +657,6 @@ async def maybe_create_project_cell_executor(
             workspace_id,
             generation_run_id=generation_run_id,
             fencing_epoch=response.fencing_epoch,
-            **({"protect_existing_data": True} if protect_existing_data else {}),
         )
     except (OrchestratorUnavailable, OrchestratorBadRequest) as exc:
         raise ProjectCellExecutorUnavailable(exc.message) from exc
@@ -678,12 +675,9 @@ async def maybe_create_project_cell_executor(
     runtime_log_tail = ""
     preview_synced = False
     capabilities = dict(snapshot.capabilities)
-    if protect_existing_data and (
-        capabilities.get("database_admin") != "protected"
-        or not portable_selected(capabilities, workspace_files)
-    ):
+    if restoration_adaptation and not portable_selected(capabilities, workspace_files):
         raise ProjectCellExecutorUnavailable(
-            "Защита текущей базы не подтверждена. Агент адаптации не запущен."
+            "Переносимая среда проекта не подтверждена. Агент адаптации не запущен."
         )
     last_identity: ProofIdentity | None = None
 

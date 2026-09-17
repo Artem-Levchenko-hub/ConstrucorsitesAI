@@ -21,7 +21,6 @@ FROM ${BASE_IMAGE} AS runtime
 WORKDIR /app
 LABEL omnia.max-core.protocol="1"
 LABEL omnia.max-core.preview-protocol="1"
-LABEL omnia.max-core.secure-data-protocol="1"
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0

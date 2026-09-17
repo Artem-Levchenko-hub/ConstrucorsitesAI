@@ -91,7 +91,6 @@ class WorkspaceAgentBootstrapRequest(BaseModel):
 
     generation_run_id: UUID
     fencing_epoch: int = Field(gt=0)
-    protect_existing_data: bool = False
 
 
 class WorkspaceAgentWriteRequest(BaseModel):

@@ -251,6 +251,15 @@ def test_capabilities_advertise_dedicated_project_postgres():
     assert capabilities["database_admin"] == "full"
 
 
+def test_capabilities_never_advertise_protected_database_or_encrypted_crud():
+    settings = SimpleNamespace(cell_data_vault_address="https://vault.example.test")
+    runtime = module().MachineAdapter(SimpleNamespace(), settings)
+    runtime.parts = lambda _state: pytest.fail("capabilities must not inspect workspace policy")
+    capabilities = runtime.capabilities()
+    assert capabilities["database_admin"] == "full"
+    assert "secure_data_crud" not in capabilities
+
+
 async def test_missing_manifest_tests_is_not_a_successful_build(tmp_path):
     api = module()
     runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())

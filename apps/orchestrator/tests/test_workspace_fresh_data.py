@@ -9,20 +9,17 @@ from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.routers import workspace
 from omnia_orchestrator.schemas.workspace import WorkspaceAgentBootstrapRequest
-from omnia_orchestrator.services.restoration_database import load_policy
 from tests.test_project_machine_manifest import payload
 from tests.test_restoration_machine_policy import backend
 
 
-@pytest.mark.parametrize("portable,has_runtime,legacy_volume", [
-    (True, True, False), (False, True, False), (True, False, False), (True, True, True),
-])
-async def test_bootstrap_advertises_fresh_protection_under_lease_lock(
-    tmp_path, monkeypatch, portable, has_runtime, legacy_volume,
+@pytest.mark.parametrize("portable,has_runtime", [(True, True), (False, True), (True, False)])
+async def test_bootstrap_keeps_new_projects_on_their_ordinary_database(
+    tmp_path, monkeypatch, portable, has_runtime,
 ):
     runtime_backend = backend(tmp_path)
     runtime_backend.client = SimpleNamespace(volumes=object())
-    runtime_backend._lookup = lambda *_: object() if legacy_volume else None
+    runtime_backend._lookup = lambda *_: None
     runtime_backend._container = lambda: None
     runtime_backend._project_postgres = lambda: None
     locked = []
@@ -36,9 +33,9 @@ async def test_bootstrap_advertises_fresh_protection_under_lease_lock(
         finally:
             locked.pop()
 
-    def capabilities(_):
+    def capabilities():
         assert locked, "capabilities must describe the admitted state while lock is held"
-        return {"database_admin": "protected" if load_policy(runtime_backend) else "full"}
+        return {"database_admin": "full"}
 
     runtime = SimpleNamespace(
         parts=lambda _: (None, runtime_backend), exists=lambda _: False,
@@ -63,15 +60,20 @@ async def test_bootstrap_advertises_fresh_protection_under_lease_lock(
             runtime_backend.workspace_id,
             WorkspaceAgentBootstrapRequest(generation_run_id=uuid4(), fencing_epoch=8),
         )
-    assert load_policy(runtime_backend) is None
     response = await workspace.bootstrap_workspace_agent(
         runtime_backend.workspace_id,
         WorkspaceAgentBootstrapRequest(generation_run_id=run_id, fencing_epoch=7),
     )
-    expected = portable and has_runtime and not legacy_volume
-    assert (load_policy(runtime_backend) is not None) is expected
-    assert response.capabilities == (
-        {"database_admin": "protected" if expected else "full"} if has_runtime else {}
-    )
-    if expected:
-        assert runtime_backend.project_database_env()["PGUSER"] == "omnia_runtime"
+    assert response.capabilities == ({"database_admin": "full"} if has_runtime else {})
+    assert not (tmp_path / str(runtime_backend.workspace_id) / "data-policy.json").exists()
+    assert not (tmp_path / str(runtime_backend.workspace_id) / "initial-database.json").exists()
+    env = runtime_backend.project_database_env()
+    assert env["PGUSER"] == "postgres"
+    assert env["PGPASSWORD"] == "old-agent-password"
+
+
+def test_bootstrap_request_no_longer_accepts_protection_enrollment():
+    with pytest.raises(ValueError):
+        WorkspaceAgentBootstrapRequest(
+            generation_run_id=uuid4(), fencing_epoch=1, protect_existing_data=True,
+        )

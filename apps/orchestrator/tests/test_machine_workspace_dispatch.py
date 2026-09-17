@@ -63,7 +63,7 @@ class PortableRuntime:
     def _request_digest(manifest, request):
         return "d" * 64
 
-    def capabilities(self, state):
+    def capabilities(self):
         return {
             "portable_machine": True,
             "manifest_path": ".omnia/cell.json",

@@ -11,31 +11,26 @@ from omnia_api.services import agent_builder, agent_native, autoheal, prompt_bui
 POLICY_HEADER = "MAX DATA EVOLUTION POLICY v1"
 
 
-def test_protected_provider_explains_explicit_declarative_migration_without_admin_claim():
+@pytest.mark.parametrize("stale", [{}, {"database_admin": "protected", "secure_data_crud": True}])
+def test_project_database_guide_grants_ordinary_development_admin_access(stale):
     from omnia_api.services.portable_cell_contract import machine_stack_guide
 
-    guide = machine_stack_guide("legacy", {"portable_machine": True, "database_admin": "protected"},
-                               {".omnia/cell.json": "{}"})
-    assert "omnia-db apply .omnia/data-contract.json" in guide
-    assert "no DDL" in guide
-    assert "development admin access" not in guide
-    assert "superuser access" not in guide
-    assert "nullable scalar columns" in guide
+    guide = machine_stack_guide(
+        "legacy", {"portable_machine": True, **stale}, {".omnia/cell.json": "{}"},
+    )
+    assert "development admin access" in guide
+    assert "Manage your own schema, migrations" in guide
+    assert "omnia-db" not in guide
+    assert "data-contract.json" not in guide
+    assert "secureCollection" not in guide
+    assert "MAX DATA EVOLUTION POLICY" in guide
 
 
-def test_unknown_provider_database_access_is_not_advertised_as_admin():
-    from omnia_api.services.portable_cell_contract import machine_stack_guide
-
-    guide = machine_stack_guide("legacy", {"portable_machine": True}, {".omnia/cell.json": "{}"})
-    assert "development admin access" not in guide
-    assert "Do not assume administrative" in guide
-
-
-def test_shared_evolution_guidance_keeps_protected_controller_out_of_service_startup():
+def test_shared_evolution_guidance_has_no_protected_controller_command():
     from omnia_api.services.max_data_evolution import MAX_DATA_EVOLUTION_POLICY
 
-    assert "omnia-db apply .omnia/data-contract.json" in MAX_DATA_EVOLUTION_POLICY
-    assert "No arbitrary SQL" in MAX_DATA_EVOLUTION_POLICY
+    assert "omnia-db" not in MAX_DATA_EVOLUTION_POLICY
+    assert "protected database" not in MAX_DATA_EVOLUTION_POLICY
     assert "service startup" in MAX_DATA_EVOLUTION_POLICY
 
 
