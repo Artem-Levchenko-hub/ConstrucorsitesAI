@@ -131,11 +131,13 @@ def assess_contract(old: DataContract, current: DataContract) -> ContractAssessm
                 or (previous.nullable and not column.nullable)
             ):
                 result.blockers.append(f"column_contract_changed:{key}")
-            elif column.type in {"json", "jsonb"} and (
-                previous.json_keys is None
-                or column.json_keys is None
-                or not set(previous.json_keys).issubset(column.json_keys)
+            elif (
+                column.type in {"json", "jsonb"}
+                and previous.json_keys is not None
+                and (column.json_keys is None
+                     or not set(previous.json_keys).issubset(column.json_keys))
             ):
+                # Plain databases declare no JSON keys; only a known key loss blocks.
                 result.blockers.append(f"json_write_contract_missing:{key}")
             if (
                 column is not None
