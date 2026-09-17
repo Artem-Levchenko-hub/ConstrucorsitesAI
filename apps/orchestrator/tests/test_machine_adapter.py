@@ -628,3 +628,32 @@ async def test_apply_cleans_all_resources_when_nested_execute_reports_timeout():
     )
     assert result.exit_code == 124 and result.timed_out
     assert events == [("remove-machine-core-gateway", False)]
+
+
+async def test_preview_resume_never_restores_live_project_database_from_checkpoint(
+    tmp_path, monkeypatch,
+):
+    from unittest.mock import AsyncMock
+
+    from tests.test_docker_machine_backend import retained_preview_fixture
+
+    api = module()
+    backend, reference, *_ = retained_preview_fixture(tmp_path)
+    runtime = api.MachineAdapter(
+        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "states")), SimpleNamespace()
+    )
+    machine = SimpleNamespace(path=tmp_path / "machine.json", state=lambda: {
+        "manifest": reference.manifest.model_dump(mode="json"), "epoch": 7,
+    })
+    runtime.parts = lambda _: (machine, backend)
+    restored = {}
+    monkeypatch.setattr(backend, "consume_retained_preview", lambda *_, **__: False)
+    monkeypatch.setattr(backend, "ensure", lambda *_: None)
+    monkeypatch.setattr(backend, "start_service", lambda *_: None)
+    monkeypatch.setattr(backend, "service_status", lambda *_, **kw: {"ready": True})
+    monkeypatch.setattr(api.MachineEnvironmentStore, "restore",
+                        lambda _self, _ref, **kwargs: restored.update(kwargs))
+    runtime._start_boundary = lambda *_: None
+    runtime.checkpoint = AsyncMock(side_effect=AssertionError("resume must not recapture"))
+    await runtime.resume_preview(SimpleNamespace(workspace_id=backend.workspace_id))
+    assert backend.project_postgres_volume in restored["preserve_volumes"]

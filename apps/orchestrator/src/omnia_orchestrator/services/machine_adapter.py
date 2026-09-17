@@ -1061,8 +1061,17 @@ class MachineAdapter:
                     self.root / "artifacts", state.workspace_id, backend,
                     max_bytes=backend.disk_bytes,
                 )
+                # The checkpoint may predate the latest writes. A live project
+                # database is the business record; only an explicit checkpoint
+                # restoration may replace it.
+                live_database = backend._lookup(
+                    backend.client.volumes, backend.project_postgres_volume, "project-volume"
+                )
                 await machine_effect(
-                    store.restore, reference, manifest_digest=reference.manifest_digest
+                    store.restore, reference, manifest_digest=reference.manifest_digest,
+                    preserve_volumes=frozenset(
+                        {backend.project_postgres_volume} if live_database is not None else ()
+                    ),
                 )
         runtime_epoch = epoch or saved["epoch"]
         await machine_effect(backend.ensure, manifest, runtime_epoch)

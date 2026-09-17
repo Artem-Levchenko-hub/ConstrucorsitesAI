@@ -268,3 +268,21 @@ def test_reuse_hashing_deadline_never_starts_another_export(tmp_path, monkeypatc
     with pytest.raises(TimeoutError, match="budget"):
         store.capture(**options, previous=old)
     assert "export_image" not in backend.events
+
+
+def test_restore_keeps_preserved_live_volume_and_restores_the_rest(tmp_path):
+    # Resuming a preview must never roll a live project database back to an
+    # older checkpoint: writes made after the capture would be silently lost.
+    api = module()
+    backend = ArchiveBackend()
+    backend.volumes["app-postgres-data"] = b"database at capture time"
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    ref = store.capture(
+        manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+        volumes=("repo", "app-postgres-data"),
+    )
+    backend.volumes["app-postgres-data"] = b"database with client rows written later"
+    backend.volumes["repo"] = b"damaged rootfs volume"
+    store.restore(ref, manifest_digest="b" * 64, preserve_volumes=frozenset({"app-postgres-data"}))
+    assert backend.volumes["app-postgres-data"] == b"database with client rows written later"
+    assert backend.volumes["repo"] == b"source and node_modules symlink archive"

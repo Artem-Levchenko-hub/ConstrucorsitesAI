@@ -199,12 +199,20 @@ class MachineEnvironmentStore:
             if digest != item.sha256:
                 raise EnvironmentIntegrityError("environment artifact digest mismatch")
 
-    def restore(self, reference: MachineEnvironmentRef, *, manifest_digest: str) -> None:
+    def restore(
+        self,
+        reference: MachineEnvironmentRef,
+        *,
+        manifest_digest: str,
+        preserve_volumes: frozenset[str] = frozenset(),
+    ) -> None:
         self.validate(reference, manifest_digest=manifest_digest)
         self.backend.begin_restore(reference)
         self.backend.stop()
         self.backend.import_image(self.artifact_path(reference.artifact_ref), reference.image_id)
         for volume in reference.volumes:
+            if volume.name in preserve_volumes:
+                continue  # Live business data outranks an older checkpoint copy.
             self.backend.import_volume(volume.name, self.artifact_path(volume.artifact_ref))
         self.backend.validate_restore(reference)
         self.backend.finish_restore()
