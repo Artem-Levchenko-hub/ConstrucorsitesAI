@@ -57,10 +57,6 @@ class CellResourceError(RuntimeError):
     """Base resource-management failure."""
 
 
-class CellProtectedEnvironmentRecoveryRequired(CellResourceError):
-    """Protected material cannot be safely reconstructed by source repair."""
-
-
 _CAPACITY_REASONS = frozenset(
     {
         "insufficient_cpu",

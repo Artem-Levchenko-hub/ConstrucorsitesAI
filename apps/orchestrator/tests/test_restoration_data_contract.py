@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from omnia_orchestrator.services.restoration_data_contract import (
     DataContract,
     assess_contract,
-    database_policy_sql,
 )
 
 
@@ -29,23 +28,14 @@ def contract():
     }
 
 
-def test_additive_nullable_surname_is_retained_and_not_writable_by_old_release():
+def test_additive_nullable_surname_is_retained_for_old_release():
     old = DataContract.model_validate(contract())
     current = contract()
     current["tables"][0]["columns"].append({"name": "surname", "type": "text"})
     result = assess_contract(old, DataContract.model_validate(current))
     assert result.blockers == []
     assert result.retained_columns == ["customers.surname"]
-    sql = database_policy_sql(
-        old, epoch=7, project_id="project", token_secret="secret", password="pass"
-    )
-    assert "pg_constraint" in sql and "k.contype IN ('p','f')" in sql
-    assert "a.attname=ANY(ARRAY['id','name']::text[])" in sql
     assert result.blocked_deletes == ["customers"]
-    assert '"surname"' not in sql
-    assert "FORCE ROW LEVEL SECURITY" in sql
-    assert "NOBYPASSRLS" in sql
-    assert "token_secret" in sql
 
 
 @pytest.mark.parametrize("change", ["required", "rename", "type", "meaning", "enum", "check"])
@@ -120,31 +110,9 @@ def test_contract_cannot_claim_missing_owner_or_duplicate_fields():
             DataContract.model_validate(data)
 
 
-def test_sql_quotes_private_values_and_does_not_grant_owner_or_ddl_rights():
-    sql = database_policy_sql(
-        DataContract.model_validate(contract()),
-        epoch=7,
-        project_id="p'1",
-        token_secret="s'2",
-        password="p'3",
-    )
-    assert "'p''1'" in sql and "'s''2'" in sql and "'p''3'" in sql
-    assert "REVOKE ALL ON DATABASE" in sql
-    assert "REVOKE ALL ON ALL FUNCTIONS" in sql
-    assert "REVOKE ALL ON ALL TABLES" in sql
-    assert "ALTER DEFAULT PRIVILEGES" in sql
-    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" in sql
-    assert "hmac(" in sql
-    assert "expires_at" in sql
-
-
-def test_json_unknown_fields_are_preserved_by_controller_trigger():
+def test_declared_json_key_growth_is_compatible():
     data = contract()
     data["tables"][0]["columns"].append({"name": "profile", "type": "jsonb", "json_keys": ["name"]})
     old = DataContract.model_validate(data)
     data["tables"][0]["columns"][-1]["json_keys"].append("surname")
     assert not assess_contract(old, DataContract.model_validate(data)).blockers
-    sql = database_policy_sql(old, epoch=1, project_id="p", token_secret="s", password="p")
-    assert "BEFORE INSERT OR UPDATE" in sql
-    assert 'OLD."profile"' in sql and 'NEW."profile"' in sql
-    assert "jsonb_typeof" in sql

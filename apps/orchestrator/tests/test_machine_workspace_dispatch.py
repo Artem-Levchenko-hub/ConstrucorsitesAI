@@ -30,10 +30,6 @@ class PortableRuntime:
     async def _ensure(self, manifest, mutation):
         pass
 
-    async def validate_protected_environment(self, state, proposed_manifest):
-        assert state.resource_names.workspace_volume
-        assert proposed_manifest.version == 1
-
     async def _request_status(self, **kwargs):
         return SimpleNamespace(transport_response=None)
 

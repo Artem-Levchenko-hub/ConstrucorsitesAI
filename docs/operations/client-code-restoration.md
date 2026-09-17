@@ -38,14 +38,12 @@ An empty database never permits a reset or bypasses compatibility checks. Both
 empty and populated compatible applications use ordinary restoration without AI;
 incompatible applications require explicit adaptation.
 
-An adaptation run requests database protection during agent bootstrap, using the
-server-saved adaptation reference. The controller checks the current schema and
-retained volumes, stops existing writers, and journals the transition to restricted
-database access. It retains the current database and business volumes. The agent
-receives an executor only after the controller confirms protection; legacy runtimes
-and unsupported schemas fail before adaptive tools run. Interrupted transitions
-keep the original generation lease for reconciliation and never restore owner
-credentials as a shortcut. Publication remains separate.
+An adaptation run is an ordinary generation in the project's portable Project Cell,
+bound to the server-saved adaptation reference. Legacy runtimes fail before adaptive
+tools run. The app keeps full development access to its dedicated project database;
+the agent must adapt code with additive, data-preserving migrations. Protection of
+end-users' data (restricted roles, row policies, encrypted CRUD) is intentionally
+out of scope. Publication remains separate.
 
 ## Runtime boundary
 
@@ -57,26 +55,23 @@ credentials as a shortcut. Publication remains separate.
   are preserved in the activation bundle.
 - The candidate uses separate owned resources and a current-data copy. Its
   outbound proxy is stopped before importing business data. It receives no live
-  integration credentials. A bounded dump excludes the private signing identity.
-- The app connects as a non-owner PostgreSQL role. Controller-owned authentication,
-  grants, row policies and signed request identity enforce data access. No
-  administrative credential is supplied to historical application code.
+  integration credentials. The dump is restored only into the candidate's own
+  isolated database; the live database volume is never overwritten.
+- The app connects to the dedicated project database as the ordinary project
+  PostgreSQL user, exactly like a newly generated project.
 - Application switches replace the code volume, not database or business volumes.
   The controller records intent before effects and reports the observed running
   revision. An uncertain response is reconciled before API history moves.
 - Failed activation restores the prior code at the admitted epoch, retaining
   current rows. It never imports an old database checkpoint.
-- Cold resume validates retained storage and immutable runtime identity. Missing
-  data volumes are not silently recreated. Pending migrations keep their original
-  generation lease until recovery proves the outcome.
+- Cold resume uses the ordinary retained-preview/checkpoint path of the Cell.
 
-After restoration, agent instructions describe the protected database capability.
-The controller accepts the standalone command
-`omnia-db apply .omnia/data-contract.json`. It admits supported additive declarations
-under the current generation lease and source revision; arbitrary shell SQL does
-not obtain owner privileges. Initial support includes nullable scalar columns and
-directly owned UUID tables. Applied SQL and policy rotation have durable recovery
-stages. Cancellation reconciles admitted work before releasing the lease.
+After restoration, the next generation manages its own schema and migrations in
+the dedicated database, following the MAX data evolution policy.
+
+Releases or controller state written while protected databases existed may still
+contain `data_contract`, `policy_epoch` or a `data-policy.json` file. Current code
+ignores them; the project always connects as the ordinary project user.
 
 ## Supported boundary and remaining risks
 
@@ -85,12 +80,12 @@ semantics. A preparation report must stay actionable when a case is unsupported.
 
 | Case | Current behavior / remaining limit |
 | --- | --- |
-| Runtime | Next.js, a saved pnpm lockfile, one standard `next start` service and pg8.22 transport are verified. Other runtimes, custom launch chains and background services need adaptation. |
+| Runtime | Next.js, a saved pnpm lockfile and one standard `next start` service are verified. Other runtimes, custom launch chains and background services need adaptation. |
 | Dependencies | The saved lockfile is rebuilt. Missing registry packages, incompatible native libraries or unavailable images can prevent preparation. This is not a historical image restored bit for bit. |
-| Data shape | Simple scalar columns and known ownership relationships are checked. SERIAL defaults, custom types/triggers, partitioning, unknown ownership and cyclic relationships require additional support. |
+| Data shape | Simple scalar columns, keys and relationships are checked for any table, with or without an owner column. SERIAL defaults, custom types/triggers and partitioning require additional support. |
 | Hidden fields | Values remain in the database but old screens may stop filling them. Re-enabling the new screen does not invent missing values. |
-| Deletes and relationships | Deletes that could lose hidden or dependent data are blocked and reported. They need compatible business logic before becoming available again. |
-| JSON and meanings | Supported top-level JSON keys are preserved. Nested unknown structures, unit changes and changed field meanings cannot be inferred safely from SQL types alone. |
+| Deletes and relationships | Deletes that could cascade into hidden or newer dependent data are reported as warnings. The database does not block them; compatible business logic is the owner's responsibility. |
+| JSON and meanings | JSON columns need an explicit compatibility decision. Nested unknown structures, unit changes and changed field meanings cannot be inferred safely from SQL types alone. |
 | External actions | Payments, notifications, messages and other actions already performed are not undone by code restoration. |
 | Business files | Unknown persistent files mixed into source require classification. This flow never replaces an unclassified business-file volume. |
 | Capacity and time | Preparation needs an additional isolated runtime, bounded dump space and build time. Capacity failure leaves the current app intact. |
@@ -98,18 +93,17 @@ semantics. A preparation report must stay actionable when a case is unsupported.
 | Legacy history | Missing Git source, missing lockfiles and unsupported historical contracts need preparation/adaptation. A screenshot alone cannot reconstruct source. |
 | Adaptation | Text context is bounded to 128 files / 256 KiB, excluding secrets, lockfiles and generated assets. Adaptation is a new generation subject to ordinary verification; it is not a guaranteed automatic semantic conversion. |
 | Infrastructure failure | A missing/corrupt volume, hardware loss or exhausted disk still requires tested backups and operator recovery. Container isolation shares the host kernel. |
-| Security proof | Tested ownership, SQL grants and signed identity reduce known bypasses. They are not a universal security audit of arbitrary generated code. |
+| Security proof | Per-user data isolation inside a generated app is application code, not a platform guarantee. |
 
 ## Verification and operations
 
 Local unit tests cover durable admission, exact identities, retries, lost responses,
-crash reconciliation, schema constraints, protected lifecycle and UI refresh/mobile
-states. The CI orchestrator job has a disposable PostgreSQL 16 database named
-`restoration_policy_test`; tests refuse an arbitrary database name. The Node/pg
-bridge has a separate real database fixture.
+crash reconciliation, schema constraints and UI refresh/mobile states. The CI
+orchestrator job has a disposable PostgreSQL 16 database named
+`restoration_policy_test`; tests refuse an arbitrary database name.
 
 `apps/orchestrator/scripts/smoke_code_restoration.py` exercises a disposable real
-Next.js/Docker/PostgreSQL app: v2→v1→v2, two actors, writes after preparation,
+Next.js/Docker/PostgreSQL app: v2→v1→v2, two users, writes after preparation,
 hidden surname retention, lost-response observation, cold resume and the next
 generation's additive migration. `--publication` additionally verifies explicit
 public releases and independent public writes. It prepares the second candidate
