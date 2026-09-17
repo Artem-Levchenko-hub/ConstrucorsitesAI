@@ -10,6 +10,41 @@ Never print secret values. Inspect and delete Telegram configuration by key
 name only. Never run an Alembic downgrade: revision 0048 deletes observer-only
 state and its downgrade exists solely for migration-contract tests.
 
+## 0. Scope and production facts
+
+This file is the single instruction for verifying and releasing the platform.
+The shared rules (branch → checks → PR → GitHub checks → merge into `main` →
+approved release → revision and health confirmation) live in
+[`AGENTS.md`](../../AGENTS.md); this file does not repeat them.
+
+A runtime release is required only for changes to runtime code, configuration,
+generation prompts, templates, or workflows (`AGENTS.md`, section 7).
+Documentation-only changes are merged without a production release.
+
+Facts every release must respect:
+
+- The production Compose project is `apps/llm-gateway/deploy/full`
+  (containers `omnia-prod-*`). `infra/docker-compose.yml` is the development
+  stack: running it on the production host starts a second Postgres/Redis,
+  collides on host ports and leaves orphan containers. Never release through it.
+- The production checkout is `/opt/omnia`. Do not run `git pull` there
+  (`pull.rebase=true`, and the tree has historically carried local SecondBrain
+  runtime edits). Use `git fetch` and move to the exact approved revision as in
+  section 5. Section 3 requires a clean tree; if it is not clean, stop and
+  report instead of discarding changes.
+- A release is confirmed only when every recreated component reports the
+  approved `RELEASE_SHA` and passes its health/readiness check (section 7).
+  HTTP 200 with a different or missing revision is not a confirmation.
+- The owner approves the exact 40-character revisions before any production
+  mutation. A blocked push, check, SSH session, or health proof is reported as
+  blocked, never as released.
+
+Sections 1–10 below are the reference release: they include the general steps
+(exact revisions, local gate, live capture and backup, zero active generations,
+rollback preparation, exact health) and steps specific to removing the
+generation-reporting integrations (revision 0048, Telegram keys). Apply the
+release-specific steps only to that release.
+
 ## 1. Confirm exact revisions
 
 The owner must approve exact 40-character revisions:

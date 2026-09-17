@@ -2,6 +2,11 @@
 
 Конкретные команды для подготовки `170.168.72.200` (Serverum VPS, hostname `inquisitive-head`) к запуску orchestrator + dev-контейнеров пользователей.
 
+> **Как применять.** Это справочник по серверу, а не разрешение на изменения: команды выполняются только в
+> рамках явно порученной серверной операции (разделы 3 и 7 [`AGENTS.md`](../AGENTS.md)). Выпуск платформы
+> (api, worker, web, gateway, orchestrator) — только по [`infra/release/README.md`](../infra/release/README.md);
+> там же зафиксированы факты о production-compose (`apps/llm-gateway/deploy/full`, не `infra/`).
+
 **Перед началом** — прочитать `docs/07-v2-architecture.md` для legacy-контекста и
 `docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md`
 для актуальной границы Project Cell. Любая серверная операция выполняется только
@@ -255,7 +260,7 @@ sudo -u omnia-orchestrator -i bash <<'EOF'
 cd /opt/omnia-runtime
 git clone https://github.com/Artem-Levchenko-hub/ConstrucorsitesAI.git source
 cd source
-git checkout claude/v2-phase-a-fullstack    # пока V2 не в main
+git checkout claude/v2-phase-a-fullstack    # исторически, пока V2 не был в main; сейчас — утверждённый SHA из main
 cd apps/orchestrator
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ~/.local/bin/uv sync
@@ -375,14 +380,14 @@ cp -a ~/.acme.sh /opt/omnia-runtime/acme-home
 V1 контейнер `omnia-prod-api` (на :8200) должен знать, как достучаться до orchestrator (на host'е :8003). Через `host.docker.internal`:
 
 ```bash
-# Добавить env в docker-compose (на сервере: /opt/omnia/infra/docker-compose.yml)
+# Добавить env в production-compose (на сервере: /opt/omnia/apps/llm-gateway/deploy/full/docker-compose.yml;
+# исторически здесь был указан infra/docker-compose.yml — это dev-стек, не production)
 # Шаблон патча:
 #   environment:
 #     ORCHESTRATOR_URL: http://host.docker.internal:8003
 #     ORCHESTRATOR_INTERNAL_TOKEN: <тот же что в .env.orchestrator>
 #
-# Restart api:
-docker restart omnia-prod-api
+# Применение — как runtime-изменение по infra/release/README.md (не ручной restart вне выпуска).
 ```
 
 ⚠️ `host.docker.internal` работает в современных Docker (29.x) — должен резолвиться напрямую. Если нет, использовать IP моста docker (`docker network inspect bridge`).
