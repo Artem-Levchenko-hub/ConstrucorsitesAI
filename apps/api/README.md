@@ -2,7 +2,7 @@
 
 Зона ответственности **агента B**. Перед стартом прочитай:
 
-1. [`/CLAUDE.md`](../../CLAUDE.md)
+1. [`/AGENTS.md`](../../AGENTS.md) — общий регламент
 2. [`/agents/AGENT-B-BACKEND.md`](../../agents/AGENT-B-BACKEND.md)
 3. [`/docs/01-api-contract.md`](../../docs/01-api-contract.md)
 4. [`/docs/02-data-model.md`](../../docs/02-data-model.md)

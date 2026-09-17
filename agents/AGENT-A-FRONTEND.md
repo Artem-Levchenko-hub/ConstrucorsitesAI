@@ -1,6 +1,10 @@
 # Агент A — Frontend (apps/web/)
 
-Этот файл — твой единственный self-contained бриф. Прочитай его полностью, затем `docs/01-api-contract.md` (контракт) и `docs/03-design-system.md` (дизайн-токены). После — приступай к M0.
+> **Статус брифа.** Зона ответственности и особенности компонента. Общие правила — Git-процесс через PR,
+> проверки, безопасность данных, выпуск и критерии готовности — в [`AGENTS.md`](../AGENTS.md).
+> Стек и структура ниже — исходный замысел MVP (май 2026): перед опорой на них сверяй с кодом.
+
+При работе в зоне читай `docs/01-api-contract.md` (контракт) и `docs/03-design-system.md` (дизайн-токены).
 
 ## Кто ты в этой команде
 
@@ -10,13 +14,12 @@
 - **Агент B** (backend) — отдаёт REST API на `:8000` и WebSocket. Ты потребитель.
 - **Агент C** (LLM Gateway) — для тебя невидим, ходит через B.
 
-## Жёсткие границы
+## Зона ответственности
 
-- **ПИШЕШЬ ТОЛЬКО в `apps/web/`.** Не лезь в `apps/api/`, `apps/llm-gateway/`, `infra/`.
-- **ЧИТАЕШЬ:** `CLAUDE.md`, `docs/00..03`, `agents/AGENT-A-FRONTEND.md`. Не читай чужие брифы (их код тебе не нужен).
-- Контракт API менять самостоятельно нельзя. Если нужна правка — оставь запись в `~/.claude/coordination/omnia-mvp/inbox/` и продолжай работу с заглушкой.
+- Ответственность — `apps/web/`. Правка других зон — по правилам раздела 1 `AGENTS.md` (нужна задаче, указана в PR, согласована).
+- Контракт API (`docs/01-api-contract.md`, типы в `src/lib/api/types.ts`) меняется в том же PR, что реализация и тесты, с согласия ответственного за backend (агент B). Пока изменение не согласовано — работай с заглушкой.
 
-## Стек (фиксированный)
+## Стек
 
 - **Next.js 15** (App Router, `app/` directory, RSC где можно)
 - **React 19** (TypeScript strict)
@@ -95,81 +98,10 @@ apps/web/
         └── workspace.ts             (Zustand: selectedSnapshotId, sidebars)
 ```
 
-## Фазы
+## История: исходный план фаз
 
-### M0 — Скаффолд + дизайн-токены (день 1–2)
-
-**Задачи:**
-1. `pnpm create next-app@latest .` (App Router, TS, Tailwind, src/, import-alias `@/*`).
-2. `pnpm dlx shadcn@canary init` (style: new-york, base color: zinc, CSS variables: yes).
-3. Перенести **все** цветовые токены из `docs/03-design-system.md` в `globals.css` как CSS-переменные. Расширить `tailwind.config.ts`, чтобы они были доступны как `bg-surface-base`, `text-fg-primary`, `border-default` и т.д.
-4. Подключить шрифты Inter + JetBrains Mono через `next/font` (subsets latin + cyrillic).
-5. `app/layout.tsx`: `<html lang="ru" className="dark">`, body с `bg-surface-base text-fg-primary`, `font-sans antialiased`.
-6. Создать `lib/api/client.ts` — обёртку над `fetch` с baseURL из `NEXT_PUBLIC_API_URL`, авто-сериализацией JSON, обработкой `ApiError`.
-7. Создать `lib/api/types.ts` — скопировать TypeScript-типы из `docs/01-api-contract.md`. Это эталон.
-8. Установить компоненты shadcn: `button`, `input`, `label`, `card`, `dialog`, `dropdown-menu`, `tooltip`, `tabs`, `scroll-area`, `avatar`, `skeleton`, `badge`, `toast` (sonner).
-9. `Providers.tsx` (TanStack Query, `next-themes` если нужно, Toaster).
-
-**Definition of Done M0:** `pnpm dev` запускает dummy-страницу `/`, видно тёмный фон с правильным шрифтом, lighthouse desktop ≥ 95 (на пустой странице).
-
-### M1 — Лендинг + Auth (день 3–5)
-
-**Лендинг (`app/(marketing)/page.tsx`):**
-- **Hero:** бейдж «Beta · Скоро запуск», H1 `text-5xl font-semibold tracking-tight`, подзаголовок `text-fg-secondary`, CTA «Начать бесплатно». Справа — typewriter-промпт, который превращается в SVG-wireframe сайта. Через framer-motion (`AnimatePresence`).
-- **Features:** 3 колонки — «Чат → сайт», «Лента версий», «Деплой одной кнопкой». Иконки lucide в `--accent` обводке.
-- **Pricing:** 3 карточки. Pro выделен бордером `--accent`.
-- **FAQ:** shadcn `Accordion`.
-- **Footer:** 4 колонки.
-
-**Auth (`app/(auth)/`):**
-- Login: email + password, кнопка «Войти», ссылка на регистрацию. POST → `/api/auth/login`.
-- Register: те же поля + подтверждение пароля. POST → `/api/auth/register`.
-- next-auth настроен на Credentials провайдер, который под капотом дёргает наш backend `/api/auth/login`. JWT приходит в cookie от backend; next-auth валидирует через JWKS либо просто проверяет наличие cookie.
-- После успеха — `redirect('/projects')`.
-
-**Definition of Done M1:** работают login/register/logout, defended page `/projects` редиректит на `/login`, lighthouse landing ≥ 95.
-
-### M2 — Workspace UI (день 6–10)
-
-**Dashboard (`projects/page.tsx`):**
-- Список карточек проектов. Кнопка «Новый проект» → модалка с выбором template (`blank`/`landing`/`portfolio`/`blog`) и именем.
-- Создание → `POST /api/projects` → редирект на `/projects/:id`.
-
-**Workspace (`projects/[id]/page.tsx`):**
-- TopBar: лого, имя проекта (редактируемое), `ModelSelector` (DropdownMenu с моделями из `GET /api/models` + цена), `WalletBadge` с балансом.
-- 3 колонки (см. layout в `docs/03`).
-- **ChatPanel:** список сообщений (user / assistant), внизу `PromptInput` — textarea с auto-resize, Enter = send, Shift+Enter = новая строка.
-- **PreviewFrame:** `<iframe src="/p/:slug" />` (через прокси, чтобы JWT работало). Кнопка «Открыть в новой вкладке».
-- **Timeline:** список `SnapshotCard` сверху вниз (новые сверху). Каждая карточка — миниатюра (PNG из `preview_url`), первые 50 символов промпта, relative time, кнопка «Откатить» (только если не текущий).
-
-**Подключения:**
-- На `mount` — `GET /api/projects/:id`, `GET /api/projects/:id/snapshots`, `GET /api/projects/:id/messages`.
-- Открыть WebSocket через `useProjectWS(projectId)`.
-
-**Definition of Done M2:** можно открыть проект, увидеть текущий preview, увидеть список snapshot'ов, отправить промпт (он появится в чате как user-сообщение), увидеть spinner ожидания ответа.
-
-### M3 — LLM-стрим + rollback + polish (день 11–14)
-
-**Стрим:**
-- При отправке промпта: `POST /api/projects/:id/prompt` возвращает `{message_id}`. Сразу создаём в чате assistant-сообщение с `id = message_id` и пустым content.
-- Подписка на WS события `llm.chunk` (по message_id) — добавляет дельты в content. `llm.done` — проставляет токены и стоимость в meta. `llm.error` — заменяет content на `[ошибка: ...]` красным.
-- Когда приходит `snapshot.created` — добавляем карточку в timeline (preview_url пока null → skeleton). Когда `preview.ready` — обновляем миниатюру.
-- `wallet.updated` — обновляем `WalletBadge`.
-
-**Rollback:**
-- Клик «Откатить» на snapshot → confirm-dialog → `POST /api/projects/:id/rollback {snapshot_id}` → новый snapshot прилетит через WS, текущий preview обновится.
-
-**Polish:**
-- Skeleton screens для всех загрузок.
-- Toast'ы на ошибки (rate limit, wallet_empty).
-- Keyboard-shortcut `Cmd/Ctrl+Enter` = отправить промпт.
-- Empty state в timeline («ещё нет версий — отправь первый промпт»).
-
-**Definition of Done M3:**
-- Полный E2E (вручную): регистрация → создание проекта → промпт → стрим → preview → rollback. Без ошибок в консоли.
-- Все tab-навигации работают, focus-ring везде виден.
-- 0 hardcoded цветов вне токенов (grep по `#[0-9a-fA-F]{3,6}` в `src/` ничего не находит).
-- `pnpm typecheck && pnpm lint` зелёные.
+План M0–M3 времён MVP — исторический; отметки и «Definition of Done» оттуда не описывают текущее
+состояние и не обязательны к чтению при старте. Полный текст — в Git: `git show d5088222:agents/AGENT-A-FRONTEND.md`.
 
 ## Команды
 
@@ -183,9 +115,9 @@ pnpm lint
 pnpm test                    # Vitest, если будут unit-тесты
 ```
 
-## Перед каждым коммитом
+## Проверки
 
-`/safe-commit "msg"` — это запустит typecheck + lint + canon-review. После значимого блока (>3 файлов или новая фича) — `/canon-review`.
+Обязательный набор — как в CI (раздел 6 `AGENTS.md`): `pnpm install --frozen-lockfile`, затем `pnpm typecheck && pnpm test && pnpm build`; `pnpm lint` — дополнительно. Перед PR — review diff по разделу 6 `AGENTS.md`.
 
 ## Что НЕ делать
 
@@ -198,12 +130,4 @@ pnpm test                    # Vitest, если будут unit-тесты
 ## Координация
 
 - Если backend ещё не готов — заглушки в `lib/api/client.ts` через `MSW` или просто `Promise.resolve(mock)` под `if (process.env.NEXT_PUBLIC_USE_MOCKS === 'true')`.
-- Если непонятно поведение API — открой `docs/01-api-contract.md`. Если там не описано — оставь записку в координации и продолжай с заглушкой.
-
-## Старт
-
-```bash
-# В новом чате Claude, в C:\Бизнес план\omnia-mvp\:
-# Driver автоматически создаст worktree.
-# Первое сообщение — фраза из CLAUDE.md проекта (она же в README ниже).
-```
+- Если непонятно поведение API — открой `docs/01-api-contract.md`. Если там не описано — задай вопрос ответственному за backend (в PR или задаче) и продолжай с заглушкой.

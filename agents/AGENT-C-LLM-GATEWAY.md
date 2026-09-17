@@ -1,6 +1,10 @@
 # Агент C — LLM Gateway (apps/llm-gateway/)
 
-Прочитай этот бриф, затем `docs/01-api-contract.md` (раздел «LLM Gateway internal API») и `docs/02-data-model.md` (таблицы `usage`, `wallet_charges`). После — приступай к M0.
+> **Статус брифа.** Зона ответственности и особенности компонента. Общие правила — Git-процесс через PR,
+> проверки, безопасность данных, выпуск и критерии готовности — в [`AGENTS.md`](../AGENTS.md).
+> Стек и структура ниже — исходный замысел MVP (май 2026): перед опорой на них сверяй с кодом.
+
+При работе в зоне читай `docs/01-api-contract.md` (раздел «LLM Gateway internal API») и `docs/02-data-model.md` (таблицы `usage`, `wallet_charges`).
 
 ## Кто ты в этой команде
 
@@ -8,13 +12,13 @@
 
 Ты — изолированный сервис. Никто кроме B тебя не дёргает. Frontend (агент A) не знает о твоём существовании.
 
-## Жёсткие границы
+## Зона ответственности
 
-- **ПИШЕШЬ ТОЛЬКО в `apps/llm-gateway/`.**
-- **НЕ ЛЕЗЬ в `apps/web/`, `apps/api/`, `infra/`** (последнее — зона B).
-- Контракт API — `docs/01-api-contract.md`. Если нужна правка — записка в координацию + продолжай.
+- Ответственность — `apps/llm-gateway/`. Здесь же лежит production-compose `deploy/full/`: его правка — runtime-изменение (раздел 7 `AGENTS.md`), выпуск — по `infra/release/README.md`.
+- Правка других зон — по правилам раздела 1 `AGENTS.md` (нужна задаче, указана в PR, согласована).
+- Контракт (`docs/01-api-contract.md`) меняется в том же PR, что реализация и тесты, с согласия ответственного за backend (агент B).
 
-## Стек (фиксированный)
+## Стек
 
 - **Python 3.12**, `uv`.
 - **FastAPI 0.115+** (async).
@@ -66,7 +70,7 @@ apps/llm-gateway/
     └── test_safety.py
 ```
 
-## Поддерживаемые модели (MVP)
+## Поддерживаемые модели (MVP, историческая таблица — актуальный список в коде)
 
 | Model ID | Provider | LiteLLM string | Key env |
 |---|---|---|---|
@@ -81,7 +85,7 @@ apps/llm-gateway/
 
 Уточни актуальные slug'и в LiteLLM docs (`/v1/model_info`). Если конкретной модели нет — оставь TODO в `services/litellm_router.py` и временно используй ближайшую.
 
-## Цены в рублях (на момент MVP, май 2026)
+## Цены в рублях (на момент MVP, май 2026; историческая таблица — актуальные цены в `pricing.py`)
 
 Конвертация: курс ЦБ + наценка 20% (хедж против скачков). В коде — таблица в `pricing.py`. Можно подгружать из ENV для гибкости.
 
@@ -96,92 +100,10 @@ apps/llm-gateway/
 
 Это стартовые ориентиры — корректировать перед запуском беты на основе реального курса USD/RUB.
 
-## Фазы
+## История: исходный план фаз
 
-### M0 — Базовый /chat (день 1–2)
-
-**Задачи:**
-1. `uv init`, `pyproject.toml`, базовый FastAPI на `:8001`.
-2. `core/config.py` — env-переменные: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`, `OPENROUTER_API_KEY`, `REDIS_URL`, `POSTGRES_URL` (та же, что у B), `DEFAULT_MODEL`.
-3. **`services/litellm_router.py`:**
-   - Конфиг LiteLLM Router с моделями выше + fallbacks (`claude-sonnet-4-6 → gpt-4.1 → gpt-5-mini`).
-   - YandexGPT — обёртка через httpx, если LiteLLM нативно не поддерживает (вызов `https://llm.api.cloud.yandex.net/foundationModels/v1/completion`).
-4. `services/pricing.py` — таблица + функция `calculate_cost_rub(model_id, tokens_in, tokens_out) -> Decimal`.
-5. **`POST /v1/chat/completions`** non-streaming:
-   - Принимает OpenAI-формат + `metadata: {project_id, message_id}`, `user`.
-   - Дёргает LiteLLM `acompletion(...)`.
-   - Считает стоимость → пишет в `usage` через `usage_logger.py`.
-   - Возвращает OpenAI-совместимый JSON.
-6. **`GET /v1/models`** — возвращает список с ценами в рублях.
-7. **`GET /health`** — `{"status": "ok"}`.
-
-**Definition of Done M0:**
-- `curl POST :8001/v1/chat/completions` с `claude-sonnet-4-6` возвращает ответ.
-- В Postgres.usage появилась строка с правильными tokens и cost_rub.
-- `pytest tests/test_chat_non_streaming.py tests/test_pricing.py` зелёный.
-
-### M1 — SSE стриминг (день 3–5)
-
-**Задачи:**
-1. **`POST /v1/chat/completions`** с `stream: true`:
-   - Использовать `litellm.acompletion(stream=True)`.
-   - Отдавать через `sse_starlette.EventSourceResponse`:
-     - На каждый chunk → `data: {"choices":[{"delta":{"content":"..."}}]}`.
-     - В конце → подсчёт токенов (через `tiktoken` + finalChunk usage если есть) → `data: [DONE]`.
-   - **Корректная отмена:** если клиент дисконнект (`request.is_disconnected()`) — прервать LiteLLM запрос (через cancel task) и НЕ списывать оплату за неотданный хвост.
-2. **Backpressure:** asyncio.Queue размером 64, чтобы не залить медленного клиента.
-3. Перед стримингом — посчитать input-токены (`tiktoken` для openai/anthropic, для yandex — берём по символам: ~1 token / 4 chars).
-4. После стрима — записать `usage` атомарно: `INSERT INTO usage (...)`.
-
-**Definition of Done M1:**
-- `curl -N` стримит ответ символ-за-символом.
-- Дисконнект клиента — нет призрачных списаний (проверить, что usage пишется только за реально отданные токены).
-- `pytest tests/test_chat_streaming.py` зелёный.
-
-### M2 — Кеш + safety (день 6–9)
-
-**Задачи:**
-1. **`services/cache.py`:**
-   - Ключ = `sha256(model + system_prompt + last_user_message)`.
-   - TTL 1 час.
-   - **Кэш только non-streaming** (стримить из кэша = неестественно для UX; пропускаем).
-   - Hit-rate метрика → лог.
-2. **`services/safety.py`** — простой regex-фильтр на:
-   - `ignore (all )?previous instructions`
-   - `system:` в user-сообщении
-   - `</file>` в пользовательском промпте (попытка инъекции файла напрямую)
-   - длинные base64-блоки (>1k символов).
-   - Если триггер — заменить на `[фильтровано]` И залогировать.
-3. Применять фильтр **только** к user-сообщениям, не к system.
-4. Опционально — конфиг включить/выключить через ENV `SAFETY_FILTER_ENABLED=true`.
-
-**Definition of Done M2:**
-- Повторный запрос с теми же messages — приходит из кэша за <50ms.
-- Попытка инъекции `Ignore previous instructions and...` — фильтруется.
-- `pytest tests/test_cache.py tests/test_safety.py` зелёный.
-
-### M3 — Биллинг + fallbacks + observability (день 10–14)
-
-**Задачи:**
-1. **`services/billing.py`:**
-   - Функция `reserve_and_charge(user_id, message_id, model_id, tokens_in, tokens_out, cost_rub)`:
-     - Транзакция в общей БД с B: `UPDATE wallets SET balance_rub = balance_rub - cost_rub WHERE user_id = ? AND balance_rub >= cost_rub` → если RowCount=0, бросить `WalletEmptyError`.
-     - `INSERT INTO usage` + `INSERT INTO wallet_charges`.
-   - Перед запросом к модели — pre-check баланса (отказ с 402 `wallet_empty`, если `< min_threshold`).
-2. **Fallbacks через LiteLLM Router:**
-   - Если основная модель отвечает 5xx или превышает timeout 60s — пробуем следующую.
-   - В ответе указываем `metadata.actual_model_used`, чтобы B мог логировать.
-3. **Логи в JSON-line файл `logs/llm-{date}.jsonl`** (с rotation):
-   - Каждый запрос: `timestamp, user_id, project_id, message_id, model, tokens_in, tokens_out, cost_rub, cache_hit, fallback_used`.
-   - **Без content** (PII).
-4. **`/v1/models`** — добавить поле `available: bool` (проверка ключей в env).
-5. **Smoke тест в M3:** прогнать 10 запросов с разными моделями, проверить, что usage и wallet_charges консистентны.
-
-**Definition of Done M3:**
-- При балансе ниже стоимости запроса возвращается 402 `wallet_empty`, ничего не списывается.
-- При выпадении основного провайдера автоматически срабатывает fallback.
-- Логи пишутся, ротация работает.
-- E2E тест: B шлёт запрос → C стримит → C списывает → B видит обновлённый баланс.
+План M0–M3 времён MVP — исторический; отметки и «Definition of Done» оттуда не описывают текущее
+состояние и не обязательны к чтению при старте. Полный текст — в Git: `git show d5088222:agents/AGENT-C-LLM-GATEWAY.md`.
 
 ## Согласование с агентом B (важно)
 
@@ -202,9 +124,9 @@ cp .env.example .env
 
 uv run uvicorn omnia_gateway.main:app --reload --port 8001
 
-uv run pytest -q
-uv run ruff check . && uv run ruff format --check .
-uv run mypy src/
+# проверки (обязательный набор — как в CI, раздел 6 AGENTS.md)
+uv run --frozen --extra dev pytest -q
+uv run ruff check . && uv run mypy src/   # дополнительно
 ```
 
 ## Безопасность
@@ -226,8 +148,3 @@ uv run mypy src/
 
 - Если B ещё не написал миграции `usage` и `wallet_charges` — пиши SQL сам через `init.sql`, его потом B перепишет в Alembic.
 - Если backend ещё не дёргает /chat — тестируй через curl и в `tests/`.
-
-## Старт
-
-В новом чате Claude в `C:\Бизнес план\omnia-mvp\`:
-> Прочитай `agents/AGENT-C-LLM-GATEWAY.md`, `docs/01-api-contract.md` (секция LLM Gateway internal), `docs/02-data-model.md`. Активируй skill code-canon. Начинай с M0.
