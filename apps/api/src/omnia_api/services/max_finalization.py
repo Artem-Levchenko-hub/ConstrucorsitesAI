@@ -22,6 +22,8 @@ from omnia_api.models.project_cell import (
     ProjectCellProof,
     ProjectCellProofResult,
 )
+from omnia_api.models.snapshot import Snapshot
+from omnia_api.services import repo
 from omnia_api.services.agent_progress import bounded_redacted_text
 from omnia_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from omnia_api.services.generation_metrics import (
@@ -63,6 +65,7 @@ from omnia_api.services.project_cell_proofs import (
     find_proof_result,
     record_proof_result,
 )
+from omnia_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
 
@@ -194,6 +197,20 @@ class MaxFinalizationCoordinator:
         self._last_files: dict[str, str] | None = None
         self._last_prompt: str | None = None
 
+    async def _adaptation_capability_gap(self, files: Mapping[str, str]) -> str | None:
+        """AV06: an adaptation run must keep every route the draft had before it."""
+        async with self.session_factory() as session:
+            run = await session.get(GenerationRun, self.generation_run_id)
+            state = run.agent_state if run is not None else None
+            bundle = state.get("restoration_adaptation") if isinstance(state, dict) else None
+            if not isinstance(bundle, dict) or not bundle.get("base_draft_snapshot_id"):
+                return None
+            snapshot = await session.get(Snapshot, UUID(str(bundle["base_draft_snapshot_id"])))
+        if snapshot is None or snapshot.project_id != self.project_id:
+            return None
+        before = await asyncio.to_thread(repo.read_files, self.project_id, snapshot.commit_sha)
+        return capability_gap(before, files)
+
     async def _raise_persisted_infrastructure_failure(self) -> None:
         # A restart or edited source cannot make a protected controller failure
         # repairable by the model. Only a new generation after operator recovery
@@ -252,6 +269,8 @@ class MaxFinalizationCoordinator:
         proof = await self._proof(identity)
         checkpoint = self._checkpoint(identity, GenerationPhase.PREPARE)
         source_gap = max_source_completion_gap(prompt, files, portable=True)
+        if source_gap is None:
+            source_gap = await self._adaptation_capability_gap(files)
         if source_gap is not None:
             return await self._outcome(
                 MaxFinalizationStatus.NEEDS_EDIT,

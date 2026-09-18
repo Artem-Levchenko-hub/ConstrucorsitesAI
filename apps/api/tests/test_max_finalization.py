@@ -362,3 +362,86 @@ async def test_source_change_keeps_bootstrap_dimension_cache_but_rechecks_source
         ProjectCellCommandRole.FAST_CHECK,
     ]
     assert len({operation for _, operation in calls}) == 3
+
+
+_CLIENTS_ROUTE = (
+    "export async function GET() { return Response.json([]) }\n"
+    "export async function POST() { return Response.json({}, { status: 201 }) }\n"
+)
+_VISITS_ROUTE = "export async function GET() { return Response.json([]) }\n"
+
+
+async def _adaptation_run(db_session: AsyncSession, harness: _Harness) -> None:
+    """Mark the run as a restoration adaptation of a draft that served visits."""
+    import asyncio
+
+    from omnia_api.models.snapshot import Snapshot
+    from omnia_api.services import repo
+
+    coordinator = harness.coordinator
+    before = {
+        **_files(),
+        "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
+        "src/app/api/visits/route.ts": _VISITS_ROUTE,
+        "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
+    }
+    sha = await asyncio.to_thread(repo.init_from_files, coordinator.project_id, before, "v2")
+    snapshot = Snapshot(project_id=coordinator.project_id, commit_sha=sha, prompt_text="v2")
+    db_session.add(snapshot)
+    await db_session.flush()
+    run = await db_session.get(GenerationRun, coordinator.generation_run_id)
+    assert run is not None
+    run.agent_state = {"restoration_adaptation": {"base_draft_snapshot_id": str(snapshot.id)}}
+    await db_session.commit()
+
+
+async def test_adaptation_that_drops_a_draft_route_returns_to_edit(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    harness = await _new_harness(db_session, test_engine)
+    await _adaptation_run(db_session, harness)
+
+    # The adapted v1 screens came back, but reading visits disappeared.
+    outcome = await harness.coordinator.finalize(
+        files={**_files(), "src/app/api/clients/route.ts": _CLIENTS_ROUTE},
+        prompt="Верни экраны выбранной исторической версии",
+    )
+
+    assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
+    assert "GET /api/visits" in outcome.redacted_detail
+    assert "/api/omnia" not in outcome.redacted_detail  # platform routes are not owned
+    assert harness.roles == []  # no build runs on a result that lost a function
+
+
+async def test_adaptation_keeping_every_route_proceeds_to_the_build(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    harness = await _new_harness(db_session, test_engine)
+    await _adaptation_run(db_session, harness)
+
+    outcome = await harness.coordinator.finalize(
+        files={
+            **_files(),
+            "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
+            # Moved into a route group: still the same GET /api/visits.
+            "src/app/(data)/api/visits/route.ts": (
+                "export const GET = async () => Response.json([])"
+            ),
+        },
+        prompt="Верни экраны выбранной исторической версии",
+    )
+
+    assert outcome.status is MaxFinalizationStatus.COMPLETE
+    assert ProjectCellCommandRole.FULL_BUILD in harness.roles
+
+
+async def test_ordinary_generation_is_not_capability_checked(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    harness = await _new_harness(db_session, test_engine)
+    # No restoration_adaptation marker: removing routes is a normal edit.
+    outcome = await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
+    assert outcome.status is MaxFinalizationStatus.COMPLETE

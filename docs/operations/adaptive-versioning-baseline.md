@@ -30,7 +30,7 @@ this work): 8 × `test_docker_machine_backend.py::test_retained_receipt_binds_tr
 | Data shown as "unknown" | presence was measured only after the schema check passed | `versioning/inventory.py`: read-only per-table counts on the source **before** any analysis, then again on the isolated copy; a failing relation is `not_measured`, never zero |
 | Vague reason ("custom constraints") | table-level flags and raw tokens | precise checks (`versioning/compatibility.py`): code, operation, object, explanation, resolution — e.g. `required_field_missing_on_create` on `public.clients.email` |
 | Ordinary CHECK/DEFAULT forced adaptation | CHECK counted as custom constraint; tiny DEFAULT whitelist; Drizzle extractor threw on any CHECK | named CHECKs compared by normalized expression on both sides; literal/`nextval`/`now()`/`gen_random_uuid()`/IDENTITY defaults are ordinary; user-function defaults, triggers, expression indexes, NOT VALID/deferrable constraints are still blockers, now named |
-| Visits GET lost after adaptation | nothing tracked functions | groundwork only: route capability diff (`capabilities.lost`) in the report and in the adaptation brief; **not yet enforced** (AV06 proper / AV13) |
+| Visits GET lost after adaptation | nothing tracked functions | route capability diff (`capabilities.lost`) in the report and brief; **enforced (AV06)**: `MaxFinalizationCoordinator.finalize` compares the draft before the adaptation run with the result and returns `NEEDS_EDIT` listing every lost `METHOD /path` (2 repair rounds, then the run fails and the draft is unchanged) — `apps/api/src/omnia_api/services/versioning_capabilities.py` |
 
 ## Report format 2
 
@@ -56,5 +56,6 @@ Real-DB tests need `RESTORATION_TEST_DATABASE_URL=.../restoration_policy_test`
   differently parenthesized boolean expressions can normalize equal. PostgreSQL
   still enforces the live CHECK, so the worst case is a rejected write, not bad data.
 - Business defaults on new required columns still need confirmation (`required_field_default_needs_confirmation`).
-- Capabilities are HTTP route methods only (no server actions, UI scenarios, response shape, owner filter checks).
+- Capabilities are HTTP route methods only (no server actions, UI scenarios, response shape, owner filter checks); there is no explicit "retire this function" decision yet, so an adaptation must keep every draft route.
+- Restoration preparation needs host capacity for an isolated candidate; on the current 8-core host a project with both a running draft and a publication is refused (`insufficient_cpu`) — see V9.
 - No behavioural rehearsal, writer barrier, migration plan, decisions, production path (AV07+).
