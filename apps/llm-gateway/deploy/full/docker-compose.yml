@@ -175,16 +175,15 @@ services:
     build:
       context: ../../../api
       dockerfile: Dockerfile
+      # Stack templates (per-stack SYSTEM_PROMPT.md + skills + skeleton sources)
+      # are baked into the image at /orchestrator/templates — no host bind
+      # mount, so the image runs on any node. A template change therefore needs
+      # an api image rebuild (`up -d --build api generation-worker worker`).
+      additional_contexts:
+        templates: ../../../orchestrator/templates
     image: ${API_IMAGE:-omnia-api:prod}
     container_name: omnia-prod-api
-    # The agentic builder loads per-stack guides (SYSTEM_PROMPT.md) + skills from
-    # the orchestrator templates dir at /orchestrator/templates (agent_builder.
-    # _TEMPLATES_DIR resolves there in-container). The api image only ships
-    # apps/api, so without this mount load_stack_system_prompt() returns None and
-    # EVERY agentic build falls back to the entities prompt — the "опять эти
-    # entities" bug. Read-only.
     volumes:
-      - ../../../orchestrator/templates:/orchestrator/templates:ro
       # Only CMS-encrypted exports are served by /api/backups/offhost. The
       # application validates the timestamp, fixed filename and SHA-256 before
       # returning a file; the mount stays read-only.
@@ -426,7 +425,6 @@ services:
     container_name: omnia-prod-generation-worker
     command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.generation"]
     volumes:
-      - ../../../orchestrator/templates:/orchestrator/templates:ro
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
     environment:
       <<: *api_environment
@@ -442,10 +440,7 @@ services:
     # build step (both Compose race on the same tag otherwise).
     image: ${API_IMAGE:-omnia-api:prod}
     container_name: omnia-prod-worker
-    # Same as api: the agent loads per-stack guides/skills from the mounted
-    # orchestrator templates dir, else it defaults to the entities prompt.
-    volumes:
-      - ../../../orchestrator/templates:/orchestrator/templates:ro
+    # Stack templates come baked in the image (see api.build.additional_contexts).
     # Same uv-run bypass as api — direct python from the venv.
     command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.run"]
     depends_on:

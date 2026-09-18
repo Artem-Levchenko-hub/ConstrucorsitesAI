@@ -61,6 +61,8 @@
    ```
    Сервисы: `api worker` (бэкенд), `web` (фронт), `gateway` (LLM-шлюз). Затем health-check (`curl` health-эндпойнта или живой URL) — подтвердить 200.
 
+   **Шаблоны стеков (`apps/orchestrator/templates/`) вшиты в образ `api`** (volume больше нет): правка шаблона → пересобрать `api generation-worker worker`, иначе агент продолжит видеть старые промпты/skills.
+
    **⚠️ Прод-compose — это проект `full` в `apps/llm-gateway/deploy/full/` (контейнеры `omnia-prod-*`), НЕ `infra/`.** `infra/docker-compose.yml` — отдельный dev-стек (имена `omnia-*` без `-prod`), и `docker compose up` в нём поднимет ВТОРОЙ постгрес/редис, столкнётся на host-портах (5432 занят) и насоздаёт висяков — НЕ деплоить через него. Так же `git pull` на проде падает (`pull.rebase=true` + грязное дерево от secondbrain-рантайма) → только `git fetch && git merge --ff-only origin/main` (мой коммит трогает лишь свои файлы, грязные secondbrain-доки не заденет).
 
 **Карвут:** чистые docs / `secondbrain` / memory-правки → только commit+push (деплоить нечего, runtime не затронут). Всё, что влияет на работающее приложение → полный цикл с деплоем.

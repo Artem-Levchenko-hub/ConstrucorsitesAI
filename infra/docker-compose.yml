@@ -86,6 +86,8 @@ services:
     build:
       context: ../apps/api
       dockerfile: Dockerfile
+      additional_contexts:
+        templates: ../apps/orchestrator/templates
     container_name: omnia-api
     depends_on:
       postgres:
@@ -114,6 +116,8 @@ services:
     build:
       context: ../apps/api
       dockerfile: Dockerfile
+      additional_contexts:
+        templates: ../apps/orchestrator/templates
     container_name: omnia-worker
     command: ["uv", "run", "python", "-m", "omnia_api.workers.run"]
     depends_on:

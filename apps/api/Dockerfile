@@ -1,4 +1,16 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1
+# Platform stack templates (SYSTEM_PROMPT.md, .omnia/skills, skeleton sources)
+# are BAKED into the image at /orchestrator/templates, so the api/worker images
+# run on any host without a bind mount of the repo checkout (portable images,
+# Phase 0 of the 13-VPS move). The templates live outside this build context,
+# so they arrive as a named build context:
+#     docker build --build-context templates=../orchestrator/templates .
+# Compose passes it via `additional_contexts`. Without it this fallback stage
+# runs and fails loudly — a silent template-less image is exactly the old
+# "every agentic build falls back to the entities prompt" bug.
+FROM busybox:1.36 AS templates
+RUN echo "missing build context: pass --build-context templates=<repo>/apps/orchestrator/templates" >&2 && exit 1
+
 FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -50,6 +62,13 @@ RUN .venv/bin/playwright install chromium --with-deps || .venv/bin/playwright in
 
 COPY . ./
 RUN uv sync --frozen
+
+# Sources only: dependency trees and build output are regenerated per project
+# by the orchestrator and would add ~1 GB to the image.
+COPY --from=templates \
+     --exclude=**/node_modules --exclude=**/.next --exclude=**/.git \
+     --exclude=**/*.tsbuildinfo --exclude=**/__pycache__ \
+     . /orchestrator/templates/
 
 ENV PATH="/app/.venv/bin:${PATH}"
 
