@@ -402,9 +402,14 @@ async def test_adaptation_that_drops_a_draft_route_returns_to_edit(
     harness = await _new_harness(db_session, test_engine)
     await _adaptation_run(db_session, harness)
 
-    # The adapted v1 screens came back, but reading visits disappeared.
+    # The adapted v1 screens came back, but reading visits disappeared. The
+    # untouched kit route is not owned by the app and must not be reported.
     outcome = await harness.coordinator.finalize(
-        files={**_files(), "src/app/api/clients/route.ts": _CLIENTS_ROUTE},
+        files={
+            **_files(),
+            "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
+            "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
+        },
         prompt="Верни экраны выбранной исторической версии",
     )
 
@@ -425,6 +430,7 @@ async def test_adaptation_keeping_every_route_proceeds_to_the_build(
         files={
             **_files(),
             "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
+            "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
             # Moved into a route group: still the same GET /api/visits.
             "src/app/(data)/api/visits/route.ts": (
                 "export const GET = async () => Response.json([])"

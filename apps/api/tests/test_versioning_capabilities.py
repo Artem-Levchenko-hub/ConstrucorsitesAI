@@ -18,7 +18,7 @@ def test_route_capabilities_cover_methods_groups_and_platform_routes():
         "src/app/visits/page.tsx": "export default function Page() {}",
     }
     assert route_capabilities(files) == {
-        ("GET", "/api/visits"), ("DELETE", "/api/visits"), ("PATCH", "/api/orders/[id]"),
+        ("GET", "/api/visits"), ("DELETE", "/api/visits"), ("PATCH", "/api/orders/[*]"),
     }
 
 

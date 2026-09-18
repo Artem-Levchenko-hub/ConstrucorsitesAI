@@ -1,0 +1,216 @@
+{
+ "schema_version": 1,
+ "note": "Golden corpus shared by apps/api versioning_capabilities and apps/orchestrator versioning/compatibility (FV032). Update both implementations together.",
+ "files": {
+  "src/app/api/clients/route.ts": "export async function GET() { return Response.json([]) }\nexport const POST = async (req: Request) => { return Response.json({}, { status: 201 }) }\n// export function DELETE() {}\n/* export async function PUT() {} */\nconst note = \"export function PATCH() {}\";\nconst tpl = `export function OPTIONS() {}\n  still a string`;\n",
+  "src/app/api/visits/route.ts": "import { list, create } from \"./handlers\";\nexport { list as GET, create as POST };\nexport { HEAD } from \"./head\";\nexport type { Visit } from \"./types\";\n",
+  "src/app/(dashboard)/api/reports/route.ts": "export function GET() { return Response.json({ ok: true }) }\n",
+  "src/app/api/clients/[clientId]/route.ts": "export function PATCH() {}\nexport function DELETE() {}\n",
+  "src/app/api/files/[...path]/route.ts": "export function GET() {}\n",
+  "src/app/api/docs/[[...slug]]/route.ts": "export function GET() {}\n",
+  "src/app/api/legacy/route.ts": "export * from \"./impl\";\n",
+  "src/app/api/ns/route.ts": "export * as handlers from \"./impl\";\nexport function GET() {}\n",
+  "src/app/api/omnia/config/route.ts": "export function GET() { return Response.json({}) }\n",
+  "src/app/api/health/route.ts": "export function GET() { return Response.json({ ok: true }) }\n",
+  "src/app/@modal/api/slot/route.ts": "export function GET() {}\n",
+  "src/app/api/clients/handlers.ts": "export function GET() {} // not a route file\n",
+  "src/app/api/multi/route.js": "const handler = () => new Response();\nexport function OPTIONS() {}\nexport let PUT = handler;\nconst url = 'export function DELETE() {}';\n",
+  "src/app/api/mixed-star/route.ts": "export * as a from \"./a\";\nexport * as b from \"./b\";\nexport * from \"./impl\";\n",
+  "src/app/api/decl/route.ts": "const h = () => new Response();\nexport const GET = h, POST = h;\nexport const { PUT, DELETE: remove } = handlers;\nexport const [OPTIONS] = [h];\n",
+  "src/app/api/asi/route.ts": "export const GET = async (req: Request, { params }: { params: { id: string } }) => {\n  return new Response()\n}\nexport const POST = h\nexport let PATCH = h\nconst helper = 1\nexport var DELETE = h\n"
+ },
+ "expected": {
+  "capabilities": [
+   [
+    "DELETE",
+    "/api/asi"
+   ],
+   [
+    "DELETE",
+    "/api/clients/[*]"
+   ],
+   [
+    "GET",
+    "/api/asi"
+   ],
+   [
+    "GET",
+    "/api/clients"
+   ],
+   [
+    "GET",
+    "/api/decl"
+   ],
+   [
+    "GET",
+    "/api/docs/[[...]]"
+   ],
+   [
+    "GET",
+    "/api/files/[...]"
+   ],
+   [
+    "GET",
+    "/api/health"
+   ],
+   [
+    "GET",
+    "/api/ns"
+   ],
+   [
+    "GET",
+    "/api/omnia/config"
+   ],
+   [
+    "GET",
+    "/api/reports"
+   ],
+   [
+    "GET",
+    "/api/slot"
+   ],
+   [
+    "GET",
+    "/api/visits"
+   ],
+   [
+    "HEAD",
+    "/api/visits"
+   ],
+   [
+    "OPTIONS",
+    "/api/decl"
+   ],
+   [
+    "OPTIONS",
+    "/api/multi"
+   ],
+   [
+    "PATCH",
+    "/api/asi"
+   ],
+   [
+    "PATCH",
+    "/api/clients/[*]"
+   ],
+   [
+    "POST",
+    "/api/asi"
+   ],
+   [
+    "POST",
+    "/api/clients"
+   ],
+   [
+    "POST",
+    "/api/decl"
+   ],
+   [
+    "POST",
+    "/api/visits"
+   ],
+   [
+    "PUT",
+    "/api/decl"
+   ],
+   [
+    "PUT",
+    "/api/multi"
+   ]
+  ],
+  "unresolved": [
+   "/api/legacy",
+   "/api/mixed-star"
+  ],
+  "owned": [
+   [
+    "DELETE",
+    "/api/asi"
+   ],
+   [
+    "DELETE",
+    "/api/clients/[*]"
+   ],
+   [
+    "GET",
+    "/api/asi"
+   ],
+   [
+    "GET",
+    "/api/clients"
+   ],
+   [
+    "GET",
+    "/api/decl"
+   ],
+   [
+    "GET",
+    "/api/docs/[[...]]"
+   ],
+   [
+    "GET",
+    "/api/files/[...]"
+   ],
+   [
+    "GET",
+    "/api/ns"
+   ],
+   [
+    "GET",
+    "/api/reports"
+   ],
+   [
+    "GET",
+    "/api/slot"
+   ],
+   [
+    "GET",
+    "/api/visits"
+   ],
+   [
+    "HEAD",
+    "/api/visits"
+   ],
+   [
+    "OPTIONS",
+    "/api/decl"
+   ],
+   [
+    "OPTIONS",
+    "/api/multi"
+   ],
+   [
+    "PATCH",
+    "/api/asi"
+   ],
+   [
+    "PATCH",
+    "/api/clients/[*]"
+   ],
+   [
+    "POST",
+    "/api/asi"
+   ],
+   [
+    "POST",
+    "/api/clients"
+   ],
+   [
+    "POST",
+    "/api/decl"
+   ],
+   [
+    "POST",
+    "/api/visits"
+   ],
+   [
+    "PUT",
+    "/api/decl"
+   ],
+   [
+    "PUT",
+    "/api/multi"
+   ]
+  ]
+ }
+}

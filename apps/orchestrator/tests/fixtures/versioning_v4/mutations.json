@@ -1,0 +1,124 @@
+{
+ "schema_version": 1,
+ "note": "Named mutations of an adapted candidate (AV06.3). status=deterministic: covered by the listed test now; not_run: waits for the named prerequisite. A good first attempt without source_repair never proves repair.",
+ "mutations": [
+  {
+   "name": "remove_get",
+   "kind": "source",
+   "status": "deterministic",
+   "description": "GET визитов удалён из кандидата",
+   "tests": [
+    "apps/orchestrator/tests/test_versioning_repair_mutations.py",
+    "apps/api/tests/test_versioning_repair_loop.py"
+   ]
+  },
+  {
+   "name": "comment_only_get",
+   "kind": "source",
+   "status": "deterministic",
+   "description": "export GET оставлен только в комментарии/строке — маршрут потерян",
+   "tests": [
+    "apps/orchestrator/tests/test_versioning_repair_mutations.py",
+    "apps/api/tests/test_versioning_repair_loop.py"
+   ]
+  },
+  {
+   "name": "reexport_alias",
+   "kind": "source",
+   "status": "deterministic",
+   "description": "GET экспортирован через alias/re-export — не потеря",
+   "tests": [
+    "apps/orchestrator/tests/test_versioning_repair_mutations.py"
+   ]
+  },
+  {
+   "name": "export_star",
+   "kind": "source",
+   "status": "deterministic",
+   "description": "маршрут объявлен через export * — coverage gap, не пустой список",
+   "tests": [
+    "apps/orchestrator/tests/test_versioning_repair_mutations.py"
+   ]
+  },
+  {
+   "name": "platform_route_deleted",
+   "kind": "source",
+   "status": "deterministic",
+   "description": "удалён служебный маршрут kit — считается потерей (владение по изменению файла)",
+   "tests": [
+    "apps/orchestrator/tests/test_versioning_repair_mutations.py"
+   ]
+  },
+  {
+   "name": "repair_restores_get",
+   "kind": "repair",
+   "status": "deterministic",
+   "description": "NEEDS_EDIT → ремонт возвращает GET → сборка и COMPLETE",
+   "tests": [
+    "apps/api/tests/test_versioning_repair_loop.py"
+   ]
+  },
+  {
+   "name": "repair_exhausted",
+   "kind": "repair",
+   "status": "deterministic",
+   "description": "ремонт не помогает трижды — нет сборки, нет новой активной версии",
+   "tests": [
+    "apps/api/tests/test_versioning_repair_loop.py"
+   ]
+  },
+  {
+   "name": "provider_error_during_repair",
+   "kind": "repair",
+   "status": "deterministic",
+   "description": "провайдер модели упал во время ремонта — запуск падает без promote",
+   "tests": [
+    "apps/api/tests/test_versioning_repair_loop.py"
+   ]
+  },
+  {
+   "name": "baseline_missing",
+   "kind": "source",
+   "status": "deterministic",
+   "description": "у распознанной адаптации нет исходной основы — baseline_unavailable, не успех",
+   "tests": [
+    "apps/api/tests/test_versioning_repair_loop.py"
+   ]
+  },
+  {
+   "name": "empty_array_get",
+   "kind": "behavior",
+   "status": "not_run",
+   "blocked_by": "AV06.2 behavioral probes",
+   "description": "GET есть, но всегда возвращает []"
+  },
+  {
+   "name": "owner_filter_removed",
+   "kind": "behavior",
+   "status": "not_run",
+   "blocked_by": "AV06.2 behavioral probes",
+   "description": "GET отдаёт чужие визиты"
+  },
+  {
+   "name": "button_removed",
+   "kind": "browser",
+   "status": "not_run",
+   "blocked_by": "AV06.2 browser fixtures",
+   "description": "кнопка списка визитов исчезла с экрана"
+  },
+  {
+   "name": "patch_clears_email",
+   "kind": "behavior",
+   "status": "not_run",
+   "blocked_by": "AV06.2 behavioral probes",
+   "description": "старый PATCH очищает email"
+  },
+  {
+   "name": "live_model_repair_canary",
+   "kind": "live",
+   "status": "not_run",
+   "blocked_by": "AV10 isolated candidate + QA fault hook",
+   "description": "один реальный model-run с намеренно сломанным кандидатом"
+  }
+ ]
+}

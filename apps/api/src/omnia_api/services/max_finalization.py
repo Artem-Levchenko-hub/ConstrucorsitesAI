@@ -81,6 +81,13 @@ class MaxFinalizationConflict(RuntimeError):
     """The durable checkpoint no longer belongs to the active fenced identity."""
 
 
+class AdaptationBaselineUnavailable(RuntimeError):
+    """A recognised adaptation lost the draft it must be compared with (AV06.1).
+
+    Without that baseline no capability can be proven preserved, so the run
+    fails instead of passing on "no differences found"."""
+
+
 class MaxFinalizationStatus(StrEnum):
     NEEDS_EDIT = "needs_edit"
     COMPLETE = "complete"
@@ -198,17 +205,39 @@ class MaxFinalizationCoordinator:
         self._last_prompt: str | None = None
 
     async def _adaptation_capability_gap(self, files: Mapping[str, str]) -> str | None:
-        """AV06: an adaptation run must keep every route the draft had before it."""
+        """AV06: an adaptation run must keep every route the draft had before it.
+
+        Ordinary generations (no adaptation bundle) are never gated. A recognised
+        adaptation whose baseline is missing, foreign or unreadable raises
+        :class:`AdaptationBaselineUnavailable` (FV030/FV031)."""
         async with self.session_factory() as session:
             run = await session.get(GenerationRun, self.generation_run_id)
             state = run.agent_state if run is not None else None
             bundle = state.get("restoration_adaptation") if isinstance(state, dict) else None
-            if not isinstance(bundle, dict) or not bundle.get("base_draft_snapshot_id"):
+            if not isinstance(bundle, dict):
                 return None
-            snapshot = await session.get(Snapshot, UUID(str(bundle["base_draft_snapshot_id"])))
-        if snapshot is None or snapshot.project_id != self.project_id:
-            return None
-        before = await asyncio.to_thread(repo.read_files, self.project_id, snapshot.commit_sha)
+            raw_id = bundle.get("base_draft_snapshot_id")
+            try:
+                snapshot_id = UUID(str(raw_id))
+            except (TypeError, ValueError) as exc:
+                raise AdaptationBaselineUnavailable(
+                    "baseline_unavailable: adaptation has no base draft snapshot"
+                ) from exc
+            snapshot = await session.get(Snapshot, snapshot_id)
+        if snapshot is None:
+            raise AdaptationBaselineUnavailable("baseline_unavailable: base draft snapshot is gone")
+        if snapshot.project_id != self.project_id:
+            raise AdaptationBaselineUnavailable(
+                "baseline_unavailable: base draft snapshot belongs to another project"
+            )
+        try:
+            before = await asyncio.to_thread(repo.read_files, self.project_id, snapshot.commit_sha)
+        except Exception as exc:
+            raise AdaptationBaselineUnavailable(
+                "baseline_unavailable: base draft source cannot be read"
+            ) from exc
+        if not before:
+            raise AdaptationBaselineUnavailable("baseline_unavailable: base draft source is empty")
         return capability_gap(before, files)
 
     async def _raise_persisted_infrastructure_failure(self) -> None:
@@ -270,7 +299,18 @@ class MaxFinalizationCoordinator:
         checkpoint = self._checkpoint(identity, GenerationPhase.PREPARE)
         source_gap = max_source_completion_gap(prompt, files, portable=True)
         if source_gap is None:
-            source_gap = await self._adaptation_capability_gap(files)
+            try:
+                source_gap = await self._adaptation_capability_gap(files)
+            except AdaptationBaselineUnavailable as exc:
+                # Not repairable by the model: no baseline, no proof, no promotion.
+                outcome = await self._outcome(
+                    MaxFinalizationStatus.FAILED,
+                    self._checkpoint(identity, GenerationPhase.EDIT),
+                    ProofBundle(identity=proof),
+                    str(exc),
+                )
+                await self._log_terminal(outcome)
+                return outcome
         if source_gap is not None:
             return await self._outcome(
                 MaxFinalizationStatus.NEEDS_EDIT,
