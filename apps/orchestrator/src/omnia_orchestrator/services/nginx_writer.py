@@ -43,7 +43,12 @@ _ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/[A-Za-z0-9_./-]+$")
 _VHOST_TEMPLATE_MARKER = "# omnia vhost template: html-no-store-v3"
 # Only a successful reload in this process confirms a file was applied. Recheck
 # periodically because wildcard certificate files may be unreadable to this user.
-_TLS_CONFIRMATION_SECONDS = 300
+# How long a confirmed, byte-identical HTTPS vhost is trusted before ensure_tls
+# re-issues/re-checks the cert and reloads nginx again. The publication reconcile
+# sweep runs every ~5 minutes; with the old 300 s window every sweep reloaded
+# nginx for every published app (288 reloads/day per app, C13/C15). A changed
+# or missing vhost file is always rewritten and reloaded regardless of this.
+_TLS_CONFIRMATION_SECONDS = 6 * 3600
 _tls_confirmations: dict[Path, tuple[str, int, float]] = {}
 _RFC1918_V4_NETWORKS = (
     ipaddress.IPv4Network("10.0.0.0/8"),

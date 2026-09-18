@@ -663,3 +663,9 @@ async def test_failed_preview_publication_only_removes_http_site(
         assert not reloads
     else:
         assert reloads == [True]
+
+
+def test_tls_confirmation_outlives_the_reconcile_sweep_period() -> None:
+    # The reconcile loop revisits every publication about every 5 minutes; an
+    # unchanged vhost must not cost a nginx reload on each visit (C13/C15).
+    assert nginx_writer._TLS_CONFIRMATION_SECONDS >= 3600
