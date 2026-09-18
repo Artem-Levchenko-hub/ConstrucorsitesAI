@@ -127,6 +127,8 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 | `POST` | `/api/projects/:id/deploy` | `{commit_sha?: string}` | `DeployStatus` (асинхронный, прогресс — через WS) |
 | `GET` | `/api/projects/:id/deploy` | — | `DeployStatus` последнего деплоя |
 
+> **DeployStatus, format_version 2 (P01, 18.09.2026, аддитивно):** к прежним полям добавлены `format_version` (1 — ответ старого контроллера, ничего не выдумывать), `stage` (текущая подстадия: `preflight`, `source_wake`, `source_schema`, `capture_rootfs`, `capture_volumes`, `verify_artifacts`, `resume_source`, `prepare_target`, `seed_data`, `activate`, `start_app`, `verify_runtime`, `tls`, `observe`), `stage_started_at`, `heartbeat_at` (последнее доказательство жизни операции), `progress` (`{bytes_done, bytes_total|null, files_done|null}` — неизвестный объём остаётся `null`, процент по времени не рисуется), `stages[]` (история подстадий с `elapsed_ms`), `metrics` (`prepare_ms`, `activate_ms`, `total_ms` и `<stage>_ms`), `error_stage` и `reason_code` (фиксированный код без сырого текста Docker/SQL). Старые `phase` и `logs` не меняются.
+
 `commit_sha` опционален: по умолчанию — текущий HEAD проекта. Использование одного коммита — для rollback prod без пересборки.
 
 ### V2 WebSocket-события (поверх V1)
