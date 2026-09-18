@@ -1,5 +1,9 @@
 # Adaptive versioning — baseline and package 1
 
+Continued by `versioning-v4-baseline.md` (plan v4, package G1: cancel without
+GET, QA cleanup retry, hardened route check, deterministic repair loop) and the
+machine-readable `versioning-v4-evidence-index.json`.
+
 Plan: `MAX_Studio_adaptive_versioning_v3` (18.09.2026), tasks AV00–AV29.
 This file records the verified starting point (AV00) and what package 1
 (AV00–AV05 + AV06 groundwork) changed. It does not declare adaptive versioning

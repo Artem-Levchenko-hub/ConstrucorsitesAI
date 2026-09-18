@@ -49,6 +49,14 @@ the agent must adapt code with additive, data-preserving migrations. Protection 
 end-users' data (restricted roles, row policies, encrypted CRUD) is intentionally
 out of scope. Publication remains separate.
 
+Cancellation and every other controller-side finish (prepare, apply) are
+carried into the API projection by the api worker (`restoration_reconciliation`)
+without any client GET: due operations are leased, re-observed with backoff and
+a lost dispatch is re-sent as the same durable intent. A cancel recorded during
+preparation stops the controller at the next safe checkpoint (before the
+candidate, after install, before build, before start); nothing is applied. See
+`versioning-v4-baseline.md` (AV19.1).
+
 ## Runtime boundary
 
 - API operations live in `restorations` (migration `0061_code_restorations`).
