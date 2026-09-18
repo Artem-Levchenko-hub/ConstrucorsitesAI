@@ -42,6 +42,7 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     delivered = []
     removed = []
     readiness = []
+    quotas = []
 
     def create(_image, _command, **kwargs):
         # No product or database container may be recreated by a gateway update.
@@ -54,12 +55,24 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         def remove(**_):
             removed.append(containers.pop("public-test-gateway"))
 
+        # The gateway boots on a full core (its Python start-up is CPU-bound) and
+        # is lowered to its steady 5 % share before the identity receipt is taken.
+        assert "nano_cpus" not in kwargs
+        host_config = {"Privileged": False, "CpuPeriod": kwargs["cpu_period"],
+                       "CpuQuota": kwargs["cpu_quota"]}
+        assert (host_config["CpuPeriod"], host_config["CpuQuota"]) == (100_000, 100_000)
+
+        def update(**limits):
+            quotas.append(limits)
+            host_config.update(CpuPeriod=limits["cpu_period"], CpuQuota=limits["cpu_quota"])
+
         gateway = SimpleNamespace(
             id="gateway-test", status="running", start=lambda: None, reload=lambda: None,
-            remove=remove, attrs={"NetworkSettings": {"Networks": network},
-                                  "State": {"StartedAt": "2026-09-07T00:00:00Z"},
-                                  "Image": image_id, "HostConfig": {"Privileged": False},
-                                  "Mounts": [], "Config": {"Labels": kwargs["labels"]}},
+            remove=remove, update=update,
+            attrs={"NetworkSettings": {"Networks": network},
+                   "State": {"StartedAt": "2026-09-07T00:00:00Z"},
+                   "Image": image_id, "HostConfig": host_config,
+                   "Mounts": [], "Config": {"Labels": kwargs["labels"]}},
         )
         containers["public-test-gateway"] = gateway
         return gateway
@@ -116,13 +129,17 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     adapter._start_boundary(state, manifest, backend, 7, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
     first = containers["public-test-gateway"]
+    assert quotas == [{"cpu_period": 100_000, "cpu_quota": 5_000}]
+    assert first.attrs["HostConfig"]["CpuQuota"] == 5_000
     if public_mode:
         assert delivered[-1]["server"] == "first trusted server"
         assert delivered[-1]["config"]["public_origin"] == runtime_env["OMNIA_PUBLIC_APP_ORIGIN"]
     adapter._start_boundary(state, manifest, backend, 7, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
+    # Reuse also proves the receipt was taken AFTER the quota went down: a receipt
+    # of the boosted gateway would not match the running one and would replace it.
     assert containers["public-test-gateway"] is first
-    assert len(delivered) == 1 and not removed
+    assert len(delivered) == 1 and not removed and len(quotas) == 1
 
     monkeypatch.setattr(
         machine_business_config, "boundary_source", lambda: "updated trusted server",
