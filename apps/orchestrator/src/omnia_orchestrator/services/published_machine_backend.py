@@ -174,6 +174,30 @@ class PublishedMachineBackend(DockerMachineBackend):
         options["labels"]["omnia.public_release_id"] = str(self.release_id)
         return options
 
+    # P09: in production the project database, its volume and the guard's
+    # network namespace belong to the environment and survive code releases.
+    # A release epoch on the app container may be newer than the epoch label
+    # the database container was created with; that is not a fence violation.
+    def _postgres_epoch_compatible(self, machine_epoch: int, postgres_epoch: int) -> bool:
+        return postgres_epoch <= machine_epoch
+
+    def _project_postgres_current(self, postgres: Any, namespace_id: str, epoch: int) -> bool:
+        physical_epoch = int(postgres.labels.get("omnia.fencing_epoch", "0"))
+        return physical_epoch <= epoch and self._project_postgres_matches(
+            postgres, namespace_id, physical_epoch
+        )
+
+    def remove(self, expected_epoch: int | None = None) -> None:
+        """A fenced removal (from ``ensure``'s recreate path) retires only the
+        release's app container; an unfenced removal is full environment teardown."""
+        if expected_epoch is None:
+            super().remove()
+            return
+        machine = self._container()
+        if machine is None or machine.labels.get("omnia.fencing_epoch") != str(expected_epoch):
+            return
+        self.remove_machine()
+
     def restart_infrastructure(self) -> None:
         for suffix, kind in (
             ("proxy", "egress-proxy"),
@@ -225,7 +249,9 @@ class PublishedMachineBackend(DockerMachineBackend):
                 old.prepare_capture()
             except Exception as exc:
                 raise PublicationRecoveryRequired("production data quiesce failed") from exc
-        old.stop()
+        # Only the product stops: its quiesce tasks flushed application state,
+        # the database itself keeps serving and is handed to the new release.
+        old.stop_machine()
 
     def volume_mapping(self, manifest: MachineManifest) -> dict[str, dict[str, str]]:
         layout = self.release_layout
@@ -301,7 +327,7 @@ class PublishedMachineBackend(DockerMachineBackend):
         self.assert_live_volumes(manifest)
         # Do not call checkpoint/restore here: a public write may postdate any snapshot.
         self.quiesce_current()
-        self.remove()
+        self.remove_machine()  # PostgreSQL, guard and proxy stay (P09)
         metadata = self._metadata()
         metadata.update(
             manifest=manifest.model_dump(mode="json"),

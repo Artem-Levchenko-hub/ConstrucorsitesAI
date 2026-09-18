@@ -412,7 +412,8 @@ def test_update_quiesces_actual_previous_manifest_before_removal(
     events = []
     incoming._container = lambda: current
     incoming.assert_live_volumes = lambda _manifest: None
-    incoming.remove = lambda: events.append("remove")
+    incoming.remove_machine = lambda: events.append("remove")
+    incoming.remove = lambda *_a, **_k: events.append("remove-all")
     incoming.restart_infrastructure = lambda: None
     incoming.ensure = lambda *_args: events.append("start-candidate")
 
@@ -424,7 +425,9 @@ def test_update_quiesces_actual_previous_manifest_before_removal(
             raise RuntimeError("quiesce failed")
 
     monkeypatch.setattr(PublishedMachineBackend, "prepare_capture", capture)
-    monkeypatch.setattr(PublishedMachineBackend, "stop", lambda _runtime: events.append("stop"))
+    # P09: a code switch stops only the product; the database keeps serving.
+    monkeypatch.setattr(PublishedMachineBackend, "stop_machine", lambda _r: events.append("stop"))
+    monkeypatch.setattr(PublishedMachineBackend, "stop", lambda _r: events.append("stop-all"))
     if quiesce_fails:
         from omnia_orchestrator.services.published_machine_backend import (
             PublicationRecoveryRequired,

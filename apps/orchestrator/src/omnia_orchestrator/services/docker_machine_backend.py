@@ -500,9 +500,9 @@ class DockerMachineBackend:
             if physical_epoch > epoch:
                 raise CellIdentityConflict("a newer physical machine already exists")
             project_postgres = self._project_postgres()
-            if project_postgres is not None and project_postgres.labels.get(
-                "omnia.fencing_epoch"
-            ) != str(physical_epoch):
+            if project_postgres is not None and not self._postgres_epoch_compatible(
+                physical_epoch, int(project_postgres.labels.get("omnia.fencing_epoch", "0"))
+            ):
                 raise CellIdentityConflict("machine and project postgres epochs differ")
             metadata = self._metadata()
             previous_manifest = MachineManifest.model_validate(metadata["manifest"])
@@ -795,15 +795,23 @@ class DockerMachineBackend:
             ):
                 helper.remove(force=True)
 
+    def _postgres_epoch_compatible(self, machine_epoch: int, postgres_epoch: int) -> bool:
+        """Development machines fence the database with the machine epoch."""
+        return machine_epoch == postgres_epoch
+
+    def _project_postgres_current(self, postgres: Any, namespace_id: str, epoch: int) -> bool:
+        physical_epoch = int(postgres.labels.get("omnia.fencing_epoch", "0"))
+        return physical_epoch == epoch and self._project_postgres_matches(
+            postgres, namespace_id, epoch
+        )
+
     def _ensure_project_postgres(self, namespace_id: str, epoch: int) -> None:
         postgres = self._project_postgres()
         if postgres is not None:
             physical_epoch = int(postgres.labels.get("omnia.fencing_epoch", "0"))
             if physical_epoch > epoch:
                 raise CellIdentityConflict("a newer project postgres already exists")
-            if physical_epoch != epoch or not self._project_postgres_matches(
-                postgres, namespace_id, epoch
-            ):
+            if not self._project_postgres_current(postgres, namespace_id, epoch):
                 postgres.remove(force=True)
                 postgres = None
         if postgres is None:
@@ -1097,12 +1105,26 @@ class DockerMachineBackend:
         self.stop()
 
     def stop(self) -> None:
-        machine = self._container()
-        if machine is not None:
-            machine.stop(timeout=10)
+        self.stop_machine()
         project_postgres = self._project_postgres()
         if project_postgres is not None:
             project_postgres.stop(timeout=10)
+
+    def stop_machine(self) -> None:
+        """Stop only the product container; the project database keeps running."""
+        machine = self._container()
+        if machine is not None:
+            machine.stop(timeout=10)
+
+    def remove_machine(self) -> None:
+        """Retire only the product container (P09); volumes, guard, proxy and the
+        project database are environment resources, not part of one release."""
+        machine = self._container()
+        if machine is None:
+            return
+        machine.remove(force=True)
+        if self._container() is not None:
+            raise CellResourceError("machine removal was not confirmed")
 
     def remove(self, expected_epoch: int | None = None) -> None:
         machine = self._container()
