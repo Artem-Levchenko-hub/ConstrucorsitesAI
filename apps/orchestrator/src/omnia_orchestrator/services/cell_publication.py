@@ -39,7 +39,17 @@ from omnia_orchestrator.services.project_machine import (
     machine_effect,
     write_controller_json,
 )
-from omnia_orchestrator.services.publication_trace import PublicationTrace, reason_code
+from omnia_orchestrator.services.publication_identity import (
+    classify_publication,
+    fingerprint_key,
+    release_fingerprint,
+    source_identity,
+)
+from omnia_orchestrator.services.publication_trace import (
+    FORMAT_VERSION,
+    PublicationTrace,
+    reason_code,
+)
 from omnia_orchestrator.services.published_machine_backend import (
     PublicationRecoveryRequired,
     PublishedMachineBackend,
@@ -136,6 +146,33 @@ class CellPublicationService:
                 raise CellIdentityConflict(
                     "publication hostname change requires explicit migration"
                 )
+            # P04: the desired release, not the request, decides the amount of work.
+            effective = self._effective_request(request)
+            decision = classify_publication(
+                effective,
+                saved.get("active_release"),
+                data_seeded=bool(saved.get("data_seeded")),
+                key=fingerprint_key(self.root),
+            )
+            detail: str | None = None
+            if decision.kind == "already_current":
+                started = time.monotonic()
+                if await self._serving_current(request, saved["active_release"]):
+                    return self._record_shortcut(request, digest, "already_current", started)
+                # Reconcile through a full release, never a fake success.
+                detail = "serving_unhealthy"
+            elif decision.kind == "config_only":
+                started = time.monotonic()
+                self._configure_locked(
+                    request.project_id,
+                    request.owner_id,
+                    runtime_env=effective.runtime_env,
+                    business_config=effective.business_config,
+                    business_config_version=effective.business_config_version,
+                )
+                await self._refresh_public_configuration(request.project_id)
+                self._stamp_active_release(request.project_id)
+                return self._record_shortcut(request, digest, "config_only", started)
             run_id = str(uuid4())
             response = DeployResponse(
                 project_id=request.project_id,
@@ -143,6 +180,7 @@ class CellPublicationService:
                 snapshot_id=request.snapshot_id,
                 commit_sha=request.commit_sha,
                 phase="queued",
+                detail=detail,
                 started_at=_now(),
                 can_cancel=False,
             )
@@ -168,6 +206,87 @@ class CellPublicationService:
             self._tasks[run_id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(run_id, None))
             return response
+
+    def _record_shortcut(
+        self, request: CellDeployRequest, digest: str, detail: str, started: float
+    ) -> DeployResponse:
+        """A finished publication that needed no release: journaled like any
+        other run (same idempotency envelope) so replays and history stay honest."""
+        saved = self._read(request.project_id)
+        active = saved.get("active_release") or {}
+        elapsed = round((time.monotonic() - started) * 1000)
+        now = _now()
+        response = DeployResponse(
+            project_id=request.project_id,
+            run_id=str(uuid4()),
+            snapshot_id=request.snapshot_id,
+            commit_sha=request.commit_sha,
+            phase="done",
+            prod_url=active.get("prod_url"),
+            image_tag=active.get("image_id"),
+            detail=detail,
+            started_at=now,
+            finished_at=now,
+            can_cancel=False,
+            logs=[f"{detail}=1", f"total_ms={elapsed}"],
+            format_version=FORMAT_VERSION,
+            heartbeat_at=now,
+            metrics={"total_ms": elapsed, detail: 1},
+        )
+        saved.update(
+            owner_id=str(request.owner_id),
+            source_workspace_id=str(request.workspace_id),
+            production_workspace_id=str(self.production_identity(request)),
+            slug=request.slug,
+        )
+        saved["history"].append(
+            {
+                "idempotency_key": request.idempotency_key,
+                "request_digest": digest,
+                "response": response.model_dump(mode="json"),
+            }
+        )
+        self._write(request.project_id, saved)
+        return response
+
+    async def _serving_current(self, request: CellDeployRequest, active: dict[str, Any]) -> bool:
+        """True only when the active release provably serves right now: the app
+        container runs the release image, the gateway is up and the public HTTPS
+        address answers. Any doubt means a full publication."""
+        try:
+            manager = self._production_manager(request.workspace_id)
+            state = manager.state_store.load(self.production_identity(request))
+            if state is None:
+                return False
+            backend = self._backend(manager, state, active)
+
+            def observe() -> bool:
+                app = backend._container()
+                if app is None:
+                    return False
+                app.reload()
+                if app.status != "running" or app.attrs.get("Image") != active.get("image_id"):
+                    return False
+                gateway = backend._lookup(
+                    backend.client.containers, backend.stem + "-gateway", "max-gateway"
+                )
+                if gateway is None:
+                    return False
+                gateway.reload()
+                return bool(gateway.status == "running")
+
+            with machine_budget(20):
+                if not await machine_effect(observe):
+                    return False
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5, trust_env=False) as client:
+                probe = await client.get(active["prod_url"], headers={"Accept": "text/html"})
+            return probe.status_code == 200
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return False
 
     def _phase(self, project_id: UUID, run_id: str, phase: str, **values: Any) -> None:
         saved = self._read(project_id)
@@ -423,6 +542,11 @@ class CellPublicationService:
             "source_revision": request.source_revision,
             "snapshot_id": str(request.snapshot_id),
             "resource_profile": asdict(manager.profile),
+            # P04: desired-release identity for the no-op / config-only decision.
+            "fingerprint": release_fingerprint(
+                self._effective_request(request), fingerprint_key(self.root)
+            ),
+            "source_identity": source_identity(request),
         }
         active = saved.get("active_release")
         if active is not None:
@@ -908,43 +1032,82 @@ class CellPublicationService:
         business_config_version: int | None = None,
     ) -> dict[str, bool]:
         async with self._submission_lock.hold(project_id):
-            saved = self._read(project_id)
-            if saved.get("disabled"):
-                raise CellIdentityConflict("publication disabled")
-            if saved.get("owner_id") not in {None, str(owner_id)}:
-                raise CellIdentityConflict("publication owner mismatch")
-            if not saved.get("history") and not saved.get("active_release"):
-                return {"applied": False}
-            path = self.root / str(project_id) / "configuration.json"
-            if path.is_symlink():
-                raise CellIdentityConflict("unsafe public configuration")
-            value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            if value.get("owner_id") not in {None, str(owner_id)}:
-                raise CellIdentityConflict("public configuration owner mismatch")
-            value["owner_id"] = str(owner_id)
-            if runtime_env is not None:
-                value["runtime_env"] = CellDeployRequest.validate_runtime_env(runtime_env)
-            if business_config is not None:
-                if (
-                    business_config_version is None
-                    or business_config_version < 1
-                    or business_config_version < value.get("business_config_version", 0)
-                ):
-                    raise CellIdentityConflict("public configuration version is stale")
-                if business_config_version == value.get(
-                    "business_config_version"
-                ) and business_config != value.get("business_config"):
-                    raise CellIdentityConflict("public configuration version conflicts")
-                value.update(
-                    business_config=business_config, business_config_version=business_config_version
-                )
-            # Independent of immutable code release. Reconciliation and code rollback
-            # always use the latest authorized bot/config, including an empty revoke.
-            write_controller_json(path, value)
-            if saved.get("active_release"):
+            applied = self._configure_locked(
+                project_id,
+                owner_id,
+                runtime_env=runtime_env,
+                business_config=business_config,
+                business_config_version=business_config_version,
+            )
+            if applied:
                 await self._refresh_public_configuration(project_id)
+                self._stamp_active_release(project_id)
                 return {"applied": True}
             return {"applied": False}
+
+    def _stamp_active_release(self, project_id: UUID) -> None:
+        """The configuration just applied is part of the serving identity (P04):
+        recompute the active release's fingerprint from its durable request plus
+        the current configuration, so an identical request is a no-op next time."""
+        saved = self._read(project_id)
+        active = saved.get("active_release")
+        if not active or not active.get("release_id"):
+            return
+        path = self.root / str(project_id) / "requests" / f"{active['release_id']}.json"
+        if not path.is_file() or path.is_symlink():
+            return
+        request = self._effective_request(
+            CellDeployRequest.model_validate_json(path.read_text(encoding="utf-8"))
+        )
+        active["fingerprint"] = release_fingerprint(request, fingerprint_key(self.root))
+        active["source_identity"] = source_identity(request)
+        self._write(project_id, saved)
+
+    def _configure_locked(
+        self,
+        project_id: UUID,
+        owner_id: UUID,
+        *,
+        runtime_env: dict[str, str] | None,
+        business_config: dict[str, Any] | None,
+        business_config_version: int | None,
+    ) -> bool:
+        """Durable configuration write under the project lock; returns whether a
+        live release exists that must now be refreshed."""
+        saved = self._read(project_id)
+        if saved.get("disabled"):
+            raise CellIdentityConflict("publication disabled")
+        if saved.get("owner_id") not in {None, str(owner_id)}:
+            raise CellIdentityConflict("publication owner mismatch")
+        if not saved.get("history") and not saved.get("active_release"):
+            return False
+        path = self.root / str(project_id) / "configuration.json"
+        if path.is_symlink():
+            raise CellIdentityConflict("unsafe public configuration")
+        value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if value.get("owner_id") not in {None, str(owner_id)}:
+            raise CellIdentityConflict("public configuration owner mismatch")
+        value["owner_id"] = str(owner_id)
+        if runtime_env is not None:
+            value["runtime_env"] = CellDeployRequest.validate_runtime_env(runtime_env)
+        if business_config is not None:
+            if (
+                business_config_version is None
+                or business_config_version < 1
+                or business_config_version < value.get("business_config_version", 0)
+            ):
+                raise CellIdentityConflict("public configuration version is stale")
+            if business_config_version == value.get(
+                "business_config_version"
+            ) and business_config != value.get("business_config"):
+                raise CellIdentityConflict("public configuration version conflicts")
+            value.update(
+                business_config=business_config, business_config_version=business_config_version
+            )
+        # Independent of immutable code release. Reconciliation and code rollback
+        # always use the latest authorized bot/config, including an empty revoke.
+        write_controller_json(path, value)
+        return bool(saved.get("active_release"))
 
     async def _refresh_public_configuration(self, project_id: UUID) -> None:
         saved = self._read(project_id)

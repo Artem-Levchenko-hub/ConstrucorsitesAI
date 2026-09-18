@@ -98,6 +98,14 @@ it("removes the publication progress once the run is done", async () => {
   expect(progressBlock()).toBeNull();
 });
 
+it("tells the owner when nothing had to be rebuilt", async () => {
+  api.readiness.mockResolvedValue({ ...readiness(), items: readiness().items.map(item => ({ ...item, done: true })) });
+  api.deploy.mockResolvedValue({ ...base, phase: "done", detail: "already_current", finished_at: "2026-09-18T15:16:54Z", prod_url: "https://app.example.com", format_version: 2, stages: [], metrics: { total_ms: 812, already_current: 1 } });
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.querySelector('[data-testid="max-launch-noop"]')?.textContent).toContain("повторная сборка не потребовалась"));
+  expect(progressBlock()).toBeNull();
+});
+
 it("helpers never turn missing data into progress", () => {
   expect(publicationStageLabel(undefined)).toBe("");
   expect(publicationStageLabel({ phase: "building", stage: null })).toBe("Собираем приложение");

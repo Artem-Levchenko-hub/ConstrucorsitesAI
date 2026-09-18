@@ -100,6 +100,8 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
             {stale && <p className="max-launch-notice">Сервер давно не сообщал о ходе публикации — проверяем состояние. Новая публикация не запускается.</p>}
           </div>}
           {!published && publication === "outdated" && !stateError && <p className="max-launch-notice">Текущая версия не опубликована. После последней публикации появились изменения.</p>}
+          {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "already_current" && <p className="max-launch-notice" data-testid="max-launch-noop">Эта версия уже работала — повторная сборка не потребовалась.</p>}
+          {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "config_only" && <p className="max-launch-notice" data-testid="max-launch-noop">Обновлены только настройки — версия не пересобиралась.</p>}
           {failed && <div role="alert" className="text-sm text-danger-fg"><p>{failure.title}</p>{failure.detail && <p className="max-launch-failure-detail">{failure.detail}</p>}</div>}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">

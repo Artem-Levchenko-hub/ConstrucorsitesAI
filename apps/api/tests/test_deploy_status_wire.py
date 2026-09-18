@@ -64,3 +64,17 @@ def test_failed_run_carries_stage_and_reason():
     )
     assert (status.error_stage, status.reason_code) == ("tls", "tls_failed")
     assert status.metrics["total_ms"] == 90000 and status.stage is None
+
+
+def test_no_op_outcome_keeps_its_detail_and_metric():
+    status = _to_deploy_status(
+        {
+            "run_id": "r",
+            "phase": "done",
+            "detail": "already_current",
+            "prod_url": "https://app.example.test",
+            "format_version": 2,
+            "metrics": {"total_ms": 812, "already_current": 1},
+        }
+    )
+    assert status.detail == "already_current" and status.metrics["already_current"] == 1
