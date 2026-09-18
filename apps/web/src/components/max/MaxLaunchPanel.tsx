@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, Server, X } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
@@ -12,6 +13,7 @@ import type { DeployPhase, Project } from "@/lib/api/types";
 import { getMaxJourney } from "@/lib/max-journey";
 import { isMaxDeployActive } from "@/lib/max-launch-state";
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
+import { type HeartbeatWatch, heartbeatStale, formatElapsed, observeHeartbeat, publicationBytesLabel, publicationElapsedMs, publicationFailureText, publicationStageLabel } from "@/lib/max-publication-progress";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLaunchButton } from "./MaxLaunchButton";
@@ -19,20 +21,39 @@ import { MaxPublicationRequirements, PUBLICATION_REQUIREMENTS } from "./MaxPubli
 import "./max-studio.css";
 import "./max-project-workspace.css";
 
-const phaseLabels: Partial<Record<DeployPhase, string>> = {
-  queued: "В очереди на публикацию", building: "Собираем приложение", pushing: "Передаём сборку на сервер",
-  swapping: "Проверяем и переключаем версию", cancelling: "Останавливаем публикацию",
-};
+const ACTIVE_PHASES = new Set<DeployPhase>(["queued", "building", "pushing", "swapping", "cancelling"]);
+const TERMINAL_PHASES = new Set<DeployPhase>(["done", "failed", "cancelled"]);
 
 export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   project: Pick<Project, "id" | "name" | "template">; onClose?: () => void; standalone?: boolean;
 }) {
   const toggleTimeline = useWorkspaceStore(state => state.toggleTimeline);
+  const queryClient = useQueryClient();
   const integration = useQuery({ queryKey: ["max-integration", project.id], queryFn: () => getMaxIntegration(project.id), retry: false });
   const deploy = useQuery({ queryKey: ["deploy", project.id], queryFn: () => getLastDeploy(project.id), retry: false,
     refetchInterval: query => isMaxDeployActive(query.state.data?.phase ?? "idle", query.state.data?.run_id) ? 1_500 : false });
   const busyDeploy = !deploy.isError && isMaxDeployActive(deploy.data?.phase ?? "idle", deploy.data?.run_id);
-  const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, refetchInterval: busyDeploy ? 2_000 : 10_000 });
+  // Prerequisites are static while a publication runs; they are re-read when it ends, not every 2 s.
+  const readiness = useQuery({ queryKey: ["max-readiness", project.id], queryFn: () => getMaxReadiness(project.id), retry: false, refetchInterval: 10_000 });
+  const deployPhase = deploy.data?.phase;
+  const previousPhase = useRef<DeployPhase | undefined>(undefined);
+  useEffect(() => {
+    const before = previousPhase.current;
+    previousPhase.current = deployPhase;
+    if (before && ACTIVE_PHASES.has(before) && deployPhase && TERMINAL_PHASES.has(deployPhase)) void queryClient.invalidateQueries({ queryKey: ["max-readiness", project.id] });
+  }, [deployPhase, project.id, queryClient]);
+  // Liveness: the heartbeat is judged by when it last changed as seen here (the
+  // client time of the fetch that brought it), never by comparing clocks.
+  const heartbeatAt = deploy.data?.heartbeat_at ?? null;
+  const observedAt = deploy.dataUpdatedAt;
+  const [watch, setWatch] = useState<HeartbeatWatch | null>(null);
+  const nextWatch = observeHeartbeat(watch, heartbeatAt, observedAt);
+  if (nextWatch !== watch) setWatch(nextWatch);
+  const stale = busyDeploy && heartbeatStale(nextWatch, observedAt);
+  const stageLabel = busyDeploy ? publicationStageLabel(deploy.data) : "";
+  const elapsedMs = busyDeploy && observedAt ? publicationElapsedMs(deploy.data, observedAt) : null;
+  const bytesLabel = busyDeploy ? publicationBytesLabel(deploy.data?.progress) : null;
+  const failure = publicationFailureText(deploy.data);
   const items = readiness.data?.items ?? [];
   const available = readiness.isSuccess && items.length > 0;
   const requiredDone = PUBLICATION_REQUIREMENTS.filter(required => items.find(item => item.id === required.id)?.done).length;
@@ -71,9 +92,15 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
-          <p>{stateError ? "Повторите проверку, чтобы получить актуальный статус сервера." : busyDeploy ? phaseLabels[deploy.data!.phase] : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
+          <p>{stateError ? "Повторите проверку, чтобы получить актуальный статус сервера." : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
+          {busyDeploy && <div data-testid="max-launch-publication-progress" className="max-launch-publication-progress" aria-live="polite">
+            <strong>{stageLabel || "Публикуем"}</strong>
+            {elapsedMs !== null && <span>идёт {formatElapsed(elapsedMs)}</span>}
+            {bytesLabel && <span>{bytesLabel}</span>}
+            {stale && <p className="max-launch-notice">Сервер давно не сообщал о ходе публикации — проверяем состояние. Новая публикация не запускается.</p>}
+          </div>}
           {!published && publication === "outdated" && !stateError && <p className="max-launch-notice">Текущая версия не опубликована. После последней публикации появились изменения.</p>}
-          {failed && <p role="alert" className="text-sm text-danger-fg">{deploy.data?.error ?? "Проверьте настройки и повторите публикацию."}</p>}
+          {failed && <div role="alert" className="text-sm text-danger-fg"><p>{failure.title}</p>{failure.detail && <p className="max-launch-failure-detail">{failure.detail}</p>}</div>}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">
             {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>Повторить проверку</Button>

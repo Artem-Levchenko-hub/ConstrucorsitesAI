@@ -160,3 +160,7 @@
   .max-launch-primary-action > div { flex-basis: 100%; }
   .max-launch-configuration { flex-direction: column; }
 }
+.max-launch-publication-progress { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 8px; font-size: 13px; color: var(--color-fg-secondary); }
+.max-launch-publication-progress strong { color: var(--color-fg-primary); font-weight: 500; }
+.max-launch-publication-progress .max-launch-notice { flex-basis: 100%; margin-top: 4px; }
+.max-launch-failure-detail { margin-top: 4px; font-size: 12px; color: var(--color-fg-secondary); }
