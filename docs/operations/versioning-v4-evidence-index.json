@@ -5,11 +5,11 @@
   "verified_at": "2026-09-18",
   "av06_complete": false,
   "components": {
-    "api": {"source_sha": "21cdaf65110291456111927534ca2141ee83b767", "image": "sha256:10e102ed090eca2cb8b61b6ec674788320e1584f60a5c62057a7d45eeb9cdd44"},
-    "worker": {"source_sha": "21cdaf65110291456111927534ca2141ee83b767", "image": "sha256:10e102ed090eca2cb8b61b6ec674788320e1584f60a5c62057a7d45eeb9cdd44"},
-    "generation_worker": {"source_sha": "21cdaf65110291456111927534ca2141ee83b767", "image": "sha256:10e102ed090eca2cb8b61b6ec674788320e1584f60a5c62057a7d45eeb9cdd44"},
+    "api": {"source_sha": "6c4f62335fadbf6d0fa63445c4562fb05bcc4754", "image": "sha256:d4533162bbe6be6ade782219764acc996c77b86a8c1545a33da5e093b47d9b5e"},
+    "worker": {"source_sha": "6c4f62335fadbf6d0fa63445c4562fb05bcc4754", "image": "sha256:d4533162bbe6be6ade782219764acc996c77b86a8c1545a33da5e093b47d9b5e"},
+    "generation_worker": {"source_sha": "6c4f62335fadbf6d0fa63445c4562fb05bcc4754", "image": "sha256:d4533162bbe6be6ade782219764acc996c77b86a8c1545a33da5e093b47d9b5e"},
     "web": {"source_sha": "ff18c258681af725a94bc1cd40024adb0c6bd539", "image": "sha256:42796b8959bd7adf641620a34038cf77944ecc6f215b2ddfa5701cf2c0035726"},
-    "orchestrator": {"source_sha": "2636a2fc23278e2ef4682219fb0e281ce880b76b", "image": "unavailable", "note": "systemd service from /opt/omnia source; checkout 594cddcf, OMNIA_RELEASE_SHA 2636a2fc"}
+    "orchestrator": {"source_sha": "6c4f62335fadbf6d0fa63445c4562fb05bcc4754", "image": "unavailable", "note": "systemd service from /opt/omnia source; checkout 6c4f6233"}
   },
   "preserved_fixes": [
     {"sha": "18b3550b", "what": "resume never rolls a live project database back"},
@@ -31,7 +31,8 @@
     {"id": "AV06.3.repair", "claim": "a deliberately broken adaptation is repaired; exhausted or failing repair never promotes", "status": "partial", "note": "deterministic stubs only; live model canary with a QA fault hook waits for AV10", "sources": ["apps/api/tests/test_versioning_repair_loop.py", "apps/orchestrator/tests/test_versioning_repair_mutations.py"]},
     {"id": "AV19.1.cancel-without-get", "claim": "cancel/apply/prepare reach the API projection without a client GET; cancel during preparation stops at a safe checkpoint", "status": "verified", "sources": ["apps/api/tests/test_restoration_background_reconciliation.py", "apps/orchestrator/tests/test_restoration_cancel_checkpoints.py"]},
     {"id": "AV23.1.cleanup", "claim": "the canary retries its own project's DELETE after 409/503 with backoff and a deadline; foreign ids are refused; the primary error survives", "status": "verified", "sources": ["apps/api/tests/test_versioning_cleanup_retry.py", "apps/api/tests/test_production_canary_diagnostics.py"]},
-    {"id": "live.3cad3a6c", "claim": "one live adaptation kept all six routes and the data (5 clients, 3 visits, 4840.49)", "status": "verified", "note": "a positive run; proves neither source_repair, browser checks nor production", "sources": ["otchet:H160", "docs/operations/adaptive-versioning-baseline.md"]}
+    {"id": "live.3cad3a6c", "claim": "one live adaptation kept all six routes and the data (5 clients, 3 visits, 4840.49)", "status": "verified", "note": "a positive run; proves neither source_repair, browser checks nor production", "sources": ["otchet:H160", "docs/operations/adaptive-versioning-baseline.md"]},
+    {"id": "live.4d61c05a", "claim": "on production a cancel sent 25 s into preparation reached cancelled in SQL after the install stage without any client GET; no build, no failed", "status": "verified", "note": "release 6c4f6233; proves AV19.1 end to end, not cancel latency inside a stage", "sources": ["otchet:H163", "docs/operations/versioning-v4-baseline.md"]}
   ],
   "fv_cases": [
     {"id": "FV009", "status": "passed", "evidence": "apps/api/tests/test_restoration_background_reconciliation.py"},

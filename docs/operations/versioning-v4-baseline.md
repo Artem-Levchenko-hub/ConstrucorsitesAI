@@ -38,5 +38,5 @@ production — those are listed as `not_run` in the index, not as done.
 
 ## Operating notes
 
-- A restoration cancel now reaches `cancelled` within ~30 s on a healthy stand without any client polling; a controller outage leaves each row exactly as it was (state, error) while `next_reconcile_at` advances with backoff, and the worker logs `restoration.reconcile_backlog` when the oldest pending observation is older than 120 s.
+- A restoration cancel now reaches `cancelled` without any client polling: within ~30 s when the controller is idle, or right after the running stage finishes when it is mid-installation (live 2026-09-18, op `4d61c05a…`: cancel 25 s into prepare → `cancelled` after 191 s, no build, report blocker «Подготовка восстановления отменена владельцем.», worker attempts 1→8 with 5→30 s backoff, no GET); a controller outage leaves each row exactly as it was (state, error) while `next_reconcile_at` advances with backoff, and the worker logs `restoration.reconcile_backlog` when the oldest pending observation is older than 120 s.
 - `restoration_reconcile_poll_seconds` (5) and `restoration_reconcile_lease_seconds` (60) are settings of the api worker.
