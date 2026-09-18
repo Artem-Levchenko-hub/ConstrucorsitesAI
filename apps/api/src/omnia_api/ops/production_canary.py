@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 import re
 import time
 from collections.abc import Callable
@@ -146,6 +147,14 @@ _DNS_TLD_PATTERN = re.compile(r"[a-z]{2,63}")
 _REQUEST_TIMEOUT_SECONDS = 30.0
 _CLEANUP_TIMEOUT_SECONDS = 10.0
 _CANCEL_WAIT_SECONDS = 120.0
+# AV23.1: a 409/503 on DELETE means "something of ours is still finishing";
+# the same delete is retried with backoff until this deadline, never a purge.
+_CLEANUP_RETRY_DEADLINE_SECONDS = 180.0
+_CLEANUP_RETRY_BASE_SECONDS = 2.0
+_CLEANUP_RETRY_MAX_SECONDS = 20.0
+# Second bound: a sleep that does not advance the clock must not spin forever.
+_CLEANUP_RETRY_MAX_ATTEMPTS = 12
+_CLEANUP_RETRYABLE_STATUSES = frozenset({409, 425, 429, 502, 503, 504})
 _ACTIVE_GENERATION_STATUSES = frozenset(
     {"pending", "queued_for_capacity", "running", "cancel_requested"}
 )
@@ -357,6 +366,7 @@ class ProductionCanary:
                 },
             )
             project_id = self._required_uuid(project, "id", code="project_create_failed")
+            self._created_project_id = project_id  # the only project cleanup may delete
             seed_snapshot_id = self._required_uuid(
                 project,
                 "current_snapshot_id",
@@ -426,20 +436,8 @@ class ProductionCanary:
             if project_id is not None:
                 # An active run makes deletion return 409 and would keep building.
                 self._cancel_active_generation(project_id)
-                if not self._request_has_status(
-                    "DELETE",
-                    f"/api/projects/{project_id}",
-                    expected_status=204,
-                ):
+                if not self._delete_project_with_retry(project_id):
                     cleanup_failure = CanaryCleanupFailure("project cleanup failed")
-                    self._event(
-                        "project_delete",
-                        "failed",
-                        project_id=project_id,
-                        error_code=cleanup_failure.code,
-                    )
-                else:
-                    self._event("project_delete", "ok", project_id=project_id)
             if logged_in and not self._request_has_status(
                 "POST",
                 "/api/auth/logout",
@@ -548,6 +546,81 @@ class ProductionCanary:
         except httpx.HTTPError:
             return False
         return response.status_code == expected_status
+
+    def _request_status(self, method: str, path: str) -> int | None:
+        try:
+            response = self._client.request(method, path, timeout=_CLEANUP_TIMEOUT_SECONDS)
+        except httpx.HTTPError:
+            return None
+        return response.status_code
+
+    def _delete_project_with_retry(self, project_id: str) -> bool:
+        """AV23.1: retry the exact same DELETE while the API says "busy".
+
+        409 (a release/restoration of this very project is still finishing) and
+        503 ("удаление ещё не подтверждено, повторите") are retried with jittered
+        backoff until a cleanup deadline; 404 means already gone. Anything else
+        is a definitive refusal. Only the project this run created is ever
+        deleted, and no broader purge is attempted."""
+        if project_id != getattr(self, "_created_project_id", None):
+            self._event(
+                "project_delete", "refused", project_id=project_id,
+                error_code="foreign_project",
+            )
+            return False
+        deadline = self._clock() + _CLEANUP_RETRY_DEADLINE_SECONDS
+        attempt = 0
+        while True:
+            attempt += 1
+            status = self._request_status("DELETE", f"/api/projects/{project_id}")
+            if status in {204, 404}:
+                self._event("project_delete", "ok", project_id=project_id, attempts=attempt)
+                return True
+            retryable = status is None or status in _CLEANUP_RETRYABLE_STATUSES
+            exhausted = self._clock() >= deadline or attempt >= _CLEANUP_RETRY_MAX_ATTEMPTS
+            if not retryable or exhausted:
+                self._event(
+                    "project_delete", "failed", project_id=project_id,
+                    error_code="cleanup_deadline" if retryable else "project_delete_rejected",
+                    attempts=attempt, http_status=status,
+                )
+                return False
+            if status == 409:
+                # Our own unfinished work: stop it, then retry the same delete.
+                self._cancel_active_generation(project_id)
+                self._cancel_active_restoration(project_id)
+            self._event(
+                "project_delete", "retry", project_id=project_id,
+                attempts=attempt, http_status=status,
+            )
+            backoff = min(
+                _CLEANUP_RETRY_BASE_SECONDS * (2 ** (attempt - 1)), _CLEANUP_RETRY_MAX_SECONDS
+            )
+            self._sleep(backoff * (0.75 + 0.5 * random.random()))
+
+    def _cancel_active_restoration(self, project_id: str) -> None:
+        """Best effort: a QA restoration of this project blocks its deletion."""
+        try:
+            response = self._client.request(
+                "GET", f"/api/projects/{project_id}/restorations", timeout=_CLEANUP_TIMEOUT_SECONDS,
+            )
+            payload = response.json() if response.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return
+        items = payload.get("items") if isinstance(payload, dict) else None
+        for item in items or []:
+            if isinstance(item, dict) and item.get("can_cancel") is True:
+                cancelled = self._request_has_status(
+                    "POST",
+                    f"/api/projects/{project_id}/restorations/{item.get('id')}/cancel",
+                    expected_status=200,
+                )
+                self._event(
+                    "restoration_cancel",
+                    "ok" if cancelled else "failed",
+                    project_id=project_id,
+                    error_code=None if cancelled else "restoration_cancel_rejected",
+                )
 
     def _generation_status(self, project_id: str) -> object:
         try:
@@ -807,6 +880,8 @@ class ProductionCanary:
         run_id: str | None = None,
         snapshot_id: str | None = None,
         error_code: str | None = None,
+        attempts: int | None = None,
+        http_status: int | None = None,
     ) -> None:
         event: dict[str, object] = {
             "step": step,
@@ -821,4 +896,8 @@ class ProductionCanary:
             event["snapshot_id"] = snapshot_id
         if error_code is not None:
             event["error_code"] = error_code
+        if attempts is not None:
+            event["attempts"] = attempts
+        if http_status is not None:
+            event["http_status"] = http_status
         self._emit(event)

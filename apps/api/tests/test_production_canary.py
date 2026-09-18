@@ -514,6 +514,8 @@ def test_canary_cleanup_failure_overrides_success() -> None:
         canary_module.ProductionCanary(
             _test_config(),
             transport=httpx.MockTransport(scenario.handler),
+            # AV23.1 retries a busy DELETE with backoff; do not sleep for real.
+            sleep=lambda _seconds: None,
         ).run()
 
     _assert_delete_attempted(scenario)
