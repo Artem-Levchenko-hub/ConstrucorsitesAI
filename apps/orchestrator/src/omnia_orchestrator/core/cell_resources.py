@@ -63,6 +63,7 @@ _CAPACITY_REASONS = frozenset(
         "insufficient_memory",
         "insufficient_disk",
         "insufficient_inodes",
+        "insufficient_verification_cpu",
         "daemon_filesystem_unverifiable",
     }
 )

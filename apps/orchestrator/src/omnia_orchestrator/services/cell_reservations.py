@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
 from omnia_orchestrator.core.cell_resources import (
@@ -19,6 +19,15 @@ from omnia_orchestrator.core.cell_resources import (
     LifecycleMutation,
 )
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate
+
+
+def _workload(value: object) -> Literal["runtime", "verification"]:
+    if value == "runtime":
+        return "runtime"
+    if value == "verification":
+        return "verification"
+    raise ValueError("invalid workload")
+
 
 _FILE_MODE = 0o600
 _DIR_MODE = 0o700
@@ -79,6 +88,10 @@ class CellCapacityReservation:
     memory_bytes: int
     disk_bytes: int
     inodes: int
+    # "verification": short-lived isolated build/check (restoration candidate).
+    # Its CPU draws from a separate budget (the future build-worker pool), never
+    # from the runtime ledger that protects running drafts and publications.
+    workload: Literal["runtime", "verification"] = "runtime"
 
     @property
     def quantities(self) -> ReservedCapacity:
@@ -105,7 +118,10 @@ class CellCapacityReservation:
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        extra: dict[str, object] = (
+            {"workload": self.workload} if self.workload != "runtime" else {}
+        )
+        return extra | {
             "workspace_id": str(self.workspace_id),
             "operation_id": str(self.operation_id),
             "fencing_epoch": self.fencing_epoch,
@@ -121,7 +137,9 @@ class CellCapacityReservation:
 
     @classmethod
     def from_dict(cls, payload: object) -> CellCapacityReservation:
-        if type(payload) is not dict or set(payload) != _RESERVATION_KEYS:
+        if type(payload) is not dict or set(payload) not in (
+            _RESERVATION_KEYS, _RESERVATION_KEYS | {"workload"}
+        ):
             raise RuntimeError("capacity reservation payload is invalid")
         value = payload
         try:
@@ -146,6 +164,7 @@ class CellCapacityReservation:
                 memory_bytes=int(value["memory_bytes"]),
                 disk_bytes=int(value["disk_bytes"]),
                 inodes=int(value["inodes"]),
+                workload=_workload(value.get("workload", "runtime")),
             )
         except (TypeError, ValueError) as exc:
             raise RuntimeError("capacity reservation payload is invalid") from exc
@@ -208,12 +227,15 @@ class CellCapacityReservationStore:
         *,
         exclude_workspace_id: UUID | None = None,
         status: Literal["provisional", "confirmed"] | None = None,
+        workload: Literal["runtime", "verification"] | None = None,
     ) -> ReservedCapacity:
         total = ReservedCapacity()
         for reservation in self.all():
             if reservation.workspace_id == exclude_workspace_id:
                 continue
             if status is not None and reservation.status != status:
+                continue
+            if workload is not None and reservation.workload != workload:
                 continue
             total = total.plus(reservation.quantities)
         return total
@@ -237,12 +259,20 @@ class CellCapacityReservationStore:
         if existing is not None and existing.operation_id == mutation.operation_id:
             raise CellFenceRejected("capacity reservation envelope mismatch")
 
-        quantities = ReservedCapacity.from_profile(profile)
+        quantities = (
+            cast(ReservedCapacity, admission_gate.required())
+            if admission_gate.workload == "verification"
+            else ReservedCapacity.from_profile(profile)
+        )
+        workload = admission_gate.workload
         if not running_bundle:
             decision = admission_gate.check(
                 snapshot,
                 existing_bundle=existing is not None,
                 running_bundle=False,
+                cpu_reserved=self.totals(
+                    exclude_workspace_id=workspace_id, workload=workload
+                ).cpu_cores,
                 reserved=self.totals(exclude_workspace_id=workspace_id),
                 provisional=self.totals(
                     exclude_workspace_id=workspace_id,
@@ -264,6 +294,7 @@ class CellCapacityReservationStore:
             memory_bytes=quantities.memory_bytes,
             disk_bytes=quantities.disk_bytes,
             inodes=quantities.inodes,
+            workload=workload,
         )
         self._persist(reservation)
         return reservation

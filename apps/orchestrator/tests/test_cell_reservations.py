@@ -175,3 +175,89 @@ def test_duplicate_reservation_is_idempotent_but_mismatched_envelope_fails(
             admission_gate=CellAdmissionGate(profile),
             running_bundle=False,
         )
+
+
+def _verification_gate(profile: CellResourceProfile, cores: float = 3.0) -> CellAdmissionGate:
+    return CellAdmissionGate(
+        profile, workload="verification", verification_cpu_cores=cores,
+        verification_disk_bytes=8 * 1024**3,
+    )
+
+
+def _fill_runtime(ledger: CellCapacityReservationStore, profile: CellResourceProfile) -> None:
+    """Two confirmed runtime bundles (2.5 cores each) + 2 reserved cores: 7 of 8."""
+    for index in (1, 2):
+        workspace = UUID(f"00000000-0000-0000-0000-00000000020{index}")
+        mutation = _mutation(1, str(index))
+        ledger.reserve(workspace, mutation, profile=profile, snapshot=_snapshot(profile),
+                       admission_gate=CellAdmissionGate(profile), running_bundle=True)
+
+
+def test_verification_candidate_is_admitted_when_runtime_ledger_is_full(tmp_path: Path) -> None:
+    profile = _profile(tmp_path / "project-cells.json")
+    ledger = CellCapacityReservationStore(tmp_path / "capacity-reservations")
+    _fill_runtime(ledger, profile)
+    # A third running app does not fit the runtime ledger...
+    with pytest.raises(CellCapacityUnavailable, match="insufficient_cpu"):
+        ledger.reserve(uuid4(), _mutation(1, "c"), profile=profile,
+                       snapshot=_snapshot(profile), admission_gate=CellAdmissionGate(profile),
+                       running_bundle=False)
+    # ...but a short-lived restoration check draws from its own budget.
+    candidate = uuid4()
+    reservation = ledger.reserve(candidate, _mutation(1, "d"), profile=profile,
+                                 snapshot=_snapshot(profile),
+                                 admission_gate=_verification_gate(profile), running_bundle=False)
+    assert reservation.workload == "verification"
+    assert reservation.disk_bytes == 8 * 1024**3  # not the long-lived 20 GiB bundle quota
+    # The verification budget is its own limit: a second parallel check waits.
+    with pytest.raises(CellCapacityUnavailable, match="insufficient_verification_cpu"):
+        ledger.reserve(uuid4(), _mutation(1, "e"), profile=profile,
+                       snapshot=_snapshot(profile),
+                       admission_gate=_verification_gate(profile), running_bundle=False)
+    reloaded = CellCapacityReservationStore(tmp_path / "capacity-reservations").load(candidate)
+    assert reloaded is not None and reloaded.workload == "verification"
+
+
+def test_verification_does_not_consume_runtime_cpu(tmp_path: Path) -> None:
+    profile = _profile(tmp_path / "project-cells.json")
+    ledger = CellCapacityReservationStore(tmp_path / "capacity-reservations")
+    ledger.reserve(uuid4(), _mutation(1, "a"), profile=profile, snapshot=_snapshot(profile),
+                   admission_gate=_verification_gate(profile), running_bundle=False)
+    ledger.reserve(UUID("00000000-0000-0000-0000-000000000301"), _mutation(1, "b"),
+                   profile=profile, snapshot=_snapshot(profile),
+                   admission_gate=CellAdmissionGate(profile), running_bundle=True)
+    # 2.5 runtime + 2.5 new runtime + 2 host reserve = 7 <= 8: the verification
+    # check's 2.5 cores do not count. (Memory and disk do, hence a roomier host.)
+    from dataclasses import replace
+
+    roomy = replace(_snapshot(profile), memory_available_bytes=40 * 1024**3,
+                    disk_free_bytes=200 * 1024**3, disk_free_inodes=2_000_000)
+    admitted = ledger.reserve(uuid4(), _mutation(1, "c"), profile=profile,
+                              snapshot=roomy,
+                              admission_gate=CellAdmissionGate(profile), running_bundle=False)
+    assert admitted.workload == "runtime"
+
+
+def test_verification_still_needs_physically_free_memory(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    profile = _profile(tmp_path / "project-cells.json")
+    ledger = CellCapacityReservationStore(tmp_path / "capacity-reservations")
+    starved = replace(_snapshot(profile), memory_available_bytes=6 * 1024**3)
+    with pytest.raises(CellCapacityUnavailable, match="insufficient_memory"):
+        ledger.reserve(uuid4(), _mutation(1, "a"), profile=profile, snapshot=starved,
+                       admission_gate=_verification_gate(profile), running_bundle=False)
+
+
+def test_runtime_reservation_files_keep_the_legacy_shape(tmp_path: Path) -> None:
+    import json
+
+    profile = _profile(tmp_path / "project-cells.json")
+    ledger = CellCapacityReservationStore(tmp_path / "capacity-reservations")
+    workspace = UUID("00000000-0000-0000-0000-000000000401")
+    ledger.reserve(workspace, _mutation(1, "a"), profile=profile, snapshot=_snapshot(profile),
+                   admission_gate=CellAdmissionGate(profile), running_bundle=True)
+    (path,) = list((tmp_path / "capacity-reservations").glob("*.json"))
+    assert "workload" not in json.loads(path.read_text())
+    loaded = ledger.load(workspace)
+    assert loaded is not None and loaded.workload == "runtime"

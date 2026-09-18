@@ -279,6 +279,11 @@ class Settings(BaseSettings):
     cell_preview_core_image: str = Field(default="")
     cell_public_helper_cpu_cores: float = Field(default=0.2, ge=0.2)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
+    # CPU budget for short-lived isolated verification candidates (restoration
+    # checks). Separate from the runtime ledger; on the 13-VPS layout this is the
+    # capacity of the isolated build-worker pool.
+    cell_verification_cpu_cores: float = Field(default=2.0, gt=0)
+    cell_verification_disk_bytes: int = Field(default=8 * 1024**3, gt=0)
     cell_host_memory_reserve_bytes: int = Field(default=4 * 1024**3, ge=0)
     cell_required_free_disk_bytes: int = Field(default=20 * 1024**3, gt=0)
     cell_host_disk_reserve_bytes: int = Field(default=10 * 1024**3, ge=0)

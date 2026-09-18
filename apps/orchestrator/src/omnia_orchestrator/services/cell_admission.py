@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import fsum
 from pathlib import Path, PurePosixPath
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from omnia_orchestrator.core.cell_resources import (
     AdmissionDecision,
@@ -214,6 +214,24 @@ class DockerHostCapacityReader:
 @dataclass(frozen=True, slots=True)
 class CellAdmissionGate:
     profile: CellResourceProfile
+    # "verification" gates admit short-lived isolated checks against their own
+    # CPU budget (on the target infrastructure: the build-worker pool) instead
+    # of the runtime ledger. Memory, disk and inodes stay real host checks.
+    workload: Literal["runtime", "verification"] = "runtime"
+    verification_cpu_cores: float = 0.0
+    verification_disk_bytes: int = 8 * 1024**3
+
+    def required(self) -> object:
+        """Capacity one admission asks for. A verification candidate holds code,
+        dependencies and one database copy, not a full long-lived bundle quota."""
+        from dataclasses import replace
+
+        from omnia_orchestrator.services.cell_reservations import ReservedCapacity
+
+        base = ReservedCapacity.from_profile(self.profile)
+        if self.workload != "verification":
+            return base
+        return replace(base, disk_bytes=min(base.disk_bytes, self.verification_disk_bytes))
 
     def check(
         self,
@@ -223,6 +241,7 @@ class CellAdmissionGate:
         running_bundle: bool,
         reserved: object | None = None,
         provisional: object | None = None,
+        cpu_reserved: float | None = None,
     ) -> AdmissionDecision:
         from omnia_orchestrator.services.cell_reservations import ReservedCapacity
 
@@ -232,7 +251,7 @@ class CellAdmissionGate:
         provisional_capacity = (
             provisional if isinstance(provisional, ReservedCapacity) else ReservedCapacity()
         )
-        required = ReservedCapacity.from_profile(self.profile)
+        required = cast(ReservedCapacity, self.required())
         if snapshot.failure_reason:
             return AdmissionDecision(False, snapshot.failure_reason)
         if running_bundle:
@@ -245,16 +264,25 @@ class CellAdmissionGate:
         # Sum demand instead of subtracting fractional quotas: 8 - 4.2 - 1.8
         # rounds below the protected 2 cores and rejects an exact-fit release.
         # Accurate summation needs no tolerance that could admit real excess.
-        if fsum((
-            reserved_capacity.cpu_cores,
+        cpu_used = reserved_capacity.cpu_cores if cpu_reserved is None else cpu_reserved
+        if self.workload == "verification":
+            if fsum((cpu_used, required.cpu_cores)) > self.verification_cpu_cores:
+                return AdmissionDecision(False, "insufficient_verification_cpu")
+        elif fsum((
+            cpu_used,
             required.cpu_cores,
             self.profile.host_cpu_reserve_cores,
         )) > snapshot.cpu_count:
             return AdmissionDecision(False, "insufficient_cpu")
+        # A verification candidate lives minutes under hard Docker limits: it is
+        # admitted on memory/disk that is physically free now, not against the
+        # long-lived runtime ledger (which already double-counts idle apps).
+        ledger = self.workload != "verification"
         memory_total = snapshot.memory_total_bytes or snapshot.memory_available_bytes
         if (
-            memory_total - reserved_capacity.memory_bytes - required.memory_bytes
-            < (self.profile.host_memory_reserve_bytes)
+            (ledger
+            and memory_total - reserved_capacity.memory_bytes - required.memory_bytes
+            < (self.profile.host_memory_reserve_bytes))
             or snapshot.memory_available_bytes
             - provisional_capacity.memory_bytes
             - (required.memory_bytes)
@@ -262,16 +290,16 @@ class CellAdmissionGate:
         ):
             return AdmissionDecision(False, "insufficient_memory")
         disk_total = snapshot.disk_total_bytes or snapshot.disk_free_bytes
-        if disk_total - reserved_capacity.disk_bytes - required.disk_bytes < (
+        if (ledger and disk_total - reserved_capacity.disk_bytes - required.disk_bytes < (
             self.profile.host_disk_reserve_bytes
-        ) or snapshot.disk_free_bytes - provisional_capacity.disk_bytes - required.disk_bytes < (
+        )) or snapshot.disk_free_bytes - provisional_capacity.disk_bytes - required.disk_bytes < (
             self.profile.host_disk_reserve_bytes
         ):
             return AdmissionDecision(False, "insufficient_disk")
         inode_total = snapshot.disk_total_inodes or snapshot.disk_free_inodes
-        if inode_total - reserved_capacity.inodes - required.inodes < (
+        if (ledger and inode_total - reserved_capacity.inodes - required.inodes < (
             self.profile.host_inode_reserve
-        ) or snapshot.disk_free_inodes - provisional_capacity.inodes - required.inodes < (
+        )) or snapshot.disk_free_inodes - provisional_capacity.inodes - required.inodes < (
             self.profile.host_inode_reserve
         ):
             return AdmissionDecision(False, "insufficient_inodes")

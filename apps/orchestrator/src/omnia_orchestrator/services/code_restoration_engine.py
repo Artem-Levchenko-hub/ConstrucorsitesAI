@@ -30,6 +30,7 @@ from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationPrepare,
     RestorationDatabaseState,
 )
+from omnia_orchestrator.services.cell_admission import CellAdmissionGate
 from omnia_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
@@ -518,6 +519,21 @@ class CodeRestorationEngine:
         from omnia_orchestrator.services.cell_publication_capacity import production_manager
 
         candidate_manager = production_manager(manager, self.settings)
+        # A restoration candidate is a verification workload, not a running app:
+        # it must not compete with the draft/publication runtime reservations.
+        candidate_manager = replace(
+            candidate_manager,
+            admission_gate=CellAdmissionGate(
+                candidate_manager.profile,
+                workload="verification",
+                verification_cpu_cores=float(
+                    getattr(self.settings, "cell_verification_cpu_cores", 2.0)
+                ),
+                verification_disk_bytes=int(
+                    getattr(self.settings, "cell_verification_disk_bytes", 8 * 1024**3)
+                ),
+            ),
+        )
         spec = WorkspaceSpec(
             workspace_id=candidate_id,
             project_id=request.project_id,
