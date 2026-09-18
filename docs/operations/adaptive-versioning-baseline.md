@@ -68,6 +68,8 @@ Real-DB tests need `RESTORATION_TEST_DATABASE_URL=.../restoration_policy_test`
 |---|---|
 | Restore v1 (clients only) | `needs_changes`, format 2: crm_clients 5 / crm_client_visits 3 rows; one blocker `required_field_missing_on_create` on `public.crm_clients.email`; `crm_clients_status_check` unchanged; lost functions `POST /api/clients/[id]/visits`, `DELETE …/visits/[visitId]` |
 | Restore v2 (email + visits) | `ready`, `mode=exact` (no AI), both CHECKs unchanged, reads compatible → applied in 60 s → version 4, head `24739617`; live app returns 5 clients with 3 visits (sum 4840.49) |
-| Adaptation via AI (AV06 live) | blocked: LLMGW.ru key is blocked (`401 Key is blocked`), every generation fails `PROVIDER_AUTH_FAILED` until the owner unblocks it |
+| Adaptation via AI (AV06 live) | after the owner unblocked the LLMGW key: run `3cad3a6c`, 17 min, `complete` on the first finalization (no `source_repair` event) → version 5, head `1355ac0c`. Route set of the result equals the draft before adaptation (6 routes incl. `POST/DELETE …/visits`), checked both in git (`capability_gap → None`) and in the running machine; data intact (5 clients, 3 visits, 4840.49); the old v1 form (`POST /api/clients` without email) now creates a client (201) — the agent reused the phone-derived surrogate rule of migration 0002; the test row was deleted afterwards |
+
+Note on the email rule: the adapted `POST /api/clients` fills a missing email as `<digits>@clients.local`, i.e. the same technical surrogate the v2 migration used for backfill. It keeps the old form working but is not a verified address; AV07 (`needs_decision`) is where the owner confirms or replaces such rules.
 
 Found on the way: the production generation canary leaked its project after a capacity wait (cleanup DELETE got 409 while the release op was in flight); retrying the DELETE as the canary owner is the designed recovery.
