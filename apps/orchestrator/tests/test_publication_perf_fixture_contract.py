@@ -50,12 +50,13 @@ def test_mode_comes_from_journal_state_not_from_names():
         )
         == "config_only"
     )
-    assert (
-        publication_mode(
-            data_seeded=True, active_release=active, desired_snapshot_id="new", schema_compatible=False
-        )
-        == "migration"
+    incompatible = mode(
+        data_seeded=True,
+        active_release=active,
+        desired_snapshot_id="new",
+        schema_compatible=False,
     )
+    assert incompatible == "migration"
     # A project called "warm-qa" with no seeded data is still a first publish.
     journal = {"slug": "warm-qa", "data_seeded": False}
     result = profile(QA, journal, desired_snapshot_id="new", logs=None)
