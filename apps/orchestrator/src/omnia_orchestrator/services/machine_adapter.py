@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
 
+import docker  # type: ignore[import-untyped]
+
 from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellResourceError,
@@ -43,6 +45,10 @@ _PROJECT_POSTGRES_MIN_MEMORY_BYTES = 128 * 1024**2
 _PROJECT_POSTGRES_TARGET_MEMORY_BYTES = 256 * 1024**2
 _PROJECT_POSTGRES_MIN_CPU_CORES = 0.1
 _PROJECT_POSTGRES_TARGET_CPU_CORES = 0.15
+# Gateway CPU: one full core while it starts, 5% of a core afterwards.
+_GATEWAY_CPU_PERIOD = 100_000
+_GATEWAY_BOOST_QUOTA = 100_000
+_GATEWAY_STEADY_QUOTA = 5_000
 _PUBLIC_CORE_COMMAND = (
     "sh", "-ec",
     "timeout 45 node scripts/apply-migrations.mjs\n"
@@ -865,7 +871,14 @@ class MachineAdapter:
             tmpfs={"/run/omnia-boundary": "rw,noexec,nosuid,nodev,size=1m,mode=0700"},
             mem_limit=32 * 1024**2,
             memswap_limit=32 * 1024**2,
-            nano_cpus=50_000_000,
+            # P13/P17: the gateway needs ~1.2 CPU-seconds to start (Python + the
+            # seeded boundary server). At its steady 5% of a core that was ~25 s of
+            # pure throttling on every publication and preview wake — measured on
+            # production (nr_throttled 222/249 periods). It starts with a full core
+            # and is lowered to the steady quota once it answers; memory, pids and
+            # every isolation option stay as they were.
+            cpu_period=_GATEWAY_CPU_PERIOD,
+            cpu_quota=_GATEWAY_BOOST_QUOTA,
             pids_limit=32,
         )
         gateway.start()
@@ -905,6 +918,13 @@ class MachineAdapter:
             "IPAddress"
         ]
         self._wait_http(gateway, gateway_ip, "/__omnia/identity", expected=401, timeout=30)
+        try:
+            # Back to the steady quota before its identity is recorded, so the
+            # receipt describes the container as it will keep running.
+            gateway.update(cpu_period=_GATEWAY_CPU_PERIOD, cpu_quota=_GATEWAY_STEADY_QUOTA)
+        except (docker.errors.APIError, OSError):
+            # A gateway left with its start-up quota still serves correctly.
+            pass
         identity = backend.trusted_container_identity(gateway, "max-gateway")
         if identity is not None:
             write_controller_json(runtime_stamp, {"digest": runtime_digest, "gateway": identity})

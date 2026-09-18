@@ -366,3 +366,22 @@ async def test_start_hands_the_trace_to_the_boundary_as_observer(tmp_path, monke
     ]
     await service._start(manager, object(), release, value, switch=True)
     assert "observer" not in seen[-1]
+
+
+def test_gateway_starts_with_a_full_core_and_settles_at_the_steady_quota():
+    """P13/P17: the gateway's start-up burned ~25 s in CPU throttling at 5% of a
+    core (measured on production). It is created with a full core and lowered to
+    the steady quota before its identity receipt is taken."""
+    import inspect
+
+    from omnia_orchestrator.services import machine_adapter as module
+
+    assert module._GATEWAY_BOOST_QUOTA == module._GATEWAY_CPU_PERIOD  # one core
+    assert module._GATEWAY_STEADY_QUOTA * 20 == module._GATEWAY_CPU_PERIOD  # 5%
+    source = inspect.getsource(module.MachineAdapter._start_boundary)
+    created = source.index("cpu_quota=_GATEWAY_BOOST_QUOTA")
+    ready = source.index('"/__omnia/identity", expected=401, timeout=30)', created)
+    lowered = source.index("cpu_quota=_GATEWAY_STEADY_QUOTA", ready)
+    receipt = source.index('trusted_container_identity(gateway, "max-gateway")', lowered)
+    assert created < ready < lowered < receipt
+    assert "nano_cpus=50_000_000" not in source  # NanoCpus cannot be combined with a quota
