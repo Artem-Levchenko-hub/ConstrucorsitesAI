@@ -148,7 +148,6 @@ async def test_normal_create_persists_server_decision_without_provisioning(
     session = SimpleNamespace(add=add, flush=AsyncMock(), commit=AsyncMock(), refresh=AsyncMock())
     monkeypatch.setattr(projects.repo_svc, "init_repo", lambda *_: "a" * 40)
     monkeypatch.setattr(projects, "enqueue_preview", lambda _: None)
-    monkeypatch.setattr(projects, "preview_public_url", lambda _: "https://preview.example.test")
     monkeypatch.setattr(projects, "publish_event", AsyncMock())
     created = await projects.create_project(
         ProjectCreate.model_validate(

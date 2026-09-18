@@ -44,6 +44,7 @@ from omnia_api.schemas.project import (
     ProjectUpdate,
     is_fullstack,
 )
+from omnia_api.schemas.snapshot import snapshot_event_dict
 from omnia_api.services import max_client, orchestrator_client, project_cell_runtime, repo_import
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.design_presets import PRESETS
@@ -166,19 +167,7 @@ async def create_project(
     await publish_event(
         project.id,
         "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(snapshot.id),
-                "project_id": str(snapshot.project_id),
-                "commit_sha": snapshot.commit_sha,
-                "prompt_text": snapshot.prompt_text,
-                "model_id": snapshot.model_id,
-                "parent_id": str(snapshot.parent_id) if snapshot.parent_id else None,
-                "preview_url": preview_public_url(snapshot.preview_key),
-                "is_rollback_target": snapshot.is_rollback_target,
-                "created_at": snapshot.created_at.isoformat(),
-            }
-        },
+        {"snapshot": snapshot_event_dict(snapshot)},
     )
 
     return project
@@ -295,19 +284,7 @@ async def import_project(
     await publish_event(
         project.id,
         "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(snapshot.id),
-                "project_id": str(snapshot.project_id),
-                "commit_sha": snapshot.commit_sha,
-                "prompt_text": snapshot.prompt_text,
-                "model_id": snapshot.model_id,
-                "parent_id": str(snapshot.parent_id) if snapshot.parent_id else None,
-                "preview_url": preview_public_url(snapshot.preview_key),
-                "is_rollback_target": snapshot.is_rollback_target,
-                "created_at": snapshot.created_at.isoformat(),
-            }
-        },
+        {"snapshot": snapshot_event_dict(snapshot)},
     )
 
     return project
@@ -478,19 +455,7 @@ async def perform_fork(
         await publish_event(
             fork.id,
             "snapshot.created",
-            {
-                "snapshot": {
-                    "id": str(snapshot.id),
-                    "project_id": str(snapshot.project_id),
-                    "commit_sha": snapshot.commit_sha,
-                    "prompt_text": snapshot.prompt_text,
-                    "model_id": snapshot.model_id,
-                    "parent_id": None,
-                    "preview_url": preview_public_url(snapshot.preview_key),
-                    "is_rollback_target": snapshot.is_rollback_target,
-                    "created_at": snapshot.created_at.isoformat(),
-                }
-            },
+            {"snapshot": snapshot_event_dict(snapshot)},
         )
 
     return fork

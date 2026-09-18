@@ -102,7 +102,6 @@ def _patch_common(monkeypatch, hot_calls, *, hot_reload_raises=False):
         return None
 
     monkeypatch.setattr(rollback_mod, "publish_event", _publish)
-    monkeypatch.setattr(rollback_mod, "preview_public_url", lambda key: None)
 
 
 def _run_rollback(project):
@@ -233,7 +232,6 @@ def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
         return None
 
     monkeypatch.setattr(rollback_mod, "publish_event", _publish)
-    monkeypatch.setattr(rollback_mod, "preview_public_url", lambda key: None)
 
     session = _Session(project, _make_target())
     user = SimpleNamespace(id=_OWNER)

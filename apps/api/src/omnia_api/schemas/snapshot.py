@@ -26,6 +26,17 @@ def snapshot_public_dict(s: Snapshot) -> dict[str, object]:
     }
 
 
+def snapshot_event_dict(s: Snapshot) -> dict[str, object]:
+    """Wire form of :func:`snapshot_public_dict` for the ``snapshot.created`` event."""
+    return {
+        **snapshot_public_dict(s),
+        "id": str(s.id),
+        "project_id": str(s.project_id),
+        "parent_id": str(s.parent_id) if s.parent_id else None,
+        "created_at": s.created_at.isoformat(),
+    }
+
+
 class SnapshotPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

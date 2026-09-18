@@ -17,12 +17,11 @@ from fastapi import APIRouter, status
 
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.routers.public import _INDEX_CANDIDATES
-from omnia_api.schemas.snapshot import SnapshotPublic
+from omnia_api.schemas.snapshot import SnapshotPublic, snapshot_event_dict
 from omnia_api.schemas.snapshot import snapshot_public_dict as _snapshot_dict
 from omnia_api.schemas.style_patch import StylePatchRequest
 from omnia_api.services import orchestrator_client
@@ -226,21 +225,7 @@ async def post_style_patch(
     await publish_event(
         project_id,
         "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(new_snapshot.id),
-                "project_id": str(new_snapshot.project_id),
-                "commit_sha": new_snapshot.commit_sha,
-                "prompt_text": new_snapshot.prompt_text,
-                "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
-                "preview_url": preview_public_url(new_snapshot.preview_key),
-                "is_rollback_target": new_snapshot.is_rollback_target,
-                "created_at": new_snapshot.created_at.isoformat(),
-            }
-        },
+        {"snapshot": snapshot_event_dict(new_snapshot)},
     )
 
     return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))

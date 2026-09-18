@@ -5,27 +5,15 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.core.minio import preview_public_url
 from omnia_api.models.account import BusinessEntitlement
 from omnia_api.models.message import Message
-from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
+from omnia_api.schemas.snapshot import snapshot_event_dict
 
 ORCHESTRATION_LABEL = "Оркестратор Sonnet+DeepSeek"
 
 
-def _snapshot_payload(s: Snapshot) -> dict[str, object]:
-    return {
-        "id": str(s.id),
-        "project_id": str(s.project_id),
-        "commit_sha": s.commit_sha,
-        "prompt_text": s.prompt_text,
-        "model_id": s.model_id,
-        "parent_id": str(s.parent_id) if s.parent_id else None,
-        "preview_url": preview_public_url(s.preview_key),
-        "is_rollback_target": s.is_rollback_target,
-        "created_at": s.created_at.isoformat(),
-    }
+_snapshot_payload = snapshot_event_dict
 
 
 async def _finalize_message(
