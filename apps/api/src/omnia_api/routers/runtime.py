@@ -145,6 +145,15 @@ def _to_deploy_status(payload: dict[str, Any]) -> DeployStatus:
         target_id=payload.get("target_id"),
         can_cancel=bool(payload.get("can_cancel")),
         logs=list(payload.get("logs") or []),
+        format_version=int(payload.get("format_version") or 1),
+        stage=payload.get("stage"),
+        stage_started_at=payload.get("stage_started_at"),
+        heartbeat_at=payload.get("heartbeat_at"),
+        progress=payload.get("progress"),
+        stages=list(payload.get("stages") or []),
+        metrics=dict(payload.get("metrics") or {}),
+        error_stage=payload.get("error_stage"),
+        reason_code=payload.get("reason_code"),
     )
 
 

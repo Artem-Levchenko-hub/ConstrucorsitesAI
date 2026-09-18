@@ -7,7 +7,7 @@ import os
 import re
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -63,6 +63,22 @@ class MachineEnvironmentStore:
         self.workspace_id = workspace_id
         self.backend = backend
         self.max_bytes = max_bytes
+        # P01: optional stage/byte progress sink (PublicationTrace); never required.
+        self.observer: Any = None
+
+    def _stage(self, name: str) -> None:
+        if self.observer is not None:
+            self.observer.stage(name)
+
+    def _digest(self, path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                machine_remaining_seconds(1)
+                digest.update(chunk)
+                if self.observer is not None:
+                    self.observer.add_bytes(len(chunk))
+        return digest.hexdigest()
 
     def artifact_path(self, reference: str) -> Path:
         if re.fullmatch(r"[0-9a-f]{32}\.tar", reference) is None:
@@ -85,6 +101,8 @@ class MachineEnvironmentStore:
                         raise EnvironmentIntegrityError("environment artifact exceeds disk budget")
                     handle.write(chunk)
                     digest.update(chunk)
+                    if self.observer is not None:
+                        self.observer.add_bytes(len(chunk))
                 handle.flush()
                 os.fsync(handle.fileno())
             if not size:
@@ -111,12 +129,14 @@ class MachineEnvironmentStore:
         machine_remaining_seconds(1)
         self.backend.stop()
         machine_remaining_seconds(1)
+        self._stage("capture_rootfs")
         if previous is not None and self._reusable_image(previous, base_image=base_image):
             image_id = previous.image_id
             reference, digest, size = previous.artifact_ref, previous.sha256, previous.size
         else:
             image_id, chunks = self.backend.export_image()
             reference, digest, size = self._save(chunks, self.max_bytes)
+        self._stage("capture_volumes")
         remaining = self.max_bytes - size
         volume_refs = []
         for name in volumes:
@@ -164,6 +184,8 @@ class MachineEnvironmentStore:
                 while chunk := handle.read(1024 * 1024):
                     machine_remaining_seconds(1)
                     digest.update(chunk)
+                    if self.observer is not None:
+                        self.observer.add_bytes(len(chunk))
             return digest.hexdigest() == previous.sha256
         except TimeoutError:
             raise
@@ -194,9 +216,7 @@ class MachineEnvironmentStore:
                 raise EnvironmentIntegrityError("environment artifact missing or unsafe")
             if path.stat().st_size != item.size:
                 raise EnvironmentIntegrityError("environment artifact size/digest mismatch")
-            with path.open("rb") as handle:
-                digest = hashlib.file_digest(handle, "sha256").hexdigest()
-            if digest != item.sha256:
+            if self._digest(path) != item.sha256:
                 raise EnvironmentIntegrityError("environment artifact digest mismatch")
 
     def restore(

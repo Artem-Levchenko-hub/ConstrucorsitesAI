@@ -746,6 +746,21 @@ export type DeployPhase =
   | "done"
   | "failed";
 
+export type DeployProgress = {
+  bytes_done: number;
+  bytes_total: number | null;
+  files_done: number | null;
+};
+
+export type DeployStage = {
+  stage: string;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_ms: number | null;
+  bytes_done?: number | null;
+  bytes_total?: number | null;
+};
+
 export type DeployStatus = {
   run_id: string | null;
   snapshot_id?: Uuid | null;
@@ -761,6 +776,16 @@ export type DeployStatus = {
   target_id: string | null;
   can_cancel: boolean;
   logs: string[];
+  /** format_version 2 (P01): durable substages, heartbeat and metrics; absent = older controller. */
+  format_version?: number;
+  stage?: string | null;
+  stage_started_at?: IsoDateTime | null;
+  heartbeat_at?: IsoDateTime | null;
+  progress?: DeployProgress | null;
+  stages?: DeployStage[];
+  metrics?: Record<string, number>;
+  error_stage?: string | null;
+  reason_code?: string | null;
 };
 
 export type ApiErrorBody = {

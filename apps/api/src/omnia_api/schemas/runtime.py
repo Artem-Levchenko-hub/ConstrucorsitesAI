@@ -66,6 +66,23 @@ class DeployRequest(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
+class DeployProgress(BaseModel):
+    """Transfer progress of the current publication stage; unknown total is None."""
+
+    bytes_done: int = 0
+    bytes_total: int | None = None
+    files_done: int | None = None
+
+
+class DeployStage(BaseModel):
+    stage: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    elapsed_ms: int | None = None
+    bytes_done: int | None = None
+    bytes_total: int | None = None
+
+
 class DeployStatus(BaseModel):
     run_id: str | None = None
     snapshot_id: UUID | None = None
@@ -82,6 +99,17 @@ class DeployStatus(BaseModel):
     target_id: str | None = None
     can_cancel: bool = False
     logs: list[str] = Field(default_factory=list)
+    # format_version 2 (P01): durable substages, heartbeat, byte progress and
+    # per-stage metrics. Missing on an older controller's answer = unknown.
+    format_version: int = 1
+    stage: str | None = None
+    stage_started_at: str | None = None
+    heartbeat_at: str | None = None
+    progress: DeployProgress | None = None
+    stages: list[DeployStage] = Field(default_factory=list)
+    metrics: dict[str, int] = Field(default_factory=dict)
+    error_stage: str | None = None
+    reason_code: str | None = None
 
 
 class RuntimeLogs(BaseModel):

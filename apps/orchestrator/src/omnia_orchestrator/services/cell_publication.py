@@ -35,6 +35,7 @@ from omnia_orchestrator.services.project_machine import (
     machine_effect,
     write_controller_json,
 )
+from omnia_orchestrator.services.publication_trace import PublicationTrace, reason_code
 from omnia_orchestrator.services.published_machine_backend import (
     PublicationRecoveryRequired,
     PublishedMachineBackend,
@@ -73,6 +74,7 @@ class CellPublicationService:
         self.manager_factory = manager_factory
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._submission_lock = WorkspaceOperationLock(self.root)
+        self.heartbeat_seconds = 1.0
 
     def _project_path(self, project_id: UUID) -> Path:
         return self.root / str(project_id) / "publication.json"
@@ -186,20 +188,29 @@ class CellPublicationService:
 
     async def _execute(self, request: CellDeployRequest, run_id: str) -> None:
         started = time.monotonic()
+        trace = PublicationTrace()
+        trace.flush = lambda: self._touch(request.project_id, run_id, trace)
+        heartbeat = asyncio.create_task(self._heartbeat(request.project_id, run_id, trace))
         try:
             with machine_budget(870):
                 async with asyncio.timeout(870):
-                    self._phase(request.project_id, run_id, "building")
-                    release = await self._prepare(request, run_id)
+                    self._phase(request.project_id, run_id, "building", **trace.snapshot())
+                    release = await self._prepare(request, run_id, trace)
                     prepared = time.monotonic()
+                    trace.end_stage()
+                    trace.metrics["prepare_ms"] = round((prepared - started) * 1000)
                     self._phase(
                         request.project_id,
                         run_id,
                         "swapping",
                         logs=[f"prepare_ms={round((prepared - started) * 1000)}"],
+                        **trace.snapshot(),
                     )
-                    await self._activate(request, release)
+                    await self._activate(request, release, trace)
                     activated = time.monotonic()
+                    trace.end_stage()
+                    trace.metrics["activate_ms"] = round((activated - prepared) * 1000)
+                    trace.metrics["total_ms"] = round((activated - started) * 1000)
                     self._phase(
                         request.project_id,
                         run_id,
@@ -212,16 +223,20 @@ class CellPublicationService:
                             f"activate_ms={round((activated - prepared) * 1000)}",
                             f"total_ms={round((activated - started) * 1000)}",
                         ],
+                        **trace.snapshot(),
                     )
         except BaseException as exc:
             # Raw Docker/SQL exceptions may contain credentials or project data.
             import structlog
 
+            failed_stage = trace.current_stage()
             structlog.get_logger("cell_publication").warning(
                 "public_release_failed",
                 project_id=str(request.project_id),
                 run_id=run_id,
                 error_type=type(exc).__name__,
+                stage=failed_stage,
+                reason_code=reason_code(exc),
                 frames=[
                     {
                         "module": Path(frame.filename).name,
@@ -236,20 +251,67 @@ class CellPublicationService:
                 if str(exc) == "publication_migration_required"
                 else f"publication failed ({type(exc).__name__}); retained data were not restored"
             )
-            self._phase(request.project_id, run_id, "failed", error=error, finished_at=_now())
+            trace.end_stage()
+            trace.metrics["total_ms"] = round((time.monotonic() - started) * 1000)
+            self._phase(
+                request.project_id,
+                run_id,
+                "failed",
+                error=error,
+                finished_at=_now(),
+                error_stage=failed_stage,
+                reason_code=reason_code(exc),
+                **trace.snapshot(),
+            )
             if isinstance(exc, asyncio.CancelledError):
                 raise
+        finally:
+            heartbeat.cancel()
 
-    async def _prepare(self, request: CellDeployRequest, run_id: str) -> dict[str, Any]:
+    async def _heartbeat(self, project_id: UUID, run_id: str, trace: PublicationTrace) -> None:
+        """Prove liveness while a long stage runs: write progress at most once per
+        interval and a plain heartbeat at least every five intervals."""
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(self.heartbeat_seconds)
+            if trace.dirty() or time.monotonic() - last >= self.heartbeat_seconds * 5:
+                self._touch(project_id, run_id, trace)
+                last = time.monotonic()
+
+    def _touch(self, project_id: UUID, run_id: str, trace: PublicationTrace) -> None:
+        """Write the trace snapshot into the run's durable response while it is
+        still active; a heartbeat must never break the publication it describes."""
+        try:
+            saved = self._read(project_id)
+            item = next(
+                (item for item in saved["history"] if item["response"].get("run_id") == run_id),
+                None,
+            )
+            if item is None or item["response"].get("phase") not in _ACTIVE:
+                return
+            item["response"].update(trace.snapshot())
+            self._write(project_id, saved)
+        except (OSError, ValueError, KeyError, CellIdentityConflict):
+            return
+
+    async def _prepare(
+        self, request: CellDeployRequest, run_id: str, trace: PublicationTrace | None = None
+    ) -> dict[str, Any]:
         async with self._submission_lock.hold(request.project_id):
             if self._read(request.project_id).get("disabled"):
                 raise CellIdentityConflict("publication disabled")
-            return await self._prepare_locked(request, run_id)
+            if trace is None:
+                return await self._prepare_locked(request, run_id)
+            return await self._prepare_locked(request, run_id, trace)
 
-    async def _prepare_locked(self, request: CellDeployRequest, run_id: str) -> dict[str, Any]:
+    async def _prepare_locked(
+        self, request: CellDeployRequest, run_id: str, trace: PublicationTrace | None = None
+    ) -> dict[str, Any]:
         from omnia_orchestrator.routers.runtime import _workspace_revision
         from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
 
+        trace = trace or PublicationTrace()
+        trace.stage("preflight")
         manager = self._manager(request.workspace_id)
         adapter = manager.machine_runtime
         if adapter is None:
@@ -281,7 +343,9 @@ class CellPublicationService:
             seeded = bool(self._read(request.project_id).get("data_seeded"))
             preview = adapter.preview(source_state)
             if preview is None or preview[0] != "running":
+                trace.stage("source_wake")
                 await adapter.resume_preview(source_state)
+            trace.stage("source_schema")
             source_schema = await machine_effect(PublishedMachineBackend.schema_digest, source)
             try:
                 # Business data already belongs to the live production identity
@@ -300,6 +364,7 @@ class CellPublicationService:
                     source_state,
                     volumes=capture_volumes,
                     persist=not seeded,
+                    observer=trace,
                 )
                 if reference is None:
                     raise CellResourceError("publication environment capture missing")
@@ -309,6 +374,11 @@ class CellPublicationService:
                     source,
                     max_bytes=source.disk_bytes,
                 )
+                trace.stage(
+                    "verify_artifacts",
+                    bytes_total=reference.size + sum(volume.size for volume in reference.volumes),
+                )
+                store.observer = trace
                 await machine_effect(store.validate, reference, manifest_digest=manifest.digest())
                 if seeded:
                     if (
@@ -320,7 +390,9 @@ class CellPublicationService:
                     source.validate_restore_reference(reference)
             finally:
                 if not adapter.recovery_required(source_state):
+                    trace.stage("resume_source")
                     await adapter.resume_preview(source_state)
+        trace.stage("prepare_target")
         manager = self._production_manager(request.workspace_id)
         saved = self._read(request.project_id)
         contract = data_contract_digest(manifest)
@@ -398,6 +470,7 @@ class CellPublicationService:
         seeded = bool(saved.get("data_seeded"))
         mapping = {name: target_binds[bind] for name, bind in source_binds.items()}
         mapping[source.project_postgres_volume] = backend.project_postgres_volume
+        trace.stage("seed_data")
         for volume in reference.volumes:
             target = mapping.get(volume.name)
             if target is None:
@@ -410,6 +483,7 @@ class CellPublicationService:
             await machine_effect(
                 backend.seed_volume, target, store.artifact_path(volume.artifact_ref)
             )
+            trace.add_files()
         if seeded:
             await machine_effect(backend.ensure_release_runtime_volumes, manifest)
         if not seeded and source.project_postgres_volume not in {v.name for v in reference.volumes}:
@@ -488,8 +562,11 @@ class CellPublicationService:
         *,
         switch: bool,
         check_schema: bool = True,
+        trace: PublicationTrace | None = None,
     ) -> PublishedMachineBackend:
         request = self._effective_request(request)
+        if trace is not None:
+            trace.stage("start_app")
         await ensure_managed_infrastructure(manager, state)
         backend = self._backend(manager, state, release)
         manifest = MachineManifest.model_validate(release["manifest"])
@@ -520,6 +597,8 @@ class CellPublicationService:
             status = await machine_effect(backend.service_status, service, release["epoch"])
             if not status["ready"]:
                 raise CellResourceError("public product service readiness failed")
+        if trace is not None:
+            trace.stage("verify_runtime")
         if check_schema and await machine_effect(backend.schema_digest) != release["schema_digest"]:
             raise CellResourceError("publication startup changed database schema")
         env = {**request.runtime_env, "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"]}
@@ -535,16 +614,31 @@ class CellPublicationService:
         )
         return backend
 
-    async def _activate(self, request: CellDeployRequest, release: dict[str, Any]) -> None:
+    async def _activate(
+        self,
+        request: CellDeployRequest,
+        release: dict[str, Any],
+        trace: PublicationTrace | None = None,
+    ) -> None:
         # Activation/configuration/recovery share one serialization boundary.
         # A revoke racing first publish cannot return while stale credentials
         # are still about to become public. Lock order: project, then production.
         async with self._submission_lock.hold(request.project_id):
-            await self._activate_locked(request, release)
+            if trace is None:
+                await self._activate_locked(request, release)
+            else:
+                await self._activate_locked(request, release, trace)
 
-    async def _activate_locked(self, request: CellDeployRequest, release: dict[str, Any]) -> None:
+    async def _activate_locked(
+        self,
+        request: CellDeployRequest,
+        release: dict[str, Any],
+        trace: PublicationTrace | None = None,
+    ) -> None:
         if self._read(request.project_id).get("disabled"):
             raise CellIdentityConflict("publication disabled")
+        trace = trace or PublicationTrace()
+        trace.stage("activate")
         manager = self._production_manager(request.workspace_id)
         production_id = self.production_identity(request)
         async with manager.operation_lock.hold(production_id):
@@ -566,7 +660,9 @@ class CellPublicationService:
                 )
                 if gateway is not None:
                     await machine_effect(gateway.remove, force=True)
-                backend = await self._start(manager, state, release, request, switch=True)
+                backend = await self._start(
+                    manager, state, release, request, switch=True, trace=trace
+                )
                 gateway = backend._lookup(
                     backend.client.containers, backend.stem + "-gateway", "max-gateway"
                 )
@@ -576,11 +672,13 @@ class CellPublicationService:
                 address = gateway.attrs["NetworkSettings"]["Networks"][backend.internal_network][
                     "IPAddress"
                 ]
+                trace.stage("tls")
                 host = nginx_writer.prod_host(request.slug)
                 if old is None:
                     await nginx_writer.publish_http(host, 3000, upstream_host=address)
                 if not await nginx_writer.ensure_tls(host, 3000, upstream_host=address):
                     raise CellResourceError("public HTTPS activation failed")
+                trace.stage("observe")
                 import httpx
 
                 async with httpx.AsyncClient(timeout=20, trust_env=False) as client:

@@ -448,6 +448,7 @@ class MachineAdapter:
         *,
         volumes: tuple[str, ...] | None = None,
         persist: bool = True,
+        observer: Any = None,
     ) -> MachineEnvironmentRef | None:
         if not self.exists(state.workspace_id):
             return None
@@ -459,6 +460,7 @@ class MachineAdapter:
         store = MachineEnvironmentStore(
             self.root / "artifacts", state.workspace_id, backend, max_bytes=backend.disk_bytes
         )
+        store.observer = observer
         saved_ref = backend._metadata().get("environment_ref")
         reference = await machine_effect(
             store.capture,
