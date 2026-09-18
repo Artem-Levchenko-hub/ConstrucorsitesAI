@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
@@ -49,6 +50,89 @@ async def _owned_project(session: SessionDep, project_id: UUID, user_id: UUID) -
     if project is None or project.owner_id != user_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
+
+
+@dataclass(frozen=True)
+class _Page:
+    """The static page a manual edit targets, pinned to the commit it was read at."""
+
+    project: Project
+    parent_sha: str
+    index_path: str
+    html: str
+
+
+async def _editable_page(session: SessionDep, project: Project) -> _Page:
+    if project.current_snapshot_id is None:
+        raise ApiError(
+            "no_snapshot", "project has no snapshot to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    current = await session.get(Snapshot, project.current_snapshot_id)
+    if current is None:
+        raise ApiError(
+            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
+        )
+    parent_sha = current.commit_sha
+    files = await asyncio.to_thread(repo_svc.read_files, project.id, parent_sha)
+    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
+    if index_path is None:
+        raise ApiError(
+            "no_index", "this project has no static index.html to edit",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    return _Page(project, parent_sha, index_path, files[index_path])
+
+
+async def _commit_page(
+    session: SessionDep, page: _Page, new_html: str, *, message: str, prompt_text: str
+) -> SnapshotPublic:
+    """Commit → snapshot → preview → event, so the timeline and rollback see the edit."""
+    project = page.project
+    project_id = project.id  # read before the commit: never touch an expired row
+    new_sha = await asyncio.to_thread(
+        repo_svc.commit_files,
+        project_id,
+        {page.index_path: new_html},
+        message,
+        page.parent_sha,
+    )
+    new_snapshot = Snapshot(
+        project_id=project_id,
+        commit_sha=new_sha,
+        prompt_text=prompt_text,
+        model_id=None,
+        parent_id=project.current_snapshot_id,
+    )
+    session.add(new_snapshot)
+    await session.flush()
+    project.current_snapshot_id = new_snapshot.id
+    await session.commit()
+    await session.refresh(new_snapshot)
+
+    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
+
+    await publish_event(
+        project_id,
+        "snapshot.created",
+        {
+            "snapshot": {
+                "id": str(new_snapshot.id),
+                "project_id": str(new_snapshot.project_id),
+                "commit_sha": new_snapshot.commit_sha,
+                "prompt_text": new_snapshot.prompt_text,
+                "model_id": new_snapshot.model_id,
+                "parent_id": (
+                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
+                ),
+                "preview_url": preview_public_url(new_snapshot.preview_key),
+                "is_rollback_target": new_snapshot.is_rollback_target,
+                "created_at": new_snapshot.created_at.isoformat(),
+            }
+        },
+    )
+
+    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
 
 
 @router.post("/{project_id}/uploads")
@@ -101,27 +185,8 @@ async def image_patch(
     if payload.old_src == payload.new_src:
         raise ApiError("empty_patch", "no change", status.HTTP_400_BAD_REQUEST)
 
-    if project.current_snapshot_id is None:
-        raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    current = await session.get(Snapshot, project.current_snapshot_id)
-    if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
-    parent_sha = current.commit_sha
-
-    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
-    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
-    if index_path is None:
-        raise ApiError(
-            "no_index", "this project has no static index.html to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    html = files[index_path]
+    page = await _editable_page(session, project)
+    html = page.html
     if payload.old_src not in html:
         raise ApiError(
             "src_not_found", "эта картинка не найдена на странице",
@@ -131,50 +196,13 @@ async def image_patch(
     if new_html == html:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
-        project_id,
-        {index_path: new_html},
-        "image: своя картинка",
-        parent_sha,
-    )
-
-    new_snapshot = Snapshot(
-        project_id=project_id,
-        commit_sha=new_sha,
+    return await _commit_page(
+        session,
+        page,
+        new_html,
+        message="image: своя картинка",
         prompt_text="(своя картинка)",
-        model_id=None,
-        parent_id=project.current_snapshot_id,
     )
-    session.add(new_snapshot)
-    await session.flush()
-    project.current_snapshot_id = new_snapshot.id
-    await session.commit()
-    await session.refresh(new_snapshot)
-
-    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
-
-    await publish_event(
-        project_id,
-        "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(new_snapshot.id),
-                "project_id": str(new_snapshot.project_id),
-                "commit_sha": new_snapshot.commit_sha,
-                "prompt_text": new_snapshot.prompt_text,
-                "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
-                "preview_url": preview_public_url(new_snapshot.preview_key),
-                "is_rollback_target": new_snapshot.is_rollback_target,
-                "created_at": new_snapshot.created_at.isoformat(),
-            }
-        },
-    )
-
-    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
 
 
 @router.post("/{project_id}/text-patch", response_model=SnapshotPublic)
@@ -189,27 +217,8 @@ async def text_patch(
 
     if payload.old_text == payload.new_text:
         raise ApiError("empty_patch", "no change", status.HTTP_400_BAD_REQUEST)
-    if project.current_snapshot_id is None:
-        raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    current = await session.get(Snapshot, project.current_snapshot_id)
-    if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
-    parent_sha = current.commit_sha
-
-    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
-    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
-    if index_path is None:
-        raise ApiError(
-            "no_index", "this project has no static index.html to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    html_src = files[index_path]
+    page = await _editable_page(session, project)
+    html_src = page.html
     # Match the text ONLY where it is the FULL content of an element (between a
     # `>` and the next `<`), whitespace-tolerant — never touches attribute values
     # or script strings. The frontend offers this only for pure-text elements, so
@@ -232,49 +241,13 @@ async def text_patch(
     if new_html == html_src:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
-        project_id,
-        {index_path: new_html},
-        "text: правка текста",
-        parent_sha,
-    )
-    new_snapshot = Snapshot(
-        project_id=project_id,
-        commit_sha=new_sha,
+    return await _commit_page(
+        session,
+        page,
+        new_html,
+        message="text: правка текста",
         prompt_text="(правка текста)",
-        model_id=None,
-        parent_id=project.current_snapshot_id,
     )
-    session.add(new_snapshot)
-    await session.flush()
-    project.current_snapshot_id = new_snapshot.id
-    await session.commit()
-    await session.refresh(new_snapshot)
-
-    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
-
-    await publish_event(
-        project_id,
-        "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(new_snapshot.id),
-                "project_id": str(new_snapshot.project_id),
-                "commit_sha": new_snapshot.commit_sha,
-                "prompt_text": new_snapshot.prompt_text,
-                "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
-                "preview_url": preview_public_url(new_snapshot.preview_key),
-                "is_rollback_target": new_snapshot.is_rollback_target,
-                "created_at": new_snapshot.created_at.isoformat(),
-            }
-        },
-    )
-
-    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
 
 
 @router.post("/{project_id}/element-delete", response_model=SnapshotPublic)
@@ -287,27 +260,8 @@ async def element_delete(
     """HARD delete — cut the element's exact source HTML out of index.html."""
     project = await _owned_project(session, project_id, current_user.id)
 
-    if project.current_snapshot_id is None:
-        raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    current = await session.get(Snapshot, project.current_snapshot_id)
-    if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
-    parent_sha = current.commit_sha
-
-    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
-    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
-    if index_path is None:
-        raise ApiError(
-            "no_index", "this project has no static index.html to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    html_src = files[index_path]
+    page = await _editable_page(session, project)
+    html_src = page.html
     oh = payload.outer_html
     # Cut the requested exact occurrence of the element's source HTML.
     positions: list[int] = []
@@ -327,49 +281,13 @@ async def element_delete(
     if new_html == html_src:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
-        project_id,
-        {index_path: new_html},
-        "element: жёсткое удаление",
-        parent_sha,
-    )
-    new_snapshot = Snapshot(
-        project_id=project_id,
-        commit_sha=new_sha,
+    return await _commit_page(
+        session,
+        page,
+        new_html,
+        message="element: жёсткое удаление",
         prompt_text="(удаление элемента)",
-        model_id=None,
-        parent_id=project.current_snapshot_id,
     )
-    session.add(new_snapshot)
-    await session.flush()
-    project.current_snapshot_id = new_snapshot.id
-    await session.commit()
-    await session.refresh(new_snapshot)
-
-    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
-
-    await publish_event(
-        project_id,
-        "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(new_snapshot.id),
-                "project_id": str(new_snapshot.project_id),
-                "commit_sha": new_snapshot.commit_sha,
-                "prompt_text": new_snapshot.prompt_text,
-                "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
-                "preview_url": preview_public_url(new_snapshot.preview_key),
-                "is_rollback_target": new_snapshot.is_rollback_target,
-                "created_at": new_snapshot.created_at.isoformat(),
-            }
-        },
-    )
-
-    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
 
 
 @router.post("/{project_id}/element-move", response_model=SnapshotPublic)
@@ -382,27 +300,8 @@ async def element_move(
     """Move up/down — swap two elements' exact source HTML in index.html."""
     project = await _owned_project(session, project_id, current_user.id)
 
-    if project.current_snapshot_id is None:
-        raise ApiError(
-            "no_snapshot", "project has no snapshot to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    current = await session.get(Snapshot, project.current_snapshot_id)
-    if current is None:
-        raise ApiError(
-            "no_snapshot", "current snapshot missing", status.HTTP_400_BAD_REQUEST
-        )
-    parent_sha = current.commit_sha
-
-    files = await asyncio.to_thread(repo_svc.read_files, project_id, parent_sha)
-    index_path = next((c for c in _INDEX_CANDIDATES if c in files), None)
-    if index_path is None:
-        raise ApiError(
-            "no_index", "this project has no static index.html to edit",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    html_src = files[index_path]
+    page = await _editable_page(session, project)
+    html_src = page.html
 
     def _nth(sub: str, n: int) -> int:
         last = 0
@@ -439,46 +338,10 @@ async def element_move(
     if new_html == html_src:
         raise ApiError("empty_patch", "no effective change", status.HTTP_400_BAD_REQUEST)
 
-    new_sha = await asyncio.to_thread(
-        repo_svc.commit_files,
-        project_id,
-        {index_path: new_html},
-        "element: перемещение",
-        parent_sha,
-    )
-    new_snapshot = Snapshot(
-        project_id=project_id,
-        commit_sha=new_sha,
+    return await _commit_page(
+        session,
+        page,
+        new_html,
+        message="element: перемещение",
         prompt_text="(перемещение элемента)",
-        model_id=None,
-        parent_id=project.current_snapshot_id,
     )
-    session.add(new_snapshot)
-    await session.flush()
-    project.current_snapshot_id = new_snapshot.id
-    await session.commit()
-    await session.refresh(new_snapshot)
-
-    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
-
-    await publish_event(
-        project_id,
-        "snapshot.created",
-        {
-            "snapshot": {
-                "id": str(new_snapshot.id),
-                "project_id": str(new_snapshot.project_id),
-                "commit_sha": new_snapshot.commit_sha,
-                "prompt_text": new_snapshot.prompt_text,
-                "model_id": new_snapshot.model_id,
-                "parent_id": (
-                    str(new_snapshot.parent_id) if new_snapshot.parent_id else None
-                ),
-                "preview_url": preview_public_url(new_snapshot.preview_key),
-                "is_rollback_target": new_snapshot.is_rollback_target,
-                "created_at": new_snapshot.created_at.isoformat(),
-            }
-        },
-    )
-
-    return SnapshotPublic.model_validate(_snapshot_dict(new_snapshot))
