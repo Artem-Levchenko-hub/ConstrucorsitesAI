@@ -246,7 +246,8 @@ done
 web_api_url="$(jq -er '.services.web.build.args.NEXT_PUBLIC_API_URL' "$rendered_compose")"
 web_ws_url="$(jq -er '.services.web.build.args.NEXT_PUBLIC_WS_URL' "$rendered_compose")"
 legal_version="$(jq -er '.services.web.build.args.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION' "$rendered_compose")"
-docker build -t "omnia-api:$RELEASE_SHA" apps/api
+# Stack templates are baked into the api image (named build context).
+docker build --build-context templates=apps/orchestrator/templates -t "omnia-api:$RELEASE_SHA" apps/api
 docker build --build-arg "NEXT_PUBLIC_API_URL=$web_api_url" --build-arg "NEXT_PUBLIC_WS_URL=$web_ws_url" --build-arg NEXT_PUBLIC_USE_MOCKS=false --build-arg "NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$legal_version" -t "omnia-web:$RELEASE_SHA" apps/web
 docker image inspect "omnia-api:$RELEASE_SHA" "omnia-web:$RELEASE_SHA" >/dev/null
 ~~~
