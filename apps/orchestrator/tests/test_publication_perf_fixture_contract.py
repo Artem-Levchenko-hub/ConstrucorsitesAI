@@ -39,10 +39,11 @@ def test_missing_timings_stay_unknown_not_zero():
 
 def test_mode_comes_from_journal_state_not_from_names():
     active = {"snapshot_id": "same"}
-    assert publication_mode(data_seeded=False, active_release=None, desired_snapshot_id="same") == "first"
-    assert publication_mode(data_seeded=True, active_release=None, desired_snapshot_id="same") == "first"
-    assert publication_mode(data_seeded=True, active_release=active, desired_snapshot_id="new") == "warm"
-    assert publication_mode(data_seeded=True, active_release=active, desired_snapshot_id="same") == "repeat"
+    mode = publication_mode
+    assert mode(data_seeded=False, active_release=None, desired_snapshot_id="same") == "first"
+    assert mode(data_seeded=True, active_release=None, desired_snapshot_id="same") == "first"
+    assert mode(data_seeded=True, active_release=active, desired_snapshot_id="new") == "warm"
+    assert mode(data_seeded=True, active_release=active, desired_snapshot_id="same") == "repeat"
     assert (
         publication_mode(
             data_seeded=True, active_release=active, desired_snapshot_id="same", config_only=True
@@ -56,9 +57,8 @@ def test_mode_comes_from_journal_state_not_from_names():
         == "migration"
     )
     # A project called "warm-qa" with no seeded data is still a first publish.
-    result = profile(
-        QA, {"slug": "warm-qa", "data_seeded": False}, desired_snapshot_id="new", logs=None
-    )
+    journal = {"slug": "warm-qa", "data_seeded": False}
+    result = profile(QA, journal, desired_snapshot_id="new", logs=None)
     assert result.mode == "first" and result.timings.total_ms is None
 
 
