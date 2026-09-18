@@ -3,6 +3,23 @@ import type { Snapshot } from "./types";
 
 export type RestoreState = "preparing" | "checking" | "ready" | "needs_changes"
   | "applying" | "completed" | "cancelled" | "failed" | "reconciling";
+export interface RestoreInventoryObject {
+  object: string;
+  kind: string;
+  classification: "business" | "technical" | "derived" | "unknown";
+  presence: "empty" | "present" | "unknown";
+  row_count?: number | null;
+  count_kind: "exact" | "estimate" | "not_measured";
+}
+export interface RestoreCheck {
+  code: string;
+  status: "compatible" | "incompatible" | "unknown" | "not_applicable";
+  severity: "blocking" | "warning" | "info";
+  operation: string;
+  object: string;
+  explanation: string;
+  resolution?: string | null;
+}
 export interface RestoreReport {
   revision: number;
   mode: "exact" | "adapted";
@@ -13,6 +30,16 @@ export interface RestoreReport {
   warnings: string[];
   blockers: string[];
   next_actions: string[];
+  // Format 2 only; absent on older reports (= not measured, never "no data").
+  format?: 1 | 2;
+  inventory?: {
+    presence: "empty" | "present" | "unknown";
+    coverage: "complete" | "partial" | "unavailable";
+    schema_analysis: "complete" | "partial" | "unavailable";
+    objects: RestoreInventoryObject[];
+  } | null;
+  checks?: RestoreCheck[];
+  capabilities?: { lost: { method: string; path: string }[]; restored: { method: string; path: string }[] } | null;
 }
 export interface RestoreOperation {
   id: string;

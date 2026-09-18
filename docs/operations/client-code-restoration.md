@@ -29,10 +29,14 @@ higher-priority instructions. The agent adapts historical code to current data,
 preserving values, meaning and ownership. Unsupported semantic changes remain a
 reported limitation; a prompt alone cannot guarantee lossless conversion.
 
-The report also records whether the inspected application database has rows:
-`empty`, `present` or `unknown`. This is an actual existence check on the isolated
-current-data copy, not a table-size estimate. Unsupported objects or a failed
-inspection return `unknown`. This observation does not classify external files,
+The report also records whether the application database has rows:
+`empty`, `present` or `unknown`, with per-table counts (report format 2). Counts
+are taken read-only on the current database before any schema analysis and again
+on the isolated copy, so an unsupported trigger or default never hides observed
+rows. A relation that cannot be counted is `not_measured`; `empty` requires every
+business table to be measured. Ordinary CHECK/DEFAULT/SERIAL/IDENTITY are compared,
+not refused; unmodelled objects are named in precise checks. See
+`adaptive-versioning-baseline.md`. This observation does not classify external files,
 other databases or all project data. New writes may arrive after inspection.
 An empty database never permits a reset or bypasses compatibility checks. Both
 empty and populated compatible applications use ordinary restoration without AI;

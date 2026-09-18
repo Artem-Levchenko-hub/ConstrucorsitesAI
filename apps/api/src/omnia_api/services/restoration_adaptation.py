@@ -157,6 +157,16 @@ def _compatibility_report(raw: object) -> dict[str, Any] | None:
             "Отчёт совместимости повреждён. Подготовьте восстановление заново."
         ) from exc
     serialized = json.dumps(report, ensure_ascii=False)
+    if len(serialized.encode()) > 64 * 1024:
+        # The agent needs the conflicts and the functions to keep, not every
+        # per-table count or passed check: trim those before refusing.
+        report = {
+            **report,
+            "inventory": None,
+            "retained_data": report["retained_data"][:20],
+            "checks": [c for c in report["checks"] if c["severity"] != "info"][:200],
+        }
+        serialized = json.dumps(report, ensure_ascii=False)
     if len(serialized.encode()) > 64 * 1024 or contains_provider_secret(serialized):
         raise _conflict("Отчёт совместимости требует повторной безопасной подготовки.")
     return report
@@ -297,7 +307,11 @@ async def append_adaptation_context(
             "migrations that preserve original values and relationships. "
             "Never guess missing business values or reinterpret units/statuses. "
             "Build and test the candidate: real reads and writes, hidden-field preservation, "
-            "reload persistence, and cross-user denial. If a business meaning is ambiguous, "
+            "reload persistence, and cross-user denial. The report's capabilities.lost lists "
+            "routes the current app has and the historical version lacks; they serve data "
+            "that still exists, so keep each of them working (same response shape, same "
+            "per-user filtering) unless the owner explicitly asked to remove it. "
+            "If a business meaning is ambiguous, "
             "report the specific choice instead of changing data. Explain changed or unavailable "
             "functions and verified checks. This is a new draft, not publication.\n"
         )

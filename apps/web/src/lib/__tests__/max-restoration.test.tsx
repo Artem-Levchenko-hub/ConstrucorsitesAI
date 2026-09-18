@@ -239,3 +239,30 @@ it("does not present a retained earlier report as a guarantee during rechecking"
   expect(container.textContent).toContain("Проверяем сохранность данных");
   expect(container.textContent).not.toContain("Фамилии сохранятся");
 });
+it("shows the precise format-2 reason, counts, lost functions and passed checks", async () => {
+  const blocked: api.RestoreOperation = { ...operation("needs_changes"), can_apply: false, can_cancel: true,
+    report: {
+      ...operation().report!, mode: "adapted", database_state: "present", format: 2,
+      retained_data: ["Данные в базе: clients — 4 записей; visits — 3 записей."],
+      unavailable_features: ["В выбранной версии нет функции чтение: GET /api/visits; её данные остаются в базе."],
+      blockers: ["Выбранная версия создаёт записи без поля clients.email, а в текущей базе оно обязательно и не заполняется автоматически."],
+      next_actions: ["Адаптировать форму: запрашивать значение у пользователя или заполнять его по подтверждённому правилу."],
+      checks: [
+        { code: "read_compatible", status: "compatible", severity: "info", operation: "clients.read",
+          object: "public.clients", explanation: "Выбранная версия может читать таблицу clients: все её поля есть в текущей базе." },
+        { code: "required_field_missing_on_create", status: "incompatible", severity: "blocking",
+          operation: "clients.create", object: "public.clients.email", explanation: "без поля clients.email" },
+      ],
+    } };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
+  vi.mocked(api.getRestoration).mockResolvedValue(blocked);
+  await render();
+  const text = container.textContent ?? "";
+  expect(text).toContain("В базе есть бизнес-данные");
+  expect(text).toContain("clients — 4 записей; visits — 3 записей");
+  expect(text).toContain("без поля clients.email");
+  expect(text).toContain("GET /api/visits");
+  expect(text).toContain("Что проверено");
+  expect(text).toContain("может читать таблицу clients");
+  expect(text).not.toContain("нестандартн");
+});

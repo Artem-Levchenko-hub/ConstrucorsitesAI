@@ -267,10 +267,35 @@ class CodeRestorationService:
             )
         ):
             raise ValueError("invalid restoration report")
-        return {
+        result = {
             **{name: report[name] for name in ("revision", "mode", *_REPORT_LISTS)},
             "database_state": database_state,
         }
+        if report.get("format") == 2:
+            from omnia_orchestrator.services.versioning.contracts import (
+                CapabilityDiff,
+                CompatibilityCheck,
+                InventoryReport,
+            )
+
+            inventory = report.get("inventory")
+            capabilities = report.get("capabilities")
+            if inventory is not None and InventoryReport.model_validate(inventory).presence != (
+                database_state
+            ):
+                raise ValueError("invalid restoration report")
+            result.update(
+                format=2,
+                inventory=None if inventory is None
+                else InventoryReport.model_validate(inventory).model_dump(mode="json"),
+                checks=[
+                    CompatibilityCheck.model_validate(check).model_dump(mode="json")
+                    for check in report.get("checks") or []
+                ],
+                capabilities=None if capabilities is None
+                else CapabilityDiff.model_validate(capabilities).model_dump(mode="json"),
+            )
+        return result
 
     @staticmethod
     def _observed(value: dict[str, Any], request: CodeRestorationApply) -> dict[str, Any]:

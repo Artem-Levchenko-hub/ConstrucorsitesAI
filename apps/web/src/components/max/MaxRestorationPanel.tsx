@@ -52,6 +52,8 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
       {report.database_state === "empty" && <p>В проверенной базе нет бизнес-записей. Восстановление сохраняет текущую базу и файлы.</p>}
       {report.database_state === "present" && <p>В базе есть бизнес-данные. Восстанавливаем код с сохранением текущих данных.</p>}
       <ReportList title="Что изменится" items={report.changes} />
+      <ReportList title="Что проверено" items={(report.checks ?? [])
+        .filter((check) => check.status === "compatible").slice(0, 8).map((check) => check.explanation)} />
       <ReportList title="Что сохраняется по результатам проверки" items={report.retained_data} />
       <ReportList title="Что будет недоступно" items={report.unavailable_features} />
       <ReportList title="Обратите внимание" items={report.warnings} />

@@ -14,7 +14,7 @@ import tarfile
 import traceback
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID, uuid5
 
 from omnia_orchestrator.core.cell_resources import (
@@ -38,7 +38,7 @@ from omnia_orchestrator.services.project_machine import (
 from omnia_orchestrator.services.restoration_catalog import (
     candidate_contract,
     catalog_contract,
-    database_state,
+    describe_live_catalog,
 )
 from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
 from omnia_orchestrator.services.restoration_database import (
@@ -46,6 +46,19 @@ from omnia_orchestrator.services.restoration_database import (
     admin_sql,
     read_controller_output,
 )
+from omnia_orchestrator.services.versioning.compatibility import (
+    capability_diff,
+    checks_from_diagnostics,
+    checks_from_unsupported,
+    delete_warnings,
+    describe_capability,
+)
+from omnia_orchestrator.services.versioning.contracts import (
+    CapabilityDiff,
+    CompatibilityCheck,
+    InventoryReport,
+)
+from omnia_orchestrator.services.versioning.inventory import observe_inventory
 
 
 class PreparationNeedsChanges(ValueError):
@@ -132,15 +145,45 @@ def validate_supported_runtime(files: dict[str, str]) -> MachineManifest:
     return manifest
 
 
+def observe_database(
+    backend: Any, *, observed_on: Literal["source", "candidate_copy"]
+) -> InventoryReport:
+    """Read-only row inventory of one project database (source or isolated copy)."""
+    return observe_inventory(
+        lambda sql: admin_sql(backend, sql, max_bytes=256 * 1024), observed_on=observed_on
+    )
+
+
+def _inventory_lines(inventory: InventoryReport | None) -> list[str]:
+    if inventory is None:
+        return []
+    counted = [
+        f"{item.object.removeprefix('public.')} — "
+        + (f"{item.row_count} " if item.count_kind == "exact" else f"более {item.row_count - 1} ")
+        + "записей"
+        for item in inventory.objects
+        if item.classification == "business" and item.row_count is not None
+    ]
+    return ["Данные в базе: " + "; ".join(counted) + "."] if counted else []
+
+
 def preparation_report(
     *,
     blockers: list[str] | None = None,
     retained: list[str] | None = None,
     cascading_deletes: list[str] | None = None,
     observed_database_state: RestorationDatabaseState = "unknown",
+    inventory: InventoryReport | None = None,
+    checks: list[CompatibilityCheck] | None = None,
+    capabilities: CapabilityDiff | None = None,
 ) -> dict[str, Any]:
     blocked = blockers or []
-    return {
+    if inventory is not None:
+        # The independent inventory is the source of truth for presence; an
+        # analysis failure elsewhere never turns observed rows into "unknown".
+        observed_database_state = inventory.presence
+    lost = [describe_capability(item) for item in capabilities.lost] if capabilities else []
+    report: dict[str, Any] = {
         "revision": 1,
         "mode": "adapted" if blocked else "exact",
         "database_state": observed_database_state,
@@ -151,9 +194,13 @@ def preparation_report(
         ],
         "retained_data": [
             "Текущая база и действующая публикация не заменяются.",
+            *_inventory_lines(inventory),
             *["Поле сохраняется в базе: " + name for name in retained or []],
         ],
-        "unavailable_features": [],
+        "unavailable_features": [
+            "В выбранной версии нет функции " + item + "; её данные остаются в базе."
+            for item in lost
+        ],
         "warnings": [
             *[
                 "Удаление в старой версии может затронуть новые связанные данные: " + name
@@ -170,6 +217,44 @@ def preparation_report(
         if blocked
         else [],
     }
+    resolutions = list(dict.fromkeys(
+        check.resolution for check in checks or []
+        if check.severity == "blocking" and check.resolution
+    ))
+    if blocked and resolutions:
+        report["next_actions"] = [*resolutions, *report["next_actions"]]
+    if inventory is not None and inventory.schema_analysis == "partial":
+        report["warnings"].append(
+            "Структура базы изучена частично: отдельные объекты требуют проверки (см. причины)."
+        )
+    if inventory is not None or checks is not None or capabilities is not None:
+        report["format"] = 2
+        report["inventory"] = inventory.model_dump(mode="json") if inventory else None
+        # Every conflict/warning is kept; passed checks are capped to stay inside
+        # the API's bounded report.
+        kept = [check for check in checks or [] if check.severity != "info"][:800]
+        kept += [check for check in checks or [] if check.severity == "info"][:100]
+        report["checks"] = [check.model_dump(mode="json") for check in kept]
+        report["capabilities"] = capabilities.model_dump(mode="json") if capabilities else None
+    return report
+
+
+def contract_matches(live: DataContract, prepared: dict[str, Any]) -> bool:
+    """Compare with a prepared contract; one recorded before format 2 carried CHECKs
+    as plain ``checks`` and no default/identity, so project the live one likewise."""
+    current = live.model_dump(mode="json")
+    if all("check_constraints" in table for table in prepared.get("tables", [])):
+        return bool(current == prepared)
+    for table in current["tables"]:
+        table["checks"] = [check["definition"] for check in table.pop("check_constraints")]
+        for column in table["columns"]:
+            column.pop("default", None)
+            column.pop("identity", None)
+    return bool(current == prepared)
+
+
+def blocking_explanations(checks: list[CompatibilityCheck]) -> list[str]:
+    return [check.explanation for check in checks if check.severity == "blocking"]
 
 
 class CodeRestorationEngine:
@@ -267,7 +352,18 @@ class CodeRestorationEngine:
                         "report": preparation_report(blockers=[str(error)]),
                     }
                 source_runtime = self._runtime_identity(source, machine)
-                current_contract, blockers = await machine_effect(catalog_contract, source)
+                # Evidence is gathered independently: row counts first (read-only),
+                # so a schema-analysis gap can never hide that the data exist.
+                inventory = await machine_effect(observe_database, source, observed_on="source")
+                capabilities = capability_diff(current_files, files)
+                current_contract, catalog_blockers, unsupported = await machine_effect(
+                    describe_live_catalog, source
+                )
+                inventory = inventory.model_copy(
+                    update={"schema_analysis": "partial" if unsupported else "complete"}
+                )
+                checks = checks_from_unsupported(unsupported)
+                blockers = blocking_explanations(checks) if catalog_blockers else []
                 current_manifest = MachineManifest.model_validate(machine.state()["manifest"])
                 if current_manifest.data_stores or any(
                     service.mounts for service in current_manifest.services
@@ -277,7 +373,12 @@ class CodeRestorationEngine:
                     return {
                         "state": "needs_changes",
                         "candidate_id": None,
-                        "report": preparation_report(blockers=blockers),
+                        "report": preparation_report(
+                            blockers=blockers,
+                            inventory=inventory,
+                            checks=checks,
+                            capabilities=capabilities,
+                        ),
                     }
                 # Only the dedicated database is copied. The trusted MAX core,
                 # live managed database, credentials and queues are never attached.
@@ -313,6 +414,10 @@ class CodeRestorationEngine:
                     tables=[table for table in old_contract.tables if table.name not in managed],
                 )
                 assessment = assess_contract(old_contract, current_contract)
+                checks = [
+                    *checks_from_diagnostics(assessment.diagnostics),
+                    *delete_warnings(assessment.blocked_deletes),
+                ]
                 # The copy lives only in this candidate's own isolated database.
                 await machine_effect(admin_sql, candidate, dump.decode(), max_bytes=4 * 1024 * 1024)
                 copied, copied_blockers = await machine_effect(catalog_contract, candidate)
@@ -320,11 +425,19 @@ class CodeRestorationEngine:
                     raise PreparationNeedsChanges(
                         "Структура копии данных не совпала с проверенной базой."
                     )
-                observed_database_state = await machine_effect(database_state, candidate)
+                copied_inventory = await machine_effect(
+                    observe_database, candidate, observed_on="candidate_copy"
+                )
+                if copied_inventory.coverage != "unavailable":
+                    inventory = copied_inventory.model_copy(
+                        update={"schema_analysis": inventory.schema_analysis}
+                    )
+                observed_database_state = inventory.presence
                 # Empty rows do not make incompatible schema safe for future writes.
                 if assessment.blockers:
                     raise PreparationNeedsChanges(
-                        "Несовместимая структура данных: " + ", ".join(assessment.blockers)
+                        "\n".join(blocking_explanations(checks))
+                        or "Несовместимая структура данных: " + ", ".join(assessment.blockers)
                     )
                 tasks = [task for task in manifest.tasks if task.role == "full_build"]
                 if not tasks:
@@ -361,6 +474,9 @@ class CodeRestorationEngine:
                         retained=assessment.retained_columns,
                         cascading_deletes=assessment.blocked_deletes,
                         observed_database_state=observed_database_state,
+                        inventory=inventory,
+                        checks=checks,
+                        capabilities=capabilities,
                     ),
                     "request_digest": request.digest(),
                     "workspace_revision": current_revision,
@@ -380,7 +496,11 @@ class CodeRestorationEngine:
                     "state": "needs_changes",
                     "candidate_id": None,
                     "report": preparation_report(
-                        blockers=[str(error)], observed_database_state=observed_database_state
+                        blockers=[line for line in str(error).split("\n") if line],
+                        observed_database_state=observed_database_state,
+                        inventory=inventory,
+                        checks=checks,
+                        capabilities=capabilities,
                     ),
                 }
             finally:
@@ -675,7 +795,7 @@ for path,digest,mode in json.load(sys.stdin):
                     prepared["current_files"],
                 )
                 live, blockers = await machine_effect(catalog_contract, backend)
-                if blockers or live.model_dump(mode="json") != prepared["live_contract"]:
+                if blockers or not contract_matches(live, prepared["live_contract"]):
                     raise CellIdentityConflict("restoration data contract changed after checking")
                 archive = directory / "code.tar"
                 if await machine_effect(self._file_digest, archive) != prepared["code_digest"]:

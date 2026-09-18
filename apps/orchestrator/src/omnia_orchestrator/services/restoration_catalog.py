@@ -68,10 +68,16 @@ SELECT json_build_object('event_triggers', EXISTS(
  SELECT c.relname AS name,
  (SELECT json_agg(json_build_object('name',a.attname,'type',format_type(a.atttypid,a.atttypmod),
     'nullable',NOT a.attnotnull, 'values', (SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder)
-      FROM pg_enum e WHERE e.enumtypid=a.atttypid)) ORDER BY a.attnum)
+      FROM pg_enum e WHERE e.enumtypid=a.atttypid),
+    'default', (SELECT pg_get_expr(d.adbin,d.adrelid) FROM pg_attrdef d
+      WHERE d.adrelid=c.oid AND d.adnum=a.attnum AND a.attgenerated=''),
+    'identity', CASE a.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by_default' END)
+    ORDER BY a.attnum)
   FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped) AS columns,
- (SELECT coalesce(json_agg(pg_get_constraintdef(k.oid) ORDER BY k.conname),'[]')
-  FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype='c') AS checks,
+ (SELECT coalesce(json_agg(json_build_object('name',k.conname,
+    'definition',pg_get_constraintdef(k.oid)) ORDER BY k.conname),'[]')
+  FROM pg_constraint k WHERE k.conrelid=c.oid AND k.contype='c'
+   AND NOT k.condeferrable AND k.convalidated) AS check_constraints,
  (SELECT coalesce(json_agg(json_build_object(
    'column',a.attname,'table',p.relname,'target',b.attname,'on_delete',
    CASE k.confdeltype WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL'
@@ -102,19 +108,20 @@ SELECT json_build_object('event_triggers', EXISTS(
   WHERE i.indrelid=c.oid AND i.indisunique AND NOT i.indisprimary
    AND i.indexprs IS NULL AND i.indpred IS NULL AND u.ord<=i.indnkeyatts
   GROUP BY i.indexrelid) keys) AS unique_keys,
- EXISTS(SELECT FROM pg_index i WHERE i.indrelid=c.oid AND
+ (SELECT coalesce(json_agg(ci.relname ORDER BY ci.relname),'[]') FROM pg_index i
+   JOIN pg_class ci ON ci.oid=i.indexrelid WHERE i.indrelid=c.oid AND
    (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR NOT i.indisvalid
     OR i.indnullsnotdistinct)) AS custom_indexes,
- EXISTS(SELECT FROM pg_constraint k WHERE k.conrelid=c.oid AND
-   (k.contype NOT IN ('p','u','f') OR k.condeferrable OR NOT k.convalidated)) AS custom_constraints,
- EXISTS(SELECT FROM pg_attribute a JOIN pg_type ty ON ty.oid=a.atttypid
+ (SELECT coalesce(json_agg(k.conname ORDER BY k.conname),'[]') FROM pg_constraint k
+   WHERE k.conrelid=c.oid AND
+   (k.contype NOT IN ('p','u','f','c') OR k.condeferrable OR NOT k.convalidated))
+ AS custom_constraints,
+ (SELECT coalesce(json_agg(x.name ORDER BY x.name),'[]') FROM (
+  SELECT a.attname AS name FROM pg_attribute a JOIN pg_type ty ON ty.oid=a.atttypid
    WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
     AND (a.attgenerated<>'' OR ty.typtype IN ('d','c','r','m')
-      OR (ty.typtype='b' AND ty.typnamespace<>'pg_catalog'::regnamespace)))
- OR EXISTS(SELECT FROM pg_rewrite r WHERE r.ev_class=c.oid)
- OR EXISTS(SELECT FROM pg_attrdef d WHERE d.adrelid=c.oid AND
-   pg_get_expr(d.adbin,d.adrelid) NOT IN ('now()','CURRENT_TIMESTAMP','gen_random_uuid()',
-     'true','false','NULL::text') AND pg_get_expr(d.adbin,d.adrelid) !~ '^-?[0-9]+(\\.[0-9]+)?$')
+      OR (ty.typtype='b' AND ty.typnamespace<>'pg_catalog'::regnamespace))
+  UNION SELECT '(rule:'||r.rulename||')' FROM pg_rewrite r WHERE r.ev_class=c.oid) x)
  AS custom_column_behavior,
  EXISTS(SELECT 1 FROM pg_constraint k WHERE k.conrelid=c.oid
    AND k.contype='f' AND array_length(k.conkey,1) <> 1) AS composite_foreign_keys
@@ -154,26 +161,125 @@ def infer_ownership(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return tables
 
 
+# pg_catalog first: an unqualified now()/nextval() in the rendered catalog is then
+# always the built-in, never a same-named function a role's search_path puts first.
+CATALOG_SCRIPT = "SET search_path = pg_catalog, public;\n" + CATALOG_SQL
+
+
 def catalog_contract(backend: Any) -> tuple[DataContract, list[str]]:
-    return contract_from_catalog(json.loads(admin_sql(backend, CATALOG_SQL)))
+    return contract_from_catalog(json.loads(admin_sql(backend, CATALOG_SCRIPT)))
+
+
+# Literal defaults (with an optional cast) and PostgreSQL's own id/time minting.
+# Anything else, above all a call into a user-defined function, stays a blocker:
+# a default executes on every historical insert.
+_ORDINARY_DEFAULT = re.compile(
+    r"^(?:'(?:[^']|'')*'(?:::[a-z_][a-z0-9_ ]*(?:\(\d+(?:,\d+)?\))?(?:\[\])?)?"
+    r"|\(?-?\d+(?:\.\d+)?\)?(?:::[a-z_][a-z0-9_ ]*)?"
+    r"|true|false|NULL(?:::[a-z_][a-z0-9_ ]*(?:\[\])?)?"
+    r"|now\(\)|CURRENT_TIMESTAMP|CURRENT_DATE|LOCALTIMESTAMP|clock_timestamp\(\)"
+    r"|statement_timestamp\(\)|transaction_timestamp\(\)|gen_random_uuid\(\)"
+    r"|nextval\('[a-zA-Z0-9_.\"]+'::regclass\))$"
+)
+
+
+def ordinary_default(expression: str) -> bool:
+    return bool(_ORDINARY_DEFAULT.match(expression.strip()))
+
+
+def _named(value: Any) -> list[str]:
+    """Catalog flags are object-name lists; older fixtures send booleans."""
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return ["*"] if value else []
 
 
 def contract_from_catalog(payload: dict[str, Any]) -> tuple[DataContract, list[str]]:
+    contract, blockers, _ = describe_catalog(payload)
+    return contract, blockers
+
+
+def describe_catalog(
+    payload: dict[str, Any],
+) -> tuple[DataContract, list[str], list[dict[str, str]]]:
+    """Contract + legacy blocker tokens + precise unsupported objects.
+
+    Every object the analyzer cannot model is named, so the report says *which*
+    trigger/default/index needs verification instead of a table-wide flag."""
     tables = deepcopy(payload["tables"])
     blockers = ["enabled_event_triggers"] if payload["event_triggers"] else []
+    unsupported: list[dict[str, str]] = []
+    if payload["event_triggers"]:
+        unsupported.append({"kind": "event_trigger", "object": "database"})
     if payload.get("unsupported_relations"):
         blockers.append("unsupported_relations")
+        unsupported.append({"kind": "relation", "object": "public"})
     for table in tables:
-        if table.pop("triggers", []):
-            blockers.append("custom_triggers:" + table["name"])
-        for flag in ("custom_indexes", "custom_constraints", "custom_column_behavior"):
-            if table.pop(flag, False):
-                blockers.append(flag + ":" + table["name"])
+        name = table["name"]
+        triggers = table.pop("triggers", [])
+        if triggers:
+            blockers.append("custom_triggers:" + name)
+            unsupported.extend(
+                {"kind": "trigger", "object": f"public.{name}.{trigger.get('name', '?')}"}
+                for trigger in triggers
+            )
+        for flag, kind in (
+            ("custom_indexes", "index"),
+            ("custom_constraints", "constraint"),
+            ("custom_column_behavior", "column_behavior"),
+        ):
+            objects = _named(table.pop(flag, False))
+            if objects:
+                blockers.append(flag + ":" + name)
+                unsupported.extend(
+                    {"kind": kind, "object": f"public.{name}" + ("" if item == "*" else f".{item}")}
+                    for item in objects
+                )
+        custom_defaults = [
+            column["name"]
+            for column in table["columns"]
+            if column.get("default")
+            and (len(column["default"]) > 2000 or not ordinary_default(column["default"]))
+        ]
+        for column in table["columns"]:
+            if column.get("default") and len(column["default"]) > 2000:
+                column["default"] = None  # reported below as an unsupported default
+        long_checks = [
+            check for check in table.get("check_constraints", [])
+            if len(check["definition"]) > 4000 or len(check["name"]) > 63
+        ]
+        if long_checks:
+            blockers.append("custom_constraints:" + name)
+            unsupported.extend(
+                {"kind": "constraint", "object": f"public.{name}.{check['name'][:63]}"}
+                for check in long_checks
+            )
+            table["check_constraints"] = [
+                check for check in table["check_constraints"] if check not in long_checks
+            ]
+        if custom_defaults:
+            if "custom_column_behavior:" + name not in blockers:
+                blockers.append("custom_column_behavior:" + name)
+            unsupported.extend(
+                {"kind": "default", "object": f"public.{name}.{column}"}
+                for column in custom_defaults
+            )
         if table.pop("composite_foreign_keys", False):
-            blockers.append("composite_foreign_keys:" + table["name"])
+            blockers.append("composite_foreign_keys:" + name)
+            unsupported.append({"kind": "composite_foreign_key", "object": f"public.{name}"})
         for column in table["columns"]:
             column["type"] = normalize_type(column["type"])
-    return DataContract(version=1, tables=infer_ownership(tables)), blockers
+            if column.get("default") is None:
+                column.pop("default", None)
+            if column.get("identity") is None:
+                column.pop("identity", None)
+    return DataContract(version=1, tables=infer_ownership(tables)), blockers, unsupported
+
+
+def describe_live_catalog(
+    backend: Any,
+) -> tuple[DataContract, list[str], list[dict[str, str]]]:
+    return describe_catalog(json.loads(admin_sql(backend, CATALOG_SCRIPT)))
 
 
 # Runs only inside the candidate with its own data and no public egress.
@@ -182,22 +288,29 @@ DRIZZLE_CATALOG_JS = r"""
 const fs = require('node:fs');
 const path = require('node:path');
 const Module = require('node:module');
-const ts = require('/workspace/node_modules/typescript');
+const root = process.env.OMNIA_WORKSPACE || '/workspace';
+const ts = require(root + '/node_modules/typescript');
 Module._extensions['.ts'] = (module, filename) => {
   const source = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022},
   }).outputText;
   module._compile(source, filename);
 };
-const {getTableConfig} = require('/workspace/node_modules/drizzle-orm/pg-core');
-const {getTableName} = require('/workspace/node_modules/drizzle-orm');
-const schema = require('/workspace/src/lib/db/schema.ts');
+const {getTableConfig, PgDialect} = require(root + '/node_modules/drizzle-orm/pg-core');
+const {getTableName} = require(root + '/node_modules/drizzle-orm');
+const schema = require(root + '/src/lib/db/schema.ts');
+const dialect = new PgDialect();
 const tables = [];
 for (const item of Object.values(schema)) {
   let config; try { config = getTableConfig(item); } catch { continue; }
   if (!config?.columns?.length) continue;
   if (config.schema && config.schema !== 'public') throw Error('Unsupported schema');
-  if (config.checks.length) throw Error('Check expressions require adaptation');
+  // Named CHECKs are compared with the live catalog, not refused up front.
+  const checks = config.checks.map(check => {
+    const rendered = dialect.sqlToQuery(check.value);
+    if (rendered.params.length) throw Error('Parameterized check expression');
+    return {name: check.name, definition: rendered.sql};
+  });
   const primary = [...config.columns.filter(c => c.primary).map(c => c.name),
     ...config.primaryKeys.flatMap(k => k.columns.map(c => c.name))];
   const unique = config.columns.filter(c => c.isUnique).map(c => {
@@ -218,7 +331,7 @@ for (const item of Object.values(schema)) {
   tables.push({name:config.name, columns:config.columns.map(column => ({
     name:column.name, type:column.getSQLType(), nullable:!column.notNull,
     ...(column.enumValues?.length ? {values:column.enumValues}:{}),
-  })), primary_key:primary, unique_keys:unique, checks:[],
+  })), primary_key:primary, unique_keys:unique, check_constraints:checks,
   foreign_keys:config.foreignKeys.map(fk => {
     const ref = fk.reference();
     if(ref.columns.length!==1) throw Error('Composite relation needs an explicit contract');
@@ -238,10 +351,8 @@ def candidate_contract(backend: Any, files: dict[str, str]) -> DataContract:
         raise ValueError("historical startup hooks require adaptation")
     explicit = files.get(".omnia/data-contract.json")
     if explicit:
-        contract = DataContract.model_validate_json(explicit)
-        if any(table.checks for table in contract.tables):
-            raise ValueError("historical check expressions require adaptation")
-        data = contract.model_dump()
+        # Declared CHECKs are compared with the live catalog in assess_contract.
+        data = DataContract.model_validate_json(explicit).model_dump()
         for table in data["tables"]:
             for column in table["columns"]:
                 column["type"] = normalize_type(column["type"])

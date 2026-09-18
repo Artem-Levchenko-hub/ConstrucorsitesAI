@@ -35,6 +35,52 @@ class RestoreApplyRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
 
 
+class _ReportPart(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class InventoryObject(_ReportPart):
+    """Counts only; a report never carries row contents."""
+
+    object: str = Field(max_length=300)
+    kind: Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table",
+                  "large_objects"]
+    classification: Literal["business", "technical", "derived", "unknown"]
+    presence: Literal["empty", "present", "unknown"]
+    row_count: int | None = Field(default=None, ge=0)
+    count_kind: Literal["exact", "estimate", "not_measured"]
+    diagnostic: str | None = Field(default=None, max_length=120)
+
+
+class InventoryReport(_ReportPart):
+    presence: Literal["empty", "present", "unknown"]
+    coverage: Literal["complete", "partial", "unavailable"]
+    schema_analysis: Literal["complete", "partial", "unavailable"]
+    objects: list[InventoryObject] = Field(default_factory=list, max_length=500)
+    observed_on: Literal["source", "candidate_copy"]
+
+
+class CompatibilityCheck(_ReportPart):
+    code: str = Field(max_length=80)
+    status: Literal["compatible", "incompatible", "unknown", "not_applicable"]
+    severity: Literal["blocking", "warning", "info"]
+    operation: str = Field(max_length=200)
+    object: str = Field(max_length=300)
+    evidence: Literal["structural_rule", "observed_catalog", "source_scan"]
+    explanation: str = Field(max_length=600)
+    resolution: str | None = Field(default=None, max_length=600)
+
+
+class Capability(_ReportPart):
+    method: str = Field(max_length=10)
+    path: str = Field(max_length=300)
+
+
+class CapabilityDiff(_ReportPart):
+    lost: list[Capability] = Field(default_factory=list, max_length=500)
+    restored: list[Capability] = Field(default_factory=list, max_length=500)
+
+
 class RestoreReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1, strict=True)
@@ -47,6 +93,18 @@ class RestoreReport(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    # Format 2 (structured evidence). Absent on older reports: that means
+    # "not measured", never "no data" and never "compatible".
+    format: Literal[1, 2] = 1
+    inventory: InventoryReport | None = None
+    checks: list[CompatibilityCheck] = Field(default_factory=list, max_length=1000)
+    capabilities: CapabilityDiff | None = None
+
+    @model_validator(mode="after")
+    def consistent_presence(self) -> Self:
+        if self.inventory is not None and self.inventory.presence != self.database_state:
+            raise ValueError("database_state must match the structured inventory")
+        return self
 
 
 class RestoreOperation(BaseModel):

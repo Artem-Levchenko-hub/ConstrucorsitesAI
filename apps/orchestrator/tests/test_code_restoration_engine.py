@@ -593,10 +593,22 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         statements.append((backend.name, text))
         return b""
 
+    def inventory(backend, *, observed_on):
+        from omnia_orchestrator.services.versioning.contracts import InventoryReport
+
+        events.append("inventory:" + backend.name)
+        return InventoryReport(
+            presence="present", coverage="complete", schema_analysis="complete",
+            observed_on=observed_on,
+        )
+
     monkeypatch.setattr(module, "catalog_contract", catalog)
+    monkeypatch.setattr(
+        module, "describe_live_catalog", lambda backend: (*catalog(backend), [])
+    )
     monkeypatch.setattr(module, "candidate_contract", lambda *_: contract)
     monkeypatch.setattr(module, "admin_sql", sql)
-    monkeypatch.setattr(module, "database_state", lambda _: "present")
+    monkeypatch.setattr(module, "observe_database", inventory)
     engine._dump = lambda backend: events.append("dump:" + backend.name) or b"COPY price_list;"
 
     async def make_candidate(*_):
@@ -626,6 +638,9 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     )
     assert "start:candidate:1" in events
     assert result["report"]["blockers"] == []
+    assert result["report"]["database_state"] == "present"
+    # Row presence is observed on the source before any schema analysis.
+    assert events.index("inventory:source") < events.index("catalog:source")
     assert "live-code" not in json.dumps(statements)
 
 
