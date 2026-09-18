@@ -29,7 +29,7 @@ this work): 8 × `test_docker_machine_backend.py::test_retained_receipt_binds_tr
 |---|---|---|
 | Data shown as "unknown" | presence was measured only after the schema check passed | `versioning/inventory.py`: read-only per-table counts on the source **before** any analysis, then again on the isolated copy; a failing relation is `not_measured`, never zero |
 | Vague reason ("custom constraints") | table-level flags and raw tokens | precise checks (`versioning/compatibility.py`): code, operation, object, explanation, resolution — e.g. `required_field_missing_on_create` on `public.clients.email` |
-| Ordinary CHECK/DEFAULT forced adaptation | CHECK counted as custom constraint; tiny DEFAULT whitelist; Drizzle extractor threw on any CHECK | named CHECKs compared by normalized expression on both sides; literal/`nextval`/`now()`/`gen_random_uuid()`/IDENTITY defaults are ordinary; user-function defaults, triggers, expression indexes, NOT VALID/deferrable constraints are still blockers, now named |
+| Ordinary CHECK/DEFAULT forced adaptation | CHECK counted as custom constraint; tiny DEFAULT whitelist; Drizzle extractor threw on any CHECK; **generated MAX apps declare CHECKs in `migrations/*.sql`, which the historical extractor never read** | named CHECKs compared by normalized expression on both sides; historical CHECKs are collected from the Drizzle schema **and** by replaying `migrations/*.sql` (ADD CONSTRAINT / inline CHECK / DROP CONSTRAINT, PostgreSQL auto-naming); literal/`nextval`/`now()`/`gen_random_uuid()`/IDENTITY defaults are ordinary; `numeric(12, 2)` = `numeric(12,2)`; user-function defaults, triggers, expression indexes, NOT VALID/deferrable constraints are still blockers, now named |
 | Visits GET lost after adaptation | nothing tracked functions | route capability diff (`capabilities.lost`) in the report and brief; **enforced (AV06)**: `MaxFinalizationCoordinator.finalize` compares the draft before the adaptation run with the result and returns `NEEDS_EDIT` listing every lost `METHOD /path` (2 repair rounds, then the run fails and the draft is unchanged) — `apps/api/src/omnia_api/services/versioning_capabilities.py` |
 
 ## Report format 2
@@ -58,5 +58,16 @@ Real-DB tests need `RESTORATION_TEST_DATABASE_URL=.../restoration_policy_test`
   verification), never the other way round.
 - Business defaults on new required columns still need confirmation (`required_field_default_needs_confirmation`).
 - Capabilities are HTTP route methods only (no server actions, UI scenarios, response shape, owner filter checks); there is no explicit "retire this function" decision yet, so an adaptation must keep every draft route.
-- Restoration preparation needs host capacity for an isolated candidate; on the current 8-core host a project with both a running draft and a publication is refused (`insufficient_cpu`) — see V9.
+- Restoration candidates are a `verification` capacity workload (own CPU budget `CELL_VERIFICATION_CPU_CORES`, real-free memory/disk, 8 GiB disk) and no longer compete with the runtime ledger; waking the draft itself still needs 4.2 runtime cores.
+- A restoration needs the draft's machine running (the editor keeps it up); headless callers must `POST /api/projects/<id>/runtime/start` first, otherwise the report says «Откройте текущую версию…».
 - No behavioural rehearsal, writer barrier, migration plan, decisions, production path (AV07+).
+
+## Live run 18.09.2026 (project «Клиенты — откаты QA»)
+
+| Step | Result |
+|---|---|
+| Restore v1 (clients only) | `needs_changes`, format 2: crm_clients 5 / crm_client_visits 3 rows; one blocker `required_field_missing_on_create` on `public.crm_clients.email`; `crm_clients_status_check` unchanged; lost functions `POST /api/clients/[id]/visits`, `DELETE …/visits/[visitId]` |
+| Restore v2 (email + visits) | `ready`, `mode=exact` (no AI), both CHECKs unchanged, reads compatible → applied in 60 s → version 4, head `24739617`; live app returns 5 clients with 3 visits (sum 4840.49) |
+| Adaptation via AI (AV06 live) | blocked: LLMGW.ru key is blocked (`401 Key is blocked`), every generation fails `PROVIDER_AUTH_FAILED` until the owner unblocks it |
+
+Found on the way: the production generation canary leaked its project after a capacity wait (cleanup DELETE got 409 while the release op was in flight); retrying the DELETE as the canary owner is the designed recovery.
