@@ -77,7 +77,9 @@ async def test_persisted_checkpoint_records_revision_and_schema_but_warm_capture
         return {"src/app/page.tsx": "export default () => null"}
 
     monkeypatch.setattr("omnia_orchestrator.routers.workspace._read_agent_workspace_files", files)
-    monkeypatch.setattr("omnia_orchestrator.routers.runtime._workspace_revision", lambda _f: "r" * 64)
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.runtime._workspace_revision", lambda _f: "r" * 64
+    )
     monkeypatch.setattr(PublishedMachineBackend, "schema_digest", lambda _self: SEALED_SCHEMA)
     state = SimpleNamespace(workspace_id=workspace_id)
 
