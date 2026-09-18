@@ -130,6 +130,10 @@ class Settings(BaseSettings):
     yookassa_api_url: str = Field(default="https://api.yookassa.ru/v3")
     yookassa_vat_code: int = Field(default=1)
     billing_lifecycle_poll_seconds: int = Field(default=60, ge=10)
+    # AV19.1: the worker re-observes restoration operations that wait on the
+    # controller (prepare/apply/cancel) so no client GET is needed to finish them.
+    restoration_reconcile_poll_seconds: int = Field(default=5, ge=1)
+    restoration_reconcile_lease_seconds: int = Field(default=60, ge=10)
     billing_renewal_retry_hours: int = Field(default=12, ge=1)
     billing_grace_days: int = Field(default=3, ge=1)
 

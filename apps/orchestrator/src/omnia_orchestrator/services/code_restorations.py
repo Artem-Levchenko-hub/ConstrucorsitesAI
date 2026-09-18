@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -56,6 +57,9 @@ class CodeRestorationService:
         self._lock = WorkspaceOperationLock(root)
         self._execution_lock = WorkspaceOperationLock(root / "execution")
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        # Operations whose intent changed while a drive was running: look again
+        # once that drive ends — its last check may already be behind the change.
+        self._rerun: set[str] = set()
 
     def _engine(self) -> RestorationEngine:
         if self.engine is None:
@@ -137,14 +141,28 @@ class CodeRestorationService:
     def _schedule(self, workspace: UUID, operation: UUID) -> None:
         key = str(operation)
         if key in self._tasks:
+            self._rerun.add(key)
             return
         task = asyncio.create_task(self._drive(workspace, operation))
         self._tasks[key] = task
-        task.add_done_callback(lambda _task: self._tasks.pop(key, None))
+        task.add_done_callback(lambda done: self._finished(done, key, workspace, operation))
+
+    def _finished(
+        self, done: asyncio.Task[None], key: str, workspace: UUID, operation: UUID
+    ) -> None:
+        self._tasks.pop(key, None)
+        if key in self._rerun:
+            self._rerun.discard(key)
+            if not done.cancelled():  # shutdown: recovery re-schedules on start
+                self._schedule(workspace, operation)
 
     async def drain(self) -> None:
         while self._tasks:
             await asyncio.gather(*tuple(self._tasks.values()))
+            # A task that finished eagerly is still registered until its done
+            # callback runs; yield once so it is popped (or re-scheduled) and the
+            # loop above cannot spin without giving the event loop a turn.
+            await asyncio.sleep(0)
 
     async def close(self) -> None:
         tasks = tuple(self._tasks.values())
@@ -353,8 +371,21 @@ class CodeRestorationService:
                         )
                     return
                 if saved["prepared"] is None:
+                    if saved["cancel_requested"]:
+                        # Recorded before any build started: honour it without
+                        # creating a candidate at all (AV19.1).
+                        await self._cancel_unprepared(engine, workspace, operation, saved)
+                        return
                     body_prepare = CodeRestorationPrepare.model_validate(saved["prepare"])
-                    prepared = await engine.prepare(body_prepare)
+                    prepared = await engine.prepare(
+                        body_prepare, **self._prepare_options(engine, workspace, operation)
+                    )
+                    if prepared.get("state") == "cancelled":
+                        # The engine stopped at a safe checkpoint and cleaned up.
+                        await self._cancel_unprepared(
+                            engine, workspace, operation, saved, report=self._report(prepared)
+                        )
+                        return
                     report = self._report(prepared)
                     candidate = (
                         str(UUID(str(prepared["candidate_id"])))
@@ -402,6 +433,33 @@ class CodeRestorationService:
                     phase=state,
                     error="Не удалось завершить проверку восстановления.",
                 )
+
+    def _prepare_options(self, engine: Any, workspace: UUID, operation: UUID) -> dict[str, Any]:
+        """Engines that accept ``cancel_requested`` stop at safe checkpoints; test
+        fakes with the bare signature keep working unchanged."""
+        if "cancel_requested" not in inspect.signature(engine.prepare).parameters:
+            return {}
+
+        def cancel_requested() -> bool:
+            saved = self._read(workspace, operation)
+            return bool(saved and saved["cancel_requested"])
+
+        return {"cancel_requested": cancel_requested}
+
+    async def _cancel_unprepared(
+        self,
+        engine: Any,
+        workspace: UUID,
+        operation: UUID,
+        saved: dict[str, Any],
+        *,
+        report: dict[str, Any] | None = None,
+    ) -> None:
+        cancel = CodeRestorationCancel.model_validate({name: saved[name] for name in _IDENTITY})
+        await engine.cancel(cancel, None)  # owned-resource cleanup is idempotent
+        await self._update(
+            workspace, operation, state="cancelled", phase="cancelled", error=None, report=report
+        )
 
     async def recover(self) -> None:
         for path in self.root.glob("*/*.json"):

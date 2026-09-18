@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4, uuid5
 
@@ -34,6 +34,33 @@ def _digest(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+# States in which the next transition depends on the controller, not on the owner.
+# The worker re-observes these (AV19.1); ready/needs_changes wait for a person.
+CONTROLLER_WAIT_STATES = frozenset({"preparing", "checking", "applying", "reconciling"})
+_RECONCILE_DELAYS_SECONDS = (3, 5, 10, 20, 30)
+
+
+def reconcile_delay_seconds(attempts: int) -> int:
+    index = min(max(attempts, 0), len(_RECONCILE_DELAYS_SECONDS) - 1)
+    return _RECONCILE_DELAYS_SECONDS[index]
+
+
+def schedule_reconcile(operation: Restoration, *, now: datetime | None = None) -> None:
+    """Keep the durable projection moving without a client GET.
+
+    Every persisted transition sets when the worker should look at the
+    controller again. Owner-facing and terminal states clear the schedule so a
+    ready candidate is never polled forever."""
+    moment = now or datetime.now(UTC)
+    if operation.state in CONTROLLER_WAIT_STATES:
+        # A row built in memory has no server default yet.
+        delay = reconcile_delay_seconds(operation.reconcile_attempts or 0)
+        operation.next_reconcile_at = moment + timedelta(seconds=delay)
+    else:
+        operation.next_reconcile_at = None
+        operation.reconcile_attempts = 0
 
 
 async def assert_no_active_restoration(
@@ -116,6 +143,7 @@ async def _owned_operation(
 def _touch(operation: Restoration) -> None:
     operation.revision += 1
     operation.updated_at = datetime.now(UTC)
+    schedule_reconcile(operation, now=operation.updated_at)
 
 
 def public_operation(operation: Restoration) -> RestoreOperation:
@@ -286,7 +314,9 @@ async def create_restoration(
         revision=1,
         runtime_revision=0,
         request_payload={},
+        reconcile_attempts=0,
     )
+    schedule_reconcile(operation)  # A crash before dispatch is resumed by the worker.
     session.add(operation)
     await session.commit()  # Claim survives a crash before Git export or any HTTP dispatch.
     return await _prepare(session, project_id, owner_id, operation.id, runtime)
@@ -555,8 +585,12 @@ async def _dispatch(
             if intent in {"prepare", "apply", "cancel"}:
                 # A durable claim may precede a lost dispatch. Reuse the exact operation.
                 return await _dispatch(session, project_id, owner_id, operation_id, runtime, intent)
+        if _no_evidence(action, exc):
+            return await _unobserved(session, project_id, owner_id, operation_id)
         return await _unconfirmed(session, project_id, owner_id, operation_id)
-    except (ValueError, OSError, TimeoutError):
+    except (ValueError, OSError, TimeoutError) as exc:
+        if _no_evidence(action, exc):
+            return await _unobserved(session, project_id, owner_id, operation_id)
         return await _unconfirmed(session, project_id, owner_id, operation_id)
     project, operation = await _owned_operation(session, project_id, owner_id, operation_id)
     # A delayed response to the old prepare envelope cannot overwrite an apply claim.
@@ -578,6 +612,8 @@ async def _dispatch(
             return await _unconfirmed(session, project_id, owner_id, operation_id)
     if operation.state in {"completed", "cancelled", "failed"}:
         return public_operation(operation)
+    if result.revision != operation.runtime_revision:
+        operation.reconcile_attempts = 0  # controller progress restarts the backoff
     operation.runtime_revision = result.revision
     operation.runtime_result = result.model_dump(mode="json")
     operation.candidate_id = result.candidate_id
@@ -616,6 +652,29 @@ async def _unconfirmed(
         operation.error = "Runtime result is not confirmed; checking the same operation"
         _touch(operation)
         await session.commit()
+    return public_operation(operation)
+
+
+def _no_evidence(action: str, exc: BaseException) -> bool:
+    """A failed *observation* proves nothing: an offline controller, a 5xx or a
+    dropped connection during ``status`` leaves the durable row as it is and the
+    worker looks again with backoff. A failed *action* (prepare/apply/cancel) is
+    different — the intent may have landed — and stays unconfirmed."""
+    if action != "status":
+        return False
+    if isinstance(exc, ApiError):
+        return exc.status_code >= 500
+    return isinstance(exc, OSError | TimeoutError)
+
+
+async def _unobserved(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+    operation_id: UUID,
+) -> RestoreOperation:
+    _, operation = await _owned_operation(session, project_id, owner_id, operation_id)
+    await session.commit()
     return public_operation(operation)
 
 

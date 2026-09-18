@@ -10,6 +10,7 @@ from rq import Connection, Worker
 
 from omnia_api.core.config import get_settings
 from omnia_api.services.queue import QUEUE_NAME
+from omnia_api.services.restoration_reconciliation import run_restoration_reconciliation_forever
 from omnia_api.services.subscription_lifecycle import run_subscription_lifecycle_forever
 from omnia_api.services.task_board_attachment_cleanup import run_attachment_cleanup_forever
 
@@ -22,6 +23,10 @@ def _run_attachment_cleanup() -> None:
     asyncio.run(run_attachment_cleanup_forever())
 
 
+def _run_restoration_reconciliation() -> None:
+    asyncio.run(run_restoration_reconciliation_forever())
+
+
 def main() -> None:
     threading.Thread(
         target=_run_billing_lifecycle,
@@ -31,6 +36,12 @@ def main() -> None:
     threading.Thread(
         target=_run_attachment_cleanup,
         name="task-board-attachment-cleanup",
+        daemon=True,
+    ).start()
+    # AV19.1: restoration cancel/apply/prepare finish without a client GET.
+    threading.Thread(
+        target=_run_restoration_reconciliation,
+        name="restoration-reconciliation",
         daemon=True,
     ).start()
     conn = Redis.from_url(get_settings().redis_url)

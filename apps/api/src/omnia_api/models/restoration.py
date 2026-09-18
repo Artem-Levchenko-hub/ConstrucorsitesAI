@@ -59,6 +59,13 @@ class Restoration(Base):
     applied_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     applied_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     error: Mapped[str | None] = mapped_column(Text)
+    # Background reconciliation (AV19.1): when the worker must re-observe the
+    # controller next; NULL while the operation waits for the owner or is terminal.
+    next_reconcile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconcile_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconcile_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -78,5 +85,10 @@ class Restoration(Base):
             postgresql_where=text(
                 "state IN ('preparing','checking','ready','needs_changes','applying','reconciling')"
             ),
+        ),
+        Index(
+            "ix_restorations_next_reconcile_at",
+            "next_reconcile_at",
+            postgresql_where=text("next_reconcile_at IS NOT NULL"),
         ),
     )

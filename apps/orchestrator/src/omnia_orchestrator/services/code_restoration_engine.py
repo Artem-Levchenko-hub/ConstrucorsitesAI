@@ -12,6 +12,7 @@ import shutil
 import socket
 import tarfile
 import traceback
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -307,8 +308,28 @@ class CodeRestorationEngine:
             )
         return state
 
-    async def prepare(self, request: CodeRestorationPrepare) -> dict[str, Any]:
+    async def prepare(
+        self,
+        request: CodeRestorationPrepare,
+        *,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         files = source_text(request)
+
+        def cancelled() -> bool:
+            # Checked only between stages; an owner cancel never waits for the
+            # whole install/build to finish (AV19.1). Cleanup runs in `finally`.
+            return bool(cancel_requested is not None and cancel_requested())
+
+        def cancelled_result() -> dict[str, Any]:
+            return {
+                "state": "cancelled",
+                "candidate_id": None,
+                "report": preparation_report(
+                    blockers=["Подготовка восстановления отменена владельцем."]
+                ),
+            }
+
         try:
             manifest = validate_supported_runtime(files)
         except (PreparationNeedsChanges, ValueError, KeyError) as error:
@@ -317,6 +338,8 @@ class CodeRestorationEngine:
                 "candidate_id": None,
                 "report": preparation_report(blockers=[str(error)]),
             }
+        if cancelled():
+            return cancelled_result()
         manager = self._manager(request.workspace_id)
         candidate_id = uuid5(request.operation_id, "candidate")
         directory = self._directory(request.operation_id)
@@ -395,6 +418,8 @@ class CodeRestorationEngine:
                 dump = await machine_effect(self._dump, source)
             observed_database_state: RestorationDatabaseState = "unknown"
             try:
+                if cancelled():
+                    return cancelled_result()
                 candidate = await self._candidate(manager, request, candidate_id, manifest)
                 await machine_effect(self._seed_source, candidate, request)
                 await machine_effect(
@@ -403,6 +428,8 @@ class CodeRestorationEngine:
                     ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
                     360,
                 )
+                if cancelled():
+                    return cancelled_result()
                 # Dependency installation has no customer data. Once data enter the
                 # candidate, its public-egress proxy stays stopped until destruction.
                 await machine_effect(self._disable_egress, candidate)
@@ -449,6 +476,8 @@ class CodeRestorationEngine:
                         "\n".join(blocking_explanations(checks))
                         or "Несовместимая структура данных: " + ", ".join(assessment.blockers)
                     )
+                if cancelled():
+                    return cancelled_result()
                 tasks = [task for task in manifest.tasks if task.role == "full_build"]
                 if not tasks:
                     tasks = [task for task in manifest.tasks if task.role == "build"]
@@ -460,6 +489,8 @@ class CodeRestorationEngine:
                         min(task.timeout_seconds, 420),
                         task.cwd,
                     )
+                if cancelled():
+                    return cancelled_result()
                 await self._start(candidate, manifest, 1)
                 await machine_effect(self._verify_source, candidate, request)
                 verify_source_inventory(
