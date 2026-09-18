@@ -462,6 +462,7 @@ class MachineAdapter:
         )
         store.observer = observer
         saved_ref = backend._metadata().get("environment_ref")
+        seal = await self._seal_identity(backend) if persist else None
         reference = await machine_effect(
             store.capture,
             manifest_digest=manifest.digest(),
@@ -475,8 +476,41 @@ class MachineAdapter:
             metadata.update(
                 environment_ref=reference.model_dump(mode="json"), restored_image=reference.image_id
             )
+            # P05/P12: a persisted checkpoint (every halt after a generation) is
+            # the sealed release artifact of this exact source revision; a
+            # publication of the same revision starts from it without stopping
+            # or waking the editor. Unknown identity simply records nothing.
+            for key in (
+                "environment_revision",
+                "environment_schema_digest",
+                "environment_sealed_at",
+            ):
+                metadata.pop(key, None)
+            if seal is not None:
+                metadata.update(
+                    environment_revision=seal["revision"],
+                    environment_schema_digest=seal["schema_digest"],
+                    environment_sealed_at=datetime.now(UTC).isoformat(),
+                )
             write_controller_json(backend.metadata_path, metadata)
         return cast(MachineEnvironmentRef, reference)
+
+    async def _seal_identity(self, backend: Any) -> dict[str, str] | None:
+        """Source revision (agent view of the workspace) and the live database
+        schema, read while the machine still runs. Best effort: None on failure."""
+        from omnia_orchestrator.routers.runtime import _workspace_revision
+        from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
+        from omnia_orchestrator.services.published_machine_backend import PublishedMachineBackend
+
+        try:
+            files = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
+            revision = _workspace_revision(files)
+            schema = await machine_effect(PublishedMachineBackend.schema_digest, backend)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return None
+        return {"revision": revision, "schema_digest": schema}
 
     async def checkpoint_payload(self, state: Any) -> bytes | None:
         reference = await self.checkpoint(state)
@@ -625,8 +659,16 @@ class MachineAdapter:
     def _start_boundary(
         self, state: Any, manifest: MachineManifest, backend: DockerMachineBackend, epoch: int,
         *, public_mode: bool = False, runtime_env: dict[str, str] | None = None,
-        business_config_override: dict[str, Any] | None = None,
+        business_config_override: dict[str, Any] | None = None, observer: Any = None,
     ) -> None:
+        # P13: the publication trace sees each readiness step of the trusted
+        # boundary (core, configuration readback, auth probes, gateway) instead
+        # of one opaque "verify_runtime"; a None observer changes nothing.
+        def stage(name: str) -> None:
+            if observer is not None:
+                observer.stage(name)
+
+        stage("verify_core")
         client = backend.client
         names = state.resource_names
         image_tag = get_stack("max-miniapp-nextjs").image_tag
@@ -724,6 +766,7 @@ class MachineAdapter:
             boundary_source,
         )
 
+        stage("verify_config")
         business_config_path = self.parts(state)[0].path.parent / "business-config.json"
         business_config = (
             json.loads(business_config_path.read_text(encoding="utf-8"))
@@ -740,6 +783,7 @@ class MachineAdapter:
                 raise CellResourceError("MAX configuration ownership mismatch")
             apply_core_config(core, core_ip, business_config["config"])
         if public_mode:
+            stage("verify_auth")
             # A health/legal page does not compile Next's lazy auth/API modules.
             # Exercise the real rejection paths before publishing/reusing ingress;
             # empty launch data cannot create a session or write a user record.
@@ -753,6 +797,7 @@ class MachineAdapter:
                 core, core_ip, "/api/omnia/actions", expected=401, timeout=120,
                 attempt_timeout=30,
             )
+        stage("gateway")
         gateway_name = backend.stem + "-gateway"
         config = {
             "secret": secret, "project_id": str(state.project_id), "epoch": epoch,

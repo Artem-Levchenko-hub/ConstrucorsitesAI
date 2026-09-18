@@ -101,6 +101,10 @@ def is_production_workspace(settings: Any, workspace_id: UUID) -> bool:
     return (publication_root(settings) / "identities" / f"{workspace_id}.json").is_file()
 
 
+class _SealedArtifactReady(Exception):
+    """Internal control flow: a sealed artifact replaces the capture block."""
+
+
 class CellPublicationService:
     def __init__(
         self, settings: Any = None, *, root: Path | None = None, manager_factory: Any = None
@@ -490,16 +494,39 @@ class CellPublicationService:
             self._verify_restoration_source(request, source)
             manifest = MachineManifest.model_validate(machine.state()["manifest"])
             seeded = bool(self._read(request.project_id).get("data_seeded"))
-            preview = adapter.preview(source_state)
-            if preview is None or preview[0] != "running":
-                trace.stage("source_wake")
-                await adapter.resume_preview(source_state)
-            trace.stage("source_schema")
-            source_schema = await machine_effect(PublishedMachineBackend.schema_digest, source)
-            await self._preflight_before_capture(
-                request, manifest, source, adapter, source_schema, trace
-            )
+            sealed = self._checkpoint_seal(request, source, adapter, manifest) if seeded else None
+            if sealed is not None:
+                # P12: the accepted version was packaged at finalization; the
+                # editor is not stopped, woken or touched for this publication.
+                trace.stage("sealed_artifact")
+                source_schema = sealed["schema_digest"]
+                reference = sealed["reference"]
+                await self._preflight_before_capture(
+                    request, manifest, source, adapter, source_schema, trace
+                )
+                store = MachineEnvironmentStore(
+                    adapter.root / "artifacts",
+                    source.workspace_id,
+                    source,
+                    max_bytes=source.disk_bytes,
+                )
+                store.observer = trace
+                await machine_effect(store.validate, reference, manifest_digest=manifest.digest())
+            else:
+                preview = adapter.preview(source_state)
+                if preview is None or preview[0] != "running":
+                    trace.stage("source_wake")
+                    await adapter.resume_preview(source_state)
+                trace.stage("source_schema")
+                source_schema = await machine_effect(
+                    PublishedMachineBackend.schema_digest, source
+                )
+                await self._preflight_before_capture(
+                    request, manifest, source, adapter, source_schema, trace
+                )
             try:
+                if sealed is not None:
+                    raise _SealedArtifactReady()
                 # Business data already belongs to the live production identity
                 # after first publication. A warm code update needs the accepted
                 # workspace (with node_modules) and home; package-manager stores
@@ -536,8 +563,10 @@ class CellPublicationService:
                         raise CellIdentityConflict("publication workspace capture mismatch")
                 else:
                     source.validate_restore_reference(reference)
+            except _SealedArtifactReady:
+                pass
             finally:
-                if not adapter.recovery_required(source_state):
+                if sealed is None and not adapter.recovery_required(source_state):
                     trace.stage("resume_source")
                     await adapter.resume_preview(source_state)
         trace.stage("prepare_target")
@@ -652,6 +681,47 @@ class CellPublicationService:
         saved["prepared_release"] = release
         self._write(request.project_id, saved)
         return release
+
+    # ---- P05/P12: sealed release artifact = the last persisted checkpoint ----
+
+    def _checkpoint_seal(
+        self, request: CellDeployRequest, source: Any, adapter: Any, manifest: MachineManifest
+    ) -> dict[str, Any] | None:
+        """The halt after a generation checkpoints the whole environment and
+        records the source revision and database schema it captured. When that
+        revision is exactly the accepted one being published, the checkpoint's
+        warm volumes are the release artifact: no stop, no wake, no export.
+        Any doubt (other revision/manifest, missing archive) → capture path."""
+        metadata = source._metadata() if hasattr(source, "_metadata") else {}
+        raw = metadata.get("environment_ref")
+        schema = metadata.get("environment_schema_digest")
+        if not raw or not schema or metadata.get("environment_revision") != request.source_revision:
+            return None
+        try:
+            reference = MachineEnvironmentRef.model_validate(raw)
+        except ValueError:
+            return None
+        if (
+            reference.workspace_id != source.workspace_id
+            or reference.manifest_digest != manifest.digest()
+        ):
+            return None
+        warm = warm_volume_names(source, manifest)
+        by_name = {volume.name: volume for volume in reference.volumes}
+        if not set(warm) <= set(by_name):
+            return None
+        base = adapter.root / "artifacts" / str(source.workspace_id)
+        refs = [reference.artifact_ref, *(by_name[name].artifact_ref for name in warm)]
+        for ref in refs:
+            artifact = base / ref
+            if artifact.is_symlink() or not artifact.is_file():
+                return None
+        return {
+            "reference": reference.model_copy(
+                update={"volumes": tuple(by_name[name] for name in warm)}
+            ),
+            "schema_digest": str(schema),
+        }
 
     async def _preflight_before_capture(
         self,
@@ -819,6 +889,7 @@ class CellPublicationService:
             public_mode=True,
             runtime_env=env,
             business_config_override=request.business_config,
+            **({"observer": trace} if trace is not None else {}),
         )
         return backend
 

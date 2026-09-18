@@ -27,6 +27,7 @@ STAGES = (
     "source_wake",
     "source_schema",
     "preflight_target",
+    "sealed_artifact",
     "capture_rootfs",
     "capture_volumes",
     "verify_artifacts",
@@ -36,6 +37,10 @@ STAGES = (
     "activate",
     "start_app",
     "verify_runtime",
+    "verify_core",
+    "verify_config",
+    "verify_auth",
+    "gateway",
     "tls",
     "observe",
 )

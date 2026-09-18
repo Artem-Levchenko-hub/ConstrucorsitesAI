@@ -313,3 +313,56 @@ def test_old_responses_read_as_format_1_without_inventing_progress():
     assert old.format_version == 1 and old.stage is None and old.progress is None
     assert old.stages == [] and old.metrics == {} and old.heartbeat_at is None
     assert json.loads(old.model_dump_json())["format_version"] == 1
+
+
+async def test_start_hands_the_trace_to_the_boundary_as_observer(tmp_path, monkeypatch):
+    """P13: the trusted boundary reports its own readiness steps into the
+    publication trace; without a trace nothing changes."""
+    from unittest.mock import AsyncMock
+
+    from omnia_orchestrator.services import cell_publication as module
+    from tests.test_cell_publication import restored_request
+    from tests.test_project_machine_manifest import payload
+
+    service = module.CellPublicationService(SimpleNamespace(), root=tmp_path)
+    value = restored_request()
+    service._effective_request = lambda request_: request_
+    service._write(value.project_id, {"project_id": str(value.project_id), "history": []})
+    backend = SimpleNamespace(
+        project_postgres_password="private-test",
+        switch_code=lambda *args: None,
+        start_service=lambda *args: None,
+        service_status=lambda *args: {"ready": True},
+        schema_digest=lambda: "live-schema",
+    )
+    service._backend = lambda *args: backend
+    seen: list[dict] = []
+
+    def boundary(*_args, **kwargs):
+        seen.append(kwargs)
+        observer = kwargs.get("observer")
+        if observer is not None:
+            observer.stage("verify_core")
+            observer.stage("gateway")
+
+    manager = SimpleNamespace(machine_runtime=SimpleNamespace(_start_boundary=boundary))
+    monkeypatch.setattr(module, "ensure_managed_infrastructure", AsyncMock())
+    release = {
+        "manifest": payload(),
+        "schema_digest": "live-schema",
+        "epoch": 2,
+        "image_id": "image",
+        "prod_url": "https://app.example.test",
+    }
+    trace = PublicationTrace()
+    await service._start(manager, object(), release, value, switch=True, trace=trace)
+    assert seen[-1]["observer"] is trace
+    trace.end_stage()
+    assert [item["stage"] for item in trace.snapshot()["stages"]] == [
+        "start_app",
+        "verify_runtime",
+        "verify_core",
+        "gateway",
+    ]
+    await service._start(manager, object(), release, value, switch=True)
+    assert "observer" not in seen[-1]

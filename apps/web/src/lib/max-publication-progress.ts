@@ -23,6 +23,10 @@ export const PUBLICATION_STAGE_LABELS: Record<string, string> = {
   activate: "Переключаем версию",
   start_app: "Запускаем приложение",
   verify_runtime: "Проверяем работу и настройки",
+  verify_core: "Поднимаем доверенное ядро MAX",
+  verify_config: "Применяем настройки приложения",
+  verify_auth: "Проверяем защиту входа",
+  gateway: "Запускаем шлюз приложения",
   tls: "Настраиваем HTTPS",
   observe: "Подтверждаем доступность",
 };
