@@ -71,6 +71,35 @@ at 17 %, disk 218 MB/s read / 244 MB/s write, 4 blocked processes.
 ≈1.4 GB / 34 000 files cross export → hash → hash → import for a change that
 touched a few source files.
 
+## Repeat run with the P01 trace (release `86ad9b78`)
+
+The same release re-published on purpose (`repeat1`, run `202d9368…`):
+**110.7 s** total (prepare 65.4 s, activate
+45.3 s), source pause 30 s, public unavailable ≈40 s — identical work
+to `warm1` although nothing changed (C08: no desired-release no-op yet). The
+durable substages now name where the time goes:
+
+| Stage | Elapsed |
+|---|---|
+| `preflight` | 1.1 s |
+| `source_schema` | 4.9 s |
+| `capture_rootfs` | 1.2 s |
+| `capture_volumes` | 18.1 s |
+| `verify_artifacts` | 10.7 s |
+| `resume_source` | 3.6 s |
+| `prepare_target` | 3.7 s |
+| `seed_data` | 22.1 s |
+| `activate` | 4.1 s |
+| `start_app` | 14.4 s |
+| `verify_runtime` | 26.5 s |
+| `tls` | 0.0 s |
+| `observe` | 0.2 s |
+
+`verify_runtime` (schema digest + MAX core health, config readback, auth
+probes, gateway creation) is the single largest activation stage; the gateway
+container only appears 18 s into it. `capture_volumes` exported 1.33 GB,
+`verify_artifacts` re-hashed 1.43 GB.
+
 ## Background reconcile (C13/C15) — confirmed live
 
 The publication reconcile loop rewrites the nginx vhost of every published
@@ -103,8 +132,8 @@ for one app). The config does not change between sweeps.
 
 ## What is not measured yet
 
-- A «repeat the same release» run (C08) and a first publish on a
-  script-owned project (the numbers above come from the journal).
+- A first publish on a script-owned project (the first-publish numbers come
+  from the journal).
 - The cache-miss branch of rootfs reuse (C03).
 - Bytes actually read/written per stage (only host-level throughput was seen).
 

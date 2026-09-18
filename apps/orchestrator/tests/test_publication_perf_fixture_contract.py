@@ -88,4 +88,5 @@ def test_recorded_baseline_is_consistent():
             assert value is None or (isinstance(value, (int, float)) and value >= 0), run["label"]
         if run["timings_ms"].get("total") is not None:
             assert run["started_at"] and run["finished_at"], run["label"]
-    assert set(baseline["not_measured"]) >= {"repeat-same-release"}
+    assert "repeat-same-release" not in baseline["not_measured"]  # measured with the P01 trace
+    assert set(baseline["not_measured"]) >= {"first-publish-scripted"}
