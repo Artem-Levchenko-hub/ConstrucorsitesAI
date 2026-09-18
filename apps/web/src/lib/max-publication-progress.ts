@@ -13,6 +13,7 @@ export const PUBLICATION_STAGE_LABELS: Record<string, string> = {
   source_wake: "Будим рабочую среду",
   source_schema: "Читаем структуру базы данных",
   preflight_target: "Сверяем с опубликованной версией",
+  sealed_artifact: "Берём готовый пакет версии",
   capture_rootfs: "Снимаем образ окружения",
   capture_volumes: "Упаковываем код и зависимости",
   verify_artifacts: "Проверяем целостность пакета",
