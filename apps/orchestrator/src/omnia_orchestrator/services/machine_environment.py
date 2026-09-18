@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from collections.abc import Iterable
@@ -14,7 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnia_orchestrator.core.project_machine import MachineManifest
 from omnia_orchestrator.services.cell_state import _ensure_secure_dir
-from omnia_orchestrator.services.project_machine import machine_remaining_seconds
+from omnia_orchestrator.services.project_machine import (
+    machine_remaining_seconds,
+    write_controller_json,
+)
 
 
 class EnvironmentIntegrityError(RuntimeError):
@@ -70,6 +74,39 @@ class MachineEnvironmentStore:
         if self.observer is not None:
             self.observer.stage(name)
 
+    # -- seal markers (P08): an archive this controller hashed while writing and
+    # fsync'd is immutable content-addressed data; re-reading it before import
+    # only burns disk time. The marker binds the digest to the exact file
+    # identity (size, mtime, inode); any later change invalidates the seal and
+    # the archive is hashed in full again. Foreign or legacy archives without a
+    # marker are always hashed.
+    @staticmethod
+    def _marker_path(path: Path) -> Path:
+        return path.with_name(path.name + ".ok")
+
+    def _seal(self, path: Path, digest: str, size: int) -> None:
+        stat = path.stat()
+        write_controller_json(
+            self._marker_path(path),
+            {"sha256": digest, "size": size, "mtime_ns": stat.st_mtime_ns, "inode": stat.st_ino},
+        )
+
+    def _sealed(self, path: Path, digest: str, size: int) -> bool:
+        marker = self._marker_path(path)
+        try:
+            if marker.is_symlink() or not marker.is_file():
+                return False
+            recorded = json.loads(marker.read_text(encoding="utf-8"))
+            stat = path.stat()
+        except (OSError, ValueError):
+            return False
+        return bool(
+            recorded.get("sha256") == digest
+            and recorded.get("size") == size == stat.st_size
+            and recorded.get("mtime_ns") == stat.st_mtime_ns
+            and recorded.get("inode") == stat.st_ino
+        )
+
     def _digest(self, path: Path) -> str:
         digest = hashlib.sha256()
         with path.open("rb") as handle:
@@ -107,8 +144,10 @@ class MachineEnvironmentStore:
                 os.fsync(handle.fileno())
             if not size:
                 raise EnvironmentIntegrityError("empty environment artifact")
+            self._seal(path, digest.hexdigest(), size)
         except BaseException:
             path.unlink(missing_ok=True)
+            self._marker_path(path).unlink(missing_ok=True)
             raise
         return reference, digest.hexdigest(), size
 
@@ -179,6 +218,10 @@ class MachineEnvironmentStore:
             path = self.artifact_path(previous.artifact_ref)
             if path.is_symlink() or not path.is_file() or path.stat().st_size != previous.size:
                 return False
+            if self._sealed(path, previous.sha256, previous.size):
+                if self.observer is not None:
+                    self.observer.add_bytes(previous.size)
+                return True
             digest = hashlib.sha256()
             with path.open("rb") as handle:
                 while chunk := handle.read(1024 * 1024):
@@ -216,6 +259,10 @@ class MachineEnvironmentStore:
                 raise EnvironmentIntegrityError("environment artifact missing or unsafe")
             if path.stat().st_size != item.size:
                 raise EnvironmentIntegrityError("environment artifact size/digest mismatch")
+            if self._sealed(path, item.sha256, item.size):
+                if self.observer is not None:
+                    self.observer.add_bytes(item.size)
+                continue
             if self._digest(path) != item.sha256:
                 raise EnvironmentIntegrityError("environment artifact digest mismatch")
 

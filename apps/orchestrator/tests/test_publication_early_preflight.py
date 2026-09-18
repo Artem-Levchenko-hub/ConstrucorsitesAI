@@ -188,7 +188,8 @@ async def test_compatible_warm_release_reaches_capture_with_the_warm_volume_set(
     assert production.schema_calls == 1
     (capture,) = adapter.checkpoints
     assert capture["persist"] is False
-    assert set(capture["volumes"]) == {"stem-workspace", "stem-home", "stem-pnpm", "stem-corepack"}
+    # `python server.py` / `ruby worker.rb` never touch package stores (B2).
+    assert set(capture["volumes"]) == {"stem-workspace", "stem-home"}
 
 
 async def test_first_publish_never_consults_production_before_capture(tmp_path, monkeypatch):

@@ -256,6 +256,8 @@ def test_reuse_hashing_deadline_never_starts_another_export(tmp_path, monkeypatc
     store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
     options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64, volumes=())
     old = store.capture(**options)
+    # A legacy archive without a seal marker must be hashed under the deadline.
+    api.MachineEnvironmentStore._marker_path(store.artifact_path(old.artifact_ref)).unlink()
     calls = []
 
     def budget(_):
@@ -286,3 +288,60 @@ def test_restore_keeps_preserved_live_volume_and_restores_the_rest(tmp_path):
     store.restore(ref, manifest_digest="b" * 64, preserve_volumes=frozenset({"app-postgres-data"}))
     assert backend.volumes["app-postgres-data"] == b"database with client rows written later"
     assert backend.volumes["repo"] == b"source and node_modules symlink archive"
+
+
+def test_sealed_archives_are_not_hashed_twice_but_any_change_is(tmp_path, monkeypatch):
+    """P08: an archive hashed while written is trusted by its seal (digest bound to
+    size/mtime/inode); a rewritten or unsealed archive is hashed in full again."""
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    reads = []
+    original = api.MachineEnvironmentStore._digest
+
+    def counting(self, path):
+        reads.append(path.name)
+        return original(self, path)
+
+    monkeypatch.setattr(api.MachineEnvironmentStore, "_digest", counting)
+    ref = store.capture(
+        manifest_digest="b" * 64, base_image="sha256:" + "c" * 64, volumes=("repo", "home")
+    )
+    store.validate(ref, manifest_digest="b" * 64)
+    assert reads == []  # three sealed archives, zero re-reads
+
+    # Same size, rewritten in place: the seal no longer matches → full hash → mismatch.
+    path = store.artifact_path(ref.volumes[0].artifact_ref)
+    path.write_bytes(b"x" * ref.volumes[0].size)
+    with pytest.raises(api.EnvironmentIntegrityError):
+        store.validate(ref, manifest_digest="b" * 64)
+    assert reads == [path.name]
+
+    # A legacy archive without a marker is hashed and accepted when intact.
+    reads.clear()
+    fresh = store.capture(
+        manifest_digest="b" * 64, base_image="sha256:" + "c" * 64, volumes=("repo",)
+    )
+    api.MachineEnvironmentStore._marker_path(store.artifact_path(fresh.artifact_ref)).unlink()
+    store.validate(fresh, manifest_digest="b" * 64)
+    assert reads == [fresh.artifact_ref]
+
+
+def test_sealed_rootfs_reuse_skips_rehash(tmp_path, monkeypatch):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64, volumes=("repo",))
+    old = store.capture(**options)
+    reads = []
+    original = api.MachineEnvironmentStore._digest
+
+    def counting(self, path):
+        reads.append(path.name)
+        return original(self, path)
+
+    monkeypatch.setattr(api.MachineEnvironmentStore, "_digest", counting)
+    backend.events.clear()
+    new = store.capture(**options, previous=old)
+    assert new.artifact_ref == old.artifact_ref and "export_image" not in backend.events
+    assert reads == []

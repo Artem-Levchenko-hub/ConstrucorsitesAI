@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import shutil
 import time
 import traceback
@@ -60,6 +61,31 @@ from omnia_orchestrator.services.published_machine_backend import (
 )
 
 _ACTIVE = {"queued", "building", "swapping"}
+# Service commands that may resolve packages at startup and therefore still need
+# the package-manager stores; a plain `pnpm start` runs from node_modules alone.
+_STORE_USERS = re.compile(
+    r"(?:^|[\s/;&|])(?:npx|pnpx)\b"  # always fetch/resolve packages
+    r"|(?:^|[\s/;&|])(?:pnpm|npm|yarn|corepack)\b"
+    r"[^;&|]*?\b(?:install|add|i|dlx|exec|rebuild|approve-builds)\b"
+)
+
+
+def runtime_needs_package_stores(manifest: MachineManifest) -> bool:
+    """P06/P08: a warm release moves the pnpm/corepack stores only when a
+    service startup command could touch them (install/exec/dlx). Node modules
+    themselves live in the workspace and are always moved."""
+    for service in manifest.services:
+        if _STORE_USERS.search(" ".join(service.argv)):
+            return True
+    return False
+
+
+def warm_volume_names(source: Any, manifest: MachineManifest) -> tuple[str, ...]:
+    """Volumes a warm (data already seeded) publication must carry."""
+    names = [source.workspace_volume, source.stem + "-home"]
+    if runtime_needs_package_stores(manifest):
+        names.extend([source.pnpm_cache_volume, source.corepack_cache_volume])
+    return tuple(names)
 
 
 def _now() -> str:
@@ -476,15 +502,11 @@ class CellPublicationService:
             try:
                 # Business data already belongs to the live production identity
                 # after first publication. A warm code update needs the accepted
-                # workspace plus package-manager stores needed by service startup;
-                # exporting Postgres, uploads and the disposable Next cache again
-                # adds minutes and those archives are deliberately discarded.
-                warm_volumes = (
-                    source.workspace_volume,
-                    source.stem + "-home",
-                    source.pnpm_cache_volume,
-                    source.corepack_cache_volume,
-                )
+                # workspace (with node_modules) and home; package-manager stores
+                # only when a startup command may resolve packages. Exporting
+                # Postgres, uploads and the disposable Next cache again adds
+                # minutes and those archives are deliberately discarded.
+                warm_volumes = warm_volume_names(source, manifest)
                 capture_volumes = warm_volumes if seeded else None
                 reference = await adapter.checkpoint(
                     source_state,
