@@ -52,9 +52,10 @@ Real-DB tests need `RESTORATION_TEST_DATABASE_URL=.../restoration_policy_test`
 
 ## Remaining limits (not done in package 1)
 
-- A changed CHECK with the same name is compared by a normalized text form; two
-  differently parenthesized boolean expressions can normalize equal. PostgreSQL
-  still enforces the live CHECK, so the worst case is a rejected write, not bad data.
+- CHECKs are compared by a conservative normalized text form (literals verbatim,
+  casts dropped only from literals, only redundant parentheses removed). Equivalent
+  but differently parenthesized renderings are reported as changed (needs
+  verification), never the other way round.
 - Business defaults on new required columns still need confirmation (`required_field_default_needs_confirmation`).
 - Capabilities are HTTP route methods only (no server actions, UI scenarios, response shape, owner filter checks); there is no explicit "retire this function" decision yet, so an adaptation must keep every draft route.
 - Restoration preparation needs host capacity for an isolated candidate; on the current 8-core host a project with both a running draft and a publication is refused (`insufficient_cpu`) — see V9.
