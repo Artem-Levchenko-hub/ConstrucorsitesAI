@@ -911,11 +911,6 @@ def extract_files(answer: str) -> dict[str, str]:
     return files
 
 
-class EditConflict(ValueError):
-    """SEARCH-блок не нашёлся или нашёлся несколько раз — не можем
-    однозначно применить замену."""
-
-
 def extract_edits(answer: str) -> dict[str, list[tuple[str, str]]]:
     """Парсит `<edit path="...">` блоки в `{path: [(search, replace), ...]}`.
 

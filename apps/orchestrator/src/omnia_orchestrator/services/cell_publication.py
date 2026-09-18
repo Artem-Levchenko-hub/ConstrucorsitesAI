@@ -96,11 +96,6 @@ def publication_root(settings: Any) -> Path:
     return Path(settings.cell_state_path).parent / "cell-publications"
 
 
-def is_production_workspace(settings: Any, workspace_id: UUID) -> bool:
-    """Lifecycle/recovery hook: production reservations cannot be reclaimed as drafts."""
-    return (publication_root(settings) / "identities" / f"{workspace_id}.json").is_file()
-
-
 class _SealedArtifactReady(Exception):
     """Internal control flow: a sealed artifact replaces the capture block."""
 

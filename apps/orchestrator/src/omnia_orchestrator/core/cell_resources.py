@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -350,10 +349,6 @@ class CellResourceNames:
     def secret_staging_volume_name(self, operation_id: UUID, purpose: str) -> str:
         return f"{self._stem}-secret-{purpose}-{operation_id.hex[:12]}"
 
-    def checkpoint_directory(self, checkpoint_ref: str) -> str:
-        validate_checkpoint_ref(checkpoint_ref)
-        return checkpoint_ref
-
     def draft_container_name(self) -> str:
         return f"{self._stem}-draft"
 
@@ -435,11 +430,3 @@ def validate_checkpoint_ref(checkpoint_ref: str) -> str:
     if _CHECKPOINT_REF_RE.fullmatch(checkpoint_ref) is None:
         raise ValueError("checkpoint_ref must match ^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
     return checkpoint_ref
-
-
-def is_digest_pinned_image(image: str) -> bool:
-    return _IMAGE_DIGEST_RE.fullmatch(image) is not None
-
-
-def state_root_from_path(state_path: str) -> Path:
-    return Path(state_path).expanduser().resolve().parent

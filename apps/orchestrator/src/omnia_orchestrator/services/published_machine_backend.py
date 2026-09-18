@@ -111,22 +111,6 @@ async def ensure_managed_infrastructure(manager: Any, state: Any) -> None:
             await manager.docker.start_container(container_spec.name)
 
 
-def send_exec_stdin(client: Any, container: Any, argv: list[str], payload: bytes) -> None:
-    execution = client.api.exec_create(container.id, argv, stdin=True)
-    connection = client.api.exec_start(execution["Id"], socket=True)
-    try:
-        connection._sock.settimeout(machine_remaining_seconds(60))
-        connection._sock.sendall(payload)
-        connection._sock.shutdown(socket.SHUT_WR)
-        while connection._sock.recv(65536):
-            connection._sock.settimeout(machine_remaining_seconds(60))
-    finally:
-        connection.close()
-    result = client.api.exec_inspect(execution["Id"])
-    if result.get("Running") or result.get("ExitCode") != 0:
-        raise CellResourceError("trusted publication database operation failed")
-
-
 @dataclass
 class PublishedMachineBackend(DockerMachineBackend):
     release_id: UUID | None = None
