@@ -100,6 +100,17 @@ probes, gateway creation) is the single largest activation stage; the gateway
 container only appears 18 s into it. `capture_volumes` exported 1.33 GB,
 `verify_artifacts` re-hashed 1.43 GB.
 
+## Delivery A on production (release `3567cbb1`)
+
+| Run | What | Result |
+|---|---|---|
+| `full2` bb11a933… | same release, active release without a fingerprint yet → full publication, now with `preflight_target` (production schema compared **before** any export) | 117.8 s; `preflight_target` 4.4 s; the rest as before (source pause 32 s, public unavailable ≈41 s) |
+| `noop1` b8ff3691… | same release again, new idempotency key | **`already_current` in 0.59 s**: serving identity (app container image, gateway) and HTTPS verified, 0 containers, 0 volumes, source untouched, site 200 throughout |
+
+P03 (`preflight_target`) and P04 (fingerprint → no-op / config-only) are live;
+the first request after the upgrade is always a full publication because older
+releases carry no fingerprint (they are never assumed current).
+
 ## Background reconcile (C13/C15) — confirmed live
 
 The publication reconcile loop rewrites the nginx vhost of every published
@@ -118,8 +129,8 @@ for one app). The config does not change between sweeps.
 | C04 extra archive passes | **confirmed live** | export hash + `validate` re-read ≈ 10 s |
 | C05 source stop/resume | **confirmed live** | 30 s pause of the editor preview |
 | C06 sequential helpers | **confirmed live** | helpers strictly one after another |
-| C07 late incompatibility check | confirmed (code) | schema compare after capture + resume |
-| C08 no desired-release no-op | confirmed (code) | not exercised |
+| C07 late incompatibility check | **fixed (P03, 3567cbb1)** | `preflight_target` compares the live production schema before capture; final check under the activation locks kept |
+| C08 no desired-release no-op | **fixed (P04, 3567cbb1)** | `noop1`: same release → `already_current` in 0.59 s, nothing touched |
 | C09 PostgreSQL recreated on code switch | **confirmed live** | +71 s destroy, +75 s new container |
 | C10 recursive chown helper | **confirmed live** | `project-postgres-prepare` helper ran |
 | C11 first publish heavier | confirmed (journal) | 155.8 s vs 114.1 s |
@@ -139,8 +150,9 @@ for one app). The config does not change between sweeps.
 
 ## Next
 
-Delivery A continues with P01 (durable substages, heartbeat, byte progress and
-`prepare/activate` timings as first-class fields), P02 (panel), P03 (preflight
-before capture) and P04 (no-op / config-only). The cheapest confirmed wins are
-the nginx reload on unchanged config (C13/C15) and the PostgreSQL restart on a
-code-only release (C09/C10, delivery C).
+Delivery A (P00–P04) is complete. What still costs the owner time on every real
+update: the 30 s source pause and ~60 s of export/hash/import (delivery B,
+P05–P08/P12: immutable release artifact), and the ~41 s public outage with the
+PostgreSQL restart and the 26 s `verify_runtime` (delivery C, P09–P16). The
+cheapest confirmed win outside the critical path is the nginx reload on an
+unchanged config every 5 minutes (C13/C15).
