@@ -64,7 +64,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import data_gate
 from .auth_session import preview_resolver_args
-from .render_settle import goto_and_settle
+from .render_settle import render_url
 
 if TYPE_CHECKING:
     from playwright.async_api import Page, StorageState
@@ -279,24 +279,15 @@ async def audit_url(
         # No session → the cabinet is unreachable (login wall). Nothing to judge.
         return CabinetReport((), rendered=False)
     try:
-        from playwright.async_api import async_playwright
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
-            try:
-                context = await browser.new_context(
-                    viewport={"width": int(width), "height": GATE_HEIGHT},
-                    reduced_motion="reduce",
-                    storage_state=storage_state,
-                )
-                try:
-                    page = await context.new_page()
-                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
-                    return await _audit_page(page)
-                finally:
-                    await context.close()
-            finally:
-                await browser.close()
+        return await render_url(
+            url,
+            _audit_page,
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+            storage_state=storage_state,
+            launch_args=preview_resolver_args(),
+        )
     except Exception as exc:
         log.warning("cabinet_gate: url audit failed (abstain): %r", exc)
         return CabinetReport((), rendered=False)

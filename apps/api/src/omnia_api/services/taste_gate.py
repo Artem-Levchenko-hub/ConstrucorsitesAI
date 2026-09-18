@@ -47,16 +47,13 @@ mobile width the correctness gates run at.
 
 from __future__ import annotations
 
-import json
 import logging
 import statistics
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .auth_session import preview_resolver_args
-from .render_settle import goto_and_settle
+from .render_settle import render_files, render_url, run_gate_cli
 from .surface_class import is_login_surface
 
 if TYPE_CHECKING:
@@ -605,24 +602,15 @@ async def audit_url(
     rather than a raise, so a flaky container never hard-fails the gauntlet (R-10).
     """
     try:
-        from playwright.async_api import async_playwright
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
-            try:
-                context = await browser.new_context(
-                    viewport={"width": int(width), "height": GATE_HEIGHT},
-                    reduced_motion="reduce",
-                    storage_state=storage_state,
-                )
-                page = await context.new_page()
-                try:
-                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
-                    return await _audit_page(page)
-                finally:
-                    await context.close()
-            finally:
-                await browser.close()
+        return await render_url(
+            url,
+            _audit_page,
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+            storage_state=storage_state,
+            launch_args=preview_resolver_args(),
+        )
     except Exception as exc:
         log.warning("taste_gate: url audit failed (abstain): %r", exc)
         return TasteReport((), 0, int(width), (), rendered=False)
@@ -635,54 +623,22 @@ async def audit_files(
     if "index.html" not in files:
         return TasteReport((), 0, int(width), (), rendered=False)
     try:
-        from playwright.async_api import async_playwright
-
-        with tempfile.TemporaryDirectory(prefix="omnia-taste-") as tmp:
-            workdir = Path(tmp)
-            for path, content in files.items():
-                full = workdir / path
-                full.parent.mkdir(parents=True, exist_ok=True)
-                full.write_text(content, encoding="utf-8")
-            index_uri = (workdir / "index.html").as_uri()
-
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
-                try:
-                    page = await browser.new_page(
-                        viewport={"width": int(width), "height": GATE_HEIGHT},
-                        reduced_motion="reduce",
-                    )
-                    try:
-                        await goto_and_settle(page, index_uri, timeout_ms=timeout_ms)
-                        return await _audit_page(page)
-                    finally:
-                        await page.close()
-                finally:
-                    await browser.close()
+        return await render_files(
+            files,
+            _audit_page,
+            prefix="omnia-taste-",
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+            launch_args=preview_resolver_args(),
+        )
     except Exception as exc:
         log.warning("taste_gate: files audit failed (abstain): %r", exc)
         return TasteReport((), 0, int(width), (), rendered=False)
 
 
 def _main(argv: list[str]) -> int:  # pragma: no cover — thin CLI wrapper
-    import asyncio
-
-    if len(argv) < 2:
-        print("usage: python -m omnia_api.services.taste_gate <url|index.html-dir>")
-        return 2
-    target = argv[1]
-    if target.startswith(("http://", "https://")):
-        report = asyncio.run(audit_url(target))
-    else:
-        root = Path(target)
-        files = {
-            str(p.relative_to(root)): p.read_text(encoding="utf-8")
-            for p in root.rglob("*.html")
-        }
-        report = asyncio.run(audit_files(files))
-    print(report.summary())
-    print(json.dumps(report.subscore(), ensure_ascii=False, indent=2))
-    return 0 if report.passed else 1
+    return run_gate_cli(argv, "taste_gate", audit_url, audit_files)
 
 
 if __name__ == "__main__":  # pragma: no cover

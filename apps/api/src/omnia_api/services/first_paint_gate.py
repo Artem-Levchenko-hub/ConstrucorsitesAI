@@ -44,13 +44,11 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import data_gate
-from .render_settle import FIRST_PAINT_BUDGET_MS, goto_and_settle
+from .render_settle import FIRST_PAINT_BUDGET_MS, render_files, render_url
 
 if TYPE_CHECKING:
     from playwright.async_api import Page, StorageState
@@ -345,27 +343,14 @@ async def audit_url(
     authenticated cabinet render instead of the anonymous stranger surface.
     """
     try:
-        from playwright.async_api import async_playwright
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            try:
-                # storage_state=None ⇒ clean incognito context: no cookies, no
-                # stored session (the default). A passed storage_state carries the
-                # session cookie for an authenticated-cabinet render.
-                context = await browser.new_context(
-                    viewport={"width": int(width), "height": GATE_HEIGHT},
-                    reduced_motion="reduce",
-                    storage_state=storage_state,
-                )
-                try:
-                    page = await context.new_page()
-                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
-                    return await _audit_page(page)
-                finally:
-                    await context.close()
-            finally:
-                await browser.close()
+        return await render_url(
+            url,
+            _audit_page,
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+            storage_state=storage_state,
+        )
     except Exception as exc:
         log.warning("first_paint_gate: url audit failed (abstain): %r", exc)
         return FirstPaintReport((), rendered=False)
@@ -382,31 +367,14 @@ async def audit_files(
     if "index.html" not in files:
         return FirstPaintReport((), rendered=False)
     try:
-        from playwright.async_api import async_playwright
-
-        with tempfile.TemporaryDirectory(prefix="omnia-firstpaint-") as tmp:
-            workdir = Path(tmp)
-            for path, content in files.items():
-                full = workdir / path
-                full.parent.mkdir(parents=True, exist_ok=True)
-                full.write_text(content, encoding="utf-8")
-            index_uri = (workdir / "index.html").as_uri()
-
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                try:
-                    context = await browser.new_context(
-                        viewport={"width": int(width), "height": GATE_HEIGHT},
-                        reduced_motion="reduce",
-                    )
-                    try:
-                        page = await context.new_page()
-                        await goto_and_settle(page, index_uri, timeout_ms=timeout_ms)
-                        return await _audit_page(page)
-                    finally:
-                        await context.close()
-                finally:
-                    await browser.close()
+        return await render_files(
+            files,
+            _audit_page,
+            prefix="omnia-firstpaint-",
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+        )
     except Exception as exc:
         log.warning("first_paint_gate: files audit failed (abstain): %r", exc)
         return FirstPaintReport((), rendered=False)

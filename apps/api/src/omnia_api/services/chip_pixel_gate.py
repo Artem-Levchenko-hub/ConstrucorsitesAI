@@ -46,13 +46,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-import tempfile
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .render_settle import goto_and_settle
+from .render_settle import render_files, render_url
 from .wow_dom_gate import (
     GATE_HEIGHT,
     GATE_WIDTH,
@@ -875,24 +874,14 @@ async def audit_url(
     storage so an authenticated cabinet renders past its login wall. When
     ``None`` the context is anonymous (byte-identical to the prior default)."""
     try:
-        from playwright.async_api import async_playwright
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            try:
-                context = await browser.new_context(
-                    viewport={"width": int(width), "height": GATE_HEIGHT},
-                    reduced_motion="reduce",
-                    storage_state=storage_state,
-                )
-                page = await context.new_page()
-                try:
-                    await goto_and_settle(page, url, timeout_ms=timeout_ms)
-                    return await _audit_page(page, spec)
-                finally:
-                    await context.close()
-            finally:
-                await browser.close()
+        return await render_url(
+            url,
+            lambda page: _audit_page(page, spec),
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+            storage_state=storage_state,
+        )
     except Exception as exc:
         log.warning("chip_pixel_gate: url audit failed (abstain): %r", exc)
         return FidelityReport((), rendered=False)
@@ -909,30 +898,14 @@ async def audit_files(
     if "index.html" not in files:
         return FidelityReport((), rendered=False)
     try:
-        from playwright.async_api import async_playwright
-
-        with tempfile.TemporaryDirectory(prefix="omnia-chippix-") as tmp:
-            workdir = Path(tmp)
-            for path, content in files.items():
-                full = workdir / path
-                full.parent.mkdir(parents=True, exist_ok=True)
-                full.write_text(content, encoding="utf-8")
-            index_uri = (workdir / "index.html").as_uri()
-
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                try:
-                    page = await browser.new_page(
-                        viewport={"width": int(width), "height": GATE_HEIGHT},
-                        reduced_motion="reduce",
-                    )
-                    try:
-                        await goto_and_settle(page, index_uri, timeout_ms=timeout_ms)
-                        return await _audit_page(page, spec)
-                    finally:
-                        await page.close()
-                finally:
-                    await browser.close()
+        return await render_files(
+            files,
+            lambda page: _audit_page(page, spec),
+            prefix="omnia-chippix-",
+            width=width,
+            height=GATE_HEIGHT,
+            timeout_ms=timeout_ms,
+        )
     except Exception as exc:
         log.warning("chip_pixel_gate: files audit failed (abstain): %r", exc)
         return FidelityReport((), rendered=False)

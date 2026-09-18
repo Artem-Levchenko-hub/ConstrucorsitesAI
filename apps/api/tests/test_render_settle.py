@@ -12,7 +12,9 @@ leg owned its own navigation + settle. These tests make recurrence impossible:
 2. A falsifiable AST assert fails the moment ANY ``*_gate.py`` calls ``page.goto``
    or passes a ``wait_until`` kwarg directly — all navigation must route through
    ``render_settle.goto_and_settle``.
-3. Every render leg is asserted to import and call the shared helper.
+3. Every url/files render leg is asserted to run the shared session
+   (``render_url`` / ``render_files``) and to open no browser, context or page of
+   its own; the session itself is unit-tested here once.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from __future__ import annotations
 import ast
 import asyncio
 from pathlib import Path
+
+import pytest
 
 import omnia_api.services.render_settle as rs
 
@@ -37,6 +41,9 @@ RENDER_LEGS = (
     "taste_gate.py",
     "hierarchy_gate.py",
     "data_gate.py",
+    "catalog_coherence_gate.py",
+    "cabinet_gate.py",
+    "first_paint_gate.py",
 )
 
 
@@ -200,15 +207,128 @@ def test_no_gate_navigates_directly():
 def test_every_render_leg_routes_through_shared_helper():
     for name in RENDER_LEGS:
         src = (SERVICES_DIR / name).read_text(encoding="utf-8")
-        assert "from .render_settle import goto_and_settle" in src, (
-            f"{name} must import the shared goto_and_settle helper"
+        tree = ast.parse(src)
+        imported = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level == 1
+            and node.module == "render_settle"
+            for alias in node.names
+        }
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert "render_url" in imported and "render_url" in called, (
+            f"{name} must render through the shared render_settle session"
         )
-        assert "goto_and_settle(" in src, (
-            f"{name} must navigate via goto_and_settle"
+        own_session = [
+            f"{name}:{node.lineno} .{node.func.attr}()"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"launch", "new_context", "new_page"}
+        ]
+        assert not own_session, (
+            "render legs must not open a browser session of their own:\n"
+            + "\n".join(own_session)
         )
         assert "async def _settle" not in src, (
             f"{name} still defines its own _settle — R-04 single-source violation"
         )
+
+
+def test_the_shared_session_is_the_only_place_that_navigates_or_opens_a_browser():
+    """The ban above exempts ``render_settle`` itself, and that is now where every
+    url/files leg navigates — so the owner gets its own ratchet: ``goto`` /
+    ``wait_until`` live only in ``goto_and_settle``, and a browser, context or page
+    is opened only in ``render_url`` (``render_files`` must delegate to it, never
+    grow a second, unsettled session)."""
+    tree = ast.parse(Path(rs.__file__).read_text(encoding="utf-8"))
+    allowed = {"goto": "goto_and_settle", "wait_until": "goto_and_settle",
+               "launch": "render_url", "new_context": "render_url", "new_page": "render_url"}
+    offenders: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call):
+                continue
+            used = [kw.arg for kw in node.keywords if kw.arg == "wait_until"]
+            if isinstance(node.func, ast.Attribute) and node.func.attr in allowed:
+                used.append(node.func.attr)
+            offenders += [
+                f"{function.name}:{node.lineno} uses {name}"
+                for name in used
+                if allowed[name] != function.name
+            ]
+    assert not offenders, "\n".join(offenders)
+
+    calls = {
+        function.name: {
+            node.func.id
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        for function in tree.body
+        if isinstance(function, ast.AsyncFunctionDef)
+    }
+    assert "goto_and_settle" in calls["render_url"]
+    assert "render_url" in calls["render_files"]
+
+
+class _Session:
+    """Minimal ``async_playwright()`` double around one ``_RecordingPage``."""
+
+    def __init__(self, page: _RecordingPage) -> None:
+        self.page = page
+        self.chromium = self
+        self.closed: list[str] = []
+
+    def __call__(self) -> _Session:
+        return self
+
+    async def __aenter__(self) -> _Session:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def launch(self, **kw) -> _Session:
+        self.page.calls.append(("launch", kw))
+        return self
+
+    async def new_context(self, **kw) -> _Session:
+        self.page.calls.append(("context", kw))
+        return self
+
+    async def new_page(self) -> _RecordingPage:
+        return self.page
+
+    async def close(self) -> None:
+        self.closed.append("closed")
+
+
+def test_render_url_settles_before_the_audit_and_swallows_nothing(monkeypatch):
+    page = _RecordingPage()
+    session = _Session(page)
+    monkeypatch.setattr("playwright.async_api.async_playwright", session)
+
+    async def audit(seen):
+        page.calls.append(("audit",))
+        raise RuntimeError("audit blew up")
+
+    with pytest.raises(RuntimeError, match="audit blew up"):
+        asyncio.run(rs.render_url("http://app.local/", audit, width=390, height=844, timeout_ms=7))
+
+    kinds = [call[0] for call in page.calls]
+    assert kinds[:3] == ["launch", "context", "goto"]
+    assert kinds[-1] == "audit" and "timeout" in kinds, "the audit must read a settled page"
+    assert page.calls[2] == (
+        "goto", "http://app.local/", {"wait_until": "domcontentloaded", "timeout": 7}
+    )
+    assert session.closed == ["closed", "closed"], "context and browser close on failure too"
 
 
 def test_render_legs_enumerated_match_disk():
@@ -218,3 +338,62 @@ def test_render_legs_enumerated_match_disk():
     assert set(RENDER_LEGS) <= on_disk, (
         f"RENDER_LEGS lists gates not on disk: {set(RENDER_LEGS) - on_disk}"
     )
+
+
+# ── CLI wrapper shared by the render legs ─────────────────────────────────────
+
+
+class _Report:
+    def __init__(self, passed: bool) -> None:
+        self.passed = passed
+
+    def summary(self) -> str:
+        return "сводка"
+
+    def subscore(self) -> dict[str, object]:
+        return {"оценка": 1}
+
+
+def _cli(passed: bool):
+    seen: list[object] = []
+
+    async def audit_url(url: str) -> _Report:
+        seen.append(("url", url))
+        return _Report(passed)
+
+    async def audit_files(files: dict[str, str]) -> _Report:
+        seen.append(("files", files))
+        return _Report(passed)
+
+    return seen, audit_url, audit_files
+
+
+def test_gate_cli_without_a_target_prints_usage(capsys):
+    seen, audit_url, audit_files = _cli(True)
+    assert rs.run_gate_cli(["prog"], "taste_gate", audit_url, audit_files) == 2
+    assert capsys.readouterr().out == (
+        "usage: python -m omnia_api.services.taste_gate <url|index.html-dir>\n"
+    )
+    assert seen == []
+
+
+@pytest.mark.parametrize(("passed", "code"), [(True, 0), (False, 1)])
+def test_gate_cli_audits_a_url(capsys, passed, code):
+    seen, audit_url, audit_files = _cli(passed)
+    assert rs.run_gate_cli(["prog", "https://app.test/"], "x", audit_url, audit_files) == code
+    assert seen == [("url", "https://app.test/")]
+    assert capsys.readouterr().out == 'сводка\n{\n  "оценка": 1\n}\n'
+
+
+def test_gate_cli_audits_every_html_file_of_a_directory(tmp_path, capsys):
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "index.html").write_text("<h1>Главная</h1>", encoding="utf-8")
+    (tmp_path / "pages" / "about.html").write_text("<p>О нас</p>", encoding="utf-8")
+    (tmp_path / "style.css").write_text("body{}", encoding="utf-8")
+    seen, audit_url, audit_files = _cli(True)
+
+    assert rs.run_gate_cli(["prog", str(tmp_path)], "x", audit_url, audit_files) == 0
+
+    assert seen == [
+        ("files", {"index.html": "<h1>Главная</h1>", "pages/about.html": "<p>О нас</p>"})
+    ]

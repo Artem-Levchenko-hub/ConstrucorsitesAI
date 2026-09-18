@@ -348,11 +348,12 @@ def test_audit_harness_routes_through_shared_settle_helper():
     here we assert wow_dom routes both audit paths through it. Pure source assertion
     (no browser), so it has teeth everywhere."""
     src = Path(g.__file__).read_text(encoding="utf-8")
-    assert "from .render_settle import goto_and_settle" in src, (
-        "wow_dom_gate must import the shared goto_and_settle helper"
+    assert "from .render_settle import render_files, render_url" in src, (
+        "wow_dom_gate must import the shared render session"
     )
-    assert src.count("goto_and_settle(page,") >= 2, (
-        "both audit_url and audit_files must navigate via goto_and_settle"
+    assert "await render_url(" in src and "await render_files(" in src, (
+        "both audit_url and audit_files must render via the shared session, "
+        "which navigates through goto_and_settle"
     )
     assert 'wait_until="domcontentloaded"' not in src, (
         "wow_dom_gate must never reference domcontentloaded directly"

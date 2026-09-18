@@ -166,6 +166,7 @@ run_step api_tests api.log "Release-critical API tests" bash -c \
     tests/test_generation_telegram_removal_migration.py \
     tests/test_telegram_reporting_removed.py \
     tests/test_render_settle.py \
+    tests/test_gate_render_session.py \
     tests/test_project_memory.py \
     tests/test_production_canary.py'
 

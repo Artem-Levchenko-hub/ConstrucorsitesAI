@@ -17,15 +17,24 @@ unit-tested here once; each leg is asserted to route through it.
 
 Every settle step is best-effort and never blocks the read (canon R-10): a flaky
 network or font load degrades to a slightly earlier read, never a raise.
+
+The browser session around that navigation is single-source too: :func:`render_url`
+and :func:`render_files` own "launch chromium → context → page → settle → audit →
+close". A gate keeps only what is its own — the page audit, the ABSTAIN report
+and its log line.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import json
+import tempfile
+from collections.abc import Awaitable, Callable, Coroutine
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page
+    from playwright.async_api import Page, StorageState
 
 # Canonical settle budget — every render leg waits the same way.
 LOAD_TIMEOUT_MS = 4_000
@@ -92,3 +101,100 @@ async def goto_and_settle(page: Page, url: str, *, timeout_ms: int) -> None:
     (13/5) without abstaining on dev containers (16/5)."""
     await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     await settle(page)
+
+
+async def render_url[T](
+    url: str,
+    audit: Callable[[Page], Awaitable[T]],
+    *,
+    width: int,
+    height: int,
+    timeout_ms: int,
+    storage_state: StorageState | None = None,
+    launch_args: list[str] | None = None,
+    init_script: str | None = None,
+) -> T:
+    """One render session: settle ``url`` in a fresh context, return ``audit(page)``.
+
+    ``storage_state=None`` is an anonymous context; ``init_script`` is installed
+    before navigation. Nothing is swallowed here — the calling gate owns the
+    fail-soft ABSTAIN, whose report shape and log line differ per gate. Context
+    and browser are closed on every path.
+    """
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=launch_args)
+        try:
+            context = await browser.new_context(
+                viewport={"width": int(width), "height": height},
+                reduced_motion="reduce",
+                storage_state=storage_state,
+            )
+            try:
+                page = await context.new_page()
+                if init_script is not None:
+                    await page.add_init_script(init_script)
+                await goto_and_settle(page, url, timeout_ms=timeout_ms)
+                return await audit(page)
+            finally:
+                await context.close()
+        finally:
+            await browser.close()
+
+
+async def render_files[T](
+    files: dict[str, str],
+    audit: Callable[[Page], Awaitable[T]],
+    *,
+    prefix: str,
+    width: int,
+    height: int,
+    timeout_ms: int,
+    launch_args: list[str] | None = None,
+    init_script: str | None = None,
+) -> T:
+    """:func:`render_url` over a static ``{path: html}`` page set's ``index.html``.
+
+    The set lives in a temporary directory (``prefix`` names the gate, so a
+    directory leaked by a killed worker is attributable) only for the session.
+    """
+    with tempfile.TemporaryDirectory(prefix=prefix) as tmp:
+        workdir = Path(tmp)
+        for path, content in files.items():
+            full = workdir / path
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content, encoding="utf-8")
+        return await render_url(
+            (workdir / "index.html").as_uri(),
+            audit,
+            width=width,
+            height=height,
+            timeout_ms=timeout_ms,
+            launch_args=launch_args,
+            init_script=init_script,
+        )
+
+
+def run_gate_cli(
+    argv: list[str],
+    gate: str,
+    audit_url: Callable[[str], Coroutine[Any, Any, Any]],
+    audit_files: Callable[[dict[str, str]], Coroutine[Any, Any, Any]],
+) -> int:
+    """``python -m omnia_api.services.<gate> <url|index.html-dir>`` for a render leg."""
+    if len(argv) < 2:
+        print(f"usage: python -m omnia_api.services.{gate} <url|index.html-dir>")
+        return 2
+    target = argv[1]
+    if target.startswith(("http://", "https://")):
+        report = asyncio.run(audit_url(target))
+    else:
+        root = Path(target)
+        files = {
+            str(p.relative_to(root)): p.read_text(encoding="utf-8") for p in root.rglob("*.html")
+        }
+        report = asyncio.run(audit_files(files))
+    print(report.summary())
+    print(json.dumps(report.subscore(), ensure_ascii=False, indent=2))
+    return 0 if report.passed else 1
