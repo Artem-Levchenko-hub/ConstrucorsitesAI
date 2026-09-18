@@ -111,6 +111,40 @@ P03 (`preflight_target`) and P04 (fingerprint → no-op / config-only) are live;
 the first request after the upgrade is always a full publication because older
 releases carry no fingerprint (they are never assumed current).
 
+## Deliveries B and C on production (releases `adcdd65c` → `6dbecbb4`)
+
+Forced full publications of the same QA release (fingerprint cleared in the journal):
+
+| Run | Release | Total | prepare | activate | Editor pause | Public unavailable |
+|---|---|---|---|---|---|---|
+| `full2` | `3567cbb1` (delivery A) | 117.8 s | 71.9 s | 45.8 s | 32 s | ≈41 s |
+| `full3` | `adcdd65c` (B1, B2, P09, P13 sub-stages) | **82.4 s** | 41.6 s | 40.8 s | 13 s | ≈36 s |
+| `full4` | `6dbecbb4` (+ gateway CPU boost) | **60.1 s** | 41.2 s | **18.9 s** | 12 s | **≈13 s** |
+
+What changed, stage by stage: `verify_artifacts` 10.3 s → 0.6 s (sealed archives are
+not re-read); `capture_volumes` 20.3 s / 1.33 GB → 9.7 s / 699 MB and `seed_data`
+22.8 s → 11.6 s (the pnpm store is not moved for a `pnpm start` app; 4 archive
+helpers instead of 8); `start_app` 14.4 s → 8.5 s with the **same PostgreSQL
+container** (identical id and StartedAt, no `project-postgres-prepare/init` helper).
+The boundary sub-stages showed the real cost of the old `verify_runtime`: core 0.07 s,
+config 0.1–0.4 s, auth probes 0.02–0.2 s, **gateway 22.8 s**. The gateway had 5 % of a
+core: cgroup `cpu.stat` recorded 222 throttled periods of 249 (25.7 s throttled for
+1.15 s of CPU). It now starts with a full core and is lowered to 5 % before its identity
+receipt is taken: `gateway` 1.1 s, 1 throttled period.
+
+Not verified live: the halt-checkpoint path (`sealed_artifact`). The owner-facing
+`runtime/stop` is not available for cell projects, so a halt recorded by the new
+controller (hibernation or a generation release) is needed first.
+
+## Host hygiene (2026-09-18)
+
+Disk went 96 % → 40 % (23 GB → 301 GB free) with a reference-checked cleanup: 77.8 GiB
+of orphan checkpoint archives (88.9 GiB on disk, 8.6 GiB referenced — nothing collects
+them until P18), 19 GB of stale QA scratch in `/tmp`, 62 GB of build cache unused for
+48 h, 296 old `omnia-api`/`omnia-web` tags, 30 superseded QA release volumes. Tool:
+`apps/orchestrator/scripts/cleanup_orphan_archives.py` (dry run by default). Never
+`docker volume prune`: halted machines' volumes look dangling and hold client data.
+
 ## Background reconcile (C13/C15) — confirmed live
 
 The publication reconcile loop rewrites the nginx vhost of every published
@@ -150,9 +184,10 @@ for one app). The config does not change between sweeps.
 
 ## Next
 
-Delivery A (P00–P04) is complete. What still costs the owner time on every real
-update: the 30 s source pause and ~60 s of export/hash/import (delivery B,
-P05–P08/P12: immutable release artifact), and the ~41 s public outage with the
-PostgreSQL restart and the 26 s `verify_runtime` (delivery C, P09–P16). The
-cheapest confirmed win outside the critical path is the nginx reload on an
-unchanged config every 5 minutes (C13/C15).
+Prepare is now ~41 s: `source_schema` 4 s, `preflight_target` 4.6 s, capture 11 s,
+`resume_source` 4 s, `prepare_target` 4 s, `seed_data` 11.6 s — the halt-checkpoint path
+(B3) removes the first four once a halt on the new controller has recorded the
+revision. Activation is ~19 s: `activate` 4.6 s, `start_app` 8.5 s, `verify_runtime`
+3.7 s, `gateway` 1.1 s; the public site is dark for ≈13 s. Open: P18 retention (archives
+and superseded release volumes are still never collected), P06 standalone packaging
+(the 700 MB workspace import), and a blue/green switch for a near-zero outage.
