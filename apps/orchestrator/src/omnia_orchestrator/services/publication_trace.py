@@ -26,6 +26,7 @@ STAGES = (
     "preflight",
     "source_wake",
     "source_schema",
+    "preflight_target",
     "capture_rootfs",
     "capture_volumes",
     "verify_artifacts",
@@ -52,6 +53,7 @@ _REASON_BY_MESSAGE = {
     "publication source revision changed": "source_changed",
     "publication accepted machine epoch changed": "source_changed",
     "publication disabled": "publication_disabled",
+    "publication needs free disk space": "insufficient_disk",
     "another publication is active": "publication_active",
 }
 _REASON_BY_TYPE = {

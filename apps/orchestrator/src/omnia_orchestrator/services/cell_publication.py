@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 import time
 import traceback
 from dataclasses import asdict, fields, replace
@@ -29,7 +30,10 @@ from omnia_orchestrator.schemas.runtime import DeployResponse
 from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
 from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
-from omnia_orchestrator.services.machine_environment import MachineEnvironmentStore
+from omnia_orchestrator.services.machine_environment import (
+    MachineEnvironmentRef,
+    MachineEnvironmentStore,
+)
 from omnia_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
@@ -347,6 +351,9 @@ class CellPublicationService:
                 await adapter.resume_preview(source_state)
             trace.stage("source_schema")
             source_schema = await machine_effect(PublishedMachineBackend.schema_digest, source)
+            await self._preflight_before_capture(
+                request, manifest, source, adapter, source_schema, trace
+            )
             try:
                 # Business data already belongs to the live production identity
                 # after first publication. A warm code update needs the accepted
@@ -499,6 +506,61 @@ class CellPublicationService:
         saved["prepared_release"] = release
         self._write(request.project_id, saved)
         return release
+
+    async def _preflight_before_capture(
+        self,
+        request: CellDeployRequest,
+        manifest: MachineManifest,
+        source: Any,
+        adapter: Any,
+        source_schema: str,
+        trace: PublicationTrace,
+    ) -> None:
+        """P03: cheap checks before any export. A release that can no longer be
+        applied, or a host that cannot hold the archives, fails here instead of
+        after minutes of I/O. Read-only observation: the same compatibility
+        comparison is repeated under the activation locks before any effect."""
+        trace.stage("preflight_target")
+        self._preflight_disk(adapter.root, source)
+        saved = self._read(request.project_id)
+        old = saved.get("active_release")
+        if not old or not saved.get("data_seeded"):
+            return
+        manager = self._production_manager(request.workspace_id)
+        state = manager.state_store.load(self.production_identity(request))
+        if state is None:
+            return  # no production identity yet: the existing path decides
+        actual = await machine_effect(self._backend(manager, state, old).schema_digest)
+        assert_compatible_update(
+            {**old, "schema_digest": actual},
+            {
+                "schema_digest": source_schema,
+                "data_contract_digest": data_contract_digest(manifest),
+            },
+        )
+
+    @staticmethod
+    def _preflight_disk(root: Path, source: Any) -> None:
+        """Export, validation and import need roughly twice the previous package
+        on the artifacts filesystem; an unknown package size falls back to 2 GiB."""
+        required = 2 * 1024**3
+        metadata = source._metadata() if hasattr(source, "_metadata") else {}
+        saved_ref = metadata.get("environment_ref")
+        if saved_ref:
+            try:
+                previous = MachineEnvironmentRef.model_validate(saved_ref)
+            except ValueError:
+                previous = None
+            if previous is not None:
+                package = previous.size + sum(volume.size for volume in previous.volumes)
+                required = max(required, 2 * package)
+        probe = root if root.exists() else root.parent
+        try:
+            free = shutil.disk_usage(probe).free
+        except OSError:
+            return  # cannot measure here; the store's own byte budget still applies
+        if free < required:
+            raise CellResourceError("publication needs free disk space")
 
     def _verify_restoration_source(self, request: CellDeployRequest, backend: Any) -> None:
         if request.restoration_operation_id is None:
