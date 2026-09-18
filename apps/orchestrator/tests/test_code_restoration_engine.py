@@ -702,3 +702,32 @@ async def test_prepared_runtime_identity_from_protected_era_still_recovers(tmp_p
     result = await engine.observe(request(), prepared)
     assert result["applied"] is False and result["safe_to_release"] is True
     assert engine.calls == ["recover"]
+
+
+async def test_sleeping_draft_is_reported_as_needs_changes_not_failure(tmp_path, monkeypatch):
+    """A draft whose machine is not running (editor closed) must yield an
+    actionable report, not the generic «Не удалось завершить проверку»."""
+    from types import SimpleNamespace
+
+    from omnia_orchestrator.core.project_machine import MachineManifest
+    from omnia_orchestrator.services import code_restoration_engine as module
+    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from tests.test_project_machine_manifest import payload
+
+    manifest = MachineManifest.model_validate(payload())
+    engine = object.__new__(CodeRestorationEngine)
+    engine.root = tmp_path
+    engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
+    source = SimpleNamespace(is_running=lambda: False, name="source")
+    manager = SimpleNamespace(
+        operation_lock=Lock(),
+        machine_runtime=SimpleNamespace(parts=lambda _: (object(), source)),
+    )
+    engine._manager = lambda _: manager
+    engine._state = lambda *args, **kwargs: SimpleNamespace(workspace_id=UUID(int=2))
+    monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
+    result = await engine.prepare(plain_prepare_request())
+    assert result["state"] == "needs_changes"
+    assert result["report"]["blockers"] == [
+        "Откройте текущую версию и повторите подготовку восстановления."
+    ]

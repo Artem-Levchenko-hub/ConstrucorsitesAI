@@ -328,13 +328,22 @@ class CodeRestorationEngine:
             return cast(dict[str, Any], saved)
         with machine_budget(870):
             async with manager.operation_lock.hold(request.workspace_id):
-                state = self._state(manager, request, epoch=request.fencing_epoch)
-                adapter = manager.machine_runtime
-                machine, source = adapter.parts(state)
-                if not await machine_effect(source.is_running):
-                    raise PreparationNeedsChanges(
-                        "Откройте текущую версию и повторите подготовку восстановления."
-                    )
+                try:
+                    state = self._state(manager, request, epoch=request.fencing_epoch)
+                    adapter = manager.machine_runtime
+                    machine, source = adapter.parts(state)
+                    if not await machine_effect(source.is_running):
+                        raise PreparationNeedsChanges(
+                            "Откройте текущую версию и повторите подготовку восстановления."
+                        )
+                except PreparationNeedsChanges as error:
+                    # A sleeping/unprovisioned draft is an actionable condition for
+                    # the owner, not a controller failure.
+                    return {
+                        "state": "needs_changes",
+                        "candidate_id": None,
+                        "report": preparation_report(blockers=[str(error)]),
+                    }
                 from omnia_orchestrator.routers.runtime import _workspace_revision
                 from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
 

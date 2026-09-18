@@ -344,6 +344,172 @@ process.stdout.write(JSON.stringify(tables));
 """
 
 
+# ── CHECK constraints declared in hand-written SQL migrations ─────────────────
+# Generated MAX apps keep CHECKs in migrations/*.sql, not in the Drizzle schema.
+# Without reading them every historical version looks like it "lost" its CHECKs.
+_MIGRATION_FILE = re.compile(r"^(?:migrations|drizzle|db/migrations|src/db/migrations)/[^/]+\.sql$")
+_IDENT = r'(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)'
+_ADD_CHECK = re.compile(
+    rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:{_IDENT}\.)?(?P<table>{_IDENT})"
+    rf"\s+ADD\s+CONSTRAINT\s+(?P<name>{_IDENT})\s+CHECK\s*\(",
+    re.IGNORECASE,
+)
+_DROP_CONSTRAINT = re.compile(
+    rf"ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:{_IDENT}\.)?(?P<table>{_IDENT})"
+    rf"\s+DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(?P<name>{_IDENT})",
+    re.IGNORECASE,
+)
+_CREATE_TABLE = re.compile(
+    rf"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:{_IDENT}\.)?(?P<table>{_IDENT})\s*\(",
+    re.IGNORECASE,
+)
+_INLINE_CHECK = re.compile(rf"(?:CONSTRAINT\s+(?P<name>{_IDENT})\s+)?CHECK\s*\(", re.IGNORECASE)
+
+
+def _unquote(identifier: str) -> str:
+    return identifier[1:-1].replace('""', '"') if identifier.startswith('"') else identifier.lower()
+
+
+def _balanced(text: str, start: int) -> tuple[str, int] | None:
+    """Return the text inside the parenthesis opened just before ``start`` and the
+    index after its closing parenthesis; string literals are skipped."""
+    depth, index, quoted = 1, start, False
+    while index < len(text):
+        char = text[index]
+        if quoted:
+            if char == "'":
+                if text[index + 1 : index + 2] == "'":
+                    index += 1  # escaped quote inside the literal
+                else:
+                    quoted = False
+        elif char == "'":
+            quoted = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start:index], index + 1
+        index += 1
+    return None
+
+
+def _split_top_level(body: str) -> list[str]:
+    parts, depth, quoted, current = [], 0, False, []
+    for char in body:
+        if quoted:
+            current.append(char)
+            quoted = char != "'"
+            continue
+        if char == "'":
+            quoted = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    if current:
+        parts.append("".join(current))
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _strip_sql_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"--[^\n]*", " ", text)
+
+
+def _create_table_checks(statement: str, table: str) -> list[dict[str, str | None]]:
+    """CHECKs inside CREATE TABLE, named like PostgreSQL names them."""
+    opened = statement.index("(") + 1
+    inside = _balanced(statement, opened)
+    if inside is None:
+        return []
+    checks: list[dict[str, str | None]] = []
+    used: set[str] = set()
+    for element in _split_top_level(inside[0]):
+        head = element.split(None, 1)[0].upper() if element else ""
+        is_table_constraint = head in {
+            "CONSTRAINT", "CHECK", "PRIMARY", "UNIQUE", "FOREIGN", "EXCLUDE",
+        }
+        column = None if is_table_constraint else _unquote(element.split(None, 1)[0])
+        for match in _INLINE_CHECK.finditer(element):
+            body = _balanced(element, match.end())
+            if body is None:
+                continue
+            expression = " ".join(body[0].split())
+            name = _unquote(match["name"]) if match["name"] else None
+            if name is None:
+                # column constraint: <table>_<column>_check; table-level: first
+                # referenced identifier, else <table>_check (PostgreSQL's rule).
+                referenced = column or next(
+                    (
+                        _unquote(token)
+                        for token in re.findall(_IDENT, expression)
+                        if token.upper() not in {"AND", "OR", "NOT", "IN", "IS", "NULL", "TRUE",
+                                                  "FALSE", "ANY", "ARRAY", "BETWEEN", "LIKE"}
+                        and not token.startswith("'")
+                    ),
+                    None,
+                )
+                base = f"{table}_{referenced}_check" if referenced else f"{table}_check"
+                name, suffix = base, 0
+                while name in used:  # PostgreSQL appends 1, 2, ... on collision
+                    suffix += 1
+                    name = f"{base}{suffix}"
+            used.add(name)
+            checks.append({"name": name, "definition": expression})
+    return checks
+
+
+def migration_checks(files: dict[str, str]) -> dict[str, list[dict[str, str | None]]]:
+    """table -> CHECK constraints still in force after replaying the migrations
+    in file order. Only the statements we recognise are interpreted; anything
+    else leaves the historical declaration as is (it then reads as a difference,
+    never as a silently matching constraint)."""
+    result: dict[str, dict[str, dict[str, str | None]]] = {}
+    for path in sorted(p for p in files if _MIGRATION_FILE.match(p)):
+        text = _strip_sql_comments(files[path])
+        for statement in text.split(";"):
+            compact = " ".join(statement.split())
+            if not compact:
+                continue
+            create = _CREATE_TABLE.search(compact)
+            if create:
+                table = _unquote(create["table"])
+                for check in _create_table_checks(compact[create.start():], table):
+                    result.setdefault(table, {})[str(check["name"])] = check
+                continue
+            add = _ADD_CHECK.search(compact)
+            if add:
+                body = _balanced(compact, add.end())
+                if body is not None:
+                    table, name = _unquote(add["table"]), _unquote(add["name"])
+                    result.setdefault(table, {})[name] = {
+                        "name": name, "definition": " ".join(body[0].split()),
+                    }
+                continue
+            drop = _DROP_CONSTRAINT.search(compact)
+            if drop:
+                result.get(_unquote(drop["table"]), {}).pop(_unquote(drop["name"]), None)
+    return {table: list(checks.values()) for table, checks in result.items() if checks}
+
+
+def _merge_migration_checks(tables: list[dict[str, Any]], files: dict[str, str]) -> None:
+    declared = migration_checks(files)
+    for table in tables:
+        extra = declared.get(table["name"])
+        if not extra:
+            continue
+        known = {check["name"] for check in table.get("check_constraints", [])}
+        table.setdefault("check_constraints", []).extend(
+            check for check in extra if check["name"] not in known
+        )
+
+
 def candidate_contract(backend: Any, files: dict[str, str]) -> DataContract:
     package = json.loads(files.get("package.json", "{}"))
     scripts = package.get("scripts", {})
@@ -370,11 +536,15 @@ def candidate_contract(backend: Any, files: dict[str, str]) -> DataContract:
     for table in tables:
         for column in table["columns"]:
             column["type"] = normalize_type(column["type"])
+    _merge_migration_checks(tables, files)
     return DataContract(version=1, tables=infer_ownership(tables))
 
 
 def normalize_type(value: str) -> str:
-    original = " ".join(value.strip().split())
+    # Drizzle renders "numeric(12, 2)", PostgreSQL "numeric(12,2)": same type.
+    original = re.sub(r"\s*,\s*", ",", " ".join(value.strip().split()))
+    original = re.sub(r"\s*\(\s*", "(", original)
+    original = re.sub(r"\s*\)", ")", original)
     value = original.lower()
     aliases = {
         "int": "integer",

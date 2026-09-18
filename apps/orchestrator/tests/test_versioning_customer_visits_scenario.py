@@ -87,7 +87,7 @@ V1_CONTRACT = {"version": 1, "tables": [{
     ],
     "primary_key": ["id"],
     "check_constraints": [
-        {"name": "clients_status_check", "definition": "\"clients\".\"status\" in ('new','vip')"}
+        {"name": "clients_status_check", "definition": "status IN ('new', 'vip')"}
     ],
 }]}
 
@@ -179,12 +179,17 @@ def test_real_drizzle_v1_schema_matches_live_check(scenario, tmp_path):
         env={**os.environ, "OMNIA_WORKSPACE": str(workspace)}, check=False,
     )
     assert outcome.returncode == 0, outcome.stderr[-500:]
-    from omnia_orchestrator.services.restoration_catalog import normalize_type
+    from omnia_orchestrator.services.restoration_catalog import (
+        _merge_migration_checks,
+        normalize_type,
+    )
 
     tables = json.loads(outcome.stdout)
     for table in tables:
         for column in table["columns"]:
             column["type"] = normalize_type(column["type"])
+    assert not any(table.get("check_constraints") for table in tables)  # not in schema.ts
+    _merge_migration_checks(tables, source("v1"))  # ...but in migrations/0001
     historical = DataContract(version=1, tables=tables)
     contract, _, _ = describe_catalog(json.loads(scenario.run(CATALOG_SQL)))
     assessment = assess_contract(historical, contract)

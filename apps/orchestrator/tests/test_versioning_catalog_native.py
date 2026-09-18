@@ -201,3 +201,73 @@ def test_shadowing_now_function_is_not_an_ordinary_default(pg):  # noqa: F811
     assert {"kind": "default", "object": "public.clients.at"} in unsupported
     assert blockers == ["custom_column_behavior:clients"]
     pg.run("DROP FUNCTION public.now() CASCADE;")
+
+
+def test_checks_declared_in_sql_migrations_are_read_in_order():
+    from omnia_orchestrator.services.restoration_catalog import migration_checks
+
+    files = {
+        "migrations/0001_create_crm_clients.sql": """-- clients
+CREATE TABLE IF NOT EXISTS crm_clients (
+  id serial PRIMARY KEY,
+  status text NOT NULL DEFAULT 'new',
+  note text CHECK (char_length(note) <= 500)
+);
+ALTER TABLE crm_clients
+  ADD CONSTRAINT crm_clients_status_check
+  CHECK (status IN ('new', 'regular', 'vip', 'inactive'));
+""",
+        "migrations/0002_visits.sql": """CREATE TABLE crm_client_visits (
+  id serial PRIMARY KEY,
+  client_id integer NOT NULL REFERENCES crm_clients(id) ON DELETE CASCADE,
+  amount numeric(12, 2) NOT NULL CHECK (amount >= 0),
+  CONSTRAINT visits_len CHECK (length(note) < 10 AND amount < 100),
+  CHECK (amount <> 13)
+);
+ALTER TABLE crm_clients DROP CONSTRAINT IF EXISTS crm_clients_note_check;
+""",
+        "src/lib/db/seed.sql": "CREATE TABLE ignored (x int CHECK (x > 0));",
+    }
+    checks = migration_checks(files)
+    assert checks == {
+        "crm_clients": [
+            {"name": "crm_clients_status_check",
+             "definition": "status IN ('new', 'regular', 'vip', 'inactive')"},
+        ],
+        "crm_client_visits": [
+            {"name": "crm_client_visits_amount_check", "definition": "amount >= 0"},
+            {"name": "visits_len", "definition": "length(note) < 10 AND amount < 100"},
+            {"name": "crm_client_visits_amount_check1", "definition": "amount <> 13"},
+        ],
+    }
+
+
+def test_migration_checks_match_the_live_catalog(pg):  # noqa: F811
+    from omnia_orchestrator.services.restoration_catalog import migration_checks
+
+    migration = """CREATE TABLE crm_client_visits (
+  id serial PRIMARY KEY,
+  amount numeric(12, 2) NOT NULL CHECK (amount >= 0),
+  status text,
+  CHECK (amount <> 13)
+);
+ALTER TABLE crm_client_visits ADD CONSTRAINT visits_status_check
+  CHECK (status IN ('new', 'done'));"""
+    pg.run(migration)
+    current, _, _ = live(pg)
+    declared = migration_checks({"migrations/0001.sql": migration})["crm_client_visits"]
+    historical = DataContract.model_validate({"version": 1, "tables": [{
+        "name": "crm_client_visits",
+        "columns": [{"name": "id", "type": "integer", "nullable": False},
+                    {"name": "amount", "type": "numeric(12,2)", "nullable": False},
+                    {"name": "status", "type": "text"}],
+        "primary_key": ["id"],
+        "check_constraints": declared,
+    }]})
+    assessment = assess_contract(historical, current)
+    assert assessment.blockers == []
+    assert sorted(d.object for d in assessment.diagnostics if d.code == "check_unchanged") == [
+        "public.crm_client_visits.crm_client_visits_amount_check",
+        "public.crm_client_visits.crm_client_visits_amount_check1",
+        "public.crm_client_visits.visits_status_check",
+    ]
