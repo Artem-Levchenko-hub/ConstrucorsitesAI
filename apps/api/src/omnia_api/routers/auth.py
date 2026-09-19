@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
@@ -110,6 +111,48 @@ async def _issue_email_token(
     )
     await session.commit()
     return raw
+
+
+async def _consume_email_token(
+    session: SessionDep, raw: str, purpose: str, now: datetime
+) -> User:
+    """Spend the one-time token and return its user; the caller commits. The row
+    lock makes two concurrent requests with one link see it spent exactly once."""
+    token = (
+        await session.execute(
+            select(AuthToken)
+            .where(
+                AuthToken.token_hash == _token_hash(raw),
+                AuthToken.purpose == purpose,
+                AuthToken.used_at.is_(None),
+                AuthToken.expires_at > now,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if token is None:
+        raise ApiError(
+            "token_invalid",
+            "Ссылка недействительна или истекла",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    user = await session.get(User, token.user_id)
+    if user is None:
+        raise ApiError("token_invalid", "Ссылка недействительна", status.HTTP_400_BAD_REQUEST)
+    token.used_at = now
+    return user
+
+
+async def _deliver(letter: Awaitable[None]) -> None:
+    """A letter the user asked for must not fail silently."""
+    try:
+        await letter
+    except (EmailDeliveryNotConfigured, EmailDeliveryFailed) as exc:
+        raise ApiError(
+            "email_delivery_unavailable",
+            "Отправка писем ещё не настроена. Обратитесь в поддержку",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
 
 
 async def _send_verification(user: User, raw_token: str) -> None:
@@ -295,43 +338,15 @@ async def request_email_verification(
     if user is None or user.email_verified_at is not None:
         return {"accepted": True}
     raw = await _issue_email_token(session, user, "verify_email", ttl=timedelta(hours=24))
-    try:
-        await _send_verification(user, raw)
-    except (EmailDeliveryNotConfigured, EmailDeliveryFailed) as exc:
-        raise ApiError(
-            "email_delivery_unavailable",
-            "Отправка писем ещё не настроена. Обратитесь в поддержку",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
+    await _deliver(_send_verification(user, raw))
     return {"accepted": True}
 
 
 @router.post("/email/verify", dependencies=[Depends(rate_limit_auth)])
 async def verify_email(payload: EmailTokenConsume, session: SessionDep) -> dict[str, bool]:
     now = datetime.now(UTC)
-    token = (
-        await session.execute(
-            select(AuthToken)
-            .where(
-                AuthToken.token_hash == _token_hash(payload.token),
-                AuthToken.purpose == "verify_email",
-                AuthToken.used_at.is_(None),
-                AuthToken.expires_at > now,
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if token is None:
-        raise ApiError(
-            "token_invalid",
-            "Ссылка недействительна или истекла",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    user = await session.get(User, token.user_id)
-    if user is None:
-        raise ApiError("token_invalid", "Ссылка недействительна", status.HTTP_400_BAD_REQUEST)
+    user = await _consume_email_token(session, payload.token, "verify_email", now)
     user.email_verified_at = now
-    token.used_at = now
     await session.commit()
     return {"verified": True}
 
@@ -353,50 +368,24 @@ async def forgot_password(
     raw = await _issue_email_token(session, user, "reset_password", ttl=timedelta(minutes=30))
     settings = get_settings()
     link = f"{settings.web_base_url.rstrip('/')}/reset-password?token={raw}"
-    try:
-        await send_transactional_email(
+    await _deliver(
+        send_transactional_email(
             recipient=str(user.email),
             subject="Сброс пароля MAX Studio",
             text=(
                 f"Чтобы задать новый пароль, откройте ссылку:\n\n{link}\n\nОна действует 30 минут."
             ),
         )
-    except (EmailDeliveryNotConfigured, EmailDeliveryFailed) as exc:
-        raise ApiError(
-            "email_delivery_unavailable",
-            "Отправка писем ещё не настроена. Обратитесь в поддержку",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
+    )
     return {"accepted": True}
 
 
 @router.post("/password/reset", dependencies=[Depends(rate_limit_auth)])
 async def reset_password(payload: PasswordResetConsume, session: SessionDep) -> dict[str, bool]:
     now = datetime.now(UTC)
-    token = (
-        await session.execute(
-            select(AuthToken)
-            .where(
-                AuthToken.token_hash == _token_hash(payload.token),
-                AuthToken.purpose == "reset_password",
-                AuthToken.used_at.is_(None),
-                AuthToken.expires_at > now,
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if token is None:
-        raise ApiError(
-            "token_invalid",
-            "Ссылка недействительна или истекла",
-            status.HTTP_400_BAD_REQUEST,
-        )
-    user = await session.get(User, token.user_id)
-    if user is None:
-        raise ApiError("token_invalid", "Ссылка недействительна", status.HTTP_400_BAD_REQUEST)
+    user = await _consume_email_token(session, payload.token, "reset_password", now)
     user.password_hash = await hash_password(payload.password)
     user.session_version += 1
-    token.used_at = now
     await session.execute(
         update(AuthSession)
         .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))

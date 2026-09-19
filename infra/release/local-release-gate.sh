@@ -161,6 +161,7 @@ run_step api_tests api.log "Release-critical API tests" bash -c \
     tests/test_release_identity.py \
     tests/test_readiness.py \
     tests/test_auth.py \
+    tests/test_auth_email_tokens.py \
     tests/test_agent_native.py \
     tests/test_generation_runs.py \
     tests/test_generation_telegram_removal_migration.py \
