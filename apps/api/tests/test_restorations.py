@@ -434,8 +434,10 @@ async def test_db_admission_blocks_active_restore_and_rebound_key(db_session):
         with pytest.raises(ApiError) as error:
             await service.create_restoration(db_session, project.id, owner.id, changed, runtime)
         assert error.value.status_code == 409
-    with pytest.raises(ApiError):
+    with pytest.raises(ApiError) as active:
         await service.assert_no_active_restoration(db_session, project.id)
+    assert (active.value.code, active.value.status_code) == ("restoration_active", 409)
+    assert active.value.details == {"restoration_id": str(operation.id)}
     cancelled = await service.cancel_restoration(
         db_session, project.id, owner.id, operation.id, runtime
     )
@@ -748,7 +750,10 @@ async def test_db_active_restoration_blocks_real_mutating_consumers(db_session, 
         else:
             await teardown_project_cell(db_session, project)
     assert error.value.status_code == 409
-    assert "restoration" in error.value.message
+    # Every consumer is told the real reason, never a bare "conflict" that a
+    # client could mistake for a running build — and in words the owner can act on.
+    assert error.value.code == "restoration_active"
+    assert "восстановление версии" in error.value.message
     assert workspace.state == "ready"
 
 

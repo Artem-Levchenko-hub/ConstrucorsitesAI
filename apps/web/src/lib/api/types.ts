@@ -476,6 +476,12 @@ export type ApiErrorCode =
   | "model_unavailable"
   | "internal_error"
   | "conflict"
+  // Why a prompt was refused with 409. Only `generation_active` means "a build
+  // is already running"; the rest are ordinary refusals with their own text.
+  | "generation_active"
+  | "restoration_active"
+  | "idempotency_conflict"
+  | "source_changed"
   // V2 — surfaced from apps/api/services/orchestrator_client.
   | "orchestrator_unavailable"
   | "orchestrator_rejected"

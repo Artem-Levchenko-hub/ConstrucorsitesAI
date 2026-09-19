@@ -32,6 +32,14 @@ import { buildJoyTrigger } from "@/lib/joy-moment";
 import { openRealStream } from "@/lib/prompt-stream-transport";
 import type { RestorationAdaptationReference } from "@/lib/api/messages";
 
+/** What the user is told when a prompt is refused for a reason other than a running build. */
+const PROMPT_REFUSALS: Record<string, string> = {
+  generation_active:
+    "Сейчас идёт другая сборка. Дождитесь её завершения и отправьте запрос ещё раз.",
+  idempotency_conflict:
+    "Запрос с этим ключом уже был отправлен с другим текстом. Обновите страницу и повторите.",
+};
+
 export type PromptSubmitOptions = {
   skipClarify?: boolean;
   designPresetId?: string | null;
@@ -939,7 +947,15 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
-        if (e instanceof ApiError && e.code === "conflict" && !opts?.restorationAdaptation) {
+        // Only `generation_active` means "a build is already running". Every other
+        // refusal (a version restoration, changed app data, a reused key) is an
+        // ordinary error: treating it as a running build left the composer queueing
+        // prompts that were never sent.
+        if (
+          e instanceof ApiError &&
+          e.code === "generation_active" &&
+          !opts?.restorationAdaptation
+        ) {
           // Another tab/remount already submitted this project. Drop only this
           // optimistic duplicate and keep the project WS attached to the
           // canonical active run instead of turning it into an error bubble.
@@ -949,33 +965,62 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             ),
           );
           qc.invalidateQueries({ queryKey: ["messages", projectId] });
-          streamingRef.current = true;
-          void getLatestGeneration(projectId)
-            .then((generation) => {
-              const canonicalMessageId = generation?.assistant_message_id;
-              if (
-                canonicalMessageId &&
-                isActiveGenerationForMessage(generation, canonicalMessageId)
-              ) {
-                watchMessage(canonicalMessageId, () =>
-                  recoverSilentStream(canonicalMessageId),
-                );
-              }
-            })
-            .catch(() => {
-              // The already-open project socket can still carry the active run.
-              // A failed status probe must not replace it with a fake error.
+          let generation: GenerationRun | null | undefined;
+          try {
+            generation = await getLatestGeneration(projectId);
+          } catch {
+            // The server has just said a run is active and the already-open
+            // project socket can still carry it: a failed probe is not a verdict.
+            generation = undefined;
+          }
+          // The build may have finished while the probe was in flight (`llm.done`
+          // reaches the socket before the run row flips): a terminal event, or a
+          // queued submit it released, already owns the state — leave it alone.
+          if (
+            !streamingRef.current ||
+            activeSubmitSignatureRef.current !== submitSignature
+          ) {
+            return false;
+          }
+          const canonicalMessageId = generation?.assistant_message_id;
+          const confirmed =
+            Boolean(canonicalMessageId) &&
+            isActiveGenerationForMessage(generation ?? null, canonicalMessageId!);
+          if (generation === undefined || confirmed) {
+            // Unconfirmed (the probe failed): the refusal itself names the run's
+            // message, so the silence watchdog still guards the composer.
+            const refusedFor = e.details?.active_message_id;
+            const watched =
+              canonicalMessageId ?? (typeof refusedFor === "string" ? refusedFor : null);
+            if (watched) {
+              watchMessage(watched, () => recoverSilentStream(watched));
+            }
+            toast.info("Генерация уже запущена", {
+              description: "Показываю текущую сборку — повтор не отправлен.",
             });
-          toast.info("Генерация уже запущена", {
-            description: "Показываю текущую сборку — повтор не отправлен.",
+            return true;
+          }
+          // The run ended between the refusal and the probe: nothing streams, so
+          // the composer must not stay in streaming mode.
+          streamingRef.current = false;
+          activeSubmitSignatureRef.current = null;
+          cancelRef.current?.();
+          cancelRef.current = null;
+          toast.info("Предыдущая сборка только что завершилась", {
+            description: "Отправьте запрос ещё раз.",
           });
-          return true;
+          fireQueued();
+          return false;
         }
         // sendPrompt failed BEFORE the backend even spawned _process_prompt
         // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.
         // Surface to user; placeholder turns into an explicit error row.
         const errMsg =
-          e instanceof Error ? e.message : "не удалось отправить промпт";
+          e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
+            ? PROMPT_REFUSALS[e.code]
+            : e instanceof Error
+              ? e.message
+              : "не удалось отправить промпт";
         _failPrompt("POST /prompt не прошёл", errMsg);
         return false;
       }

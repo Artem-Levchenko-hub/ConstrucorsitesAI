@@ -200,7 +200,7 @@ class PromptAcceptance:
             # The per-project advisory lock means a replay cannot observe the run
             # before its first transaction commits the assistant id and response.
             raise ApiError(
-                "conflict",
+                "generation_active",
                 "generation request is still being accepted",
                 status.HTTP_409_CONFLICT,
                 details={"active_run_id": str(self.generation_run.id)},
@@ -233,7 +233,7 @@ class PromptAcceptance:
                 or config.config_version != self.payload.max_config_version
             ):
                 raise ApiError(
-                    "conflict",
+                    "source_changed",
                     "Данные приложения изменились. "
                     "Откройте настройки и примените актуальную версию.",
                     status.HTTP_409_CONFLICT,

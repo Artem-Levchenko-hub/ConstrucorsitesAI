@@ -18,6 +18,12 @@ ErrorCode = Literal[
     "advice_unavailable",
     "internal_error",
     "conflict",
+    # Why a prompt (or another claim on the project) was refused with 409. The
+    # client must not guess: only `generation_active` means "a build is running".
+    "generation_active",
+    "restoration_active",
+    "idempotency_conflict",
+    "source_changed",
     # V2: orchestrator-proxy errors surfaced through apps/api/services/orchestrator_client.
     # `unavailable` = transport / 5xx / token missing (503). `rejected` = orchestrator
     # returned 4xx that we passed through (400/404/etc).

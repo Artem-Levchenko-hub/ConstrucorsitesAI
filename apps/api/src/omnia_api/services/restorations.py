@@ -76,8 +76,15 @@ async def assert_no_active_restoration(
     )
     if operation_id is not None:
         query = query.where(Restoration.id != operation_id)
-    if await session.scalar(query.limit(1)):
-        raise ApiError("conflict", "A version restoration is already in progress", 409)
+    active_id = await session.scalar(query.limit(1))
+    if active_id:
+        raise ApiError(
+            "restoration_active",
+            "Идёт восстановление версии: примените или отмените его, "
+            "затем повторите действие.",
+            409,
+            details={"restoration_id": str(active_id)},
+        )
 
 
 async def _owned_project(

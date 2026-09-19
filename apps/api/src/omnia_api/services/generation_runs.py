@@ -404,7 +404,7 @@ async def reserve_generation_run(
     if existing is not None:
         if existing.prompt_hash != prompt_hash(prompt):
             raise ApiError(
-                "conflict",
+                "idempotency_conflict",
                 "idempotency key was already used for another prompt",
                 status.HTTP_409_CONFLICT,
                 details={"run_id": str(existing.id)},
@@ -448,7 +448,7 @@ async def reserve_generation_run(
 
     if active is not None:
         raise ApiError(
-            "conflict",
+            "generation_active",
             "generation already in progress",
             status.HTTP_409_CONFLICT,
             details={

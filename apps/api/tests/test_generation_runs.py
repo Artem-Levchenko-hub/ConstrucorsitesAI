@@ -189,7 +189,7 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
             idempotency_key="submit-11111111",
             prompt="Другой текст с тем же ключом",
         )
-    assert reused.value.code == "conflict"
+    assert (reused.value.code, reused.value.status_code) == ("idempotency_conflict", 409)
     assert reused.value.details == {"run_id": str(first.id)}
 
     with pytest.raises(ApiError) as blocked:
@@ -200,7 +200,8 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
             idempotency_key="submit-22222222",
             prompt="Второй конкурентный запуск",
         )
-    assert blocked.value.code == "conflict"
+    # The client may show "a build is already running" for THIS code only.
+    assert (blocked.value.code, blocked.value.status_code) == ("generation_active", 409)
     assert blocked.value.details == {
         "active_run_id": str(first.id),
         "active_message_id": None,
@@ -441,6 +442,9 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
     stored = await db_session.get(GenerationRun, uuid.UUID(first.json()["run_id"]))
     assert stored.execution_backend == ("worker" if worker_backend else "api")
     assert blocked.status_code == 409
+    # The wire tells the client WHY: a build is running, and which one.
+    assert blocked.json()["error"]["code"] == "generation_active"
+    assert blocked.json()["error"]["details"]["active_run_id"] == first.json()["run_id"]
     assert latest.status_code == 200
     assert latest.json()["id"] == first.json()["run_id"]
     assert latest.json()["status"] == "pending"
@@ -1131,6 +1135,7 @@ async def test_config_application_rejects_stale_data_before_dispatch(
             },
         )
         assert rejected.status_code == 409
+        assert rejected.json()["error"]["code"] == "source_changed"
         assert "Данные приложения изменились" in rejected.text
         spawn.assert_not_called()
         # The shared-session test client does not close the request session;

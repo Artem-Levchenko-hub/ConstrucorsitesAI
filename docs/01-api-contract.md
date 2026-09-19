@@ -67,8 +67,16 @@
 `idempotency_key` — стабильный UUID одного пользовательского submit. Повтор
 `POST /prompt` с тем же ключом и тем же текстом возвращает исходный ответ и не
 создаёт вторую пару сообщений/генерацию. Переиспользование ключа с другим текстом
-даёт `409 conflict`. На проект допускается ровно один активный `GenerationRun`;
-параллельный запрос с другим ключом также получает `409 conflict`.
+даёт `409 idempotency_conflict`. На проект допускается ровно один активный
+`GenerationRun`; параллельный запрос с другим ключом получает `409 generation_active`
+(в `details` — `active_run_id`, `active_message_id`, `active_status`).
+
+С 19.09.2026 отказ `409` на `POST /prompt` всегда называет причину — клиент не
+должен её угадывать: `generation_active` (идёт сборка; только этот код разрешает
+показывать «Генерация уже запущена»), `restoration_active` (идёт восстановление
+версии, в `details.restoration_id` — операция; тот же код получают предпросмотр
+владельца, публикация, настройки MAX и удаление проекта), `source_changed` (данные
+приложения MAX изменились с момента открытия формы), `idempotency_conflict`.
 
 Stop — серверная операция: `/generation/cancel` записывает durable-статус,
 передаёт сигнал через Redis и отменяет реальную coroutine генерации, а не только
@@ -521,6 +529,8 @@ export type ApiError = {
         // V2-добавления:
         | "container_failure" | "docker_unavailable" | "postgres_unavailable"
         | "port_exhausted" | "conflict"
+        // Причина отказа 409 на POST /prompt (19.09.2026):
+        | "generation_active" | "restoration_active" | "idempotency_conflict" | "source_changed"
         // V3-добавления:
         | "onboarding_invalid_state" | "stack_not_found" | "preset_not_found"
         | "github_oauth_failed" | "github_repo_inaccessible" | "deploy_link_failed"
