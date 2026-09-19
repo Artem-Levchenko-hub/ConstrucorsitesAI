@@ -1,10 +1,7 @@
 """Tests for the per-vendor instruction layer (Phase N+).
 
 Covers the vendor-detection table, directive non-emptiness / json_strict
-behaviour, the GENERIC no-op contract, and that the message builders in
-director_polish / multipass actually inject the right family's block into the
-*user* turn while leaving the *system* turn byte-identical (prompt-cache
-safety).
+behaviour and the GENERIC no-op contract.
 """
 
 from __future__ import annotations
@@ -89,58 +86,3 @@ def test_gemini_json_strict_demands_no_fences() -> None:
     strict = vendor_directive("gemini-2.5-flash", json_strict=True)
     assert "```json" in strict
     assert "markdown" in strict.lower()
-
-
-# ── Message-builder injection (depends on A2 wiring) ──────────────────────────
-
-_BASE = [
-    {"role": "system", "content": "SYSTEM-PROMPT-BLOCK"},
-    {"role": "user", "content": "сайт для кофейни"},
-]
-
-
-def test_director_messages_inject_gemini_directive() -> None:
-    from omnia_api.services.director_polish import _build_director_messages
-
-    msgs = _build_director_messages(_BASE, "сайт для кофейни", "gemini-2.5-flash")
-    last = msgs[-1]["content"]
-    assert "```json" in last  # google no-fences directive landed in user turn
-
-
-def test_polish_messages_inject_gemini_directive() -> None:
-    from omnia_api.services.director_polish import _build_polish_messages
-
-    msgs = _build_polish_messages(_BASE, "сайт для кофейни", '{"sections": []}', "gemini-2.5-flash")
-    assert "```json" in msgs[-1]["content"]
-
-
-def test_skeleton_messages_inject_gemini_directive() -> None:
-    from omnia_api.services.multipass_generator import _build_skeleton_messages
-
-    msgs = _build_skeleton_messages(_BASE, "сайт для кофейни", "gemini-2.5-flash")
-    assert "```json" in msgs[-1]["content"]
-
-
-def test_system_prompt_stays_byte_identical_for_cache() -> None:
-    # Vendor block goes in the USER turn only — the system block must be
-    # untouched so Anthropic's ephemeral prompt cache still hits across passes.
-    from omnia_api.services.director_polish import (
-        _build_director_messages,
-        _build_polish_messages,
-    )
-
-    d = _build_director_messages(_BASE, "x", "gemini-2.5-flash")
-    p = _build_polish_messages(_BASE, "x", "{}", "claude-opus-4-7")
-    assert d[0] == _BASE[0]
-    assert p[0] == _BASE[0]
-
-
-def test_generic_model_adds_nothing_to_messages() -> None:
-    # An uncalibrated/unknown model must not change the assembled user turn
-    # beyond the existing role instruction (no stray empty lines from "").
-    from omnia_api.services.director_polish import _build_director_messages
-
-    msgs = _build_director_messages(_BASE, "сайт для кофейни", "some-unknown-model")
-    generic_tail = msgs[-1]["content"]
-    msgs_none = _build_director_messages(_BASE, "сайт для кофейни", None)
-    assert generic_tail == msgs_none[-1]["content"]

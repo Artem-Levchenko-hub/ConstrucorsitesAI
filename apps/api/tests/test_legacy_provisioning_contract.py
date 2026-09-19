@@ -22,19 +22,10 @@ from omnia_api.services.generation import (
     agent_recovery,
     agent_runtime,
     agent_verification,
-    asset_composition,
-    container_realization,
     lifecycle,
     onboarding,
     progress,
     runtime,
-    static_acceptance,
-    static_quality,
-    stream_attempt,
-    stream_preparation,
-    stream_publication,
-    streamed_pipeline,
-    surgical_recovery,
 )
 
 
@@ -43,6 +34,9 @@ class BoundaryReached(BaseException):
 
 
 @pytest.mark.asyncio
+# A cheap follow-up (orchestrate=False) is an agent edit turn: the one-shot pipeline
+# it used to fall back to is gone, so it must take exactly the same road.
+@pytest.mark.parametrize("orchestrate", [True, False])
 @pytest.mark.parametrize(
     "path,fault",
     [
@@ -50,13 +44,20 @@ class BoundaryReached(BaseException):
         for path in ["early", "deferred", "deferred_retry"]
         for fault in [None, "start", "ensure", "ready"]
     ]
-    + [(path, None) for path in ["blank", "imported", "empty_slug"]],
+    + [(path, None) for path in ["blank", "imported", "empty_slug", "builder_off"]],
 )
-async def test_real_process_provisioning(path, fault, monkeypatch):
+async def test_real_process_provisioning(path, fault, orchestrate, monkeypatch):
     trace, errors, statuses = [], [], []
     original_fault = fault
     deferred = path.startswith("deferred")
-    gated = path in {"blank", "imported", "empty_slug"}
+    # The agent is the only builder: a project it cannot take fails before any
+    # provisioning, file read or model call.
+    refused = {
+        "blank": lifecycle._SITE_BUILDER_PROJECT,
+        "imported": lifecycle._SITE_BUILDER_PROJECT,
+        "empty_slug": lifecycle._SITE_BUILDER_PROJECT,
+        "builder_off": lifecycle._BUILDER_DISABLED,
+    }.get(path)
     pid, uid, mid, rid, sid = (UUID(int=i) for i in range(1, 6))
     project = SimpleNamespace(
         template="max_miniapp" if deferred else "nextjs_entities",
@@ -87,7 +88,7 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
     ).model_copy(
         update={
             "use_project_memory": False,
-            "use_agentic_builder": deferred,
+            "use_agentic_builder": path != "builder_off",
             "agentic_builder_canary_users": "",
             "use_design_intelligence_plugin": False,
             "max_project_shell_enabled": False,
@@ -104,17 +105,8 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
         agent_recovery,
         agent_runtime,
         agent_verification,
-        asset_composition,
-        container_realization,
         lifecycle,
         onboarding,
-        static_acceptance,
-        static_quality,
-        streamed_pipeline,
-        stream_attempt,
-        stream_preparation,
-        stream_publication,
-        surgical_recovery,
     ):
         monkeypatch.setattr(owner, "get_settings", lambda: settings)
 
@@ -244,12 +236,17 @@ async def test_real_process_provisioning(path, fault, monkeypatch):
         None if deferred else sid,
         "Create a test application",
         "test-model",
-        orchestrate=True,
+        orchestrate=orchestrate,
     )
-    if fault is None or path == "deferred_retry":
+    if refused is not None:
+        await call
+        assert trace == []
+        assert errors == [refused]
+        assert statuses == [("failed", {"error": refused})]
+    elif fault is None or path == "deferred_retry":
         with pytest.raises(BoundaryReached):
             await call
-        expected = ["boundary"] if gated else ["start", "ensure", "ready", "boundary"]
+        expected = ["start", "ensure", "ready", "boundary"]
         if path == "deferred_retry" and original_fault is not None:
             stages = ["start", "ensure", "ready"]
             expected = stages[: stages.index(original_fault) + 1] + expected

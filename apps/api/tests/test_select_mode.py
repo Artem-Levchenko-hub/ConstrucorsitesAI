@@ -1,5 +1,4 @@
-"""Select-mode (preview element picker) — prompt injection, schema clamps,
-and the two-copy inspector drift guard."""
+"""Select-mode (preview element picker) — schema clamps and the inspector drift guard."""
 
 from pathlib import Path
 
@@ -8,61 +7,6 @@ from pydantic import ValidationError
 
 from omnia_api.routers.public import _INSPECTOR_JS, _KIT_ASSETS
 from omnia_api.schemas.message import PromptRequest, SelectedElement
-from omnia_api.services.prompt_builder import build_messages
-
-
-def _sel(**kw: object) -> dict:
-    base = {
-        "selector": ".btn",
-        "label": "button.btn",
-        "html": "<button>X</button>",
-        "text": "X",
-        "comment": "сделай красной",
-    }
-    base.update(kw)
-    return base
-
-
-# ── prompt injection ────────────────────────────────────────────────────────
-
-
-def test_build_messages_injects_selection_block() -> None:
-    msgs = build_messages(
-        current_files={},
-        history=[],
-        user_prompt="поменяй кнопку",
-        template="landing",
-        selected_elements=[_sel()],
-    )
-    last = msgs[-1]
-    assert last["role"] == "user"
-    body = last["content"]
-    assert "выделил элементы" in body  # ubiquitous-language framing
-    assert ".btn" in body
-    assert "<button>X</button>" in body
-    assert "сделай красной" in body
-    # the user's own text stays at the end, after the context block
-    assert body.rstrip().endswith("поменяй кнопку")
-
-
-def test_build_messages_without_selection_is_unchanged() -> None:
-    assert build_messages({}, [], "просто промпт", "landing")[-1]["content"] == "просто промпт"
-    # explicit empty list behaves the same (backward-compatible)
-    assert build_messages({}, [], "просто промпт", "landing", [])[-1]["content"] == "просто промпт"
-
-
-def test_build_messages_numbers_multiple_selections() -> None:
-    body = build_messages(
-        {},
-        [],
-        "правки",
-        "landing",
-        [_sel(selector=".a", comment="один"), _sel(selector=".b", comment="два")],
-    )[-1]["content"]
-    assert "1." in body and "2." in body
-    assert ".a" in body and ".b" in body
-    assert "один" in body and "два" in body
-
 
 # ── schema clamps (R-10 fail-fast at the boundary) ───────────────────────────
 

@@ -19,7 +19,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.services import repo
-from omnia_api.services.generation import agent_publication, stream_publication
+from omnia_api.services.generation import agent_publication
 from omnia_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
@@ -188,7 +188,8 @@ async def execute(path, env):
     async def noop(*args, **kwargs):
         pass
 
-    target = agent_publication if path == "agent" else stream_publication
+    assert path == "agent"  # the one-shot publisher left with the site builder
+    target = agent_publication
     # Nested scope restores imported collaborators between repeated executions.
     with env["monkeypatch"].context() as patch:
         real_create = target.create_generation_snapshot
@@ -213,33 +214,21 @@ async def execute(path, env):
             project_info=facts,
             prompt_text=env["prompt_text"],
         )
-        if path == "agent":
-            await target.publish_agent_candidate(
-                **common,
-                _att_capture=None,
-                _attestation_stack="",
-                _orch_name=None,
-                _max_finalization_proof=env["_max_finalization_proof"],
-                progress=GenerationProgress(
-                    env["factory"], run.id, project.id, message.id, env["_agent_step_log"]
-                ),
-                runtime=GenerationRuntime(),
-            )
-        else:
-            await target.publish_streamed_candidate(
-                **common,
-                _acc_fingerprint=None,
-                _gen_mode="freeform",
-                force_model=env["force_model"],
-                orchestrate=env["orchestrate"],
-                routing_model=env["routing_model"],
-                surgical=env["surgical"],
-                usage_data=env["usage_data"],
-            )
+        await target.publish_agent_candidate(
+            **common,
+            _att_capture=None,
+            _attestation_stack="",
+            _orch_name=None,
+            _max_finalization_proof=env["_max_finalization_proof"],
+            progress=GenerationProgress(
+                env["factory"], run.id, project.id, message.id, env["_agent_step_log"]
+            ),
+            runtime=GenerationRuntime(),
+        )
     return captured
 
 
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
     rows, trace = records(), []
     session = OfflineSession(rows, trace)
@@ -251,7 +240,7 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
     assert result["project"] is project
     assert snapshot.parent_id == parent.id
     assert snapshot.project_id == project.id and snapshot.prompt_text == "P" * 65
-    assert snapshot.model_id == ("routing" if path == "agent" else "Оркестратор Sonnet+DeepSeek")
+    assert snapshot.model_id == "routing"
     assert project.current_snapshot_id == message.snapshot_id == snapshot.id
     assert run.agent_state == {
         "keep": "yes",
@@ -260,14 +249,9 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
         "changed_files": ["empty.txt", "page.txt", "prior.txt"],
     }
     assert owner.free_generations_used == 4
-    assert message.content == (
-        "A useful change."
-        if path == "agent"
-        else 'A useful change.\n\n<file path="page.txt">\nnew\n</file>'
-        '\n\n<file path="empty.txt">\n\n</file>'
-    )
-    assert (message.tokens_in, message.tokens_out) == ((7, 0) if path == "agent" else (11, 23))
-    assert message.agent_steps == (env["_agent_step_log"] if path == "agent" else None)
+    assert message.content == "A useful change."
+    assert (message.tokens_in, message.tokens_out) == (7, 0)
+    assert message.agent_steps == env["_agent_step_log"]
     assert trace == [
         "git",
         "add",
@@ -279,9 +263,9 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
         "commit",
         "refresh",
     ]
-    assert calls[0][0][2] == ("AI(agent): " if path == "agent" else "AI: ") + "P" * 50
+    assert calls[0][0][2] == "AI(agent): " + "P" * 50
     assert calls[0][0][3] == parent.commit_sha
-    assert calls[0][1] == ({"exact_tree": False} if path == "agent" else {})
+    assert calls[0][1] == {"exact_tree": False}
     assert repo.read_files(project.id, parent.commit_sha) == original
     # Ordinary commits interpret empty strings as deletion, unlike exact_tree.
     assert repo.read_files(project.id, snapshot.commit_sha) == {
@@ -291,7 +275,7 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
     assert len(session.durable) == 6
 
 
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 @pytest.mark.parametrize("fault", ["git", "upload", "flush", "commit"])
 async def test_caller_failure_does_not_publish_durable_rows(path, fault, monkeypatch):
     rows, trace = records(), []
@@ -318,7 +302,7 @@ async def test_caller_failure_does_not_publish_durable_rows(path, fault, monkeyp
     assert repo.read_files(rows[1].id, env["current_sha"]) == original
 
 
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 @pytest.mark.parametrize("missing", [Project, GenerationRun, Message])
 async def test_caller_preserves_optional_row_behavior(path, missing, monkeypatch):
     rows, trace = records(), []
@@ -330,7 +314,7 @@ async def test_caller_preserves_optional_row_behavior(path, missing, monkeypatch
     assert trace[-2:] == ["commit", "refresh"]
 
 
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 async def test_caller_reexecution_preserves_existing_non_idempotent_semantics(path, monkeypatch):
     rows, trace = records(), []
     session = OfflineSession(rows, trace)
@@ -343,7 +327,7 @@ async def test_caller_reexecution_preserves_existing_non_idempotent_semantics(pa
     assert len([row for row in session.durable if isinstance(row, Snapshot)]) == 3
 
 
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 @pytest.mark.parametrize("is_free", [False, True])
 async def test_caller_free_business_counter_precedes_user(path, is_free, monkeypatch):
     rows, trace = records(), []
@@ -363,30 +347,7 @@ async def test_caller_free_business_counter_precedes_user(path, is_free, monkeyp
     assert business.free_generations_used == (9 if is_free else 8)
 
 
-@pytest.mark.parametrize(
-    "model,forced,orchestrate,expected",
-    [
-        ("fallback", "forced", True, "fallback"),
-        ("routing", "forced", True, "forced"),
-        ("routing", None, False, "routing"),
-    ],
-)
-async def test_oneshot_effective_model_label(model, forced, orchestrate, expected, monkeypatch):
-    rows, trace = records(), []
-    session = OfflineSession(rows, trace)
-    env, _calls, _original = context(
-        rows,
-        lambda: session,
-        trace,
-        monkeypatch,
-        model_id=model,
-        force_model=forced,
-        orchestrate=orchestrate,
-    )
-    assert (await execute("oneshot", env))["snapshot"].model_id == expected
-
-
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 @pytest.mark.parametrize("fault", [None, "git", "upload", "flush", "commit"])
 async def test_disposable_db_caller_publication(path, fault, test_engine, monkeypatch):
     """CI PostgreSQL only: actual transactions and FK constraints, no model calls."""
@@ -489,15 +450,7 @@ async def test_agent_proof_exact_tree_deletes_absent_and_preserves_empty(monkeyp
     assert repo.read_files(rows[1].id, env["current_sha"]) == original
 
 
-async def test_oneshot_without_usage_keeps_existing_tokens(monkeypatch):
-    rows, trace = records(), []
-    session = OfflineSession(rows, trace)
-    env, _calls, _original = context(rows, lambda: session, trace, monkeypatch, usage_data=None)
-    await execute("oneshot", env)
-    assert (rows[3].tokens_in, rows[3].tokens_out) == (7, None)
-
-
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 async def test_missing_business_entitlement_falls_back_to_user(path, monkeypatch):
     rows, trace = records(), []
     session = OfflineSession(rows, trace)
@@ -509,7 +462,7 @@ async def test_missing_business_entitlement_falls_back_to_user(path, monkeypatch
     assert trace.index("get:BusinessEntitlement") < trace.index("get:User")
 
 
-@pytest.mark.parametrize("path", ["agent", "oneshot"])
+@pytest.mark.parametrize("path", ["agent"])
 async def test_refresh_failure_happens_after_durable_publication(path, monkeypatch):
     rows, trace = records(), []
     session = OfflineSession(rows, trace, fault="refresh")

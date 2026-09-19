@@ -113,16 +113,12 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
 
 
 @pytest.mark.parametrize("template", ["nextjs-entities", "nextjs-postgres-drizzle"])
-def test_generated_brief_and_empty_source_override_survive_export(template):
-    from omnia_api.services.brief_narration import BRIEF_MODULE_PATH, inject_brief_module
-
-    generated = inject_brief_module(
-        {"src/lib/utils.ts": ""},
-        {"palette": {"Акцент": "#b45309"}},
-    )
-    assert BRIEF_MODULE_PATH in generated
+def test_generated_file_and_empty_source_override_survive_export(template):
+    # A shared-source path: the generated file must beat the template's own copy.
+    generated_path = "src/app/omnia-brief.ts"
+    generated = {"src/lib/utils.ts": "", generated_path: "export const brief = {};\n"}
     exported = project_export.build_runnable_export(template, generated)
-    assert exported[BRIEF_MODULE_PATH] == generated[BRIEF_MODULE_PATH]
+    assert exported[generated_path] == generated[generated_path]
     assert exported["src/lib/utils.ts"] == ""
     for relative, entry in SOURCE_MAPPING.items():
         if template not in entry["templates"] or relative in generated:

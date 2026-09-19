@@ -2,9 +2,9 @@
 
 Frozen BEFORE the session moved into ``render_settle`` and unchanged AFTER: nine
 gates carried a hand-rolled copy of "launch chromium → context → page → settle →
-audit → close, abstain on any failure". The assertions describe what a caller
-(the accept gauntlet, the reference corpus) can observe, not how the code is
-laid out — they hold for the copies and for the single owner alike.
+audit → close, abstain on any failure". Seven of them left with the site builder;
+the two that stay are pinned here. The assertions describe what a caller can
+observe, not how the code is laid out.
 
 No chromium: ``playwright.async_api.async_playwright`` is a recorder, and each
 gate's ``_audit_page`` is a stub, so only the session itself is under test.
@@ -22,17 +22,7 @@ from urllib.parse import unquote, urlparse
 
 import pytest
 
-from omnia_api.services import (
-    cabinet_gate,
-    catalog_coherence_gate,
-    chip_pixel_gate,
-    data_gate,
-    first_paint_gate,
-    hierarchy_gate,
-    perf_a11y_gate,
-    taste_gate,
-    wow_dom_gate,
-)
+from omnia_api.services import chip_pixel_gate, wow_dom_gate
 
 RESOLVER_ARGS = ["--host-resolver-rules=MAP preview.test 10.0.0.7"]
 SESSION_STATE = {"cookies": [{"name": "authjs.session-token", "value": "x"}], "origins": []}
@@ -62,46 +52,10 @@ LEGS = (
         prefix="omnia-wowdom-",
     ),
     Leg(
-        hierarchy_gate,
-        lambda w: hierarchy_gate.HierarchyReport((), 0, w, rendered=False),
-        resolver=True,
-        prefix="omnia-hier-",
-    ),
-    Leg(
-        catalog_coherence_gate,
-        lambda w: catalog_coherence_gate.CatalogReport((), 0, w, 0, rendered=False),
-        prefix="omnia-catalog-",
-    ),
-    Leg(
-        taste_gate,
-        lambda w: taste_gate.TasteReport((), 0, w, (), rendered=False),
-        resolver=True,
-        prefix="omnia-taste-",
-    ),
-    Leg(data_gate, lambda w: data_gate.DataReport((), 0, rendered=False), prefix="omnia-data-"),
-    Leg(
-        perf_a11y_gate,
-        lambda w: perf_a11y_gate.PerfA11yReport((), {}, None, 0, rendered=False),
-        timeout_ms=20_000,
-        init_script=perf_a11y_gate._PERF_INIT_JS,
-        prefix="omnia-perfa11y-",
-    ),
-    Leg(
         chip_pixel_gate,
         lambda w: chip_pixel_gate.FidelityReport((), rendered=False),
         prefix="omnia-chippix-",
         extra=(chip_pixel_gate.FidelitySpec(),),
-    ),
-    Leg(
-        cabinet_gate,
-        lambda w: cabinet_gate.CabinetReport((), rendered=False),
-        resolver=True,
-        needs_session=True,
-    ),
-    Leg(
-        first_paint_gate,
-        lambda w: first_paint_gate.FirstPaintReport((), rendered=False),
-        prefix="omnia-firstpaint-",
     ),
 )
 FILE_LEGS = tuple(leg for leg in LEGS if leg.prefix is not None)
@@ -382,21 +336,6 @@ def test_url_leg_abstains_when_the_browser_cannot_start(leg, session, monkeypatc
 
     assert report == leg.abstain(640)
     assert recorder.launches == []
-
-
-def test_cabinet_without_a_session_abstains_without_a_browser(session, monkeypatch):
-    recorder = session()
-    audit = Audit()
-    monkeypatch.setattr(cabinet_gate, "_audit_page", audit)
-
-    report = asyncio.run(cabinet_gate.audit_url("https://app.test/dashboard"))
-
-    assert report == cabinet_gate.CabinetReport((), rendered=False)
-    assert recorder.launches == []
-    assert audit.pages == []
-
-
-# ── files leg ─────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("leg", FILE_LEGS, ids=_ids(FILE_LEGS))

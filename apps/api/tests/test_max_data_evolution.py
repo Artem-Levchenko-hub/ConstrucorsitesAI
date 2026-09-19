@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services import agent_builder, agent_native, autoheal, prompt_builder
+from omnia_api.services import agent_builder, agent_native, autoheal
 
 POLICY_HEADER = "MAX DATA EVOLUTION POLICY v1"
 
@@ -34,44 +34,6 @@ def test_shared_evolution_guidance_has_no_protected_controller_command():
     assert "service startup" in MAX_DATA_EVOLUTION_POLICY
 
 
-@pytest.mark.parametrize("model_id", [None, "claude-sonnet-5", "gpt-4.1-mini"])
-@pytest.mark.parametrize("language", ["ru", "en"])
-def test_max_code_writer_receives_policy_despite_model_tier_and_language(model_id, language):
-    prompt = prompt_builder.build_system_prompt(
-        "max_miniapp", model_id=model_id, language=language,
-    )
-    assert prompt.count(POLICY_HEADER) == 1
-    if language == "en":
-        assert prompt.startswith("ЯЗЫК ПРОЕКТА: en.")
-
-
-@pytest.mark.parametrize("template", ["blank", "fullstack", "realtime", "spa"])
-def test_other_project_writers_do_not_receive_max_database_instructions(template):
-    assert POLICY_HEADER not in prompt_builder.build_system_prompt(template)
-
-
-def test_prose_only_art_director_does_not_receive_database_execution_policy():
-    prompt = prompt_builder.build_system_prompt("max_miniapp", brief_only=True)
-    assert POLICY_HEADER not in prompt
-
-
-@pytest.mark.parametrize("imported", [False, True])
-@pytest.mark.parametrize("template", ["max_miniapp", "fullstack"])
-def test_edit_policy_follows_project_type_even_with_imported_source(imported, template):
-    messages = prompt_builder._build_edit_messages(
-        current_files={"src/app/page.tsx": "export default function Page() {}"},
-        history=[],
-        user_prompt="Rename surname to Family name; keep the saved customers",
-        selected_elements=None,
-        template=template,
-        is_imported=imported,
-        language="en",
-    )
-    assert messages[0]["role"] == "system"
-    assert messages[0]["content"].count(POLICY_HEADER) == (template == "max_miniapp")
-    assert messages[0]["content"].startswith("ЯЗЫК ПРОЕКТА: en.")
-
-
 @pytest.mark.parametrize("mode", ["build", "edit", "native"])
 @pytest.mark.parametrize("provider", ["legacy", "cell-legacy", "portable", "missing-manifest"])
 async def test_agent_policy_survives_provider_replacement_and_all_prompt_protocols(mode, provider):
@@ -97,20 +59,6 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
     assert snapshot.await_count == (provider != "legacy")
     if mode == "native":
         assert "MAX VERIFICATION OVERRIDE" in prompt
-
-
-@pytest.mark.parametrize("template", ["max_miniapp", "fullstack"])
-def test_failed_exact_edit_rewrite_retains_max_policy(template):
-    messages = prompt_builder.build_container_rewrite_messages(
-        {"src/app/page.tsx": "export default function Page() {}"},
-        [], "Fix the customers form", None, template=template,
-    )
-    assert messages[0]["role"] == "system"
-    assert messages[0]["content"].count(POLICY_HEADER) == (template == "max_miniapp")
-    if template == "fullstack":
-        assert messages[0]["content"] == prompt_builder.build_container_rewrite_messages(
-            {}, [], "Fix form", None,
-        )[0]["content"]
 
 
 @pytest.mark.parametrize("template", ["max_miniapp", "fullstack"])

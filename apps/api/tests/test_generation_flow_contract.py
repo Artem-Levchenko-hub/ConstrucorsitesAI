@@ -40,21 +40,11 @@ from omnia_api.services.generation import (
     agent_recovery,
     agent_runtime,
     agent_verification,
-    asset_composition,
-    container_realization,
     lifecycle,
     lightweight_turns,
     onboarding,
     progress,
-    static_acceptance,
-    static_quality,
-    stream_attempt,
-    stream_candidate,
-    stream_preparation,
-    stream_publication,
-    streamed_pipeline,
     supervisor,
-    surgical_recovery,
 )
 from omnia_api.services.generation import lifecycle as messages
 from omnia_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
@@ -72,17 +62,8 @@ def set_generation_settings(monkeypatch, settings):
         agent_recovery,
         agent_runtime,
         agent_verification,
-        asset_composition,
-        container_realization,
         lifecycle,
         onboarding,
-        static_acceptance,
-        static_quality,
-        streamed_pipeline,
-        stream_attempt,
-        stream_preparation,
-        stream_publication,
-        surgical_recovery,
     ):
         monkeypatch.setattr(owner, "get_settings", lambda: settings)
 
@@ -99,7 +80,6 @@ class Flow:
     parent_sha: str
     events: list[tuple[str, dict]] = field(default_factory=list)
     trace: list[str] = field(default_factory=list)
-    buffers: list[tuple[str, int]] = field(default_factory=list)
     model_free: list[bool] = field(default_factory=list)
     free: bool = True
     visible_publications: list[str] = field(default_factory=list)
@@ -160,7 +140,7 @@ class Flow:
 
 @pytest.fixture
 async def flow_factory(test_engine, monkeypatch):
-    async def make(template="code"):
+    async def make(template):
         owner = User(
             email=f"flow-{uuid4().hex}@example.test",
             password_hash="fixture",
@@ -232,7 +212,7 @@ async def flow_factory(test_engine, monkeypatch):
         settings = config.get_settings().model_copy(
             update={
                 **dict.fromkeys(disabled, False),
-                "use_agentic_builder": template != "code",
+                "use_agentic_builder": True,
                 "multipass_models": "off",
                 "agentic_builder_canary_users": "",
                 "use_clean_chat_content": True,
@@ -256,10 +236,6 @@ async def flow_factory(test_engine, monkeypatch):
                 )
             flow.events.append((kind, payload))
             flow.trace.append(kind)
-
-        async def buffer(project_id, message_id, content, seq):
-            assert (project_id, message_id) == (flow.project_id, flow.assistant_id)
-            flow.buffers.append((content, seq))
 
         async def clear(*_args):
             flow.trace.append("clear_stream")
@@ -291,100 +267,18 @@ async def flow_factory(test_engine, monkeypatch):
         monkeypatch.setattr(httpx.AsyncClient, "send", forbidden_http)
         monkeypatch.setattr(agent_pipeline, "publish_event", publish)
         monkeypatch.setattr(agent_publication, "publish_event", publish)
-        monkeypatch.setattr(asset_composition, "publish_event", publish)
-        monkeypatch.setattr(container_realization, "publish_event", publish)
         monkeypatch.setattr(lifecycle, "publish_event", publish)
         monkeypatch.setattr(lightweight_turns, "publish_event", publish)
         monkeypatch.setattr(progress, "publish_event", publish)
-        monkeypatch.setattr(static_acceptance, "publish_event", publish)
-        monkeypatch.setattr(static_quality, "publish_event", publish)
-        monkeypatch.setattr(streamed_pipeline, "publish_event", publish)
-        monkeypatch.setattr(stream_attempt, "publish_event", publish)
-        monkeypatch.setattr(stream_candidate, "publish_event", publish)
-        monkeypatch.setattr(stream_publication, "publish_event", publish)
         monkeypatch.setattr(supervisor, "publish_event", publish)
-        monkeypatch.setattr(surgical_recovery, "publish_event", publish)
-        monkeypatch.setattr(stream_attempt, "set_stream_state", buffer)
         monkeypatch.setattr(messages, "clear_stream_state", clear)
         monkeypatch.setattr(agent_pipeline, "clear_stream_state", clear)
         monkeypatch.setattr(supervisor, "clear_generation_cancel", noop)
         monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", wait_cancel)
         monkeypatch.setattr(agent_publication, "enqueue_preview", enqueue)
-        monkeypatch.setattr(container_realization, "enqueue_preview", enqueue)
-        monkeypatch.setattr(stream_publication, "enqueue_preview", enqueue)
         return flow
 
     return make
-
-
-@pytest.mark.parametrize("free", [True, False])
-async def test_real_oneshot_publishes_tree_usage_and_terminal_outcome(
-    flow_factory, monkeypatch, free
-):
-    flow = await flow_factory()
-    chunks = [
-        "Calculation implemented.\n",
-        '<file path="src/main.py">\ndef total():\n    return 42\n</file>',
-    ]
-
-    async def provider(prompt, model, user_id, project_id, message_id):
-        assert (model, user_id, project_id, message_id) == (
-            "gemini-3.1-pro-preview-customtools",
-            str(flow.owner_id),
-            str(flow.project_id),
-            str(flow.assistant_id),
-        )
-        assert "Preserve this source" in str(prompt)
-        flow.model_free.append(llm_client._free_generation.get())
-        flow.trace.append("provider")
-        for chunk in chunks:
-            yield {"delta": chunk}
-        yield {"usage": {"tokens_in": 11, "tokens_out": 23, "cost_rub": 0.125}}
-
-    monkeypatch.setattr(stream_attempt, "stream_chat_completion", provider)
-    await flow.run(free=free)
-    run, project, message, owner, snapshots, durable_events = await flow.saved()
-    assert run.status == "completed" and run.finished_at is not None and run.error is None
-    assert len(snapshots) == 2
-    snapshot = next(row for row in snapshots if row.id != flow.parent_id)
-    assert project.current_snapshot_id == message.snapshot_id == snapshot.id
-    assert snapshot.parent_id == flow.parent_id
-    assert snapshot.model_id == "Оркестратор Sonnet+DeepSeek"
-    assert (message.tokens_in, message.tokens_out) == (11, 23)
-    assert message.content == (
-        'Calculation implemented.\n\n<file path="src/main.py">\n'
-        "def total():\n    return 42\n</file>"
-    )
-    assert owner.free_generations_used == 3 + int(free)
-    assert flow.model_free == [free]
-    assert flow.visible_publications == ["enqueue_preview", "snapshot.created"]
-    assert repo.read_files(flow.project_id, snapshot.commit_sha) == {
-        "README.md": "Preserve this source",
-        "src/main.py": "\ndef total():\n    return 42\n",
-    }
-    assert repo.read_files(flow.project_id, flow.parent_sha) == {
-        "README.md": "Preserve this source"
-    }
-    assert flow.buffers == [(chunks[0], 1), ("".join(chunks), 2)]
-    assert [
-        kind
-        for kind, _ in flow.events
-        if kind in {"llm.chunk", "snapshot.created", "llm.done", "llm.error"}
-    ] == ["llm.chunk", "llm.chunk", "snapshot.created", "llm.done"]
-    assert (
-        flow.trace.index("enqueue_preview")
-        < flow.trace.index("snapshot.created")
-        < flow.trace.index("llm.done")
-    )
-    assert flow.trace[-1] == "clear_stream"
-    assert durable_events == []  # Plain chunks use the replay buffer, not agent-step persistence.
-    done = next(payload for kind, payload in flow.events if kind == "llm.done")
-    assert done == {
-        "message_id": str(flow.assistant_id),
-        "tokens_in": 11,
-        "tokens_out": 23,
-        "cost_rub": 0.125,
-    }
 
 
 @pytest.mark.parametrize("cancel", [False, True])
@@ -476,26 +370,6 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
     else:
         assert run.error == "fixture managed SDK unavailable"
         assert "fixture managed SDK unavailable" in message.content
-
-
-async def test_real_oneshot_provider_failure_preserves_previous_product(flow_factory, monkeypatch):
-    flow = await flow_factory()
-
-    async def provider(*_args):
-        flow.model_free.append(llm_client._free_generation.get())
-        raise RuntimeError("fixture provider unavailable")
-        yield  # pragma: no cover - preserve the provider's async-iterator protocol
-
-    monkeypatch.setattr(stream_attempt, "stream_chat_completion", provider)
-    await flow.run()
-    run, project, message, owner, snapshots, _events = await flow.saved()
-    assert run.status == "failed" and run.error == "fixture provider unavailable"
-    assert project.current_snapshot_id == flow.parent_id and message.snapshot_id is None
-    assert len(snapshots) == 1 and owner.free_generations_used == 3
-    assert message.tokens_out == 0 and "fixture provider unavailable" in message.content
-    assert flow.model_free == [True]
-    assert [kind for kind, _ in flow.events] == ["llm.error"]
-    assert flow.trace[-1] == "clear_stream" and "enqueue_preview" not in flow.trace
 
 
 @pytest.mark.parametrize("stopped", [False, True])
@@ -714,9 +588,9 @@ async def test_real_native_candidate_red_restored_green_stays_failed(flow_factor
     assert repo.read_files(flow.project_id, flow.parent_sha) == runtime_files
 
 
-async def test_actual_worker_cancels_real_stream_and_does_not_replay(flow_factory, monkeypatch):
-    """Dispatcher contract, not a claim that HTTP routes code projects to workers."""
-    flow = await flow_factory("code")
+async def test_actual_worker_cancels_real_agent_build_without_replay(flow_factory, monkeypatch):
+    """Dispatcher contract: a DB cancel stops the running build and nothing replays it."""
+    flow = await flow_factory("nextjs_entities")
     factory = async_sessionmaker(flow.engine, expire_on_commit=False)
     async with factory() as session:
         run = await session.get(GenerationRun, flow.run_id)
@@ -743,17 +617,29 @@ async def test_actual_worker_cancels_real_stream_and_does_not_replay(flow_factor
     entered, provider_cancelled = asyncio.Event(), asyncio.Event()
     calls = []
 
-    async def provider(*_args):
+    async def provider(**_kwargs):
         calls.append(llm_client._free_generation.get())
-        yield {"delta": '<file path="src/candidate.py">unpublished candidate'}
         entered.set()
         try:
             await asyncio.Event().wait()
         finally:
             provider_cancelled.set()
 
+    async def ready(*_args, **_kwargs):
+        return None
+
+    async def empty(*_args, **_kwargs):
+        return ""
+
+    async def no_cell(**_kwargs):
+        return None
+
     monkeypatch.setattr(generation, "get_engine", lambda: flow.engine)
-    monkeypatch.setattr(stream_attempt, "stream_chat_completion", provider)
+    monkeypatch.setattr(messages.stack_routing, "ensure_provisioned", ready)
+    monkeypatch.setattr(project_cell_executor, "maybe_create_project_cell_executor", no_cell)
+    monkeypatch.setattr(orchestrator_client, "agent_list_dir", empty)
+    monkeypatch.setattr(orchestrator_client, "agent_read_file", empty)
+    monkeypatch.setattr(agent_builder, "run_agent_build", provider)
     # Keep real execute_dispatch, ownership monitor, tracker and process. The
     # existing fixture's Redis watcher never fires; DB cancellation must work.
     work = asyncio.create_task(generation.execute_dispatch(flow.run_id))
@@ -774,7 +660,9 @@ async def test_actual_worker_cancels_real_stream_and_does_not_replay(flow_factor
     assert run.execution_started_at is not None and run.status == "cancelled"
     assert run.finished_at is not None and message.tokens_out == 0
     assert project.current_snapshot_id == flow.parent_id and message.snapshot_id is None
-    assert len(snapshots) == 1 and owner.free_generations_used == 3 and events == []
+    assert len(snapshots) == 1 and owner.free_generations_used == 3
+    # Only the two runtime-readiness steps were recorded before the build was stopped.
+    assert [event.payload["tool"] for event in events] == ["runtime", "runtime"]
     assert flow.trace.count("generation.cancelled") == 1
     assert "llm.done" not in flow.trace and "snapshot.created" not in flow.trace
     assert not flow.visible_publications
@@ -976,51 +864,6 @@ async def test_real_nonmax_selected_cell_owns_executor_and_final_probes(flow_fac
     assert flow.visible_publications == ["enqueue_preview", "snapshot.created"]
     assert len([kind for kind, _ in flow.events if kind == "llm.done"]) == 1
     assert any(event.payload["tool"] == "project_cell" for event in events)
-
-
-async def test_real_empty_response_fallback_persists_effective_model_and_usage(
-    flow_factory, monkeypatch
-):
-    flow = await flow_factory()
-    calls = []
-    chunk = '<file path="src/fallback.py">\ndef recovered():\n    return 17\n</file>'
-
-    async def provider(prompt, model, user_id, project_id, message_id):
-        calls.append(model)
-        if model == "fixture-fallback":
-            yield {"delta": chunk}
-            yield {"usage": {"tokens_in": 31, "tokens_out": 47, "cost_rub": 0.25}}
-        else:
-            yield {"usage": {"tokens_in": 2, "tokens_out": 0, "cost_rub": 0.0}}
-
-    async def empty_multipass(**kwargs):
-        calls.append("same-model-multipass")
-        yield {"delta": "<"}
-        yield {"usage": {"tokens_in": 3, "tokens_out": 0, "cost_rub": 0.0}}
-
-    monkeypatch.setattr(stream_attempt, "stream_chat_completion", provider)
-    monkeypatch.setattr(stream_attempt, "multipass_generate", empty_multipass)
-    monkeypatch.setattr(
-        stream_candidate, "_EMPTY_RESPONSE_FALLBACKS", {"fixture-model": ["fixture-fallback"]}
-    )
-    await flow.run()
-    run, project, message, _owner, snapshots, _events = await flow.saved()
-    assert run.status == "completed" and run.error is None
-    snapshot = next(row for row in snapshots if row.id != flow.parent_id)
-    assert snapshot.model_id == "fixture-fallback"
-    assert (message.tokens_in, message.tokens_out) == (31, 47)
-    assert calls == [
-        "gemini-3.1-pro-preview-customtools",
-        "same-model-multipass",
-        "fixture-fallback",
-    ]
-    assert flow.buffers == [("<", 1), ("<" + chunk, 2)]
-    assert project.current_snapshot_id == message.snapshot_id == snapshot.id
-    assert (
-        repo.read_files(flow.project_id, snapshot.commit_sha)["src/fallback.py"]
-        == "\ndef recovered():\n    return 17\n"
-    )
-    assert next(payload for kind, payload in flow.events if kind == "llm.done")["tokens_out"] == 47
 
 
 async def test_real_terminal_cell_failure_stops_native_and_waits_release_without_snapshot(

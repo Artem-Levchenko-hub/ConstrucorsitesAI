@@ -34,18 +34,9 @@ from omnia_api.services.generation import (
     agent_runtime,
     agent_seed,
     agent_verification,
-    asset_composition,
-    container_realization,
     lifecycle,
     onboarding,
     progress,
-    static_acceptance,
-    static_quality,
-    stream_attempt,
-    stream_preparation,
-    stream_publication,
-    streamed_pipeline,
-    surgical_recovery,
 )
 from omnia_api.services.generation import (
     runtime as generation_runtime,
@@ -171,17 +162,8 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         agent_recovery,
         agent_runtime,
         agent_verification,
-        asset_composition,
-        container_realization,
         lifecycle,
         onboarding,
-        static_acceptance,
-        static_quality,
-        streamed_pipeline,
-        stream_attempt,
-        stream_preparation,
-        stream_publication,
-        surgical_recovery,
     ):
         monkeypatch.setattr(owner, "get_settings", lambda: settings)
     monkeypatch.setattr(core_config, "get_settings", lambda: settings)

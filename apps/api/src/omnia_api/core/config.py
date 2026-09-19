@@ -928,8 +928,8 @@ class Settings(BaseSettings):
     # rest of the page. Fixes the owner's two complaints: a small edit no longer
     # spins up the Art-Director→Writer premium pipeline (cost), and no longer
     # re-rolls the palette / regenerates other sections ("всё потерялось").
-    # When False, edits fall back to the prior behaviour (full build prompt +
-    # guards) for instant rollback (R-10). Kill per-env: USE_SURGICAL_EDIT=false.
+    # No reader since the one-shot pipeline left with the site builder: a cheap
+    # follow-up is always an agent edit turn. Kept until the settings clean-up.
     use_surgical_edit: bool = Field(default=True)
 
     # Container-app edit rewrite fallback (2026-06-21). When a surgical <edit>
@@ -1019,14 +1019,14 @@ class Settings(BaseSettings):
     # bar). Default ON; flip AGENT_SHIP_GREEN_ON_ABORT=0 to revert.
     agent_ship_green_on_abort: bool = Field(default=True)
 
-    # Agentic builder (2026-06-22, Phase 0 of the "like Claude Code" engine).
-    # When ON, container-app BUILDS (nextjs_entities/fullstack/spa, first build)
-    # run through a real plan→act→observe→verify agent loop
-    # (services/agent_builder.py): the model reads/writes files, runs a real
-    # typecheck, sees the actual errors, and iterates until the build is clean —
-    # instead of one-shot text→regex. Default OFF = byte-identical to today's
-    # pipeline (the loop is never entered). Flip per-project for dogfood first.
-    # Env: USE_AGENTIC_BUILDER. `agent_builder_max_steps` bounds the loop.
+    # Agentic builder: every build and edit runs through a real
+    # plan→act→observe→verify agent loop (services/agent_builder.py): the model
+    # reads/writes files, runs a real typecheck, sees the actual errors, and
+    # iterates until the build is clean. It is the ONLY builder — the one-shot
+    # text pipeline left with the site builder — so OFF does not fall back to
+    # anything: generation is refused with a clear message (users listed in
+    # `agentic_builder_canary_users` still build). Env: USE_AGENTIC_BUILDER.
+    # `agent_builder_max_steps` bounds the loop.
     use_agentic_builder: bool = Field(default=True)
     # Step budget for the loop. Explore-then-build on the entity template needs
     # headroom: the agent reads a couple of examples, declares N entities, writes

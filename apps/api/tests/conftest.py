@@ -62,19 +62,10 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     from omnia_api.services.generation import (
         agent_pipeline,
         agent_publication,
-        asset_composition,
-        container_realization,
         lifecycle,
         lightweight_turns,
         progress,
-        static_acceptance,
-        static_quality,
-        stream_attempt,
-        stream_candidate,
-        stream_publication,
-        streamed_pipeline,
         supervisor,
-        surgical_recovery,
     )
 
     def discard_background_job(*_args: object, **_kwargs: object) -> None:
@@ -87,9 +78,6 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
         (projects, "enqueue_preview"),
         (rollback, "enqueue_preview"),
         (agent_publication, "enqueue_preview"),
-        (container_realization, "enqueue_entity_gate"),
-        (container_realization, "enqueue_preview"),
-        (stream_publication, "enqueue_preview"),
     ):
         monkeypatch.setattr(module, attribute, discard_background_job)
 
@@ -99,19 +87,10 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
         messages,
         agent_pipeline,
         agent_publication,
-        asset_composition,
-        container_realization,
         lifecycle,
         lightweight_turns,
         progress,
-        static_acceptance,
-        static_quality,
-        streamed_pipeline,
-        stream_attempt,
-        stream_candidate,
-        stream_publication,
         supervisor,
-        surgical_recovery,
     ):
         monkeypatch.setattr(module, "publish_event", discard_event)
 

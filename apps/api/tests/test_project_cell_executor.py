@@ -1344,14 +1344,8 @@ async def test_cell_rejects_removed_visual_tool_without_preview_or_legacy_io(
     db_session,
     test_engine,
 ) -> None:
-    from omnia_api.services import agent_vision
-
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
 
-    async def forbidden_vision(*args, **kwargs):
-        pytest.fail("removed visual action must not capture or call a model")
-
-    monkeypatch.setattr(agent_vision, "see_page", forbidden_vision)
     result = await harness.handle.execute(Action(name="see", args={"path": "/"}))
 
     assert result == {"ok": False, "error": "unknown cell action see"}

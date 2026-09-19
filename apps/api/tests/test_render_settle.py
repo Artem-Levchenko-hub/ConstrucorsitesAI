@@ -36,14 +36,7 @@ GATE_FILES = sorted(p for p in SERVICES_DIR.glob("*_gate.py"))
 # stays green on the structural assert without needing the helper.)
 RENDER_LEGS = (
     "wow_dom_gate.py",
-    "perf_a11y_gate.py",
     "chip_pixel_gate.py",
-    "taste_gate.py",
-    "hierarchy_gate.py",
-    "data_gate.py",
-    "catalog_coherence_gate.py",
-    "cabinet_gate.py",
-    "first_paint_gate.py",
 )
 
 

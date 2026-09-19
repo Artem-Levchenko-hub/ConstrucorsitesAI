@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services.generation import agent_messages, container_realization, runtime, supervisor
+from omnia_api.services.generation import agent_messages, runtime, supervisor
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-at-least-32-bytes")
@@ -1071,55 +1071,6 @@ async def test_rollback_project_cell_shell_files_preserves_zero_byte_snapshot(
     assert rolled_back is False
     assert stage_calls == [({"empty.txt": ""}, ("removed.txt",))]
     assert sync_calls == ["sync"]
-
-
-@pytest.mark.asyncio
-async def test_run_app_self_repair_uses_project_cell_preview_apply_without_hot_reload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    apply_calls: list[dict[str, str]] = []
-    probe_calls: list[object] = []
-
-    async def fake_probe_app_error(*args, **kwargs):
-        probe_calls.append(kwargs.get("project_cell_handle"))
-        if len(probe_calls) == 1:
-            return {"error": "boom", "file": "src/app/page.tsx"}, "compile"
-        return None, ""
-
-    async def fake_apply_preview_files(**kwargs) -> None:
-        assert kwargs["project_cell_handle"] is not None
-        apply_calls.append(dict(kwargs["files"]))
-
-    async def fake_propose_fix(**kwargs) -> dict[str, str]:
-        assert kwargs["file_path"] == "src/app/page.tsx"
-        return {"src/app/page.tsx": "fixed\n"}
-
-    monkeypatch.setattr(container_realization, "_probe_app_error", fake_probe_app_error)
-    monkeypatch.setattr(
-        container_realization,
-        "_apply_project_cell_preview_files",
-        fake_apply_preview_files,
-    )
-    monkeypatch.setattr(container_realization.app_doctor, "propose_fix", fake_propose_fix)
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "hot_reload",
-        lambda *args, **kwargs: pytest.fail("legacy hot_reload must stay unused"),
-    )
-
-    repaired, final_error, category = await container_realization._run_app_self_repair(
-        project_id=uuid4(),
-        slug="max-cell",
-        files={"src/app/page.tsx": "broken\n"},
-        passes=1,
-        project_cell_handle=SimpleNamespace(),
-    )
-
-    assert repaired == {"src/app/page.tsx": "fixed\n"}
-    assert final_error is None
-    assert category == ""
-    assert len(probe_calls) == 2
-    assert apply_calls == [{"src/app/page.tsx": "fixed\n"}]
 
 
 def test_hard_coverage_failure_is_captured_for_release_attestation() -> None:

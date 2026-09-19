@@ -21,8 +21,8 @@ Design rules that keep it safe to ship:
     `make_container_executor(...)` at the bottom.
   * Bounded: `max_steps` hard cap, per-action output truncation. No unbounded
     grind.
-  * Gated by ``Settings.use_agentic_builder`` (default False) at the call site —
-    when off, this module is never entered and current generation is untouched.
+  * Gated by ``Settings.use_agentic_builder`` at the call site. This loop is the
+    only builder: when the gate is off, generation is refused, not rerouted.
 
 Actions (file tools + real build/runtime observations):
     list_dir     {"path": "src/app"}

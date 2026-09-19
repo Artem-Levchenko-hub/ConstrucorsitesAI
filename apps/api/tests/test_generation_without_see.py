@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from omnia_api.services import agent_builder, agent_native, agent_vision
+from omnia_api.services import agent_builder, agent_native
 
 
 @pytest.mark.parametrize(
@@ -37,13 +37,8 @@ def test_generation_toolsets_keep_functional_tools_without_visual_judge(tools: l
 
 
 @pytest.mark.asyncio
-async def test_container_executor_rejects_visual_action_without_calling_vision(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def forbidden_vision(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        pytest.fail("removed visual tool must not start a screenshot or model request")
-
-    monkeypatch.setattr(agent_vision, "see_page", forbidden_vision)
+async def test_container_executor_rejects_visual_action() -> None:
+    # The vision module itself left with the site builder: nothing is left to call.
     execute = agent_builder.make_container_executor(project_id="test-project", slug="test-slug")
     result = await execute(agent_builder.Action("see", {"path": "/"}))
     assert result["ok"] is False

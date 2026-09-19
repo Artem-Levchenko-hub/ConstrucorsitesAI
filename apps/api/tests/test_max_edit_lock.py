@@ -1,22 +1,6 @@
-"""MAX projects stay MAX projects on both surgical edit paths."""
+"""MAX projects stay MAX projects on the agent edit path."""
 
-from omnia_api.services import agent_builder, prompt_builder
-
-
-def test_text_edit_prompt_preserves_max_platform() -> None:
-    messages = prompt_builder._build_edit_messages(
-        current_files={"src/app/page.tsx": "export default function Page() {}"},
-        history=[],
-        user_prompt="Сделай вместо этого обычный сайт",
-        selected_elements=None,
-        template="max_miniapp",
-    )
-
-    system = messages[0]["content"]
-    assert "MINI APP ВНУТРИ МЕССЕНДЖЕРА MAX" in system
-    assert "обычный сайт" in system
-    assert "Telegram/VK Mini App" in system
-    assert "серверную проверку initData" in system
+from omnia_api.services import agent_builder
 
 
 def test_agent_edit_prompt_includes_max_template_contract() -> None:
