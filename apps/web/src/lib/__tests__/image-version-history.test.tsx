@@ -3,7 +3,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePromptStream } from "@/hooks/usePromptStream";
-import { PreviewFrame } from "@/components/workspace/PreviewFrame";
 import { VersionImagePreview } from "@/components/workspace/VersionImagePreview";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLivePreview } from "@/components/max/MaxLivePreview";
@@ -18,8 +17,6 @@ vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: api.sync, createMaxP
 vi.mock("@/lib/api/snapshots", () => ({ listSnapshots: api.snapshots, listProjectVersions: api.versions, rollback: api.rollback }));
 vi.mock("@/lib/api/projects", () => ({ listProjects: async () => [], getProject: async () => ({ ...project, template: "fullstack" }) }));
 vi.mock("@/lib/api/messages", () => ({ listMessages: async () => [], reportClientError: vi.fn(), getLatestGeneration: async () => ({ id: "run", status: "running", assistant_message_id: "a" }), sendPrompt: api.send, cancelGeneration: vi.fn() }));
-vi.mock("@/components/workspace/HeroMediaPanel", () => ({ HeroMediaPanel: () => null }));
-vi.mock("@/components/workspace/StylePanel", () => ({ StylePanel: () => null }));
 vi.mock("@/components/workspace/ChatPanel", () => ({ ChatPanel: () => null }));
 vi.mock("@/components/workspace/DownloadButton", () => ({ DownloadButton: () => null }));
 vi.mock("@/components/max/MaxLaunchPanel", () => ({ MaxLaunchPanel: () => null }));
@@ -452,20 +449,6 @@ describe("image version history", () => {
     expect(activity.querySelector("[data-testid='max-history-event-33']")).not.toBeNull();
     click("[data-testid='max-version-32']"); expect(image()?.getAttribute("src")).toBe("/images/v32.png");
   });
-  it("generic fullstack history never starts or shows HEAD, including pending and missing IDs", async () => {
-    api.snapshots.mockImplementation(() => new Promise(() => {}));
-    useWorkspaceStore.setState({ selectedSnapshotId: "s31" });
-    render(<PreviewFrame project={{ ...project, template: "fullstack" }} />); await settle();
-    expect(api.runtime).not.toHaveBeenCalled(); expect(api.start).not.toHaveBeenCalled();
-    expect(container.querySelector("iframe")).toBeNull();
-    act(() => client.setQueryData(["snapshots", "p"], [{ id: "s32", commit_sha: "new", prompt_text: "New", preview_url: "/current.png" }])); await settle();
-    expect(container.querySelector("iframe")).toBeNull(); expect(container.textContent).toContain("нет изображения");
-    act(() => client.setQueryData(["snapshots", "p"], [{ id: "s32", commit_sha: "new" }, { id: "s31", commit_sha: "old", created_at: "2026-09-06T10:00:00Z", preview_url: "/old.png" }])); await settle();
-    expect(image()?.getAttribute("src")).toBe("/old.png");
-    act(() => useWorkspaceStore.getState().selectSnapshot(null));
-    await waitForDom(() => expect(container.querySelector("iframe")?.getAttribute("src")).toContain("live.example"));
-  });
-
   it("does not clear generic historical selection on a real snapshot.created stream event", async () => {
     let socket: { onmessage?: (event: { data: string }) => void } | undefined;
     vi.stubGlobal("WebSocket", class { static OPEN = 1; static CONNECTING = 0; readyState = 1; onmessage?: (event: { data: string }) => void; onclose = null; constructor() { socket = this; } send() {} close() {} });

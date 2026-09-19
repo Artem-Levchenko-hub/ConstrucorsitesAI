@@ -69,7 +69,7 @@ export function ChatPanel({
   projectId,
   projectSlug,
   mode = "default",
-  basePath = `/projects/${projectId}`,
+  basePath = `/max/${projectId}`,
   embedded = false,
   currentSnapshotId,
   draftRef,
@@ -355,9 +355,9 @@ export function ChatPanel({
 
   const chatScroll = useChatScroll(scrollRef, `${messages?.length}:${last?.content}:${chips?.choices.join("|")}`);
 
-  // `/deep-research` entry hands the user's task over via `?p=`: auto-fire it
-  // ONCE on a fresh (empty) project so they land mid-agent-run — the cloud
-  // Claude Code experience — instead of re-typing it. `skipClarify` sends it
+  // The starter flow hands the user's task over via `?p=`: auto-fire it ONCE on
+  // a fresh (empty) project so they land mid-agent-run instead of re-typing it.
+  // `skipClarify` sends it
   // straight to the agent (no onboarding interview). Strip the param afterwards
   // so a refresh never replays the prompt.
   const autoFiredRef = useRef(false);

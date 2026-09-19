@@ -11,7 +11,6 @@ function source(path: string): string {
 }
 
 const chatMessage = source("src/components/workspace/ChatMessage.tsx");
-const heroMediaPanel = source("src/components/workspace/HeroMediaPanel.tsx");
 const button = source("src/components/ui/button.tsx");
 
 describe("semantic foreground contracts", () => {
@@ -20,8 +19,6 @@ describe("semantic foreground contracts", () => {
     expect(chatMessage).toContain("text-inherit");
     expect(chatMessage).not.toContain("text-white/80 underline-offset-2");
     expect(chatMessage).not.toContain("text-inherit opacity-80");
-    expect(heroMediaPanel).toContain("border-accent bg-accent text-accent-fg");
-    expect(heroMediaPanel).not.toContain("text-on-accent");
   });
 
   it("uses a dedicated light foreground for destructive buttons", () => {

@@ -39,9 +39,8 @@ export default async function MaxWorkspacePage({
     notFound();
   }
   const project = result.data;
-  if (project.template !== "max_miniapp") {
-    redirect(`/projects/${project.id}`);
-  }
+  // Only MAX Mini Apps have an editor here; anything else goes back to the cabinet.
+  if (project.template !== "max_miniapp") redirect("/max");
 
   return <MaxWorkspaceShell project={project} email={session.email} />;
 }

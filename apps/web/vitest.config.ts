@@ -2,12 +2,8 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
 
-// Headless behavioural harness for the streaming-preview layer (V3.0b). The
-// bootstrap script (streaming-preview-bootstrap.ts) ships pure runtime DOM
-// behaviour — morphdom patching, image-preservation, brief transport — that
-// `tsc`/`next build` only type-check, never exercise. jsdom gives us a real
-// DOM + DOMParser + MessageEvent so each generator-wide live-render invariant
-// becomes a permanent falsifiable assert (ratchet), money-free, 0 LLM.
+// Headless behavioural harness: jsdom gives components and hooks a real DOM,
+// DOMParser and MessageEvent, so UI invariants become permanent asserts.
 export default defineConfig({
   oxc: {
     jsx: {
@@ -18,6 +14,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // `server-only` resolves only inside a Next build.
+      "server-only": fileURLToPath(new URL("./src/test/server-only.ts", import.meta.url)),
     },
   },
   test: {

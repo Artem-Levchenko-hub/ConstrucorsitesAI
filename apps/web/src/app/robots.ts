@@ -10,7 +10,7 @@ export default function robots(): MetadataRoute.Robots {
         userAgent: "*",
         allow: "/",
         // Authenticated app routes — no value for crawlers, costs them budget.
-        disallow: ["/projects", "/projects/", "/api/", "/_next/"],
+        disallow: ["/account", "/billing", "/admin", "/api/", "/_next/"],
       },
     ],
     sitemap: `${PUBLIC_ORIGIN}/sitemap.xml`,

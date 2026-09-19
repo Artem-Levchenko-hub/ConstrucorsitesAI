@@ -26,14 +26,13 @@ export function middleware(req: NextRequest) {
   // Never redirect away from /login or /register based on cookie presence
   // alone. Middleware cannot validate the JWT, so a stale omnia_session used
   // to create an infinite loop:
-  //   /login -> /projects -> app layout rejects JWT -> /login -> ...
+  //   /login -> /max -> app layout rejects JWT -> /login -> ...
   // Auth pages must remain reachable so the user can replace an expired
   // session by signing in again.
 
   const isProtectedRoute =
     path === "/account" || path.startsWith("/account/") ||
     path === "/billing" || path.startsWith("/billing/") ||
-    path.startsWith("/projects") ||
     path.startsWith("/admin") ||
     path === "/max" ||
     path.startsWith("/max/");
@@ -57,5 +56,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/account/:path*", "/billing/:path*", "/projects/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
+  matcher: ["/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
 };

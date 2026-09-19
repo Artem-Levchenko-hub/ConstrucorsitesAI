@@ -24,6 +24,6 @@ export async function loadMaxProject(id: string, nextPath: string): Promise<Proj
     if (result.status === 403 || result.status === 404) redirect("/max");
     notFound();
   }
-  if (result.data.template !== "max_miniapp") redirect(`/projects/${result.data.id}`);
+  if (result.data.template !== "max_miniapp") redirect("/max");
   return result.data;
 }

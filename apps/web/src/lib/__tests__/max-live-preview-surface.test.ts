@@ -17,14 +17,6 @@ const usageBreakdown = readFileSync(
   resolve(process.cwd(), "src/components/max/MaxUsageBreakdown.tsx"),
   "utf8",
 );
-const previewFrame = readFileSync(
-  resolve(process.cwd(), "src/components/workspace/PreviewFrame.tsx"),
-  "utf8",
-);
-const streamingPreviewFrame = readFileSync(
-  resolve(process.cwd(), "src/components/workspace/StreamingPreviewFrame.tsx"),
-  "utf8",
-);
 
 describe("MAX live preview surface", () => {
   it("keeps the phone on a transparent stage without a grey framing card", () => {
@@ -48,10 +40,6 @@ describe("MAX live preview surface", () => {
     );
     expect(livePreview).toContain(
       'className="absolute inset-0 size-full border-0 bg-white"',
-    );
-    expect(previewFrame.match(/className="h-full bg-white border-0 mx-auto shadow-xl"/g)).toHaveLength(2);
-    expect(streamingPreviewFrame).toContain(
-      'className="h-full bg-white border-0 mx-auto shadow-xl"',
     );
   });
 

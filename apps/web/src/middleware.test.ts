@@ -48,11 +48,11 @@ describe("auth middleware", () => {
   });
 
   it("still sends unauthenticated protected routes to login", () => {
-    const response = middleware(request("/projects?filter=recent"));
+    const response = middleware(request("/billing/transactions?filter=recent"));
 
     expect(response.status).toBe(307);
     expect(response.headers.get("location")).toBe(
-      "https://constructor.lead-generator.ru/login?next=%2Fprojects%3Ffilter%3Drecent",
+      "https://constructor.lead-generator.ru/login?next=%2Fbilling%2Ftransactions%3Ffilter%3Drecent",
     );
   });
 });
