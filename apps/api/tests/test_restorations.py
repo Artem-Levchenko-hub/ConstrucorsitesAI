@@ -678,6 +678,10 @@ async def test_db_generation_blocks_restore_before_external_dispatch(db_session)
     with pytest.raises(ApiError) as error:
         await service.create_restoration(db_session, project.id, owner.id, request, runtime)
     assert error.value.status_code == 409 and runtime.prepares == 0
+    # The owner is told what blocks the restoration, and which run it is.
+    assert error.value.code == "generation_active"
+    assert error.value.details == {"active_run_id": str(run.id)}
+    assert "идёт сборка" in error.value.message
 
 
 @pytest.mark.parametrize("flag", [1, "true", "yes"])

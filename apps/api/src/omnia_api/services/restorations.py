@@ -117,15 +117,21 @@ async def lock_restoration_admission(
 ) -> Project:
     project = await _owned_project(session, project_id, owner_id)
     await assert_no_active_restoration(session, project_id, operation_id=operation_id)
-    if await session.scalar(
+    active_run_id = await session.scalar(
         select(GenerationRun.id)
         .where(
             GenerationRun.project_id == project_id,
             GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
         )
         .limit(1)
-    ):
-        raise ApiError("conflict", "Wait for the current generation to finish", 409)
+    )
+    if active_run_id:
+        raise ApiError(
+            "generation_active",
+            "Сейчас идёт сборка. Дождитесь её завершения и повторите восстановление версии.",
+            409,
+            details={"active_run_id": str(active_run_id)},
+        )
     return project
 
 

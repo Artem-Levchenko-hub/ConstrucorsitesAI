@@ -14,6 +14,13 @@ const labels: Record<RestoreState, string> = {
   cancelled: "Подготовка отменена", failed: "Восстановление не завершено",
   reconciling: "Уточняем результат",
 };
+// What exactly lost contact. The server keeps the operation's phase: a cancel is only
+// possible before apply was requested, so only `apply` may speak about applying.
+const reconcilingText: Record<string, string> = {
+  prepare: "Связь прервалась во время подготовки. Уточняем её состояние — применение не запускалось.",
+  cancel: "Отменяем подготовку и ждём подтверждения. Применение не запускалось.",
+  apply: "Связь прервалась во время применения. Уточняем, какая версия сейчас работает.",
+};
 function ReportList({ title, items }: { title: string; items: string[] }) {
   return items.length ? <div><h4 className="font-medium">{title}</h4>
     <ul className="list-disc space-y-1 pl-5">{items.map((item, index) => <li key={index}>{item}</li>)}</ul>
@@ -40,7 +47,8 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
     <h3 className="font-semibold" role="status">{operation ? labels[operation.state] : r.busy
       ? "Отправляем запрос на подготовку" : "Проверяем результат запроса"}</h3>
     <p className="mt-2 text-fg-secondary">Публикация — отдельный шаг. Восстановление в редакторе не публикует изменения.</p>
-    {operation?.state === "reconciling" && <p className="mt-2">Связь прервалась во время применения. Уточняем, какая версия сейчас работает.</p>}
+    {operation?.state === "reconciling" && <p className="mt-2" data-testid="max-restoration-reconciling">
+      {reconcilingText[operation.phase] ?? "Уточняем состояние операции. Повторная проверка идёт автоматически."}</p>}
     {r.headChanged && <p role="alert" className="mt-2">Черновик изменился после подготовки. Отмените эту подготовку и проверьте выбранную версию заново.</p>}
     {operation && !report && ["preparing", "checking"].includes(operation.state)
       && <p className="mt-2">Проверяем сохранность данных. Результат появится здесь.</p>}

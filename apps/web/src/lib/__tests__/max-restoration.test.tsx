@@ -173,6 +173,22 @@ it("shows reconciliation honestly without an apply button or promises before a r
   expect(container.textContent).not.toContain("Фамилии сохранятся");
   expect(container.querySelector("[data-testid='max-restoration-apply']")).toBeNull();
 });
+it.each([
+  ["prepare", "во время подготовки", true],
+  ["cancel", "Отменяем подготовку", true],
+  ["apply", "во время применения", false],
+  ["unknown-phase", "Уточняем состояние операции", false],
+] as const)("says what was interrupted while reconciling: %s", async (phase, shown, applyNeverStarted) => {
+  const pending = { ...operation("reconciling"), phase, report: null, can_apply: false, can_cancel: false };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [pending] });
+  vi.mocked(api.getRestoration).mockResolvedValue(pending);
+  await render();
+  const text = container.querySelector("[data-testid='max-restoration-reconciling']")?.textContent ?? "";
+  expect(text).toContain(shown);
+  // A cancelled preparation must never be described as an interrupted apply.
+  expect(text.includes("Применение не запускалось") || text.includes("применение не запускалось")).toBe(applyNeverStarted);
+  if (phase !== "apply") expect(text).not.toContain("во время применения");
+});
 it("does not prepare when the server disabled restoration or a version has no source", async () => {
   vi.mocked(api.listRestorations).mockResolvedValue({ enabled: false, items: [] });
   await render(); await act(async () => controller.prepare(oldVersion));
