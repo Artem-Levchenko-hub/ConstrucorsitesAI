@@ -7,8 +7,9 @@ export function apiUrl(path: string): string {
 }
 
 /**
- * Typed error mirroring docs/01-api-contract.md error envelope. Throw site is
- * `apiFetch`; consumers `instanceof ApiError` to discriminate from network errors.
+ * Typed error mirroring docs/01-api-contract.md error envelope. Thrown by
+ * `apiFetch` and `postBlob`; consumers `instanceof ApiError` to discriminate from
+ * network errors.
  */
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -22,6 +23,26 @@ export class ApiError extends Error {
     this.status = status;
     this.details = body.details;
   }
+}
+
+/** Body by content type; a non-2xx becomes the `{error}` envelope or a generic `ApiError`. */
+async function readPayload<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload: unknown = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    if (typeof payload === "object" && payload !== null && "error" in payload) {
+      throw new ApiError(response.status, (payload as ApiErrorBody).error);
+    }
+    throw new ApiError(response.status, {
+      code: "internal_error",
+      message: typeof payload === "string" ? payload : `HTTP ${response.status}`,
+    });
+  }
+
+  return payload as T;
 }
 
 type RequestInitWithJson = Omit<RequestInit, "body"> & {
@@ -104,26 +125,7 @@ export async function apiFetch<T>(
     return undefined as T;
   }
 
-  const contentType = response.headers.get("content-type") ?? "";
-  const payload: unknown = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-
-  if (!response.ok) {
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      "error" in payload
-    ) {
-      throw new ApiError(response.status, (payload as ApiErrorBody).error);
-    }
-    throw new ApiError(response.status, {
-      code: "internal_error",
-      message: typeof payload === "string" ? payload : `HTTP ${response.status}`,
-    });
-  }
-
-  return payload as T;
+  return await readPayload<T>(response);
 }
 
 /**
@@ -165,20 +167,5 @@ export async function postBlob<T>(
     });
   }
 
-  const contentType = response.headers.get("content-type") ?? "";
-  const payload: unknown = contentType.includes("application/json")
-    ? await response.json()
-    : await response.text();
-
-  if (!response.ok) {
-    if (typeof payload === "object" && payload !== null && "error" in payload) {
-      throw new ApiError(response.status, (payload as ApiErrorBody).error);
-    }
-    throw new ApiError(response.status, {
-      code: "internal_error",
-      message: typeof payload === "string" ? payload : `HTTP ${response.status}`,
-    });
-  }
-
-  return payload as T;
+  return await readPayload<T>(response);
 }
