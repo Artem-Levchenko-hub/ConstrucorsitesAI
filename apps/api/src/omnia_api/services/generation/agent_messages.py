@@ -144,6 +144,17 @@ def _agent_product_failure(
     return None
 
 
+def _agent_needs_continue_card(res: Any, *, product_failure: str | None) -> bool:
+    """The «Продолжить» card belongs to an UNFINISHED run only.
+
+    The run's verdict is ``_agent_product_failure``: a bounded exit that the
+    finalization coordinator completed is a finished product — its status and its
+    chat text say so, and a "Сборка не завершена" card next to «Готово» would
+    contradict both.
+    """
+    return product_failure is not None and getattr(res, "stop_reason", "") == "max_steps"
+
+
 def _agent_result_message(res: Any, *, is_edit: bool) -> str:
     """User-facing chat text for an agentic-build run — NEVER leaks the raw summary.
 

@@ -22,7 +22,10 @@ from omnia_api.services.generation.agent_generation import (
     complete_empty_legacy_build,
     execute_agent_turn,
 )
-from omnia_api.services.generation.agent_messages import _agent_product_failure
+from omnia_api.services.generation.agent_messages import (
+    _agent_needs_continue_card,
+    _agent_product_failure,
+)
 from omnia_api.services.generation.agent_preparation import (
     classify_agent_turn,
     prepare_stack_prompt,
@@ -452,19 +455,20 @@ async def run_agent_generation(
         operations=_operations,
     )
 
-    if get_settings().use_native_agent:
-        _product_failure = _agent_product_failure(
-            _agent_res,
-            verification_failed=_agent_verification_failed,
-            finalization_complete=_max_finalization_proof is not None,
-        )
-        if _product_failure is not None:
-            # Persist before the assistant becomes final. The next-submit
-            # admission path and tracked-task finalizer must see the same
-            # failure after normal return, rollback, or lease cleanup.
-            async with factory() as session:
-                await record_generation_product_failure(session, ids.run_id, _product_failure)
-                await session.commit()
+    # One verdict for the whole turn: the run status, the chat text and the
+    # «Продолжить» card below all follow it.
+    _product_failure = _agent_product_failure(
+        _agent_res,
+        verification_failed=_agent_verification_failed,
+        finalization_complete=_max_finalization_proof is not None,
+    )
+    if get_settings().use_native_agent and _product_failure is not None:
+        # Persist before the assistant becomes final. The next-submit
+        # admission path and tracked-task finalizer must see the same
+        # failure after normal return, rollback, or lease cleanup.
+        async with factory() as session:
+            await record_generation_product_failure(session, ids.run_id, _product_failure)
+            await session.commit()
 
     # Universal release proof. The specialised realtime/isolation gates
     # above cover only two stacks; every container build (including MAX)
@@ -512,10 +516,7 @@ async def run_agent_generation(
     # routes back into the build loop on the live container. Published AFTER
     # the msg.content=accumulated overwrite above (else it'd be wiped) and
     # BEFORE llm.done so the card both persists and animates in.
-    if (
-        not getattr(_agent_res, "done", False)
-        and getattr(_agent_res, "stop_reason", "") == "max_steps"
-    ):
+    if _agent_needs_continue_card(_agent_res, product_failure=_product_failure):
         await app_errors.publish(
             factory,
             ids.project_id,

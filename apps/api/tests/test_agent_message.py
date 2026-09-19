@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from omnia_api.services.generation.agent_messages import (
+    _agent_needs_continue_card,
     _agent_product_failure,
     _agent_result_message,
     _agent_step_budget,
@@ -75,6 +76,56 @@ def test_successful_coordinator_repair_can_complete_a_bounded_agent_exit() -> No
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "res, finalized, card",
+    [
+        # The audit's case: the step budget ran out with complete source, the
+        # coordinator finished the product — «Готово» must stand alone.
+        (dict(stop_reason="max_steps", needs_finalization=True), True, False),
+        (dict(stop_reason="max_steps"), False, True),
+        (dict(stop_reason="max_steps", needs_finalization=True), False, True),
+        (dict(done=True, stop_reason="done"), False, False),
+        (dict(stop_reason="looping"), False, False),
+    ],
+)
+def test_continue_card_follows_the_run_verdict(res, finalized, card) -> None:
+    failure = _agent_product_failure(
+        _res(**res), verification_failed=False, finalization_complete=finalized
+    )
+    assert _agent_needs_continue_card(_res(**res), product_failure=failure) is card
+    # The card never accompanies a successful run.
+    assert not (failure is None and card)
+
+
+def test_pipeline_asks_the_verdict_instead_of_deciding_the_card_itself() -> None:
+    """The contradiction came from a second, inline copy of the rule in the pipeline."""
+    import ast
+    from pathlib import Path
+
+    from omnia_api.services.generation import agent_pipeline
+
+    tree = ast.parse(Path(agent_pipeline.__file__).read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_agent_needs_continue_card"
+    ]
+    assert len(calls) == 1
+    assert [keyword.arg for keyword in calls[0].keywords] == ["product_failure"]
+    inline_rules = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and any(
+            isinstance(side, ast.Constant) and side.value == "max_steps"
+            for side in [node.left, *node.comparators]
+        )
+    ]
+    assert inline_rules == [], "the pipeline must not compare stop_reason to max_steps itself"
 
 
 def test_max_build_restores_proven_single_pass_budget() -> None:
