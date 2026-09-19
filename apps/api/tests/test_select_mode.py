@@ -12,7 +12,6 @@ from omnia_api.routers.public import (
     _KIT_ASSETS,
     _inject_inspector,
 )
-from omnia_api.routers.style_patch import _CONTAINER_STYLE_PATH
 from omnia_api.schemas.message import PromptRequest, SelectedElement
 from omnia_api.services.prompt_builder import build_messages
 
@@ -197,13 +196,3 @@ def test_vite_spa_loads_canonical_inspector_only_inside_workspace() -> None:
     assert "/api/kit/omnia-inspector.js" in index
     assert 'data-omnia-inspector-loader' in index
     assert _INSPECTOR_JS.encode("utf-8") == _KIT_ASSETS["omnia-inspector.js"]
-
-
-def test_every_supported_container_web_stack_has_style_persistence() -> None:
-    assert _CONTAINER_STYLE_PATH == {
-        "fullstack": "src/app/globals.css",
-        "nextjs_entities": "src/app/globals.css",
-        "realtime": "src/app/globals.css",
-        "max_miniapp": "src/app/globals.css",
-        "spa": "src/index.css",
-    }

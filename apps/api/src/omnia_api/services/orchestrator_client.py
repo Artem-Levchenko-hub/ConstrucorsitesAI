@@ -1688,33 +1688,3 @@ async def hot_reload(
         params={"slug": slug},
         timeout=1800.0,
     )
-
-
-async def build_exe(
-    name: str,
-    files: dict[str, str],
-    pyinstaller_args: list[str],
-    installer_nsi: str,
-    requirements: str | None,
-) -> dict[str, Any]:
-    """POST /build-exe — package a Python project into a Windows .exe + NSIS
-    Setup installer.
-
-    The orchestrator side spawns an ``omnia-exe-builder`` sidecar container
-    that runs PyInstaller + NSIS and returns the artefacts as base-64 blobs.
-    A full build typically takes 60–300s, so we override the default 30s
-    socket timeout with 360s. Returns ``{"ok": bool, "log": str,
-    "setup_b64": str, "exe_b64": str | null}``.
-    """
-    return await _request(
-        "POST",
-        "/build-exe",
-        json={
-            "name": name,
-            "files": files,
-            "pyinstaller_args": pyinstaller_args,
-            "installer_nsi": installer_nsi,
-            "requirements": requirements,
-        },
-        timeout=360.0,
-    )

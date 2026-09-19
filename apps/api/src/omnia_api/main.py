@@ -25,11 +25,7 @@ from omnia_api.routers import auth as auth_router
 from omnia_api.routers import backups as backups_router
 from omnia_api.routers import billing as billing_router
 from omnia_api.routers import deploy_targets as deploy_targets_router
-from omnia_api.routers import design_presets as design_presets_router
 from omnia_api.routers import domains as domains_router
-from omnia_api.routers import fonts as fonts_router
-from omnia_api.routers import github as github_router
-from omnia_api.routers import hero_media as hero_media_router
 from omnia_api.routers import integration_runtime as integration_runtime_router
 from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import max_integrations as max_integrations_router
@@ -45,10 +41,8 @@ from omnia_api.routers import restorations as restorations_router
 from omnia_api.routers import rollback as rollback_router
 from omnia_api.routers import runtime as runtime_router
 from omnia_api.routers import snapshots as snapshots_router
-from omnia_api.routers import style_patch as style_patch_router
 from omnia_api.routers import task_board as task_board_router
 from omnia_api.routers import transcribe as transcribe_router
-from omnia_api.routers import uploads as uploads_router
 from omnia_api.routers import wallet as wallet_router
 from omnia_api.routers import ws as ws_router
 from omnia_api.services import readiness
@@ -135,10 +129,8 @@ def create_app() -> FastAPI:
     app.include_router(app_integrations_router.router)
     app.include_router(integration_runtime_router.router)
     app.include_router(account_router.legal_router)
-    app.include_router(github_router.router)
     app.include_router(projects_router.router)
     app.include_router(product_advice_router.router)
-    app.include_router(hero_media_router.router)
     app.include_router(snapshots_router.router)
     app.include_router(project_versions_router.router)
     app.include_router(restorations_router.router)
@@ -147,18 +139,14 @@ def create_app() -> FastAPI:
     app.include_router(max_accounts_router.router)
     app.include_router(max_studio_router.router)
     app.include_router(rollback_router.router)
-    app.include_router(style_patch_router.router)
     app.include_router(task_board_router.router)
-    app.include_router(uploads_router.router)
     app.include_router(transcribe_router.router)
-    app.include_router(fonts_router.router)
     app.include_router(runtime_router.router)
     app.include_router(deploy_targets_router.router)
     app.include_router(domains_router.router)
     app.include_router(wallet_router.router)
     app.include_router(models_router.router)
     app.include_router(payments_router.router)
-    app.include_router(design_presets_router.router)
     app.include_router(public_router.router)
     app.include_router(public_router.kit_router)
     app.include_router(ws_router.router)

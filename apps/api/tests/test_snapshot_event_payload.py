@@ -2,8 +2,8 @@
 
 Frozen BEFORE the hand-written copies in the routers were replaced by the single
 owner, unchanged AFTER. Actual handlers and models; git, queue and pub/sub stay
-in memory. (The four manual page edits are pinned in ``test_page_edit_endpoints``,
-the generation pipeline in ``test_snapshot_serialization_contract``.)
+in memory. (The generation pipeline is pinned in
+``test_snapshot_serialization_contract``.)
 """
 
 from __future__ import annotations
@@ -20,10 +20,9 @@ from fastapi import Response
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
-from omnia_api.routers import projects, rollback, style_patch
+from omnia_api.routers import projects, rollback
 from omnia_api.schemas.project import ProjectCreate, ProjectImportRequest
 from omnia_api.schemas.snapshot import RollbackRequest
-from omnia_api.schemas.style_patch import StylePatchRequest
 
 PROJECT = UUID("00000000-0000-0000-0000-000000000001")
 OWNER = UUID("00000000-0000-0000-0000-000000000002")
@@ -103,7 +102,7 @@ def events(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     )
     monkeypatch.setattr(minio, "get_settings", lambda: settings)
     published = AsyncMock()
-    for module in (projects, rollback, style_patch):
+    for module in (projects, rollback):
         monkeypatch.setattr(module, "publish_event", published)
         monkeypatch.setattr(module, "enqueue_preview", Mock())
     return published
@@ -214,22 +213,4 @@ async def test_rollback_announces_the_restored_snapshot(events, monkeypatch):
 
     row = session.snapshot()
     assert (row.prompt_text, row.parent_id) == ("Восстановление версии", HEAD)
-    _assert_announced(events, PROJECT, row)
-
-
-async def test_style_patch_announces_the_new_snapshot(events, monkeypatch):
-    page = "<html><head></head><body><h1>Привет</h1></body></html>"
-    monkeypatch.setattr(style_patch.repo_svc, "read_files", Mock(return_value={"index.html": page}))
-    monkeypatch.setattr(style_patch.repo_svc, "commit_files", Mock(return_value="b" * 40))
-    session, _project = _edited_project()
-
-    await style_patch.post_style_patch(
-        PROJECT,
-        StylePatchRequest(tokens=[{"var": "--accent", "value": "#123456"}]),
-        session,
-        SimpleNamespace(id=OWNER),
-    )
-
-    row = session.snapshot()
-    assert (row.prompt_text, row.parent_id) == ("(прямое редактирование стиля)", HEAD)
     _assert_announced(events, PROJECT, row)
