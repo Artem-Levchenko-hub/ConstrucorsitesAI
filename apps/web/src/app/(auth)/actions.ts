@@ -12,6 +12,9 @@ type FormState = { error: string | null };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const COOKIE_NAME = "omnia_session";
+/** Where a sign-in without an explicit destination lands: the MAX Studio cabinet,
+ * which itself routes an unverified account to onboarding. */
+const DEFAULT_LANDING = "/max";
 
 function validateCredentials(email: string, password: string): string | null {
   if (!email || !EMAIL_RE.test(email)) return "Введите корректный email";
@@ -139,7 +142,7 @@ export async function loginAction(
 
   const error = await callAuth("login", email, password);
   if (error) return { error };
-  redirect(safeNext(formData.get("next")) ?? "/projects");
+  redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);
 }
 
 export async function registerAction(
@@ -173,7 +176,7 @@ export async function registerAction(
     Object.keys(provenance).length > 0 ? provenance : undefined,
   );
   if (error) return { error };
-  redirect(safeNext(formData.get("next")) ?? "/projects");
+  redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);
 }
 
 export async function maxRegisterAction(
