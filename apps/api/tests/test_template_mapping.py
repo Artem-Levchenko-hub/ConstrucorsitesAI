@@ -86,8 +86,8 @@ def test_every_orchestrator_template_directory_exists_on_disk() -> None:
 
 
 def test_template_literal_includes_new_values() -> None:
-    """The Pydantic `Template` literal MUST include every new template so
-    `ProjectCreate` validation doesn't reject them on the way in."""
+    """The Pydantic `Template` literal MUST keep every template so rows of the
+    separated site builder still read (`ProjectCreate` itself admits only MAX)."""
     from typing import get_args
 
     values = set(get_args(Template))

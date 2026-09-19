@@ -44,7 +44,7 @@ async def test_target_requires_fingerprint_confirmation_and_preflight(
 
     project_response = await client.post(
         "/api/projects",
-        json={"name": "BYO project", "template": "blank"},
+        json={"name": "BYO project", "template": "max_miniapp"},
     )
     assert project_response.status_code == 201
     project_id = project_response.json()["id"]

@@ -45,7 +45,7 @@
 
 | Метод | Path | Тело | Ответ |
 |---|---|---|---|
-| `POST` | `/api/projects` | `{name, kind?: "static"\|"fullstack", template?: <см. ниже>}` | `Project` |
+| `POST` | `/api/projects` | `{name, template?: "max_miniapp"}` — с 19.09.2026 только MAX и только для вошедшего пользователя (гость — 403 `max_registration_required`, другой шаблон — 422) | `Project` |
 | `GET` | `/api/projects` | — | `Project[]` (только свои) |
 | `GET` | `/api/projects/:id` | — | `Project` |
 | `DELETE` | `/api/projects/:id` | — | 204 (orchestrator destroy для fullstack) |
@@ -108,10 +108,13 @@ Stop — серверная операция: `/generation/cancel` записы�
 
 ### Public preview (без auth)
 
-| Метод | Path | Ответ |
-|---|---|---|
-| `GET` | `/p/:slug` | `index.html` текущего HEAD (только `kind=static`) |
-| `GET` | `/p/:slug/*` | статика проекта (CSS, JS, img) |
+> **19.09.2026 — вынесено.** Адреса `/p/:slug`, `/p/:slug/*`, `/p/:slug/lead`,
+> `/p/:slug/remix`, а также `POST /api/projects/import`, `/api/projects/:id/claim`,
+> `/api/projects/:id/fork` и `GET /api/projects/:id/leads` принадлежали конструктору
+> сайтов и живут в соседнем проекте `omnia-sitebuilder`
+> (`docs/plans/2026-09-19-max-only-separation.md`). `POST /api/projects` создаёт только
+> `max_miniapp` и только для вошедшего пользователя; другой шаблон — 422. Остался
+> `GET /api/kit/:file`: из него черновые предпросмотры ячеек берут `omnia-inspector.js`.
 
 Для `kind=fullstack` preview работает иначе: web iframe грузит `https://<slug>.preview.omniadevelop.ru` напрямую (apps/api в этом не участвует, см. секцию V2).
 

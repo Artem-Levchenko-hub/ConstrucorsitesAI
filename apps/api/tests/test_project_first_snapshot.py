@@ -1,9 +1,10 @@
 """Characterisation of how a new project gets its first snapshot.
 
-``create_project`` and ``import_project`` end the same way: first snapshot →
-project pointer → commit (a slug collision is a 409) → refresh → preview job →
-``snapshot.created``. Frozen BEFORE that tail got one owner, unchanged AFTER.
-Actual handlers and models; git, queue and pub/sub stay in memory.
+``create_project`` ends with: first snapshot → project pointer → commit (a slug
+collision is a 409) → refresh → preview job → ``snapshot.created``. Frozen BEFORE
+that tail got one owner, unchanged AFTER. (GitHub import shared the tail until it
+moved out with the site builder.) Actual handler and models; git, queue and pub/sub
+stay in memory.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import Response
 from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.errors import ApiError
@@ -24,7 +24,7 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import projects
-from omnia_api.schemas.project import ProjectCreate, ProjectImportRequest
+from omnia_api.schemas.project import ProjectCreate
 
 OWNER = UUID("00000000-0000-0000-0000-000000000002")
 
@@ -81,20 +81,10 @@ def owner() -> User:
 
 async def _create(session: Session) -> Project:
     return await projects.create_project(
-        ProjectCreate.model_validate({"name": "Кофейня у дома", "template": "blank"}),
+        ProjectCreate.model_validate({"name": "Кофейня у дома", "template": "max_miniapp"}),
         session,
-        Response(),
         owner(),
     )
-
-
-async def _import(session: Session) -> Project:
-    return await projects.import_project(
-        ProjectImportRequest(repo_url="octo/site"), session, Response(), owner()
-    )
-
-
-CASES = {"create": (_create, "a" * 40, None), "import": (_import, "c" * 40, "")}
 
 
 @pytest.fixture
@@ -119,28 +109,19 @@ def world(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(projects, "enqueue_preview", enqueue)
     monkeypatch.setattr(projects, "publish_event", publish)
     monkeypatch.setattr(projects.repo_svc, "init_repo", Mock(return_value="a" * 40))
-    monkeypatch.setattr(projects.repo_svc, "init_from_files", Mock(return_value="c" * 40))
-    monkeypatch.setattr(projects.repo_import, "fetch_repo_tarball", AsyncMock(return_value=b"t"))
-    monkeypatch.setattr(
-        projects.repo_import,
-        "tarball_to_files",
-        Mock(return_value=SimpleNamespace(files={"index.html": "<h1>hi</h1>"}, template="blank")),
-    )
     return state
 
 
-@pytest.mark.parametrize("name", list(CASES))
-async def test_new_project_is_committed_with_its_first_snapshot_then_announced(name, world):
-    run, commit_sha, prompt_text = CASES[name]
+async def test_new_project_is_committed_with_its_first_snapshot_then_announced(world):
     session = Session()
     world.order = session.order
 
-    project = await run(session)
+    project = await _create(session)
 
     snapshot = session.snapshot
     assert project is session.project
-    assert (snapshot.project_id, snapshot.commit_sha) == (project.id, commit_sha)
-    assert (snapshot.prompt_text, snapshot.model_id) == (prompt_text, None)
+    assert (snapshot.project_id, snapshot.commit_sha) == (project.id, "a" * 40)
+    assert (snapshot.prompt_text, snapshot.model_id) == (None, None)
     assert snapshot.parent_id is None
     assert snapshot.id is not None, "the snapshot must be flushed before it is pointed at"
     assert project.current_snapshot_id == snapshot.id
@@ -154,14 +135,12 @@ async def test_new_project_is_committed_with_its_first_snapshot_then_announced(n
     assert data["snapshot"]["parent_id"] is None
 
 
-@pytest.mark.parametrize("name", list(CASES))
-async def test_slug_collision_is_a_conflict_and_announces_nothing(name, world):
-    run, _commit_sha, _prompt_text = CASES[name]
+async def test_slug_collision_is_a_conflict_and_announces_nothing(world):
     session = Session(slug_taken=True)
     world.order = session.order
 
     with pytest.raises(ApiError) as caught:
-        await run(session)
+        await _create(session)
 
     error = caught.value
     assert (error.code, error.message, error.status_code) == (

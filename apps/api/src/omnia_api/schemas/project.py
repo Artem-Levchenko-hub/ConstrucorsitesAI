@@ -1,16 +1,17 @@
-import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from omnia_api.services.design_presets import PRESETS
 
+# Only `max_miniapp` can be created (see `ProjectCreate`); the other values stay
+# so rows and code written for the separated site builder still read and type.
 # Template values fall into two classes:
 #
-# 1. Static V1 (`blank/landing/portfolio/blog`) — pure HTML rendered out
-#    of the project's bare git via `/p/<slug>`. No orchestrator container.
+# 1. Static V1 (`blank/landing/portfolio/blog`) — pure HTML kept in the
+#    project's bare git. No orchestrator container.
 #
 # 2. Container-backed V2 — runs inside an orchestrator-provisioned Docker
 #    container, accessed via `runtime.dev_url`:
@@ -85,7 +86,7 @@ def orchestrator_template(template: str) -> str | None:
 
     Returns None for static templates (blank/landing/portfolio/blog) —
     those don't have a Docker image, the caller (`routers/runtime.py`)
-    treats None as "no container needed; this stays on /p/<slug>".
+    treats None as "no container needed".
 
     BARE experiment (owner 2026-06-30): when `bare_build_experiment` is ON, every
     CONTAINER-backed stack is swapped to the blank `bare-nextjs` image+dir, so the
@@ -107,8 +108,10 @@ def orchestrator_template(template: str) -> str | None:
 
 
 class ProjectCreate(BaseModel):
+    """Only MAX Mini Apps are created here; `Template` stays wide for reading old rows."""
+
     name: str = Field(min_length=1, max_length=100)
-    template: Template = "blank"
+    template: Literal["max_miniapp"] = "max_miniapp"
     language: str | None = None
 
 
@@ -143,15 +146,10 @@ class ProjectPublic(BaseModel):
     # "imported" when seeded from an external GitHub repo.
     source: str = "native"
     external_repo_url: str | None = None
-    # Lineage for V4.1b "Remix this": the project this one was forked from, or
-    # None for organically created projects. Lets the client show provenance and
-    # a "back to original" / attribution edge (the viral return-loop, V4.2b).
+    # Remix lineage of the separated site builder. Forking is gone, so new
+    # projects never carry it; the fields stay on the wire for old clients and
+    # the two resolved names are always None.
     forked_from: UUID | None = None
-    # Resolved at read time (get_project) from `forked_from` so the workspace can
-    # show WHICH project this is a remix of and link to it — the transitive remix
-    # lineage (V4 #3). Not mapped columns: the projects router sets them on the
-    # ORM instance, same as `preview_url`. Stay None for organic projects (and
-    # when the source has been deleted).
     forked_from_name: str | None = None
     forked_from_slug: str | None = None
     # BYO-VPS: цель деплоя проекта. None = наш хостинг (по умолчанию).
@@ -171,35 +169,3 @@ class ProjectPublic(BaseModel):
         if self.design_preset_id and (preset := PRESETS.get(self.design_preset_id)):
             return preset.name
         return None
-
-
-# ---------------------------------------------------------------------------
-# Import request (B2 — GitHub repo import)
-# ---------------------------------------------------------------------------
-
-_GH_SHORTHAND_RE = re.compile(
-    r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
-)
-
-
-class ProjectImportRequest(BaseModel):
-    """Request body for POST /projects/import.
-
-    `repo_url` accepts either a full GitHub URL
-    (``https://github.com/owner/repo``) or the shorthand ``owner/repo`` form.
-    `ref` is an optional branch/tag/SHA; defaults to the repo's default branch.
-    `name` overrides the generated project name; defaults to the repo name.
-    """
-
-    repo_url: str
-    ref: str | None = None
-    name: str | None = None
-
-    @field_validator("repo_url")
-    @classmethod
-    def validate_repo_url(cls, v: str) -> str:
-        if not _GH_SHORTHAND_RE.match(v.strip().removesuffix(".git").rstrip("/")):
-            raise ValueError(
-                "repo_url must be a github.com URL or 'owner/repo' shorthand"
-            )
-        return v

@@ -147,7 +147,6 @@ def create_app() -> FastAPI:
     app.include_router(wallet_router.router)
     app.include_router(models_router.router)
     app.include_router(payments_router.router)
-    app.include_router(public_router.router)
     app.include_router(public_router.kit_router)
     app.include_router(ws_router.router)
 

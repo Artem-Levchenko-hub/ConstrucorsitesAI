@@ -1,54 +1,43 @@
 import asyncio
 import io
 import zipfile
-from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, status
 from fastapi.responses import StreamingResponse
 from slugify import slugify
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.config import get_settings
-from omnia_api.core.crypto import decrypt_secret, decrypt_strong
+from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import (
     CurrentUserDep,
     OptionalUserDep,
     SessionDep,
-    set_session_cookie,
 )
 from omnia_api.core.errors import ApiError
 from omnia_api.core.minio import preview_public_url
 from omnia_api.core.redis import publish_event
-from omnia_api.core.security import create_access_token
-from omnia_api.models.billing import BillingAccount
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.lead import Lead
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.usage import Usage
-from omnia_api.models.user import User
-from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.schemas.project import (
     ProjectCreate,
-    ProjectImportRequest,
     ProjectPublic,
     ProjectUpdate,
     is_fullstack,
 )
 from omnia_api.schemas.snapshot import snapshot_event_dict
-from omnia_api.services import max_client, orchestrator_client, project_cell_runtime, repo_import
+from omnia_api.services import max_client, orchestrator_client
 from omnia_api.services import repo as repo_svc
-from omnia_api.services.design_presets import PRESETS
-from omnia_api.services.fork_recap import build_fork_recap
 from omnia_api.services.max_access import require_max_studio_access
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.project_cell_access import admit_new_project_cell
@@ -63,41 +52,12 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
-async def _ensure_anon_user(session: SessionDep, response: Response) -> User:
-    """Mint an ephemeral anonymous principal and hand the caller its session.
-
-    Backs the V4.1a anon-project seam: an unauthenticated visitor can create a
-    project owned by this row, then keep editing it via the issued cookie, and
-    later `claim` it onto a real account. The anon user has no credentials and a
-    zero-balance wallet (no free funds given away to a throwaway principal).
-    """
-    anon = User(email=None, password_hash=None, is_anon=True)
-    session.add(anon)
-    await session.flush()
-    billing_account = BillingAccount(
-        scope="personal",
-        personal_user_id=anon.id,
-        created_by_user_id=anon.id,
-    )
-    session.add(billing_account)
-    await session.flush()
-    anon.wallet = Wallet(
-        billing_account_id=billing_account.id,
-        balance_rub=Decimal("0"),
-    )
-    await session.flush()
-    set_session_cookie(response, create_access_token(anon.id))
-    return anon
-
-
-async def _commit_first_snapshot(
-    session: SessionDep, project: Project, commit_sha: str, *, prompt_text: str | None
-) -> Project:
+async def _commit_first_snapshot(session: SessionDep, project: Project, commit_sha: str) -> Project:
     """Commit the flushed project together with its first snapshot, then announce it."""
     snapshot = Snapshot(
         project_id=project.id,
         commit_sha=commit_sha,
-        prompt_text=prompt_text,
+        prompt_text=None,
         model_id=None,
         parent_id=None,
     )
@@ -115,8 +75,8 @@ async def _commit_first_snapshot(
     await session.refresh(project)
     await session.refresh(snapshot)
 
-    # Static repos get a thumbnail; for code repos the worker's template check
-    # makes the job a no-op.
+    # For a MAX project the worker returns at once: MAX thumbnails are captured
+    # under the generation lease, never by this deferred job.
     await asyncio.to_thread(enqueue_preview, snapshot.id)
     await publish_event(
         project.id,
@@ -131,18 +91,16 @@ async def _commit_first_snapshot(
 async def create_project(
     payload: ProjectCreate,
     session: SessionDep,
-    response: Response,
     current_user: OptionalUserDep,
 ) -> Project:
-    if payload.template == "max_miniapp":
-        if current_user is None:
-            raise ApiError(
-                "max_registration_required",
-                "Для MAX Studio нужна регистрация",
-                status.HTTP_403_FORBIDDEN,
-            )
-        require_max_studio_access(current_user)
-    owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
+    if current_user is None:
+        raise ApiError(
+            "max_registration_required",
+            "Для MAX Studio нужна регистрация",
+            status.HTTP_403_FORBIDDEN,
+        )
+    require_max_studio_access(current_user)
+    owner = current_user
     short_id = uuid4().hex[:6]
     base_slug = slugify(payload.name)[:60] or "project"
     slug = f"{base_slug}-{short_id}"
@@ -169,7 +127,7 @@ async def create_project(
         slug=slug,
         template=payload.template,
         design_preset_id=preset_id,
-        project_cell_enabled=(payload.template == "max_miniapp" and admit_new_project_cell(owner)),
+        project_cell_enabled=admit_new_project_cell(owner),
     )
     session.add(project)
     await session.flush()
@@ -179,264 +137,7 @@ async def create_project(
         repo_svc.init_repo, project.id, template_dir, payload.template
     )
 
-    return await _commit_first_snapshot(session, project, commit_sha, prompt_text=None)
-
-
-@router.post("/import", response_model=ProjectPublic, status_code=status.HTTP_201_CREATED)
-async def import_project(
-    payload: ProjectImportRequest,
-    session: SessionDep,
-    response: Response,
-    current_user: OptionalUserDep,
-) -> Project:
-    """Seed a new project from an external GitHub repo tarball.
-
-    Public repos work anonymously; private repos require a connected GitHub
-    account (the user's stored OAuth token is used automatically).  The
-    resulting project has ``source='imported'`` which causes the build
-    pipeline to treat every subsequent prompt as a surgical edit — the
-    original repo files are never regenerated from scratch.
-    """
-    owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
-
-    try:
-        gh_owner, gh_repo = repo_import.parse_github_url(payload.repo_url)
-    except ValueError as exc:
-        raise ApiError("import_bad_url", str(exc), status.HTTP_400_BAD_REQUEST) from exc
-
-    token: str | None = None
-    if current_user and current_user.github_token_enc:
-        token = decrypt_secret(current_user.github_token_enc)
-
-    try:
-        tar = await repo_import.fetch_repo_tarball(gh_owner, gh_repo, payload.ref, token)
-    except FileNotFoundError as exc:
-        raise ApiError(
-            "import_not_found",
-            "репозиторий не найден или приватный без подключённого GitHub",
-            status.HTTP_404_NOT_FOUND,
-        ) from exc
-    except PermissionError as exc:
-        raise ApiError(
-            "import_forbidden",
-            "нет доступа к репозиторию — подключите GitHub-аккаунт с нужными правами",
-            status.HTTP_403_FORBIDDEN,
-        ) from exc
-
-    result = repo_import.tarball_to_files(tar)
-    if not result.files:
-        raise ApiError(
-            "import_empty",
-            "нечего импортировать (только бинарники/пусто)",
-            status.HTTP_400_BAD_REQUEST,
-        )
-
-    short_id = uuid4().hex[:6]
-    project_name = payload.name or gh_repo
-    base_slug = slugify(project_name)[:60] or "project"
-    slug = f"{base_slug}-{short_id}"
-
-    project = Project(
-        owner_id=owner.id,
-        name=project_name,
-        slug=slug,
-        template=result.template,
-        source="imported",
-        external_repo_url=f"https://github.com/{gh_owner}/{gh_repo}",
-        external_repo_ref=payload.ref,
-    )
-    session.add(project)
-    await session.flush()
-
-    try:
-        commit_sha = await asyncio.to_thread(
-            repo_svc.init_from_files,
-            project.id,
-            result.files,
-            f"Import {gh_owner}/{gh_repo}",
-        )
-    except ValueError as exc:
-        raise ApiError(
-            "too_large",
-            "репозиторий превышает лимит текстового проекта",
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-        ) from exc
-
-    # prompt_text='' (EMPTY STRING, not None): this makes is_first_build=False
-    # so the first chat prompt is treated as an EDIT, not a from-scratch rebuild
-    # that would nuke the imported repo files with an Omnia template generation.
-    return await _commit_first_snapshot(session, project, commit_sha, prompt_text="")
-
-
-@router.post("/{project_id}/claim", response_model=ProjectPublic)
-async def claim_project(
-    project_id: UUID,
-    session: SessionDep,
-    current_user: CurrentUserDep,
-) -> Project:
-    """Bind an anonymous-owned project to the authenticated caller (V4.1a).
-
-    The viewer→creator handoff: a visitor builds anonymously, signs up, and
-    claims their work. Re-points ``owner_id`` only — snapshots/messages FK the
-    project id, so all source rows survive untouched. Idempotent if the caller
-    already owns it; a project owned by a *different real* account is 403 (never
-    steal an account-bound project).
-    """
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    if project.owner_id == current_user.id:
-        return project
-
-    owner = await session.get(User, project.owner_id)
-    if owner is None or not owner.is_anon:
-        raise ApiError("forbidden", "project is not claimable", status.HTTP_403_FORBIDDEN)
-
-    project.owner_id = current_user.id
-    await session.commit()
-    await session.refresh(project)
-    return project
-
-
-@router.post(
-    "/{project_id}/fork",
-    response_model=ProjectPublic,
-    status_code=status.HTTP_201_CREATED,
-)
-async def fork_project(
-    project_id: UUID,
-    session: SessionDep,
-    response: Response,
-    current_user: OptionalUserDep,
-) -> Project:
-    """Zero-signup instant fork — the viral "Remix this" seam (V4.1b).
-
-    A visitor on ``/p/<slug>`` forks the app into their own editable copy with
-    one request and zero credentials: the fork gets a distinct ``project_id``,
-    an anon owner (or the caller, if already authenticated), a deep-copied git
-    repo on its own MinIO key, and the source's HEAD as its first snapshot so it
-    is immediately previewable/editable. Editing the fork mutates only the fork
-    — the source's repo bytes and rows stay byte-identical (isolation invariant:
-    distinct id, deep-copied repo, no shared rows).
-    """
-    source = await session.get(Project, project_id)
-    if source is None:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    return await perform_fork(session, response, source, current_user)
-
-
-async def perform_fork(
-    session: AsyncSession,
-    response: Response,
-    source: Project,
-    current_user: User | None,
-) -> Project:
-    """Core of the zero-signup fork — shared by the POST ``/fork`` endpoint and
-    the same-origin ``GET /p/<slug>/remix`` link (public.py).
-
-    The cross-origin ``fetch`` the in-page CTA uses is blocked from a deployed
-    container (different origin + ``SameSite=lax`` cookie), so the container
-    viral path needs a top-level-navigation entry that lands on this same logic.
-    Resolving the source is the caller's job (by id vs by slug); everything that
-    mutates state — minting the anon owner, deep-copying the repo, carrying the
-    HEAD snapshot, committing — lives here so the two entrypoints can never
-    drift in isolation behaviour.
-    """
-    selection = await project_cell_runtime.resolve_project_cell_public_selection(session, source)
-    if selection.selected and (current_user is None or current_user.id != source.owner_id):
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    owner = current_user if current_user is not None else await _ensure_anon_user(session, response)
-
-    short_id = uuid4().hex[:6]
-    base_slug = slugify(source.name)[:60] or "project"
-    slug = f"{base_slug}-{short_id}"
-
-    fork = Project(
-        owner_id=owner.id,
-        name=source.name,
-        slug=slug,
-        template=source.template,
-        language=source.language,
-        design_preset_id=source.design_preset_id,
-        discovery_spec=source.discovery_spec,
-        image_gen_enabled=source.image_gen_enabled,
-        # V4.9 — the fork's first surface is a byte-copy of the source's HEAD,
-        # so the source's floor verdict applies to it verbatim. Carrying the
-        # flag makes the viral pool transitively floor-gated: a fork is itself
-        # re-shareable only if the app it copied cleared the beauty floor (the
-        # V4.7 fork-tree invariant). The fork's own gate re-stamps it on the
-        # first re-generation/edit.
-        viral_eligible=source.viral_eligible,
-        forked_from=source.id,
-    )
-    session.add(fork)
-    await session.flush()
-
-    # Deep-copy the source repo onto the fork's own MinIO key. A later commit on
-    # the fork re-uploads only the fork's key → the source stays byte-identical.
-    await asyncio.to_thread(repo_svc.duplicate_repo, source.id, fork.id)
-
-    # Carry the source's HEAD as the fork's first snapshot so it is immediately
-    # previewable. A NEW row keyed to the fork's project_id → source snapshots
-    # are never touched. The preview PNG is immutable, so its key is shared.
-    source_head = (
-        await session.get(Snapshot, source.current_snapshot_id)
-        if source.current_snapshot_id
-        else None
-    )
-    snapshot: Snapshot | None = None
-    if source_head is not None:
-        snapshot = Snapshot(
-            project_id=fork.id,
-            commit_sha=source_head.commit_sha,
-            prompt_text=source_head.prompt_text,
-            model_id=source_head.model_id,
-            preview_key=source_head.preview_key,
-            parent_id=None,
-        )
-        session.add(snapshot)
-        await session.flush()
-        fork.current_snapshot_id = snapshot.id
-
-    # Land the remixer in a WARM workspace (NORTH STAR pillar 4): seed ONE
-    # assistant recap that names what they forked, echoes its captured design
-    # DNA, and offers one-tap starter edits. Without this the fork has zero chat
-    # rows and the client shows the cold generic "Поговорим о вашем сайте" empty
-    # state. Pure + LLM-free, so it never adds a build cost or a failure surface.
-    # tokens_out=0 (not NULL) keeps the client from treating the seed as a live
-    # mid-stream reply; tokens_in stays NULL so no "0 tokens" footer renders.
-    preset_name = (
-        PRESETS[source.design_preset_id].name
-        if source.design_preset_id and source.design_preset_id in PRESETS
-        else None
-    )
-    session.add(
-        Message(
-            project_id=fork.id,
-            role="assistant",
-            content=build_fork_recap(source.name, source.discovery_spec, preset_name),
-            model_id=None,
-            tokens_in=None,
-            tokens_out=0,
-        )
-    )
-
-    try:
-        await session.commit()
-    except IntegrityError as e:
-        await session.rollback()
-        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
-
-    await session.refresh(fork)
-    if snapshot is not None:
-        await session.refresh(snapshot)
-        await publish_event(
-            fork.id,
-            "snapshot.created",
-            {"snapshot": snapshot_event_dict(snapshot)},
-        )
-
-    return fork
+    return await _commit_first_snapshot(session, project, commit_sha)
 
 
 @router.get("", response_model=list[ProjectPublic])
@@ -485,58 +186,7 @@ async def get_project(
     if project.current_snapshot_id:
         snap = await session.get(Snapshot, project.current_snapshot_id)
         preview_url = preview_public_url(snap.preview_key) if snap else None
-    # Transitive remix lineage (V4 #3): resolve the source's name + slug so the
-    # workspace remix badge can attribute it ("ремикс <name>") and link to
-    # /p/<slug>. A deleted source leaves both None → the badge degrades to a
-    # link-less attribution instead of a broken link.
-    forked_from_name: str | None = None
-    forked_from_slug: str | None = None
-    if project.forked_from:
-        source = await session.get(Project, project.forked_from)
-        if source is not None:
-            forked_from_name = source.name
-            forked_from_slug = source.slug
-    return ProjectPublic.model_validate(project).model_copy(
-        update={
-            "preview_url": preview_url,
-            "forked_from_name": forked_from_name,
-            "forked_from_slug": forked_from_slug,
-        }
-    )
-
-
-@router.get("/{project_id}/leads")
-async def list_leads(
-    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
-) -> dict[str, object]:
-    """Owner «Заявки» inbox — lead-form submissions captured from the public site
-    (P-LEAD). Owner-scoped; newest first, capped at 200 with a real total count."""
-    project = await session.get(Project, project_id)
-    if project is None or project.owner_id != current_user.id:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    total = (
-        await session.execute(
-            select(func.count()).select_from(Lead).where(Lead.project_id == project_id)
-        )
-    ).scalar_one()
-    res = await session.execute(
-        select(Lead)
-        .where(Lead.project_id == project_id)
-        .order_by(Lead.created_at.desc())
-        .limit(200)
-    )
-    return {
-        "count": int(total),
-        "leads": [
-            {
-                "id": str(row.id),
-                "data": row.data,
-                "source": row.source,
-                "created_at": row.created_at.isoformat(),
-            }
-            for row in res.scalars().all()
-        ],
-    }
+    return ProjectPublic.model_validate(project).model_copy(update={"preview_url": preview_url})
 
 
 @router.get("/{project_id}/download")

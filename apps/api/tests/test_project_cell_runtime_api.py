@@ -368,21 +368,6 @@ async def test_released_owner_can_restart_preview_without_agent_bootstrap(
     assert workspace.generation_run_id is None
 
 
-@pytest.mark.parametrize("cell", [False, True])
-async def test_dark_cell_has_no_public_source_redirect_or_anonymous_fork(
-    client, db_session, monkeypatch, cell,
-):
-    _, project, _, _ = await _seed(db_session, monkeypatch, cell=cell, enabled=not cell)
-    _deny_legacy(monkeypatch)
-    for path in (f"/p/{project.slug}", f"/p/{project.slug}?inspect=1",
-                 f"/p/{project.slug}/src/app/page.tsx", f"/p/{project.slug}/remix"):
-        response = await client.get(path)
-        assert response.status_code == 404, (path, response.text)
-    response = await client.post(f"/api/projects/{project.id}/fork")
-    assert response.status_code == 404, response.text
-    assert "set-cookie" not in response.headers
-
-
 @pytest.mark.parametrize("paused_state", ["resources_paused", "retained"])
 @pytest.mark.parametrize("lost_wake_response", [False, True])
 async def test_owner_start_wakes_paused_cell_with_durable_retry_and_no_agent_lease(

@@ -120,14 +120,8 @@ def test_provider_marker_cannot_be_set_through_public_project_payloads():
     assert "project_cell_enabled" not in ProjectUpdate.model_fields
 
 
-@pytest.mark.parametrize(
-    "template,enabled", [("max_miniapp", True), ("max_miniapp", False), ("blank", True)]
-)
-async def test_normal_create_persists_server_decision_without_provisioning(
-    monkeypatch, template, enabled
-):
-    from fastapi import Response
-
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_normal_create_persists_server_decision_without_provisioning(monkeypatch, enabled):
     from omnia_api.routers import projects
     from omnia_api.schemas.project import ProjectCreate
 
@@ -151,13 +145,12 @@ async def test_normal_create_persists_server_decision_without_provisioning(
     monkeypatch.setattr(projects, "publish_event", AsyncMock())
     created = await projects.create_project(
         ProjectCreate.model_validate(
-            {"name": "Test", "template": template, "project_cell_enabled": True}
+            {"name": "Test", "template": "max_miniapp", "project_cell_enabled": True}
         ),
         session,
-        Response(),
         user(),
     )
-    assert created.project_cell_enabled is (enabled and template == "max_miniapp")
+    assert created.project_cell_enabled is enabled
     assert created in inserted
     session.commit.assert_awaited_once()
 

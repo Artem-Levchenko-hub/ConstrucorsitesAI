@@ -1,17 +1,12 @@
 """Select-mode (preview element picker) — prompt injection, schema clamps,
-static-serve injection, and the two-copy inspector drift guard."""
+and the two-copy inspector drift guard."""
 
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from omnia_api.routers.public import (
-    _INSPECTOR_JS,
-    _INSPECTOR_TAG,
-    _KIT_ASSETS,
-    _inject_inspector,
-)
+from omnia_api.routers.public import _INSPECTOR_JS, _KIT_ASSETS
 from omnia_api.schemas.message import PromptRequest, SelectedElement
 from omnia_api.services.prompt_builder import build_messages
 
@@ -97,22 +92,6 @@ def test_prompt_request_caps_selection_count() -> None:
 
 def test_prompt_request_backward_compatible_without_field() -> None:
     assert PromptRequest(prompt="p", model_id="m").selected_elements is None
-
-
-# ── static-serve injection ───────────────────────────────────────────────────
-
-
-def test_inject_inspector_inserts_before_body_close() -> None:
-    out = _inject_inspector(b"<html><body><h1>hi</h1></body></html>")
-    assert _INSPECTOR_TAG in out
-    assert out.index(_INSPECTOR_TAG) < out.index(b"</body>")
-    assert b"<h1>hi</h1>" in out  # original content preserved
-
-
-def test_inject_inspector_appends_when_no_body() -> None:
-    out = _inject_inspector(b"<div>fragment</div>")
-    assert out.startswith(b"<div>fragment</div>")
-    assert _INSPECTOR_TAG in out
 
 
 # ── inspector drift guard (R-04 DRY of knowledge) ────────────────────────────

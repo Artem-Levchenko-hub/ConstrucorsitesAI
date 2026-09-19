@@ -15,13 +15,11 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import Response
 
-from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.routers import projects, rollback
-from omnia_api.schemas.project import ProjectCreate, ProjectImportRequest
+from omnia_api.schemas.project import ProjectCreate
 from omnia_api.schemas.snapshot import RollbackRequest
 
 PROJECT = UUID("00000000-0000-0000-0000-000000000001")
@@ -129,69 +127,14 @@ async def test_created_project_announces_its_first_snapshot(events, monkeypatch)
     session = Session()
 
     project = await projects.create_project(
-        ProjectCreate.model_validate({"name": "Кофейня у дома", "template": "blank"}),
+        ProjectCreate.model_validate({"name": "Кофейня у дома", "template": "max_miniapp"}),
         session,
-        Response(),
         owner(),
     )
 
     row = session.snapshot()
     assert (row.prompt_text, row.parent_id, row.preview_key) == (None, None, None)
     _assert_announced(events, project.id, row)
-
-
-async def test_imported_project_announces_its_first_snapshot(events, monkeypatch):
-    monkeypatch.setattr(projects.repo_import, "fetch_repo_tarball", AsyncMock(return_value=b"tar"))
-    monkeypatch.setattr(
-        projects.repo_import,
-        "tarball_to_files",
-        Mock(return_value=SimpleNamespace(files={"index.html": "<h1>hi</h1>"}, template="blank")),
-    )
-    monkeypatch.setattr(projects.repo_svc, "init_from_files", Mock(return_value="c" * 40))
-    session = Session()
-
-    project = await projects.import_project(
-        ProjectImportRequest(repo_url="octo/site"), session, Response(), owner()
-    )
-
-    row = session.snapshot()
-    assert (row.prompt_text, row.parent_id) == ("", None)
-    _assert_announced(events, project.id, row)
-
-
-async def test_fork_announces_the_carried_head_without_a_parent(events, monkeypatch):
-    monkeypatch.setattr(
-        projects.project_cell_runtime,
-        "resolve_project_cell_public_selection",
-        AsyncMock(return_value=SimpleNamespace(selected=False)),
-    )
-    monkeypatch.setattr(projects.repo_svc, "duplicate_repo", Mock())
-    source = Project(
-        id=PROJECT,
-        owner_id=uuid4(),
-        name="Источник",
-        slug="istochnik-aaaaaa",
-        template="blank",
-        current_snapshot_id=HEAD,
-    )
-    head = Snapshot(
-        id=HEAD,
-        project_id=PROJECT,
-        commit_sha="d" * 40,
-        prompt_text="сайт кофейни",
-        model_id="example-model",
-        preview_key="istochnik/head.png",
-        parent_id=uuid4(),
-    )
-    session = Session({HEAD: head})
-
-    fork = await projects.perform_fork(session, Response(), source, owner())
-
-    row = session.snapshot()
-    assert (row.project_id, row.commit_sha) == (fork.id, "d" * 40)
-    assert row.preview_key == head.preview_key
-    assert row.parent_id is None
-    _assert_announced(events, fork.id, row)
 
 
 def _edited_project() -> tuple[Session, SimpleNamespace]:

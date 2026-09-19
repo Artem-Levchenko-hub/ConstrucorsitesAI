@@ -47,18 +47,11 @@ def isolated_project_repo_storage(monkeypatch: pytest.MonkeyPatch) -> None:
             archive.extractall(destination)
         return True
 
-    def duplicate(source_id: UUID, destination_id: UUID) -> None:
-        try:
-            objects[str(destination_id)] = objects[str(source_id)]
-        except KeyError as exc:
-            raise RuntimeError(f"repo for source project {source_id} not found in MinIO") from exc
-
     def delete(project_id: UUID) -> None:
         objects.pop(str(project_id), None)
 
     monkeypatch.setattr(repo_service, "_upload", upload)
     monkeypatch.setattr(repo_service, "_try_download", try_download)
-    monkeypatch.setattr(repo_service, "duplicate_repo", duplicate)
     monkeypatch.setattr(repo_service, "delete_repo", delete)
 
 

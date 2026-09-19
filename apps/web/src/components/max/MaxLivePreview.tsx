@@ -303,13 +303,6 @@ export function MaxLivePreview({
     return () => window.removeEventListener("message", syncPreviewChrome);
   }, []);
 
-  // A relative same-origin fallback is both correct behind the production
-  // reverse proxy and stable across SSR/hydration. Reading window.location
-  // during render produced different href values on server and client.
-  const apiOrigin = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
-  const publicUrl = apiOrigin
-    ? `${apiOrigin}/p/${project.slug}`
-    : `/p/${project.slug}`;
   const previewUrl = previewSession.data?.url ?? null;
   const connected = Boolean(previewUrl ?? lastWorkingUrl);
   // A cold provision can outlive an earlier start request. Once polling sees
@@ -672,7 +665,7 @@ export function MaxLivePreview({
               disabled={!connected || separatePreview.isPending}
               className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               data-testid="max-open-preview-separate"
-              title={connected ? undefined : `Публичный адрес: ${publicUrl}`}
+              title={connected ? undefined : "Сначала дождитесь запуска предпросмотра"}
             >
               {separatePreview.isPending ? (
                 <Loader2 className="size-3 animate-spin" />

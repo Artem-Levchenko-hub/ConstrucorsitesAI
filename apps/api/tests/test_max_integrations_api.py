@@ -4,6 +4,8 @@ from uuid import UUID
 
 import httpx
 import pytest
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.models.project import Project
 from omnia_api.routers import max_accounts as max_accounts_router
@@ -20,6 +22,7 @@ async def _register_and_create(
     monkeypatch: pytest.MonkeyPatch,
     *,
     template: str = "max_miniapp",
+    db_session: AsyncSession | None = None,
 ) -> str:
     monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
     monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
@@ -50,9 +53,18 @@ async def _register_and_create(
         assert business.status_code == 200
     created = await client.post(
         "/api/projects",
-        json={"name": "MAX loyalty", "template": template},
+        json={"name": "MAX loyalty", "template": "max_miniapp"},
     )
     assert created.status_code == 201
+    if template != "max_miniapp":
+        # Only MAX projects can be created; a site-builder row is an old one.
+        assert db_session is not None
+        await db_session.execute(
+            update(Project)
+            .where(Project.id == UUID(created.json()["id"]))
+            .values(template=template, project_cell_enabled=False)
+        )
+        await db_session.commit()
     return str(created.json()["id"])
 
 
@@ -131,9 +143,12 @@ async def test_max_connection_activation_and_disconnect_never_expose_secrets(
 
 async def test_max_connection_rejects_non_max_project(
     client: httpx.AsyncClient,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project_id = await _register_and_create(client, monkeypatch, template="spa")
+    project_id = await _register_and_create(
+        client, monkeypatch, template="spa", db_session=db_session
+    )
     response = await client.post(
         f"/api/projects/{project_id}/integrations/max/connect",
         json={"token": "max-bot-secret-value"},
@@ -224,9 +239,12 @@ async def test_max_preview_session_rejects_foreign_project(
 
 async def test_max_preview_session_rejects_non_max_project(
     client: httpx.AsyncClient,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project_id = await _register_and_create(client, monkeypatch, template="spa")
+    project_id = await _register_and_create(
+        client, monkeypatch, template="spa", db_session=db_session
+    )
 
     response = await client.post(f"/api/projects/{project_id}/max/preview-session")
 

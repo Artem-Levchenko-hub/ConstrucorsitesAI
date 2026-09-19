@@ -144,7 +144,6 @@ jobs:
           tests/test_template_materialization.py
           tests/test_select_mode.py
           tests/test_project_export.py
-          tests/test_repo_import.py
           tests/test_template_registration.py
           tests/test_template_mapping.py
       - name: Verify templates from an installed wheel outside the checkout
