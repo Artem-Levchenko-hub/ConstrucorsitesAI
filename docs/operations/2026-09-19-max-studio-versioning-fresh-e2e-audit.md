@@ -70,7 +70,26 @@
 - Некоторые локальные API-тесты требуют PostgreSQL, которого на рабочей машине не было. Это ограничение локального прогона, а не продуктовый pass/fail.
 - Реальный delete A4 через UI не отправлялся: компьютерная политика требует отдельного подтверждения прямо перед удалением даже синтетической записи. Create/update/reload проверены live; delete покрыт только agent-authored тестом и потому не считается независимым live proof.
 - Кнопка «Скачать» не создала доступный локальный файл, а прямой официальный download endpoint был заблокирован клиентом браузера (`ERR_BLOCKED_BY_CLIENT`). Код свежего generated artifact изучался через transcript/read/edit evidence; полный локальный ZIP этого проекта не получен.
-- Production SSH `170.168.72.200:22` не завершил banner exchange за 10 секунд. Серверные журналы проекта и точная live-ревизия в этом прогоне не подтверждены; локальный CI не подменяет эту границу.
+- Первый production SSH не завершил banner exchange за 10 секунд. Позднее доступ восстановился: read-only запрос к PostgreSQL подтвердил durable terminal receipts свежего проекта. Старые container logs уже не были доступны после последующего recreate сервисов; это не заменяет полную correlated-трассу первоначального runtime.
+
+### 2.4. Durable server-side receipts свежего проекта
+
+После восстановления SSH без чтения prompt/payload и пользовательских данных проверены `generation_runs`, агрегаты `generation_events`, `project_versions` и `restorations` для `d68cc61a-4889-4b8a-9134-af521de07776`:
+
+| Run | Роль в сценарии | Durable status/error |
+|---|---|---|
+| `b3157c2a-4811-4642-af5c-76cb574dc5df` | v1 | `completed` |
+| `98a0b810-79a5-413b-a4bc-83bd4ae083c9` | первый compatible edit | `failed`, `MAX_FINALIZATION_FAILED ... HTTP 502; expected 401` |
+| `056b1d67-fd62-475b-93c0-586964c12403` | retry compatible | `completed` |
+| `56c1e62f-7bcd-4d52-b9ea-1541bced840f` | первый Continue | `failed`, `Previous Project Cell ensure needs reconciliation` |
+| `9b1f2900-aad7-4e22-a7a3-1b227f960827` | v5 | `completed` |
+| `3094701a-a01c-4940-9843-b49181766c48` | первая incompatible попытка | `failed`, `final verification did not succeed` |
+| `15e3dd25-3c71-4b55-833c-16fbaf2a0962` | v7 | `completed` |
+| `78566acb-b453-468d-84c2-063bbf18027f` | adaptive v8 | `completed` |
+
+Две prepare/cancel операции имеют terminal `cancelled`: `5fcf0af9-1c06-45a8-bac2-40932dd6dbcb` и `02d2aae8-43c7-4859-81e9-dc065427067e`. Exact v8 → v7 имеет restoration `acfc2033-6301-4ba0-8001-56f932db6975`, state/phase `completed/complete`, applied version `946e2995-d16e-4a62-ac22-6ca46b8f8b4f` (v9). На момент запроса незавершённых `generation_runs` в production не было.
+
+Production checkout и контейнеры к этому моменту уже работали на `0710485075af890639c568fcb4665b08cd0851c7`, а не на проверенной live-ревизии `58ab7392`; server-side строки подтверждают terminal history, но не доказывают identity старых контейнеров для каждого шага.
 
 ## 3. Хронология свежего E2E
 
@@ -560,7 +579,7 @@ Ancestor walk в `apps/api/src/omnia_api/routers/project_versions.py:59` огр�
 - DB-backed API suite локально не запущен из-за отсутствующего PostgreSQL на `127.0.0.1:5432`;
 - первый Web-run на Node 25 дал setup errors `localStorage.clear is not a function`; повтор с отключённым experimental Node webstorage прошёл.
 - [GitHub Actions run 35436912804](https://github.com/Artem-Levchenko-hub/ConstrucorsitesAI/actions/runs/35436912804) для точного `58ab73926b786925e3c81e3c84b36bc6954a6c6d` завершился `success`: `api-release-gate`, `orchestrator-release-gate`, `web`, `py-syntax`, `image-build`, `workflow-lint`, `gateway-tests`.
-- Production server-side evidence не снято: SSH завершился `Connection timed out during banner exchange`; это operational blocker для сверки live SHA и backend-журналов, а не доказательство дефекта конкретного кода.
+- После первоначального SSH timeout доступ восстановился. Read-only production DB receipts подтвердили 8 terminal generation runs, 2 terminal `cancelled` prepare и завершённый exact apply в v9; active generation gate был пуст. Старые container logs были утрачены после recreate, а точная per-step identity прежних контейнеров не восстановлена.
 
 Эти зелёные тесты не отменяют live-дефекты: текущие unit/integration tests не воспроизводят весь свежий сценарий.
 
