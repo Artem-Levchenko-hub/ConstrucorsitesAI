@@ -50,6 +50,23 @@ async def _request(
     return body
 
 
+def _receipt(customer_email: str, description: str, amount: str) -> dict[str, object]:
+    """The fiscal receipt: one full-payment service line for the whole amount."""
+    return {
+        "customer": {"email": customer_email},
+        "items": [
+            {
+                "description": description[:128],
+                "quantity": "1.00",
+                "amount": {"value": amount, "currency": "RUB"},
+                "vat_code": get_settings().yookassa_vat_code,
+                "payment_mode": "full_payment",
+                "payment_subject": "service",
+            }
+        ],
+    }
+
+
 async def create_payment(
     *,
     amount: str,
@@ -60,7 +77,6 @@ async def create_payment(
     metadata: dict[str, str],
     save_payment_method: bool = False,
 ) -> dict[str, Any]:
-    settings = get_settings()
     return await _request(
         "POST",
         "/payments",
@@ -72,19 +88,7 @@ async def create_payment(
             "confirmation": {"type": "redirect", "return_url": return_url},
             "description": description[:128],
             "metadata": metadata,
-            "receipt": {
-                "customer": {"email": customer_email},
-                "items": [
-                    {
-                        "description": description[:128],
-                        "quantity": "1.00",
-                        "amount": {"value": amount, "currency": "RUB"},
-                        "vat_code": settings.yookassa_vat_code,
-                        "payment_mode": "full_payment",
-                        "payment_subject": "service",
-                    }
-                ],
-            },
+            "receipt": _receipt(customer_email, description, amount),
         },
     )
 
@@ -99,7 +103,6 @@ async def create_recurring_payment(
     metadata: dict[str, str],
 ) -> dict[str, Any]:
     """Charge a provider-saved method without handling raw card data."""
-    settings = get_settings()
     return await _request(
         "POST",
         "/payments",
@@ -110,19 +113,7 @@ async def create_recurring_payment(
             "payment_method_id": payment_method_id,
             "description": description[:128],
             "metadata": metadata,
-            "receipt": {
-                "customer": {"email": customer_email},
-                "items": [
-                    {
-                        "description": description[:128],
-                        "quantity": "1.00",
-                        "amount": {"value": amount, "currency": "RUB"},
-                        "vat_code": settings.yookassa_vat_code,
-                        "payment_mode": "full_payment",
-                        "payment_subject": "service",
-                    }
-                ],
-            },
+            "receipt": _receipt(customer_email, description, amount),
         },
     )
 
