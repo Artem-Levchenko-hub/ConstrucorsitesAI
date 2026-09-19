@@ -1,0 +1,1447 @@
+{
+ "deploy:connect-fails": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "no route to host",
+   "ok": false,
+   "url": null
+  },
+  "transcript": []
+ },
+ "deploy:domain-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Новая версия проверена и трафик переключён без простоя.",
+   "ok": true,
+   "url": "https://shop.example"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker ps -aq --no-trunc --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f old-id",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "find $HOME/.omnia/env -maxdepth 1 -type f -name '11111111222233334444-*.env' ! -name '11111111222233334444-aaaaaaaabbbb.env' -delete",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker images 'omnia-app-shop' --format '{{.ID}}' | awk 'NR>3 {print $1}' | xargs -r docker rmi >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "deploy:new": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Новая версия проверена и трафик переключён без простоя.",
+   "ok": true,
+   "url": "http://203.0.113.9:34567"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "aHR0cDovLzozNDU2NyB7CglyZXZlcnNlX3Byb3h5IDEyNy4wLjAuMTozNDU2OAp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker ps -aq --no-trunc --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f old-id",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "find $HOME/.omnia/env -maxdepth 1 -type f -name '11111111222233334444-*.env' ! -name '11111111222233334444-aaaaaaaabbbb.env' -delete",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker images 'omnia-app-shop' --format '{{.ID}}' | awk 'NR>3 {print $1}' | xargs -r docker rmi >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "deploy:reload": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Caddy не переключил трафик: reload refused",
+   "ok": false,
+   "url": null
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "aHR0cDovLzozNDU2NyB7CglyZXZlcnNlX3Byb3h5IDEyNy4wLjAuMTozNDU2OAp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "rm -f $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f omnia-app-11111111222233334444-aaaaaaaabbbb >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "deploy:reload-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Caddy не переключил трафик: reload refused",
+   "ok": false,
+   "url": null
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "aHR0cDovLzozNDU2NyB7CglyZXZlcnNlX3Byb3h5IDEyNy4wLjAuMTozNDU2OAp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "b2xkLmV4YW1wbGUgewoJcmV2ZXJzZV9wcm94eSAxMjcuMC4wLjE6MQp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f omnia-app-11111111222233334444-aaaaaaaabbbb >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "deploy:validate": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Конфигурация домена некорректна: bad route",
+   "ok": false,
+   "url": null
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "aHR0cDovLzozNDU2NyB7CglyZXZlcnNlX3Byb3h5IDEyNy4wLjAuMTozNDU2OAp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "rm -f $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f omnia-app-11111111222233334444-aaaaaaaabbbb >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "deploy:validate-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Конфигурация домена некорректна: bad route",
+   "ok": false,
+   "url": null
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "aHR0cDovLzozNDU2NyB7CglyZXZlcnNlX3Byb3h5IDEyNy4wLjAuMTozNDU2OAp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "b2xkLmV4YW1wbGUgewoJcmV2ZXJzZV9wcm94eSAxMjcuMC4wLjE6MQp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f omnia-app-11111111222233334444-aaaaaaaabbbb >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "deploy:validate-previous-restore-fails": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Не удалось записать runtime-файл: disk full",
+   "ok": false,
+   "url": null
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker image inspect omnia-app-shop:1 --format '{{.Architecture}}'",
+    "timeout": 20
+   },
+   {
+    "input": null,
+    "run": "uname -m",
+    "timeout": 10
+   },
+   {
+    "input": null,
+    "run": "docker network create omnia-net-11111111222233334444 >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "input": "QVVUSF9TRUNSRVQ9QVBQLVNVUEVSLVNFQ1JFVAo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env; chmod 600 $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker run -d --name omnia-app-11111111222233334444-aaaaaaaabbbb --restart unless-stopped --label omnia.managed=true --label omnia.project=11111111222233334444 --label omnia.kind=app --label omnia.run=aaaaaaaabbbb --network omnia-net-11111111222233334444 --env-file $HOME/.omnia/env/11111111222233334444-aaaaaaaabbbb.env -p 127.0.0.1::3000 omnia-app-shop:1",
+    "timeout": 90
+   },
+   {
+    "input": null,
+    "run": "docker port omnia-app-11111111222233334444-aaaaaaaabbbb 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "aHR0cDovLzozNDU2NyB7CglyZXZlcnNlX3Byb3h5IDEyNy4wLjAuMTozNDU2OAp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "b2xkLmV4YW1wbGUgewoJcmV2ZXJzZV9wcm94eSAxMjcuMC4wLjE6MQp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker rm -f omnia-app-11111111222233334444-aaaaaaaabbbb >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "logs:": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "logs": "line 1\nline 2\nwarn\n",
+   "ok": true
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "id=$(docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1); test -z \"$id\" || docker logs --tail 2000 \"$id\"",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "logs:connect-fails": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "no route to host",
+   "raised": "OSError"
+  },
+  "transcript": []
+ },
+ "sync:connect-fails": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "no route to host",
+   "raised": "OSError"
+  },
+  "transcript": []
+ },
+ "sync:new": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Маршруты доменов обновлены.",
+   "ok": true
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:no-container": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "У проекта пока нет удалённого runtime.",
+   "ok": true
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Маршруты доменов обновлены.",
+   "ok": true
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:reload": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Caddy не обновил маршруты: reload refused",
+   "raised": "RuntimeError"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "rm -f $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:reload-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Caddy не обновил маршруты: reload refused",
+   "raised": "RuntimeError"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "b2xkLmV4YW1wbGUgewoJcmV2ZXJzZV9wcm94eSAxMjcuMC4wLjE6MQp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:validate": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Caddy не принял маршруты: bad route",
+   "raised": "RuntimeError"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "rm -f $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:validate-blank-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Caddy не принял маршруты: bad route",
+   "raised": "RuntimeError"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "rm -f $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:validate-broken-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Incorrect padding",
+   "raised": "Error"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:validate-previous": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Caddy не принял маршруты: bad route",
+   "raised": "RuntimeError"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "b2xkLmV4YW1wbGUgewoJcmV2ZXJzZV9wcm94eSAxMjcuMC4wLjE6MQp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "sync:validate-previous-restore-fails": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "Не удалось записать runtime-файл: disk full",
+   "raised": "RuntimeError"
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "docker ps -q --filter label=omnia.project=11111111222233334444 --filter label=omnia.kind=app | head -1",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker port app-id 3000/tcp | head -1 | awk -F: '{print $NF}'",
+    "timeout": 30
+   },
+   {
+    "input": "aW1wb3J0IC9jb25maWcvcm91dGVzLyouY2FkZHkK",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/Caddyfile; chmod 644 $HOME/.omnia/caddy/Caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "aHR0cDovLzEyNy4wLjAuMTo2NTUzNSB7CiAgcmVzcG9uZCA0MDQKfQo=",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/00-empty.caddy; chmod 644 $HOME/.omnia/caddy/routes/00-empty.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker inspect -f '{{.State.Running}}' omnia-edge 2>/dev/null || true",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "base64 -w0 $HOME/.omnia/caddy/routes/11111111222233334444.caddy 2>/dev/null || true",
+    "timeout": 10
+   },
+   {
+    "input": "c2hvcC5leGFtcGxlIHsKCXJldmVyc2VfcHJveHkgMTI3LjAuMC4xOjM0NTY4Cn0K",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "input": null,
+    "run": "docker exec omnia-edge caddy validate --config /config/Caddyfile --adapter caddyfile",
+    "timeout": 30
+   },
+   {
+    "input": "b2xkLmV4YW1wbGUgewoJcmV2ZXJzZV9wcm94eSAxMjcuMC4wLjE6MQp9Cg==",
+    "run": "umask 077; mkdir -p $HOME/.omnia/env $HOME/.omnia/caddy/routes; base64 -d > $HOME/.omnia/caddy/routes/11111111222233334444.caddy; chmod 644 $HOME/.omnia/caddy/routes/11111111222233334444.caddy",
+    "timeout": 30
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "teardown:": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "detail": "Удалённый runtime проекта удалён.",
+   "ok": true
+  },
+  "transcript": [
+   {
+    "input": null,
+    "run": "ids=$(docker ps -aq --filter label=omnia.project=11111111222233334444); test -z \"$ids\" || docker rm -f $ids; docker network rm omnia-net-11111111222233334444 >/dev/null 2>&1 || true; docker volume rm omnia-db-data-11111111222233334444 >/dev/null 2>&1 || true; rm -f $HOME/.omnia/caddy/routes/11111111222233334444.caddy $HOME/.omnia/env/11111111222233334444*.env; docker exec omnia-edge caddy reload --config /config/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true",
+    "timeout": 120
+   },
+   {
+    "close": true
+   }
+  ]
+ },
+ "teardown:connect-fails": {
+  "connect": [
+   {
+    "auth_type": "key",
+    "known_host_key": "203.0.113.9 ssh-ed25519 AAAA",
+    "port": 2222,
+    "resolved_ip": "203.0.113.9",
+    "secret": "PRIVATE-KEY",
+    "user": "deploy"
+   }
+  ],
+  "outcome": {
+   "message": "no route to host",
+   "raised": "OSError"
+  },
+  "transcript": []
+ }
+}

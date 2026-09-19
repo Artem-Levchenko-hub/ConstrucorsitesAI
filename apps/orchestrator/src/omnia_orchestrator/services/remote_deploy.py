@@ -45,6 +45,27 @@ async def _write_file(
         raise RuntimeError(f"Не удалось записать runtime-файл: {result.stderr[-180:]}")
 
 
+async def _connect(creds: dict[str, object]) -> ssh.SSHSession:
+    return await ssh.connect(
+        resolved_ip=str(creds["resolved_ip"]),
+        port=int(str(creds["port"])),
+        user=str(creds["user"]),
+        auth_type=str(creds["auth_type"]),
+        secret=str(creds["secret"]),
+        known_host_key=str(creds["known_host_key"]),
+    )
+
+
+async def _restore_route(session: ssh.SSHSession, route_path: str, previous: str) -> None:
+    """Undo a rejected route: the previous file (base64, as read) or no file."""
+    if previous:
+        await _write_file(
+            session, route_path, base64.b64decode(previous).decode("utf-8"), mode="644"
+        )
+    else:
+        await session.run(f"rm -f {route_path}")
+
+
 async def _save_load(
     image_tag: str,
     session: ssh.SSHSession,
@@ -203,14 +224,7 @@ async def deploy_to_target(
     database_created = False
     db_name: str | None = None
     try:
-        session = await ssh.connect(
-            resolved_ip=str(creds["resolved_ip"]),
-            port=int(str(creds["port"])),
-            user=str(creds["user"]),
-            auth_type=str(creds["auth_type"]),
-            secret=str(creds["secret"]),
-            known_host_key=str(creds["known_host_key"]),
-        )
+        session = await _connect(creds)
         if progress:
             progress("Защищённое SSH-соединение установлено")
         ok, transfer_detail = await _save_load(image_tag, session, progress)
@@ -298,30 +312,14 @@ async def deploy_to_target(
             timeout=30,
         )
         if not valid.ok:
-            if previous_route.stdout.strip():
-                await _write_file(
-                    session,
-                    route_path,
-                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
-                    mode="644",
-                )
-            else:
-                await session.run(f"rm -f {route_path}")
+            await _restore_route(session, route_path, previous_route.stdout.strip())
             raise RuntimeError(f"Конфигурация домена некорректна: {valid.stderr[-220:]}")
         reloaded = await session.run(
             f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile --adapter caddyfile",
             timeout=30,
         )
         if not reloaded.ok:
-            if previous_route.stdout.strip():
-                await _write_file(
-                    session,
-                    route_path,
-                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
-                    mode="644",
-                )
-            else:
-                await session.run(f"rm -f {route_path}")
+            await _restore_route(session, route_path, previous_route.stdout.strip())
             await session.run(
                 f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile "
                 f"--adapter caddyfile >/dev/null 2>&1 || true"
@@ -385,14 +383,7 @@ async def deploy_to_target(
 async def teardown_target(*, creds: dict[str, object], project_id: str) -> dict[str, object]:
     """Remove one project's containers/routes/volume without touching neighbours."""
     project_key = _ident(project_id.replace("-", ""), limit=20)
-    session = await ssh.connect(
-        resolved_ip=str(creds["resolved_ip"]),
-        port=int(str(creds["port"])),
-        user=str(creds["user"]),
-        auth_type=str(creds["auth_type"]),
-        secret=str(creds["secret"]),
-        known_host_key=str(creds["known_host_key"]),
-    )
+    session = await _connect(creds)
     try:
         await session.run(
             f"ids=$(docker ps -aq --filter label=omnia.project={project_key}); "
@@ -413,14 +404,7 @@ async def target_logs(
     *, creds: dict[str, object], project_id: str, tail: int = 200
 ) -> dict[str, object]:
     project_key = _ident(project_id.replace("-", ""), limit=20)
-    session = await ssh.connect(
-        resolved_ip=str(creds["resolved_ip"]),
-        port=int(str(creds["port"])),
-        user=str(creds["user"]),
-        auth_type=str(creds["auth_type"]),
-        secret=str(creds["secret"]),
-        known_host_key=str(creds["known_host_key"]),
-    )
+    session = await _connect(creds)
     try:
         result = await session.run(
             f"id=$(docker ps -q --filter label=omnia.project={project_key} "
@@ -442,14 +426,7 @@ async def sync_routes(
 ) -> dict[str, object]:
     """Rebuild one project's Caddy route after its domain set changes."""
     project_key = _ident(project_id.replace("-", ""), limit=20)
-    session = await ssh.connect(
-        resolved_ip=str(creds["resolved_ip"]),
-        port=int(str(creds["port"])),
-        user=str(creds["user"]),
-        auth_type=str(creds["auth_type"]),
-        secret=str(creds["secret"]),
-        known_host_key=str(creds["known_host_key"]),
-    )
+    session = await _connect(creds)
     try:
         container = await session.run(
             f"docker ps -q --filter label=omnia.project={project_key} "
@@ -478,34 +455,19 @@ async def sync_routes(
             timeout=30,
         )
         if not valid.ok:
-            if previous_route.stdout.strip():
-                await _write_file(
-                    session,
-                    route_path,
-                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
-                    mode="644",
-                )
-            else:
-                await session.run(f"rm -f {route_path}")
+            await _restore_route(session, route_path, previous_route.stdout.strip())
             raise RuntimeError(f"Caddy не принял маршруты: {valid.stderr[-220:]}")
         result = await session.run(
             f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile --adapter caddyfile",
             timeout=30,
         )
         if not result.ok:
+            await _restore_route(session, route_path, previous_route.stdout.strip())
             if previous_route.stdout.strip():
-                await _write_file(
-                    session,
-                    route_path,
-                    base64.b64decode(previous_route.stdout.strip()).decode("utf-8"),
-                    mode="644",
-                )
                 await session.run(
                     f"docker exec {_EDGE_NAME} caddy reload --config /config/Caddyfile "
                     f"--adapter caddyfile >/dev/null 2>&1 || true"
                 )
-            else:
-                await session.run(f"rm -f {route_path}")
             raise RuntimeError(f"Caddy не обновил маршруты: {result.stderr[-220:]}")
         return {"ok": True, "detail": "Маршруты доменов обновлены."}
     finally:
