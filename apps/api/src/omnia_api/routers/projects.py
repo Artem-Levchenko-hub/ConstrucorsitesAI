@@ -90,6 +90,43 @@ async def _ensure_anon_user(session: SessionDep, response: Response) -> User:
     return anon
 
 
+async def _commit_first_snapshot(
+    session: SessionDep, project: Project, commit_sha: str, *, prompt_text: str | None
+) -> Project:
+    """Commit the flushed project together with its first snapshot, then announce it."""
+    snapshot = Snapshot(
+        project_id=project.id,
+        commit_sha=commit_sha,
+        prompt_text=prompt_text,
+        model_id=None,
+        parent_id=None,
+    )
+    session.add(snapshot)
+    await session.flush()
+
+    project.current_snapshot_id = snapshot.id
+
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
+
+    await session.refresh(project)
+    await session.refresh(snapshot)
+
+    # Static repos get a thumbnail; for code repos the worker's template check
+    # makes the job a no-op.
+    await asyncio.to_thread(enqueue_preview, snapshot.id)
+    await publish_event(
+        project.id,
+        "snapshot.created",
+        {"snapshot": snapshot_event_dict(snapshot)},
+    )
+
+    return project
+
+
 @router.post("", response_model=ProjectPublic, status_code=status.HTTP_201_CREATED)
 async def create_project(
     payload: ProjectCreate,
@@ -142,35 +179,7 @@ async def create_project(
         repo_svc.init_repo, project.id, template_dir, payload.template
     )
 
-    snapshot = Snapshot(
-        project_id=project.id,
-        commit_sha=commit_sha,
-        prompt_text=None,
-        model_id=None,
-        parent_id=None,
-    )
-    session.add(snapshot)
-    await session.flush()
-
-    project.current_snapshot_id = snapshot.id
-
-    try:
-        await session.commit()
-    except IntegrityError as e:
-        await session.rollback()
-        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
-
-    await session.refresh(project)
-    await session.refresh(snapshot)
-
-    await asyncio.to_thread(enqueue_preview, snapshot.id)
-    await publish_event(
-        project.id,
-        "snapshot.created",
-        {"snapshot": snapshot_event_dict(snapshot)},
-    )
-
-    return project
+    return await _commit_first_snapshot(session, project, commit_sha, prompt_text=None)
 
 
 @router.post("/import", response_model=ProjectPublic, status_code=status.HTTP_201_CREATED)
@@ -256,38 +265,7 @@ async def import_project(
     # prompt_text='' (EMPTY STRING, not None): this makes is_first_build=False
     # so the first chat prompt is treated as an EDIT, not a from-scratch rebuild
     # that would nuke the imported repo files with an Omnia template generation.
-    snapshot = Snapshot(
-        project_id=project.id,
-        commit_sha=commit_sha,
-        prompt_text="",
-        model_id=None,
-        parent_id=None,
-    )
-    session.add(snapshot)
-    await session.flush()
-
-    project.current_snapshot_id = snapshot.id
-
-    try:
-        await session.commit()
-    except IntegrityError as e:
-        await session.rollback()
-        raise ApiError("conflict", "slug already exists", status.HTTP_409_CONFLICT) from e
-
-    await session.refresh(project)
-    await session.refresh(snapshot)
-
-    # Enqueue a preview render — static repos (blank template) will produce a
-    # thumbnail; code/arbitrary repos produce a no-op (gracefully handled by
-    # the worker's template check).
-    await asyncio.to_thread(enqueue_preview, snapshot.id)
-    await publish_event(
-        project.id,
-        "snapshot.created",
-        {"snapshot": snapshot_event_dict(snapshot)},
-    )
-
-    return project
+    return await _commit_first_snapshot(session, project, commit_sha, prompt_text="")
 
 
 @router.post("/{project_id}/claim", response_model=ProjectPublic)
