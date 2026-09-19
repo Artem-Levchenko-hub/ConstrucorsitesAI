@@ -380,7 +380,13 @@ class PromptAcceptance:
         # installer-download card (the .zip already ships a run.bat launcher), so the
         # user goes from ask → installer in one click. Gated to a project that already
         # has something built. Consumed in the turn-routing branch below.
-        _has_built = not self.is_first_build and self.project.current_snapshot_id is not None
+        # A MAX Mini App has no installer — it is launched inside MAX — so there the
+        # same words are an ordinary request for the builder.
+        _has_built = (
+            not self.is_first_build
+            and self.project.current_snapshot_id is not None
+            and self.project.template != "max_miniapp"
+        )
         self.run_intent = _has_built and _infer_run_intent(self.payload.prompt)
         # «Спрашивай, если сомневаешься» (owner 2026-06-19): plausible-but-uncertain run
         # intent → ASK "собрать установщик?" with yes/no chips instead of guessing.
