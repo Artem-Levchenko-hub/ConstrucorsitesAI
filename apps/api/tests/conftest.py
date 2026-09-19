@@ -65,7 +65,7 @@ def isolated_project_repo_storage(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep API unit tests isolated from real Redis queues and pub/sub."""
-    from omnia_api.routers import hero_media, messages, projects, rollback, style_patch, uploads
+    from omnia_api.routers import messages, projects, rollback
     from omnia_api.services.generation import (
         agent_pipeline,
         agent_publication,
@@ -91,13 +91,8 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     for module, attribute in (
-        (projects, "enqueue_build_exe"),
         (projects, "enqueue_preview"),
-        (style_patch, "enqueue_preview"),
         (rollback, "enqueue_preview"),
-        (uploads, "enqueue_preview"),
-        (hero_media, "enqueue_hero_media_render"),
-        (hero_media, "enqueue_preview"),
         (agent_publication, "enqueue_preview"),
         (container_realization, "enqueue_entity_gate"),
         (container_realization, "enqueue_preview"),
@@ -107,10 +102,7 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for module in (
         projects,
-        style_patch,
         rollback,
-        uploads,
-        hero_media,
         messages,
         agent_pipeline,
         agent_publication,

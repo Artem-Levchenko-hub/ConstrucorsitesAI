@@ -64,7 +64,7 @@ def modules(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
     result = {
         name: importlib.import_module("omnia_api.routers." + name)
-        for name in ("rollback", "style_patch", "uploads", "snapshots", "hero_media")
+        for name in ("rollback", "snapshots")
     }
     result["generation_publication"] = importlib.import_module(
         "omnia_api.services.generation.publication"
@@ -75,7 +75,6 @@ def modules(monkeypatch):
         minio_public_url="https://objects.example.test/", minio_bucket_previews="previews"
     )
     monkeypatch.setattr(minio, "get_settings", lambda: settings)
-    monkeypatch.setattr(result["uploads"], "get_settings", lambda: settings)
     return result
 
 
@@ -121,7 +120,7 @@ def test_existing_serializers_and_json_contract(modules, case):
     row = snapshot(case)
     value = expected(row)
     reference = SnapshotPublic.model_validate(value)
-    for name in ("rollback", "style_patch", "uploads", "snapshots"):
+    for name in ("rollback", "snapshots"):
         function = getattr(
             modules[name], "_public_dict" if name == "snapshots" else "_snapshot_dict"
         )
@@ -130,9 +129,6 @@ def test_existing_serializers_and_json_contract(modules, case):
         assert raw == value
         assert raw["id"] is row.id and raw["created_at"] is row.created_at
         assert SnapshotPublic.model_validate(raw).model_dump_json() == reference.model_dump_json()
-    assert (
-        modules["hero_media"]._snapshot_public(row).model_dump_json() == reference.model_dump_json()
-    )
     event = modules["generation_publication"]._snapshot_payload(row)
     assert event == {
         **value,
@@ -146,14 +142,12 @@ def test_existing_serializers_and_json_contract(modules, case):
         assert reference.model_dump(mode="json")["created_at"].endswith("Z")
 
 
-@pytest.mark.parametrize("name", ["rollback", "style_patch", "uploads"])
+@pytest.mark.parametrize("name", ["rollback"])
 @pytest.mark.parametrize("case", [CASES[0], CASES[2]], ids=["null-preview-utc", "preview-offset"])
 async def test_actual_mutation_consumers_preserve_response_and_event(
     modules, monkeypatch, name, case
 ):
     from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
-    from omnia_api.schemas.style_patch import StylePatchRequest
-    from omnia_api.schemas.upload import ImagePatchRequest
 
     module = modules[name]
     row = snapshot(case)
@@ -187,28 +181,11 @@ async def test_actual_mutation_consumers_preserve_response_and_event(
         ),
     )
     monkeypatch.setattr(module.repo_svc, "commit_files", Mock(return_value="b" * 40))
-    if name == "rollback":
-        monkeypatch.setattr(module.repo_svc, "checkout", Mock(return_value="b" * 40))
-        monkeypatch.setattr(module, "record_restored_version", AsyncMock())
-        response = await module.post_rollback(
-            PROJECT, RollbackRequest(snapshot_id=OLD), session, SimpleNamespace(id=OWNER)
-        )
-    elif name == "style_patch":
-        response = await module.post_style_patch(
-            PROJECT,
-            StylePatchRequest(tokens=[{"var": "--accent", "value": "#123456"}]),
-            session,
-            SimpleNamespace(id=OWNER),
-        )
-    else:
-        response = await module.image_patch(
-            PROJECT,
-            ImagePatchRequest(
-                old_src="old.png", new_src="https://objects.example.test/uploads/new.png"
-            ),
-            session,
-            SimpleNamespace(id=OWNER),
-        )
+    monkeypatch.setattr(module.repo_svc, "checkout", Mock(return_value="b" * 40))
+    monkeypatch.setattr(module, "record_restored_version", AsyncMock())
+    response = await module.post_rollback(
+        PROJECT, RollbackRequest(snapshot_id=OLD), session, SimpleNamespace(id=OWNER)
+    )
     assert len(added) == 1
     assert (
         response.model_dump_json()
