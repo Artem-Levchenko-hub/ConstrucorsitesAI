@@ -15,19 +15,22 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 19
+MAX_MANAGED_KIT_VERSION = 20
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
-# platform-owned paths from projects that received them; never reuse 18.
-MAX_RETIRED_MANAGED_FILES = frozenset({
-    "src/app/api/omnia/data/[...path]/route.ts",
-    "src/lib/secure-data/crypto.ts",
-    "src/lib/secure-data/store.ts",
-    "src/lib/secure-data/validation.ts",
-    "src/lib/secure-data/http.ts",
-    "src/lib/secure-data/runtime.ts",
-    "src/lib/omnia/data-client.ts",
-    "drizzle/0003_secure_records.sql",
-})
+# platform-owned paths. v20 materializes trusted gateway subjects in the
+# isolated product DB before business tables can enforce max_users FKs.
+MAX_RETIRED_MANAGED_FILES = frozenset(
+    {
+        "src/app/api/omnia/data/[...path]/route.ts",
+        "src/lib/secure-data/crypto.ts",
+        "src/lib/secure-data/store.ts",
+        "src/lib/secure-data/validation.ts",
+        "src/lib/secure-data/http.ts",
+        "src/lib/secure-data/runtime.ts",
+        "src/lib/omnia/data-client.ts",
+        "drizzle/0003_secure_records.sql",
+    }
+)
 _MANAGED_COMPONENT_IMPORT_RE = re.compile(r"""from\s+["']@/components/(Omnia[A-Za-z0-9_/-]+)["']""")
 
 
@@ -124,9 +127,7 @@ def render_max_managed_files(
     files = {
         "postcss.config.mjs": _template_file("postcss.config.mjs"),
         "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
-        "src/app/api/omnia/health/route.ts": _template_file(
-            "src/app/api/omnia/health/route.ts"
-        ),
+        "src/app/api/omnia/health/route.ts": _template_file("src/app/api/omnia/health/route.ts"),
         "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
         "src/components/OmniaCompliance.tsx": _template_file("src/components/OmniaCompliance.tsx"),
         "src/lib/db/index.ts": _template_file("src/lib/db/index.ts"),
@@ -160,7 +161,9 @@ export function GET() {
   });
 }
 """,
-        "src/lib/omnia/integration-client.ts": _template_file("src/lib/omnia/integration-client.ts"),
+        "src/lib/omnia/integration-client.ts": _template_file(
+            "src/lib/omnia/integration-client.ts"
+        ),
         "src/app/api/omnia/integrations/[...path]/route.ts": _template_file(
             "src/app/api/omnia/integrations/[...path]/route.ts"
         ).replace('process.env.OMNIA_PROJECT_ID || ""', project_literal, 1),
@@ -267,7 +270,8 @@ export default function SupportPage() {
 
 
 def render_max_managed_kit_update(
-    config: MaxProjectConfigPayload, project_id: UUID | str | None = None,
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str | None = None,
 ) -> dict[str, str]:
     """Managed files plus deletions (empty content) of retired managed paths."""
     return {
@@ -375,7 +379,8 @@ edit, preserve working behaviour and change only the relevant product files.
 
 
 def include_portable_manifest(
-    starter_files: Mapping[str, str], workspace_files: Mapping[str, str],
+    starter_files: Mapping[str, str],
+    workspace_files: Mapping[str, str],
 ) -> dict[str, str]:
     """Preserve platform runtime metadata without adopting pre-existing product code."""
     files = dict(starter_files)
@@ -385,8 +390,19 @@ def include_portable_manifest(
 
 
 def render_portable_max_session(project_id: UUID | str) -> str:
-    """Adapt the product helper to the secretless, gateway-authenticated runtime."""
+    """Adapt product auth to the secretless, gateway-authenticated runtime.
+
+    The trusted core owns the browser session, while portable product tables use
+    their isolated project database. Materialize the authenticated subject there
+    before product routes can insert rows with a ``max_users`` foreign key.
+    """
     source = _template_file("src/lib/max/session.ts")
+    source = source.replace(
+        'import { cookies, headers } from "next/headers";\n',
+        'import { cookies, headers } from "next/headers";\n\n'
+        'import { db, schema } from "@/lib/db";\n',
+        1,
+    )
     start = source.index("export async function getMaxUser()")
     end = source.index("export async function requireMaxUser()", start)
     helper = """export async function getMaxUser(): Promise<MaxSessionUser | null> {
@@ -399,6 +415,10 @@ def render_portable_max_session(project_id: UUID | str) -> str:
   if (!id?.trim() || projectId !== __PROJECT_ID__ || !epoch || !/^[0-9]+$/.test(epoch)) {
     return null;
   }
+  await db
+    .insert(schema.maxUsers)
+    .values({ maxUserId: id, firstName: "" })
+    .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
   return {
     id, firstName: "", lastName: null, username: null,
     languageCode: null, photoUrl: null,
@@ -409,9 +429,21 @@ def render_portable_max_session(project_id: UUID | str) -> str:
     return source[:start] + helper + source[end:]
 
 
+def render_portable_max_managed_files(
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str,
+) -> dict[str, str]:
+    """Current managed kit for a secretless portable product runtime."""
+    files = render_max_managed_files(config, project_id)
+    files["src/lib/max/session.ts"] = render_portable_max_session(project_id)
+    return files
+
+
 def render_max_starter_files(
-    config: MaxProjectConfigPayload, project_id: UUID | str | None = None,
-    *, portable: bool = False,
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str | None = None,
+    *,
+    portable: bool = False,
 ) -> dict[str, str]:
     """Buildable MAX platform core with no generated product UI.
 
@@ -433,5 +465,5 @@ def render_max_starter_files(
     if portable:
         if project_id is None:
             raise ValueError("portable MAX starter requires a project identity")
-        files["src/lib/max/session.ts"] = render_portable_max_session(project_id)
+        files.update(render_portable_max_managed_files(config, project_id))
     return files

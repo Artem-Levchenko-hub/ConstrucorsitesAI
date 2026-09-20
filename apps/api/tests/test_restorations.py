@@ -65,6 +65,51 @@ def test_prepare_does_not_move_head_and_activation_replays():
     assert repo.read_files(project, planned) == {"page.txt": "old", "empty.txt": ""}
 
 
+def test_prepare_overlays_current_platform_files_and_removes_retired_paths():
+    project, operation = uuid4(), uuid4()
+    old = repo.init_from_files(
+        project,
+        {
+            "src/app/page.tsx": "historical product",
+            "src/lib/max/session.ts": "historical platform core",
+            "src/lib/secure-data/store.ts": "retired platform core",
+        },
+        "seed",
+    )
+    head = repo.commit_files(project, {"src/app/page.tsx": "current product"}, "edit", old)
+
+    prepared = repo.prepare_restore_commit(
+        project,
+        old,
+        head,
+        operation,
+        overrides={"src/lib/max/session.ts": "current platform core"},
+        deletes=("src/lib/secure-data/store.ts",),
+    )
+
+    assert prepared == repo.prepare_restore_commit(
+        project,
+        old,
+        head,
+        operation,
+        overrides={"src/lib/max/session.ts": "current platform core"},
+        deletes=("src/lib/secure-data/store.ts",),
+    )
+    assert repo.read_files(project, prepared["commit_sha"]) == {
+        "src/app/page.tsx": "historical product",
+        "src/lib/max/session.ts": "current platform core",
+    }
+    with pytest.raises(ValueError, match="identity"):
+        repo.prepare_restore_commit(
+            project,
+            old,
+            head,
+            operation,
+            overrides={"src/lib/max/session.ts": "changed platform core"},
+            deletes=("src/lib/secure-data/store.ts",),
+        )
+
+
 def test_restore_git_rejects_wrong_parent_and_operation_rebinding():
     project, operation = uuid4(), uuid4()
     old = repo.init_from_files(project, {"page.txt": "old"}, "seed")
@@ -254,9 +299,7 @@ def test_runtime_source_binding_digest_is_canonical_and_secret_free():
     from omnia_api.schemas.restoration import RuntimeSourceBindingV2
 
     first = RuntimeSourceBindingV2.model_validate(source_binding())
-    second = RuntimeSourceBindingV2.model_validate(
-        dict(reversed(list(source_binding().items())))
-    )
+    second = RuntimeSourceBindingV2.model_validate(dict(reversed(list(source_binding().items()))))
     assert first.digest() == second.digest()
     assert "secret" not in first.model_dump_json().lower()
 
@@ -338,9 +381,13 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
     assert result.applied_snapshot_id not in {current.id, old.id}
     assert project.current_snapshot_id == result.applied_snapshot_id
     assert workspace.fencing_epoch == 8
-    assert repo.read_files(
+    restored_files = repo.read_files(
         project.id, (await db_session.get(Snapshot, result.applied_snapshot_id)).commit_sha
-    ) == {"page.txt": "old", "empty.txt": ""}
+    )
+    assert restored_files["page.txt"] == "old"
+    assert restored_files["empty.txt"] == ""
+    assert "onConflictDoNothing" in restored_files["src/lib/max/session.ts"]
+    assert str(project.id) in restored_files["src/lib/max/session.ts"]
     replay = await service.apply_restoration(
         db_session, project.id, owner.id, operation.id, applied_request, runtime
     )
@@ -349,6 +396,38 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
     assert await db_session.scalar(select(func.count()).select_from(ProjectVersion)) == 2
     await db_session.refresh(current)
     assert current.commit_sha != old.commit_sha  # Existing source history is preserved.
+
+
+async def test_db_restoration_overlays_complete_current_max_kit_when_configured(db_session):
+    from omnia_api.models.max_project_config import MaxProjectConfig
+    from omnia_api.models.restoration import Restoration
+    from omnia_api.services import restorations as service
+
+    owner, project, _, _, _, _, request = await restoration_fixture(db_session)
+    db_session.add(
+        MaxProjectConfig(
+            project_id=project.id,
+            owner_id=owner.id,
+            config_version=2,
+            managed_kit_version=19,
+            config={
+                "app_name": "Restored current platform",
+                "app_type": "custom",
+                "summary": "Historical product with the current managed runtime",
+            },
+        )
+    )
+    await db_session.commit()
+
+    runtime = FakeRuntime()
+    operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
+    row = await db_session.get(Restoration, operation.id)
+    restored_files = repo.read_files(project.id, row.planned_commit_sha)
+
+    assert restored_files["page.txt"] == "old"
+    assert "onConflictDoNothing" in restored_files["src/lib/max/session.ts"]
+    assert "Restored current platform" in restored_files["src/lib/omnia/max-config.ts"]
+    assert runtime.prepares == 1
 
 
 async def test_db_v2_binding_is_durable_and_required_before_apply(db_session):
@@ -426,9 +505,7 @@ def test_v2_runtime_observation_requires_saved_binding_digest():
 @pytest.mark.parametrize(
     "case", ["legacy", "empty", "present", "different_state", "invalid_extra", "invalid_flag"]
 )
-async def test_db_same_revision_receipt_is_noop_only_when_semantically_identical(
-    db_session, case
-):
+async def test_db_same_revision_receipt_is_noop_only_when_semantically_identical(db_session, case):
     from copy import deepcopy
 
     from sqlalchemy.orm.attributes import flag_modified
@@ -468,9 +545,7 @@ async def test_db_same_revision_receipt_is_noop_only_when_semantically_identical
     before = (row.revision, row.updated_at, deepcopy(row.runtime_result), row.reconcile_attempts)
     if case == "invalid_flag":
         assert type(row.runtime_result["can_apply"]) is int
-    result = await service.advance_restoration(
-        db_session, project.id, owner.id, row.id, runtime
-    )
+    result = await service.advance_restoration(db_session, project.id, owner.id, row.id, runtime)
     await db_session.refresh(row)
     if case in {"legacy", "empty", "present"}:
         assert result.state == "checking" and not result.can_apply
@@ -1040,9 +1115,7 @@ def test_verified_negative_runtime_receipt_is_failed_only():
     }
     validate_runtime_response(request_payload, pre_effect)
     with pytest.raises(ValueError, match="rejection fence mismatch"):
-        validate_runtime_response(
-            {**request_payload, "expected_fencing_epoch": 2}, pre_effect
-        )
+        validate_runtime_response({**request_payload, "expected_fencing_epoch": 2}, pre_effect)
     superseded = RuntimeRestoration(
         **identity,
         state="failed",

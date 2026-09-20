@@ -200,6 +200,21 @@ def _current_build_result(result: ProjectCellProofResult, artifact_digest: str) 
     return result.artifact_ref == f"build/sha256/{artifact_digest}"
 
 
+def _adaptation_proof_capability_gap(
+    bundle: object,
+    capabilities: Mapping[str, object],
+) -> str | None:
+    from omnia_api.services.restoration_adaptation import has_current_adaptation_contract
+
+    if not has_current_adaptation_contract(bundle):
+        return "adaptation_proof_unavailable: immutable preservation contract"
+    if capabilities.get("restoration_adaptation_database_copy_v1") is not True:
+        return "adaptation_proof_unavailable: isolated database copy"
+    if capabilities.get("restoration_adaptation_proof_v1") is not True:
+        return "adaptation_proof_unavailable: schema, CRUD, reload and owner isolation"
+    return None
+
+
 class MaxFinalizationCoordinator:
     """Own every deterministic step after the edit loop for one generation."""
 
@@ -240,6 +255,9 @@ class MaxFinalizationCoordinator:
             bundle = state.get("restoration_adaptation") if isinstance(state, dict) else None
             if not isinstance(bundle, dict):
                 return None
+            proof_gap = _adaptation_proof_capability_gap(bundle, self.executor.capabilities)
+            if proof_gap is not None:
+                raise AdaptationBaselineUnavailable(proof_gap)
             raw_id = bundle.get("base_draft_snapshot_id")
             try:
                 snapshot_id = UUID(str(raw_id))
@@ -320,9 +338,7 @@ class MaxFinalizationCoordinator:
         self._last_prompt = prompt
         identity = await self._identity()
         if workspace_revision_digest(files) != identity.workspace_revision:
-            raise MaxFinalizationConflict(
-                "source files do not match the active workspace revision"
-            )
+            raise MaxFinalizationConflict("source files do not match the active workspace revision")
         proof = await self._proof(identity)
         checkpoint = self._checkpoint(identity, GenerationPhase.PREPARE)
         source_gap = max_source_completion_gap(prompt, files, portable=True)
@@ -560,9 +576,7 @@ class MaxFinalizationCoordinator:
                 if candidate is None or candidate.status != "accepted":
                     raise MaxFinalizationConflict("accepted candidate checkpoint is stale")
             bundle = (
-                await self._load_bundle(proof)
-                if build_is_current
-                else ProofBundle(identity=proof)
+                await self._load_bundle(proof) if build_is_current else ProofBundle(identity=proof)
             )
             if bundle.permit is not None:
                 return await self._outcome(
@@ -705,9 +719,7 @@ class MaxFinalizationCoordinator:
         # Proof reuse is dimension-specific; commands carry the full fenced
         # envelope and must never alias after another identity field changes.
         contract_version = (
-            MAX_FULL_BUILD_CONTRACT_VERSION
-            if role is ProjectCellCommandRole.FULL_BUILD
-            else "v1"
+            MAX_FULL_BUILD_CONTRACT_VERSION if role is ProjectCellCommandRole.FULL_BUILD else "v1"
         )
         operation_id = uuid5(
             self.generation_run_id,

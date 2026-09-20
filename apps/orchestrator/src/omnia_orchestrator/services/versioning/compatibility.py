@@ -67,6 +67,14 @@ _EXPLAIN: dict[str, tuple[str, str | None]] = {
         "Старая форма может перезаписать JSON-поле {field} без новых ключей.",
         "Адаптировать сохранение, чтобы менялись только свои ключи.",
     ),
+    "json_write_contract_unknown": (
+        "Для JSON-поля {field} не доказано, что старая форма сохраняет неизвестные ей ключи.",
+        "Адаптировать запись к по-ключевому обновлению и проверить сохранность на копии данных.",
+    ),
+    "json_key_growth_requires_write_proof": (
+        "В JSON-поле {field} появились новые ключи, которые старая форма может стереть.",
+        "Адаптировать запись к по-ключевому обновлению и проверить сохранность на копии данных.",
+    ),
     "owner_rule_changed": (
         "У таблицы {table} изменилось правило владельца записей.",
         "Проверить доступ разных пользователей в адаптированной версии.",
@@ -116,22 +124,33 @@ def checks_from_diagnostics(diagnostics: Iterable[Diagnostic]) -> list[Compatibi
         )
         values = {**_names(item.object), "detail": item.detail or ""}
         blocking = item.status in {"incompatible", "unknown"}
-        result.append(CompatibilityCheck(
-            code=item.code, status=item.status,
-            severity="blocking" if blocking else "info",
-            operation=item.operation, object=item.object, evidence="structural_rule",
-            explanation=template.format(**values), resolution=resolution,
-        ))
+        result.append(
+            CompatibilityCheck(
+                code=item.code,
+                status=item.status,
+                severity="blocking" if blocking else "info",
+                operation=item.operation,
+                object=item.object,
+                evidence="structural_rule",
+                explanation=template.format(**values),
+                resolution=resolution,
+            )
+        )
     return result
 
 
 def checks_from_unsupported(objects: Iterable[Mapping[str, str]]) -> list[CompatibilityCheck]:
     return [
         CompatibilityCheck(
-            code="analysis_not_supported", status="unknown", severity="blocking",
-            operation="schema.analysis", object=item["object"], evidence="observed_catalog",
-            explanation=_UNSUPPORTED.get(item["kind"], "Объект {object} пока не проверяется.")
-            .format(object=item["object"]),
+            code="analysis_not_supported",
+            status="unknown",
+            severity="blocking",
+            operation="schema.analysis",
+            object=item["object"],
+            evidence="observed_catalog",
+            explanation=_UNSUPPORTED.get(
+                item["kind"], "Объект {object} пока не проверяется."
+            ).format(object=item["object"]),
             resolution="Адаптировать версию с проверкой этого объекта на копии данных.",
         )
         for item in objects
@@ -141,8 +160,12 @@ def checks_from_unsupported(objects: Iterable[Mapping[str, str]]) -> list[Compat
 def delete_warnings(tables: Iterable[str]) -> list[CompatibilityCheck]:
     return [
         CompatibilityCheck(
-            code="delete_may_cascade_into_newer_data", status="unknown", severity="warning",
-            operation=f"{table}.delete", object=f"public.{table}", evidence="structural_rule",
+            code="delete_may_cascade_into_newer_data",
+            status="unknown",
+            severity="warning",
+            operation=f"{table}.delete",
+            object=f"public.{table}",
+            evidence="structural_rule",
             explanation=f"Удаление записи {table} в выбранной версии может затронуть связанные "
             "данные, которых она не знает.",
         )
@@ -376,9 +399,7 @@ def capability_diff(current: Mapping[str, str], historical: Mapping[str, str]) -
     lost = sorted(now.capabilities - then.capabilities)
     lost.extend(("*", route) for route in sorted(now.unresolved) if route not in then.routes())
     restored = sorted(then.capabilities - now.capabilities)
-    restored.extend(
-        ("*", route) for route in sorted(then.unresolved) if route not in now.routes()
-    )
+    restored.extend(("*", route) for route in sorted(then.unresolved) if route not in now.routes())
     return CapabilityDiff(
         lost=[Capability(method=m, path=p) for m, p in lost],
         restored=[Capability(method=m, path=p) for m, p in restored],

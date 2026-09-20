@@ -141,14 +141,10 @@ def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
                 continue
             rel = path.relative_to(workdir).as_posix()
             blob_oid = repo.create_blob(path.read_bytes())
-            index.add(
-                pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB)
-            )
+            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB))
         index.write()
         tree_oid = index.write_tree()
-        commit_oid = repo.create_commit(
-            "HEAD", sig, sig, f"Initial: {template_name}", tree_oid, []
-        )
+        commit_oid = repo.create_commit("HEAD", sig, sig, f"Initial: {template_name}", tree_oid, [])
         _upload(project_id, workdir)
         return str(commit_oid)
 
@@ -172,15 +168,11 @@ def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> st
         index = repo.index
         for rel, content in sorted(files.items()):
             blob_oid = repo.create_blob(content.encode("utf-8"))
-            index.add(
-                pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB)
-            )
+            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB))
         index.write()
         tree_oid = index.write_tree()
         _validate_tree_budget(repo, tree_oid)
-        commit_oid = repo.create_commit(
-            "HEAD", sig, sig, message, tree_oid, []
-        )
+        commit_oid = repo.create_commit("HEAD", sig, sig, message, tree_oid, [])
         _upload(project_id, workdir)
         return str(commit_oid)
 
@@ -232,9 +224,7 @@ def commit_files(
                 full.parent.mkdir(parents=True, exist_ok=True)
                 full.write_text(content, encoding="utf-8")
             blob_oid = repo.create_blob(content.encode("utf-8"))
-            index.add(
-                pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB)
-            )
+            index.add(pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB))
         index.write()
         tree_oid = index.write_tree()
         _validate_tree_budget(repo, tree_oid)
@@ -244,9 +234,7 @@ def commit_files(
         elif not repo.is_empty:
             head_target = repo.head.target
             parents = [
-                head_target
-                if isinstance(head_target, pygit2.Oid)
-                else pygit2.Oid(hex=head_target)
+                head_target if isinstance(head_target, pygit2.Oid) else pygit2.Oid(hex=head_target)
             ]
         else:
             parents = []
@@ -273,9 +261,7 @@ def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
             raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
         total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
         if total_bytes > MAX_REPO_BYTES:
-            raise ValueError(
-                f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}"
-            )
+            raise ValueError(f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}")
         return out
 
 
@@ -319,9 +305,7 @@ def checkout(project_id: UUID, target_commit_sha: str) -> str:
         if not isinstance(created, pygit2.Commit):
             raise RuntimeError(f"created commit {commit_oid} cannot be loaded")
         checkout_tree = cast(Callable[..., Any], repo.checkout_tree)
-        checkout_tree(
-            created.tree, strategy=pygit2.enums.CheckoutStrategy.FORCE
-        )
+        checkout_tree(created.tree, strategy=pygit2.enums.CheckoutStrategy.FORCE)
         _upload(project_id, workdir)
         return str(commit_oid)
 
@@ -352,32 +336,66 @@ def prepare_restore_commit(
     target_sha: str,
     expected_head: str,
     operation_id: UUID,
+    *,
+    overrides: dict[str, str] | None = None,
+    deletes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Pin an operation-owned commit without advancing HEAD; caller serializes writes.
 
     Export all regular blobs, including empty/binary files. Refuse links rather
-    than silently changing their semantics at the runtime boundary.
+    than silently changing their semantics at the runtime boundary. Platform-owned
+    source can be overlaid on the historical product tree so an exact rollback
+    never revives an obsolete authentication or integration boundary.
     """
     import base64
     import hashlib
+
+    platform_overrides = overrides or {}
+    _validate_file_batch(platform_overrides)
+    normalized_deletes = tuple(dict.fromkeys(deletes))
+    for path in normalized_deletes:
+        _validate_repo_path(path)
+    if set(platform_overrides).intersection(normalized_deletes):
+        raise ValueError("restoration override cannot also delete the same path")
 
     with _open_workdir(project_id, must_exist=True) as workdir:
         git = pygit2.Repository(str(workdir))
         target, base = git.get(target_sha), git.get(expected_head)
         if not isinstance(target, pygit2.Commit) or not isinstance(base, pygit2.Commit):
             raise ValueError("restoration source commit missing")
+        tree_id = target.tree_id
+        if platform_overrides or normalized_deletes:
+            index = pygit2.Index()
+            index.read_tree(target.tree)
+            for path in normalized_deletes:
+                try:
+                    index.remove(path)
+                except (KeyError, OSError):
+                    pass
+            for path, content in platform_overrides.items():
+                mode = pygit2.enums.FileMode.BLOB
+                try:
+                    existing = target.tree[path]
+                except KeyError:
+                    existing = None
+                if existing is not None:
+                    if existing.filemode not in {0o100644, 0o100755}:
+                        raise ValueError("restoration platform override requires a regular file")
+                    mode = existing.filemode
+                index.add(pygit2.IndexEntry(path, git.create_blob(content.encode("utf-8")), mode))
+            tree_id = index.write_tree(git)
         reference = f"refs/omnia/restorations/{operation_id.hex}"
         message = f"Restore {target_sha}\nOperation: {operation_id}\n"
         try:
             planned = git[git.references[reference].target]
         except KeyError:
             signature = pygit2.Signature(*SIGNATURE, base.commit_time, 0)
-            oid = git.create_commit(None, signature, signature, message, target.tree_id, [base.id])
+            oid = git.create_commit(None, signature, signature, message, tree_id, [base.id])
             planned = git[oid]
         if (
             not isinstance(planned, pygit2.Commit)
             or planned.message != message
-            or planned.tree_id != target.tree_id
+            or planned.tree_id != tree_id
             or planned.parent_ids != [base.id]
         ):
             raise ValueError("restoration operation identity changed")

@@ -31,6 +31,35 @@ def test_portable_dispatch_requires_provider_capability_and_manifest():
     assert not project_cell_executor.portable_selected({"portable_machine": "true"}, files)
 
 
+def test_adaptation_execution_requires_controller_attested_copy_and_proofs():
+    gap = project_cell_executor.adaptation_execution_capability_gap
+
+    assert gap({"portable_machine": True, "database_admin": "full"}) == (
+        "изолированная копия базы данных не подтверждена"
+    )
+    assert (
+        gap(
+            {
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+            }
+        )
+        == "доверенная проверка адаптации не подтверждена"
+    )
+    assert (
+        gap(
+            {
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+                "restoration_adaptation_proof_v1": True,
+            }
+        )
+        is None
+    )
+
+
 def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
     from omnia_api.services import agent_native
     from omnia_api.services.portable_cell_contract import machine_stack_guide

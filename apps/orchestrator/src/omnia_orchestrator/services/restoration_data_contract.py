@@ -141,16 +141,25 @@ def technical_default(column: DataColumn) -> bool:
 
 
 _TOKEN = re.compile(
-    r"'(?:[^']|'')*'"            # string literal, kept byte-for-byte
-    r'|"(?:[^"]|"")*"'            # quoted identifier
+    r"'(?:[^']|'')*'"  # string literal, kept byte-for-byte
+    r'|"(?:[^"]|"")*"'  # quoted identifier
     r"|[A-Za-z_][A-Za-z0-9_$]*"  # word
-    r"|\d+(?:\.\d+)?"            # number
+    r"|\d+(?:\.\d+)?"  # number
     r"|::|<=|>=|<>|!=|\|\||[-+*/%<>=(),.\[\]]"
     r"|\S"
 )
 # Type names that follow a literal cast; multi-word names are listed explicitly.
-_TYPE_WORDS = {"character", "varying", "double", "precision", "timestamp", "time", "with",
-               "without", "zone"}
+_TYPE_WORDS = {
+    "character",
+    "varying",
+    "double",
+    "precision",
+    "timestamp",
+    "time",
+    "with",
+    "without",
+    "zone",
+}
 
 
 def _word(token: str) -> str:
@@ -202,7 +211,7 @@ def _any_array_to_in(tokens: list[str]) -> list[str]:
     out: list[str] = []
     index = 0
     while index < len(tokens):
-        if tokens[index:index + 5] == ["=", "any", "(", "array", "["]:
+        if tokens[index : index + 5] == ["=", "any", "(", "array", "["]:
             depth, cursor = 0, index + 4
             while cursor < len(tokens):
                 depth += tokens[cursor] == "["
@@ -211,7 +220,7 @@ def _any_array_to_in(tokens: list[str]) -> list[str]:
                     break
                 cursor += 1
             if cursor + 1 < len(tokens) and tokens[cursor + 1] == ")":
-                out += ["in", "(", *tokens[index + 5:cursor], ")"]
+                out += ["in", "(", *tokens[index + 5 : cursor], ")"]
                 index = cursor + 2
                 continue
         out.append(tokens[index])
@@ -228,10 +237,15 @@ def _drop_atom_parens(tokens: list[str]) -> list[str]:
             if tokens[index] == "(" and tokens[index + 2] == ")" and tokens[index + 1] not in "(),":
                 previous = tokens[index - 1] if index else ""
                 if re.fullmatch(r"[a-z_][a-z0-9_$]*", previous) and previous not in {
-                    "and", "or", "not", "in", "is", "check",
+                    "and",
+                    "or",
+                    "not",
+                    "in",
+                    "is",
+                    "check",
                 }:
                     continue  # function call argument
-                tokens = [*tokens[:index], tokens[index + 1], *tokens[index + 3:]]
+                tokens = [*tokens[:index], tokens[index + 1], *tokens[index + 3 :]]
                 changed = True
                 break
     return tokens
@@ -284,9 +298,7 @@ def _checks(table: DataTable) -> dict[str, str | None]:
     return result
 
 
-def _compare_checks(
-    result: ContractAssessment, table: DataTable, live: DataTable
-) -> None:
+def _compare_checks(result: ContractAssessment, table: DataTable, live: DataTable) -> None:
     """Live CHECKs constrain the historical writer; historical-only CHECKs are looser."""
     old_checks, live_checks = _checks(table), _checks(live)
     old_names = {name: expr for expr, name in old_checks.items() if name}
@@ -294,20 +306,32 @@ def _compare_checks(
         subject = f"public.{table.name}" + (f".{name}" if name else "")
         if expression in old_checks:
             result.diagnostics.append(
-                Diagnostic(code="check_unchanged", status="compatible",
-                           operation=f"{table.name}.write", object=subject)
+                Diagnostic(
+                    code="check_unchanged",
+                    status="compatible",
+                    operation=f"{table.name}.write",
+                    object=subject,
+                )
             )
         elif name and name in old_names:
             result.blockers.append(f"check_changed:{table.name}.{name}")
             result.diagnostics.append(
-                Diagnostic(code="check_changed", status="unknown",
-                           operation=f"{table.name}.write", object=subject)
+                Diagnostic(
+                    code="check_changed",
+                    status="unknown",
+                    operation=f"{table.name}.write",
+                    object=subject,
+                )
             )
         else:
             result.blockers.append(f"check_added:{table.name}" + (f".{name}" if name else ""))
             result.diagnostics.append(
-                Diagnostic(code="check_added", status="unknown",
-                           operation=f"{table.name}.write", object=subject)
+                Diagnostic(
+                    code="check_added",
+                    status="unknown",
+                    operation=f"{table.name}.write",
+                    object=subject,
+                )
             )
 
 
@@ -321,15 +345,23 @@ def assess_contract(old: DataContract, current: DataContract) -> ContractAssessm
         if live is None:
             result.blockers.append(f"missing_table:{table.name}")
             result.diagnostics.append(
-                Diagnostic(code="table_missing", status="incompatible",
-                           operation=f"{table.name}.read", object=subject)
+                Diagnostic(
+                    code="table_missing",
+                    status="incompatible",
+                    operation=f"{table.name}.read",
+                    object=subject,
+                )
             )
             continue
         if table.owner_column != live.owner_column or table.owner_reference != live.owner_reference:
             result.blockers.append(f"actor_rule_changed:{table.name}")
             result.diagnostics.append(
-                Diagnostic(code="owner_rule_changed", status="unknown",
-                           operation=f"{table.name}.access", object=subject)
+                Diagnostic(
+                    code="owner_rule_changed",
+                    status="unknown",
+                    operation=f"{table.name}.access",
+                    object=subject,
+                )
             )
         if (
             table.foreign_keys != live.foreign_keys
@@ -338,8 +370,12 @@ def assess_contract(old: DataContract, current: DataContract) -> ContractAssessm
         ):
             result.blockers.append(f"constraints_changed:{table.name}")
             result.diagnostics.append(
-                Diagnostic(code="keys_or_relations_changed", status="unknown",
-                           operation=f"{table.name}.write", object=subject)
+                Diagnostic(
+                    code="keys_or_relations_changed",
+                    status="unknown",
+                    operation=f"{table.name}.write",
+                    object=subject,
+                )
             )
         _compare_checks(result, table, live)
         columns = {column.name: column for column in live.columns}
@@ -350,8 +386,12 @@ def assess_contract(old: DataContract, current: DataContract) -> ContractAssessm
             if column is None:
                 result.blockers.append(f"missing_column:{key}")
                 result.diagnostics.append(
-                    Diagnostic(code="column_missing", status="incompatible",
-                               operation=f"{table.name}.read", object=f"public.{key}")
+                    Diagnostic(
+                        code="column_missing",
+                        status="incompatible",
+                        operation=f"{table.name}.read",
+                        object=f"public.{key}",
+                    )
                 )
             elif (
                 previous.type != column.type
@@ -369,32 +409,72 @@ def assess_contract(old: DataContract, current: DataContract) -> ContractAssessm
                 else:
                     code, detail = "column_became_required", None
                 result.diagnostics.append(
-                    Diagnostic(code=code, status="unknown", operation=f"{table.name}.write",
-                               object=f"public.{key}", detail=detail)
+                    Diagnostic(
+                        code=code,
+                        status="unknown",
+                        operation=f"{table.name}.write",
+                        object=f"public.{key}",
+                        detail=detail,
+                    )
                 )
             elif (
                 column.type in {"json", "jsonb"}
                 and previous.json_keys is not None
-                and (column.json_keys is None
-                     or not set(previous.json_keys).issubset(column.json_keys))
+                and (
+                    column.json_keys is None
+                    or not set(previous.json_keys).issubset(column.json_keys)
+                )
             ):
                 # Plain databases declare no JSON keys; only a known key loss blocks.
                 result.blockers.append(f"json_write_contract_missing:{key}")
                 result.diagnostics.append(
-                    Diagnostic(code="json_keys_lost", status="unknown",
-                               operation=f"{table.name}.update", object=f"public.{key}")
+                    Diagnostic(
+                        code="json_keys_lost",
+                        status="unknown",
+                        operation=f"{table.name}.update",
+                        object=f"public.{key}",
+                    )
                 )
             if (
+                column is not None
+                and previous.type in {"json", "jsonb"}
+                and column.type in {"json", "jsonb"}
+                and previous.json_keys is None
+            ):
+                result.blockers.append(f"json_write_contract_unknown:{key}")
+                result.blocked_deletes.append(table.name)
+                result.diagnostics.append(
+                    Diagnostic(
+                        code="json_write_contract_unknown",
+                        status="unknown",
+                        operation=f"{table.name}.update",
+                        object=f"public.{key}",
+                    )
+                )
+            elif (
                 column is not None
                 and column.json_keys is not None
                 and previous.json_keys is not None
                 and set(column.json_keys) - set(previous.json_keys)
             ):
                 result.blocked_deletes.append(table.name)
+                result.blockers.append(f"json_write_contract_changed:{key}")
+                result.diagnostics.append(
+                    Diagnostic(
+                        code="json_key_growth_requires_write_proof",
+                        status="unknown",
+                        operation=f"{table.name}.update",
+                        object=f"public.{key}",
+                    )
+                )
         if all(previous.name in columns for previous in table.columns):
             result.diagnostics.append(
-                Diagnostic(code="read_compatible", status="compatible",
-                           operation=f"{table.name}.read", object=subject)
+                Diagnostic(
+                    code="read_compatible",
+                    status="compatible",
+                    operation=f"{table.name}.read",
+                    object=subject,
+                )
             )
         for column in live.columns:
             if column.name not in old_names:
@@ -406,8 +486,12 @@ def assess_contract(old: DataContract, current: DataContract) -> ContractAssessm
                 if technical_default(column):
                     # An identifier/timestamp minted by PostgreSQL invents no fact.
                     result.diagnostics.append(
-                        Diagnostic(code="required_field_filled_technically", status="compatible",
-                                   operation=f"{table.name}.create", object=f"public.{key}")
+                        Diagnostic(
+                            code="required_field_filled_technically",
+                            status="compatible",
+                            operation=f"{table.name}.create",
+                            object=f"public.{key}",
+                        )
                     )
                     continue
                 # A business default can fabricate a surname/status, so it is not

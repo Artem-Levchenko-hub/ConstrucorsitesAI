@@ -64,9 +64,9 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
-def test_kit_v19_retires_encrypted_crud_files_instead_of_offering_them() -> None:
+def test_kit_v20_retires_encrypted_crud_and_materializes_portable_users() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 19
+    assert MAX_MANAGED_KIT_VERSION == 20
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     assert MAX_RETIRED_MANAGED_FILES == {
@@ -82,6 +82,10 @@ def test_kit_v19_retires_encrypted_crud_files_instead_of_offering_them() -> None
     for files in (managed, starter):
         assert not MAX_RETIRED_MANAGED_FILES & set(files)
         assert "secureCollection" not in "".join(files.values())
+    assert (
+        ".onConflictDoNothing({ target: schema.maxUsers.maxUserId })"
+        in starter["src/lib/max/session.ts"]
+    )
     assert not MAX_RETIRED_MANAGED_FILES & MAX_SECURITY_LOCKED_FILES
     update = render_max_managed_kit_update(_config(), project_id)
     assert {path: update[path] for path in MAX_RETIRED_MANAGED_FILES} == dict.fromkeys(
@@ -265,7 +269,8 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
                 app_type=app_type,
                 summary="Contract fixture",
             ),
-            uuid4(), portable=True,
+            uuid4(),
+            portable=True,
         ),
     }
     manifest = machine_defaults.MachineManifest.from_files(final_files)
@@ -575,6 +580,7 @@ async def test_max_usage_groups_actual_gateway_ledger_by_latest_run(db_session) 
     assert stages["native_agent"].calls == 1
     assert stages["native_agent"].retries == 2
 
+
 @pytest.mark.parametrize("portable", [False, True])
 def test_starter_session_uses_only_its_runtime_auth_boundary(portable: bool) -> None:
     """Execute the shipped TypeScript helper without a signing key or browser cookie."""
@@ -588,9 +594,15 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 let incoming = new Headers();
+const persisted = [];
+const schema = {maxUsers: {maxUserId: 'max_user_id'}};
+const db = {insert: table => ({values: value => ({onConflictDoNothing: async options => {
+  persisted.push({table, value, options});
+}})})};
 const exportsFor = {
  'node:crypto': {createHmac: crypto.createHmac, timingSafeEqual: crypto.timingSafeEqual},
  'next/headers': {headers: async () => incoming, cookies: async () => ({get: () => undefined})},
+ '@/lib/db': {db, schema},
  '@/lib/max/validate-init-data': {validateMaxInitData: () => {
   throw Error('unexpected MAX token validation')
  }}
@@ -610,7 +622,15 @@ const exportsFor = {
                   'x-omnia-session-epoch':'7'};
  incoming = new Headers(trusted);
  const user = await mod.namespace.getMaxUser();
- if (input.portable) assert.equal(user.id, 'owner-123');
+ if (input.portable) {
+  assert.equal(user.id, 'owner-123');
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].table, schema.maxUsers);
+  assert.equal(persisted[0].value.maxUserId, 'owner-123');
+  assert.equal(persisted[0].value.firstName, '');
+  assert.equal(Object.keys(persisted[0].value).length, 2);
+  assert.equal(persisted[0].options.target, schema.maxUsers.maxUserId);
+ }
  else assert.equal(user, null); // Legacy routes must never trust client-supplied identity.
  for (const changes of [
   {'x-omnia-user-id':''}, {'x-omnia-project-id':'another-project'},
@@ -622,12 +642,15 @@ const exportsFor = {
  }
  incoming = new Headers();
  assert.equal(await mod.namespace.getMaxUser(), null);
+ assert.equal(persisted.length, input.portable ? 1 : 0);
 })().catch(error => {console.error(error); process.exitCode = 1});
 """
     result = run(
         ["node", "--experimental-vm-modules", "-e", script],
         input=json.dumps({"source": source, "project": str(project_id), "portable": portable}),
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
 
@@ -641,41 +664,55 @@ def test_preseeded_portable_manifest_satisfies_real_completion_without_agent_rew
     from omnia_api.services.max_generation_contract import max_source_completion_gap
 
     starter = render_max_starter_files(_config(), uuid4(), portable=True)
-    manifest = json.dumps({
-        "version": 1,
-        "tasks": [{"name": "final-test", "role": "full_build", "argv": ["pnpm", "test"]}],
-        "services": [{"name": "web"}],
-        "routes": [{"path": "/", "service": "web", "port": 3000}],
-    })
+    manifest = json.dumps(
+        {
+            "version": 1,
+            "tasks": [{"name": "final-test", "role": "full_build", "argv": ["pnpm", "test"]}],
+            "services": [{"name": "web"}],
+            "routes": [{"path": "/", "service": "web", "port": 3000}],
+        }
+    )
     old_page = "export default function Page(){return <main>Old user interface</main>}"
-    workspace = {".omnia/cell.json": manifest, "src/app/page.tsx": old_page,
-                 "src/app/api/old/route.ts": "export const GET = () => new Response('old')"}
+    workspace = {
+        ".omnia/cell.json": manifest,
+        "src/app/page.tsx": old_page,
+        "src/app/api/old/route.ts": "export const GET = () => new Response('old')",
+    }
     seed = max_project_kit_svc.include_portable_manifest(starter, workspace)
     assert "src/app/page.tsx" not in seed
     assert "src/app/api/old/route.ts" not in seed
-    authored = {"src/app/page.tsx": (
-        "export default function Page(){return <main>Authored warehouse product</main>}"
-    )}
+    authored = {
+        "src/app/page.tsx": (
+            "export default function Page(){return <main>Authored warehouse product</main>}"
+        )
+    }
     assert max_source_completion_gap("Build warehouse", {**seed, **authored}, portable=True) is None
     for changed_manifest in ("", "{}", "broken"):
-        assert max_source_completion_gap(
-            "Build warehouse", {**seed, **authored, ".omnia/cell.json": changed_manifest},
-            portable=True,
-        ) is not None
+        assert (
+            max_source_completion_gap(
+                "Build warehouse",
+                {**seed, **authored, ".omnia/cell.json": changed_manifest},
+                portable=True,
+            )
+            is not None
+        )
     missing_seed = max_project_kit_svc.include_portable_manifest(starter, {})
     assert ".omnia/cell.json" not in missing_seed
-    assert max_source_completion_gap(
-        "Build warehouse", {**missing_seed, **authored}, portable=True,
-    ) is not None
+    assert (
+        max_source_completion_gap(
+            "Build warehouse",
+            {**missing_seed, **authored},
+            portable=True,
+        )
+        is not None
+    )
 
 
 def test_long_brief_survives_config_and_prompt_validation() -> None:
     from omnia_api.schemas.message import PromptRequest
 
     brief = ("Товары, движения, история.\n" * 800)[:19_992] + "КОНЕЦ ТЗ"
-    config = MaxProjectConfigPayload.model_validate(
-        {**_config().model_dump(), "summary": brief}
-    )
+    config = MaxProjectConfigPayload.model_validate({**_config().model_dump(), "summary": brief})
     assert config.summary == brief
     request = PromptRequest(prompt=f"Создай MAX Mini App.\n{brief}\nПроверь результат.")
     assert brief in request.prompt
@@ -687,8 +724,6 @@ def test_brief_limits_reject_instead_of_truncating() -> None:
     from omnia_api.schemas.message import PromptRequest
 
     with pytest.raises(ValidationError):
-        MaxProjectConfigPayload.model_validate(
-            {**_config().model_dump(), "summary": "я" * 20_001}
-        )
+        MaxProjectConfigPayload.model_validate({**_config().model_dump(), "summary": "я" * 20_001})
     with pytest.raises(ValidationError):
         PromptRequest(prompt="я" * 30_001)

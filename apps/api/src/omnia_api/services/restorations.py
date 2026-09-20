@@ -81,8 +81,7 @@ async def assert_no_active_restoration(
     if active_id:
         raise ApiError(
             "restoration_active",
-            "Идёт восстановление версии: примените или отмените его, "
-            "затем повторите действие.",
+            "Идёт восстановление версии: примените или отмените его, затем повторите действие.",
             409,
             details={"restoration_id": str(active_id)},
         )
@@ -253,8 +252,12 @@ def validate_runtime_response(request: dict[str, Any], result: RuntimeRestoratio
         if str(getattr(result, key)) != request[key]:
             raise ValueError("restoration response identity mismatch")
     v2 = request.get("binding_contract_version") == 2
-    if v2 and result.state == "ready" and (
-        result.binding is None or result.binding_digest is None or result.can_apply is not True
+    if (
+        v2
+        and result.state == "ready"
+        and (
+            result.binding is None or result.binding_digest is None or result.can_apply is not True
+        )
     ):
         raise ValueError("restoration source binding is required")
     expected_binding = request.get("binding_digest")
@@ -497,11 +500,29 @@ async def _prepare(
         raise ApiError("conflict", "The draft changed before restoration preparation", 409)
     if not operation.request_payload:
         try:
+            from omnia_api.models.max_project_config import MaxProjectConfig
+            from omnia_api.schemas.max_studio import MaxProjectConfigPayload
+            from omnia_api.services.max_project_kit import (
+                MAX_RETIRED_MANAGED_FILES,
+                render_portable_max_managed_files,
+                render_portable_max_session,
+            )
+
+            config = await session.get(MaxProjectConfig, project_id)
+            platform_files = (
+                render_portable_max_managed_files(
+                    MaxProjectConfigPayload.model_validate(config.config), project_id
+                )
+                if config is not None
+                else {"src/lib/max/session.ts": render_portable_max_session(project_id)}
+            )
             prepared = repo.prepare_restore_commit(
                 project_id,
                 operation.target_commit_sha,
                 operation.base_commit_sha,
                 operation.id,
+                overrides=platform_files,
+                deletes=tuple(sorted(MAX_RETIRED_MANAGED_FILES)),
             )
         except (ValueError, RuntimeError, OSError):
             operation.state = "failed"
@@ -718,8 +739,7 @@ async def _dispatch(
         await session.commit()
         return await _dispatch(session, project_id, owner_id, operation_id, runtime, "cancel")
     same_receipt = (
-        result.revision == operation.runtime_revision
-        and operation.runtime_result is not None
+        result.revision == operation.runtime_revision and operation.runtime_result is not None
     )
     projection_before: tuple[Any, ...] | None = None
     if same_receipt:
@@ -763,9 +783,7 @@ async def _dispatch(
             # binding and fencing envelope; no SQL fence or owner intent is
             # created here.
             await session.commit()
-            return await _dispatch(
-                session, project_id, owner_id, operation_id, runtime, "apply"
-            )
+            return await _dispatch(session, project_id, owner_id, operation_id, runtime, "apply")
         # A different ready receipt is not proof that this apply was never
         # admitted. Keep the original preparation evidence as the only replay
         # baseline and wait for an unambiguous controller outcome.
@@ -773,9 +791,7 @@ async def _dispatch(
         return await _unconfirmed(session, project_id, owner_id, operation_id)
     if operation.state in {"completed", "cancelled", "failed"}:
         return public_operation(operation)
-    result_binding = (
-        result.binding.model_dump(mode="json") if result.binding is not None else None
-    )
+    result_binding = result.binding.model_dump(mode="json") if result.binding is not None else None
     if operation.source_binding is not None and (
         result_binding != operation.source_binding
         or result.binding_digest != operation.source_binding_digest

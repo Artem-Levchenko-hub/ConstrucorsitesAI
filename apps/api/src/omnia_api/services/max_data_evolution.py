@@ -2,6 +2,7 @@
 
 import json
 import posixpath
+import re
 from collections.abc import Mapping
 
 from omnia_api.services.portable_cell_contract import (
@@ -106,12 +107,7 @@ _SCHEMA_PATH = "src/lib/db/schema.ts"
 
 def _normalized_path(path: str) -> str:
     raw = path.strip().replace("\\", "/")
-    if (
-        not raw
-        or raw.startswith(("/", "~"))
-        or "\x00" in raw
-        or ".." in raw.split("/")
-    ):
+    if not raw or raw.startswith(("/", "~")) or "\x00" in raw or ".." in raw.split("/"):
         raise ValueError(f"unsafe path: {path!r}")
     normalized = posixpath.normpath(raw)
     if normalized in {"", "."} or normalized.startswith("../"):
@@ -120,15 +116,156 @@ def _normalized_path(path: str) -> str:
 
 
 def _canonical_migration(path: str) -> bool:
-    return (
-        path.startswith("drizzle/")
-        and path.count("/") == 1
-        and path.endswith(".sql")
-    )
+    return path.startswith("drizzle/") and path.count("/") == 1 and path.endswith(".sql")
+
+
+_DOLLAR_QUOTE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
+_DESTRUCTIVE_SQL_WORDS = frozenset({"delete", "drop", "truncate"})
+_UNSAFE_STRING_ESCAPE = "\0string_escape"
+
+
+def _sql_words(source: str) -> tuple[str, ...]:
+    """Return executable SQL words and statement boundaries.
+
+    Dollar-quoted values, ordinary strings and quoted identifiers stay inert. SQL
+    constructs that can execute a dollar-quoted body are rejected separately; the
+    contract never tries to prove arbitrary procedural or dynamic SQL safe.
+    """
+
+    words: list[str] = []
+    index = 0
+    while index < len(source):
+        if source.startswith("--", index):
+            line_end = index + 2
+            while line_end < len(source) and source[line_end] not in "\r\n":
+                line_end += 1
+            index = line_end
+            if index < len(source) and source[index] == "\r":
+                index += 1
+            if index < len(source) and source[index] == "\n":
+                index += 1
+            continue
+        if source.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < len(source) and depth:
+                if source.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            continue
+        if source[index] in {"e", "E"} and index + 1 < len(source) and source[index + 1] == "'":
+            index += 2
+            while index < len(source):
+                if source[index] == "\\":
+                    index = min(index + 2, len(source))
+                    continue
+                if source[index] == "'":
+                    if index + 1 < len(source) and source[index + 1] == "'":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        if source[index] == "'":
+            index += 1
+            literal: list[str] = []
+            while index < len(source):
+                if source[index] == "'":
+                    if index + 1 < len(source) and source[index + 1] == "'":
+                        literal.append("'")
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                literal.append(source[index])
+                index += 1
+            if "\\" in literal:
+                words.append(_UNSAFE_STRING_ESCAPE)
+            continue
+        if source[index] == '"':
+            index += 1
+            while index < len(source):
+                if source[index] == '"':
+                    if index + 1 < len(source) and source[index + 1] == '"':
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            continue
+        dollar_quote = _DOLLAR_QUOTE.match(source, index)
+        if dollar_quote:
+            marker = dollar_quote.group()
+            closing = source.find(marker, dollar_quote.end())
+            index = len(source) if closing < 0 else closing + len(marker)
+            continue
+        if source[index].isalpha() or source[index] == "_":
+            end = index + 1
+            while end < len(source) and (source[end].isalnum() or source[end] in "_$"):
+                end += 1
+            word = source[index:end].lower()
+            words.append(word)
+            index = end
+            continue
+        if source[index] == ";":
+            words.append(";")
+        index += 1
+    return tuple(words)
+
+
+def _destructive_sql_keyword(words: tuple[str, ...]) -> str | None:
+    statements: list[list[str]] = [[]]
+    for word in words:
+        if word == ";":
+            if statements[-1]:
+                statements.append([])
+            continue
+        statements[-1].append(word)
+    for statement in statements:
+        for index, word in enumerate(statement):
+            foreign_key_action = (
+                word == "delete"
+                and index > 0
+                and statement[index - 1] == "on"
+                and "references" in statement[:index]
+            )
+            if word in _DESTRUCTIVE_SQL_WORDS and not foreign_key_action:
+                return word
+    for statement in statements:
+        if not statement:
+            continue
+        if statement[0] == "call":
+            return "call"
+        if _UNSAFE_STRING_ESCAPE in statement:
+            return "string_escape"
+        if statement[0] in {"set", "reset"} and "standard_conforming_strings" in statement:
+            return "standard_conforming_strings"
+        if "set_config" in statement:
+            return "set_config"
+        if statement[0] == "do":
+            return "do"
+        if "execute" in statement:
+            return "execute"
+        if statement[0] in {"alter", "create"}:
+            procedural = next(
+                (word for word in statement if word in {"function", "procedure", "trigger"}),
+                None,
+            )
+            if procedural:
+                return procedural
+    return None
 
 
 def _normalized_source(
-    source: Mapping[str, str], *, label: str,
+    source: Mapping[str, str],
+    *,
+    label: str,
 ) -> tuple[dict[str, str], tuple[str, ...]]:
     normalized: dict[str, str] = {}
     aliases: dict[str, str] = {}
@@ -151,7 +288,8 @@ def _normalized_source(
 
 
 def max_migration_contract_errors(
-    before: Mapping[str, str], after: Mapping[str, str],
+    before: Mapping[str, str],
+    after: Mapping[str, str],
 ) -> tuple[str, ...]:
     """Return fail-closed MAX migration violations for one candidate diff.
 
@@ -178,9 +316,7 @@ def max_migration_contract_errors(
         and bool(normalized_after.get(path, "").strip())
     ]
     errors: list[str] = []
-    existing_canonical = sorted(
-        path for path in normalized_before if _canonical_migration(path)
-    )
+    existing_canonical = sorted(path for path in normalized_before if _canonical_migration(path))
     if existing_canonical:
         last_existing = existing_canonical[-1]
         for path in sorted(new_canonical):
@@ -188,21 +324,25 @@ def max_migration_contract_errors(
                 errors.append(
                     f"{path} must append after existing canonical migration {last_existing}"
                 )
+    for path in sorted(new_canonical):
+        words = _sql_words(normalized_after[path])
+        destructive = _destructive_sql_keyword(words)
+        if destructive:
+            errors.append(
+                f"{path} contains unsafe SQL keyword {destructive.upper()}; "
+                "destructive or procedural migrations require isolated "
+                "database-copy verification"
+            )
     for path in changed:
         removed = path in normalized_before and path not in normalized_after
         if _canonical_migration(path) and path in normalized_before:
-            errors.append(
-                f"{path} is an existing canonical migration and must remain immutable"
-            )
+            errors.append(f"{path} is an existing canonical migration and must remain immutable")
         elif (
-            path.startswith("drizzle/")
-            and path.endswith(".sql")
-            and not _canonical_migration(path)
+            path.startswith("drizzle/") and path.endswith(".sql") and not _canonical_migration(path)
         ) and not removed:
             errors.append(f"{path} is not canonical; use direct drizzle/*.sql files")
         elif (
-            path.startswith("migrations/")
-            or path.startswith("src/lib/db/migrations/")
+            path.startswith("migrations/") or path.startswith("src/lib/db/migrations/")
         ) and not removed:
             errors.append(f"{path} is not canonical; use drizzle/*.sql")
         elif (
@@ -237,18 +377,18 @@ def max_migration_contract_errors(
     if _CANONICAL_RUNNER in changed:
         errors.append(f"{_CANONICAL_RUNNER} is platform-owned and must not be changed")
     if _SCHEMA_PATH in changed and not new_canonical:
-        errors.append(
-            f"{_SCHEMA_PATH} changed without a new canonical drizzle/*.sql migration"
-        )
+        errors.append(f"{_SCHEMA_PATH} changed without a new canonical drizzle/*.sql migration")
     return tuple(errors)
 
 
 async def build_max_agent_guide(
-    legacy: str, executor: PortableGuideExecutor | None = None,
+    legacy: str,
+    executor: PortableGuideExecutor | None = None,
 ) -> str:
     """Apply policy after provider selection, which may replace the entire guide."""
     guide = (
         await machine_stack_guide_from_executor(legacy, executor)
-        if executor is not None else legacy
+        if executor is not None
+        else legacy
     )
     return f"{guide}\n\n{MAX_DATA_EVOLUTION_POLICY}".strip()

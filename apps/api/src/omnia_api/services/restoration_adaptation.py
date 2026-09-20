@@ -35,7 +35,7 @@ _DERIVED = {"node_modules", ".next", ".git", "dist", "build", "__pycache__"}
 _LOCKS = {"pnpm-lock.yaml", "package-lock.json", "yarn.lock", "uv.lock"}
 _JS_NON_CODE = re.compile(
     r"//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|"
-    r'''"(?:\\[\s\S]|[^"\\])*(?:"|\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\Z)|'''
+    r""""(?:\\[\s\S]|[^"\\])*(?:"|\Z)|'(?:\\[\s\S]|[^'\\])*(?:'|\Z)|"""
     r"`(?:\\[\s\S]|[^`\\])*(?:`|\Z)|"
     r"/(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*\]|[^/\\[\r\n])+/[a-z]*|/[^\n]*"
 )
@@ -45,8 +45,44 @@ _ENV_DECLARATION = re.compile(
     re.MULTILINE,
 )
 _SIMPLE_TEMPLATE_EXPRESSION = re.compile(
-    r'''\$\{(?:[^{}'"`\\]|"(?:\\[^`]|[^"`\\])*"|'(?:\\[^`]|[^'`\\])*')*\}'''
+    r"""\$\{(?:[^{}'"`\\]|"(?:\\[^`]|[^"`\\])*"|'(?:\\[^`]|[^'`\\])*')*\}"""
 )
+
+
+def _preservation_contract() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "immutable": True,
+        "database_target": "isolated_copy_only",
+        "requirements": [
+            "preserve_existing_ids",
+            "preserve_existing_business_values",
+            "preserve_unknown_and_hidden_fields",
+            "preserve_owner_isolation",
+            "additive_schema_only",
+        ],
+        "required_proofs": [
+            "current_schema",
+            "create_read_update_delete",
+            "per_id_hidden_field_preservation",
+            "reload_persistence",
+            "cross_owner_denial",
+        ],
+    }
+
+
+def has_current_adaptation_contract(value: object) -> bool:
+    diff = value.get("data_contract_diff") if isinstance(value, dict) else None
+    return (
+        isinstance(value, dict)
+        and value.get("version") == 2
+        and value.get("preservation_contract") == _preservation_contract()
+        and isinstance(diff, dict)
+        and diff.get("version") == 1
+        and diff.get("historical_source") == "selected_historical_code"
+        and diff.get("current_source") == "controller_observed_catalog"
+        and isinstance(diff.get("findings"), list)
+    )
 
 
 def _source_secret_scan_text(path: PurePosixPath, content: str) -> str:
@@ -79,7 +115,7 @@ def _source_secret_scan_text(path: PurePosixPath, content: str) -> str:
     for match in _ENV_DECLARATION.finditer("".join(code)):
         # The statement boundary must also exist in the original source: do not
         # turn `process.env.TOKEN /* comment */;` into a supported declaration.
-        statement = content[match.start():match.end()]
+        statement = content[match.start() : match.end()]
         reference_end = match.end("reference") - match.start()
         if not re.fullmatch(r"[ \t]*;[ \t]*(?://[^\r\n]*)?", statement[reference_end:]):
             continue
@@ -172,6 +208,43 @@ def _compatibility_report(raw: object) -> dict[str, Any] | None:
     return report
 
 
+def _data_contract_diff(report: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose only controller evidence; never infer compatibility from prose."""
+    checks = report.get("checks", []) if report is not None else []
+    findings = [
+        {
+            key: check.get(key)
+            for key in (
+                "code",
+                "status",
+                "severity",
+                "operation",
+                "object",
+                "evidence",
+                "resolution",
+            )
+        }
+        for check in checks
+        if isinstance(check, dict)
+    ]
+    observed = (
+        report is not None
+        and report.get("database_state") in {"empty", "present"}
+        and any(
+            item.get("evidence") in {"observed_catalog", "structural_rule"} for item in findings
+        )
+    )
+    return {
+        "version": 1,
+        "historical_source": "selected_historical_code",
+        "current_source": (
+            "controller_observed_catalog" if observed else "controller_report_unavailable"
+        ),
+        "findings": findings,
+        "blockers": list(report.get("blockers", [])) if report is not None else [],
+    }
+
+
 async def prepare_adaptation(
     session: AsyncSession,
     project: Project,
@@ -233,8 +306,9 @@ async def prepare_adaptation(
             "Не удалось прочитать исходник выбранной версии. Повторите подготовку."
         ) from exc
     safe, excluded = _source_files(files)
+    report = _compatibility_report(operation.report)
     bundle: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "project_id": str(project.id),
         "owner_id": str(owner_id),
         "operation_id": str(operation.id),
@@ -244,7 +318,9 @@ async def prepare_adaptation(
         "base_draft_snapshot_id": str(reference.expected_draft_snapshot_id),
         "files": safe,
         "excluded_paths": excluded,
-        "compatibility_report": _compatibility_report(operation.report),
+        "compatibility_report": report,
+        "data_contract_diff": _data_contract_diff(report),
+        "preservation_contract": _preservation_contract(),
     }
     return {**bundle, "sha256": _digest(bundle)}
 
@@ -276,9 +352,10 @@ async def append_adaptation_context(
     if not isinstance(raw, dict):
         raise _conflict("Сохранённая ссылка на исторический код повреждена.")
     bundle = {key: value for key, value in raw.items() if key != "sha256"}
+    version = raw.get("version")
     if (
         raw.get("sha256") != _digest(bundle)
-        or raw.get("version") != 1
+        or version not in {1, 2}
         or raw.get("project_id") != str(project_id)
         or raw.get("owner_id") != str(owner_id)
         or raw.get("base_draft_snapshot_id") != str(current_snapshot_id)
@@ -286,7 +363,12 @@ async def append_adaptation_context(
     ):
         raise _conflict("Сохранённый исторический исходник не прошёл проверку целостности.")
     files, excluded = _source_files(raw["files"])
-    _compatibility_report(raw.get("compatibility_report"))
+    report = _compatibility_report(raw.get("compatibility_report"))
+    if version == 2 and (
+        raw.get("data_contract_diff") != _data_contract_diff(report)
+        or raw.get("preservation_contract") != _preservation_contract()
+    ):
+        raise _conflict("Сохранённый исторический исходник не прошёл проверку целостности.")
     if excluded:
         raise _conflict("Сохранённый исходник требует повторной безопасной подготовки.")
     return (
@@ -306,8 +388,12 @@ async def append_adaptation_context(
             "Prefer adapting application code; any necessary schema additions must be additive "
             "migrations that preserve original values and relationships. "
             "Never guess missing business values or reinterpret units/statuses. "
-            "Build and test the candidate: real reads and writes, hidden-field preservation, "
-            "reload persistence, and cross-user denial. The report's capabilities.lost lists "
+            "The preservation contract is immutable. Use database tools only against a "
+            "controller-confirmed isolated copy; absence of that capability blocks data-changing "
+            "tests and promotion. Build and test the candidate: real reads and writes, "
+            "hidden-field preservation, reload persistence, and cross-user denial. Each listed "
+            "proof is mandatory before promotion; a build, health check, screenshot, or model "
+            "claim is not proof. The report's capabilities.lost lists "
             "routes the current app has and the historical version lacks; they serve data "
             "that still exists, so keep each of them working (same response shape, same "
             "per-user filtering) unless the owner explicitly asked to remove it. "

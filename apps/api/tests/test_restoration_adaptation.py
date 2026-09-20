@@ -145,10 +145,33 @@ def source_case(monkeypatch):
         base_draft_snapshot_id=project.current_snapshot_id,
         report={
             "revision": 1,
-            "mode": "exact",
+            "mode": "adapted",
             "database_state": "present",
+            "format": 2,
             "blockers": ["Новое обязательное поле требует совместимой записи."],
             "retained_data": ["Текущие фамилии клиентов остаются в базе."],
+            "checks": [
+                {
+                    "code": "column_became_required",
+                    "status": "unknown",
+                    "severity": "blocking",
+                    "operation": "clients.insert",
+                    "object": "public.clients.surname",
+                    "evidence": "structural_rule",
+                    "explanation": "Current catalog requires surname.",
+                    "resolution": "Keep the current column and adapt historical writes.",
+                },
+                {
+                    "code": "owner_rule_unchanged",
+                    "status": "compatible",
+                    "severity": "info",
+                    "operation": "clients.access",
+                    "object": "public.clients.owner_id",
+                    "evidence": "structural_rule",
+                    "explanation": "Owner binding is unchanged.",
+                    "resolution": None,
+                },
+            ],
         },
     )
     run = SimpleNamespace(
@@ -285,6 +308,123 @@ async def test_historical_component_absent_from_current_code_reaches_model_conte
     assert historical["src/components/OldCalendar.tsx"] in text
     assert "CURRENT business database" in text
     assert text.startswith("Adapt the old UI")
+
+
+async def test_adaptation_bundle_carries_explicit_contract_diff_and_immutable_proof_contract(
+    source_case,
+):
+    service, session, project, _, run, reference, _, _ = source_case
+
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    run.agent_state = {"restoration_adaptation": bundle}
+    context = await service.append_adaptation_context(
+        session,
+        run.id,
+        project.id,
+        project.owner_id,
+        project.current_snapshot_id,
+        "Adapt",
+    )
+
+    assert bundle["version"] == 2
+    assert bundle["data_contract_diff"] == {
+        "version": 1,
+        "historical_source": "selected_historical_code",
+        "current_source": "controller_observed_catalog",
+        "findings": [
+            {
+                "code": "column_became_required",
+                "status": "unknown",
+                "severity": "blocking",
+                "operation": "clients.insert",
+                "object": "public.clients.surname",
+                "evidence": "structural_rule",
+                "resolution": "Keep the current column and adapt historical writes.",
+            },
+            {
+                "code": "owner_rule_unchanged",
+                "status": "compatible",
+                "severity": "info",
+                "operation": "clients.access",
+                "object": "public.clients.owner_id",
+                "evidence": "structural_rule",
+                "resolution": None,
+            },
+        ],
+        "blockers": ["Новое обязательное поле требует совместимой записи."],
+    }
+    assert bundle["preservation_contract"] == {
+        "version": 1,
+        "immutable": True,
+        "database_target": "isolated_copy_only",
+        "requirements": [
+            "preserve_existing_ids",
+            "preserve_existing_business_values",
+            "preserve_unknown_and_hidden_fields",
+            "preserve_owner_isolation",
+            "additive_schema_only",
+        ],
+        "required_proofs": [
+            "current_schema",
+            "create_read_update_delete",
+            "per_id_hidden_field_preservation",
+            "reload_persistence",
+            "cross_owner_denial",
+        ],
+    }
+    assert '"data_contract_diff"' in context
+    assert '"isolated_copy_only"' in context
+    assert "proof is mandatory before promotion" in context
+
+
+async def test_v2_bundle_tampering_with_proof_contract_is_rejected(source_case):
+    service, session, project, _, run, reference, _, _ = source_case
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle["preservation_contract"]["database_target"] = "live"
+    run.agent_state = {"restoration_adaptation": bundle}
+
+    with pytest.raises(ApiError, match="целостности"):
+        await service.append_adaptation_context(
+            session,
+            run.id,
+            project.id,
+            project.owner_id,
+            project.current_snapshot_id,
+            "Adapt",
+        )
+
+
+@pytest.mark.parametrize(
+    ("database_state", "current_source"),
+    [
+        ("present", "controller_observed_catalog"),
+        ("empty", "controller_observed_catalog"),
+        ("unknown", "controller_report_unavailable"),
+    ],
+)
+def test_contract_diff_provenance_requires_an_observed_database_state(
+    database_state,
+    current_source,
+):
+    from omnia_api.services.restoration_adaptation import _data_contract_diff
+
+    report = {
+        "database_state": database_state,
+        "checks": [
+            {
+                "code": "required_field_missing_on_create",
+                "status": "incompatible",
+                "severity": "blocking",
+                "operation": "tasks.create",
+                "object": "public.tasks.email",
+                "evidence": "structural_rule",
+                "resolution": "adapt",
+            }
+        ],
+        "blockers": ["new_required_column:tasks.email"],
+    }
+
+    assert _data_contract_diff(report)["current_source"] == current_source
 
 
 @pytest.mark.parametrize("invalid", ["owner", "project", "state", "head", "snapshot", "sha"])

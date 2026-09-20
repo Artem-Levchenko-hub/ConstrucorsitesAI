@@ -110,22 +110,23 @@ def test_contract_cannot_claim_missing_owner_or_duplicate_fields():
             DataContract.model_validate(data)
 
 
-def test_declared_json_key_growth_is_compatible():
+def test_declared_json_key_growth_requires_historical_writer_proof():
     data = contract()
     data["tables"][0]["columns"].append({"name": "profile", "type": "jsonb", "json_keys": ["name"]})
     old = DataContract.model_validate(data)
     data["tables"][0]["columns"][-1]["json_keys"].append("surname")
-    assert not assess_contract(old, DataContract.model_validate(data)).blockers
+    assert assess_contract(old, DataContract.model_validate(data)).blockers == [
+        "json_write_contract_changed:customers.profile"
+    ]
 
 
-def test_undeclared_unchanged_json_column_does_not_block_plain_restoration():
-    # Plain project databases have no declared JSON key contract; every MAX kit
-    # schema has jsonb columns, so treating "unknown keys" as a blocker would
-    # make every historical restore impossible.
+def test_undeclared_json_writer_requires_adaptation():
     data = contract()
     data["tables"][0]["columns"].append({"name": "details", "type": "jsonb", "nullable": False})
     old = DataContract.model_validate(data)
-    assert assess_contract(old, DataContract.model_validate(deepcopy(data))).blockers == []
+    assert assess_contract(old, DataContract.model_validate(deepcopy(data))).blockers == [
+        "json_write_contract_unknown:customers.details"
+    ]
 
 
 def test_declared_json_key_loss_still_blocks():

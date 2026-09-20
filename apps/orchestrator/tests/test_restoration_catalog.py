@@ -1,5 +1,7 @@
 """Catalog evidence is observed; historical declarations cannot invent live semantics."""
 
+import json
+
 import pytest
 
 from omnia_orchestrator.services.restoration_catalog import normalize_type
@@ -57,10 +59,13 @@ def test_table_without_owner_column_is_an_ordinary_compatible_table():
     tables = infer_ownership([{"name": "prices", "columns": [{"name": "note", "type": "text"}]}])
     assert "owner_column" not in tables[0] and "owner_reference" not in tables[0]
     data = catalog_payload()
-    data["tables"].append({
-        **data["tables"][0], "name": "price_list",
-        "columns": [{"name": "id", "type": "uuid"}, {"name": "title", "type": "text"}],
-    })
+    data["tables"].append(
+        {
+            **data["tables"][0],
+            "name": "price_list",
+            "columns": [{"name": "id", "type": "uuid"}, {"name": "title", "type": "text"}],
+        }
+    )
     live, blockers = contract_from_catalog(data)
     assert blockers == []
     assert [table.name for table in live.tables] == ["contacts", "price_list"]
@@ -149,6 +154,43 @@ def test_live_catalog_never_invents_json_semantics():
     live, _ = contract_from_catalog(catalog_payload())
     assert live.tables[0].columns[2].json_keys is None
     assert live.tables[0].columns[2].meaning is None
+
+
+def test_historical_read_only_claim_cannot_green_unknown_live_json_writes():
+    from omnia_orchestrator.services.restoration_catalog import (
+        candidate_contract,
+        contract_from_catalog,
+    )
+    from omnia_orchestrator.services.restoration_data_contract import assess_contract
+
+    live, _ = contract_from_catalog(catalog_payload())
+    historical = candidate_contract(
+        object(),
+        {
+            ".omnia/data-contract.json": json.dumps(
+                {
+                    "version": 1,
+                    "tables": [
+                        {
+                            "name": "contacts",
+                            "owner_column": "owner_id",
+                            "read_only": True,
+                            "columns": [
+                                {"name": "id", "type": "uuid"},
+                                {"name": "owner_id", "type": "text"},
+                                {"name": "profile", "type": "jsonb"},
+                            ],
+                            "primary_key": ["id"],
+                        }
+                    ],
+                }
+            )
+        },
+    )
+
+    assert assess_contract(historical, live).blockers == [
+        "json_write_contract_unknown:contacts.profile"
+    ]
 
 
 def test_json_named_user_trigger_is_not_controller_proof():

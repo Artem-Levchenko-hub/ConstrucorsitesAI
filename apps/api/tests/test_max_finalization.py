@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable
@@ -24,6 +25,7 @@ from omnia_api.models.user import User
 from omnia_api.services.max_finalization import (
     MaxFinalizationCoordinator,
     MaxFinalizationStatus,
+    _adaptation_proof_capability_gap,
 )
 from omnia_api.services.max_runtime_probe import MaxRuntimeProbe
 from omnia_api.services.orchestrator_client import (
@@ -121,6 +123,50 @@ def _exact_release_probe(monkeypatch: pytest.MonkeyPatch):
 
 
 _RUNTIME_ARTIFACT_DIGESTS: dict[UUID, Callable[[], str]] = {}
+_CURRENT_ADAPTATION_DIFF = {
+    "version": 1,
+    "historical_source": "selected_historical_code",
+    "current_source": "controller_observed_catalog",
+    "findings": [],
+    "blockers": [],
+}
+
+
+def test_adaptation_capabilities_are_controller_attested_and_fail_closed() -> None:
+    from omnia_api.services.restoration_adaptation import _preservation_contract
+
+    bundle = {
+        "version": 2,
+        "preservation_contract": _preservation_contract(),
+        "data_contract_diff": _CURRENT_ADAPTATION_DIFF,
+    }
+    assert _adaptation_proof_capability_gap(bundle, {}) == (
+        "adaptation_proof_unavailable: isolated database copy"
+    )
+    copy_only = {"restoration_adaptation_database_copy_v1": True}
+    assert _adaptation_proof_capability_gap(bundle, copy_only) == (
+        "adaptation_proof_unavailable: schema, CRUD, reload and owner isolation"
+    )
+    assert (
+        _adaptation_proof_capability_gap(
+            bundle,
+            {
+                **copy_only,
+                "restoration_adaptation_proof_v1": True,
+            },
+        )
+        is None
+    )
+    assert (
+        _adaptation_proof_capability_gap(
+            {**bundle, "version": 1},
+            {
+                **copy_only,
+                "restoration_adaptation_proof_v1": True,
+            },
+        )
+        == "adaptation_proof_unavailable: immutable preservation contract"
+    )
 
 
 @dataclass
@@ -287,8 +333,7 @@ async def _new_harness(
             workspace_id=workspace.id,
             preview_url=preview_url,
             bootstrap_url=(
-                f"{preview_url}/"
-                "api/omnia/preview-session?expires=4102444800&signature=" + "a" * 64
+                f"{preview_url}/api/omnia/preview-session?expires=4102444800&signature=" + "a" * 64
             ),
             expires_at="2100-01-01T00:00:00+00:00",
         )
@@ -691,7 +736,24 @@ async def _adaptation_run(db_session: AsyncSession, harness: _Harness) -> None:
     await db_session.flush()
     run = await db_session.get(GenerationRun, coordinator.generation_run_id)
     assert run is not None
-    run.agent_state = {"restoration_adaptation": {"base_draft_snapshot_id": str(snapshot.id)}}
+    from omnia_api.services.restoration_adaptation import _preservation_contract
+
+    run.agent_state = {
+        "restoration_adaptation": {
+            "version": 2,
+            "base_draft_snapshot_id": str(snapshot.id),
+            "preservation_contract": _preservation_contract(),
+            "data_contract_diff": _CURRENT_ADAPTATION_DIFF,
+        }
+    }
+    harness.coordinator.executor = replace(
+        harness.coordinator.executor,
+        capabilities={
+            **harness.coordinator.executor.capabilities,
+            "restoration_adaptation_database_copy_v1": True,
+            "restoration_adaptation_proof_v1": True,
+        },
+    )
     await db_session.commit()
 
 
@@ -734,9 +796,7 @@ async def test_adaptation_keeping_every_route_proceeds_to_the_build(
         "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
         "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
         # Moved into a route group: still the same GET /api/visits.
-        "src/app/(data)/api/visits/route.ts": (
-            "export const GET = async () => Response.json([])"
-        ),
+        "src/app/(data)/api/visits/route.ts": ("export const GET = async () => Response.json([])"),
     }
     harness.files.clear()
     harness.files.update(candidate)
@@ -747,6 +807,50 @@ async def test_adaptation_keeping_every_route_proceeds_to_the_build(
 
     assert outcome.status is MaxFinalizationStatus.COMPLETE
     assert ProjectCellCommandRole.FULL_BUILD in harness.roles
+
+
+async def test_adaptation_without_trusted_copy_and_proof_capability_fails_before_build(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    from omnia_api.models.snapshot import Snapshot
+    from omnia_api.services import repo
+    from omnia_api.services.restoration_adaptation import _preservation_contract
+
+    harness = await _new_harness(db_session, test_engine)
+    sha = await asyncio.to_thread(
+        repo.init_from_files,
+        harness.coordinator.project_id,
+        _files(),
+        "v2",
+    )
+    snapshot = Snapshot(
+        project_id=harness.coordinator.project_id,
+        commit_sha=sha,
+        prompt_text="v2",
+    )
+    db_session.add(snapshot)
+    await db_session.flush()
+    run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
+    assert run is not None
+    run.agent_state = {
+        "restoration_adaptation": {
+            "version": 2,
+            "base_draft_snapshot_id": str(snapshot.id),
+            "preservation_contract": _preservation_contract(),
+            "data_contract_diff": _CURRENT_ADAPTATION_DIFF,
+        }
+    }
+    await db_session.commit()
+
+    outcome = await harness.coordinator.finalize(
+        files=_files(),
+        prompt="Верни выбранную версию",
+    )
+
+    assert outcome.status is MaxFinalizationStatus.FAILED
+    assert outcome.redacted_detail == "adaptation_proof_unavailable: isolated database copy"
+    assert harness.roles == []
 
 
 async def test_ordinary_generation_is_not_capability_checked(

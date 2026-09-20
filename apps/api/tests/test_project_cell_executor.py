@@ -899,7 +899,26 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
     assert persisted.agent_state["capacity_admitted_dispatch_token"] == str(winner)
 
 
-async def test_adaptation_runs_on_ordinary_project_database(
+async def test_adaptation_refuses_ordinary_project_database_before_agent_execution(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    with pytest.raises(
+        project_cell_executor.ProjectCellExecutorUnavailable,
+        match="изолированная копия",
+    ):
+        await _prepare_executor(
+            monkeypatch,
+            db_session,
+            test_engine,
+            restoration_adaptation=True,
+            snapshot_files={".omnia/cell.json": '{"version":1}'},
+            capabilities={"portable_machine": True, "database_admin": "full"},
+        )
+
+
+async def test_adaptation_accepts_controller_attested_copy_and_proof_environment(
     monkeypatch,
     db_session,
     test_engine,
@@ -910,9 +929,14 @@ async def test_adaptation_runs_on_ordinary_project_database(
         test_engine,
         restoration_adaptation=True,
         snapshot_files={".omnia/cell.json": '{"version":1}'},
-        capabilities={"portable_machine": True, "database_admin": "full"},
+        capabilities={
+            "portable_machine": True,
+            "database_admin": "isolated_copy",
+            "restoration_adaptation_database_copy_v1": True,
+            "restoration_adaptation_proof_v1": True,
+        },
     )
-    assert harness.handle.capabilities["database_admin"] == "full"
+    assert harness.handle.capabilities["database_admin"] == "isolated_copy"
     assert harness.legacy_actions == []
     assert harness.exec_calls == []
 

@@ -40,6 +40,77 @@ def test_max_migration_contract_accepts_only_canonical_forward_migration():
 
 
 @pytest.mark.parametrize(
+    ("sql", "keyword"),
+    [
+        ("DELETE FROM tasks WHERE archived = true;", "DELETE"),
+        ("TRUNCATE TABLE tasks;", "TRUNCATE"),
+        ("ALTER TABLE tasks DROP COLUMN legacy_value;", "DROP"),
+        ("DO $$ BEGIN EXECUTE 'DROP TABLE tasks'; END $$;", "DO"),
+        ("DO $$ BEGIN EXECUTE format('DROP TABLE %I', 'tasks'); END $$;", "DO"),
+        ("DO $$ BEGIN EXECUTE E'DROP TABLE tasks'; END $$;", "DO"),
+        ("DO $$ BEGIN EXECUTE 'DR' || 'OP TABLE tasks'; END $$;", "DO"),
+        ("SET standard_conforming_strings = on; DELETE FROM tasks;", "DELETE"),
+        ("SELECT E'\\''; DROP TABLE tasks; --';", "DROP"),
+        ("-- harmless comment\rDROP TABLE tasks;", "DROP"),
+        ("CALL purge_tasks();", "CALL"),
+        (
+            "SET standard_conforming_strings = off; SELECT '\\''; DROP TABLE tasks;",
+            "STANDARD_CONFORMING_STRINGS",
+        ),
+        ("SELECT E'x'\n'\\''; DROP TABLE tasks; --';", "STRING_ESCAPE"),
+    ],
+)
+def test_max_migration_contract_rejects_destructive_sql_before_execution(sql, keyword):
+    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+
+    path = "drizzle/0004.sql"
+
+    assert max_migration_contract_errors({}, {path: sql}) == (
+        f"{path} contains unsafe SQL keyword {keyword}; "
+        "destructive or procedural migrations require isolated database-copy verification",
+    )
+
+
+def test_max_migration_contract_ignores_destructive_words_in_comments_and_literals():
+    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+
+    path = "drizzle/0004.sql"
+    sql = "-- never DROP storage\nINSERT INTO audit(message) VALUES ('DELETE is disabled');"
+
+    assert max_migration_contract_errors({}, {path: sql}) == ()
+
+
+def test_max_migration_contract_allows_foreign_key_delete_action():
+    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+
+    path = "drizzle/0004.sql"
+    sql = (
+        "ALTER TABLE task_events ADD CONSTRAINT task_events_task_fk "
+        "FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE;"
+    )
+
+    assert max_migration_contract_errors({}, {path: sql}) == ()
+
+
+def test_max_migration_contract_allows_dollar_quoted_data_literal():
+    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+
+    path = "drizzle/0004.sql"
+    sql = "INSERT INTO audit(message) VALUES ($$DROP is disabled$$);"
+
+    assert max_migration_contract_errors({}, {path: sql}) == ()
+
+
+def test_max_migration_contract_allows_upsert_do_nothing():
+    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+
+    path = "drizzle/0004.sql"
+    sql = "INSERT INTO tasks(id) VALUES (1) ON CONFLICT (id) DO NOTHING;"
+
+    assert max_migration_contract_errors({}, {path: sql}) == ()
+
+
+@pytest.mark.parametrize(
     "path",
     [
         "migrations/0001_add_private_note.sql",
@@ -142,8 +213,7 @@ def test_max_migration_contract_rejects_new_package_script_using_custom_runner()
     before = {"package.json": '{"scripts":{"db:push":"drizzle-kit push"}}'}
     after = {
         "package.json": (
-            '{"scripts":{"db:push":"drizzle-kit push",'
-            '"db:migrate":"node scripts/migrate.mjs"}}'
+            '{"scripts":{"db:push":"drizzle-kit push","db:migrate":"node scripts/migrate.mjs"}}'
         )
     }
 
@@ -264,7 +334,9 @@ def test_project_database_guide_grants_ordinary_development_admin_access(stale):
     from omnia_api.services.portable_cell_contract import machine_stack_guide
 
     guide = machine_stack_guide(
-        "legacy", {"portable_machine": True, **stale}, {".omnia/cell.json": "{}"},
+        "legacy",
+        {"portable_machine": True, **stale},
+        {".omnia/cell.json": "{}"},
     )
     assert "development admin access" in guide
     assert "Manage your own schema, migrations" in guide
@@ -288,11 +360,16 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
     from omnia_api.services.max_data_evolution import build_max_agent_guide
 
     legacy = "MAX PLATFORM CORE CONTRACT\nLEGACY-ONLY-INSTRUCTIONS"
-    snapshot = AsyncMock(return_value=(
-        {} if provider == "missing-manifest" else {".omnia/cell.json": "{}"}
-    ))
-    executor = None if provider == "legacy" else SimpleNamespace(
-        capabilities={"portable_machine": provider != "cell-legacy"}, snapshot_files=snapshot,
+    snapshot = AsyncMock(
+        return_value=({} if provider == "missing-manifest" else {".omnia/cell.json": "{}"})
+    )
+    executor = (
+        None
+        if provider == "legacy"
+        else SimpleNamespace(
+            capabilities={"portable_machine": provider != "cell-legacy"},
+            snapshot_files=snapshot,
+        )
     )
     guide = await build_max_agent_guide(legacy, executor)
     builders = {
@@ -311,15 +388,28 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
 
 @pytest.mark.parametrize("template", ["max_miniapp", "fullstack"])
 async def test_autoheal_sends_project_policy_to_actual_agent_boundary(monkeypatch, template):
-    monkeypatch.setattr(autoheal, "get_settings", lambda: SimpleNamespace(
-        use_autoheal_on_open=True, autoheal_debounce_seconds=300,
-    ))
-    monkeypatch.setattr(autoheal, "get_redis", lambda: SimpleNamespace(
-        set=AsyncMock(return_value=True),
-    ))
-    monkeypatch.setattr(autoheal.orchestrator_client, "compile_status", AsyncMock(
-        side_effect=[{"ok": False, "error": "type mismatch"}, {"ok": True}],
-    ))
+    monkeypatch.setattr(
+        autoheal,
+        "get_settings",
+        lambda: SimpleNamespace(
+            use_autoheal_on_open=True,
+            autoheal_debounce_seconds=300,
+        ),
+    )
+    monkeypatch.setattr(
+        autoheal,
+        "get_redis",
+        lambda: SimpleNamespace(
+            set=AsyncMock(return_value=True),
+        ),
+    )
+    monkeypatch.setattr(
+        autoheal.orchestrator_client,
+        "compile_status",
+        AsyncMock(
+            side_effect=[{"ok": False, "error": "type mismatch"}, {"ok": True}],
+        ),
+    )
     captured = []
 
     async def run(**kwargs):
@@ -338,9 +428,13 @@ async def test_autoheal_sends_project_policy_to_actual_agent_boundary(monkeypatc
 
 
 async def test_disabled_autoheal_does_not_load_guide_or_call_model(monkeypatch):
-    monkeypatch.setattr(autoheal, "get_settings", lambda: SimpleNamespace(
-        use_autoheal_on_open=False,
-    ))
+    monkeypatch.setattr(
+        autoheal,
+        "get_settings",
+        lambda: SimpleNamespace(
+            use_autoheal_on_open=False,
+        ),
+    )
     run = AsyncMock(side_effect=AssertionError("disabled autoheal must not spend tokens"))
     monkeypatch.setattr(autoheal.agent_builder, "run_agent_build", run)
     result = await autoheal.maybe_autoheal_on_open(uuid4(), "fixture", template="max_miniapp")

@@ -350,6 +350,24 @@ def portable_selected(capabilities: dict[str, object], files: dict[str, str]) ->
     return capabilities.get("portable_machine") is True and ".omnia/cell.json" in files
 
 
+def adaptation_execution_capability_gap(capabilities: dict[str, object]) -> str | None:
+    """Reject adaptive agent execution until the controller proves isolation.
+
+    This gate runs immediately after the trusted bootstrap snapshot and before an
+    executor handle reaches the model. A prompt or a later promotion gate cannot
+    protect live data from commands already executed by the adaptive agent.
+    """
+
+    if (
+        capabilities.get("restoration_adaptation_database_copy_v1") is not True
+        or capabilities.get("database_admin") != "isolated_copy"
+    ):
+        return "изолированная копия базы данных не подтверждена"
+    if capabilities.get("restoration_adaptation_proof_v1") is not True:
+        return "доверенная проверка адаптации не подтверждена"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellExecutorHandle:
     execute: Executor
@@ -679,6 +697,12 @@ async def maybe_create_project_cell_executor(
         raise ProjectCellExecutorUnavailable(
             "Переносимая среда проекта не подтверждена. Агент адаптации не запущен."
         )
+    if restoration_adaptation:
+        adaptation_gap = adaptation_execution_capability_gap(capabilities)
+        if adaptation_gap is not None:
+            raise ProjectCellExecutorUnavailable(
+                f"Адаптация остановлена до запуска агента: {adaptation_gap}."
+            )
     last_identity: ProofIdentity | None = None
 
     def _is_portable() -> bool:
