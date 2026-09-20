@@ -16,6 +16,8 @@ import asyncpg
 import pytest
 import pytest_asyncio
 
+from tests._versioning_pg import RESET_DISPOSABLE_DATABASE_SQL
+
 A = UUID("00000000-0000-0000-0000-000000000001")
 NEW = UUID("00000000-0000-0000-0000-000000000002")
 B = UUID("00000000-0000-0000-0000-000000000003")
@@ -35,14 +37,12 @@ async def database():
     if parsed.scheme not in {"postgresql", "postgres"} or parsed.path != "/restoration_policy_test":
         pytest.fail("RESTORATION_TEST_DATABASE_URL must name restoration_policy_test")
     admin = await asyncpg.connect(dsn, timeout=10, command_timeout=30)
+    reset_allowed = False
     try:
-        assert await admin.fetchval("SELECT current_database()") == "restoration_policy_test"
-        await admin.execute(
-            "DROP SCHEMA IF EXISTS omnia_guard CASCADE; "
-            "DROP SCHEMA IF EXISTS unmanaged CASCADE; "
-            "DROP EVENT TRIGGER IF EXISTS fixture_event; "
-            "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-        )
+        if await admin.fetchval("SELECT current_database()") != "restoration_policy_test":
+            pytest.fail("connected database must be restoration_policy_test")
+        reset_allowed = True
+        await admin.execute(RESET_DISPOSABLE_DATABASE_SQL)
         await admin.execute("""
             CREATE TABLE public.contacts (
                 id uuid PRIMARY KEY, owner_id text NOT NULL, name text, surname text
@@ -76,8 +76,11 @@ async def database():
         await admin.execute("INSERT INTO price_list VALUES($1,'Coffee')", A)
         yield Database(admin)
     finally:
-        await admin.execute("DROP EVENT TRIGGER IF EXISTS fixture_event")
-        await admin.close()
+        try:
+            if reset_allowed:
+                await admin.execute(RESET_DISPOSABLE_DATABASE_SQL)
+        finally:
+            await admin.close()
 
 
 async def test_ordinary_tables_without_owner_columns_are_compatible(database):

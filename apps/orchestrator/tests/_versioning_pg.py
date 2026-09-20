@@ -6,9 +6,41 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from urllib.parse import urlparse
 
 import pytest
+
+RESET_DISPOSABLE_DATABASE_SQL = """
+DROP EVENT TRIGGER IF EXISTS fixture_event;
+DO $reset$
+DECLARE
+    schema_name text;
+BEGIN
+    FOR schema_name IN
+        SELECT nspname
+        FROM pg_namespace
+        WHERE nspname <> 'public'
+          AND nspname <> 'information_schema'
+          AND nspname !~ '^pg_'
+    LOOP
+        EXECUTE format('DROP SCHEMA %I CASCADE', schema_name);
+    END LOOP;
+END
+$reset$;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+DO $reset$
+DECLARE
+    object_oid oid;
+BEGIN
+    FOR object_oid IN SELECT oid FROM pg_largeobject_metadata
+    LOOP
+        PERFORM lo_unlink(object_oid);
+    END LOOP;
+END
+$reset$;
+"""
 
 
 class Pg:
@@ -26,7 +58,7 @@ class Pg:
 
 
 @pytest.fixture
-def pg() -> Pg:
+def pg() -> Iterator[Pg]:
     dsn = os.environ.get("RESTORATION_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("requires explicit disposable RESTORATION_TEST_DATABASE_URL")
@@ -35,11 +67,10 @@ def pg() -> Pg:
     if urlparse(dsn).path != "/restoration_policy_test":
         pytest.fail("RESTORATION_TEST_DATABASE_URL must name restoration_policy_test")
     db = Pg(dsn)
-    assert db.run("SELECT current_database();").strip() == b"restoration_policy_test"
-    db.run(
-        "DROP SCHEMA IF EXISTS omnia_guard CASCADE; DROP SCHEMA IF EXISTS unmanaged CASCADE; "
-        "DROP SCHEMA IF EXISTS drizzle CASCADE; DROP SCHEMA IF EXISTS \"Odd Schema\" CASCADE; "
-        "DROP EVENT TRIGGER IF EXISTS fixture_event; "
-        "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-    )
-    return db
+    if db.run("SELECT current_database();").strip() != b"restoration_policy_test":
+        pytest.fail("connected database must be restoration_policy_test")
+    db.run(RESET_DISPOSABLE_DATABASE_SQL)
+    try:
+        yield db
+    finally:
+        db.run(RESET_DISPOSABLE_DATABASE_SQL)

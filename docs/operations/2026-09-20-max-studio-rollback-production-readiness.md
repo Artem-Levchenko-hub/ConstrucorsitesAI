@@ -164,7 +164,7 @@ Production API уже требовал эти признаки, а работа�
 1899 passed, 62 skipped, 15 xfailed, 8 failed
 ```
 
-Шесть ошибок относились к Windows-кодировке fixture: тест записывал nginx-конфиг в системной кодировке и production-код читал UTF-8. Две ошибки означали, что golden manifest шаблона не включал новый обязательный маршрут `actions/[id]`. Fixtures и golden manifest исправлены. После последующих recovery-исправлений полный прогон завершился результатом `1914 passed, 62 skipped, 15 xfailed`.
+Шесть ошибок относились к Windows-кодировке fixture: тест записывал nginx-конфиг в системной кодировке и production-код читал UTF-8. Две ошибки означали, что golden manifest шаблона не включал новый обязательный маршрут `actions/[id]`. Fixtures и golden manifest исправлены. После последующих recovery-исправлений полный локальный прогон завершился результатом `1917 passed, 63 skipped, 15 xfailed`.
 
 #### R9. Повторная авария cleanup оставляла неверный fencing epoch
 
@@ -178,7 +178,13 @@ Production API уже требовал эти признаки, а работа�
 - после успешного reconcile перечитывать durable-запись в текущей итерации, не регистрируя тот же operation ID второй раз;
 - отдельно проверять обычное восстановление и два последовательных crash/reconcile цикла для `release` и `destroy`.
 
-Итог: exact recovery/guard-набор `6 passed`, workspace-набор `40 passed, 1 skipped`, полный orchestrator `1914 passed, 62 skipped, 15 xfailed`.
+Итог: exact recovery/guard-набор `6 passed`, workspace-набор `40 passed, 1 skipped`.
+
+#### R10. Real-PostgreSQL тест загрязнял следующий тест служебной схемой
+
+Первый Linux CI-прогон прошёл 1943 теста и обнаружил два падения inventory. Причина: новый real-PostgreSQL тест создавал `drizzle.__drizzle_migrations`, а общая disposable fixture не очищала произвольные non-system schemas после завершения. Следующий тест правильно возвращал `unsupported=true`. Production inventory не ослаблялся.
+
+Решение: единый reset удаляет все non-system schemas с безопасным `%I` quoting и large objects до и после real-PG fixture. Очистка разрешается только после явного подтверждения фактического имени БД; при несовпадении имени выполняется ноль разрушительных запросов, соединение всегда закрывается. Добавлены sync/async guard-тесты и real-PG regression загрязнения. Локально: exact `3 passed`, focused `20 passed, 13 skipped`, полный orchestrator `1917 passed, 63 skipped, 15 xfailed`; окончательный real-PG результат подтверждает повторный Linux CI.
 
 ## 6. Артефакты и дефекты самой генерации
 
@@ -232,7 +238,7 @@ v8 была отмечена готовой, но новый preview сразу 
 | Orchestrator adaptive/activation | workspace + exact recovery/guard | 40 passed, 1 skipped; exact 6 passed |
 | Orchestrator lint | Ruff по новым/изменённым модулям | PASS |
 | Orchestrator types | mypy всего `src`, 99 файлов | PASS |
-| Orchestrator full | полный pytest | 1914 passed, 62 skipped, 15 xfailed |
+| Orchestrator full | полный pytest после fixture guard | 1917 passed, 63 skipped, 15 xfailed |
 | Web restoration | focused vitest | 29 passed |
 | Web full | полный vitest | 580 passed |
 | Web types | `tsc --noEmit` | PASS |

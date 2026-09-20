@@ -6,6 +6,7 @@ from omnia_orchestrator.services.restoration_catalog import (
     DATABASE_INVENTORY_SQL,
     database_presence_query,
 )
+from tests._versioning_pg import RESET_DISPOSABLE_DATABASE_SQL
 from tests.test_restoration_database import database  # noqa: F401
 
 
@@ -42,6 +43,22 @@ async def test_reserved_looking_application_table_is_not_ignored(database):  # n
     assert "omnia_orders" in inventory["tables"]
     query = database_presence_query(inventory)
     assert query is not None and await admin.fetchval(query) is True
+
+
+async def test_disposable_database_reset_removes_prior_schema_pollution(database):  # noqa: F811
+    admin = database.admin
+    await admin.execute(
+        "CREATE SCHEMA leftover_from_prior_test; "
+        "CREATE TABLE leftover_from_prior_test.business_rows(id integer)"
+    )
+    polluted = json.loads(await admin.fetchval(DATABASE_INVENTORY_SQL))
+    assert polluted["unsupported"] is True
+
+    await admin.execute(RESET_DISPOSABLE_DATABASE_SQL)
+
+    inventory = json.loads(await admin.fetchval(DATABASE_INVENTORY_SQL))
+    assert inventory == {"unsupported": False, "tables": []}
+    assert database_presence_query(inventory) == "SELECT false;"
 
 
 async def test_unknown_storage_in_database_cannot_be_called_empty(database):  # noqa: F811
