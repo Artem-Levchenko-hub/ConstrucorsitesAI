@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from omnia_api.core.config import get_settings
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import (
+    ProjectCellActivityLease,
     ProjectCellCandidate,
     ProjectCellProofResult,
     ProjectCellWorkspace,
@@ -23,7 +26,12 @@ from omnia_api.services.max_finalization import (
     MaxFinalizationStatus,
 )
 from omnia_api.services.max_runtime_probe import MaxRuntimeProbe
-from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+from omnia_api.services.orchestrator_client import (
+    ProjectCellAgentExecResponse,
+    ProjectCellAgentOperationStatus,
+    ProjectCellPreviewSession,
+    ProjectCellWorkspaceIdentity,
+)
 from omnia_api.services.project_cell_executor import (
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
@@ -31,7 +39,10 @@ from omnia_api.services.project_cell_executor import (
     ProjectCellPreviewSyncResult,
 )
 from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
-from omnia_api.services.promotion_permit import workspace_revision_digest
+from omnia_api.services.promotion_permit import (
+    canonical_files_digest,
+    workspace_revision_digest,
+)
 
 
 def _files() -> dict[str, str]:
@@ -56,20 +67,60 @@ def _files() -> dict[str, str]:
     }
 
 
-@pytest.fixture(autouse=True)
-def _exact_release_probe(monkeypatch):
-    async def probe(_preview, **_kwargs) -> MaxRuntimeProbe:
+def _install_exact_release_probe(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
+    async def probe(preview, **_kwargs) -> MaxRuntimeProbe:
+        digest = _RUNTIME_ARTIFACT_DIGESTS[preview.workspace_id]()
         return MaxRuntimeProbe(
             True,
             "signed preview auth and protected read green",
-            "8" * 64,
-            "runtime/sha256/" + "8" * 64,
+            digest,
+            f"build/sha256/{digest}",
+        )
+
+    async def security(
+        _base_url,
+        *,
+        bootstrap_url,
+        require_embedded_framing,
+        framing_policy,
+    ):
+        from omnia_api.services.security_gate import surface_verdict_from_headers
+
+        assert bootstrap_url.endswith("&signature=" + "a" * 64)
+        assert require_embedded_framing is True
+        protected_headers = {"x-content-type-options": "nosniff"}
+        document_headers = {
+            "x-content-type-options": "nosniff",
+            "content-security-policy": framing_policy,
+        }
+        return surface_verdict_from_headers(
+            protected_headers,
+            require_embedded_framing=True,
+            protected_status=200,
+            framing_policy=framing_policy,
+            document_headers=document_headers,
+            document_status=200,
         )
 
     monkeypatch.setattr(
         "omnia_api.services.max_runtime_probe.probe_max_cell_runtime",
         probe,
     )
+    monkeypatch.setattr(
+        "omnia_api.services.security_gate.run_security_gate",
+        security,
+    )
+    return _RUNTIME_ARTIFACT_DIGESTS.clear
+
+
+@pytest.fixture(autouse=True)
+def _exact_release_probe(monkeypatch: pytest.MonkeyPatch):
+    cleanup = _install_exact_release_probe(monkeypatch)
+    yield
+    cleanup()
+
+
+_RUNTIME_ARTIFACT_DIGESTS: dict[UUID, Callable[[], str]] = {}
 
 
 @dataclass
@@ -78,6 +129,7 @@ class _Harness:
     roles: list[ProjectCellCommandRole]
     runtime_probes: list[str]
     set_build_green: Callable[[bool], None]
+    files: dict[str, str]
 
 
 async def _new_harness(
@@ -121,11 +173,12 @@ async def _new_harness(
     session.add(workspace)
     await session.commit()
 
+    files = _files()
     identity = ProofIdentity(
         workspace_id=workspace.id,
         generation_run_id=run.id,
         fencing_epoch=7,
-        workspace_revision=workspace_revision_digest(_files()),
+        workspace_revision=workspace_revision_digest(files),
         dependency_digest="2" * 64,
         schema_data_digest="3" * 64,
         cell_manifest_digest="4" * 64,
@@ -137,9 +190,13 @@ async def _new_harness(
     roles: list[ProjectCellCommandRole] = []
     runtime_probes: list[str] = []
     state = {"build_green": build_green}
+    observations: dict[UUID, ProjectCellCommandObservation] = {}
+
+    def active_identity() -> ProofIdentity:
+        return replace(identity, workspace_revision=workspace_revision_digest(files))
 
     async def current_identity() -> ProofIdentity:
-        return identity
+        return active_identity()
 
     async def run_role(
         role: ProjectCellCommandRole,
@@ -147,40 +204,97 @@ async def _new_harness(
     ) -> ProjectCellCommandObservation:
         roles.append(role)
         ok = role is not ProjectCellCommandRole.FULL_BUILD or state["build_green"]
-        return ProjectCellCommandObservation(
+        current = active_identity()
+        observation = ProjectCellCommandObservation(
             operation_id=operation_id,
             role=role,
             ok=ok,
             timed_out=False,
             redacted_detail="green" if ok else "TS2322",
-            before=identity,
-            after=identity,
+            before=current,
+            after=current,
             invalidated_dimensions=frozenset(),
         )
+        observations[operation_id] = observation
+        return observation
 
     async def runtime_probe(proof_key: str) -> MaxRuntimeProbe:
         runtime_probes.append(proof_key)
-        return MaxRuntimeProbe(True, "runtime green", "8" * 64, "runtime/sha256/" + "8" * 64)
+        digest = canonical_files_digest(files)
+        return MaxRuntimeProbe(True, "runtime green", digest, f"build/sha256/{digest}")
 
-    async def operation_status(_operation_id: UUID):
-        raise AssertionError("instant command must finish before its first heartbeat")
+    def wire_identity(value: ProofIdentity) -> ProjectCellWorkspaceIdentity:
+        return ProjectCellWorkspaceIdentity(
+            workspace_revision=value.workspace_revision,
+            dependency_digest=value.dependency_digest,
+            schema_data_digest=value.schema_data_digest,
+            cell_manifest_digest=value.cell_manifest_digest,
+            environment_digest=value.base_image_digest,
+            build_config_digest=value.build_config_digest,
+        )
+
+    async def operation_status(operation_id: UUID) -> ProjectCellAgentOperationStatus:
+        observation = observations[operation_id]
+        now = datetime.now(UTC)
+        before = wire_identity(observation.before)
+        after = wire_identity(observation.after)
+        response = ProjectCellAgentExecResponse(
+            ok=observation.ok,
+            exit_code=0 if observation.ok else 1,
+            detail=observation.redacted_detail,
+            timed_out=observation.timed_out,
+            workspace_revision=observation.after.workspace_revision,
+            operation_id=operation_id,
+            before_identity=before,
+            after_identity=after,
+            environment_mutated=before != after,
+        )
+        return ProjectCellAgentOperationStatus(
+            operation_id=operation_id,
+            state=(
+                "timed_out"
+                if observation.timed_out
+                else "completed"
+                if observation.ok
+                else "failed"
+            ),
+            phase=observation.role.value if observation.role is not None else "command",
+            started_at=now - timedelta(seconds=1),
+            deadline_at=now + timedelta(minutes=1),
+            heartbeat_at=now,
+            log_bytes=len(observation.redacted_detail.encode()),
+            terminal_response=response,
+        )
+
+    async def replay_role_response(
+        role: ProjectCellCommandRole,
+        response: ProjectCellAgentExecResponse,
+        expected: ProofIdentity,
+    ) -> ProjectCellCommandObservation:
+        assert response.operation_id is not None
+        observation = observations[response.operation_id]
+        assert observation.role is role
+        assert observation.before == expected
+        return observation
 
     async def noop() -> None:
         return None
 
     async def create_preview_session() -> ProjectCellPreviewSession:
+        suffix = get_settings().project_cell_preview_host_suffix
+        preview_url = f"https://cell-{workspace.id.hex[:12]}-dev.{suffix}"
         return ProjectCellPreviewSession(
             workspace_id=workspace.id,
-            preview_url=f"https://cell-{workspace.id.hex[:12]}-dev.preview.test",
+            preview_url=preview_url,
             bootstrap_url=(
-                f"https://cell-{workspace.id.hex[:12]}-dev.preview.test/"
+                f"{preview_url}/"
                 "api/omnia/preview-session?expires=4102444800&signature=" + "a" * 64
             ),
             expires_at="2100-01-01T00:00:00+00:00",
         )
 
     async def snapshot_files() -> dict[str, str]:
-        return _files()
+        return dict(files)
 
     async def stage_patch(_writes: dict[str, str], _deletes: tuple[str, ...]) -> None:
         return None
@@ -207,6 +321,7 @@ async def _new_harness(
         release=noop,
         current_identity=current_identity,
         run_role=run_role,
+        replay_role_response=replay_role_response,
         runtime_probe=runtime_probe,
         operation_status=operation_status,
         capabilities={"portable_machine": True},
@@ -223,7 +338,8 @@ async def _new_harness(
     def set_build_green(value: bool) -> None:
         state["build_green"] = value
 
-    return _Harness(coordinator, roles, runtime_probes, set_build_green)
+    _RUNTIME_ARTIFACT_DIGESTS[workspace.id] = lambda: canonical_files_digest(files)
+    return _Harness(coordinator, roles, runtime_probes, set_build_green, files)
 
 
 async def test_finalize_runs_one_full_build_and_reuses_release_evidence(
@@ -273,6 +389,31 @@ async def test_resume_rebuilds_legacy_full_build_and_dependent_proofs(
         )
     )
     assert result is not None
+    runtime_result = await db_session.scalar(
+        select(ProjectCellProofResult).where(
+            ProjectCellProofResult.dimension == ProofDimension.RUNTIME.value
+        )
+    )
+    assert runtime_result is not None
+
+    identity = await harness.coordinator.executor.current_identity()
+    legacy_build_operation = uuid.uuid5(
+        harness.coordinator.generation_run_id,
+        "command:"
+        f"{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:"
+        f"{ProjectCellCommandRole.FULL_BUILD.value}",
+    )
+    legacy_runtime_operation = uuid.uuid5(
+        harness.coordinator.generation_run_id,
+        f"runtime:{runtime_result.dimension_key}",
+    )
+    build_lease = await db_session.get(ProjectCellActivityLease, result.operation_id)
+    runtime_lease = await db_session.get(ProjectCellActivityLease, runtime_result.operation_id)
+    assert build_lease is not None and runtime_lease is not None
+    build_lease.operation_id = legacy_build_operation
+    runtime_lease.operation_id = legacy_runtime_operation
+    result.operation_id = legacy_build_operation
+    runtime_result.operation_id = legacy_runtime_operation
     result.redacted_detail = "legacy unversioned build evidence"
     await db_session.commit()
 
@@ -306,8 +447,11 @@ async def test_source_gap_returns_to_edit_without_running_commands(
 ) -> None:
     harness = await _new_harness(db_session, test_engine)
 
+    incomplete = {".omnia/cell.json": "{}"}
+    harness.files.clear()
+    harness.files.update(incomplete)
     outcome = await harness.coordinator.finalize(
-        files={".omnia/cell.json": "{}"},
+        files=incomplete,
         prompt="Build tracker",
     )
 
@@ -365,8 +509,6 @@ async def test_stale_identity_blocks_candidate_prepare(
     db_session: AsyncSession,
     test_engine: AsyncEngine,
 ) -> None:
-    from dataclasses import replace
-
     import pytest
 
     from omnia_api.services.promotion_permit import PromotionPermitError
@@ -379,7 +521,9 @@ async def test_stale_identity_blocks_candidate_prepare(
     async def identity_changes_before_promotion() -> ProofIdentity:
         nonlocal calls
         calls += 1
-        return original if calls == 1 else stale
+        # Initial, post-build and post-release file reads stay on one fence.
+        # The first promotion read observes the stale revision.
+        return original if calls <= 3 else stale
 
     harness.coordinator.executor = replace(
         harness.coordinator.executor,
@@ -560,12 +704,15 @@ async def test_adaptation_that_drops_a_draft_route_returns_to_edit(
 
     # The adapted v1 screens came back, but reading visits disappeared. The
     # untouched kit route is not owned by the app and must not be reported.
+    candidate = {
+        **_files(),
+        "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
+        "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
+    }
+    harness.files.clear()
+    harness.files.update(candidate)
     outcome = await harness.coordinator.finalize(
-        files={
-            **_files(),
-            "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
-            "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
-        },
+        files=candidate,
         prompt="Верни экраны выбранной исторической версии",
     )
 
@@ -582,16 +729,19 @@ async def test_adaptation_keeping_every_route_proceeds_to_the_build(
     harness = await _new_harness(db_session, test_engine)
     await _adaptation_run(db_session, harness)
 
+    candidate = {
+        **_files(),
+        "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
+        "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
+        # Moved into a route group: still the same GET /api/visits.
+        "src/app/(data)/api/visits/route.ts": (
+            "export const GET = async () => Response.json([])"
+        ),
+    }
+    harness.files.clear()
+    harness.files.update(candidate)
     outcome = await harness.coordinator.finalize(
-        files={
-            **_files(),
-            "src/app/api/clients/route.ts": _CLIENTS_ROUTE,
-            "src/app/api/omnia/health/route.ts": _VISITS_ROUTE,
-            # Moved into a route group: still the same GET /api/visits.
-            "src/app/(data)/api/visits/route.ts": (
-                "export const GET = async () => Response.json([])"
-            ),
-        },
+        files=candidate,
         prompt="Верни экраны выбранной исторической версии",
     )
 

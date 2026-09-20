@@ -786,7 +786,10 @@ class MaxFinalizationCoordinator:
             ProofDimension.RUNTIME,
             artifact_digest=build_digest,
         )
-        operation_id = uuid5(self.generation_run_id, f"runtime:{dimension_key}")
+        operation_id = uuid5(
+            self.generation_run_id,
+            f"runtime:{MAX_FULL_BUILD_CONTRACT_VERSION}:{dimension_key}",
+        )
         phase = GenerationPhase.RUNTIME_PROBE
         await self._phase_started(phase, self._checkpoint(identity, phase, operation_id))
         runtime_probe = self.executor.runtime_probe

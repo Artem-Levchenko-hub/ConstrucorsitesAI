@@ -205,7 +205,8 @@ def test_project_versions_is_the_only_head() -> None:
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0063_restoration_reconcile"]
+    assert heads == ["0064_restoration_binding"]
+    assert chain["0064_restoration_binding"] == "0063_restoration_reconcile"
     assert chain["0063_restoration_reconcile"] == "0062_project_cell_rollout"
     assert chain["0062_project_cell_rollout"] == "0061_code_restorations"
     assert chain["0061_code_restorations"] == "0060_project_versions"

@@ -13,18 +13,26 @@ from omnia_api.models.project_cell import (
 )
 from omnia_api.services.max_finalization import MaxFinalizationStatus
 from omnia_api.services.project_cell_executor import ProjectCellCommandRole
-from tests.test_max_finalization import _files, _new_harness
+from tests.test_max_finalization import (
+    _files,
+    _install_exact_release_probe,
+    _new_harness,
+)
+
+
+@pytest.fixture(autouse=True)
+def _exact_release_probe(monkeypatch: pytest.MonkeyPatch):
+    cleanup = _install_exact_release_probe(monkeypatch)
+    yield
+    cleanup()
 
 
 async def test_finalization_returns_missing_capability_to_same_workspace_editor(
     db_session, test_engine,
 ):
     harness = await _new_harness(db_session, test_engine)
-    tree = _files()
+    tree = harness.files
     feedback = []
-
-    async def snapshot():
-        return dict(tree)
 
     async def repair(detail):
         feedback.append(detail)
@@ -32,7 +40,6 @@ async def test_finalization_returns_missing_capability_to_same_workspace_editor(
             "export default function Page(){return <main>Каталог товаров</main>}"
         )
 
-    harness.coordinator.executor = replace(harness.coordinator.executor, snapshot_files=snapshot)
     outcome = await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
 
     assert outcome.status is MaxFinalizationStatus.COMPLETE
@@ -45,18 +52,14 @@ async def test_finalization_repairs_stop_without_success_or_unbounded_retries(
     db_session, test_engine, changes, expected_calls,
 ):
     harness = await _new_harness(db_session, test_engine)
-    tree = _files()
+    tree = harness.files
     calls = []
-
-    async def snapshot():
-        return dict(tree)
 
     async def repair(detail):
         calls.append(detail)
         if changes:
             tree["src/app/page.tsx"] += "\n// still incomplete"
 
-    harness.coordinator.executor = replace(harness.coordinator.executor, snapshot_files=snapshot)
     outcome = await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
 
     assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
@@ -161,20 +164,12 @@ async def test_missing_production_build_repairs_test_in_same_workspace(
 ):
     harness = await _new_harness(db_session, test_engine)
     executor = harness.coordinator.executor
-    identity = await executor.current_identity()
-    tree = _files()
+    tree = harness.files
     feedback = []
     original_role = executor.run_role
 
-    async def snapshot():
-        return dict(tree)
-
-    async def current_identity():
-        return identity
-
     async def run_role(role, operation_id):
         result = await original_role(role, operation_id)
-        result = replace(result, before=identity, after=identity)
         if role is ProjectCellCommandRole.FULL_BUILD and not feedback:
             return replace(result, ok=False, redacted_detail=(
                 "service web readiness failed: Could not find a production build "
@@ -184,14 +179,13 @@ async def test_missing_production_build_repairs_test_in_same_workspace(
         return result
 
     async def repair(detail):
-        nonlocal identity
         feedback.append(detail)
         if change_source:
             tree["tests/runtime.test.mjs"] = "// test production server in an isolated port"
-            identity = replace(identity, workspace_revision="a" * 64)
 
     harness.coordinator.executor = replace(
-        executor, snapshot_files=snapshot, current_identity=current_identity, run_role=run_role,
+        executor,
+        run_role=run_role,
     )
     outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
     assert len(feedback) == 1
