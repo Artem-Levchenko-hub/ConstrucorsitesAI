@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import math
+import re
 from datetime import datetime
 from typing import Annotated, Literal, Self
 from uuid import UUID
@@ -15,6 +17,7 @@ RestoreState = Literal[
     "checking",
     "ready",
     "needs_changes",
+    "adapting",
     "applying",
     "completed",
     "cancelled",
@@ -22,6 +25,17 @@ RestoreState = Literal[
     "reconciling",
 ]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+_ACTIVATION_VOLUME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
+_ACTIVATION_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def canonical_activation_digest(value: object) -> str:
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json")
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 class RuntimeSourceBindingV2(BaseModel):
@@ -117,6 +131,276 @@ class RestoreApplyRequest(BaseModel):
     report_revision: int = Field(ge=1, strict=True)
     expected_draft_snapshot_id: UUID
     idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+JsonScalar = str | int | float | bool | None
+
+
+class ActivationBusinessWitness(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    entity: str = Field(min_length=1, max_length=63)
+    id_column: str = Field(min_length=1, max_length=63)
+    owner_column: str = Field(min_length=1, max_length=63)
+    value_column: str = Field(min_length=1, max_length=63)
+    create_values: dict[str, JsonScalar] = Field(default_factory=dict, max_length=64)
+
+    @model_validator(mode="after")
+    def bounded_identifiers_and_values(self) -> Self:
+        names = (
+            self.entity,
+            self.id_column,
+            self.owner_column,
+            self.value_column,
+            *self.create_values,
+        )
+        if any(_ACTIVATION_TABLE_RE.fullmatch(value) is None for value in names):
+            raise ValueError("invalid activation business witness identifier")
+        if len(json.dumps(self.create_values, ensure_ascii=False).encode("utf-8")) > 4096:
+            raise ValueError("activation business witness payload is too large")
+        if any(
+            isinstance(value, float) and not math.isfinite(value)
+            for value in self.create_values.values()
+        ):
+            raise ValueError("activation business witness payload is not finite")
+        return self
+
+
+class ActivationProbePointers(BaseModel):
+    """Fixed probe response locations; arbitrary controller JSON pointers are rejected."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    items: Literal["/items"] = "/items"
+    item: Literal["/item"] = "/item"
+    item_id: Literal["/item/id"] = "/item/id"
+    owner_id: Literal["/item/ownerId"] = "/item/ownerId"
+    entity: Literal["/item/entity"] = "/item/entity"
+    marker: Literal["/item/marker"] = "/item/marker"
+    phase: Literal["/item/phase"] = "/item/phase"
+    contract_digest: Literal["/probeContractDigest"] = "/probeContractDigest"
+
+
+class ActivationBusinessProbe(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal[1] = 1
+    endpoint: str = Field(min_length=1, max_length=240)
+    data_contract_digest: Sha256
+    witnesses: tuple[ActivationBusinessWitness, ...] = Field(min_length=1, max_length=32)
+    max_payload_bytes: int = Field(ge=256, le=8192, strict=True)
+    pointers: ActivationProbePointers = Field(default_factory=ActivationProbePointers)
+    contract_digest: Sha256
+
+    @model_validator(mode="after")
+    def valid_contract(self) -> Self:
+        if (
+            not self.endpoint.startswith("/api/")
+            or self.endpoint.startswith(("/api/omnia/", "/api/max/"))
+            or self.endpoint in {"/api/omnia", "/api/max"}
+            or any(token in self.endpoint for token in ("?", "#", "%", "\\", "//"))
+            or ".." in self.endpoint.split("/")
+            or self.endpoint.endswith("/")
+            or any(
+                re.fullmatch(r"[A-Za-z0-9_-]+", segment) is None
+                for segment in self.endpoint.split("/")[1:]
+            )
+        ):
+            raise ValueError("activation business probe endpoint must be target-owned")
+        if len({item.entity for item in self.witnesses}) != len(self.witnesses):
+            raise ValueError("duplicate activation business probe entity")
+        payload = self.model_dump(mode="json", exclude={"contract_digest"})
+        if canonical_activation_digest(payload) != self.contract_digest:
+            raise ValueError("activation business probe digest mismatch")
+        return self
+
+
+class RestorationAdaptationActivationOfferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    workspace_id: UUID
+    operation_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    candidate_workspace_id: UUID
+    candidate_fencing_epoch: int = Field(gt=0, strict=True)
+    candidate_workspace_revision: Sha256
+    proof_attempt: int = Field(gt=0, strict=True)
+    proof_digest: Sha256
+
+
+class RestorationAdaptationActivationOffer(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    state: Literal["offered"] = "offered"
+    workspace_id: UUID
+    operation_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    activation_id: UUID
+    expected_source_fencing_epoch: int = Field(gt=0, strict=True)
+    target_fencing_epoch: int = Field(gt=0, strict=True)
+    source_workspace_revision: Sha256
+    source_code_volume: str = Field(min_length=1, max_length=255)
+    live_database_volume: str = Field(min_length=1, max_length=255)
+    live_database_identity_digest: Sha256
+    candidate_workspace_id: UUID
+    candidate_fencing_epoch: int = Field(gt=0, strict=True)
+    candidate_workspace_revision: Sha256
+    candidate_artifact_digest: Sha256
+    candidate_source_manifest_digest: Sha256
+    candidate_files_digest: Sha256
+    archive_digest: Sha256
+    business_probe: ActivationBusinessProbe
+    probe_contract_digest: Sha256
+    probe_rehearsal_digest: Sha256
+    probe_rehearsal_database_digest: Sha256
+    proof_attempt: int = Field(gt=0, strict=True)
+    proof_digest: Sha256
+    offer_digest: Sha256
+
+    @model_validator(mode="after")
+    def valid_binding(self) -> Self:
+        if self.target_fencing_epoch <= self.expected_source_fencing_epoch:
+            raise ValueError("target fencing epoch must advance source fence")
+        if self.candidate_workspace_id == self.workspace_id:
+            raise ValueError("candidate workspace must be isolated")
+        if any(
+            _ACTIVATION_VOLUME_RE.fullmatch(value) is None
+            for value in (self.source_code_volume, self.live_database_volume)
+        ):
+            raise ValueError("invalid activation volume identity")
+        if self.probe_contract_digest != self.business_probe.contract_digest:
+            raise ValueError("activation probe digest mismatch")
+        payload = self.model_dump(mode="json", exclude={"offer_digest"})
+        if canonical_activation_digest(payload) != self.offer_digest:
+            raise ValueError("activation offer digest mismatch")
+        return self
+
+
+class RestorationAdaptationActivationCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    offer: RestorationAdaptationActivationOffer
+    planned_commit_sha: GitSha
+
+    def activation_binding_payload(self) -> dict[str, object]:
+        offer = self.offer
+        return {
+            "operation_id": str(offer.operation_id),
+            "generation_run_id": str(offer.generation_run_id),
+            "project_id": str(offer.project_id),
+            "owner_id": str(offer.owner_id),
+            "source_workspace_id": str(offer.workspace_id),
+            "expected_source_fencing_epoch": offer.expected_source_fencing_epoch,
+            "target_fencing_epoch": offer.target_fencing_epoch,
+            "source_workspace_revision": offer.source_workspace_revision,
+            "source_code_volume": offer.source_code_volume,
+            "live_database_volume": offer.live_database_volume,
+            "live_database_identity_digest": offer.live_database_identity_digest,
+            "candidate_workspace_id": str(offer.candidate_workspace_id),
+            "candidate_fencing_epoch": offer.candidate_fencing_epoch,
+            "candidate_workspace_revision": offer.candidate_workspace_revision,
+            "proof_digest": offer.proof_digest,
+            "candidate_artifact_digest": offer.candidate_artifact_digest,
+            "candidate_source_manifest_digest": offer.candidate_source_manifest_digest,
+            "candidate_code_digest": offer.archive_digest,
+            "business_probe": offer.business_probe.model_dump(mode="json"),
+            "probe_rehearsal_digest": offer.probe_rehearsal_digest,
+            "probe_rehearsal_database_digest": offer.probe_rehearsal_database_digest,
+            "planned_commit_sha": self.planned_commit_sha,
+            "activation_id": str(offer.activation_id),
+        }
+
+    def activation_digest(self) -> str:
+        """Digest the immutable effect binding, excluding the digest field itself."""
+        return canonical_activation_digest(self.activation_binding_payload())
+
+    def digest(self) -> str:
+        """Hash the complete command envelope independently from the effect binding."""
+        return canonical_activation_digest(self)
+
+
+class ActivationPreparedTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    workspace_id: UUID
+    fencing_epoch: int = Field(gt=0, strict=True)
+    code_volume: str = Field(min_length=1, max_length=255)
+    code_digest: Sha256
+    database_volume: str = Field(min_length=1, max_length=255)
+    database_identity_digest: Sha256
+
+
+ActivationState = Literal[
+    "intent",
+    "target_prepared",
+    "writers_stopping",
+    "cancelling",
+    "target_writers_admitted",
+    "activated",
+    "cancelled",
+]
+
+
+class RestorationAdaptationActivationStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    state: ActivationState
+    effects_admitted: bool = Field(strict=True)
+    offer: RestorationAdaptationActivationOffer
+    planned_commit_sha: GitSha
+    activation_digest: Sha256
+    fencing_epoch: int = Field(gt=0, strict=True)
+    source_volume_identity: ActivationPreparedTarget
+    target_volume_identity: ActivationPreparedTarget
+    health_digest: Sha256 | None = None
+    receipt_digest: Sha256
+
+    @model_validator(mode="after")
+    def valid_receipt(self) -> Self:
+        admitted = self.state in {"target_writers_admitted", "activated"}
+        if self.effects_admitted is not admitted:
+            raise ValueError("activation state does not match admitted effects")
+        if (self.state == "activated") != (self.health_digest is not None):
+            raise ValueError("activation health proof does not match state")
+        command = RestorationAdaptationActivationCommand(
+            offer=self.offer, planned_commit_sha=self.planned_commit_sha
+        )
+        if self.activation_digest != command.activation_digest():
+            raise ValueError("activation digest mismatch")
+        expected_source = ActivationPreparedTarget(
+            workspace_id=self.offer.workspace_id,
+            fencing_epoch=self.offer.expected_source_fencing_epoch,
+            code_volume=self.offer.source_code_volume,
+            code_digest=self.offer.source_workspace_revision,
+            database_volume=self.offer.live_database_volume,
+            database_identity_digest=self.offer.live_database_identity_digest,
+        )
+        if self.source_volume_identity != expected_source:
+            raise ValueError("activation source identity mismatch")
+        if (
+            self.target_volume_identity.workspace_id != self.offer.workspace_id
+            or self.target_volume_identity.fencing_epoch != self.offer.target_fencing_epoch
+            or self.target_volume_identity.code_digest != self.offer.archive_digest
+            or self.target_volume_identity.database_volume != self.offer.live_database_volume
+            or self.target_volume_identity.database_identity_digest
+            != self.offer.live_database_identity_digest
+            or self.fencing_epoch != self.offer.target_fencing_epoch
+        ):
+            raise ValueError("activation target identity mismatch")
+        receipt = {
+            "state": self.state,
+            "effects_admitted": self.effects_admitted,
+            "operation_id": str(self.offer.operation_id),
+            "generation_run_id": str(self.offer.generation_run_id),
+            "project_id": str(self.offer.project_id),
+            "owner_id": str(self.offer.owner_id),
+            "activation_id": str(self.offer.activation_id),
+            "activation_digest": self.activation_digest,
+            "proof_digest": self.offer.proof_digest,
+            "fencing_epoch": self.fencing_epoch,
+            "source_volume_identity": self.source_volume_identity.model_dump(mode="json"),
+            "target_volume_identity": self.target_volume_identity.model_dump(mode="json"),
+            "health_digest": self.health_digest,
+        }
+        if canonical_activation_digest(receipt) != self.receipt_digest:
+            raise ValueError("activation receipt digest mismatch")
+        return self
 
 
 class _ReportPart(BaseModel):

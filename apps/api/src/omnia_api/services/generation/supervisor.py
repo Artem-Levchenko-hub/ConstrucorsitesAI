@@ -19,6 +19,7 @@ from omnia_api.core.redis import (
 )
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
+from omnia_api.services.generation.agent_finalization import AdaptationActivationPending
 from omnia_api.services.generation.lightweight_turns import (
     _run_async_onboarding,
     _run_clarify,
@@ -31,6 +32,7 @@ from omnia_api.services.generation_runs import (
     finalize_generation_run,
     load_generation_dispatch,
     set_generation_run_status,
+    terminalize_generation_run_locked,
     write_capacity_dispatch_claim,
 )
 from omnia_api.services.project_cell_capacity import (
@@ -264,6 +266,10 @@ async def _run_tracked_prompt(
         with suppress(asyncio.CancelledError):
             await work_task
         await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
+    except AdaptationActivationPending:
+        # The restoration reconciler owns the durable activation outbox and
+        # will settle the run after the controller returns a terminal receipt.
+        return
     except Exception as exc:
         logging.getLogger("omnia_api.routers.messages").error("%s failed", label, exc_info=exc)
         await set_generation_run_status(
@@ -431,9 +437,12 @@ async def resume_capacity_queued_generations() -> int:
                 ):
                     raise ValueError("generation dispatch message ownership mismatch")
             except ValueError as exc:
-                run.status = "failed"
-                run.error = f"invalid queued dispatch: {exc}"[:2000]
-                run.finished_at = datetime.now(UTC)
+                await terminalize_generation_run_locked(
+                    session,
+                    run,
+                    status="failed",
+                    error=f"invalid queued dispatch: {exc}",
+                )
                 continue
             claim_token = uuid4()
             _write_capacity_dispatch_claim(run, token=claim_token, now=now)

@@ -16,3 +16,23 @@ test("MAX starter package satisfies portable machine contract", async () => {
   assert.equal(packageJson.scripts.start, "next start --port 3000 --hostname 0.0.0.0");
   assert.equal(packageJson.scripts.test, "node --test tests/*.test.mjs");
 });
+
+test("activation action cleanup removes only a user created by that fixture", async () => {
+  const createRoute = await readFile(
+    resolve(starterRoot, "src/app/api/omnia/actions/route.ts"),
+    "utf8",
+  );
+  const deleteRoute = await readFile(
+    resolve(starterRoot, "src/app/api/omnia/actions/[id]/route.ts"),
+    "utf8",
+  );
+
+  assert.match(createRoute, /probeUserCreated: createdUsers\.length === 1/);
+  assert.match(deleteRoute, /audit\?\.details\?\.probeUserCreated === true/);
+  assert.match(deleteRoute, /action\.actionType\.startsWith\("omnia_health_"\)/);
+  assert.match(deleteRoute, /NOT EXISTS \(/);
+  assert.ok(
+    deleteRoute.indexOf("delete(schema.maxAuditLog)") <
+      deleteRoute.indexOf("delete(schema.maxUsers)"),
+  );
+});

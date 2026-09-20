@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
 from uuid import UUID
@@ -24,7 +25,7 @@ from omnia_api.models.project_version import ProjectVersion
 from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.message import RestorationAdaptationReference
-from omnia_api.schemas.restoration import RestoreReport
+from omnia_api.schemas.restoration import ActivationBusinessWitness, RestoreReport
 from omnia_api.services import repo
 from omnia_api.services.project_versions import resolve_version
 from omnia_api.services.secret_safety import contains_provider_secret, is_secret_file
@@ -47,6 +48,111 @@ _ENV_DECLARATION = re.compile(
 _SIMPLE_TEMPLATE_EXPRESSION = re.compile(
     r"""\$\{(?:[^{}'"`\\]|"(?:\\[^`]|[^"`\\])*"|'(?:\\[^`]|[^'`\\])*')*\}"""
 )
+
+RESTORATION_PROBE_PATH = ".omnia/restoration-probe.json"
+_PROBE_MANIFEST_KEYS = {"version", "endpoint", "witnesses", "max_payload_bytes"}
+_PROBE_REQUIREMENTS = """\
+ADAPTIVE RESTORATION ACTIVATION PROBE (SERVER REQUIREMENT)
+Create `.omnia/restoration-probe.json` with exactly these JSON fields: version=1,
+same-origin target-owned endpoint under `/api/`, max_payload_bytes 256..8192,
+and one witness per changed probeable business entity. Each witness has exactly
+entity, id_column, owner_column, value_column and create_values. It names the
+actual current DataContract entity, its single UUID primary key, its direct owner
+column, one mutable text value column, and scalar create_values for every other
+required column without a technical default. Do not use a platform-managed table
+or an `/api/omnia/*` or `/api/max/*` endpoint.
+
+Implement the declared endpoint in the generated target application against
+DATABASE_URL and authenticate it with the application's signed `__Host-max_session`
+owner session. GET endpoint?entity=&marker=&limit= returns
+{probeContractDigest,items,complete}; POST accepts
+{id,entity,marker,phase,values}; GET/PATCH/DELETE use
+endpoint/{entity}/{id}. Every item is {id,ownerId,entity,marker,phase}; store the
+value_column exactly as `${marker}:${phase}`. PATCH accepts {phase}. POST must use
+the supplied UUID id and never upsert another owner's row. Scope every read and
+mutation by both id and signed owner. Missing/malformed auth returns 401;
+cross-owner access returns 403/404/409 without changing data. Every successful
+response echoes the normalized probeContractDigest. Marker filtering is exact
+and complete, and every response stays within max_payload_bytes.
+"""
+
+
+def restoration_probe_requirements() -> str:
+    """Return the immutable generated-code contract used by prompt and repair."""
+
+    return _PROBE_REQUIREMENTS
+
+
+def restoration_probe_source_gap(files: dict[str, str] | Any) -> str | None:
+    """Fail closed on a missing/invalid probe before the controller proof is sealed."""
+
+    if not isinstance(files, dict):
+        return "restoration_probe_invalid: candidate source map"
+    raw = files.get(RESTORATION_PROBE_PATH)
+    if not isinstance(raw, str) or not raw or len(raw.encode("utf-8")) > 32 * 1024:
+        return "restoration_probe_missing: .omnia/restoration-probe.json"
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError):
+        return "restoration_probe_invalid: manifest JSON"
+    if not isinstance(value, dict) or set(value) != _PROBE_MANIFEST_KEYS:
+        return "restoration_probe_invalid: manifest fields"
+    endpoint = value.get("endpoint")
+    segments = endpoint.split("/")[1:] if isinstance(endpoint, str) else []
+    if (
+        value.get("version") != 1
+        or isinstance(value.get("version"), bool)
+        or not isinstance(endpoint, str)
+        or len(endpoint) > 240
+        or not endpoint.startswith("/api/")
+        or endpoint.startswith(("/api/omnia/", "/api/max/"))
+        or endpoint in {"/api/omnia", "/api/max"}
+        or endpoint.endswith("/")
+        or any(token in endpoint for token in ("?", "#", "%", "\\", "//"))
+        or any(re.fullmatch(r"[A-Za-z0-9_-]+", segment) is None for segment in segments)
+    ):
+        return "restoration_probe_invalid: target-owned endpoint"
+    max_payload = value.get("max_payload_bytes")
+    if (
+        isinstance(max_payload, bool)
+        or not isinstance(max_payload, int)
+        or not 256 <= max_payload <= 8192
+    ):
+        return "restoration_probe_invalid: max_payload_bytes"
+    witnesses = value.get("witnesses")
+    if not isinstance(witnesses, list) or not 1 <= len(witnesses) <= 32:
+        return "restoration_probe_invalid: witnesses"
+    try:
+        parsed = [ActivationBusinessWitness.model_validate(item) for item in witnesses]
+    except (TypeError, ValidationError, ValueError):
+        return "restoration_probe_invalid: witness"
+    if len({item.entity for item in parsed}) != len(parsed):
+        return "restoration_probe_invalid: duplicate witness entity"
+
+    relative = endpoint.removeprefix("/api/")
+    route_root = f"src/app/api/{relative}"
+    exact = files.get(f"{route_root}/route.ts") or files.get(
+        f"{route_root}/[[...path]]/route.ts"
+    )
+    descendants = [
+        content
+        for path, content in files.items()
+        if path.startswith(route_root + "/")
+        and path.endswith("/route.ts")
+        and path != f"{route_root}/route.ts"
+        and isinstance(content, str)
+    ]
+    if not isinstance(exact, str) or not exact.strip() or not descendants:
+        return "restoration_probe_missing: endpoint collection and item routes"
+    implementation = "\n".join([exact, *descendants])
+    missing = [
+        method
+        for method in ("GET", "POST", "PATCH", "DELETE")
+        if re.search(rf"\b(?:function|const)\s+{method}\b", implementation) is None
+    ]
+    if missing:
+        return "restoration_probe_invalid: endpoint methods " + ",".join(missing)
+    return None
 
 
 def _preservation_contract() -> dict[str, Any]:
@@ -250,25 +356,43 @@ async def prepare_adaptation(
     project: Project,
     owner_id: UUID,
     reference: RestorationAdaptationReference,
+    adaptation_run: GenerationRun,
 ) -> dict[str, Any]:
     # reserve_generation_run already owns the canonical project advisory/row lock.
     await session.refresh(project)
     operation = await session.get(Restoration, reference.operation_id)
+    if operation is not None:
+        await session.refresh(operation, with_for_update=True)
+    locked_run = await session.get(GenerationRun, adaptation_run.id)
+    if locked_run is not None:
+        await session.refresh(locked_run, with_for_update=True)
     if (
         project.owner_id != owner_id
         or project.template != "max_miniapp"
         or operation is None
         or operation.project_id != project.id
         or operation.owner_id != owner_id
+        or locked_run is None
+        or locked_run.project_id != project.id
+        or locked_run.user_id != owner_id
+        or locked_run.status not in {"pending", "queued_for_capacity", "running"}
     ):
         raise _conflict("Выбранная подготовка восстановления недоступна в этом проекте.")
-    if operation.state != "cancelled":
+    adaptation_run = locked_run
+    replay = (
+        operation.state == "adapting"
+        and operation.selected_branch == "adaptive"
+        and operation.adaptation_run_id == adaptation_run.id
+    )
+    if operation.state != "cancelled" and not replay:
         raise _conflict("Сначала дождитесь подтверждённой отмены подготовки восстановления.")
     if (
         project.current_snapshot_id != reference.expected_draft_snapshot_id
         or operation.base_draft_snapshot_id != reference.expected_draft_snapshot_id
     ):
         raise _conflict("Черновик изменился. Подготовьте адаптацию выбранной версии заново.")
+    if operation.adaptation_run_id not in {None, adaptation_run.id}:
+        raise _conflict("Адаптация восстановления уже привязана к другому запуску.")
     source = await session.get(Snapshot, operation.source_snapshot_id)
     version = await session.get(ProjectVersion, operation.source_version_id)
     if (
@@ -307,11 +431,20 @@ async def prepare_adaptation(
         ) from exc
     safe, excluded = _source_files(files)
     report = _compatibility_report(operation.report)
+    if not replay:
+        operation.selected_branch = "adaptive"
+        operation.adaptation_run_id = adaptation_run.id
+        operation.state = "adapting"
+        operation.phase = "generation"
+        operation.error = None
+        operation.revision += 1
+        operation.updated_at = datetime.now(UTC)
     bundle: dict[str, Any] = {
         "version": 2,
         "project_id": str(project.id),
         "owner_id": str(owner_id),
         "operation_id": str(operation.id),
+        "adaptation_run_id": str(adaptation_run.id),
         "source_version_id": str(version.id),
         "source_snapshot_id": str(source.id),
         "source_commit_sha": source.commit_sha,
@@ -358,6 +491,7 @@ async def append_adaptation_context(
         or version not in {1, 2}
         or raw.get("project_id") != str(project_id)
         or raw.get("owner_id") != str(owner_id)
+        or raw.get("adaptation_run_id") != str(run_id)
         or raw.get("base_draft_snapshot_id") != str(current_snapshot_id)
         or not isinstance(raw.get("files"), dict)
     ):
@@ -401,5 +535,7 @@ async def append_adaptation_context(
             "report the specific choice instead of changing data. Explain changed or unavailable "
             "functions and verified checks. This is a new draft, not publication.\n"
         )
+        + restoration_probe_requirements()
+        + "\n"
         + json.dumps({**bundle, "files": files}, ensure_ascii=False)
     )

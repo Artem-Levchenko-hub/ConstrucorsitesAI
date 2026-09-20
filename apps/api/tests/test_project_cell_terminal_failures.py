@@ -141,3 +141,84 @@ async def test_finalization_fatal_skips_source_repair_and_preserves_code(monkeyp
             ),
         )
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_sealed_adaptation_failure_preserves_candidate_for_forward_recovery(
+    monkeypatch,
+):
+    from omnia_api.services.generation import agent_finalization
+    from omnia_api.services.max_finalization import (
+        AdaptationActivationRecoveryRequired,
+    )
+
+    calls = []
+
+    async def finalize(**kwargs):
+        raise AdaptationActivationRecoveryRequired("planned Git upload uncertain")
+
+    def read_files(*args):
+        calls.append("restore source")
+        return {}
+
+    monkeypatch.setattr(agent_finalization.repo_svc, "read_files", read_files)
+    with pytest.raises(RuntimeError, match="planned Git upload uncertain"):
+        await agent_finalization.finalize_max_candidate(
+            _is_edit=True,
+            _max_has_generated_snapshot=True,
+            _max_shell_enabled=False,
+            accumulated="sealed candidate",
+            baseline=SimpleNamespace(sha="a" * 40),
+            files={"src/app/page.tsx": "sealed candidate"},
+            ids=SimpleNamespace(project_id=uuid4()),
+            is_free=False,
+            prompt_text="adapt",
+            plan=SimpleNamespace(),
+            operations=SimpleNamespace(),
+            runtime=SimpleNamespace(
+                handle=object(), coordinator=SimpleNamespace(finalize_with_repair=finalize)
+            ),
+        )
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_adaptation_cancel_stops_pipeline_without_source_rollback(
+    monkeypatch,
+):
+    import asyncio
+
+    from omnia_api.services.generation import agent_finalization
+    from omnia_api.services.max_finalization import MaxFinalizationStatus
+
+    calls = []
+
+    async def finalize(**kwargs):
+        return SimpleNamespace(
+            status=MaxFinalizationStatus.CANCELLED,
+            redacted_detail="adaptation activation cancelled",
+        )
+
+    def read_files(*args):
+        calls.append("restore source")
+        return {}
+
+    monkeypatch.setattr(agent_finalization.repo_svc, "read_files", read_files)
+    with pytest.raises(asyncio.CancelledError):
+        await agent_finalization.finalize_max_candidate(
+            _is_edit=True,
+            _max_has_generated_snapshot=True,
+            _max_shell_enabled=False,
+            accumulated="sealed candidate",
+            baseline=SimpleNamespace(sha="a" * 40),
+            files={"src/app/page.tsx": "sealed candidate"},
+            ids=SimpleNamespace(project_id=uuid4()),
+            is_free=False,
+            prompt_text="adapt",
+            plan=SimpleNamespace(),
+            operations=SimpleNamespace(),
+            runtime=SimpleNamespace(
+                handle=object(), coordinator=SimpleNamespace(finalize_with_repair=finalize)
+            ),
+        )
+    assert calls == []

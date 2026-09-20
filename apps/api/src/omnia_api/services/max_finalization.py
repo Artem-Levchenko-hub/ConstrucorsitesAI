@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -34,8 +35,10 @@ from omnia_api.services.generation_metrics import (
     record_phase_started,
     record_terminal_reason,
 )
+from omnia_api.services.generation_runs import terminalize_generation_run_locked
 from omnia_api.services.max_generation_contract import max_source_completion_gap
 from omnia_api.services.max_runtime_probe import MaxRuntimeProbe
+from omnia_api.services.orchestrator_client import RestorationAdaptationProof
 from omnia_api.services.project_cell_activity import (
     ActivityKind,
     ActivityStart,
@@ -77,6 +80,7 @@ from omnia_api.services.promotion_permit import (
     require_promotion_permit,
     workspace_revision_digest,
 )
+from omnia_api.services.restoration_adaptation import restoration_probe_source_gap
 from omnia_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
@@ -101,8 +105,13 @@ class AdaptationBaselineUnavailable(RuntimeError):
     fails instead of passing on "no differences found"."""
 
 
+class AdaptationActivationRecoveryRequired(RuntimeError):
+    """A sealed adaptation proof owns the candidate until forward recovery."""
+
+
 class MaxFinalizationStatus(StrEnum):
     NEEDS_EDIT = "needs_edit"
+    ACTIVATING = "activating"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -256,6 +265,14 @@ class MaxFinalizationCoordinator:
             if not isinstance(bundle, dict):
                 return None
             proof_gap = _adaptation_proof_capability_gap(bundle, self.executor.capabilities)
+            if (
+                proof_gap
+                == "adaptation_proof_unavailable: schema, CRUD, reload and owner isolation"
+                and self.executor.prove_restoration_adaptation is not None
+            ):
+                # The immutable preservation proof is produced only after the
+                # candidate build/runtime/release evidence is frozen.
+                proof_gap = None
             if proof_gap is not None:
                 raise AdaptationBaselineUnavailable(proof_gap)
             raw_id = bundle.get("base_draft_snapshot_id")
@@ -306,6 +323,8 @@ class MaxFinalizationCoordinator:
 
     async def fast_check(self) -> ProjectCellProofResult:
         await self._raise_persisted_infrastructure_failure()
+        if self.executor.prove_restoration_adaptation is not None:
+            return await self._adaptation_fast_check()
         identity = await self._identity()
         proof = await self._proof(identity)
         bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
@@ -334,6 +353,8 @@ class MaxFinalizationCoordinator:
         prompt: str,
     ) -> MaxFinalizationOutcome:
         await self._raise_persisted_infrastructure_failure()
+        if self.executor.prove_restoration_adaptation is not None:
+            return await self._finalize_adaptation(files=files, prompt=prompt)
         self._last_files = dict(files)
         self._last_prompt = prompt
         identity = await self._identity()
@@ -540,6 +561,862 @@ class MaxFinalizationCoordinator:
                 return outcome
             files = updated
         raise AssertionError("bounded finalization loop exhausted")
+
+    @staticmethod
+    def _transient_proof(identity: ProofIdentity) -> ProjectCellProof:
+        return ProjectCellProof(
+            id=uuid5(
+                identity.generation_run_id,
+                f"adaptation-proof:{identity.workspace_id}:{identity.proof_key}",
+            ),
+            workspace_id=identity.workspace_id,
+            generation_run_id=identity.generation_run_id,
+            fencing_epoch=identity.fencing_epoch,
+            proof_key=identity.proof_key,
+            workspace_revision=identity.workspace_revision,
+            dependency_digest=identity.dependency_digest,
+            schema_data_digest=identity.schema_data_digest,
+            cell_manifest_digest=identity.cell_manifest_digest,
+            base_image_digest=identity.base_image_digest,
+            toolchain_digest=identity.toolchain_digest,
+            resource_profile_version=identity.resource_profile_version,
+            build_config_digest=identity.build_config_digest,
+        )
+
+    @staticmethod
+    def _transient_result(
+        *,
+        identity: ProofIdentity,
+        proof: ProjectCellProof,
+        dimension: ProofDimension,
+        outcome: ProofOutcome,
+        operation_id: UUID,
+        detail: str,
+        artifact_ref: str | None = None,
+        artifact_digest: str | None = None,
+    ) -> ProjectCellProofResult:
+        detail_text = bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
+        return ProjectCellProofResult(
+            id=uuid5(
+                operation_id,
+                f"adaptation-result:{dimension.value}:{identity.proof_key}",
+            ),
+            proof_id=proof.id,
+            workspace_id=identity.workspace_id,
+            dimension=dimension.value,
+            dimension_key=identity.dimension_key(
+                dimension,
+                artifact_digest=(
+                    artifact_digest
+                    if dimension in {ProofDimension.RUNTIME, ProofDimension.RELEASE}
+                    else None
+                ),
+            ),
+            outcome=outcome.value,
+            operation_id=operation_id,
+            artifact_ref=artifact_ref,
+            detail_digest=hashlib.sha256(detail_text.encode("utf-8")).hexdigest(),
+            redacted_detail=detail_text,
+        )
+
+    async def _adaptation_role_result(
+        self,
+        *,
+        identity: ProofIdentity,
+        proof: ProjectCellProof,
+        dimension: ProofDimension,
+        role: ProjectCellCommandRole,
+    ) -> tuple[ProjectCellProofResult, ProofIdentity, ProjectCellProof]:
+        run_role = self.executor.run_role
+        assert run_role is not None
+        operation_id = uuid5(
+            self.generation_run_id,
+            "adaptation-command:"
+            f"{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:"
+            f"{role.value}:{MAX_FULL_BUILD_CONTRACT_VERSION}",
+        )
+        observation = await run_role(role, operation_id)
+        if observation.before != identity:
+            raise MaxFinalizationConflict("candidate command started from another proof identity")
+        final_identity = observation.after
+        final_proof = (
+            proof
+            if final_identity.proof_key == identity.proof_key
+            else self._transient_proof(final_identity)
+        )
+        changed_frozen_identity = (
+            dimension is not ProofDimension.BOOTSTRAP and final_identity != identity
+        )
+        outcome = (
+            ProofOutcome.GREEN
+            if observation.ok and not changed_frozen_identity
+            else ProofOutcome.RED
+        )
+        detail = observation.redacted_detail
+        if changed_frozen_identity:
+            detail = "command changed the frozen candidate proof identity" + (
+                "\n" + detail if detail else ""
+            )
+        artifact_ref = None
+        artifact_digest = None
+        if dimension is ProofDimension.FULL_BUILD:
+            detail = _versioned_build_detail(detail)
+            if outcome is ProofOutcome.GREEN:
+                artifact_files = await self._verified_workspace_files(identity)
+                artifact_digest = canonical_files_digest(artifact_files)
+                artifact_ref = f"build/sha256/{artifact_digest}"
+                self._last_files = artifact_files
+        result = self._transient_result(
+            identity=final_identity if dimension is ProofDimension.BOOTSTRAP else identity,
+            proof=final_proof if dimension is ProofDimension.BOOTSTRAP else proof,
+            dimension=dimension,
+            outcome=outcome,
+            operation_id=operation_id,
+            detail=detail,
+            artifact_ref=artifact_ref,
+            artifact_digest=artifact_digest,
+        )
+        return result, final_identity, final_proof
+
+    async def _adaptation_fast_check(self) -> ProjectCellProofResult:
+        identity = await self._identity()
+        proof = self._transient_proof(identity)
+        bootstrap, identity, proof = await self._adaptation_role_result(
+            identity=identity,
+            proof=proof,
+            dimension=ProofDimension.BOOTSTRAP,
+            role=ProjectCellCommandRole.BOOTSTRAP,
+        )
+        if bootstrap.outcome != ProofOutcome.GREEN.value:
+            return bootstrap
+        result, _identity, _proof = await self._adaptation_role_result(
+            identity=identity,
+            proof=proof,
+            dimension=ProofDimension.FAST_CHECK,
+            role=ProjectCellCommandRole.FAST_CHECK,
+        )
+        return result
+
+    async def _adaptation_runtime_result(
+        self,
+        *,
+        identity: ProofIdentity,
+        proof: ProjectCellProof,
+        build_digest: str,
+    ) -> ProjectCellProofResult:
+        runtime_probe = self.executor.runtime_probe
+        assert runtime_probe is not None
+        operation_id = uuid5(
+            self.generation_run_id,
+            f"adaptation-runtime:{identity.proof_key}:{build_digest}",
+        )
+        probe = cast(MaxRuntimeProbe, await runtime_probe(identity.proof_key))
+        current = await self._identity()
+        unchanged = current == identity
+        ok = bool(probe.ok) and unchanged
+        detail = str(probe.detail)
+        if not unchanged:
+            detail = "runtime probe changed the frozen candidate proof identity" + (
+                "\n" + detail if detail else ""
+            )
+        verification_digest = _content_digest(
+            "runtime",
+            identity.proof_key,
+            build_digest,
+            str(getattr(probe, "artifact_digest", "")),
+        )
+        return self._transient_result(
+            identity=identity,
+            proof=proof,
+            dimension=ProofDimension.RUNTIME,
+            outcome=ProofOutcome.GREEN if ok else ProofOutcome.RED,
+            operation_id=operation_id,
+            artifact_ref=f"verification/sha256/{verification_digest}" if ok else None,
+            detail=detail,
+            artifact_digest=build_digest,
+        )
+
+    async def _adaptation_release_result(
+        self,
+        *,
+        identity: ProofIdentity,
+        bundle: ProofBundle,
+        build_digest: str,
+    ) -> ProjectCellProofResult:
+        from omnia_api.services.release_proof import run_release_proof
+
+        operation_id = uuid5(
+            self.generation_run_id,
+            f"adaptation-release:{identity.proof_key}:{build_digest}",
+        )
+        verdict = await run_release_proof(
+            self.project_id,
+            self.project_slug,
+            proof=bundle,
+            require_max_data=True,
+            project_cell_handle=self.executor,
+        )
+        current = await self._identity()
+        unchanged = current == identity
+        detail = bounded_redacted_text(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
+        if not unchanged:
+            detail = bounded_redacted_text(
+                "release proof changed the frozen candidate proof identity\n" + detail,
+                max_bytes=_MAX_DETAIL_BYTES,
+            )
+        digest = release_receipt_digest(
+            proof_key=identity.proof_key,
+            artifact_digest=build_digest,
+            detail=detail,
+        )
+        return self._transient_result(
+            identity=identity,
+            proof=bundle.identity,
+            dimension=ProofDimension.RELEASE,
+            outcome=(
+                ProofOutcome.GREEN if verdict.passed and unchanged else ProofOutcome.RED
+            ),
+            operation_id=operation_id,
+            artifact_ref=release_receipt_ref(
+                artifact_digest=build_digest,
+                receipt_digest=digest,
+            ),
+            detail=detail,
+            artifact_digest=build_digest,
+        )
+
+    async def _issue_adaptation_proof_attempt(
+        self,
+        *,
+        identity: ProofIdentity,
+        artifact_digest: str,
+        files: Mapping[str, str],
+    ) -> int:
+        from omnia_api.services.restorations import _owned_operation, _touch
+
+        workspace = self.executor.restoration_adaptation_workspace
+        if workspace is None:
+            raise MaxFinalizationConflict("restoration adaptation workspace is missing")
+        exact_files = dict(files)
+        if canonical_files_digest(exact_files) != artifact_digest:
+            raise MaxFinalizationConflict("restoration adaptation artifact changed")
+        binding = {
+            "candidate_workspace_id": str(identity.workspace_id),
+            "candidate_fencing_epoch": identity.fencing_epoch,
+            "candidate_workspace_revision": identity.workspace_revision,
+            "candidate_proof_key": identity.proof_key,
+            "candidate_artifact_digest": artifact_digest,
+        }
+        async with self.session_factory() as session:
+            run_hint = await session.get(GenerationRun, self.generation_run_id)
+            hint_state = (
+                run_hint.agent_state
+                if run_hint is not None and isinstance(run_hint.agent_state, dict)
+                else {}
+            )
+            raw_adaptation = hint_state.get("restoration_adaptation")
+            try:
+                operation_id = UUID(str(cast(dict[str, object], raw_adaptation)["operation_id"]))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise MaxFinalizationConflict(
+                    "restoration adaptation binding is invalid"
+                ) from exc
+            _project, operation = await _owned_operation(
+                session,
+                self.project_id,
+                workspace.owner_id,
+                operation_id,
+            )
+            run = await session.get(
+                GenerationRun, self.generation_run_id, with_for_update=True
+            )
+            if (
+                run is None
+                or run.project_id != self.project_id
+                or run.user_id != workspace.owner_id
+                or run.status not in {"running", "cancel_requested"}
+                or operation.selected_branch != "adaptive"
+                or operation.adaptation_run_id != run.id
+                or operation.workspace_id != workspace.source_workspace_id
+                or workspace.operation_id != operation.id
+                or workspace.project_id != run.project_id
+                or workspace.generation_run_id != run.id
+                or workspace.candidate_workspace_id != identity.workspace_id
+                or workspace.candidate_fencing_epoch != identity.fencing_epoch
+            ):
+                raise MaxFinalizationConflict(
+                    "restoration adaptation proof ownership changed"
+                )
+            root = dict(run.agent_state)
+            raw_state = root.get("max_finalization")
+            state = dict(raw_state) if isinstance(raw_state, dict) else {}
+            raw_attempt = state.get("restoration_adaptation_proof_attempt")
+            current = dict(raw_attempt) if isinstance(raw_attempt, dict) else None
+            if current is not None and current.get("status") == "issued":
+                if any(current.get(key) != value for key, value in binding.items()):
+                    raise MaxFinalizationConflict(
+                        "restoration adaptation proof attempt identity changed"
+                    )
+                number = current.get("number")
+                if type(number) is not int or number < 1:
+                    raise MaxFinalizationConflict(
+                        "restoration adaptation proof attempt is invalid"
+                    )
+            elif current is not None:
+                prior = state.get("restoration_adaptation_proof")
+                if not isinstance(prior, dict) or prior.get("state") != "migration_required":
+                    raise MaxFinalizationConflict(
+                        "restoration adaptation proof is already terminal"
+                    )
+                previous = current.get("number")
+                if type(previous) is not int or previous < 1:
+                    raise MaxFinalizationConflict(
+                        "restoration adaptation proof attempt is invalid"
+                    )
+                number = previous + 1
+            else:
+                number = 1
+            proof_request = {
+                "workspace": {
+                    "source_workspace_id": str(workspace.source_workspace_id),
+                    "candidate_workspace_id": str(workspace.candidate_workspace_id),
+                    "operation_id": str(workspace.operation_id),
+                    "project_id": str(workspace.project_id),
+                    "owner_id": str(workspace.owner_id),
+                    "generation_run_id": str(workspace.generation_run_id),
+                    "candidate_fencing_epoch": workspace.candidate_fencing_epoch,
+                    "source_database_digest": workspace.source_database_digest,
+                    "proof_digest": workspace.proof_digest,
+                    "capabilities": dict(workspace.capabilities),
+                },
+                **binding,
+                "proof_attempt": number,
+            }
+            intent = {
+                "proof_request": proof_request,
+                "candidate_files": exact_files,
+                "candidate_artifact_digest": artifact_digest,
+            }
+            if operation.activation_request is not None and operation.activation_request != intent:
+                raise MaxFinalizationConflict(
+                    "restoration adaptation proof intent changed"
+                )
+            state["restoration_adaptation_proof_attempt"] = {
+                "number": number,
+                "status": "issued",
+                **binding,
+            }
+            root["max_finalization"] = state
+            run.agent_state = root
+            operation.activation_request = intent
+            operation.activation_request_digest = hashlib.sha256(
+                json.dumps(intent, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            operation.state = "applying"
+            operation.phase = "activation_proof_intent"
+            operation.error = None
+            _touch(operation)
+            await session.commit()
+            return number
+
+    async def _persist_adaptation_proof(
+        self,
+        receipt: RestorationAdaptationProof,
+        files: Mapping[str, str],
+    ) -> None:
+        async with self.session_factory() as session:
+            await self.persist_adaptation_proof_receipt(
+                session,
+                generation_run_id=self.generation_run_id,
+                project_id=self.project_id,
+                receipt=receipt,
+                files=files,
+            )
+
+    @staticmethod
+    async def persist_adaptation_proof_receipt(
+        session: AsyncSession,
+        *,
+        generation_run_id: UUID,
+        project_id: UUID,
+        receipt: RestorationAdaptationProof,
+        files: Mapping[str, str],
+    ) -> None:
+        from omnia_api.services.restorations import (
+            _activation_offer_request,
+            _adaptation_cancel_requested,
+            _owned_operation,
+            _touch,
+        )
+
+        run_hint = await session.get(GenerationRun, generation_run_id)
+        if run_hint is None or run_hint.project_id != project_id:
+            raise MaxFinalizationConflict("generation run not found for project")
+        hint_state = run_hint.agent_state if isinstance(run_hint.agent_state, dict) else {}
+        raw_binding = hint_state.get("restoration_adaptation")
+        if not isinstance(raw_binding, dict):
+            raise MaxFinalizationConflict("restoration adaptation binding is missing")
+        try:
+            operation_id = UUID(str(raw_binding["operation_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MaxFinalizationConflict(
+                "restoration adaptation binding is invalid"
+            ) from exc
+        _project, operation = await _owned_operation(
+            session,
+            run_hint.project_id,
+            run_hint.user_id,
+            operation_id,
+        )
+        run = await session.get(GenerationRun, generation_run_id, with_for_update=True)
+        if run is None or run.project_id != project_id:
+            raise MaxFinalizationConflict("generation run not found for project")
+        durable_cancel = bool(
+            not operation.activation_effects_admitted
+            and (
+                operation.activation_cancel_requested_at is not None
+                or operation.phase in {"activation_cancel", "activation_cancelled"}
+                or _adaptation_cancel_requested(run)
+            )
+        )
+        root = dict(run.agent_state) if isinstance(run.agent_state, dict) else {}
+        raw_state = root.get("max_finalization")
+        state = dict(raw_state) if isinstance(raw_state, dict) else {}
+        raw_attempt = state.get("restoration_adaptation_proof_attempt")
+        attempt = dict(raw_attempt) if isinstance(raw_attempt, dict) else None
+        issued_failed_recovery = bool(
+            run.status == "failed"
+            and root.get("restoration_adaptation_owner_status")
+            == "sealed_proof_retained"
+            and operation.selected_branch == "adaptive"
+            and operation.adaptation_run_id == run.id
+            and operation.state in {"applying", "reconciling"}
+            and operation.phase == "activation_proof_intent"
+            and isinstance(operation.activation_request, dict)
+            and "proof_request" in operation.activation_request
+            and attempt is not None
+            and attempt.get("status") == "issued"
+        )
+        if (
+            run.status not in {"running", "cancel_requested"}
+            and not (run.status == "cancelled" and durable_cancel)
+            and not issued_failed_recovery
+        ):
+            raise MaxFinalizationConflict("generation run is not active")
+        if (
+            receipt.operation_id != operation.id
+            or receipt.project_id != run.project_id
+            or receipt.owner_id != run.user_id
+            or receipt.generation_run_id != run.id
+            or receipt.source_workspace_id != operation.workspace_id
+        ):
+            raise MaxFinalizationConflict(
+                "restoration adaptation proof ownership changed"
+            )
+        if (
+            attempt is None
+            or attempt.get("number") != receipt.proof_attempt
+            or attempt.get("candidate_workspace_id")
+            != str(receipt.candidate_workspace_id)
+            or attempt.get("candidate_fencing_epoch")
+            != receipt.candidate_fencing_epoch
+            or attempt.get("candidate_workspace_revision")
+            != receipt.candidate_workspace_revision
+            or attempt.get("candidate_proof_key") != receipt.candidate_proof_key
+            or attempt.get("candidate_artifact_digest")
+            != receipt.candidate_artifact_digest
+        ):
+            raise MaxFinalizationConflict(
+                "restoration adaptation proof receipt changed"
+            )
+        if attempt.get("status") == "completed":
+            prior = state.get("restoration_adaptation_proof")
+            if not (
+                isinstance(prior, dict)
+                and prior.get("proof_digest") == receipt.proof_digest
+            ):
+                raise MaxFinalizationConflict(
+                    "restoration adaptation proof attempt was already completed"
+                )
+        elif attempt.get("status") != "issued":
+            raise MaxFinalizationConflict(
+                "restoration adaptation proof attempt is not issued"
+            )
+        if attempt.get("status") == "issued":
+            proof_intent = operation.activation_request
+            proof_request = (
+                proof_intent.get("proof_request")
+                if isinstance(proof_intent, dict)
+                else None
+            )
+            if (
+                not isinstance(proof_intent, dict)
+                or not isinstance(proof_request, dict)
+                or proof_intent.get("candidate_files") != dict(files)
+                or proof_intent.get("candidate_artifact_digest")
+                != receipt.candidate_artifact_digest
+                or proof_request.get("proof_attempt") != receipt.proof_attempt
+                or proof_request.get("candidate_workspace_id")
+                != str(receipt.candidate_workspace_id)
+                or proof_request.get("candidate_fencing_epoch")
+                != receipt.candidate_fencing_epoch
+                or proof_request.get("candidate_workspace_revision")
+                != receipt.candidate_workspace_revision
+                or proof_request.get("candidate_proof_key")
+                != receipt.candidate_proof_key
+                or proof_request.get("candidate_artifact_digest")
+                != receipt.candidate_artifact_digest
+            ):
+                raise MaxFinalizationConflict(
+                    "restoration adaptation proof intent changed"
+                )
+        state["restoration_adaptation_proof"] = {
+            "state": receipt.state,
+            "reason_code": receipt.reason_code,
+            "proof_digest": receipt.proof_digest,
+            "proof_attempt": receipt.proof_attempt,
+            "operation_id": str(receipt.operation_id),
+            "source_workspace_id": str(receipt.source_workspace_id),
+            "candidate_workspace_id": str(receipt.candidate_workspace_id),
+            "candidate_fencing_epoch": receipt.candidate_fencing_epoch,
+            "candidate_proof_key": receipt.candidate_proof_key,
+            "candidate_artifact_digest": receipt.candidate_artifact_digest,
+            "source_workspace_revision": receipt.source_workspace_revision,
+            "candidate_workspace_revision": receipt.candidate_workspace_revision,
+            "source_database_digest": receipt.source_database_digest,
+            "candidate_database_digest": receipt.candidate_database_digest,
+            "source_schema_digest": receipt.source_schema_digest,
+            "candidate_schema_digest": receipt.candidate_schema_digest,
+            "source_business_digest": receipt.source_business_digest,
+            "candidate_business_digest": receipt.candidate_business_digest,
+            "source_technical_digest": receipt.source_technical_digest,
+            "candidate_technical_digest": receipt.candidate_technical_digest,
+            "probe_contract_digest": receipt.probe_contract_digest,
+            "probe_rehearsal_digest": receipt.probe_rehearsal_digest,
+            "probe_rehearsal_database_digest": receipt.probe_rehearsal_database_digest,
+            "candidate_source_manifest_digest": receipt.candidate_source_manifest_digest,
+            "capabilities": dict(receipt.capabilities),
+        }
+        state["restoration_adaptation_proof_attempt"] = {
+            **attempt,
+            "status": "completed",
+            "proof_digest": receipt.proof_digest,
+        }
+        root["max_finalization"] = state
+        run.agent_state = root
+        has_proof_intent = bool(
+            isinstance(operation.activation_request, dict)
+            and "proof_request" in operation.activation_request
+        )
+        if receipt.state == "proof_ready":
+            if (
+                operation.selected_branch != "adaptive"
+                or operation.adaptation_run_id != run.id
+                or operation.state
+                not in {"adapting", "applying", "reconciling"}
+            ):
+                raise MaxFinalizationConflict(
+                    "restoration adaptation activation ownership changed"
+                )
+            if durable_cancel:
+                operation.activation_cancel_requested_at = (
+                    operation.activation_cancel_requested_at or datetime.now(UTC)
+                )
+                operation.error = None
+                if operation.activation_request is None or has_proof_intent:
+                    operation.state = "cancelled"
+                    operation.phase = "activation_cancelled"
+                    operation.activation_request = None
+                    operation.activation_request_digest = None
+                    root["restoration_adaptation_owner_status"] = "terminal_pending"
+                    run.agent_state = root
+                    run.status = "cancelled"
+                    run.error = None
+                    run.finished_at = datetime.now(UTC)
+                    operation.activation_notification_state = (
+                        operation.activation_notification_state or "pending"
+                    )
+                else:
+                    operation.state = "reconciling"
+                    operation.phase = "activation_cancel"
+                _touch(operation)
+            else:
+                request = _activation_offer_request(
+                    operation=operation,
+                    run=run,
+                    proof=state["restoration_adaptation_proof"],
+                )
+                exact_files = dict(files)
+                intent = {
+                    "offer_request": request.model_dump(mode="json"),
+                    "candidate_files": exact_files,
+                    "candidate_artifact_digest": canonical_files_digest(exact_files),
+                }
+                if operation.activation_request is None or has_proof_intent:
+                    operation.activation_request = intent
+                    operation.activation_request_digest = hashlib.sha256(
+                        json.dumps(
+                            intent, sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ).hexdigest()
+                    operation.state = "applying"
+                    operation.phase = "activation_offer_intent"
+                    operation.error = None
+                    _touch(operation)
+                elif operation.activation_request == intent:
+                    if operation.state == "adapting":
+                        operation.state = "applying"
+                        operation.phase = "activation_offer_intent"
+                        operation.error = None
+                        _touch(operation)
+                elif "offer" not in operation.activation_request:
+                    raise MaxFinalizationConflict(
+                        "restoration adaptation activation intent changed"
+                    )
+        elif has_proof_intent:
+            operation.activation_request = None
+            operation.activation_request_digest = None
+            if issued_failed_recovery:
+                operation.state = "failed"
+                operation.phase = "generation"
+                reason = receipt.reason_code or receipt.state
+                operation.error = (
+                    f"restoration adaptation proof {receipt.state}: {reason}"
+                )[:2000]
+                operation.activation_notification_state = "pending"
+                root["restoration_adaptation_owner_status"] = "terminal_pending"
+                run.agent_state = root
+            else:
+                operation.state = "adapting"
+                operation.phase = "generation"
+                operation.error = None
+            _touch(operation)
+        await session.commit()
+
+
+    async def _finalize_adaptation(
+        self,
+        *,
+        files: Mapping[str, str],
+        prompt: str,
+    ) -> MaxFinalizationOutcome:
+        self._last_files = dict(files)
+        self._last_prompt = prompt
+        identity = await self._identity()
+        if workspace_revision_digest(files) != identity.workspace_revision:
+            raise MaxFinalizationConflict("source files do not match the candidate revision")
+        proof = self._transient_proof(identity)
+        source_gap = max_source_completion_gap(prompt, files, portable=True)
+        if source_gap is None:
+            source_gap = restoration_probe_source_gap(dict(files))
+        if source_gap is None:
+            try:
+                source_gap = await self._adaptation_capability_gap(files)
+            except AdaptationBaselineUnavailable as exc:
+                outcome = await self._outcome(
+                    MaxFinalizationStatus.FAILED,
+                    self._checkpoint(identity, GenerationPhase.EDIT),
+                    ProofBundle(identity=proof),
+                    str(exc),
+                )
+                await self._log_terminal(outcome)
+                return outcome
+        if source_gap is not None:
+            return await self._outcome(
+                MaxFinalizationStatus.NEEDS_EDIT,
+                self._checkpoint(identity, GenerationPhase.EDIT),
+                ProofBundle(identity=proof),
+                source_gap,
+            )
+
+        bootstrap, identity, proof = await self._adaptation_role_result(
+            identity=identity,
+            proof=proof,
+            dimension=ProofDimension.BOOTSTRAP,
+            role=ProjectCellCommandRole.BOOTSTRAP,
+        )
+        if bootstrap.outcome != ProofOutcome.GREEN.value:
+            return await self._failed(
+                identity,
+                proof,
+                GenerationPhase.PREPARE,
+                bootstrap,
+                bootstrap.redacted_detail,
+            )
+        build, _after, _proof = await self._adaptation_role_result(
+            identity=identity,
+            proof=proof,
+            dimension=ProofDimension.FULL_BUILD,
+            role=ProjectCellCommandRole.FULL_BUILD,
+        )
+        bundle = ProofBundle(identity=proof, bootstrap=bootstrap, full_build=build)
+        if build.outcome != ProofOutcome.GREEN.value:
+            return await self._failed(
+                identity,
+                proof,
+                GenerationPhase.FINAL_BUILD,
+                build,
+                build.redacted_detail,
+                bundle=bundle,
+            )
+        build_digest = _artifact_digest(build)
+        runtime = await self._adaptation_runtime_result(
+            identity=identity,
+            proof=proof,
+            build_digest=build_digest,
+        )
+        bundle = ProofBundle(
+            identity=proof,
+            bootstrap=bootstrap,
+            full_build=build,
+            runtime=runtime,
+        )
+        if runtime.outcome != ProofOutcome.GREEN.value:
+            return await self._failed(
+                identity,
+                proof,
+                GenerationPhase.RUNTIME_PROBE,
+                runtime,
+                runtime.redacted_detail,
+                bundle=bundle,
+            )
+        release = await self._adaptation_release_result(
+            identity=identity,
+            bundle=bundle,
+            build_digest=build_digest,
+        )
+        bundle = ProofBundle(
+            identity=proof,
+            bootstrap=bootstrap,
+            full_build=build,
+            runtime=runtime,
+            release=release,
+        )
+        if release.outcome != ProofOutcome.GREEN.value:
+            return await self._failed(
+                identity,
+                proof,
+                GenerationPhase.RUNTIME_PROBE,
+                release,
+                release.redacted_detail,
+                bundle=bundle,
+            )
+        final_files = await self._verified_workspace_files(identity)
+        if canonical_files_digest(final_files) != build_digest:
+            raise MaxFinalizationConflict("candidate artifact changed after release proof")
+        self._last_files = final_files
+        prove = self.executor.prove_restoration_adaptation
+        assert prove is not None
+        proof_attempt = await self._issue_adaptation_proof_attempt(
+            identity=identity,
+            artifact_digest=build_digest,
+            files=final_files,
+        )
+        try:
+            preservation = await prove(identity, build_digest, proof_attempt)
+        except Exception as exc:
+            raise AdaptationActivationRecoveryRequired(
+                "restoration adaptation proof request requires recovery"
+            ) from exc
+        try:
+            await self._persist_adaptation_proof(preservation, final_files)
+        except Exception as exc:
+            if preservation.state == "proof_ready":
+                raise AdaptationActivationRecoveryRequired(
+                    "sealed restoration adaptation proof requires recovery"
+                ) from exc
+            raise
+        if preservation.state == "migration_required":
+            return await self._outcome(
+                MaxFinalizationStatus.NEEDS_EDIT,
+                self._checkpoint(identity, GenerationPhase.EDIT),
+                bundle,
+                f"migration_required:{preservation.reason_code or 'candidate_database_changed'}",
+            )
+        if preservation.state == "source_changed":
+            outcome = await self._outcome(
+                MaxFinalizationStatus.FAILED,
+                self._checkpoint(identity, GenerationPhase.PROMOTE),
+                bundle,
+                f"source_changed:{preservation.reason_code or 'source_changed'}",
+            )
+            await self._log_terminal(outcome)
+            return outcome
+        proof_gap = _adaptation_proof_capability_gap(
+            (await self._adaptation_bundle()),
+            preservation.capabilities,
+        )
+        if proof_gap is not None:
+            outcome = await self._outcome(
+                MaxFinalizationStatus.FAILED,
+                self._checkpoint(identity, GenerationPhase.PROMOTE),
+                bundle,
+                proof_gap,
+            )
+            await self._log_terminal(outcome)
+            return outcome
+        from omnia_api.services.restorations import activate_restoration_adaptation
+
+        try:
+            activated = await activate_restoration_adaptation(
+                self.session_factory,
+                generation_run_id=self.generation_run_id,
+                files=final_files,
+            )
+        except Exception as exc:
+            raise AdaptationActivationRecoveryRequired(
+                "sealed restoration adaptation activation requires recovery"
+            ) from exc
+        cancelled = False
+        if not activated:
+            async with self.session_factory() as session:
+                terminal_run = await session.get(GenerationRun, self.generation_run_id)
+                terminal_state = (
+                    terminal_run.agent_state
+                    if terminal_run is not None and isinstance(terminal_run.agent_state, dict)
+                    else {}
+                )
+                terminal_activation = terminal_state.get(
+                    "restoration_adaptation_activation"
+                )
+                cancelled = bool(
+                    terminal_run is not None
+                    and terminal_run.status == "cancelled"
+                    and isinstance(terminal_activation, dict)
+                    and terminal_activation.get("state") == "cancelled"
+                )
+        status = (
+            MaxFinalizationStatus.COMPLETE
+            if activated
+            else MaxFinalizationStatus.CANCELLED
+            if cancelled
+            else MaxFinalizationStatus.ACTIVATING
+        )
+        checkpoint = self._checkpoint(
+            identity,
+            GenerationPhase.COMPLETE if activated else GenerationPhase.PROMOTE,
+        )
+        outcome = await self._outcome(
+            status,
+            checkpoint,
+            bundle,
+            (
+                "adaptation activation completed"
+                if activated
+                else "adaptation activation cancelled"
+                if cancelled
+                else "adaptation activation is awaiting reconciliation"
+            ),
+        )
+        if activated:
+            await self._log_terminal(outcome)
+        return outcome
+
+    async def _adaptation_bundle(self) -> object:
+        async with self.session_factory() as session:
+            run = await session.get(GenerationRun, self.generation_run_id)
+            state = run.agent_state if run is not None else None
+            return state.get("restoration_adaptation") if isinstance(state, dict) else None
 
     async def resume(
         self,
@@ -1195,7 +2072,36 @@ class MaxFinalizationCoordinator:
     ) -> MaxFinalizationOutcome:
         safe_detail = bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
         async with self.session_factory() as session:
-            run = await self._locked_run(session)
+            run = await session.scalar(
+                select(GenerationRun)
+                .where(GenerationRun.id == self.generation_run_id)
+                .with_for_update()
+            )
+            if run is None or run.project_id != self.project_id:
+                raise MaxFinalizationConflict("generation run not found for project")
+            raw_activation = (
+                run.agent_state.get("restoration_adaptation_activation")
+                if isinstance(run.agent_state, dict)
+                else None
+            )
+            already_completed_activation = bool(
+                status is MaxFinalizationStatus.COMPLETE
+                and run.status == "completed"
+                and isinstance(raw_activation, dict)
+                and raw_activation.get("state") == "completed"
+                and raw_activation.get("publication_consumed") is True
+            )
+            already_cancelled_activation = bool(
+                status is MaxFinalizationStatus.CANCELLED
+                and run.status == "cancelled"
+                and isinstance(raw_activation, dict)
+                and raw_activation.get("state") == "cancelled"
+                and raw_activation.get("publication_consumed") is False
+            )
+            if run.status not in {"running", "cancel_requested"} and not (
+                already_completed_activation or already_cancelled_activation
+            ):
+                raise MaxFinalizationConflict("generation run is not active")
             root = dict(run.agent_state)
             raw_state = root.get("max_finalization")
             state = dict(raw_state) if isinstance(raw_state, dict) else {}
@@ -1205,7 +2111,12 @@ class MaxFinalizationCoordinator:
             run.agent_state = root
             record_terminal_reason(
                 run,
-                None if status is MaxFinalizationStatus.COMPLETE else safe_detail,
+                (
+                    None
+                    if status
+                    in {MaxFinalizationStatus.COMPLETE, MaxFinalizationStatus.ACTIVATING}
+                    else safe_detail
+                ),
             )
             await session.commit()
         return MaxFinalizationOutcome(status, checkpoint, proof, safe_detail)
@@ -1362,9 +2273,13 @@ async def watch_generation_deadline(
             lease.finished_at = max(current, lease.heartbeat_at)
             lease.heartbeat_at = lease.finished_at
             lease.redacted_diagnostic = diagnostic
-        run.status = "cancelled" if cancelled else "failed"
-        run.error = diagnostic
-        run.finished_at = current
+        await terminalize_generation_run_locked(
+            session,
+            run,
+            status="cancelled" if cancelled else "failed",
+            error=diagnostic,
+            finished_at=current,
+        )
         state["outcome"] = run.status
         state["terminal_reason"] = diagnostic
         root = dict(run.agent_state)

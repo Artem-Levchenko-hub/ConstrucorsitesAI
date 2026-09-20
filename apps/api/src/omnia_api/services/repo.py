@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import tarfile
 import tempfile
 from collections.abc import Callable, Iterator
@@ -31,6 +33,27 @@ MAX_FILES = 5_000
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_REPO_BYTES = 64 * 1024 * 1024
 SIGNATURE = ("Omnia AI", "ai@omnia.ai")
+_ADAPTATION_EXCLUDED_PARTS = frozenset(
+    {
+        ".git",
+        ".next",
+        ".pnpm-store",
+        ".turbo",
+        ".cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "coverage",
+        "dist",
+        "build",
+        "vendor",
+    }
+)
+_ADAPTATION_SECRET_NAMES = frozenset(
+    {".env", "secrets.json", "secrets.yaml", "secrets.yml"}
+)
+_ADAPTATION_MAX_SOURCE_FILES = 4096
+_ADAPTATION_MAX_SOURCE_FILE_BYTES = 16 * 1024 * 1024
 
 
 def _repo_key(project_id: UUID) -> str:
@@ -453,6 +476,138 @@ def prepare_restore_commit(
             "files": sorted(files, key=lambda row: row["path"]),
             "current_files": sorted(current_files, key=lambda row: row["path"]),
         }
+
+
+def prepare_restoration_adaptation_commit(
+    project_id: UUID,
+    files: dict[str, str],
+    expected_head: str,
+    operation_id: UUID,
+) -> str:
+    """Pin the exact proof-ready adaptation tree without moving canonical HEAD.
+
+    ``files`` is a complete tree, so paths omitted from it stay deleted.  The
+    deterministic signature and operation-owned ref make a retry after an
+    uncertain object-store upload reproduce and validate the same commit.
+    """
+
+    _validate_file_batch(files)
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        base = git.get(expected_head)
+        if not isinstance(base, pygit2.Commit):
+            raise ValueError("restoration adaptation base commit missing")
+
+        index = pygit2.Index()
+        base_modes: dict[str, int] = {}
+        pending = [(base.tree, "")]
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                    continue
+                if not isinstance(item, pygit2.Blob) or entry.filemode not in {
+                    0o100644,
+                    0o100755,
+                }:
+                    raise ValueError("restoration adaptation requires regular files")
+                base_modes[path] = entry.filemode
+                try:
+                    item.data.decode("utf-8")
+                except UnicodeDecodeError:
+                    # Agent workspace snapshots carry editable UTF-8 files only. Binary
+                    # source assets are byte-preserved from the fenced base Git tree.
+                    index.add(pygit2.IndexEntry(path, entry.id, entry.filemode))
+        for path, content in sorted(files.items()):
+            blob_id = git.create_blob(content.encode("utf-8"))
+            mode = base_modes.get(path, pygit2.enums.FileMode.BLOB)
+            index.add(pygit2.IndexEntry(path, blob_id, mode))
+        tree_id = index.write_tree(git)
+        _validate_tree_budget(git, tree_id)
+
+        reference = f"refs/omnia/restoration-adaptations/{operation_id.hex}"
+        message = f"Adapt restoration\nOperation: {operation_id}\n"
+        try:
+            planned = git[git.references[reference].target]
+        except KeyError:
+            signature = pygit2.Signature(*SIGNATURE, base.commit_time, 0)
+            oid = git.create_commit(None, signature, signature, message, tree_id, [base.id])
+            planned = git[oid]
+        if (
+            not isinstance(planned, pygit2.Commit)
+            or planned.message != message
+            or planned.tree_id != tree_id
+            or planned.parent_ids != [base.id]
+        ):
+            raise ValueError("restoration adaptation operation identity changed")
+        if reference not in git.references:
+            git.references.create(reference, planned.id, force=False)
+        _upload(project_id, workdir)
+        return str(planned.id)
+
+
+def restoration_adaptation_source_manifest_digest(
+    project_id: UUID,
+    commit_sha: str,
+) -> str:
+    """Mirror the controller byte manifest for the exact planned Git snapshot."""
+
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        commit = git.get(commit_sha)
+        if not isinstance(commit, pygit2.Commit):
+            raise ValueError("restoration adaptation commit missing")
+        manifest: list[dict[str, object]] = []
+        pending = [(commit.tree, "")]
+        total = 0
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                    continue
+                if not isinstance(item, pygit2.Blob) or entry.filemode not in {
+                    0o100644,
+                    0o100755,
+                }:
+                    raise ValueError("restoration adaptation requires regular files")
+                parts = PurePosixPath(path).parts
+                if (
+                    any(part in _ADAPTATION_EXCLUDED_PARTS for part in parts)
+                    or any(
+                        part.casefold() in _ADAPTATION_SECRET_NAMES for part in parts
+                    )
+                    or any(part.casefold().startswith(".env.") for part in parts)
+                    or path.endswith(".tsbuildinfo")
+                ):
+                    continue
+                payload = bytes(item.data)
+                if len(payload) > _ADAPTATION_MAX_SOURCE_FILE_BYTES:
+                    raise ValueError("restoration adaptation source file exceeds budget")
+                total += len(payload)
+                if (
+                    len(manifest) >= _ADAPTATION_MAX_SOURCE_FILES
+                    or total > MAX_REPO_BYTES
+                ):
+                    raise ValueError("restoration adaptation source exceeds budget")
+                manifest.append(
+                    {
+                        "path": path,
+                        "size": len(payload),
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                )
+        if not manifest:
+            raise ValueError("restoration adaptation source is empty")
+        manifest.sort(key=lambda row: cast(str, row["path"]))
+        return hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
 
 def activate_restore_commit(

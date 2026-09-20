@@ -10,7 +10,7 @@ from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -36,13 +36,18 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellAgentOperationStatus,
     ProjectCellPreviewSession,
     ProjectCellWorkspaceIdentity,
+    RestorationAdaptationProof,
+    RestorationAdaptationWorkspace,
     project_cell_agent_bootstrap,
     project_cell_agent_exec,
     project_cell_agent_identity,
     project_cell_agent_operation_status,
     project_cell_agent_write_files,
     project_cell_apply_draft,
+    project_cell_cleanup_restoration_adaptation,
     project_cell_create_preview_session,
+    project_cell_prepare_restoration_adaptation,
+    project_cell_prove_restoration_adaptation,
 )
 from omnia_api.services.project_cell_capacity import (
     release_one_stale_generation_lease,
@@ -363,9 +368,34 @@ def adaptation_execution_capability_gap(capabilities: dict[str, object]) -> str 
         or capabilities.get("database_admin") != "isolated_copy"
     ):
         return "изолированная копия базы данных не подтверждена"
-    if capabilities.get("restoration_adaptation_proof_v1") is not True:
-        return "доверенная проверка адаптации не подтверждена"
     return None
+
+
+def _adaptation_binding(value: object, generation_run_id: UUID) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ProjectCellExecutorUnavailable("Сохранённая адаптация повреждена.")
+    required = {
+        "operation_id",
+        "adaptation_run_id",
+        "source_snapshot_id",
+        "base_draft_snapshot_id",
+        "source_commit_sha",
+        "sha256",
+    }
+    if not required.issubset(value):
+        raise ProjectCellExecutorUnavailable("Сохранённая адаптация неполна.")
+    if value.get("adaptation_run_id") != str(generation_run_id):
+        raise ProjectCellExecutorUnavailable("Сохранённая адаптация привязана к другому запуску.")
+    try:
+        return {
+            "operation_id": UUID(str(value["operation_id"])),
+            "source_snapshot_id": UUID(str(value["source_snapshot_id"])),
+            "base_draft_snapshot_id": UUID(str(value["base_draft_snapshot_id"])),
+            "source_commit_sha": str(value["source_commit_sha"]),
+            "adaptation_bundle_digest": str(value["sha256"]),
+        }
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ProjectCellExecutorUnavailable("Сохранённая адаптация повреждена.") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,6 +426,12 @@ class ProjectCellExecutorHandle:
     operation_status: Callable[[UUID], Awaitable[ProjectCellAgentOperationStatus]] | None = None
     capabilities: dict[str, object] = dataclass_field(default_factory=dict)
     is_portable: Callable[[], bool] = lambda: False
+    control_workspace_id: UUID | None = None
+    control_fencing_epoch: int | None = None
+    restoration_adaptation_workspace: RestorationAdaptationWorkspace | None = None
+    prove_restoration_adaptation: (
+        Callable[[ProofIdentity, str, int], Awaitable[RestorationAdaptationProof]] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -670,47 +706,124 @@ async def maybe_create_project_cell_executor(
         fencing_epoch=response.fencing_epoch,
     )
     signal_capacity_admitted(generation_run_id)
+    adaptation_workspace: RestorationAdaptationWorkspace | None = None
+    agent_workspace_id = workspace_id
+
+    async def _abort_adaptation_setup() -> None:
+        cleanup_error: BaseException | None = None
+        if adaptation_workspace is not None:
+            try:
+                await project_cell_cleanup_restoration_adaptation(adaptation_workspace)
+            except BaseException as exc:
+                cleanup_error = exc
+        try:
+            await _release_generation_lease(
+                session_factory=session_factory,
+                workspace_id=workspace_id,
+                generation_run_id=generation_run_id,
+                profile_version=profile_version,
+            )
+        finally:
+            if cleanup_error is not None:
+                raise cleanup_error
+
     try:
-        snapshot = await project_cell_agent_bootstrap(
+        source_snapshot = await project_cell_agent_bootstrap(
             workspace_id,
             generation_run_id=generation_run_id,
             fencing_epoch=response.fencing_epoch,
         )
+        if (
+            source_snapshot.generation_run_id != generation_run_id
+            or source_snapshot.fencing_epoch != response.fencing_epoch
+        ):
+            raise ProjectCellExecutorUnavailable("Project Cell active lease does not match the run")
+        snapshot = source_snapshot
+        if restoration_adaptation:
+            if not portable_selected(source_snapshot.capabilities, source_snapshot.files):
+                raise ProjectCellExecutorUnavailable(
+                    "Переносимая среда проекта не подтверждена. Агент адаптации не запущен."
+                )
+            binding = _adaptation_binding(
+                (run.agent_state or {}).get("restoration_adaptation"),
+                generation_run_id,
+            )
+            adaptation_workspace = await project_cell_prepare_restoration_adaptation(
+                workspace_id,
+                operation_id=cast(UUID, binding["operation_id"]),
+                project_id=project_id,
+                owner_id=user_id,
+                generation_run_id=generation_run_id,
+                fencing_epoch=response.fencing_epoch,
+                source_workspace_revision=source_snapshot.workspace_revision,
+                source_snapshot_id=cast(UUID, binding["source_snapshot_id"]),
+                base_draft_snapshot_id=cast(UUID, binding["base_draft_snapshot_id"]),
+                source_commit_sha=cast(str, binding["source_commit_sha"]),
+                adaptation_bundle_digest=cast(str, binding["adaptation_bundle_digest"]),
+            )
+            agent_workspace_id = adaptation_workspace.candidate_workspace_id
+            snapshot = await project_cell_agent_bootstrap(
+                agent_workspace_id,
+                generation_run_id=generation_run_id,
+                fencing_epoch=adaptation_workspace.candidate_fencing_epoch,
+            )
+            if (
+                snapshot.generation_run_id != generation_run_id
+                or snapshot.fencing_epoch != adaptation_workspace.candidate_fencing_epoch
+            ):
+                raise ProjectCellExecutorUnavailable(
+                    "Project Cell adaptation lease does not match the run"
+                )
     except (OrchestratorUnavailable, OrchestratorBadRequest) as exc:
+        if restoration_adaptation:
+            await asyncio.shield(_abort_adaptation_setup())
         raise ProjectCellExecutorUnavailable(exc.message) from exc
-    if (
-        snapshot.generation_run_id != generation_run_id
-        or snapshot.fencing_epoch != response.fencing_epoch
-    ):
-        raise ProjectCellExecutorUnavailable("Project Cell active lease does not match the run")
+    except BaseException:
+        if restoration_adaptation:
+            await asyncio.shield(_abort_adaptation_setup())
+        raise
     workspace_files = {_normalize_path(path): content for path, content in snapshot.files.items()}
     leased_run_id = generation_run_id
-    fencing_epoch = response.fencing_epoch
+    fencing_epoch = (
+        adaptation_workspace.candidate_fencing_epoch
+        if adaptation_workspace is not None
+        else response.fencing_epoch
+    )
     workspace_revision = snapshot.workspace_revision
     baseline_files = dict(workspace_files)
     synced_files = dict(workspace_files)
     dirty = False
     runtime_log_tail = ""
     preview_synced = False
-    capabilities = dict(snapshot.capabilities)
-    if restoration_adaptation and not portable_selected(capabilities, workspace_files):
-        raise ProjectCellExecutorUnavailable(
-            "Переносимая среда проекта не подтверждена. Агент адаптации не запущен."
-        )
-    if restoration_adaptation:
-        adaptation_gap = adaptation_execution_capability_gap(capabilities)
-        if adaptation_gap is not None:
+    capabilities = dict(
+        adaptation_workspace.capabilities
+        if adaptation_workspace is not None
+        else snapshot.capabilities
+    )
+    try:
+        if restoration_adaptation and not portable_selected(capabilities, workspace_files):
             raise ProjectCellExecutorUnavailable(
-                f"Адаптация остановлена до запуска агента: {adaptation_gap}."
+                "Переносимая среда проекта не подтверждена. Агент адаптации не запущен."
             )
+        if restoration_adaptation:
+            adaptation_gap = adaptation_execution_capability_gap(capabilities)
+            if adaptation_gap is not None:
+                raise ProjectCellExecutorUnavailable(
+                    f"Адаптация остановлена до запуска агента: {adaptation_gap}."
+                )
+    except BaseException:
+        if restoration_adaptation:
+            await asyncio.shield(_abort_adaptation_setup())
+        raise
     last_identity: ProofIdentity | None = None
+    adaptation_proof_ready = False
 
     def _is_portable() -> bool:
         return portable_selected(capabilities, workspace_files)
 
     def _proof_identity(identity: ProjectCellWorkspaceIdentity) -> ProofIdentity:
         return ProofIdentity(
-            workspace_id=workspace_id,
+            workspace_id=agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
             workspace_revision=identity.workspace_revision,
@@ -722,6 +835,35 @@ async def maybe_create_project_cell_executor(
             resource_profile_version=profile_version,
             build_config_digest=identity.build_config_digest,
         )
+
+    async def _prove_restoration_adaptation(
+        identity: ProofIdentity,
+        artifact_digest: str,
+        proof_attempt: int,
+    ) -> RestorationAdaptationProof:
+        nonlocal adaptation_proof_ready
+        if adaptation_workspace is None:
+            raise ProjectCellExecutorUnavailable("restoration adaptation is unavailable")
+        if (
+            identity.workspace_id != agent_workspace_id
+            or identity.generation_run_id != leased_run_id
+            or identity.fencing_epoch != fencing_epoch
+            or identity.workspace_revision != workspace_revision
+        ):
+            raise ProjectCellExecutorUnavailable(
+                "restoration adaptation proof identity changed before verification"
+            )
+        proof = await project_cell_prove_restoration_adaptation(
+            adaptation_workspace,
+            candidate_workspace_revision=identity.workspace_revision,
+            candidate_proof_key=identity.proof_key,
+            candidate_artifact_digest=artifact_digest,
+            proof_attempt=proof_attempt,
+        )
+        if proof.state == "proof_ready":
+            capabilities.update(proof.capabilities)
+            adaptation_proof_ready = True
+        return proof
 
     def _command_observation(
         result: Any,
@@ -753,7 +895,7 @@ async def maybe_create_project_cell_executor(
         if not _is_portable():
             raise ProjectCellExecutorUnavailable("portable Project Cell identity is unavailable")
         identity = await project_cell_agent_identity(
-            workspace_id,
+            agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
         )
@@ -770,7 +912,7 @@ async def maybe_create_project_cell_executor(
             ProjectCellCommandRole.FULL_BUILD: 900,
         }[role]
         result = await project_cell_agent_exec(
-            workspace_id,
+            agent_workspace_id,
             f"omnia:{role.value}",
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
@@ -811,13 +953,13 @@ async def maybe_create_project_cell_executor(
         return await _accept_role_response(role, response)
 
     async def _operation_status(operation_id: UUID) -> ProjectCellAgentOperationStatus:
-        return await project_cell_agent_operation_status(workspace_id, operation_id)
+        return await project_cell_agent_operation_status(agent_workspace_id, operation_id)
 
     async def _runtime_probe(proof_key: str) -> Any:
         from omnia_api.services.max_runtime_probe import probe_max_cell_runtime
 
         preview = await project_cell_create_preview_session(
-            workspace_id,
+            agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
         )
@@ -841,7 +983,7 @@ async def maybe_create_project_cell_executor(
         if not normalized_writes and not normalized_deletes:
             return
         response = await project_cell_agent_write_files(
-            workspace_id,
+            agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
             expected_revision=workspace_revision,
@@ -875,7 +1017,7 @@ async def maybe_create_project_cell_executor(
     async def _refresh_workspace_from_cell() -> dict[str, str]:
         nonlocal dirty, fencing_epoch, workspace_revision
         refreshed = await project_cell_agent_bootstrap(
-            workspace_id,
+            agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
         )
@@ -904,12 +1046,32 @@ async def maybe_create_project_cell_executor(
         return dict(workspace_files)
 
     async def _release() -> None:
-        await _release_generation_lease(
-            session_factory=session_factory,
-            workspace_id=workspace_id,
-            generation_run_id=leased_run_id,
-            profile_version=profile_version,
-        )
+        cleanup_error: BaseException | None = None
+        retain_activation_lease = False
+        if adaptation_workspace is not None:
+            from omnia_api.services.restorations import (
+                adaptation_activation_holds_generation_lease,
+            )
+
+            retain_activation_lease = await adaptation_activation_holds_generation_lease(
+                session_factory, leased_run_id
+            )
+            if not adaptation_proof_ready and not retain_activation_lease:
+                try:
+                    await project_cell_cleanup_restoration_adaptation(adaptation_workspace)
+                except BaseException as exc:
+                    cleanup_error = exc
+        try:
+            if not retain_activation_lease:
+                await _release_generation_lease(
+                    session_factory=session_factory,
+                    workspace_id=workspace_id,
+                    generation_run_id=leased_run_id,
+                    profile_version=profile_version,
+                )
+        finally:
+            if cleanup_error is not None:
+                raise cleanup_error
 
     async def _sync_preview() -> ProjectCellPreviewSyncResult:
         nonlocal synced_files, dirty, workspace_revision, runtime_log_tail, preview_synced
@@ -918,7 +1080,7 @@ async def maybe_create_project_cell_executor(
         if not dirty and preview_synced:
             try:
                 await project_cell_create_preview_session(
-                    workspace_id,
+                    agent_workspace_id,
                     generation_run_id=leased_run_id,
                     fencing_epoch=fencing_epoch,
                 )
@@ -936,7 +1098,7 @@ async def maybe_create_project_cell_executor(
                 )
             try:
                 await project_cell_create_preview_session(
-                    workspace_id,
+                    agent_workspace_id,
                     generation_run_id=leased_run_id,
                     fencing_epoch=fencing_epoch,
                 )
@@ -950,7 +1112,7 @@ async def maybe_create_project_cell_executor(
         preview_synced = False
         diff = _diff_files(synced_files, workspace_files)
         draft = await project_cell_apply_draft(
-            workspace_id,
+            agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
             expected_revision=workspace_revision,
@@ -987,7 +1149,7 @@ async def maybe_create_project_cell_executor(
         if sync.failure:
             raise ProjectCellExecutorUnavailable(sync.failure)
         return await project_cell_create_preview_session(
-            workspace_id,
+            agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,
         )
@@ -1058,7 +1220,7 @@ async def maybe_create_project_cell_executor(
                         ),
                     }
                 result = await project_cell_agent_exec(
-                    workspace_id,
+                    agent_workspace_id,
                     "omnia:build" if portable else _PROJECT_CELL_BUILD_CMD,
                     generation_run_id=leased_run_id,
                     fencing_epoch=fencing_epoch,
@@ -1079,7 +1241,7 @@ async def maybe_create_project_cell_executor(
                 if not cmd:
                     return {"ok": False, "error": "bash needs a non-empty cmd string"}
                 result = await project_cell_agent_exec(
-                    workspace_id,
+                    agent_workspace_id,
                     cmd,
                     generation_run_id=leased_run_id,
                     fencing_epoch=fencing_epoch,
@@ -1166,7 +1328,7 @@ async def maybe_create_project_cell_executor(
                     }
                 else:
                     preview = await project_cell_create_preview_session(
-                        workspace_id,
+                        agent_workspace_id,
                         generation_run_id=leased_run_id,
                         fencing_epoch=fencing_epoch,
                     )
@@ -1248,7 +1410,7 @@ async def maybe_create_project_cell_executor(
         stage_files=_stage_files,
         apply_external_files=_apply_external_files,
         export_files=_export_files,
-        workspace_id=workspace_id,
+        workspace_id=agent_workspace_id,
         create_preview_session=_create_preview_session,
         release=_release,
         current_identity=_current_identity,
@@ -1258,6 +1420,12 @@ async def maybe_create_project_cell_executor(
         operation_status=_operation_status,
         capabilities=capabilities,
         is_portable=_is_portable,
+        control_workspace_id=workspace_id,
+        control_fencing_epoch=response.fencing_epoch,
+        restoration_adaptation_workspace=adaptation_workspace,
+        prove_restoration_adaptation=(
+            _prove_restoration_adaptation if adaptation_workspace is not None else None
+        ),
     )
 
 

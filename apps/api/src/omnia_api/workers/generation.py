@@ -29,6 +29,8 @@ from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     apply_cancelled_generation_locked,
     load_generation_dispatch,
+    retry_terminal_adaptation_notifications,
+    terminalize_generation_run_locked,
 )
 
 log = logging.getLogger(__name__)
@@ -88,9 +90,12 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
         run = await session.get(GenerationRun, run_id, with_for_update=True)
         if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
             return
-        run.status = "failed"
-        run.error = message
-        run.finished_at = datetime.now(UTC)
+        await terminalize_generation_run_locked(
+            session,
+            run,
+            status="failed",
+            error=message,
+        )
         project_id, assistant_id = run.project_id, run.assistant_message_id
         await _abandon_operations(session, run_id)
         await session.commit()
@@ -217,7 +222,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
                 await ownership.commit()
 
 
-async def run_forever() -> None:
+async def _run_dispatch_forever() -> None:
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     active: dict[UUID, asyncio.Task[bool]] = {}
     while True:
@@ -264,6 +269,25 @@ async def run_forever() -> None:
         except Exception:
             log.exception("generation dispatcher scan failed")
         await asyncio.sleep(2)
+
+
+async def _run_terminal_notification_forever() -> None:
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    while True:
+        try:
+            async with factory() as session:
+                await retry_terminal_adaptation_notifications(session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("generation adaptation terminal notification scan failed")
+        await asyncio.sleep(2)
+
+
+async def run_forever() -> None:
+    async with asyncio.TaskGroup() as tasks:
+        tasks.create_task(_run_dispatch_forever())
+        tasks.create_task(_run_terminal_notification_forever())
 
 
 if __name__ == "__main__":

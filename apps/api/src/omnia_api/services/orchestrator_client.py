@@ -8,6 +8,7 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -21,6 +22,12 @@ import structlog
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
+from omnia_api.schemas.restoration import (
+    RestorationAdaptationActivationCommand,
+    RestorationAdaptationActivationOffer,
+    RestorationAdaptationActivationOfferRequest,
+    RestorationAdaptationActivationStatus,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -408,6 +415,260 @@ class ProjectCellAgentWorkspaceSnapshot:
         except ValueError as exc:
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell workspace snapshot"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class RestorationAdaptationWorkspace:
+    source_workspace_id: UUID
+    candidate_workspace_id: UUID
+    operation_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    candidate_fencing_epoch: int
+    source_database_digest: str
+    proof_digest: str
+    capabilities: dict[str, object]
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> RestorationAdaptationWorkspace:
+        expected = {
+            "state",
+            "source_workspace_id",
+            "candidate_workspace_id",
+            "operation_id",
+            "project_id",
+            "owner_id",
+            "generation_run_id",
+            "candidate_fencing_epoch",
+            "source_database_digest",
+            "proof_digest",
+            "capabilities",
+        }
+        capabilities = payload.get("capabilities")
+        digests = (payload.get("source_database_digest"), payload.get("proof_digest"))
+        if (
+            set(payload) != expected
+            or payload.get("state") != "ready"
+            or type(payload.get("candidate_fencing_epoch")) is not int
+            or cast(int, payload["candidate_fencing_epoch"]) < 1
+            or type(capabilities) is not dict
+            or any(
+                type(value) is not str or _REQUEST_DIGEST_RE.fullmatch(value) is None
+                for value in digests
+            )
+            or capabilities
+            != {
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+            }
+        ):
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid restoration adaptation workspace"
+            )
+        try:
+            return cls(
+                source_workspace_id=UUID(cast(str, payload["source_workspace_id"])),
+                candidate_workspace_id=UUID(cast(str, payload["candidate_workspace_id"])),
+                operation_id=UUID(cast(str, payload["operation_id"])),
+                project_id=UUID(cast(str, payload["project_id"])),
+                owner_id=UUID(cast(str, payload["owner_id"])),
+                generation_run_id=UUID(cast(str, payload["generation_run_id"])),
+                candidate_fencing_epoch=cast(int, payload["candidate_fencing_epoch"]),
+                source_database_digest=cast(str, payload["source_database_digest"]),
+                proof_digest=cast(str, payload["proof_digest"]),
+                capabilities=cast(dict[str, object], capabilities),
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid restoration adaptation workspace"
+            ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class RestorationAdaptationProof:
+    state: str
+    reason_code: str | None
+    source_workspace_id: UUID
+    candidate_workspace_id: UUID
+    operation_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    candidate_fencing_epoch: int
+    proof_attempt: int
+    source_workspace_revision: str
+    candidate_workspace_revision: str
+    candidate_proof_key: str
+    candidate_artifact_digest: str
+    source_database_digest: str
+    candidate_database_digest: str
+    source_schema_digest: str
+    candidate_schema_digest: str
+    source_business_digest: str
+    candidate_business_digest: str
+    source_technical_digest: str
+    candidate_technical_digest: str
+    probe_contract_digest: str
+    probe_rehearsal_digest: str | None
+    probe_rehearsal_database_digest: str | None
+    candidate_source_manifest_digest: str
+    proof_digest: str
+    capabilities: dict[str, object]
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> RestorationAdaptationProof:
+        expected = {
+            "state",
+            "reason_code",
+            "source_workspace_id",
+            "candidate_workspace_id",
+            "operation_id",
+            "project_id",
+            "owner_id",
+            "generation_run_id",
+            "candidate_fencing_epoch",
+            "proof_attempt",
+            "source_workspace_revision",
+            "candidate_workspace_revision",
+            "candidate_proof_key",
+            "candidate_artifact_digest",
+            "source_database_digest",
+            "candidate_database_digest",
+            "source_schema_digest",
+            "candidate_schema_digest",
+            "source_business_digest",
+            "candidate_business_digest",
+            "source_technical_digest",
+            "candidate_technical_digest",
+            "probe_contract_digest",
+            "probe_rehearsal_digest",
+            "probe_rehearsal_database_digest",
+            "candidate_source_manifest_digest",
+            "proof_digest",
+            "capabilities",
+        }
+        state = payload.get("state")
+        reason = payload.get("reason_code")
+        digests = tuple(
+            payload.get(name)
+            for name in (
+                "source_workspace_revision",
+                "candidate_workspace_revision",
+                "candidate_proof_key",
+                "candidate_artifact_digest",
+                "source_database_digest",
+                "candidate_database_digest",
+                "source_schema_digest",
+                "candidate_schema_digest",
+                "source_business_digest",
+                "candidate_business_digest",
+                "source_technical_digest",
+                "candidate_technical_digest",
+                "probe_contract_digest",
+                "candidate_source_manifest_digest",
+                "proof_digest",
+            )
+        )
+        valid_reasons = {
+            "candidate_schema_changed",
+            "candidate_business_data_changed",
+            "candidate_technical_data_changed",
+            "source_code_changed",
+            "source_database_changed",
+            "probe_rehearsal_failed",
+        }
+        base_capabilities = {
+            "portable_machine": True,
+            "database_admin": "isolated_copy",
+            "restoration_adaptation_database_copy_v1": True,
+        }
+        expected_capabilities = (
+            {**base_capabilities, "restoration_adaptation_proof_v1": True}
+            if state == "proof_ready"
+            else base_capabilities
+        )
+        if (
+            set(payload) != expected
+            or state not in {"proof_ready", "migration_required", "source_changed"}
+            or (state == "proof_ready") != (reason is None)
+            or (reason is not None and reason not in valid_reasons)
+            or type(payload.get("candidate_fencing_epoch")) is not int
+            or cast(int, payload["candidate_fencing_epoch"]) < 1
+            or type(payload.get("proof_attempt")) is not int
+            or cast(int, payload["proof_attempt"]) < 1
+            or payload.get("capabilities") != expected_capabilities
+            or (
+                state == "proof_ready"
+                and (
+                    payload.get("probe_rehearsal_digest") is None
+                    or payload.get("probe_rehearsal_database_digest") is None
+                )
+            )
+            or any(
+                value is not None
+                and (
+                    type(value) is not str
+                    or _REQUEST_DIGEST_RE.fullmatch(value) is None
+                )
+                for value in (
+                    payload.get("probe_rehearsal_digest"),
+                    payload.get("probe_rehearsal_database_digest"),
+                )
+            )
+            or any(
+                type(value) is not str or _REQUEST_DIGEST_RE.fullmatch(value) is None
+                for value in digests
+            )
+        ):
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid restoration adaptation proof"
+            )
+        try:
+            return cls(
+                state=state,
+                reason_code=reason,
+                source_workspace_id=UUID(cast(str, payload["source_workspace_id"])),
+                candidate_workspace_id=UUID(cast(str, payload["candidate_workspace_id"])),
+                operation_id=UUID(cast(str, payload["operation_id"])),
+                project_id=UUID(cast(str, payload["project_id"])),
+                owner_id=UUID(cast(str, payload["owner_id"])),
+                generation_run_id=UUID(cast(str, payload["generation_run_id"])),
+                candidate_fencing_epoch=cast(int, payload["candidate_fencing_epoch"]),
+                proof_attempt=cast(int, payload["proof_attempt"]),
+                **{
+                    name: cast(str, payload[name])
+                    for name in (
+                        "source_workspace_revision",
+                        "candidate_workspace_revision",
+                        "candidate_proof_key",
+                        "candidate_artifact_digest",
+                        "source_database_digest",
+                        "candidate_database_digest",
+                        "source_schema_digest",
+                        "candidate_schema_digest",
+                        "source_business_digest",
+                        "candidate_business_digest",
+                        "source_technical_digest",
+                        "candidate_technical_digest",
+                        "probe_contract_digest",
+                        "candidate_source_manifest_digest",
+                        "proof_digest",
+                    )
+                },
+                probe_rehearsal_digest=cast(
+                    str | None, payload["probe_rehearsal_digest"]
+                ),
+                probe_rehearsal_database_digest=cast(
+                    str | None, payload["probe_rehearsal_database_digest"]
+                ),
+                capabilities=cast(dict[str, object], payload["capabilities"]),
+            )
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid restoration adaptation proof"
             ) from exc
 
 
@@ -1078,6 +1339,247 @@ async def project_cell_agent_bootstrap(
         },
     )
     return ProjectCellAgentWorkspaceSnapshot.from_json(payload)
+
+
+async def project_cell_prepare_restoration_adaptation(
+    workspace_id: UUID,
+    *,
+    operation_id: UUID,
+    project_id: UUID,
+    owner_id: UUID,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+    source_workspace_revision: str,
+    source_snapshot_id: UUID,
+    base_draft_snapshot_id: UUID,
+    source_commit_sha: str,
+    adaptation_bundle_digest: str,
+) -> RestorationAdaptationWorkspace:
+    _validate_fencing_epoch(fencing_epoch)
+    _validate_workspace_revision(source_workspace_revision)
+    if re.fullmatch(r"[0-9a-f]{40}", source_commit_sha) is None:
+        raise ValueError("source_commit_sha must be a Git SHA")
+    _validate_request_digest(adaptation_bundle_digest)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/restoration-adaptations/"
+        f"{generation_run_id}/prepare",
+        json={
+            "workspace_id": str(workspace_id),
+            "operation_id": str(operation_id),
+            "project_id": str(project_id),
+            "owner_id": str(owner_id),
+            "generation_run_id": str(generation_run_id),
+            "fencing_epoch": fencing_epoch,
+            "source_workspace_revision": source_workspace_revision,
+            "source_snapshot_id": str(source_snapshot_id),
+            "base_draft_snapshot_id": str(base_draft_snapshot_id),
+            "source_commit_sha": source_commit_sha,
+            "adaptation_bundle_digest": adaptation_bundle_digest,
+        },
+        timeout=900.0,
+    )
+    response = RestorationAdaptationWorkspace.from_json(payload)
+    if (
+        response.source_workspace_id != workspace_id
+        or response.operation_id != operation_id
+        or response.project_id != project_id
+        or response.owner_id != owner_id
+        or response.generation_run_id != generation_run_id
+    ):
+        raise OrchestratorUnavailable(
+            "Orchestrator returned a foreign restoration adaptation workspace"
+        )
+    return response
+
+
+async def project_cell_cleanup_restoration_adaptation(
+    workspace: RestorationAdaptationWorkspace,
+) -> None:
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace.source_workspace_id}/restoration-adaptations/"
+        f"{workspace.generation_run_id}/cleanup",
+        json={
+            "workspace_id": str(workspace.source_workspace_id),
+            "generation_run_id": str(workspace.generation_run_id),
+            "candidate_workspace_id": str(workspace.candidate_workspace_id),
+            "candidate_fencing_epoch": workspace.candidate_fencing_epoch,
+            "proof_digest": workspace.proof_digest,
+        },
+        timeout=120.0,
+    )
+    if payload != {"state": "cleaned"}:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid restoration adaptation cleanup receipt"
+        )
+
+
+async def project_cell_prove_restoration_adaptation(
+    workspace: RestorationAdaptationWorkspace,
+    *,
+    candidate_workspace_revision: str,
+    candidate_proof_key: str,
+    candidate_artifact_digest: str,
+    proof_attempt: int,
+) -> RestorationAdaptationProof:
+    if type(proof_attempt) is not int or proof_attempt < 1:
+        raise ValueError("proof_attempt must be a positive integer")
+    for value in (
+        candidate_workspace_revision,
+        candidate_proof_key,
+        candidate_artifact_digest,
+    ):
+        _validate_request_digest(value)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace.source_workspace_id}/restoration-adaptations/"
+        f"{workspace.generation_run_id}/proof",
+        json={
+            "workspace_id": str(workspace.source_workspace_id),
+            "operation_id": str(workspace.operation_id),
+            "project_id": str(workspace.project_id),
+            "owner_id": str(workspace.owner_id),
+            "generation_run_id": str(workspace.generation_run_id),
+            "candidate_workspace_id": str(workspace.candidate_workspace_id),
+            "candidate_fencing_epoch": workspace.candidate_fencing_epoch,
+            "preparation_proof_digest": workspace.proof_digest,
+            "source_database_digest": workspace.source_database_digest,
+            "candidate_workspace_revision": candidate_workspace_revision,
+            "candidate_proof_key": candidate_proof_key,
+            "candidate_artifact_digest": candidate_artifact_digest,
+            "proof_attempt": proof_attempt,
+        },
+        timeout=900.0,
+    )
+    result = RestorationAdaptationProof.from_json(payload)
+    if (
+        result.source_workspace_id != workspace.source_workspace_id
+        or result.candidate_workspace_id != workspace.candidate_workspace_id
+        or result.operation_id != workspace.operation_id
+        or result.project_id != workspace.project_id
+        or result.owner_id != workspace.owner_id
+        or result.generation_run_id != workspace.generation_run_id
+        or result.candidate_fencing_epoch != workspace.candidate_fencing_epoch
+        or result.candidate_workspace_revision != candidate_workspace_revision
+        or result.candidate_proof_key != candidate_proof_key
+        or result.candidate_artifact_digest != candidate_artifact_digest
+        or result.proof_attempt != proof_attempt
+    ):
+        raise OrchestratorUnavailable(
+            "Orchestrator returned a foreign restoration adaptation proof"
+        )
+    return result
+
+
+async def project_cell_offer_restoration_adaptation_activation(
+    request: RestorationAdaptationActivationOfferRequest,
+) -> RestorationAdaptationActivationOffer:
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{request.workspace_id}/restoration-adaptations/"
+        f"{request.generation_run_id}/activation-offer",
+        json=request.model_dump(mode="json"),
+        timeout=120.0,
+    )
+    try:
+        result = RestorationAdaptationActivationOffer.model_validate_json(
+            json.dumps(payload), strict=True
+        )
+    except (TypeError, ValueError) as exc:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid restoration adaptation activation offer"
+        ) from exc
+    if (
+        result.workspace_id != request.workspace_id
+        or result.operation_id != request.operation_id
+        or result.project_id != request.project_id
+        or result.owner_id != request.owner_id
+        or result.generation_run_id != request.generation_run_id
+        or result.candidate_workspace_id != request.candidate_workspace_id
+        or result.candidate_fencing_epoch != request.candidate_fencing_epoch
+        or result.candidate_workspace_revision != request.candidate_workspace_revision
+        or result.proof_attempt != request.proof_attempt
+        or result.proof_digest != request.proof_digest
+    ):
+        raise OrchestratorUnavailable(
+            "Orchestrator returned a foreign restoration adaptation activation offer"
+        )
+    return result
+
+
+async def _project_cell_restoration_adaptation_activation_action(
+    command: RestorationAdaptationActivationCommand,
+    action: Literal["apply", "status", "cancel"],
+) -> RestorationAdaptationActivationStatus:
+    offer = command.offer
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{offer.workspace_id}/restoration-adaptations/"
+        f"{offer.generation_run_id}/activations/{offer.activation_id}/{action}",
+        json=command.model_dump(mode="json"),
+        timeout=930.0 if action == "apply" else 120.0,
+    )
+    try:
+        result = RestorationAdaptationActivationStatus.model_validate_json(
+            json.dumps(payload), strict=True
+        )
+    except (TypeError, ValueError) as exc:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid restoration adaptation activation receipt"
+        ) from exc
+    if result.offer != offer or result.planned_commit_sha != command.planned_commit_sha:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned a foreign restoration adaptation activation receipt"
+        )
+    return result
+
+
+async def project_cell_apply_restoration_adaptation_activation(
+    command: RestorationAdaptationActivationCommand,
+) -> RestorationAdaptationActivationStatus:
+    return await _project_cell_restoration_adaptation_activation_action(command, "apply")
+
+
+async def project_cell_status_restoration_adaptation_activation(
+    command: RestorationAdaptationActivationCommand,
+) -> RestorationAdaptationActivationStatus:
+    return await _project_cell_restoration_adaptation_activation_action(command, "status")
+
+
+async def project_cell_cancel_restoration_adaptation_activation(
+    command: RestorationAdaptationActivationCommand,
+) -> RestorationAdaptationActivationStatus:
+    return await _project_cell_restoration_adaptation_activation_action(command, "cancel")
+
+
+async def project_cell_update_restoration_adaptation_owner_status(
+    *,
+    workspace_id: UUID,
+    operation_id: UUID,
+    project_id: UUID,
+    owner_id: UUID,
+    generation_run_id: UUID,
+    state: Literal["active", "terminal"],
+) -> None:
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/restoration-adaptations/"
+        f"{generation_run_id}/owner-status",
+        json={
+            "workspace_id": str(workspace_id),
+            "operation_id": str(operation_id),
+            "project_id": str(project_id),
+            "owner_id": str(owner_id),
+            "generation_run_id": str(generation_run_id),
+            "state": state,
+        },
+        timeout=30.0,
+    )
+    if payload != {"state": state}:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid restoration adaptation owner status"
+        )
 
 
 async def project_cell_agent_write_files(

@@ -137,6 +137,7 @@ _MANAGED_DB_PATHS = {
     "src/app/api/max/session/route.ts",
     "src/app/api/max/webhook/route.ts",
     "src/app/api/omnia/actions/route.ts",
+    "src/app/api/omnia/actions/[id]/route.ts",
     "src/app/api/omnia/consents/route.ts",
     "src/app/api/omnia/events/route.ts",
     "src/app/api/omnia/preview-session/route.ts",

@@ -17,6 +17,7 @@ const Action = z.object({
 const ActionQuery = z.object({
   limit: z.coerce.number().int().min(1).max(MAX_ACTION_LIMIT).default(DEFAULT_ACTION_LIMIT),
   cursor: z.string().trim().min(1).optional(),
+  actionType: z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/).optional(),
 });
 
 const ActionCursor = z.object({
@@ -50,6 +51,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid action cursor" }, { status: 400 });
   }
   const filters = [eq(schema.maxBusinessActions.maxUserId, user.id)];
+  if (query.data.actionType) {
+    filters.push(eq(schema.maxBusinessActions.actionType, query.data.actionType));
+  }
   if (cursor) {
     filters.push(
       or(
@@ -87,14 +91,35 @@ export async function POST(request: Request) {
   if (payloadBytes > MAX_ACTION_PAYLOAD_BYTES) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
-  const [action] = await db
-    .insert(schema.maxBusinessActions)
-    .values({ maxUserId: user.id, actionType: input.actionType, payload: input.payload })
-    .returning();
-  await db.insert(schema.maxAuditLog).values({
-    maxUserId: user.id,
-    action: `created:${input.actionType}`,
-    details: { actionId: action.id },
+  const result = await db.transaction(async (tx) => {
+    // A valid server-signed actor is sufficient authority to materialize its
+    // FK parent. Real MAX login already creates this row; activation probes use
+    // the same signed-session contract without inventing an external login.
+    const createdUsers = await tx
+      .insert(schema.maxUsers)
+      .values({
+        maxUserId: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
+        languageCode: user.languageCode,
+        photoUrl: user.photoUrl,
+      })
+      .onConflictDoNothing({ target: schema.maxUsers.maxUserId })
+      .returning({ maxUserId: schema.maxUsers.maxUserId });
+    const [created] = await tx
+      .insert(schema.maxBusinessActions)
+      .values({ maxUserId: user.id, actionType: input.actionType, payload: input.payload })
+      .returning();
+    await tx.insert(schema.maxAuditLog).values({
+      maxUserId: user.id,
+      action: `created:${input.actionType}`,
+      details: {
+        actionId: created.id,
+        probeUserCreated: createdUsers.length === 1,
+      },
+    });
+    return { action: created, probeUserCreated: createdUsers.length === 1 };
   });
-  return NextResponse.json({ action }, { status: 201 });
+  return NextResponse.json(result, { status: 201 });
 }

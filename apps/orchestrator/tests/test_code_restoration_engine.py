@@ -433,6 +433,31 @@ async def test_forward_recovery_restarts_only_bound_target_pair(tmp_path):
     assert intent["database_volume"] == "new-db"
 
 
+async def test_preserved_database_forward_recovery_restarts_only_target_code(tmp_path):
+    engine = ForwardEngine(tmp_path, volumes={"new-code", "live-db"})
+    value = save_intent(engine, "target_writers_admitted")
+    path = engine._directory(value.operation_id) / "activation.json"
+    intent = json.loads(path.read_text())
+    intent.update(
+        database_strategy="preserve_current",
+        database_volume="live-db",
+        effects_admitted=True,
+    )
+    intent["old"]["database_volume"] = "live-db"
+    write_controller_json(path, intent)
+
+    result = await engine.observe(value, {"manifest": {}})
+
+    assert result["applied"] is True
+    assert "recover" not in engine.calls
+    assert engine.calls == [
+        "observe",
+        "remove-target-runtime",
+        ("activate-target", "new-code", "live-db", 4),
+        "complete",
+    ]
+
+
 async def test_lost_success_response_observes_without_restarting_app(tmp_path):
     engine = Engine(tmp_path)
     value = save_intent(engine, "active")
@@ -1459,8 +1484,22 @@ async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_pa
     engine._start = start
     engine._complete_fence = fence
     prepared = {"manifest": manifest, "base_image": "image"}
-    await engine._activate_code(manager, object(), backend, prepared, "new-code", 4)
-    assert events == [("ensure", "new-code", 4), ("start", 4), "boundary", "fence"]
+    await engine._activate_code(
+        manager,
+        object(),
+        backend,
+        prepared,
+        "new-code",
+        4,
+        before_writers=lambda: events.append("admit"),
+    )
+    assert events == [
+        "admit",
+        ("ensure", "new-code", 4),
+        ("start", 4),
+        "boundary",
+        "fence",
+    ]
     assert metadata()["active_code_volume"] == "new-code"
     events.clear()
     old = {
@@ -1474,6 +1513,364 @@ async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_pa
     await engine._recover_old(manager, object(), backend, old, 4)
     assert events == ["remove", ("ensure", "old-code", 4), ("start", 4), "boundary", "fence"]
     assert metadata()["active_code_volume"] == "old-code"
+
+
+async def test_preserved_database_start_failure_after_admission_is_forward_only(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    from dataclasses import dataclass
+
+    from omnia_orchestrator.core.cell_resources import CellResourceError
+    from omnia_orchestrator.routers.runtime import _workspace_revision
+
+    value = request().model_copy(update={"binding_digest": "b" * 64})
+    engine = Engine(tmp_path)
+    events = []
+
+    @dataclass
+    class PreserveBackend:
+        stem: str = "fixture"
+        workspace_volume: str = "old-code"
+        project_postgres_volume: str = "live-business-db"
+
+        def _metadata(self):
+            return {"manifest": {}}
+
+        def _lookup(self, _collection, _name, _kind):
+            return None
+
+        def labels(self, _kind):
+            return {"omnia.machine": "true"}
+
+        def import_volume(self, name, _path):
+            events.append(("code-import", name))
+
+        def remove(self):
+            events.append("old-stopped")
+
+    backend = PreserveBackend()
+    backend.client = SimpleNamespace(volumes=object())
+    machine = SimpleNamespace(state=lambda: {"manifest": {}})
+    engine.backend = backend
+    engine.manager.machine_runtime.parts = lambda _state: (machine, backend)
+
+    async def read_source_files(_name):
+        return {"src/page.tsx": b"current"}
+
+    engine.manager.docker = SimpleNamespace(read_workspace_source_files=read_source_files)
+    engine.manager._state_labels = lambda *_args: {"omnia.cell": "true"}
+
+    async def ensure_volume(name, _labels):
+        events.append(("volume-prepared", name))
+
+    engine.manager._ensure_volume = ensure_volume
+    engine.begin_preflight = lambda _request: None
+    engine._capture_preflight_serving_epoch = lambda _manager, _request: None
+    engine._claim_preflight = lambda _request: "new"
+
+    async def preflight(*_args):
+        return engine.state, machine, backend
+
+    engine._activation_preflight = preflight
+
+    async def read_workspace(*_args):
+        return {"src/page.tsx": "current"}
+
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", read_workspace
+    )
+    monkeypatch.setattr(
+        "omnia_orchestrator.services.code_restoration_engine.catalog_contract",
+        lambda _backend: ({"version": 1, "tables": []}, []),
+    )
+    monkeypatch.setattr(
+        "omnia_orchestrator.services.code_restoration_engine.contract_matches",
+        lambda _actual, _expected: True,
+    )
+    directory = engine._directory(value.operation_id)
+    (directory / "code.tar").write_bytes(b"code")
+    prepared = {
+        "workspace_revision": _workspace_revision({"src/page.tsx": "current"}),
+        "current_files": [
+            {
+                "path": "src/page.tsx",
+                "sha256": hashlib.sha256(b"current").hexdigest(),
+            }
+        ],
+        "live_contract": {"version": 1, "tables": []},
+        "code_digest": hashlib.sha256(b"code").hexdigest(),
+        "database_strategy": "preserve_current",
+        "manifest": {},
+    }
+
+    async def fail_after_admission(*_args, before_writers):
+        receipt = json.loads((directory / "activation.json").read_text())
+        assert receipt["effects_admitted"] is False
+        before_writers()
+        admitted = json.loads((directory / "activation.json").read_text())
+        assert admitted["state"] == "target_writers_admitted"
+        assert admitted["effects_admitted"] is True
+        events.append("target-writer-started")
+        raise RuntimeError("target start failed after writer admission")
+
+    engine._activate_code = fail_after_admission
+
+    try:
+        await engine.apply(value, prepared)
+    except CellResourceError as exc:
+        assert "forward recovery" in str(exc)
+    else:
+        pytest.fail(
+            f"activation returned after PONR; events={events!r}; "
+            f"error={(directory / 'activation-error.log').read_text()!r}"
+        )
+
+    receipt = json.loads((directory / "activation.json").read_text())
+    assert receipt["state"] == "target_recovery"
+    assert receipt["database_volume"] == "live-business-db"
+    assert "recover" not in engine.calls
+    assert events[-1] == "target-writer-started"
+
+
+def _activation_replay_fixture(monkeypatch, *, services_ready: bool):
+    import hashlib
+    from uuid import uuid5
+
+    from omnia_orchestrator.services import code_restoration_engine as module
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from omnia_orchestrator.services.project_machine import MachineManifest
+    from tests.test_project_machine_manifest import payload
+
+    manifest = MachineManifest.model_validate(payload())
+    workspace_id = UUID(int=82)
+    generation_run_id = UUID(int=83)
+    source_epoch = 11
+    target_epoch = 12
+    target_volume = "target-code"
+    live_database = "live-db"
+    operations = {}
+    state = SimpleNamespace(
+        workspace_id=workspace_id,
+        project_id=UUID(int=84),
+        owner_id=UUID(int=85),
+        profile_version=1,
+        resource_names=object(),
+        fencing_epoch=source_epoch,
+        active_generation_run_id=generation_run_id,
+        active_generation_fencing_epoch=source_epoch,
+        last_operation_id=None,
+        operation=lambda operation_id: operations.get(operation_id),
+    )
+
+    class Store:
+        def load(self, _workspace_id):
+            return state
+
+        def begin(self, spec, mutation, *, kind, phase, resource_names):
+            operations[mutation.operation_id] = CellOperationRecord(
+                operation_id=mutation.operation_id,
+                kind=kind,
+                status="running",
+                phase=phase,
+                request_digest=mutation.request_digest,
+                fencing_epoch=mutation.fencing_epoch,
+                generation_run_id=spec.generation_run_id,
+            )
+            state.fencing_epoch = mutation.fencing_epoch
+            state.last_operation_id = mutation.operation_id
+
+        def complete(self, _workspace_id, mutation, *, phase, bundle_state):
+            operation = operations[mutation.operation_id]
+            operations[mutation.operation_id] = CellOperationRecord(
+                operation_id=operation.operation_id,
+                kind=operation.kind,
+                status="completed",
+                phase=phase,
+                request_digest=operation.request_digest,
+                fencing_epoch=operation.fencing_epoch,
+                generation_run_id=operation.generation_run_id,
+                bundle_state=bundle_state,
+            )
+
+    class NamedLock:
+        @asynccontextmanager
+        async def hold_named(self, _name):
+            yield
+
+    class Container:
+        def __init__(self):
+            self.status = "running"
+            self.labels = {"omnia.fencing_epoch": str(target_epoch)}
+            self.attrs = {
+                "Config": {"Labels": self.labels},
+                "Mounts": [{"Destination": "/workspace", "Name": target_volume}],
+            }
+
+        def reload(self):
+            return None
+
+    events = []
+    container = Container()
+    backend = SimpleNamespace(
+        workspace_volume=target_volume,
+        project_postgres_volume=live_database,
+        _container=lambda: container,
+        service_status=lambda *_args, **_kwargs: {
+            "state": "running" if services_ready else "failed",
+            "ready": services_ready,
+        },
+        remove_machine=lambda: events.append("remove-app"),
+    )
+    runtime = SimpleNamespace(
+        parts=lambda _state: (object(), backend),
+        _start_boundary=lambda *_args: events.append("boundary"),
+    )
+    manager = SimpleNamespace(
+        state_store=Store(),
+        machine_runtime=runtime,
+        capacity_lock=NamedLock(),
+        operation_lock=NamedLock(),
+        _capacity_reservation_store=lambda: SimpleNamespace(
+            rebind=lambda *_args: events.append("rebind")
+        ),
+    )
+    engine = object.__new__(CodeRestorationEngine)
+    monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
+
+    async def workspace_files(*_args):
+        return {"src/page.tsx": "candidate"}
+
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        workspace_files,
+    )
+    expected_operation_id = uuid5(workspace_id, "code-activation-" + str(target_epoch))
+    expected_digest = hashlib.sha256(
+        (str(workspace_id) + ":restore:" + str(target_epoch)).encode()
+    ).hexdigest()
+    return SimpleNamespace(
+        engine=engine,
+        manager=manager,
+        state=state,
+        backend=backend,
+        manifest=manifest,
+        events=events,
+        target_epoch=target_epoch,
+        target_volume=target_volume,
+        live_database=live_database,
+        operations=operations,
+        operation_id=expected_operation_id,
+        operation_digest=expected_digest,
+    )
+
+
+async def test_running_target_replay_durably_completes_controller_fence(monkeypatch):
+    setup = _activation_replay_fixture(monkeypatch, services_ready=True)
+    setup.state.fencing_epoch = setup.target_epoch
+    setup.state.active_generation_fencing_epoch = setup.target_epoch
+    setup.state.last_operation_id = setup.operation_id
+    setup.operations[setup.operation_id] = SimpleNamespace(
+        operation_id=setup.operation_id,
+        kind="code_restore",
+        status="running",
+        fencing_epoch=setup.target_epoch,
+        request_digest=setup.operation_digest,
+        generation_run_id=setup.state.active_generation_run_id,
+    )
+
+    async def running(*_args):
+        return True
+
+    setup.engine._running_matches = running
+    setup.engine._activate_code = lambda *_args, **_kwargs: pytest.fail(
+        "running target must not be started twice"
+    )
+
+    await setup.engine.activation_start_code_only_target(
+        setup.manager,
+        setup.state,
+        code_volume=setup.target_volume,
+        database_volume=setup.live_database,
+        epoch=setup.target_epoch,
+    )
+
+    operation = setup.state.operation(setup.operation_id)
+    assert setup.state.fencing_epoch == setup.target_epoch
+    assert setup.state.last_operation_id == setup.operation_id
+    assert operation.status == "completed"
+    assert operation.request_digest == setup.operation_digest
+    assert setup.events == ["rebind"]
+
+
+async def test_running_services_replay_repairs_boundary_without_double_start(monkeypatch):
+    setup = _activation_replay_fixture(monkeypatch, services_ready=True)
+    observations = 0
+
+    async def running(*_args):
+        nonlocal observations
+        observations += 1
+        return observations > 1
+
+    setup.engine._running_matches = running
+    setup.engine._activate_code = lambda *_args, **_kwargs: pytest.fail(
+        "running services must not be started twice"
+    )
+
+    await setup.engine.activation_start_code_only_target(
+        setup.manager,
+        setup.state,
+        code_volume=setup.target_volume,
+        database_volume=setup.live_database,
+        epoch=setup.target_epoch,
+    )
+
+    assert setup.events == ["boundary", "rebind"]
+    assert observations == 2
+
+
+async def test_source_restart_replay_repairs_boundary_without_duplicate_writer_start(
+    monkeypatch,
+):
+    setup = _activation_replay_fixture(monkeypatch, services_ready=True)
+    source_epoch = 11
+    source_volume = "source-code"
+    setup.state.fencing_epoch = source_epoch
+    setup.backend.workspace_volume = source_volume
+    setup.backend._container().labels["omnia.fencing_epoch"] = str(source_epoch)
+    setup.backend._container().attrs["Mounts"][0]["Name"] = source_volume
+    setup.manager.machine_runtime.parts = lambda _state: (
+        SimpleNamespace(
+            state=lambda: {
+                "epoch": source_epoch,
+                "manifest": setup.manifest.model_dump(mode="json"),
+            }
+        ),
+        setup.backend,
+    )
+    observations = 0
+
+    async def running(*_args):
+        nonlocal observations
+        observations += 1
+        return observations > 1
+
+    setup.engine._running_matches = running
+
+    async def duplicate_start(*_args, **_kwargs):
+        pytest.fail("source writers must not be started twice")
+
+    setup.engine._start = duplicate_start
+
+    await setup.engine.activation_restart_source(
+        setup.manager,
+        setup.state,
+        code_volume=source_volume,
+        database_volume=setup.live_database,
+    )
+
+    assert setup.events == ["boundary"]
+    assert observations == 2
 
 
 @pytest.mark.asyncio
@@ -1520,7 +1917,15 @@ async def test_empty_activation_and_recovery_switch_code_and_database_as_one_pai
         "database_strategy": "replace_verified_empty",
         "target_database_volume": "new-db",
     }
-    await engine._activate_code(manager, object(), backend, prepared, "new-code", 4)
+    await engine._activate_code(
+        manager,
+        object(),
+        backend,
+        prepared,
+        "new-code",
+        4,
+        before_writers=lambda: events.append("admit"),
+    )
     active = json.loads(metadata_path.read_text())
     assert (active["active_code_volume"], active["active_database_volume"]) == (
         "new-code",

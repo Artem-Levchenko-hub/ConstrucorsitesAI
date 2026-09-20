@@ -200,12 +200,18 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_restoration_execution_policy_is_the_only_head() -> None:
+def test_restoration_adaptation_activation_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0065_restoration_execution_policy"]
+    assert heads == ["0067_restoration_adaptation_activation"]
+    assert chain["0067_restoration_adaptation_activation"] == (
+        "0066_restoration_adapting_state"
+    )
+    assert chain["0066_restoration_adapting_state"] == (
+        "0065_restoration_execution_policy"
+    )
     assert chain["0065_restoration_execution_policy"] == "0064_restoration_binding"
     assert chain["0064_restoration_binding"] == "0063_restoration_reconcile"
     assert chain["0063_restoration_reconcile"] == "0062_project_cell_rollout"
@@ -216,6 +222,33 @@ def test_restoration_execution_policy_is_the_only_head() -> None:
     assert chain["0058_integration_operations"] == "0057_generation_execution_owner"
     assert chain["0057_generation_execution_owner"] == "0056_project_cell_finalization"
     assert chain["0056_project_cell_finalization"] == "0055_project_cell_capacity_queue"
+
+
+def test_restoration_adaptation_migrations_roundtrip(
+    project_cell_migration_database: ProjectCellMigrationDatabase,
+) -> None:
+    database = project_cell_migration_database
+    database.upgrade("0065_restoration_execution_policy")
+    database.upgrade("head")
+    assert database.fetchval("SELECT version_num FROM alembic_version") == (
+        "0067_restoration_adaptation_activation"
+    )
+    assert database.fetchval(
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
+    ) == 1
+    command.downgrade(database.config, "0065_restoration_execution_policy")
+    assert database.fetchval("SELECT version_num FROM alembic_version") == (
+        "0065_restoration_execution_policy"
+    )
+    assert database.fetchval(
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
+    ) == 0
+    database.upgrade("head")
+    assert database.fetchval("SELECT version_num FROM alembic_version") == (
+        "0067_restoration_adaptation_activation"
+    )
 
 
 def test_project_cell_candidates_migration_upgrade_and_rollback(

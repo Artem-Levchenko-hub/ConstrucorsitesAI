@@ -56,6 +56,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Recovery is fail-closed: an unreadable ledger is preserved and new
         # admission will continue to account for it.
         _log.warning("startup.capacity_reservation_recovery_failed", err=str(exc))
+    try:
+        from omnia_orchestrator.services.restoration_adaptation_workspace import (
+            get_restoration_adaptation_workspace_service,
+        )
+
+        await get_restoration_adaptation_workspace_service().recover()
+    except Exception as exc:
+        _log.warning("startup.restoration_adaptation_recovery_failed", err=str(exc))
+    try:
+        from omnia_orchestrator.services.restoration_adaptation_activation_service import (
+            get_restoration_adaptation_activation_service,
+        )
+
+        batch = await get_restoration_adaptation_activation_service().recover_all()
+        for failure in batch.failures:
+            _log.warning(
+                "startup.restoration_adaptation_activation_journal_failed",
+                **failure.model_dump(),
+            )
+    except Exception as exc:
+        _log.warning("startup.restoration_adaptation_activation_recovery_failed", err=str(exc))
     await start_hibernate_loop()
     from omnia_orchestrator.services.cell_publication import start_publication_recovery
 
@@ -63,14 +84,32 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from omnia_orchestrator.services.code_restorations import start_restoration_recovery
 
     restoration_recovery = start_restoration_recovery()
+    from omnia_orchestrator.services.restoration_adaptation_workspace import (
+        start_restoration_adaptation_recovery,
+    )
+
+    adaptation_recovery = start_restoration_adaptation_recovery()
+    from omnia_orchestrator.services.restoration_adaptation_activation_service import (
+        start_restoration_adaptation_activation_recovery,
+    )
+
+    adaptation_activation_recovery = start_restoration_adaptation_activation_recovery()
     try:
         yield
     finally:
         publication_recovery.cancel()
         restoration_recovery.cancel()
+        adaptation_recovery.cancel()
+        adaptation_activation_recovery.cancel()
         import asyncio
 
-        await asyncio.gather(publication_recovery, restoration_recovery, return_exceptions=True)
+        await asyncio.gather(
+            publication_recovery,
+            restoration_recovery,
+            adaptation_recovery,
+            adaptation_activation_recovery,
+            return_exceptions=True,
+        )
         from omnia_orchestrator.services.code_restorations import get_code_restoration_service
 
         await get_code_restoration_service().close()

@@ -576,13 +576,16 @@ async def test_republishing_preview_never_drops_existing_tls(
     get_settings.cache_clear()  # type: ignore[attr-defined]
     host = "cell-repeat.preview.omniadevelop.ru"
     conf = tmp_path / f"{host}.conf"
-    conf.write_text(nginx_writer._https_block(
-        host, 3000, upstream_host="172.30.0.2", private_cell=True,
-    ))
+    conf.write_text(
+        nginx_writer._https_block(
+            host, 3000, upstream_host="172.30.0.2", private_cell=True,
+        ),
+        encoding="utf-8",
+    )
     rendered: list[str] = []
 
     async def reload() -> CmdResult:
-        rendered.append(conf.read_text())
+        rendered.append(conf.read_text(encoding="utf-8"))
         return CmdResult(rc=0, stdout="", stderr="")
 
     async def certificate(_host: str) -> bool:
@@ -593,7 +596,7 @@ async def test_republishing_preview_never_drops_existing_tls(
     await nginx_writer.publish_http(host, 3000, upstream_host=upstream, private_cell=True)
     assert await nginx_writer.ensure_tls(host, 3000, upstream_host=upstream, private_cell=True)
     assert all("listen 443 ssl" in block for block in rendered)
-    assert f"proxy_pass http://{upstream}:3000" in conf.read_text()
+    assert f"proxy_pass http://{upstream}:3000" in conf.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("operation", ["publish_http", "ensure_tls"])
@@ -610,11 +613,11 @@ async def test_republish_failure_restores_existing_https(
     original = nginx_writer._https_block(
         host, 3000, upstream_host="172.30.0.2", private_cell=True,
     )
-    conf.write_text(original)
+    conf.write_text(original, encoding="utf-8")
     rendered: list[str] = []
 
     async def reload() -> CmdResult:
-        rendered.append(conf.read_text() if conf.exists() else "")
+        rendered.append(conf.read_text(encoding="utf-8") if conf.exists() else "")
         return CmdResult(rc=1 if len(rendered) == 1 else 0, stdout="", stderr="test failure")
 
     async def certificate(_host: str) -> bool:
@@ -631,7 +634,7 @@ async def test_republish_failure_restores_existing_https(
         assert not await nginx_writer.ensure_tls(
             host, 3000, upstream_host="172.30.0.3", private_cell=True,
         )
-    assert conf.read_text() == original
+    assert conf.read_text(encoding="utf-8") == original
     assert all("listen 443 ssl" in block for block in rendered)
 
 
@@ -648,7 +651,7 @@ async def test_failed_preview_publication_only_removes_http_site(
     conf = tmp_path / f"{host}.conf"
     render = nginx_writer._https_block if existing_tls else nginx_writer._http_block
     original = render(host, 3000, upstream_host="172.30.0.2", private_cell=True)
-    conf.write_text(original)
+    conf.write_text(original, encoding="utf-8")
     reloads = []
 
     async def reload() -> CmdResult:
@@ -659,7 +662,7 @@ async def test_failed_preview_publication_only_removes_http_site(
     await nginx_writer.unpublish(host, http_only=True)
     assert conf.exists() is existing_tls
     if existing_tls:
-        assert conf.read_text() == original
+        assert conf.read_text(encoding="utf-8") == original
         assert not reloads
     else:
         assert reloads == [True]

@@ -20,6 +20,8 @@ from omnia_api.models.generation_event import GenerationEvent
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_cell import ProjectCellWorkspace
+from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.services import (
@@ -370,6 +372,130 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
     else:
         assert run.error == "fixture managed SDK unavailable"
         assert "fixture managed SDK unavailable" in message.content
+
+
+async def test_real_process_prompt_hands_uncertain_activation_to_late_reconciler(
+    flow_factory,
+    monkeypatch,
+):
+    from datetime import UTC, datetime
+
+    from omnia_api.services.generation.agent_finalization import (
+        AdaptationActivationPending,
+    )
+    from omnia_api.services.generation_runs import terminalize_generation_run_locked
+
+    flow = await flow_factory("max_miniapp")
+    factory = async_sessionmaker(flow.engine, expire_on_commit=False)
+    operation_id = uuid4()
+
+    async def pending_pipeline(*_args, **kwargs):
+        ids = kwargs["ids"]
+        pipeline_factory = kwargs["factory"]
+        async with pipeline_factory() as session:
+            run = await session.get(GenerationRun, ids.run_id, with_for_update=True)
+            assert run is not None
+            workspace = ProjectCellWorkspace(
+                project_id=flow.project_id,
+                owner_id=flow.owner_id,
+                provider="docker_owner_canary",
+                state="ready",
+                generation_run_id=flow.run_id,
+                fencing_epoch=11,
+            )
+            session.add(workspace)
+            await session.flush()
+            pending = Restoration(
+                id=operation_id,
+                project_id=flow.project_id,
+                owner_id=flow.owner_id,
+                workspace_id=workspace.id,
+                source_version_id=uuid4(),
+                source_snapshot_id=flow.parent_id,
+                base_draft_snapshot_id=flow.parent_id,
+                target_commit_sha=flow.parent_sha,
+                base_commit_sha=flow.parent_sha,
+                idempotency_key=f"forward-activation-{flow.run_id}",
+                request_digest="b" * 64,
+                selected_branch="adaptive",
+                adaptation_run_id=flow.run_id,
+                state="reconciling",
+                phase="activation_status",
+                revision=3,
+                fencing_epoch=workspace.fencing_epoch,
+                request_payload={},
+                activation_request={"offer": {"activation_id": str(uuid4())}},
+                error="apply timeout; status timeout",
+            )
+            session.add(pending)
+            run.agent_state = {
+                **(run.agent_state or {}),
+                "restoration_adaptation": {
+                    "operation_id": str(pending.id),
+                    "adaptation_run_id": str(run.id),
+                },
+                "max_finalization": {
+                    "restoration_adaptation_proof": {"state": "proof_ready"}
+                },
+                "restoration_adaptation_owner_status": "sealed_proof_retained",
+            }
+            await session.commit()
+        raise AdaptationActivationPending(
+            "adaptation activation is awaiting reconciliation"
+        )
+
+    statuses: list[str] = []
+    real_status = supervisor.set_generation_run_status
+
+    async def tracked_status(run_id, new_status, **kwargs):
+        statuses.append(new_status)
+        await real_status(run_id, new_status, **kwargs)
+
+    monkeypatch.setattr(lifecycle, "run_agent_generation", pending_pipeline)
+    monkeypatch.setattr(supervisor, "set_generation_run_status", tracked_status)
+    monkeypatch.setattr(lifecycle, "set_generation_run_status", tracked_status)
+
+    await flow.run()
+
+    run, _project, message, _owner, _snapshots, _durable_events = await flow.saved()
+    async with factory() as session:
+        pending = await session.get(Restoration, operation_id)
+    assert statuses == ["running"]
+    assert run.status == "running" and run.finished_at is None and run.error is None
+    assert pending is not None and pending.state == "reconciling"
+    assert pending.phase == "activation_status"
+    assert message.content == "" and message.tokens_out is None
+    assert "llm.error" not in flow.trace
+
+    # A later controller receipt can still win the canonical transaction: the
+    # process/tracker did not terminalize or poison either durable owner.
+    async with factory() as session:
+        late_run = await session.get(GenerationRun, flow.run_id, with_for_update=True)
+        late_operation = await session.get(Restoration, operation_id, with_for_update=True)
+        late_message = await session.get(Message, flow.assistant_id, with_for_update=True)
+        assert late_run is not None and late_operation is not None and late_message is not None
+        late_operation.state = "completed"
+        late_operation.phase = "activation_complete"
+        late_operation.error = None
+        late_operation.activation_settled_at = datetime.now(UTC)
+        late_run.agent_state = {
+            **(late_run.agent_state or {}),
+            "restoration_adaptation_activation": {
+                "state": "completed",
+                "operation_id": str(late_operation.id),
+                "publication_consumed": True,
+            },
+        }
+        late_message.content = "Готово — версия адаптирована и восстановлена."
+        late_message.tokens_in = late_message.tokens_in or 0
+        late_message.tokens_out = late_message.tokens_out or 0
+        await terminalize_generation_run_locked(session, late_run, status="completed")
+        await session.commit()
+
+    run, _project, message, _owner, _snapshots, _durable_events = await flow.saved()
+    assert run.status == "completed" and run.error is None
+    assert message.content.startswith("Готово") and message.tokens_out == 0
+    assert "failed" not in statuses and "llm.error" not in flow.trace
 
 
 @pytest.mark.parametrize("stopped", [False, True])

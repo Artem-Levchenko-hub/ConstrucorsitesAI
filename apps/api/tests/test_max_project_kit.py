@@ -64,9 +64,9 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
-def test_kit_v20_retires_encrypted_crud_and_materializes_portable_users() -> None:
+def test_kit_v21_retires_encrypted_crud_and_materializes_portable_users() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 20
+    assert MAX_MANAGED_KIT_VERSION == 21
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     assert MAX_RETIRED_MANAGED_FILES == {
@@ -116,6 +116,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/lib/max/session.ts",
         "src/app/api/omnia/preview-session/route.ts",
         "src/app/api/omnia/actions/route.ts",
+        "src/app/api/omnia/actions/[id]/route.ts",
         "src/app/api/omnia/consents/route.ts",
         "src/app/api/omnia/events/route.ts",
         "src/lib/omnia/max-config.ts",
@@ -148,6 +149,12 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     session = files["src/lib/max/session.ts"]
     assert 'const MAX_INIT_DATA_HEADER = "x-omnia-max-init-data"' in session
     assert "validateMaxInitData(initData, token)" in session
+
+    action_item = files["src/app/api/omnia/actions/[id]/route.ts"]
+    assert "eq(schema.maxBusinessActions.maxUserId, user.id)" in action_item
+    assert "export async function GET" in action_item
+    assert "export async function PATCH" in action_item
+    assert "export async function DELETE" in action_item
     assert "if (cookieUser) return cookieUser" in session
     provider = files["src/components/MaxAppProvider.tsx"]
     assert 'state.mode === "loading" || state.mode === "error"' in provider

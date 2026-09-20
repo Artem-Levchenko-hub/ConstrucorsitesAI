@@ -27,6 +27,10 @@ _NO_SOURCE_CHANGE_MESSAGE = (
 )
 
 
+class AdaptationActivationPending(RuntimeError):
+    """Forward-only controller reconciliation owns the sealed candidate."""
+
+
 class EditSourceChangeVerdict(NamedTuple):
     files: dict[str, str]
     message: str
@@ -138,10 +142,34 @@ async def finalize_max_candidate(
                 prompt=prompt_text,
                 repair=_repair_finalization_source,
             )
+            if _finalization.status is MaxFinalizationStatus.ACTIVATING:
+                raise AdaptationActivationPending(_finalization.redacted_detail)
+            if _finalization.status is MaxFinalizationStatus.CANCELLED:
+                raise asyncio.CancelledError
             if _finalization.status is not MaxFinalizationStatus.COMPLETE:
                 raise RuntimeError("MAX_FINALIZATION_FAILED: " + _finalization.redacted_detail)
+        except AdaptationActivationPending:
+            raise
         except Exception as exc:
+            from omnia_api.services.max_finalization import (
+                AdaptationActivationRecoveryRequired,
+            )
+
+            if isinstance(exc, AdaptationActivationRecoveryRequired):
+                raise AdaptationActivationPending(str(exc)) from exc
             raise_if_terminal_cell_error(exc)
+            if runtime.coordinator is not None:
+                from omnia_api.services.restorations import (
+                    adaptation_activation_holds_generation_lease,
+                )
+
+                if await adaptation_activation_holds_generation_lease(
+                    runtime.coordinator.session_factory,
+                    ids.run_id,
+                ):
+                    raise AdaptationActivationPending(
+                        "sealed restoration adaptation activation requires recovery"
+                    ) from exc
             if baseline.sha and _max_has_generated_snapshot:
                 try:
                     _published_source = await asyncio.to_thread(

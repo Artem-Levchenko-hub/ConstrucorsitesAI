@@ -6,6 +6,15 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
+from omnia_api.schemas.restoration import (
+    ActivationBusinessProbe,
+    ActivationBusinessWitness,
+    ActivationPreparedTarget,
+    RestorationAdaptationActivationCommand,
+    RestorationAdaptationActivationOffer,
+    RestorationAdaptationActivationOfferRequest,
+    canonical_activation_digest,
+)
 from omnia_api.services import orchestrator_client
 from omnia_api.services.orchestrator_client import (
     ControlProjectCellResourcesRequest,
@@ -23,7 +32,180 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellPreEffectRejection,
     ProjectCellPreviewSession,
     ProjectCellResourceResponse,
+    RestorationAdaptationWorkspace,
 )
+
+
+def _activation_contract() -> tuple[
+    RestorationAdaptationActivationOfferRequest,
+    RestorationAdaptationActivationCommand,
+    dict[str, object],
+]:
+    workspace_id, operation_id, project_id, owner_id, run_id = (uuid4() for _ in range(5))
+    candidate_id, activation_id = uuid4(), uuid4()
+    witness = ActivationBusinessWitness(
+        entity="tasks",
+        id_column="id",
+        owner_column="owner_id",
+        value_column="title",
+        create_values={"status": "active"},
+    )
+    raw_probe = {
+        "version": 1,
+        "endpoint": "/api/activation-probe",
+        "data_contract_digest": "1" * 64,
+        "witnesses": [witness.model_dump(mode="json")],
+        "max_payload_bytes": 4096,
+        "pointers": {
+            "items": "/items",
+            "item": "/item",
+            "item_id": "/item/id",
+            "owner_id": "/item/ownerId",
+            "entity": "/item/entity",
+            "marker": "/item/marker",
+            "phase": "/item/phase",
+            "contract_digest": "/probeContractDigest",
+        },
+    }
+    probe = ActivationBusinessProbe(
+        **raw_probe,
+        contract_digest=canonical_activation_digest(raw_probe),
+    )
+    request = RestorationAdaptationActivationOfferRequest(
+        workspace_id=workspace_id,
+        operation_id=operation_id,
+        project_id=project_id,
+        owner_id=owner_id,
+        generation_run_id=run_id,
+        candidate_workspace_id=candidate_id,
+        candidate_fencing_epoch=8,
+        candidate_workspace_revision="2" * 64,
+        proof_attempt=3,
+        proof_digest="3" * 64,
+    )
+    raw_offer = {
+        "state": "offered",
+        **request.model_dump(mode="json"),
+        "activation_id": str(activation_id),
+        "expected_source_fencing_epoch": 7,
+        "target_fencing_epoch": 9,
+        "source_workspace_revision": "4" * 64,
+        "source_code_volume": "source-code",
+        "live_database_volume": "live-db",
+        "live_database_identity_digest": "5" * 64,
+        "candidate_artifact_digest": "6" * 64,
+        "candidate_source_manifest_digest": "b" * 64,
+        "candidate_files_digest": "7" * 64,
+        "archive_digest": "8" * 64,
+        "business_probe": probe.model_dump(mode="json"),
+        "probe_contract_digest": probe.contract_digest,
+        "probe_rehearsal_digest": "c" * 64,
+        "probe_rehearsal_database_digest": "d" * 64,
+    }
+    offer = RestorationAdaptationActivationOffer(
+        **raw_offer,
+        offer_digest=canonical_activation_digest(raw_offer),
+    )
+    command = RestorationAdaptationActivationCommand(
+        offer=offer,
+        planned_commit_sha="a" * 40,
+    )
+    source = ActivationPreparedTarget(
+        workspace_id=workspace_id,
+        fencing_epoch=7,
+        code_volume="source-code",
+        code_digest="4" * 64,
+        database_volume="live-db",
+        database_identity_digest="5" * 64,
+    )
+    target = ActivationPreparedTarget(
+        workspace_id=workspace_id,
+        fencing_epoch=9,
+        code_volume="target-code",
+        code_digest="8" * 64,
+        database_volume="live-db",
+        database_identity_digest="5" * 64,
+    )
+    receipt_core = {
+        "state": "activated",
+        "effects_admitted": True,
+        "operation_id": str(operation_id),
+        "generation_run_id": str(run_id),
+        "project_id": str(project_id),
+        "owner_id": str(owner_id),
+        "activation_id": str(activation_id),
+        "activation_digest": command.activation_digest(),
+        "proof_digest": request.proof_digest,
+        "fencing_epoch": 9,
+        "source_volume_identity": source.model_dump(mode="json"),
+        "target_volume_identity": target.model_dump(mode="json"),
+        "health_digest": "9" * 64,
+    }
+    status = {
+        "state": "activated",
+        "effects_admitted": True,
+        "offer": offer.model_dump(mode="json"),
+        "planned_commit_sha": command.planned_commit_sha,
+        "activation_digest": command.activation_digest(),
+        "fencing_epoch": 9,
+        "source_volume_identity": source.model_dump(mode="json"),
+        "target_volume_identity": target.model_dump(mode="json"),
+        "health_digest": "9" * 64,
+        "receipt_digest": canonical_activation_digest(receipt_core),
+    }
+    return request, command, status
+
+
+async def test_restoration_activation_uses_exact_offer_and_apply_envelopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, command, status = _activation_contract()
+    calls: list[tuple[str, str, object]] = []
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        calls.append((method, path, kwargs.get("json")))
+        if path.endswith("/activation-offer"):
+            return command.offer.model_dump(mode="json")
+        return status
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    offer = await orchestrator_client.project_cell_offer_restoration_adaptation_activation(
+        request
+    )
+    receipt = await orchestrator_client.project_cell_apply_restoration_adaptation_activation(
+        command
+    )
+
+    assert offer == command.offer
+    assert receipt.receipt_digest == status["receipt_digest"]
+    assert calls == [
+        (
+            "POST",
+            f"/internal/workspaces/{request.workspace_id}/restoration-adaptations/"
+            f"{request.generation_run_id}/activation-offer",
+            request.model_dump(mode="json"),
+        ),
+        (
+            "POST",
+            f"/internal/workspaces/{request.workspace_id}/restoration-adaptations/"
+            f"{request.generation_run_id}/activations/{command.offer.activation_id}/apply",
+            command.model_dump(mode="json"),
+        ),
+    ]
+
+
+async def test_restoration_activation_rejects_tampered_binding_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, command, status = _activation_contract()
+    status["activation_digest"] = "f" * 64
+
+    async def fake_request(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return status
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+    with pytest.raises(OrchestratorUnavailable, match="invalid restoration adaptation"):
+        await orchestrator_client.project_cell_status_restoration_adaptation_activation(command)
 
 
 @pytest.mark.parametrize("applied", [False, True, None, "false"])
@@ -117,6 +299,196 @@ async def test_project_cell_agent_bootstrap_calls_exact_internal_path(
             "generation_run_id": "00000000-0000-0000-0000-000000000099",
             "fencing_epoch": 4,
         },
+    }
+
+
+async def test_prepare_restoration_adaptation_uses_bound_internal_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    workspace_id = uuid4()
+    operation_id = uuid4()
+    project_id = uuid4()
+    owner_id = uuid4()
+    run_id = uuid4()
+    source_snapshot_id = uuid4()
+    base_snapshot_id = uuid4()
+    candidate_id = uuid4()
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {
+            "state": "ready",
+            "source_workspace_id": str(workspace_id),
+            "candidate_workspace_id": str(candidate_id),
+            "operation_id": str(operation_id),
+            "project_id": str(project_id),
+            "owner_id": str(owner_id),
+            "generation_run_id": str(run_id),
+            "candidate_fencing_epoch": 1,
+            "source_database_digest": "1" * 64,
+            "proof_digest": "2" * 64,
+            "capabilities": {
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+            },
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.project_cell_prepare_restoration_adaptation(
+        workspace_id,
+        operation_id=operation_id,
+        project_id=project_id,
+        owner_id=owner_id,
+        generation_run_id=run_id,
+        fencing_epoch=7,
+        source_workspace_revision="0" * 64,
+        source_snapshot_id=source_snapshot_id,
+        base_draft_snapshot_id=base_snapshot_id,
+        source_commit_sha="a" * 40,
+        adaptation_bundle_digest="b" * 64,
+    )
+
+    assert isinstance(result, RestorationAdaptationWorkspace)
+    assert result.candidate_workspace_id == candidate_id
+    assert observed["method"] == "POST"
+    assert observed["path"] == (
+        f"/internal/workspaces/{workspace_id}/restoration-adaptations/{run_id}/prepare"
+    )
+    assert observed["json"] == {
+        "workspace_id": str(workspace_id),
+        "operation_id": str(operation_id),
+        "project_id": str(project_id),
+        "owner_id": str(owner_id),
+        "generation_run_id": str(run_id),
+        "fencing_epoch": 7,
+        "source_workspace_revision": "0" * 64,
+        "source_snapshot_id": str(source_snapshot_id),
+        "base_draft_snapshot_id": str(base_snapshot_id),
+        "source_commit_sha": "a" * 40,
+        "adaptation_bundle_digest": "b" * 64,
+    }
+
+
+async def test_prove_restoration_adaptation_returns_candidate_bound_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    workspace_id = uuid4()
+    operation_id = uuid4()
+    project_id = uuid4()
+    owner_id = uuid4()
+    run_id = uuid4()
+    candidate_id = uuid4()
+    workspace = RestorationAdaptationWorkspace(
+        source_workspace_id=workspace_id,
+        candidate_workspace_id=candidate_id,
+        operation_id=operation_id,
+        project_id=project_id,
+        owner_id=owner_id,
+        generation_run_id=run_id,
+        candidate_fencing_epoch=3,
+        source_database_digest="1" * 64,
+        proof_digest="2" * 64,
+        capabilities={
+            "portable_machine": True,
+            "database_admin": "isolated_copy",
+            "restoration_adaptation_database_copy_v1": True,
+        },
+    )
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {
+            "state": "proof_ready",
+            "reason_code": None,
+            "source_workspace_id": str(workspace_id),
+            "candidate_workspace_id": str(candidate_id),
+            "operation_id": str(operation_id),
+            "project_id": str(project_id),
+            "owner_id": str(owner_id),
+            "generation_run_id": str(run_id),
+            "candidate_fencing_epoch": 3,
+            "proof_attempt": 2,
+            "source_workspace_revision": "3" * 64,
+            "candidate_workspace_revision": "4" * 64,
+            "candidate_proof_key": "5" * 64,
+            "candidate_artifact_digest": "6" * 64,
+            "source_database_digest": "1" * 64,
+            "candidate_database_digest": "1" * 64,
+            "source_schema_digest": "7" * 64,
+            "candidate_schema_digest": "7" * 64,
+            "source_business_digest": "8" * 64,
+            "candidate_business_digest": "8" * 64,
+            "source_technical_digest": "9" * 64,
+            "candidate_technical_digest": "9" * 64,
+            "probe_contract_digest": "b" * 64,
+            "probe_rehearsal_digest": "c" * 64,
+            "probe_rehearsal_database_digest": "d" * 64,
+            "candidate_source_manifest_digest": "e" * 64,
+            "proof_digest": "a" * 64,
+            "capabilities": {
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+                "restoration_adaptation_proof_v1": True,
+            },
+        }
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    result = await orchestrator_client.project_cell_prove_restoration_adaptation(
+        workspace,
+        candidate_workspace_revision="4" * 64,
+        candidate_proof_key="5" * 64,
+        candidate_artifact_digest="6" * 64,
+        proof_attempt=2,
+    )
+
+    assert result.state == "proof_ready"
+    assert result.candidate_workspace_id == candidate_id
+    assert result.proof_attempt == 2
+    assert observed["json"]["proof_attempt"] == 2
+    assert observed["path"] == (
+        f"/internal/workspaces/{workspace_id}/restoration-adaptations/{run_id}/proof"
+    )
+
+
+async def test_terminal_adaptation_owner_status_uses_bound_internal_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    workspace_id, operation_id = uuid4(), uuid4()
+    project_id, owner_id, run_id = uuid4(), uuid4(), uuid4()
+
+    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
+        observed.update(method=method, path=path, **kwargs)
+        return {"state": "terminal"}
+
+    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
+
+    await orchestrator_client.project_cell_update_restoration_adaptation_owner_status(
+        workspace_id=workspace_id,
+        operation_id=operation_id,
+        project_id=project_id,
+        owner_id=owner_id,
+        generation_run_id=run_id,
+        state="terminal",
+    )
+
+    assert observed["path"] == (
+        f"/internal/workspaces/{workspace_id}/restoration-adaptations/"
+        f"{run_id}/owner-status"
+    )
+    assert observed["json"] == {
+        "workspace_id": str(workspace_id),
+        "operation_id": str(operation_id),
+        "project_id": str(project_id),
+        "owner_id": str(owner_id),
+        "generation_run_id": str(run_id),
+        "state": "terminal",
     }
 
 

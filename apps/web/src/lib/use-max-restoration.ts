@@ -33,7 +33,7 @@ function readRequest(project: string): Request | null {
   } catch { return null; }
 }
 const terminal = (state: api.RestoreState) => ["completed", "cancelled", "failed"].includes(state);
-const running = (state: api.RestoreState) => ["preparing", "checking", "applying", "reconciling"].includes(state);
+const running = (state: api.RestoreState) => ["preparing", "checking", "adapting", "applying", "reconciling"].includes(state);
 function newer(previous: api.RestoreOperation | undefined, next: api.RestoreOperation) {
   return previous && previous.revision > next.revision ? previous : next;
 }

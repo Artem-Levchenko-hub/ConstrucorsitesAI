@@ -23,6 +23,7 @@ from omnia_api.services import (
     stack_routing,
 )
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.generation.agent_finalization import AdaptationActivationPending
 from omnia_api.services.generation.agent_pipeline import run_agent_generation
 from omnia_api.services.generation.contracts import (
     GenerationIds,
@@ -262,6 +263,11 @@ async def _process_prompt(
             selected_elements=selected_elements,
         )
 
+    except AdaptationActivationPending:
+        # The sealed candidate and activation outbox are durable. Let the
+        # tracker hand ownership to the reconciler without emitting a false
+        # terminal generation error or changing the assistant message.
+        raise
     except Exception as e:
         import traceback as _tb
 

@@ -25,6 +25,7 @@ ACTIVE_RESTORATION_STATES = (
     "checking",
     "ready",
     "needs_changes",
+    "adapting",
     "applying",
     "reconciling",
 )
@@ -74,6 +75,22 @@ class Restoration(Base):
     runtime_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     source_binding: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     source_binding_digest: Mapped[str | None] = mapped_column(Text)
+    activation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    activation_offer: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    activation_offer_digest: Mapped[str | None] = mapped_column(Text)
+    activation_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    activation_request_digest: Mapped[str | None] = mapped_column(Text)
+    adaptation_planned_commit_sha: Mapped[str | None] = mapped_column(Text)
+    activation_receipt: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    activation_receipt_digest: Mapped[str | None] = mapped_column(Text)
+    activation_effects_admitted: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+    activation_cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    activation_settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activation_notification_state: Mapped[str | None] = mapped_column(Text)
     report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     applied_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     applied_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -109,6 +126,15 @@ class Restoration(Base):
             "adaptation_run_id IS NULL OR selected_branch = 'adaptive'",
             name="ck_restorations_adaptation_branch",
         ),
+        CheckConstraint(
+            "activation_notification_state IS NULL OR "
+            "activation_notification_state IN ('pending','delivered')",
+            name="ck_restorations_activation_notification_state",
+        ),
+        CheckConstraint(
+            "activation_id IS NULL OR selected_branch = 'adaptive'",
+            name="ck_restorations_activation_branch",
+        ),
         Index(
             "uq_restorations_adaptation_run_id",
             "adaptation_run_id",
@@ -116,11 +142,18 @@ class Restoration(Base):
             postgresql_where=text("adaptation_run_id IS NOT NULL"),
         ),
         Index(
+            "uq_restorations_activation_id",
+            "activation_id",
+            unique=True,
+            postgresql_where=text("activation_id IS NOT NULL"),
+        ),
+        Index(
             "uq_restorations_active_project",
             "project_id",
             unique=True,
             postgresql_where=text(
-                "state IN ('preparing','checking','ready','needs_changes','applying','reconciling')"
+                "state IN ('preparing','checking','ready','needs_changes','adapting',"
+                "'applying','reconciling')"
             ),
         ),
         Index(

@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -11,6 +12,42 @@ from omnia_api.models.project_version import ProjectVersion
 from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.message import RestorationAdaptationReference
+
+
+def test_restoration_probe_source_contract_accepts_real_qa_tasks_shape() -> None:
+    from omnia_api.services.restoration_adaptation import restoration_probe_source_gap
+
+    files = {
+        ".omnia/restoration-probe.json": json.dumps(
+            {
+                "version": 1,
+                "endpoint": "/api/restoration-probe",
+                "witnesses": [
+                    {
+                        "entity": "qa_tasks",
+                        "id_column": "id",
+                        "owner_column": "max_user_id",
+                        "value_column": "title",
+                        "create_values": {"status": "pending"},
+                    }
+                ],
+                "max_payload_bytes": 4096,
+            }
+        ),
+        "src/app/api/restoration-probe/route.ts": (
+            "export async function GET() {}\nexport async function POST() {}"
+        ),
+        "src/app/api/restoration-probe/[...path]/route.ts": (
+            "export async function GET() {}\n"
+            "export async function PATCH() {}\n"
+            "export async function DELETE() {}"
+        ),
+    }
+
+    assert restoration_probe_source_gap(files) is None
+    assert restoration_probe_source_gap({}) == (
+        "restoration_probe_missing: .omnia/restoration-probe.json"
+    )
 
 
 @pytest.mark.parametrize(
@@ -139,6 +176,12 @@ def source_case(monkeypatch):
         project_id=project.id,
         owner_id=project.owner_id,
         state="cancelled",
+        selected_branch=None,
+        adaptation_run_id=None,
+        phase="cancelled",
+        error=None,
+        revision=1,
+        updated_at=None,
         source_version_id=version.id,
         source_snapshot_id=snapshot.id,
         target_commit_sha=snapshot.commit_sha,
@@ -175,7 +218,11 @@ def source_case(monkeypatch):
         },
     )
     run = SimpleNamespace(
-        id=uuid4(), project_id=project.id, user_id=project.owner_id, agent_state={}
+        id=uuid4(),
+        project_id=project.id,
+        user_id=project.owner_id,
+        status="pending",
+        agent_state={},
     )
     rows = {
         (Restoration, operation.id): operation,
@@ -189,8 +236,11 @@ def source_case(monkeypatch):
         real_reader = staticmethod(service.repo.read_files)
         data = rows
 
-        async def refresh(self, row):
-            pass
+        def __init__(self) -> None:
+            self.refresh_calls = []
+
+        async def refresh(self, row, **kwargs):
+            self.refresh_calls.append((row, kwargs))
 
         async def get(self, model, identity, **kwargs):
             return rows.get((model, identity))
@@ -211,6 +261,368 @@ def source_case(monkeypatch):
     return service, Session(), project, operation, run, reference, historical, reads
 
 
+async def test_adaptation_admission_binds_locked_operation_to_exact_run(source_case):
+    service, session, project, operation, run, reference, _, _ = source_case
+
+    first = await service.prepare_adaptation(
+        session, project, project.owner_id, reference, run
+    )
+    replay = await service.prepare_adaptation(
+        session, project, project.owner_id, reference, run
+    )
+
+    assert replay == first
+    assert first["adaptation_run_id"] == str(run.id)
+    assert operation.selected_branch == "adaptive"
+    assert operation.adaptation_run_id == run.id
+    assert operation.state == "adapting"
+    assert operation.phase == "generation"
+    assert operation.revision == 2
+    assert any(
+        row is operation and kwargs.get("with_for_update") is True
+        for row, kwargs in session.refresh_calls
+    )
+
+    other = SimpleNamespace(
+        id=uuid4(),
+        project_id=project.id,
+        user_id=project.owner_id,
+        status="pending",
+    )
+    with pytest.raises(ApiError):
+        await service.prepare_adaptation(
+            session, project, project.owner_id, reference, other
+        )
+
+
+async def test_db_adaptation_admission_is_atomic_and_blocks_competing_work(
+    db_session, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from omnia_api.services import project_cell_runtime, restorations
+    from omnia_api.services import restoration_adaptation as service
+    from omnia_api.services.generation_runs import (
+        _finalize_generation_run,
+        reserve_generation_run,
+    )
+    from tests.test_restorations import FakeRuntime, restoration_fixture
+
+    async def ready_resources(_workspace_id):
+        return SimpleNamespace(state="resources_ready")
+
+    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", ready_resources)
+
+    owner, project, _, current, _, _, request = await restoration_fixture(db_session)
+    runtime = FakeRuntime()
+    operation = await restorations.create_restoration(
+        db_session, project.id, owner.id, request, runtime
+    )
+    operation = await restorations.cancel_restoration(
+        db_session, project.id, owner.id, operation.id, runtime
+    )
+    run, replayed = await reserve_generation_run(
+        db_session,
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key=f"adapt-{uuid4().hex}",
+        prompt="adapt selected version",
+    )
+    assert replayed is False
+    reference = RestorationAdaptationReference(
+        operation_id=operation.id,
+        expected_draft_snapshot_id=current.id,
+    )
+
+    first = await service.prepare_adaptation(
+        db_session, project, owner.id, reference, run
+    )
+    await db_session.commit()
+    replay = await service.prepare_adaptation(
+        db_session, project, owner.id, reference, run
+    )
+
+    assert replay == first
+    bound = await db_session.get(Restoration, operation.id, populate_existing=True)
+    assert bound is not None and bound.state == "adapting"
+    assert bound.adaptation_run_id == run.id
+    with pytest.raises(ApiError) as competing:
+        await reserve_generation_run(
+            db_session,
+            project_id=project.id,
+            user_id=owner.id,
+            idempotency_key=f"competing-{uuid4().hex}",
+            prompt="competing generation",
+        )
+    assert competing.value.status_code == 409
+
+    run.agent_state = {"restoration_adaptation": first}
+    assert await _finalize_generation_run(db_session, run.id) == "completed"
+    await db_session.refresh(run)
+    await db_session.refresh(bound)
+    assert bound.state == "adapting"
+    assert run.agent_state["restoration_adaptation_owner_status"] == "terminal_pending"
+
+    async def notified(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "omnia_api.services.orchestrator_client."
+        "project_cell_update_restoration_adaptation_owner_status",
+        notified,
+    )
+    from omnia_api.services.generation_runs import retry_terminal_adaptation_notifications
+
+    assert await retry_terminal_adaptation_notifications(db_session) == 1
+    await db_session.refresh(bound)
+    assert bound.state == "failed"
+    await restorations.assert_no_active_restoration(db_session, project.id)
+
+
+@pytest.mark.parametrize("cancel_timeout", [False, True])
+async def test_delayed_legacy_cancel_response_cannot_overwrite_adapting(
+    db_session, test_engine, monkeypatch, cancel_timeout
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from omnia_api.services import project_cell_runtime, restoration_adaptation, restorations
+    from omnia_api.services.generation_runs import reserve_generation_run
+    from tests.test_restorations import FakeRuntime, restoration_fixture
+
+    class DelayedCancelRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_entered = asyncio.Event()
+            self.release_cancel = asyncio.Event()
+
+        async def cancel(self, request):
+            self.cancel_calls += 1
+            delayed = self.result.model_copy(
+                update={
+                    "state": "cancelled",
+                    "phase": "cancelled",
+                    "revision": 2,
+                    "can_apply": False,
+                    "can_cancel": False,
+                }
+            )
+            self.cancel_entered.set()
+            await self.release_cancel.wait()
+            if cancel_timeout:
+                raise TimeoutError("cancel response lost after admission")
+            return delayed
+
+    async def ready_resources(_workspace_id):
+        return SimpleNamespace(state="resources_ready")
+
+    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", ready_resources)
+
+    owner, project, _, current, _, _, request = await restoration_fixture(db_session)
+    runtime = DelayedCancelRuntime()
+    public = await restorations.create_restoration(
+        db_session, project.id, owner.id, request, runtime
+    )
+    operation = await db_session.get(Restoration, public.id)
+    assert operation is not None
+    operation.state, operation.phase = "reconciling", "cancel"
+    await db_session.commit()
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as delayed_session:
+        delayed = asyncio.create_task(
+            restorations._dispatch(
+                delayed_session,
+                project.id,
+                owner.id,
+                operation.id,
+                runtime,
+                "cancel",
+            )
+        )
+        await runtime.cancel_entered.wait()
+
+        await db_session.refresh(operation)
+        operation.state, operation.phase = "cancelled", "cancelled"
+        await db_session.commit()
+        run, replayed = await reserve_generation_run(
+            db_session,
+            project_id=project.id,
+            user_id=owner.id,
+            idempotency_key=f"delayed-cancel-{uuid4().hex}",
+            prompt="adapt selected version",
+        )
+        assert replayed is False
+        bundle = await restoration_adaptation.prepare_adaptation(
+            db_session,
+            project,
+            owner.id,
+            RestorationAdaptationReference(
+                operation_id=operation.id,
+                expected_draft_snapshot_id=current.id,
+            ),
+            run,
+        )
+        run.agent_state = {"restoration_adaptation": bundle}
+        await db_session.commit()
+
+        runtime.release_cancel.set()
+        stale_result = await delayed
+
+    await db_session.refresh(operation)
+    assert stale_result.state == "adapting"
+    assert operation.state == "adapting"
+    assert operation.phase == "generation"
+    assert operation.adaptation_run_id == run.id
+
+
+async def test_startup_recovery_retries_terminal_adaptation_status(
+    db_session, monkeypatch
+):
+    from omnia_api.models.project_cell import ProjectCellWorkspace
+    from omnia_api.models.user import User
+    from omnia_api.services import orchestrator_client
+    from omnia_api.services.generation_runs import recover_interrupted_generation_runs
+
+    owner = User(email=f"adapt-recovery-{uuid4().hex}@example.test", password_hash="fixture")
+    db_session.add(owner)
+    await db_session.flush()
+    project = Project(
+        owner_id=owner.id,
+        name="Adaptation recovery",
+        slug=f"adapt-recovery-{uuid4().hex}",
+        template="max_miniapp",
+    )
+    db_session.add(project)
+    await db_session.flush()
+    operation_id = uuid4()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="interrupted-adaptation",
+        prompt_hash="a" * 64,
+        status="running",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    run.agent_state = {
+        "restoration_adaptation": {
+            "operation_id": str(operation_id),
+            "adaptation_run_id": str(run.id),
+        }
+    }
+    workspace = ProjectCellWorkspace(
+        project_id=project.id,
+        owner_id=owner.id,
+        provider="docker_owner_canary",
+        state="ready",
+        generation_run_id=run.id,
+        fencing_epoch=3,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    calls: list[dict[str, object]] = []
+
+    async def notify(**kwargs: object) -> None:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RuntimeError("transient orchestrator outage")
+
+    monkeypatch.setattr(
+        orchestrator_client,
+        "project_cell_update_restoration_adaptation_owner_status",
+        notify,
+    )
+
+    assert await recover_interrupted_generation_runs(db_session) == 1
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.agent_state["restoration_adaptation_owner_status"] == "terminal_notified"
+    assert len(calls) == 2
+    assert calls[-1]["workspace_id"] == workspace.id
+    assert calls[-1]["operation_id"] == operation_id
+    assert calls[-1]["state"] == "terminal"
+
+    assert await recover_interrupted_generation_runs(db_session) == 0
+    assert len(calls) == 2
+
+
+async def test_startup_recovery_keeps_sealed_proof_for_bounded_activation_handoff(
+    db_session, monkeypatch
+):
+    from omnia_api.models.project_cell import ProjectCellWorkspace
+    from omnia_api.models.user import User
+    from omnia_api.services import orchestrator_client
+    from omnia_api.services.generation_runs import recover_interrupted_generation_runs
+
+    owner = User(email=f"sealed-recovery-{uuid4().hex}@example.test", password_hash="fixture")
+    db_session.add(owner)
+    await db_session.flush()
+    project = Project(
+        owner_id=owner.id,
+        name="Sealed adaptation recovery",
+        slug=f"sealed-recovery-{uuid4().hex}",
+        template="max_miniapp",
+    )
+    db_session.add(project)
+    await db_session.flush()
+    operation_id = uuid4()
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key="sealed-interrupted-adaptation",
+        prompt_hash="a" * 64,
+        status="running",
+    )
+    db_session.add(run)
+    await db_session.flush()
+    run.agent_state = {
+        "restoration_adaptation": {
+            "operation_id": str(operation_id),
+            "adaptation_run_id": str(run.id),
+        },
+        "max_finalization": {
+            "restoration_adaptation_proof": {
+                "state": "proof_ready",
+                "proof_digest": "b" * 64,
+            }
+        },
+    }
+    db_session.add(
+        ProjectCellWorkspace(
+            project_id=project.id,
+            owner_id=owner.id,
+            provider="docker_owner_canary",
+            state="ready",
+            generation_run_id=run.id,
+            fencing_epoch=3,
+        )
+    )
+    await db_session.commit()
+    calls: list[dict[str, object]] = []
+
+    async def notify(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        orchestrator_client,
+        "project_cell_update_restoration_adaptation_owner_status",
+        notify,
+    )
+
+    assert await recover_interrupted_generation_runs(db_session) == 1
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.agent_state["restoration_adaptation_owner_status"] == (
+        "sealed_proof_retained"
+    )
+    assert calls == []
+
+    assert await recover_interrupted_generation_runs(db_session) == 0
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     "invalid",
     [
@@ -226,7 +638,7 @@ def source_case(monkeypatch):
     ],
 )
 async def test_generated_version_uses_resolved_completed_source(source_case, invalid):
-    service, session, project, operation, _, reference, historical, reads = source_case
+    service, session, project, operation, run, reference, historical, reads = source_case
     source = await session.get(Snapshot, operation.source_snapshot_id)
     base = Snapshot(id=uuid4(), project_id=project.id, commit_sha="b" * 40)
     assistant = Message(
@@ -276,10 +688,10 @@ async def test_generated_version_uses_resolved_completed_source(source_case, inv
         version.project_id = uuid4()
     if invalid is not None:
         with pytest.raises(ApiError):
-            await service.prepare_adaptation(session, project, project.owner_id, reference)
+            await service.prepare_adaptation(session, project, project.owner_id, reference, run)
         assert reads == []
         return
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     assert bundle["source_snapshot_id"] == str(source.id)
     assert bundle["source_commit_sha"] == source.commit_sha
     assert bundle["files"] == historical
@@ -293,7 +705,7 @@ async def test_historical_component_absent_from_current_code_reaches_model_conte
 ):
     service, session, project, _, run, reference, historical, reads = source_case
     run.execution_backend = execution_backend
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     run.agent_state = {"restoration_adaptation": bundle}
     text = await service.append_adaptation_context(
         session,
@@ -307,6 +719,9 @@ async def test_historical_component_absent_from_current_code_reaches_model_conte
     assert "src/components/OldCalendar.tsx" in text
     assert historical["src/components/OldCalendar.tsx"] in text
     assert "CURRENT business database" in text
+    assert ".omnia/restoration-probe.json" in text
+    assert "value_column" in text
+    assert "__Host-max_session" in text
     assert text.startswith("Adapt the old UI")
 
 
@@ -315,7 +730,7 @@ async def test_adaptation_bundle_carries_explicit_contract_diff_and_immutable_pr
 ):
     service, session, project, _, run, reference, _, _ = source_case
 
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     run.agent_state = {"restoration_adaptation": bundle}
     context = await service.append_adaptation_context(
         session,
@@ -379,7 +794,7 @@ async def test_adaptation_bundle_carries_explicit_contract_diff_and_immutable_pr
 
 async def test_v2_bundle_tampering_with_proof_contract_is_rejected(source_case):
     service, session, project, _, run, reference, _, _ = source_case
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     bundle["preservation_contract"]["database_target"] = "live"
     run.agent_state = {"restoration_adaptation": bundle}
 
@@ -429,7 +844,7 @@ def test_contract_diff_provenance_requires_an_observed_database_state(
 
 @pytest.mark.parametrize("invalid", ["owner", "project", "state", "head", "snapshot", "sha"])
 async def test_admission_rejects_untrusted_or_stale_reference_before_git_read(source_case, invalid):
-    service, session, project, operation, _, reference, _, reads = source_case
+    service, session, project, operation, run, reference, _, reads = source_case
     if invalid == "owner":
         operation.owner_id = uuid4()
     elif invalid == "project":
@@ -443,7 +858,7 @@ async def test_admission_rejects_untrusted_or_stale_reference_before_git_read(so
     else:
         operation.target_commit_sha = "b" * 40
     with pytest.raises(ApiError):
-        await service.prepare_adaptation(session, project, project.owner_id, reference)
+        await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     assert reads == []
 
 
@@ -451,7 +866,7 @@ async def test_dispatch_rejects_new_head_after_queue_without_exposing_bundle(sou
     service, session, project, _, run, reference, _, _ = source_case
     run.agent_state = {
         "restoration_adaptation": await service.prepare_adaptation(
-            session, project, project.owner_id, reference
+            session, project, project.owner_id, reference, run
         )
     }
     old_head = project.current_snapshot_id
@@ -463,14 +878,14 @@ async def test_dispatch_rejects_new_head_after_queue_without_exposing_bundle(sou
 
 
 async def test_source_budget_is_actionable_and_secret_files_are_excluded(source_case):
-    service, session, project, _, _, reference, historical, _ = source_case
+    service, session, project, _, run, reference, historical, _ = source_case
     historical[".env"] = "PASSWORD=private-fixture-value"
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     assert ".env" not in bundle["files"]
     assert ".env" in bundle["excluded_paths"]
     historical["src/TooLarge.tsx"] = "x" * (service.MAX_SOURCE_BYTES + 1)
     with pytest.raises(ApiError):
-        await service.prepare_adaptation(session, project, project.owner_id, reference)
+        await service.prepare_adaptation(session, project, project.owner_id, reference, run)
 
 
 async def test_no_adaptation_keeps_ordinary_context_unchanged(source_case):
@@ -486,7 +901,7 @@ async def test_no_adaptation_keeps_ordinary_context_unchanged(source_case):
 
 async def test_one_click_adaptation_uses_durable_server_report_not_prompt(source_case):
     service, session, project, operation, run, reference, _, _ = source_case
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     run.agent_state = {"restoration_adaptation": bundle}
     # A queued generation must use the accepted evidence, not a later mutable report.
     operation.report = {**operation.report, "blockers": ["Different later report"]}
@@ -503,10 +918,10 @@ async def test_one_click_adaptation_uses_durable_server_report_not_prompt(source
 
 
 async def test_invalid_compatibility_report_blocks_adaptation_before_dispatch(source_case):
-    service, session, project, operation, _, reference, _, _ = source_case
+    service, session, project, operation, run, reference, _, _ = source_case
     operation.report = {"revision": 1, "mode": "exact", "database_state": "assumed_empty"}
     with pytest.raises(ApiError, match="совместимости"):
-        await service.prepare_adaptation(session, project, project.owner_id, reference)
+        await service.prepare_adaptation(session, project, project.owner_id, reference, run)
 
 
 async def test_reads_selected_git_commit_not_current_tree(source_case, monkeypatch, tmp_path):
@@ -527,7 +942,7 @@ async def test_reads_selected_git_commit_not_current_tree(source_case, monkeypat
     snapshot = await session.get(Snapshot, operation.source_snapshot_id)
     version = await session.get(ProjectVersion, operation.source_version_id)
     snapshot.commit_sha = version.commit_sha = operation.target_commit_sha = old
-    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference)
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
     assert bundle["files"] == historical
     run.agent_state = {"restoration_adaptation": bundle}
     # Dispatch/retry uses the accepted private bundle, never another Git read.
@@ -587,6 +1002,7 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
             project,
             project.owner_id,
             reference,
+            run,
         )
     }
     tree = ast.parse(await asyncio.to_thread(Path(lifecycle.__file__).read_text, encoding="utf-8"))
@@ -742,11 +1158,14 @@ async def test_disposable_db_worker_reads_private_accepted_bundle(
         status="queued_for_capacity",
         execution_backend="worker",
     )
+    db_session.add(run)
+    await db_session.flush()
     bundle = {
         "version": 1,
         "project_id": str(project.id),
         "owner_id": str(owner.id),
         "operation_id": str(uuid4()),
+        "adaptation_run_id": str(run.id),
         "source_version_id": str(uuid4()),
         "source_snapshot_id": str(uuid4()),
         "source_commit_sha": "b" * 40,
@@ -776,7 +1195,6 @@ async def test_disposable_db_worker_reads_private_accepted_bundle(
             selected_elements=[],
         ),
     )
-    db_session.add(run)
     await db_session.commit()
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     inputs = []

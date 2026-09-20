@@ -2,7 +2,7 @@ import { apiFetch } from "./client";
 import type { Snapshot } from "./types";
 
 export type RestoreState = "preparing" | "checking" | "ready" | "needs_changes"
-  | "applying" | "completed" | "cancelled" | "failed" | "reconciling";
+  | "adapting" | "applying" | "completed" | "cancelled" | "failed" | "reconciling";
 export interface RestoreInventoryObject {
   object: string;
   kind: string;

@@ -214,6 +214,7 @@ class PromptAcceptance:
                 self.project,
                 self.current_user.id,
                 self.payload.restoration_adaptation,
+                self.generation_run,
             )
             self.generation_run.agent_state = {
                 **(self.generation_run.agent_state or {}),

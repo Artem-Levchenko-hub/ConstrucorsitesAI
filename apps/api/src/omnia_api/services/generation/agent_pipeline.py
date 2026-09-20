@@ -63,6 +63,18 @@ from omnia_api.services.generation_runs import record_generation_product_failure
 _log = logging.getLogger("omnia_api.routers.messages")
 
 
+async def publish_finalized_candidate_once(
+    *,
+    activation_consumed: bool,
+    publish: Callable[[], Awaitable[None]],
+) -> bool:
+    """Do not create a second snapshot or settle quota after adaptive activation."""
+    if activation_consumed:
+        return False
+    await publish()
+    return True
+
+
 async def run_agent_generation(
     *,
     _consume_free_generation: Callable[[AsyncSession], Awaitable[None]],
@@ -458,6 +470,11 @@ async def run_agent_generation(
         plan=_prompt_plan,
         operations=_operations,
     )
+    from omnia_api.services.restorations import adaptation_activation_consumed
+
+    _activation_consumed_publication = await adaptation_activation_consumed(
+        factory, ids.run_id
+    )
     _source_change = validate_edit_source_change(
         requires_source_change=_is_edit or _max_has_generated_snapshot,
         baseline_files=baseline.files,
@@ -472,7 +489,7 @@ async def run_agent_generation(
         # requested edit happened. Do not let it authorize an identical tree.
         _max_finalization_proof = None
     _promotion_permit = None
-    if _max_finalization_proof is not None:
+    if _max_finalization_proof is not None and not _activation_consumed_publication:
         from omnia_api.services.promotion_permit import require_promotion_permit
 
         _promotion_permit = require_promotion_permit(
@@ -525,23 +542,29 @@ async def run_agent_generation(
             f"[ATTEST] universal release proof passed={_release_verdict.passed}",
             flush=True,
         )
-    await publish_agent_candidate(
-        _att_capture=_att_capture,
-        _attestation_stack=_attestation_stack,
-        _consume_free_generation=_consume_free_generation,
-        _max_finalization_proof=_max_finalization_proof,
-        _promotion_permit=_promotion_permit,
-        _orch_name=_stack.orchestrator_template,
-        accumulated=accumulated,
-        baseline=baseline,
-        factory=factory,
-        files=files,
-        ids=ids,
-        model_id=model_id,
-        progress=progress,
-        project_info=project_info,
-        prompt_text=prompt_text,
-        runtime=runtime,
+    async def _publish_candidate() -> None:
+        await publish_agent_candidate(
+            _att_capture=_att_capture,
+            _attestation_stack=_attestation_stack,
+            _consume_free_generation=_consume_free_generation,
+            _max_finalization_proof=_max_finalization_proof,
+            _promotion_permit=_promotion_permit,
+            _orch_name=_stack.orchestrator_template,
+            accumulated=accumulated,
+            baseline=baseline,
+            factory=factory,
+            files=files,
+            ids=ids,
+            model_id=model_id,
+            progress=progress,
+            project_info=project_info,
+            prompt_text=prompt_text,
+            runtime=runtime,
+        )
+
+    await publish_finalized_candidate_once(
+        activation_consumed=_activation_consumed_publication,
+        publish=_publish_candidate,
     )
 
     # Resumable partial build: the agent ran out of step budget without

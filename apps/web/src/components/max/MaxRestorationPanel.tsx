@@ -10,6 +10,7 @@ import type { RestorationAdaptationReference } from "@/lib/api/messages";
 const labels: Record<RestoreState, string> = {
   preparing: "Подготавливаем восстановление", checking: "Проверяем совместимость",
   ready: "Восстановление подготовлено", needs_changes: "Нужны изменения для совместимости",
+  adapting: "Адаптируем выбранную версию",
   applying: "Применяем в редакторе", completed: "Версия восстановлена в редакторе",
   cancelled: "Подготовка отменена", failed: "Восстановление не завершено",
   reconciling: "Уточняем результат",

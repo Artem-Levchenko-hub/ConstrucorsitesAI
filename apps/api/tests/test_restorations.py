@@ -1,6 +1,8 @@
 """Restoration contracts; DB cases require the disposable conftest database."""
 
 import base64
+import hashlib
+import json
 from uuid import uuid4
 
 import pytest
@@ -74,6 +76,85 @@ def test_prepare_does_not_move_head_and_activation_replays():
     assert repo.activate_restore_commit(project, planned, head, operation) == planned
     assert repo.activate_restore_commit(project, planned, head, operation) == planned
     assert repo.read_files(project, planned) == {"page.txt": "old", "empty.txt": ""}
+
+
+def test_prepare_adaptation_commit_is_exact_and_replays_after_lost_upload(monkeypatch):
+    project, operation = uuid4(), uuid4()
+    base = repo.init_from_files(
+        project,
+        {"keep.txt": "old", "delete.txt": "gone", "empty.txt": "was-not-empty"},
+        "seed",
+    )
+    binary_asset = b"\x89PNG\r\n\x1a\n\x00omnia-adaptation"
+    with repo._open_workdir(project, must_exist=True) as path:
+        import pygit2
+
+        git = pygit2.Repository(str(path))
+        parent = git[base]
+        index = pygit2.Index()
+        index.read_tree(parent.tree)
+        asset_id = git.create_blob(binary_asset)
+        index.add(pygit2.IndexEntry("public/logo.png", asset_id, 0o100644))
+        tree_id = index.write_tree(git)
+        signature = pygit2.Signature("Omnia", "dev@omnia.local", parent.commit_time, 0)
+        base = str(
+            git.create_commit(
+                "HEAD", signature, signature, "binary seed", tree_id, [parent.id]
+            )
+        )
+        repo._upload(project, path)
+    original_upload = repo._upload
+    attempts = 0
+
+    def flaky_upload(project_id, path):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("upload acknowledgement lost")
+        original_upload(project_id, path)
+
+    monkeypatch.setattr(repo, "_upload", flaky_upload)
+    exact = {"keep.txt": "adapted", "empty.txt": "", "new.txt": "new"}
+    with pytest.raises(OSError, match="acknowledgement"):
+        repo.prepare_restoration_adaptation_commit(project, exact, base, operation)
+    planned = repo.prepare_restoration_adaptation_commit(project, exact, base, operation)
+    assert planned == repo.prepare_restoration_adaptation_commit(
+        project, exact, base, operation
+    )
+    assert repo.read_files(project, planned) == exact
+    assert repo.read_file(project, planned, "public/logo.png") == binary_asset
+    manifest = [
+        {
+            "path": path,
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        for path, payload in {
+            **{path: content.encode() for path, content in exact.items()},
+            "public/logo.png": binary_asset,
+        }.items()
+    ]
+    manifest.sort(key=lambda row: row["path"])
+    expected_manifest_digest = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert (
+        repo.restoration_adaptation_source_manifest_digest(project, planned)
+        == expected_manifest_digest
+    )
+    with repo._open_workdir(project, must_exist=True) as path:
+        import pygit2
+
+        git = pygit2.Repository(str(path))
+        assert str(git.head.target) == base
+        adaptation_ref = git.references[
+            f"refs/omnia/restoration-adaptations/{operation.hex}"
+        ]
+        assert str(adaptation_ref.target) == planned
+    with pytest.raises(ValueError, match="identity"):
+        repo.prepare_restoration_adaptation_commit(
+            project, {**exact, "new.txt": "changed"}, base, operation
+        )
 
 
 def test_prepare_overlays_current_platform_files_and_removes_retired_paths():
@@ -195,6 +276,91 @@ def test_restoration_request_and_runtime_contracts_are_strict():
             can_apply=False,
             can_cancel=False,
         )
+
+
+def test_adaptive_cancel_projection_uses_controller_ponr_not_legacy_exact_flag():
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from omnia_api.services.restorations import public_operation
+
+    operation = SimpleNamespace(
+        id=uuid4(),
+        project_id=uuid4(),
+        source_version_id=uuid4(),
+        source_snapshot_id=uuid4(),
+        base_draft_snapshot_id=uuid4(),
+        state="applying",
+        phase="activation_intent",
+        updated_at=datetime.now(UTC),
+        revision=1,
+        candidate_id=None,
+        execution_policy="manual",
+        selected_branch="adaptive",
+        adaptation_run_id=uuid4(),
+        report=None,
+        source_binding=None,
+        source_binding_digest=None,
+        apply_digest=None,
+        runtime_result={"can_cancel": False},
+        activation_effects_admitted=False,
+        applied_version_id=None,
+        applied_snapshot_id=None,
+        error=None,
+    )
+
+    assert public_operation(operation).can_cancel is True
+    operation.activation_effects_admitted = True
+    assert public_operation(operation).can_cancel is False
+    operation.activation_effects_admitted = False
+    operation.phase = "activation_cancel"
+    assert public_operation(operation).can_cancel is False
+
+
+def test_activation_receipt_journal_accepts_phase_advance_and_rejects_regression():
+    from types import SimpleNamespace
+
+    from omnia_api.core.errors import ApiError
+    from omnia_api.schemas.restoration import (
+        RestorationAdaptationActivationStatus,
+        canonical_activation_digest,
+    )
+    from omnia_api.services.restorations import _validate_activation_receipt_progression
+    from tests.test_orchestrator_client import _activation_contract
+
+    _, _command, activated_raw = _activation_contract()
+
+    def status(state: str) -> RestorationAdaptationActivationStatus:
+        raw = dict(activated_raw)
+        raw["state"] = state
+        raw["effects_admitted"] = state in {"target_writers_admitted", "activated"}
+        raw["health_digest"] = "9" * 64 if state == "activated" else None
+        offer = raw["offer"]
+        receipt = {
+            "state": state,
+            "effects_admitted": raw["effects_admitted"],
+            "operation_id": offer["operation_id"],
+            "generation_run_id": offer["generation_run_id"],
+            "project_id": offer["project_id"],
+            "owner_id": offer["owner_id"],
+            "activation_id": offer["activation_id"],
+            "activation_digest": raw["activation_digest"],
+            "proof_digest": offer["proof_digest"],
+            "fencing_epoch": raw["fencing_epoch"],
+            "source_volume_identity": raw["source_volume_identity"],
+            "target_volume_identity": raw["target_volume_identity"],
+            "health_digest": raw["health_digest"],
+        }
+        raw["receipt_digest"] = canonical_activation_digest(receipt)
+        return RestorationAdaptationActivationStatus.model_validate(raw)
+
+    prepared = status("target_prepared")
+    activated = status("activated")
+    operation = SimpleNamespace(activation_receipt=prepared.model_dump(mode="json"))
+    _validate_activation_receipt_progression(operation, activated)
+    operation.activation_receipt = activated.model_dump(mode="json")
+    with pytest.raises(ApiError, match="regressed"):
+        _validate_activation_receipt_progression(operation, prepared)
 
 
 def test_restore_request_policy_is_strict_and_changes_the_durable_request_digest():

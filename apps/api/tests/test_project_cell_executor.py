@@ -353,10 +353,14 @@ class _ExecutorHarness:
     project_slug: str
     run_id: UUID
     write_calls: list[dict[str, object]]
+    write_workspaces: list[UUID]
     exec_calls: list[dict[str, object]]
     hot_reload_calls: list[dict[str, str]]
     hot_reload_empty_files: list[tuple[str, ...]]
     legacy_actions: list[str]
+    adaptation_prepare_calls: list[dict[str, object]]
+    adaptation_proof_calls: list[dict[str, object]]
+    adaptation_cleanup_calls: list[dict[str, object]]
 
 
 async def _prepare_executor(
@@ -377,7 +381,16 @@ async def _prepare_executor(
     project = await _new_project(db_session, owner)
     run = await _new_run(db_session, project, owner)
     if restoration_adaptation:
-        run.agent_state = {"restoration_adaptation": {"source_commit_sha": "a" * 40}}
+        run.agent_state = {
+            "restoration_adaptation": {
+                "operation_id": str(uuid4()),
+                "adaptation_run_id": str(run.id),
+                "source_snapshot_id": str(uuid4()),
+                "base_draft_snapshot_id": str(uuid4()),
+                "source_commit_sha": "a" * 40,
+                "sha256": "b" * 64,
+            }
+        }
     await db_session.commit()
     expected_project_id = project.id
     expected_project_slug = project.slug
@@ -390,7 +403,11 @@ async def _prepare_executor(
     hot_reload_calls: list[dict[str, str]] = []
     hot_reload_empty_files: list[tuple[str, ...]] = []
     write_calls: list[dict[str, object]] = []
+    write_workspaces: list[UUID] = []
     legacy_actions: list[str] = []
+    adaptation_prepare_calls: list[dict[str, object]] = []
+    adaptation_proof_calls: list[dict[str, object]] = []
+    adaptation_cleanup_calls: list[dict[str, object]] = []
     revision_number = 1
 
     def _current_revision() -> str:
@@ -455,6 +472,85 @@ async def _prepare_executor(
             capabilities=capabilities or {},
         )
 
+    async def fake_prepare_adaptation(workspace_id: UUID, **kwargs):
+        adaptation_prepare_calls.append({"workspace_id": workspace_id, **kwargs})
+        return project_cell_executor.RestorationAdaptationWorkspace(
+            source_workspace_id=workspace_id,
+            candidate_workspace_id=UUID(int=901),
+            operation_id=kwargs["operation_id"],
+            project_id=expected_project_id,
+            owner_id=owner.id,
+            generation_run_id=expected_run_id,
+            candidate_fencing_epoch=1,
+            source_database_digest="1" * 64,
+            proof_digest="2" * 64,
+            capabilities={
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+            },
+        )
+
+    async def fake_cleanup_adaptation(receipt):
+        adaptation_cleanup_calls.append({"receipt": receipt})
+
+    async def fake_prove_adaptation(receipt, **kwargs):
+        adaptation_proof_calls.append({"receipt": receipt, **kwargs})
+        return project_cell_executor.RestorationAdaptationProof(
+            state="proof_ready",
+            reason_code=None,
+            source_workspace_id=receipt.source_workspace_id,
+            candidate_workspace_id=receipt.candidate_workspace_id,
+            operation_id=receipt.operation_id,
+            project_id=receipt.project_id,
+            owner_id=receipt.owner_id,
+            generation_run_id=receipt.generation_run_id,
+            candidate_fencing_epoch=receipt.candidate_fencing_epoch,
+            proof_attempt=kwargs["proof_attempt"],
+            source_workspace_revision=adaptation_prepare_calls[0][
+                "source_workspace_revision"
+            ],
+            candidate_workspace_revision=kwargs["candidate_workspace_revision"],
+            candidate_proof_key=kwargs["candidate_proof_key"],
+            candidate_artifact_digest=kwargs["candidate_artifact_digest"],
+            source_database_digest=receipt.source_database_digest,
+            candidate_database_digest=receipt.source_database_digest,
+            source_schema_digest="3" * 64,
+            candidate_schema_digest="3" * 64,
+            source_business_digest="4" * 64,
+            candidate_business_digest="4" * 64,
+            source_technical_digest="5" * 64,
+            candidate_technical_digest="5" * 64,
+            probe_contract_digest="7" * 64,
+            probe_rehearsal_digest="8" * 64,
+            probe_rehearsal_database_digest="9" * 64,
+            candidate_source_manifest_digest="a" * 64,
+            proof_digest="6" * 64,
+            capabilities={
+                **receipt.capabilities,
+                "restoration_adaptation_proof_v1": True,
+            },
+        )
+
+    async def fake_identity(
+        workspace_id: UUID,
+        *,
+        generation_run_id: UUID,
+        fencing_epoch: int,
+    ) -> ProjectCellWorkspaceIdentity:
+        assert generation_run_id == expected_run_id
+        assert fencing_epoch == 1
+        if restoration_adaptation:
+            assert workspace_id == UUID(int=901)
+        return ProjectCellWorkspaceIdentity(
+            workspace_revision=_current_revision(),
+            dependency_digest="2" * 64,
+            schema_data_digest="3" * 64,
+            cell_manifest_digest="4" * 64,
+            environment_digest="5" * 64,
+            build_config_digest="6" * 64,
+        )
+
     async def fake_write_files(
         workspace_id: UUID,
         *,
@@ -468,6 +564,7 @@ async def _prepare_executor(
         assert generation_run_id == expected_run_id
         assert fencing_epoch == 1
         assert expected_revision == _current_revision()
+        write_workspaces.append(workspace_id)
         write_calls.append(
             {
                 "generation_run_id": generation_run_id,
@@ -619,6 +716,22 @@ async def _prepare_executor(
     )
     monkeypatch.setattr(
         project_cell_executor,
+        "project_cell_prepare_restoration_adaptation",
+        fake_prepare_adaptation,
+    )
+    monkeypatch.setattr(
+        project_cell_executor,
+        "project_cell_cleanup_restoration_adaptation",
+        fake_cleanup_adaptation,
+    )
+    monkeypatch.setattr(
+        project_cell_executor,
+        "project_cell_prove_restoration_adaptation",
+        fake_prove_adaptation,
+    )
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_identity", fake_identity)
+    monkeypatch.setattr(
+        project_cell_executor,
         "project_cell_agent_write_files",
         fake_write_files,
     )
@@ -660,10 +773,14 @@ async def _prepare_executor(
         project_slug=project_slug,
         run_id=run_id,
         write_calls=write_calls,
+        write_workspaces=write_workspaces,
         exec_calls=exec_calls,
         hot_reload_calls=hot_reload_calls,
         hot_reload_empty_files=hot_reload_empty_files,
         legacy_actions=legacy_actions,
+        adaptation_prepare_calls=adaptation_prepare_calls,
+        adaptation_proof_calls=adaptation_proof_calls,
+        adaptation_cleanup_calls=adaptation_cleanup_calls,
     )
 
 
@@ -899,26 +1016,25 @@ async def test_concurrent_pending_dispatch_tokens_have_exactly_one_winner(
     assert persisted.agent_state["capacity_admitted_dispatch_token"] == str(winner)
 
 
-async def test_adaptation_refuses_ordinary_project_database_before_agent_execution(
+async def test_adaptation_replaces_ordinary_project_database_before_agent_execution(
     monkeypatch,
     db_session,
     test_engine,
 ):
-    with pytest.raises(
-        project_cell_executor.ProjectCellExecutorUnavailable,
-        match="изолированная копия",
-    ):
-        await _prepare_executor(
-            monkeypatch,
-            db_session,
-            test_engine,
-            restoration_adaptation=True,
-            snapshot_files={".omnia/cell.json": '{"version":1}'},
-            capabilities={"portable_machine": True, "database_admin": "full"},
-        )
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        restoration_adaptation=True,
+        snapshot_files={".omnia/cell.json": '{"version":1}'},
+        capabilities={"portable_machine": True, "database_admin": "full"},
+    )
+    assert len(harness.adaptation_prepare_calls) == 1
+    assert harness.handle.capabilities["database_admin"] == "isolated_copy"
+    await harness.handle.release()
 
 
-async def test_adaptation_accepts_controller_attested_copy_and_proof_environment(
+async def test_adaptation_accepts_controller_attested_isolated_copy(
     monkeypatch,
     db_session,
     test_engine,
@@ -933,12 +1049,91 @@ async def test_adaptation_accepts_controller_attested_copy_and_proof_environment
             "portable_machine": True,
             "database_admin": "isolated_copy",
             "restoration_adaptation_database_copy_v1": True,
-            "restoration_adaptation_proof_v1": True,
         },
     )
     assert harness.handle.capabilities["database_admin"] == "isolated_copy"
+    assert len(harness.adaptation_prepare_calls) == 1
     assert harness.legacy_actions == []
     assert harness.exec_calls == []
+    await harness.handle.release()
+    assert len(harness.adaptation_cleanup_calls) == 1
+
+
+async def test_adaptation_exposes_candidate_identity_and_post_agent_proof(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        restoration_adaptation=True,
+        snapshot_files={".omnia/cell.json": '{"version":1}'},
+        capabilities={"portable_machine": True, "database_admin": "full"},
+    )
+
+    candidate_workspace_id = UUID(int=901)
+    assert harness.handle.workspace_id == candidate_workspace_id
+    assert harness.handle.control_workspace_id == harness.workspace_id
+    assert harness.handle.restoration_adaptation_workspace is not None
+    assert harness.handle.prove_restoration_adaptation is not None
+
+    identity = await harness.handle.current_identity()  # type: ignore[misc]
+    assert identity.workspace_id == candidate_workspace_id
+    proof = await harness.handle.prove_restoration_adaptation(identity, "a" * 64, 1)
+
+    assert proof.state == "proof_ready"
+    assert proof.candidate_workspace_id == candidate_workspace_id
+    assert proof.candidate_proof_key == identity.proof_key
+    assert harness.handle.capabilities["restoration_adaptation_proof_v1"] is True
+    assert harness.adaptation_proof_calls == [
+        {
+            "receipt": harness.handle.restoration_adaptation_workspace,
+            "candidate_workspace_revision": identity.workspace_revision,
+            "candidate_proof_key": identity.proof_key,
+            "candidate_artifact_digest": "a" * 64,
+            "proof_attempt": 1,
+        }
+    ]
+    await harness.handle.release()
+    assert harness.adaptation_cleanup_calls == []
+
+
+async def test_failed_adaptation_candidate_diff_is_cleaned_without_source_write(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        restoration_adaptation=True,
+        snapshot_files={
+            ".omnia/cell.json": '{"version":1}',
+            "src/current.ts": "export const current = true;",
+        },
+        capabilities={"portable_machine": True, "database_admin": "full"},
+    )
+
+    result = await harness.handle.execute(
+        Action(
+            "write_file",
+            {
+                "path": "src/candidate-only.ts",
+                "content": "export const candidate = true;",
+            },
+            "candidate edit before a failed or cancelled finalization",
+        )
+    )
+    assert result["ok"] is True
+    assert harness.write_workspaces == [UUID(int=901)]
+
+    await harness.handle.release()
+
+    assert harness.workspace_id not in harness.write_workspaces
+    assert len(harness.adaptation_cleanup_calls) == 1
 
 
 @pytest.mark.parametrize(

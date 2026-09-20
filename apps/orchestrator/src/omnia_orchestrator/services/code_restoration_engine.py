@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import socket
@@ -90,6 +91,24 @@ from omnia_orchestrator.services.versioning.inventory import observe_inventory
 
 class PreparationNeedsChanges(ValueError):
     pass
+
+
+def _write_activation_journal(path: Path, payload: dict[str, Any]) -> None:
+    """Persist a phase before its external effect, including the rename."""
+
+    write_controller_json(path, payload)
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 _DRIZZLE_CONFIGS = {
@@ -573,6 +592,349 @@ class CodeRestorationEngine:
         )
 
         return _require_docker_resource_manager(_workspace_provider(workspace_id))
+
+    def activation_manager(self, workspace_id: UUID) -> Any:
+        """Resolve the real Project Cell manager for a bound activation adapter."""
+
+        return self._manager(workspace_id)
+
+    async def activation_start_code_only_target(
+        self,
+        manager: Any,
+        state: Any,
+        *,
+        code_volume: str,
+        database_volume: str,
+        epoch: int,
+    ) -> None:
+        """Start one code-only target while preserving the live DB volume."""
+
+        from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
+
+        _machine, backend = manager.machine_runtime.parts(state)
+        if backend.project_postgres_volume != database_volume:
+            raise CellIdentityConflict("activation live database volume changed")
+        files = await _read_agent_workspace_files(manager, code_volume)
+        manifest = validate_supported_runtime(files)
+        manifest_payload = manifest.model_dump(mode="json")
+        target_application_running = await self._activation_application_running(
+            backend,
+            code_volume=code_volume,
+            database_volume=database_volume,
+            epoch=epoch,
+        )
+        if target_application_running:
+            if await self._running_matches(
+                manager,
+                state,
+                backend,
+                code_volume,
+                epoch,
+                manifest_payload,
+                database_volume,
+            ):
+                # A crash may happen after opening the serving boundary but
+                # before the controller fence is persisted. Completing the
+                # same deterministic operation is required before success.
+                await self._complete_fence(manager, state, epoch, code_volume)
+                self.activation_assert_target_controller(
+                    manager,
+                    manager.state_store.load(state.workspace_id),
+                    epoch=epoch,
+                    generation_run_id=state.active_generation_run_id,
+                )
+                return
+            if await self._activation_services_ready(backend, manifest, epoch):
+                # The app writers are already live. Reconcile only the trusted
+                # boundary; clearing metadata or starting services again could
+                # admit duplicate writers.
+                await machine_effect(
+                    manager.machine_runtime._start_boundary,
+                    state,
+                    manifest,
+                    backend,
+                    epoch,
+                )
+                await self._complete_fence(manager, state, epoch, code_volume)
+                current = manager.state_store.load(state.workspace_id)
+                self.activation_assert_target_controller(
+                    manager,
+                    current,
+                    epoch=epoch,
+                    generation_run_id=state.active_generation_run_id,
+                )
+                if await self._running_matches(
+                    manager,
+                    current,
+                    backend,
+                    code_volume,
+                    epoch,
+                    manifest_payload,
+                    database_volume,
+                ):
+                    return
+                raise CellResourceError("activation target pair is not running")
+            # A partial bound app is ambiguous. Retire only that application
+            # container; the live PostgreSQL container and volume stay intact.
+            await machine_effect(backend.remove_machine)
+        await self._activate_code(
+            manager,
+            state,
+            backend,
+            {
+                "manifest": manifest.model_dump(mode="json"),
+                "base_image": backend.base_image,
+                "database_strategy": "preserve_current",
+                "target_database_volume": database_volume,
+            },
+            code_volume,
+            epoch,
+            # The outer adaptation journal has already fsynced its PONR before
+            # it invokes this public primitive.
+            before_writers=lambda: None,
+        )
+        current = manager.state_store.load(state.workspace_id)
+        if current is None:
+            raise CellIdentityConflict("activation target state disappeared")
+        self.activation_assert_target_controller(
+            manager,
+            current,
+            epoch=epoch,
+            generation_run_id=state.active_generation_run_id,
+        )
+        _machine, activated = manager.machine_runtime.parts(current)
+        if not await self._running_matches(
+            manager,
+            current,
+            activated,
+            code_volume,
+            epoch,
+            manifest.model_dump(mode="json"),
+            database_volume,
+        ):
+            raise CellResourceError("activation target pair is not running")
+
+    async def activation_stop_source_application(
+        self,
+        manager: Any,
+        state: Any,
+        *,
+        code_volume: str,
+        database_volume: str,
+        epoch: int,
+    ) -> None:
+        """Retire only the bound source app while PostgreSQL remains live."""
+
+        _machine, backend = manager.machine_runtime.parts(state)
+        if (
+            backend.workspace_volume != code_volume
+            or backend.project_postgres_volume != database_volume
+        ):
+            raise CellIdentityConflict("activation source pair changed")
+        container = backend._container()
+        if container is None:
+            return
+        labels = container.attrs.get("Config", {}).get("Labels") or container.labels or {}
+        if labels.get("omnia.fencing_epoch") != str(epoch):
+            raise CellIdentityConflict("activation source application fence changed")
+        await machine_effect(backend.remove_machine)
+        if backend._container() is not None:
+            raise CellResourceError("activation source application did not stop")
+
+    @staticmethod
+    def activation_assert_target_controller(
+        manager: Any,
+        state: Any,
+        *,
+        epoch: int,
+        generation_run_id: UUID | None,
+        allow_running: bool = False,
+    ) -> None:
+        """Require the durable deterministic controller operation for a target."""
+
+        if state is None:
+            raise CellIdentityConflict("activation target controller state disappeared")
+        mutation = CodeRestorationEngine._activation_mutation(state.workspace_id, epoch)
+        operation = state.operation(mutation.operation_id)
+        if (
+            state.fencing_epoch != epoch
+            or state.last_operation_id != mutation.operation_id
+            or state.active_generation_run_id != generation_run_id
+            or operation is None
+            or operation.kind != "code_restore"
+            or operation.status not in (
+                {"running", "completed"} if allow_running else {"completed"}
+            )
+            or operation.fencing_epoch != epoch
+            or operation.request_digest != mutation.request_digest
+            or operation.generation_run_id != generation_run_id
+        ):
+            raise CellIdentityConflict("activation target controller fence is incomplete")
+
+    async def activation_restart_source(
+        self,
+        manager: Any,
+        state: Any,
+        *,
+        code_volume: str,
+        database_volume: str,
+    ) -> None:
+        """Idempotently restart the unchanged pre-admission source pair."""
+
+        machine, backend = manager.machine_runtime.parts(state)
+        saved = machine.state()
+        manifest = MachineManifest.model_validate(saved["manifest"])
+        epoch = saved.get("epoch")
+        if (
+            type(epoch) is not int
+            or epoch <= 0
+            or backend.workspace_volume != code_volume
+            or backend.project_postgres_volume != database_volume
+        ):
+            raise CellIdentityConflict("activation source pair changed")
+        if await self._running_matches(
+            manager,
+            state,
+            backend,
+            code_volume,
+            epoch,
+            manifest.model_dump(mode="json"),
+            database_volume,
+        ):
+            return
+        if await self._activation_application_running(
+            backend,
+            code_volume=code_volume,
+            database_volume=database_volume,
+            epoch=epoch,
+        ):
+            if await self._activation_services_ready(backend, manifest, epoch):
+                await machine_effect(
+                    manager.machine_runtime._start_boundary,
+                    state,
+                    manifest,
+                    backend,
+                    epoch,
+                )
+                if await self._running_matches(
+                    manager,
+                    state,
+                    backend,
+                    code_volume,
+                    epoch,
+                    manifest.model_dump(mode="json"),
+                    database_volume,
+                ):
+                    return
+                raise CellResourceError("activation source pair is not running")
+            await machine_effect(backend.remove_machine)
+        await machine_effect(backend.ensure, manifest, epoch)
+        await self._start(backend, manifest, epoch)
+        await machine_effect(
+            manager.machine_runtime._start_boundary,
+            state,
+            manifest,
+            backend,
+            epoch,
+        )
+        if not await self._running_matches(
+            manager,
+            state,
+            backend,
+            code_volume,
+            epoch,
+            manifest.model_dump(mode="json"),
+            database_volume,
+        ):
+            raise CellResourceError("activation source pair is not running")
+
+    async def activation_running_matches(
+        self,
+        manager: Any,
+        state: Any,
+        backend: Any,
+        *,
+        code_volume: str,
+        database_volume: str,
+        epoch: int,
+        manifest: dict[str, Any],
+    ) -> bool:
+        """Confirm the exact running code/DB/fence pair."""
+
+        return await self._running_matches(
+            manager,
+            state,
+            backend,
+            code_volume,
+            epoch,
+            manifest,
+            database_volume,
+        )
+
+    @staticmethod
+    async def _activation_application_running(
+        backend: Any,
+        *,
+        code_volume: str,
+        database_volume: str,
+        epoch: int,
+    ) -> bool:
+        if (
+            backend.workspace_volume != code_volume
+            or backend.project_postgres_volume != database_volume
+        ):
+            return False
+        container = backend._container()
+        if container is None:
+            return False
+        await machine_effect(container.reload)
+        labels = container.attrs.get("Config", {}).get("Labels") or container.labels or {}
+        mounts = container.attrs.get("Mounts") or []
+        workspace_mount = next(
+            (
+                item
+                for item in mounts
+                if item.get("Destination") == "/workspace"
+            ),
+            None,
+        )
+        mounted_volume = (
+            workspace_mount.get("Name") or workspace_mount.get("Source")
+            if isinstance(workspace_mount, dict)
+            else None
+        )
+        if (
+            labels.get("omnia.fencing_epoch") != str(epoch)
+            or mounted_volume != code_volume
+        ):
+            raise CellIdentityConflict("activation target application identity changed")
+        return bool(container.status == "running")
+
+    @staticmethod
+    async def _activation_services_ready(
+        backend: Any,
+        manifest: MachineManifest,
+        epoch: int,
+    ) -> bool:
+        for name in manifest.service_order():
+            service = next(item for item in manifest.services if item.name == name)
+            result = await machine_effect(
+                backend.service_status,
+                service,
+                epoch,
+                include_logs=False,
+            )
+            if result.get("state") != "running" or result.get("ready") is not True:
+                return False
+        return True
+
+    @staticmethod
+    def _activation_mutation(workspace_id: UUID, epoch: int) -> LifecycleMutation:
+        return LifecycleMutation(
+            uuid5(workspace_id, "code-activation-" + str(epoch)),
+            epoch,
+            hashlib.sha256((str(workspace_id) + ":restore:" + str(epoch)).encode()).hexdigest(),
+        )
 
     def _directory(self, operation_id: UUID) -> Path:
         path = self.root / str(operation_id)
@@ -1845,7 +2207,10 @@ for path,digest,mode in json.load(sys.stdin):
                 "fencing_epoch": request.fencing_epoch,
                 "binding_digest": request.binding_digest,
                 "retained_source_fencing_epoch": request.expected_fencing_epoch,
-                "effects_admitted": True,
+                # Preparation and writer shutdown remain reversible. The PONR
+                # is fsynced by admit_target_writers immediately before the
+                # first target start for every database strategy.
+                "effects_admitted": False,
                 "old": old,
                 "volume": volume,
                 "database_strategy": database_strategy,
@@ -1864,7 +2229,7 @@ for path,digest,mode in json.load(sys.stdin):
                 ),
                 "state": "intent",
             }
-            write_controller_json(directory / "activation.json", intent)
+            _write_activation_journal(directory / "activation.json", intent)
             try:
                 current = await _read_agent_workspace_files(manager, backend.workspace_volume)
                 if _workspace_revision(current) != prepared["workspace_revision"]:
@@ -1958,7 +2323,7 @@ for path,digest,mode in json.load(sys.stdin):
                         artifact_digest=prepared["database_digest"],
                     )
                     intent["state"] = "writers_stopping"
-                    write_controller_json(directory / "activation.json", intent)
+                    _write_activation_journal(directory / "activation.json", intent)
                     final_witness = await self._quiesce_empty_source(backend, request, prepared)
                     intent["final_witness"] = final_witness.model_dump(mode="json")
                     intent["final_witness_digest"] = final_witness.digest()
@@ -1974,7 +2339,7 @@ for path,digest,mode in json.load(sys.stdin):
                         }
                     )
                 intent["state"] = "switching"
-                write_controller_json(directory / "activation.json", intent)
+                _write_activation_journal(directory / "activation.json", intent)
                 # Writers stop only after all checks and code import have succeeded.
                 await machine_effect(backend.remove)
                 activation_prepared = {
@@ -1984,7 +2349,8 @@ for path,digest,mode in json.load(sys.stdin):
 
                 def admit_target_writers() -> None:
                     intent["state"] = "target_writers_admitted"
-                    write_controller_json(directory / "activation.json", intent)
+                    intent["effects_admitted"] = True
+                    _write_activation_journal(directory / "activation.json", intent)
 
                 await self._activate_code(
                     manager,
@@ -1993,11 +2359,7 @@ for path,digest,mode in json.load(sys.stdin):
                     activation_prepared,
                     volume,
                     request.fencing_epoch,
-                    before_writers=(
-                        admit_target_writers
-                        if database_strategy == "replace_verified_empty"
-                        else None
-                    ),
+                    before_writers=admit_target_writers,
                 )
                 intent["source_revision"] = await self._complete_activation(
                     manager, state, backend, request, intent
@@ -2008,12 +2370,12 @@ for path,digest,mode in json.load(sys.stdin):
                 error_path.chmod(0o600)
                 if intent.get("state") in {"target_writers_admitted", "target_recovery"}:
                     intent["state"] = "target_recovery"
-                    write_controller_json(directory / "activation.json", intent)
+                    _write_activation_journal(directory / "activation.json", intent)
                     raise CellResourceError(
                         "target restoration requires forward recovery"
                     ) from error
                 intent["state"] = "reverting"
-                write_controller_json(directory / "activation.json", intent)
+                _write_activation_journal(directory / "activation.json", intent)
                 await self._recover_old(manager, state, backend, old, request.fencing_epoch)
                 await self._record_reverted_pair(
                     manager,
@@ -2028,7 +2390,7 @@ for path,digest,mode in json.load(sys.stdin):
                 self._discard_code(directory)
                 return self._observed(intent, applied=False)
             intent["state"] = "active"
-            write_controller_json(directory / "activation.json", intent)
+            _write_activation_journal(directory / "activation.json", intent)
             self._discard_code(directory)
             return self._observed(intent)
 
@@ -2145,7 +2507,7 @@ for path,digest,mode in json.load(sys.stdin):
         prepared: dict[str, Any],
         volume: str,
         epoch: int,
-        before_writers: Callable[[], None] | None = None,
+        before_writers: Callable[[], None],
     ) -> None:
         adapter = manager.machine_runtime
         manifest = MachineManifest.model_validate(prepared["manifest"])
@@ -2179,22 +2541,37 @@ for path,digest,mode in json.load(sys.stdin):
         )
         write_controller_json(machine.path, saved)
         # The live database volume is reused as-is; only the code volume changes.
+        # backend.ensure starts the target machine container, so the durable
+        # PONR must precede it as well as the later service writer starts.
+        before_writers()
         await machine_effect(backend.ensure, manifest, epoch)
-        if before_writers is not None:
-            before_writers()
         await self._start(backend, manifest, epoch)
         await machine_effect(adapter._start_boundary, state, manifest, backend, epoch)
         await self._complete_fence(manager, state, epoch, volume)
 
     @staticmethod
     async def _complete_fence(manager: Any, state: Any, epoch: int, volume: str) -> None:
-        mutation = LifecycleMutation(
-            uuid5(state.workspace_id, "code-activation-" + str(epoch)),
-            epoch,
-            hashlib.sha256(
-                (str(state.workspace_id) + ":restore:" + str(epoch)).encode()
-            ).hexdigest(),
-        )
+        mutation = CodeRestorationEngine._activation_mutation(state.workspace_id, epoch)
+        current = manager.state_store.load(state.workspace_id)
+        if (
+            current is None
+            or current.project_id != state.project_id
+            or current.owner_id != state.owner_id
+            or current.active_generation_run_id != state.active_generation_run_id
+            or current.fencing_epoch not in {state.fencing_epoch, epoch}
+        ):
+            raise CellIdentityConflict("activation controller ownership changed")
+        if current.fencing_epoch == epoch:
+            operation = current.operation(mutation.operation_id)
+            if (
+                current.last_operation_id != mutation.operation_id
+                or operation is None
+                or operation.kind != "code_restore"
+                or operation.status not in {"running", "completed"}
+                or operation.fencing_epoch != epoch
+                or operation.request_digest != mutation.request_digest
+            ):
+                raise CellIdentityConflict("activation controller operation changed")
         capacity_lock = manager.capacity_lock or manager.operation_lock
         async with capacity_lock.hold_named("host-capacity-admission"):
             manager._capacity_reservation_store().rebind(state.workspace_id, mutation)
@@ -2203,6 +2580,7 @@ for path,digest,mode in json.load(sys.stdin):
             project_id=state.project_id,
             owner_id=state.owner_id,
             profile_version=state.profile_version,
+            generation_run_id=state.active_generation_run_id,
         )
         manager.state_store.begin(
             spec,
@@ -2213,6 +2591,13 @@ for path,digest,mode in json.load(sys.stdin):
         )
         manager.state_store.complete(
             state.workspace_id, mutation, phase="completed", bundle_state="resources_ready"
+        )
+        completed = manager.state_store.load(state.workspace_id)
+        CodeRestorationEngine.activation_assert_target_controller(
+            manager,
+            completed,
+            epoch=epoch,
+            generation_run_id=state.active_generation_run_id,
         )
 
     async def _recover_old(
@@ -2277,7 +2662,7 @@ for path,digest,mode in json.load(sys.stdin):
             database_artifact_digest=database_digest,
         )
         intent.pop("cleanup_pending", None)
-        write_controller_json(path, intent)
+        _write_activation_journal(path, intent)
 
     async def _record_reverted_pair(
         self,
@@ -2292,7 +2677,7 @@ for path,digest,mode in json.load(sys.stdin):
     ) -> None:
         intent["state"] = "reverted"
         if intent.get("database_strategy") != "replace_verified_empty":
-            write_controller_json(path, intent)
+            _write_activation_journal(path, intent)
             return
         if not await self._running_matches(
             manager,
@@ -2305,7 +2690,7 @@ for path,digest,mode in json.load(sys.stdin):
         ):
             raise CellResourceError("reverted restoration source pair is not confirmed")
         intent["cleanup_pending"] = True
-        write_controller_json(path, intent)
+        _write_activation_journal(path, intent)
         await self._cleanup_reverted_pair(backend, request, prepared, intent, path)
 
     async def observe(
@@ -2356,9 +2741,7 @@ for path,digest,mode in json.load(sys.stdin):
         ):
             raise CellIdentityConflict("activation owner, fence or activity changed")
         _, backend = manager.machine_runtime.parts(state)
-        target_forward_only = intent.get(
-            "database_strategy"
-        ) == "replace_verified_empty" and intent.get("state") in {
+        target_forward_only = intent.get("state") in {
             "target_writers_admitted",
             "target_recovery",
             "active",
@@ -2383,14 +2766,14 @@ for path,digest,mode in json.load(sys.stdin):
                 manager, state, backend, request, intent
             )
             intent["state"] = "active"
-            write_controller_json(path, intent)
+            _write_activation_journal(path, intent)
             self._discard_code(path.parent)
             return self._observed(intent)
         if target_forward_only:
             # Once target writers were admitted, target rows may exist. Recovery
             # may repair/restart only the bound target pair; old DB is forbidden.
             intent["state"] = "target_recovery"
-            write_controller_json(path, intent)
+            _write_activation_journal(path, intent)
             activation_prepared = {
                 **prepared,
                 "target_database_volume": intent["database_volume"],
@@ -2409,7 +2792,8 @@ for path,digest,mode in json.load(sys.stdin):
 
             def readmit_target_writers() -> None:
                 intent["state"] = "target_writers_admitted"
-                write_controller_json(path, intent)
+                intent["effects_admitted"] = True
+                _write_activation_journal(path, intent)
 
             await self._activate_code(
                 manager,
@@ -2424,7 +2808,7 @@ for path,digest,mode in json.load(sys.stdin):
                 manager, state, backend, request, intent
             )
             intent["state"] = "active"
-            write_controller_json(path, intent)
+            _write_activation_journal(path, intent)
             self._discard_code(path.parent)
             return self._observed(intent)
         old = intent["old"]
@@ -2442,7 +2826,7 @@ for path,digest,mode in json.load(sys.stdin):
             self._discard_code(path.parent)
             return self._observed(intent, applied=False)
         intent["state"] = "reverting"
-        write_controller_json(path, intent)
+        _write_activation_journal(path, intent)
         await self._recover_old(manager, state, backend, old, request.fencing_epoch)
         await self._record_reverted_pair(
             manager,
@@ -2560,7 +2944,7 @@ for path,digest,mode in json.load(sys.stdin):
                 binding.live_identity_digest()
             ):
                 raise CellIdentityConflict("unrecorded activation source binding changed")
-        write_controller_json(
+        _write_activation_journal(
             path,
             {
                 "operation_id": str(request.operation_id),
