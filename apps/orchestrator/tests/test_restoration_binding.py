@@ -75,6 +75,40 @@ def test_live_identity_rejects_recreated_resource_with_same_name():
     assert baseline.live_identity_digest() != recreated.live_identity_digest()
 
 
+def test_database_oid_query_casts_pg_oid_to_canonical_json_number(monkeypatch):
+    import json
+
+    from omnia_orchestrator.services import restoration_binding as module
+
+    backend = SimpleNamespace(
+        project_database_env=lambda: {"PGDATABASE": "app", "PGUSER": "app"}
+    )
+
+    def execute(_backend, sql, **_kwargs):
+        # PostgreSQL's oid type is emitted as a JSON string in production unless
+        # the query first converts it to an ordinary numeric type.
+        database_oid = 42 if "d.oid::bigint" in sql else "42"
+        return json.dumps(
+            {
+                "database_name": "app",
+                "database_oid": database_oid,
+                "role_name": "app",
+                "role_login": True,
+                "role_superuser": False,
+                "role_create_db": False,
+                "role_create_role": False,
+                "database_acl": "",
+                "system_identifier": "7612345678901234567",
+            }
+        ).encode()
+
+    monkeypatch.setattr(module, "admin_sql", execute)
+
+    observed = module._database_observation(backend)
+
+    assert observed["database_oid"] == 42
+
+
 def test_inventory_partitions_business_and_technical_rows():
     from omnia_orchestrator.services.restoration_binding import inventory_partition_digests
     from omnia_orchestrator.services.versioning.contracts import InventoryReport

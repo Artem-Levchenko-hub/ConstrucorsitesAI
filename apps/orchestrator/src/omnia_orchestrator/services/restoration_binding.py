@@ -151,7 +151,7 @@ def _database_observation(backend: Any) -> dict[str, Any]:
     sql = f"""
 SELECT json_build_object(
   'database_name', d.datname,
-  'database_oid', d.oid,
+  'database_oid', d.oid::bigint,
   'role_name', r.rolname,
   'role_login', r.rolcanlogin,
   'role_superuser', r.rolsuper,
