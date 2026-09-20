@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import asdict, is_dataclass
 from typing import Any, cast
+from uuid import UUID
 
 from omnia_orchestrator.core.cell_resources import CellIdentityConflict
 from omnia_orchestrator.services.cell_state import retained_serving_fencing_epoch
@@ -249,11 +250,16 @@ def observe_live_source(
     ):
         raise CellIdentityConflict("serving route is detached from restoration source")
     database = _database_observation(backend)
-    resources = (
-        asdict(cast(Any, state.resource_names))
-        if is_dataclass(state.resource_names)
-        else None
-    )
+    resources = None
+    if is_dataclass(state.resource_names):
+        resources = asdict(cast(Any, state.resource_names))
+        resource_workspace_id = resources.get("workspace_id")
+        if (
+            not isinstance(resource_workspace_id, UUID)
+            or resource_workspace_id != state.workspace_id
+        ):
+            raise CellIdentityConflict("controller resource workspace identity is invalid")
+        resources["workspace_id"] = str(resource_workspace_id)
     return {
         "serving_route_digest": canonical_digest(route),
         "serving_release_digest": canonical_digest(

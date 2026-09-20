@@ -287,6 +287,28 @@ def test_detached_application_database_binding_fails_closed(monkeypatch):
         )
 
 
+def test_live_source_canonicalizes_controller_resource_workspace_uuid(monkeypatch):
+    from omnia_orchestrator.core.cell_resources import CellResourceNames
+
+    module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
+    state.resource_names = CellResourceNames.for_workspace(
+        state.workspace_id,
+        namespace="prod",
+    )
+
+    observed = module.observe_live_source(
+        backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+    )
+
+    assert len(observed["controller_resource_digest"]) == 64
+
+    state.resource_names = CellResourceNames.for_workspace(UUID(int=99), namespace="prod")
+    with pytest.raises(RuntimeError, match="resource workspace identity"):
+        module.observe_live_source(
+            backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+        )
+
+
 def test_generation_aba_changes_live_source_identity(monkeypatch):
     module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
     first = module.observe_live_source(
