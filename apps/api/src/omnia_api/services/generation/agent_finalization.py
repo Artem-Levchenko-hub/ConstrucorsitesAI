@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
+from typing import NamedTuple
 
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.generation.contracts import (
@@ -17,6 +19,52 @@ from omnia_api.services.max_finalization import ProofBundle
 from omnia_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 _log = logging.getLogger("omnia_api.routers.messages")
+
+_NO_SOURCE_CHANGE_FAILURE = "edit produced no source changes"
+_NO_SOURCE_CHANGE_MESSAGE = (
+    "Не удалось применить правку: итоговый код не изменился. "
+    "Повтори запрос или уточни, что именно нужно изменить."
+)
+
+
+class EditSourceChangeVerdict(NamedTuple):
+    files: dict[str, str]
+    message: str
+    failure: str | None
+
+
+def source_change_allows_partial_save(verdict: EditSourceChangeVerdict) -> bool:
+    """Suppress the partial-save CTA after an explicit no-source-change failure."""
+    return verdict.failure is None
+
+
+def validate_edit_source_change(
+    *,
+    requires_source_change: bool,
+    baseline_files: Mapping[str, str],
+    candidate_files: Mapping[str, str],
+    exact_tree: bool,
+    message: str,
+) -> EditSourceChangeVerdict:
+    """Reject a nonempty edit candidate that is byte-identical to its baseline.
+
+    An empty candidate is the established explicit no-op contract. A nonempty
+    candidate claims that source was written, so it must produce a semantic Git
+    tree change before the run can create a version or report success.
+    """
+    files = dict(candidate_files)
+    if not requires_source_change or not files:
+        return EditSourceChangeVerdict(files, message, None)
+    if exact_tree:
+        changed = files != dict(baseline_files)
+    else:
+        changed = any(
+            (path in baseline_files if content == "" else baseline_files.get(path) != content)
+            for path, content in files.items()
+        )
+    if changed:
+        return EditSourceChangeVerdict(files, message, None)
+    return EditSourceChangeVerdict({}, _NO_SOURCE_CHANGE_MESSAGE, _NO_SOURCE_CHANGE_FAILURE)
 
 
 async def finalize_max_candidate(

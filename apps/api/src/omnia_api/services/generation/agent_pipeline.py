@@ -17,7 +17,11 @@ from omnia_api.services import (
     agent_builder,
     app_errors,
 )
-from omnia_api.services.generation.agent_finalization import finalize_max_candidate
+from omnia_api.services.generation.agent_finalization import (
+    finalize_max_candidate,
+    source_change_allows_partial_save,
+    validate_edit_source_change,
+)
 from omnia_api.services.generation.agent_generation import (
     complete_empty_legacy_build,
     execute_agent_turn,
@@ -454,6 +458,19 @@ async def run_agent_generation(
         plan=_prompt_plan,
         operations=_operations,
     )
+    _source_change = validate_edit_source_change(
+        requires_source_change=_is_edit or _max_has_generated_snapshot,
+        baseline_files=baseline.files,
+        candidate_files=files,
+        exact_tree=_max_finalization_proof is not None,
+        message=accumulated,
+    )
+    files = _source_change.files
+    accumulated = _source_change.message
+    if _source_change.failure is not None:
+        # The proof describes a healthy runtime, but it cannot prove that the
+        # requested edit happened. Do not let it authorize an identical tree.
+        _max_finalization_proof = None
     _promotion_permit = None
     if _max_finalization_proof is not None:
         from omnia_api.services.promotion_permit import require_promotion_permit
@@ -465,12 +482,14 @@ async def run_agent_generation(
 
     # One verdict for the whole turn: the run status, the chat text and the
     # «Продолжить» card below all follow it.
-    _product_failure = _agent_product_failure(
+    _product_failure = _source_change.failure or _agent_product_failure(
         _agent_res,
         verification_failed=_agent_verification_failed,
         finalization_complete=_max_finalization_proof is not None,
     )
-    if get_settings().use_native_agent and _product_failure is not None:
+    if _product_failure is not None and (
+        _source_change.failure is not None or get_settings().use_native_agent
+    ):
         # Persist before the assistant becomes final. The next-submit
         # admission path and tracked-task finalizer must see the same
         # failure after normal return, rollback, or lease cleanup.
@@ -532,7 +551,9 @@ async def run_agent_generation(
     # routes back into the build loop on the live container. Published AFTER
     # the msg.content=accumulated overwrite above (else it'd be wiped) and
     # BEFORE llm.done so the card both persists and animates in.
-    if _agent_needs_continue_card(_agent_res, product_failure=_product_failure):
+    if source_change_allows_partial_save(_source_change) and _agent_needs_continue_card(
+        _agent_res, product_failure=_product_failure
+    ):
         await app_errors.publish(
             factory,
             ids.project_id,

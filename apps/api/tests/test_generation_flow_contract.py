@@ -493,6 +493,80 @@ async def test_real_agent_publication_or_rollback_reaches_terminal_state(
     }
 
 
+async def test_identical_exact_edit_fails_without_snapshot_or_version(
+    flow_factory, monkeypatch
+):
+    flow = await flow_factory("nextjs_entities")
+    baseline_files = {"README.md": "Preserve this source"}
+    error_cards: list[dict] = []
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    async def empty(*_args, **_kwargs):
+        return ""
+
+    async def no_cell(**_kwargs):
+        return None
+
+    async def build(*_args, **_kwargs):
+        return {"ok": True}
+
+    async def runtime(*_args, **_kwargs):
+        return {"ok": True, "status_code": 200}
+
+    async def provider(**_kwargs):
+        return agent_builder.AgentResult(
+            done=False,
+            summary="Step budget exhausted.",
+            files=dict(baseline_files),
+            steps=1,
+            stop_reason="max_steps",
+            needs_finalization=True,
+        )
+
+    async def record_error_card(*_args, **kwargs):
+        error_cards.append(kwargs)
+
+    async def structural_followup(**kwargs):
+        return kwargs["prompt_text"], False, False, True
+
+    async def byte_identical_finalization(**kwargs):
+        assert kwargs["_is_edit"] is False
+        return object(), dict(baseline_files), "Готово — правка применена и проверена."
+
+    monkeypatch.setattr(messages.stack_routing, "ensure_provisioned", noop)
+    monkeypatch.setattr(project_cell_executor, "maybe_create_project_cell_executor", no_cell)
+    monkeypatch.setattr(orchestrator_client, "agent_list_dir", empty)
+    monkeypatch.setattr(orchestrator_client, "agent_read_file", empty)
+    monkeypatch.setattr(orchestrator_client, "agent_build", build)
+    monkeypatch.setattr(orchestrator_client, "runtime_status", runtime)
+    monkeypatch.setattr(orchestrator_client, "warm_routes", empty)
+    monkeypatch.setattr(orchestrator_client, "hot_reload", noop)
+    monkeypatch.setattr(agent_builder, "run_agent_build", provider)
+    monkeypatch.setattr(agent_pipeline, "classify_agent_turn", structural_followup)
+    monkeypatch.setattr(agent_pipeline, "finalize_max_candidate", byte_identical_finalization)
+    monkeypatch.setattr(agent_pipeline.app_errors, "publish", record_error_card)
+
+    await flow.run()
+
+    run, project, message, owner, snapshots, _events = await flow.saved()
+    assert run.status == "failed" and run.error == "edit produced no source changes"
+    assert run.agent_state["product_outcome"] == {
+        "status": "failed",
+        "error": "edit produced no source changes",
+    }
+    assert len(snapshots) == 1 and project.current_snapshot_id == flow.parent_id
+    assert message.snapshot_id is None and owner.free_generations_used == 3
+    assert message.content == (
+        "Не удалось применить правку: итоговый код не изменился. "
+        "Повтори запрос или уточни, что именно нужно изменить."
+    )
+    assert "snapshot.created" not in flow.trace and "enqueue_preview" not in flow.trace
+    assert error_cards == []
+    assert repo.read_files(flow.project_id, flow.parent_sha) == baseline_files
+
+
 async def test_real_native_candidate_red_restored_green_stays_failed(flow_factory, monkeypatch):
     flow = await flow_factory("nextjs_entities")
     settings = config.get_settings().model_copy(update={"use_native_agent": True})
