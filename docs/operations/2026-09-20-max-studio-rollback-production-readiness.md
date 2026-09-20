@@ -186,6 +186,12 @@ Production API уже требовал эти признаки, а работа�
 
 Решение: единый reset удаляет все non-system schemas с безопасным `%I` quoting и large objects до и после real-PG fixture. Очистка разрешается только после явного подтверждения фактического имени БД; при несовпадении имени выполняется ноль разрушительных запросов, соединение всегда закрывается. Добавлены sync/async guard-тесты и real-PG regression загрязнения. Локально: exact `3 passed`, focused `20 passed, 13 skipped`, полный orchestrator `1917 passed, 63 skipped, 15 xfailed`; окончательный real-PG результат подтверждает повторный Linux CI.
 
+#### R11. Полный API CI обнаружил два устаревших тестовых контракта
+
+После зелёных release-critical проверок полный API-набор прошёл 2755 тестов и выявил 19 test-only failures. Восемнадцать вариантов render contract ожидали 29 файлов и старые SHA, хотя обязательный owner-scoped маршрут `actions/[id]` увеличил проверенный MAX starter до 30 файлов. Один pure-read mock не содержал новое обязательное ORM-поле `activation_effects_admitted`.
+
+Решение: все 18 golden SHA пересчитаны фактическим `render_max_starter_files`, а тест дополнительно требует новый маршрут. Mock дополнен `activation_effects_admitted=False`; production-проекция не ослаблялась через fallback. Exact-набор: `28 passed`; соседний real-PostgreSQL API-набор: `74 passed`; независимый review — CLEAN.
+
 ## 6. Артефакты и дефекты самой генерации
 
 ### G1. Агент исчерпывает шаги до законченного вертикального изменения

@@ -306,6 +306,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     assert config["summary"] == (
         "Persisted summary" if stored else prompt[:1000] or "Сервис внутри MAX"
     )
+    assert "src/app/api/omnia/actions/[id]/route.ts" in files
     digest = hashlib.sha256(
         json.dumps(files, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()

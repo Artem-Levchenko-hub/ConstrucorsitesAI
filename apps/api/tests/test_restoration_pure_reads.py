@@ -51,6 +51,7 @@ async def test_service_detail_read_needs_only_read_models_and_never_a_runtime():
         execution_policy="manual",
         selected_branch=None,
         adaptation_run_id=None,
+        activation_effects_admitted=False,
         apply_digest=None,
         applied_version_id=None,
         applied_snapshot_id=None,
