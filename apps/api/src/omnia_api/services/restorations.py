@@ -185,6 +185,35 @@ async def _read_owned_project(
     return project
 
 
+async def _owned_project_for_admission(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+) -> Project:
+    """Fail fast when another project mutation owns the admission lock."""
+    await _read_owned_project(session, project_id, owner_id)
+    acquired = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtext(:project_id))"),
+        {"project_id": str(project_id)},
+    )
+    if acquired is not True:
+        raise ApiError(
+            "conflict",
+            "Проект сейчас занят. Повторите восстановление через несколько секунд.",
+            503,
+            details={"retryable": True},
+        )
+    project = await session.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if project is None or project.owner_id != owner_id:
+        raise ApiError("not_found", "project not found", 404)
+    return project
+
+
 async def lock_restoration_admission(
     session: AsyncSession,
     project_id: UUID,
@@ -192,7 +221,7 @@ async def lock_restoration_admission(
     *,
     operation_id: UUID | None = None,
 ) -> Project:
-    project = await _owned_project(session, project_id, owner_id)
+    project = await _owned_project_for_admission(session, project_id, owner_id)
     await assert_no_active_restoration(session, project_id, operation_id=operation_id)
     active_run_id = await session.scalar(
         select(GenerationRun.id)
@@ -1437,7 +1466,7 @@ async def create_restoration(
     *,
     _source_attempt: int = 0,
 ) -> RestoreOperation:
-    project = await _owned_project(session, project_id, owner_id)
+    project = await _owned_project_for_admission(session, project_id, owner_id)
     digest = restoration_request_digest(project_id, owner_id, request)
     existing = await session.scalar(
         select(Restoration).where(

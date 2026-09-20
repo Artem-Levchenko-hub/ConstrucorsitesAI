@@ -39,6 +39,7 @@ from omnia_orchestrator.services.code_restoration_engine import (
     observe_database,
     validate_supported_runtime,
 )
+from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
 from omnia_orchestrator.services.project_machine import (
     machine_effect,
     write_controller_json,
@@ -1135,6 +1136,164 @@ class DockerAdaptationWorkspaceEngine:
         )
         return database, schema
 
+    @staticmethod
+    def _require_source_state(
+        request: RestorationAdaptationPrepare,
+        state: Any,
+        manager: Any,
+    ) -> None:
+        if (
+            state is None
+            or state.workspace_id != request.workspace_id
+            or state.project_id != request.project_id
+            or state.owner_id != request.owner_id
+            or state.fencing_epoch != request.fencing_epoch
+            or state.active_generation_run_id != request.generation_run_id
+            or state.active_generation_fencing_epoch != request.fencing_epoch
+            or manager.machine_runtime is None
+        ):
+            raise CellIdentityConflict("restoration adaptation source lease changed")
+
+    @staticmethod
+    async def _source_database_volume_binding(source: Any) -> str:
+        volume_name = source.project_postgres_volume
+        volume = await machine_effect(
+            source._lookup,
+            source.client.volumes,
+            volume_name,
+            "project-volume",
+        )
+        attrs = volume.attrs if volume is not None else {}
+        labels = attrs.get("Labels") or {}
+        expected_labels = source.labels("project-volume")
+        created_at = attrs.get("CreatedAt")
+        if (
+            volume is None
+            or attrs.get("Name") != volume_name
+            or not isinstance(created_at, str)
+            or not created_at
+            or any(labels.get(key) != value for key, value in expected_labels.items())
+        ):
+            raise CellIdentityConflict(
+                "restoration adaptation source database volume changed"
+            )
+        return canonical_digest(
+            {
+                "name": volume_name,
+                "created_at": created_at,
+                "driver": attrs.get("Driver"),
+                "scope": attrs.get("Scope"),
+                "options": attrs.get("Options") or {},
+                "labels": labels,
+            }
+        )
+
+    @staticmethod
+    async def _require_resume_checkpoint(
+        request: RestorationAdaptationPrepare,
+        source: Any,
+        manifest: MachineManifest,
+    ) -> None:
+        metadata = await machine_effect(source._metadata)
+        if not isinstance(metadata, dict):
+            raise CellIdentityConflict(
+                "restoration adaptation source checkpoint is unattested"
+            )
+        raw_reference = metadata.get("environment_ref")
+        schema_digest = metadata.get("environment_schema_digest")
+        sealed_at = metadata.get("environment_sealed_at")
+        try:
+            reference = MachineEnvironmentRef.model_validate(raw_reference)
+            if not isinstance(sealed_at, str):
+                raise TypeError("checkpoint seal time is not a string")
+            sealed = datetime.fromisoformat(sealed_at)
+        except (TypeError, ValueError) as exc:
+            raise CellIdentityConflict(
+                "restoration adaptation source checkpoint is unattested"
+            ) from exc
+        manifest_digest = manifest.digest()
+        expected_volumes = tuple(
+            await machine_effect(source.environment_volume_names, manifest)
+        )
+        reference_volumes = tuple(item.name for item in reference.volumes)
+        if (
+            metadata.get("environment_revision") != request.source_workspace_revision
+            or not isinstance(schema_digest, str)
+            or len(schema_digest) != 64
+            or any(char not in "0123456789abcdef" for char in schema_digest)
+            or sealed.tzinfo is None
+            or reference.workspace_id != request.workspace_id
+            or reference.manifest_digest != manifest_digest
+            or reference.manifest is None
+            or reference.manifest.digest() != manifest_digest
+            or reference.base_image != source.base_image
+            or source.workspace_volume not in reference_volumes
+            or len(reference_volumes) != len(set(reference_volumes))
+            or set(reference_volumes) != set(expected_volumes)
+        ):
+            raise CellIdentityConflict(
+                "restoration adaptation source checkpoint is unattested"
+            )
+
+    @staticmethod
+    def _require_current_manifest(machine: Any, expected: MachineManifest) -> dict[str, Any]:
+        try:
+            saved = machine.state()
+            if not isinstance(saved, dict):
+                raise TypeError("machine state is not a mapping")
+            observed = MachineManifest.model_validate(saved["manifest"])
+        except Exception as exc:
+            raise CellIdentityConflict(
+                "restoration adaptation source manifest is unavailable"
+            ) from exc
+        if observed.digest() != expected.digest():
+            raise CellIdentityConflict("restoration adaptation source manifest changed")
+        return saved
+
+    @staticmethod
+    async def _source_pair_running(
+        manager: Any,
+        state: Any,
+        machine: Any,
+        source: Any,
+        manifest: MachineManifest,
+        epoch: int,
+    ) -> bool:
+        saved = DockerAdaptationWorkspaceEngine._require_current_manifest(machine, manifest)
+        if saved.get("epoch") != epoch:
+            return False
+        application = await machine_effect(source._container)
+        postgres = await machine_effect(source._project_postgres)
+        for container in (application, postgres):
+            if container is None or container.labels.get("omnia.fencing_epoch") != str(epoch):
+                return False
+            await machine_effect(container.reload)
+            if container.status != "running":
+                return False
+        if not any(
+            item.get("Name") == source.workspace_volume
+            and item.get("Destination") == "/workspace"
+            for item in application.attrs.get("Mounts", [])
+        ):
+            return False
+        if not any(
+            item.get("Name") == source.project_postgres_volume
+            and item.get("Destination") == "/var/lib/postgresql/data"
+            for item in postgres.attrs.get("Mounts", [])
+        ):
+            return False
+        for service in manifest.services:
+            status = await machine_effect(
+                source.service_status,
+                service,
+                epoch,
+                include_logs=False,
+            )
+            if not status["ready"]:
+                return False
+        preview = await machine_effect(manager.machine_runtime.preview, state)
+        return preview is not None and preview[0] == "running"
+
     async def prepare(
         self,
         request: RestorationAdaptationPrepare,
@@ -1144,18 +1303,9 @@ class DockerAdaptationWorkspaceEngine:
         try:
             async with manager.operation_lock.hold(request.workspace_id):
                 state = manager.state_store.load(request.workspace_id)
-                if (
-                    state is None
-                    or state.project_id != request.project_id
-                    or state.owner_id != request.owner_id
-                    or state.active_generation_run_id != request.generation_run_id
-                    or state.active_generation_fencing_epoch != request.fencing_epoch
-                    or manager.machine_runtime is None
-                ):
-                    raise CellIdentityConflict("restoration adaptation source lease changed")
-                _machine, source = manager.machine_runtime.parts(state)
-                if not await machine_effect(source.is_running):
-                    raise CellResourceError("restoration adaptation source database is not running")
+                self._require_source_state(request, state, manager)
+                machine, source = manager.machine_runtime.parts(state)
+                from omnia_orchestrator.routers.runtime import _workspace_revision
                 from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
 
                 files = await _read_agent_workspace_files(manager, source.workspace_volume)
@@ -1163,6 +1313,73 @@ class DockerAdaptationWorkspaceEngine:
                     await manager.docker.read_workspace_source_files(source.workspace_volume)
                 )
                 manifest = validate_supported_runtime(files)
+                if _workspace_revision(files) != request.source_workspace_revision:
+                    raise CellIdentityConflict(
+                        "restoration adaptation source workspace changed"
+                    )
+                self._require_current_manifest(machine, manifest)
+                source_volume = source.project_postgres_volume
+                source_code_volume = source.workspace_volume
+                database_binding = await self._source_database_volume_binding(source)
+                if not await self._source_pair_running(
+                    manager,
+                    state,
+                    machine,
+                    source,
+                    manifest,
+                    request.fencing_epoch,
+                ):
+                    await self._require_resume_checkpoint(request, source, manifest)
+                    await manager.machine_runtime.resume_preview(
+                        state,
+                        epoch=request.fencing_epoch,
+                    )
+
+                resumed_state = manager.state_store.load(request.workspace_id)
+                self._require_source_state(request, resumed_state, manager)
+                resumed_machine, resumed_source = manager.machine_runtime.parts(resumed_state)
+                if (
+                    resumed_source.workspace_volume != source_code_volume
+                    or resumed_source.project_postgres_volume != source_volume
+                    or await self._source_database_volume_binding(resumed_source)
+                    != database_binding
+                ):
+                    raise CellIdentityConflict(
+                        "restoration adaptation source runtime changed during resume"
+                    )
+                resumed_files = await _read_agent_workspace_files(
+                    manager,
+                    resumed_source.workspace_volume,
+                )
+                resumed_source_files = canonical_source_files(
+                    await manager.docker.read_workspace_source_files(
+                        resumed_source.workspace_volume
+                    )
+                )
+                resumed_manifest = validate_supported_runtime(resumed_files)
+                if (
+                    _workspace_revision(resumed_files) != request.source_workspace_revision
+                    or resumed_manifest.digest() != manifest.digest()
+                ):
+                    raise CellIdentityConflict(
+                        "restoration adaptation source changed during resume"
+                    )
+                if not await self._source_pair_running(
+                    manager,
+                    resumed_state,
+                    resumed_machine,
+                    resumed_source,
+                    resumed_manifest,
+                    request.fencing_epoch,
+                ):
+                    raise CellResourceError(
+                        "restoration adaptation source pair is not running"
+                    )
+                state = resumed_state
+                source = resumed_source
+                files = resumed_files
+                source_files = resumed_source_files
+                manifest = resumed_manifest
                 source_inventory = await machine_effect(
                     observe_database, source, observed_on="source"
                 )

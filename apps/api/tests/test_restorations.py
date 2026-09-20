@@ -1272,6 +1272,50 @@ async def test_db_generation_blocks_restore_before_external_dispatch(db_session)
     assert "идёт сборка" in error.value.message
 
 
+async def test_db_busy_project_lock_rejects_restoration_admission_without_writes(
+    db_session, test_engine
+):
+    import asyncio
+
+    from sqlalchemy import func, select, text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from omnia_api.core.errors import ApiError
+    from omnia_api.models.restoration import Restoration
+    from omnia_api.services import restorations as service
+
+    owner, project, _, _, _, _, request = await restoration_fixture(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    runtime = FakeRuntime()
+
+    async with factory() as blocker, factory() as contender:
+        await blocker.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(project.id)},
+        )
+        with pytest.raises(ApiError) as error:
+            await asyncio.wait_for(
+                service.create_restoration(
+                    contender,
+                    project.id,
+                    owner.id,
+                    request,
+                    runtime,
+                ),
+                timeout=1.0,
+            )
+        await contender.rollback()
+
+    assert error.value.status_code == 503
+    assert error.value.code == "conflict"
+    assert error.value.details == {"retryable": True}
+    assert error.value.message == (
+        "Проект сейчас занят. Повторите восстановление через несколько секунд."
+    )
+    assert runtime.prepares == 0
+    assert await db_session.scalar(select(func.count()).select_from(Restoration)) == 0
+
+
 @pytest.mark.parametrize("flag", [1, "true", "yes"])
 def test_runtime_completion_rejects_coerced_applied_flags(flag):
     from pydantic import ValidationError

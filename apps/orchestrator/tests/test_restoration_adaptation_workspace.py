@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID, uuid4, uuid5
 
 import pytest
@@ -218,6 +219,444 @@ def _inventory() -> InventoryReport:
             ),
         ],
     )
+
+
+def _docker_prepare_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    resume_fault: bool = False,
+    running: bool = False,
+):
+    from omnia_orchestrator.core.project_machine import MachineManifest
+    from omnia_orchestrator.routers.runtime import _workspace_revision
+    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+    from omnia_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
+    from tests.test_project_machine_manifest import payload
+
+    request = _request()
+    files = {".omnia/cell.json": "{}", "app.py": "print('current')\n"}
+    request = request.model_copy(
+        update={"source_workspace_revision": _workspace_revision(files)}
+    )
+    manifest = MachineManifest.model_validate(payload())
+    source_base_image = "omnia/source-current:sealed"
+    source_environment_volumes = ("source-code", "source-home", "live-db")
+    environment_ref = MachineEnvironmentRef(
+        workspace_id=request.workspace_id,
+        image_id="sha256:" + "a" * 64,
+        artifact_ref="a" * 32 + ".tar",
+        sha256="b" * 64,
+        size=1,
+        base_image=source_base_image,
+        manifest_digest=manifest.digest(),
+        volumes=tuple(
+            VolumeEnvironmentRef(
+                name=name,
+                artifact_ref=f"{index:032x}.tar",
+                sha256=f"{index:064x}",
+                size=1,
+            )
+            for index, name in enumerate(source_environment_volumes, start=1)
+        ),
+        manifest=manifest,
+    )
+    events: list[object] = []
+    business_rows = ["owner-row-before"]
+    runtime_state = {
+        "running": running,
+        "machine_epoch": request.fencing_epoch if running else request.fencing_epoch - 1,
+        "resume_fault": resume_fault,
+        "volume_present": True,
+        "manifest": manifest.model_dump(mode="json"),
+        "resume_hook": None,
+        "environment_ref": environment_ref.model_dump(mode="json"),
+        "environment_revision": request.source_workspace_revision,
+        "environment_schema_digest": "c" * 64,
+        "environment_sealed_at": "2026-09-21T00:00:00+00:00",
+    }
+    state = SimpleNamespace(
+        workspace_id=request.workspace_id,
+        project_id=request.project_id,
+        owner_id=request.owner_id,
+        fencing_epoch=request.fencing_epoch,
+        active_generation_run_id=request.generation_run_id,
+        active_generation_fencing_epoch=request.fencing_epoch,
+    )
+
+    class Lock:
+        def hold(self, workspace_id):
+            assert workspace_id == request.workspace_id
+            return self
+
+        async def __aenter__(self):
+            events.append("lock")
+
+        async def __aexit__(self, *_args):
+            events.append("unlock")
+
+    class Container:
+        def __init__(self, *, database: bool) -> None:
+            self.labels = {"omnia.fencing_epoch": str(request.fencing_epoch)}
+            self.status = "running"
+            self.attrs = {
+                "Mounts": [
+                    {
+                        "Name": "live-db" if database else "source-code",
+                        "Destination": (
+                            "/var/lib/postgresql/data" if database else "/workspace"
+                        ),
+                    }
+                ]
+            }
+
+        def reload(self) -> None:
+            kind = "reload-db" if self.attrs["Mounts"][0]["Name"] == "live-db" else "reload-app"
+            events.append(kind)
+
+    application = Container(database=False)
+    postgres = Container(database=True)
+    expected_labels = {
+        "omnia.managed": "true",
+        "omnia.workspace_id": str(request.workspace_id),
+        "omnia.project_id": str(request.project_id),
+        "omnia.owner_id": str(request.owner_id),
+        "omnia.resource_kind": "project-volume",
+    }
+    volume = SimpleNamespace(
+        attrs={
+            "Name": "live-db",
+            "CreatedAt": "2026-09-21T00:00:00Z",
+            "Driver": "local",
+            "Scope": "local",
+            "Options": {},
+            "Labels": expected_labels,
+        }
+    )
+
+    def lookup(_collection, name, kind):
+        events.append(("lookup", name, kind))
+        return (
+            volume
+            if runtime_state["volume_present"]
+            and name == "live-db"
+            and kind == "project-volume"
+            else None
+        )
+
+    source = SimpleNamespace(
+        workspace_volume="source-code",
+        project_postgres_volume="live-db",
+        base_image=source_base_image,
+        client=SimpleNamespace(volumes=object()),
+        labels=lambda kind: {**expected_labels, "omnia.resource_kind": kind},
+        _lookup=lookup,
+        _metadata=lambda: {
+            "environment_ref": runtime_state["environment_ref"],
+            "environment_revision": runtime_state["environment_revision"],
+            "environment_schema_digest": runtime_state["environment_schema_digest"],
+            "environment_sealed_at": runtime_state["environment_sealed_at"],
+        },
+        environment_volume_names=lambda observed_manifest: (
+            source_environment_volumes
+            if observed_manifest.digest() == manifest.digest()
+            else ()
+        ),
+        _container=lambda: application if runtime_state["running"] else None,
+        _project_postgres=lambda: postgres if runtime_state["running"] else None,
+        service_status=lambda *_args, **_kwargs: {"ready": runtime_state["running"]},
+        is_running=lambda: runtime_state["running"],
+    )
+    machine = SimpleNamespace(
+        state=lambda: {
+            "epoch": runtime_state["machine_epoch"],
+            "manifest": runtime_state["manifest"],
+        }
+    )
+
+    class Runtime:
+        def parts(self, observed_state):
+            assert observed_state is state
+            return machine, source
+
+        async def resume_preview(self, observed_state, *, epoch):
+            assert observed_state is state and epoch == request.fencing_epoch
+            events.append(("resume", epoch))
+            runtime_state["running"] = True
+            runtime_state["machine_epoch"] = epoch
+            hook = runtime_state["resume_hook"]
+            if hook is not None:
+                hook()
+            if runtime_state["resume_fault"]:
+                runtime_state["resume_fault"] = False
+                raise RuntimeError("resume interrupted after current pair started")
+
+        def preview(self, observed_state):
+            assert observed_state is state
+            return ("running", "127.0.0.1") if runtime_state["running"] else None
+
+    async def read_source_files(volume_name):
+        assert volume_name == "source-code"
+        return {path: content.encode() for path, content in files.items()}
+
+    manager = SimpleNamespace(
+        operation_lock=Lock(),
+        state_store=SimpleNamespace(load=lambda workspace_id: state),
+        machine_runtime=Runtime(),
+        docker=SimpleNamespace(
+            read_workspace_source_files=read_source_files
+        ),
+    )
+    candidate = SimpleNamespace()
+    candidate_calls: list[UUID] = []
+    engine = DockerAdaptationWorkspaceEngine()
+    monkeypatch.setattr(engine, "_manager", lambda workspace_id: manager)
+
+    async def materialize_candidate(
+        observed_manager,
+        observed_request,
+        candidate_workspace_id,
+        observed_manifest,
+        source_files,
+    ):
+        assert observed_manager is manager
+        assert observed_request is request
+        assert observed_manifest == manifest
+        assert source_files == {path: content.encode() for path, content in files.items()}
+        candidate_calls.append(candidate_workspace_id)
+        events.append("candidate")
+        return candidate, 1
+
+    monkeypatch.setattr(engine, "_candidate", materialize_candidate)
+    async def read_agent_files(observed_manager, volume_name):
+        assert observed_manager is manager and volume_name == "source-code"
+        return files
+
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        read_agent_files,
+    )
+    monkeypatch.setattr(module, "validate_supported_runtime", lambda observed_files: manifest)
+    inventory = _inventory()
+    contract = SimpleNamespace(model_dump=lambda **_kwargs: {"tables": []})
+    monkeypatch.setattr(
+        module,
+        "observe_database",
+        lambda backend, *, observed_on: events.append(("inventory", observed_on)) or inventory,
+    )
+    monkeypatch.setattr(module, "catalog_contract", lambda backend: (contract, []))
+    monkeypatch.setattr(
+        module,
+        "content_inventory_partition_digests",
+        lambda backend, observed_inventory: (
+            events.append(("rows", tuple(business_rows))) or ("b" * 64, "t" * 64)
+        ),
+    )
+    monkeypatch.setattr(
+        module.CodeRestorationEngine,
+        "_dump",
+        lambda backend: events.append("dump") or b"database-copy",
+    )
+    monkeypatch.setattr(module, "admin_sql", lambda *_args, **_kwargs: b"")
+    return SimpleNamespace(
+        engine=engine,
+        request=request,
+        candidate_id=uuid5(
+            request.operation_id,
+            f"restoration-adaptation:{request.generation_run_id}",
+        ),
+        state=state,
+        volume=volume,
+        files=files,
+        manifest=manifest,
+        events=events,
+        business_rows=business_rows,
+        runtime_state=runtime_state,
+        environment_ref=environment_ref,
+        manager=manager,
+        source=source,
+        candidate_calls=candidate_calls,
+    )
+
+
+async def test_docker_prepare_resumes_current_source_before_database_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = _docker_prepare_fixture(monkeypatch)
+
+    result = await setup.engine.prepare(setup.request, setup.candidate_id)
+
+    assert result.candidate_workspace_id == setup.candidate_id
+    assert setup.events.count(("resume", setup.request.fencing_epoch)) == 1
+    assert setup.events.index(("resume", setup.request.fencing_epoch)) < setup.events.index("dump")
+    assert setup.events.index("dump") < setup.events.index("candidate")
+    row_witnesses = [
+        index
+        for index, event in enumerate(setup.events)
+        if isinstance(event, tuple) and event[0] == "rows"
+    ]
+    assert row_witnesses[0] < setup.events.index("dump") < row_witnesses[1]
+    assert row_witnesses[1] < setup.events.index("candidate")
+    assert setup.candidate_calls == [setup.candidate_id]
+    assert setup.business_rows == ["owner-row-before"]
+
+
+async def test_docker_prepare_resume_fault_retries_same_pair_without_duplicate_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = _docker_prepare_fixture(monkeypatch, resume_fault=True)
+
+    with pytest.raises(RuntimeError, match="resume interrupted"):
+        await setup.engine.prepare(setup.request, setup.candidate_id)
+    assert setup.candidate_calls == []
+    assert setup.business_rows == ["owner-row-before"]
+
+    await setup.engine.prepare(setup.request, setup.candidate_id)
+
+    assert setup.events.count(("resume", setup.request.fencing_epoch)) == 1
+    assert setup.candidate_calls == [setup.candidate_id]
+    assert setup.business_rows == ["owner-row-before"]
+
+
+async def test_docker_prepare_matching_running_pair_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = _docker_prepare_fixture(monkeypatch, running=True)
+
+    await setup.engine.prepare(setup.request, setup.candidate_id)
+
+    assert not any(isinstance(event, tuple) and event[0] == "resume" for event in setup.events)
+    assert setup.candidate_calls == [setup.candidate_id]
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "missing_attestation",
+        "revision",
+        "workspace",
+        "manifest",
+        "base_image",
+        "foreign_volume",
+    ],
+)
+async def test_docker_prepare_rejects_unbound_checkpoint_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    setup = _docker_prepare_fixture(monkeypatch)
+    original_files = dict(setup.files)
+    reference = setup.environment_ref
+    if changed == "missing_attestation":
+        setup.runtime_state["environment_sealed_at"] = None
+    elif changed == "revision":
+        setup.runtime_state["environment_revision"] = "f" * 64
+    elif changed == "workspace":
+        reference = reference.model_copy(update={"workspace_id": uuid4()})
+    elif changed == "manifest":
+        reference = reference.model_copy(update={"manifest_digest": "f" * 64})
+    elif changed == "base_image":
+        reference = reference.model_copy(update={"base_image": "omnia/source-stale:old"})
+    else:
+        volumes = (
+            *reference.volumes[:-1],
+            reference.volumes[-1].model_copy(update={"name": "foreign-live-db"}),
+        )
+        reference = reference.model_copy(update={"volumes": volumes})
+    setup.runtime_state["environment_ref"] = reference.model_dump(mode="json")
+
+    def overwrite_current_code_from_stale_checkpoint() -> None:
+        setup.files["app.py"] = "print('stale-checkpoint')\n"
+
+    setup.runtime_state["resume_hook"] = overwrite_current_code_from_stale_checkpoint
+
+    with pytest.raises(CellIdentityConflict):
+        await setup.engine.prepare(setup.request, setup.candidate_id)
+
+    assert setup.files == original_files
+    assert not any(isinstance(event, tuple) and event[0] == "resume" for event in setup.events)
+    assert "dump" not in setup.events
+    assert setup.candidate_calls == []
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "workspace",
+        "project",
+        "owner",
+        "run",
+        "fence",
+        "active_fence",
+        "missing_volume",
+        "replaced_volume",
+        "revision",
+        "manifest",
+    ],
+)
+async def test_docker_prepare_rejects_changed_source_before_resume_or_dump(
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    setup = _docker_prepare_fixture(monkeypatch)
+    if changed == "workspace":
+        setup.state.workspace_id = uuid4()
+    elif changed == "project":
+        setup.state.project_id = uuid4()
+    elif changed == "owner":
+        setup.state.owner_id = uuid4()
+    elif changed == "run":
+        setup.state.active_generation_run_id = uuid4()
+    elif changed == "fence":
+        setup.state.fencing_epoch += 1
+    elif changed == "active_fence":
+        setup.state.active_generation_fencing_epoch += 1
+    elif changed == "missing_volume":
+        setup.runtime_state["volume_present"] = False
+    elif changed == "replaced_volume":
+        setup.volume.attrs["Name"] = "replaced-live-db"
+    elif changed == "revision":
+        setup.request = setup.request.model_copy(
+            update={"source_workspace_revision": "f" * 64}
+        )
+    else:
+        setup.runtime_state["manifest"] = {
+            **setup.manifest.model_dump(mode="json"),
+            "tasks": [],
+        }
+
+    with pytest.raises(CellIdentityConflict):
+        await setup.engine.prepare(setup.request, setup.candidate_id)
+
+    assert not any(isinstance(event, tuple) and event[0] == "resume" for event in setup.events)
+    assert "dump" not in setup.events
+    assert setup.candidate_calls == []
+
+
+@pytest.mark.parametrize("changed", ["fence", "volume", "revision"])
+async def test_docker_prepare_rechecks_source_binding_after_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    setup = _docker_prepare_fixture(monkeypatch)
+
+    def change_during_resume() -> None:
+        if changed == "fence":
+            setup.state.active_generation_fencing_epoch += 1
+        elif changed == "volume":
+            setup.volume.attrs["CreatedAt"] = "2026-09-21T00:00:01Z"
+        else:
+            setup.files["app.py"] = "print('changed-during-resume')\n"
+
+    setup.runtime_state["resume_hook"] = change_during_resume
+
+    with pytest.raises(CellIdentityConflict):
+        await setup.engine.prepare(setup.request, setup.candidate_id)
+
+    assert "dump" not in setup.events
+    assert setup.candidate_calls == []
 
 
 def _expire(
