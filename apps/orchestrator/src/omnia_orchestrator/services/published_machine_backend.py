@@ -32,6 +32,7 @@ from omnia_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
+from omnia_orchestrator.services.restoration_database import close_controller_socket
 
 
 class PublicationRecoveryRequired(CellResourceError):
@@ -412,7 +413,7 @@ class PublishedMachineBackend(DockerMachineBackend):
                 while connection._sock.recv(8192):
                     pass
             finally:
-                connection.close()
+                close_controller_socket(connection)
             outcome = self.client.api.exec_inspect(execution["Id"])
             if outcome.get("Running") or outcome.get("ExitCode") != 0:
                 raise CellResourceError("production database credential rotation failed")

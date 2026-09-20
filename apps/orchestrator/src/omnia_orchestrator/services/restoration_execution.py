@@ -340,7 +340,11 @@ class RestorationExecutionJournal:
             or not isinstance(saved.get("container_created_at"), str)
             or not saved["container_created_at"]
             or attempt_id != saved.get("attempt_id")
-            or re.fullmatch(r"(?:install|build:[0-9]+)", str(saved.get("stage"))) is None
+            or re.fullmatch(
+                r"(?:install|empty-database-migrations|build:[0-9]+)",
+                str(saved.get("stage")),
+            )
+            is None
             or not _CONTAINER_ID.fullmatch(str(saved.get("argv_digest") or ""))
             or saved.get("state") not in {"running", "unknown", "finished", "stopped"}
         ):

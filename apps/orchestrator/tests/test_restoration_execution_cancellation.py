@@ -121,6 +121,35 @@ async def test_restart_kills_only_exact_candidate_id_and_rejects_reused_identity
     assert wrong.killed == []
 
 
+async def test_empty_database_migration_attempt_is_exactly_cancellable(tmp_path):
+    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+
+    value = request()
+    container = candidate_container(value)
+    journal = RestorationExecutionJournal(tmp_path)
+    journal.begin_attempt(
+        value,
+        container,
+        stage="empty-database-migrations",
+        argv=[
+            "pnpm",
+            "exec",
+            "drizzle-kit",
+            "push",
+            "--config=drizzle.config.ts",
+            "--force",
+        ],
+        cwd=".",
+    )
+    journal.request_cancel(cancel_request(value))
+    api = ExactApi({**container.attrs, "State": {"Running": True}})
+
+    assert await journal.stop_active(
+        cancel_request(value), api_factory=lambda: api, timeout_seconds=0.5
+    )
+    assert api.killed == [("a" * 64, "KILL")]
+
+
 async def test_tampered_receipt_cannot_authorize_killing_live_container(tmp_path):
     from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
 

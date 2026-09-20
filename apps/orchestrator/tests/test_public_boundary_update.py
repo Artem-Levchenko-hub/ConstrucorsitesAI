@@ -43,6 +43,7 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     removed = []
     readiness = []
     quotas = []
+    socket_closes = []
 
     def create(_image, _command, **kwargs):
         # No product or database container may be recreated by a gateway update.
@@ -82,6 +83,23 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         sendall=lambda value: delivered.append(json.loads(value)),
         shutdown=lambda _: None, recv=lambda _: b"",
     )
+
+    def exec_connection(*_args, **_kwargs):
+        response = SimpleNamespace(closed=False)
+
+        def close_response():
+            socket_closes.append("response")
+            response.closed = True
+
+        response.close = close_response
+
+        def close_socket():
+            if not response.closed:
+                raise ValueError("raw socket closed before owning response")
+            socket_closes.append("socket")
+
+        return SimpleNamespace(_sock=transport, _response=response, close=close_socket)
+
     client = SimpleNamespace(
         images=SimpleNamespace(get=lambda _: SimpleNamespace(
             id=image_id, labels={"omnia.max-core.protocol": "1",
@@ -89,9 +107,7 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         containers=SimpleNamespace(create=create),
         api=SimpleNamespace(
             exec_create=lambda *_args, **_kwargs: {"Id": "upload"},
-            exec_start=lambda *_args, **_kwargs: SimpleNamespace(
-                _sock=transport, close=lambda: None,
-            ),
+            exec_start=exec_connection,
             exec_inspect=lambda _: {"Running": False, "ExitCode": 0},
         ),
     )
@@ -128,6 +144,7 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         runtime_env["MAX_BOT_TOKEN"] = "disposable-test-bot"
     adapter._start_boundary(state, manifest, backend, 7, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
+    assert socket_closes == ["response", "socket"]
     first = containers["public-test-gateway"]
     assert quotas == [{"cpu_period": 100_000, "cpu_quota": 5_000}]
     assert first.attrs["HostConfig"]["CpuQuota"] == 5_000

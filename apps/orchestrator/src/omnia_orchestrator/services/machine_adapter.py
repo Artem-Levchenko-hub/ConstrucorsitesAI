@@ -38,6 +38,7 @@ from omnia_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
+from omnia_orchestrator.services.restoration_database import close_controller_socket
 
 MACHINE_APPLY_TIMEOUT_SECONDS = 900
 MACHINE_APPLY_CLEANUP_RESERVE_SECONDS = 30
@@ -909,7 +910,7 @@ class MachineAdapter:
             while connection._sock.recv(4096):
                 connection._sock.settimeout(machine_remaining_seconds(15))
         finally:
-            connection.close()
+            close_controller_socket(connection)
         outcome = client.api.exec_inspect(execution["Id"])
         if outcome.get("Running") or outcome.get("ExitCode") != 0:
             raise CellResourceError("trusted preview configuration was not applied")

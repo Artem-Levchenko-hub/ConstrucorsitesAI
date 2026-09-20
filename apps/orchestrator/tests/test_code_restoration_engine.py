@@ -1073,6 +1073,11 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     engine._state = lambda *args, **kwargs: state
     monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
     monkeypatch.setattr(module, "verify_source_inventory", lambda *_: None)
+    monkeypatch.setattr(
+        module,
+        "empty_database_materializer",
+        lambda *_args: pytest.fail("nonempty restoration must not select an empty materializer"),
+    )
     monkeypatch.setattr(project_machine, "machine_remaining_seconds", lambda value: value or 1)
 
     async def workspace_files(*_):

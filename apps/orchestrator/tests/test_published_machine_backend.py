@@ -333,6 +333,47 @@ def test_restart_stopped_public_guard_proxy_and_database_preserves_records(tmp_p
     assert records == ["write-after-checkpoint"]
 
 
+def test_seeded_postgres_rotation_closes_response_before_raw_socket(tmp_path):
+    runtime = published_backend(tmp_path)
+    events = []
+    response = SimpleNamespace(closed=False)
+
+    def close_response():
+        events.append("response")
+        response.closed = True
+
+    response.close = close_response
+
+    def close_socket():
+        if not response.closed:
+            raise ValueError("raw socket closed before owning response")
+        events.append("socket")
+
+    transport = SimpleNamespace(
+        settimeout=lambda _timeout: None,
+        sendall=lambda _value: None,
+        shutdown=lambda _direction: None,
+        recv=lambda _size: b"",
+    )
+    connection = SimpleNamespace(_sock=transport, _response=response, close=close_socket)
+    runtime.client = SimpleNamespace(
+        api=SimpleNamespace(
+            exec_create=lambda *_args, **_kwargs: {"Id": "rotate"},
+            exec_start=lambda *_args, **_kwargs: connection,
+            exec_inspect=lambda _exec_id: {"Running": False, "ExitCode": 0},
+        )
+    )
+    postgres = SimpleNamespace(id="postgres")
+    runtime._project_postgres = lambda: postgres
+    runtime._wait_project_postgres_ready = lambda candidate: events.append(
+        ("ready", candidate.id)
+    )
+
+    runtime.rotate_seeded_postgres("source-password")
+
+    assert events == ["response", "socket", ("ready", "postgres")]
+
+
 async def test_managed_infrastructure_restart_requires_existing_data_and_starts_sidecars(tmp_path):
     from unittest.mock import AsyncMock
 

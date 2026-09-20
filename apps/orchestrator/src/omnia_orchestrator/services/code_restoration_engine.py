@@ -55,6 +55,7 @@ from omnia_orchestrator.services.restoration_data_contract import (
     ContractAssessment,
     DataContract,
     assess_contract,
+    normalize_check,
 )
 from omnia_orchestrator.services.restoration_database import (
     admin_args,
@@ -89,6 +90,247 @@ from omnia_orchestrator.services.versioning.inventory import observe_inventory
 
 class PreparationNeedsChanges(ValueError):
     pass
+
+
+_DRIZZLE_CONFIGS = {
+    '''import type { Config } from "drizzle-kit";
+
+export default {
+  schema: "./src/lib/db/schema.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL as string,
+  },
+} satisfies Config;''',
+    '''import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  schema: "./src/lib/db/schema.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  dbCredentials: { url: process.env.DATABASE_URL! },
+  verbose: true,
+  strict: true,
+});''',
+    '''import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  schema: "./src/lib/db/schema.ts",
+  out: "./drizzle",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL!,
+  },
+  verbose: true,
+  strict: true,
+});''',
+}
+
+_MANAGED_MAX_TABLES = frozenset(
+    {
+        "max_users",
+        "max_webhook_events",
+        "max_catalog_items",
+        "max_business_actions",
+        "max_consents",
+        "max_analytics_events",
+        "max_bot_outbox",
+        "max_audit_log",
+    }
+)
+
+
+def _project_data_contract(contract: DataContract) -> DataContract:
+    """Exclude only the controller-owned MAX core from a project schema proof."""
+    return DataContract(
+        version=1,
+        tables=[table for table in contract.tables if table.name not in _MANAGED_MAX_TABLES],
+    )
+
+
+def _mapping_body(value: str, *, header: str, indent: int) -> str | None:
+    prefix = " " * indent
+    matches = list(re.finditer(rf"(?m)^{re.escape(prefix + header)}:\r?$", value))
+    if len(matches) != 1:
+        return None
+    start = matches[0].end()
+    sibling = re.search(rf"(?m)^{re.escape(prefix)}\S.*:\r?$", value[start:])
+    return value[start : start + sibling.start()] if sibling else value[start:]
+
+
+def _root_lock_importer(lockfile: str) -> str | None:
+    if re.fullmatch(r"(?s).*^lockfileVersion: '9\.0'\r?\n.*", lockfile) is None:
+        return None
+    importers = _mapping_body(lockfile, header="importers", indent=0)
+    if importers is None:
+        return None
+    return _mapping_body(importers, header=".", indent=2)
+
+
+def _root_lock_version(
+    importer: str,
+    dependency_group: str,
+    package: str,
+    specifier: str,
+    version: str,
+) -> bool:
+    dependencies = _mapping_body(importer, header=dependency_group, indent=4)
+    if dependencies is None:
+        return False
+    matches = re.findall(
+        rf"(?m)^      {re.escape(package)}:\r?\n"
+        rf"        specifier: {re.escape(specifier)}\r?\n"
+        rf"        version: ({version})(?:\([^\r\n]*\))?\r?$",
+        dependencies,
+    )
+    return len(matches) == 1
+
+
+def _contract_checks(table: Any) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            [normalize_check(item) for item in table.checks]
+            + [normalize_check(item.definition) for item in table.check_constraints]
+        )
+    )
+
+
+def _declaration_only_enum_hint(column_type: str) -> bool:
+    return (
+        re.fullmatch(
+            r"(?:text|character varying(?:\([0-9]+\))?|character(?:\([0-9]+\))?)(?:\[\])?",
+            column_type,
+        )
+        is not None
+    )
+
+
+def structural_materialization_matches(
+    expected: DataContract, actual: DataContract
+) -> bool:
+    """Prove physical schema creation without applying data-compatibility semantics.
+
+    Historical extraction does not measure ownership/read-only/JSON-key metadata,
+    defaults, or identity declarations. A known historical default/identity is still
+    required exactly; an absent declaration stays unmeasured rather than "absent".
+    """
+    expected_tables = {table.name: table for table in expected.tables}
+    actual_tables = {table.name: table for table in actual.tables}
+    if expected_tables.keys() != actual_tables.keys():
+        return False
+    for name, table in expected_tables.items():
+        observed = actual_tables[name]
+        if (
+            table.primary_key != observed.primary_key
+            or sorted(map(tuple, table.unique_keys))
+            != sorted(map(tuple, observed.unique_keys))
+            or sorted(
+                (
+                    item.column,
+                    item.table,
+                    item.target,
+                    item.on_delete,
+                    item.on_update,
+                )
+                for item in table.foreign_keys
+            )
+            != sorted(
+                (
+                    item.column,
+                    item.table,
+                    item.target,
+                    item.on_delete,
+                    item.on_update,
+                )
+                for item in observed.foreign_keys
+            )
+            or _contract_checks(table) != _contract_checks(observed)
+        ):
+            return False
+        declared_columns = {column.name: column for column in table.columns}
+        materialized_columns = {column.name: column for column in observed.columns}
+        if declared_columns.keys() != materialized_columns.keys():
+            return False
+        for column_name, declared in declared_columns.items():
+            materialized = materialized_columns[column_name]
+            if (
+                declared.type != materialized.type
+                or declared.nullable != materialized.nullable
+                or (
+                    declared.values != materialized.values
+                    and not (
+                        materialized.values is None
+                        and _declaration_only_enum_hint(declared.type)
+                    )
+                )
+                or (
+                    declared.default is not None
+                    and declared.default != materialized.default
+                )
+                or (
+                    declared.identity is not None
+                    and declared.identity != materialized.identity
+                )
+            ):
+                return False
+    return True
+
+
+def empty_database_materializer(files: dict[str, str]) -> list[str] | None:
+    """Select a bounded historical-schema recipe for a new isolated empty DB."""
+    if "scripts/apply-migrations.mjs" in files:
+        return ["node", "scripts/apply-migrations.mjs"]
+    required = {
+        "package.json",
+        "pnpm-lock.yaml",
+        "drizzle.config.ts",
+        "src/lib/db/schema.ts",
+    }
+    if not required.issubset(files) or not files["src/lib/db/schema.ts"].strip():
+        return None
+    if files["drizzle.config.ts"].replace("\r\n", "\n").strip() not in _DRIZZLE_CONFIGS:
+        return None
+    try:
+        package = json.loads(files["package.json"])
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(package, dict) or package.get("packageManager") != "pnpm@9.15.0":
+        return None
+    dependencies = package.get("dependencies")
+    development = package.get("devDependencies")
+    if (
+        not isinstance(dependencies, dict)
+        or not isinstance(development, dict)
+        or dependencies.get("drizzle-orm") != "^0.36.0"
+        or development.get("drizzle-kit") != "^0.28.0"
+    ):
+        return None
+    importer = _root_lock_importer(files["pnpm-lock.yaml"])
+    if importer is None or not _root_lock_version(
+        importer,
+        "dependencies",
+        "drizzle-orm",
+        "^0.36.0",
+        r"0\.36\.[0-9]+",
+    ):
+        return None
+    if not _root_lock_version(
+        importer,
+        "devDependencies",
+        "drizzle-kit",
+        "^0.28.0",
+        r"0\.28\.[0-9]+",
+    ):
+        return None
+    return [
+        "pnpm",
+        "exec",
+        "drizzle-kit",
+        "push",
+        "--config=drizzle.config.ts",
+        "--force",
+    ]
 
 
 def verify_source_inventory(actual: dict[str, bytes], expected: list[dict[str, Any]]) -> None:
@@ -427,6 +669,8 @@ class CodeRestorationEngine:
             if saved["request_digest"] != request.digest():
                 raise CellIdentityConflict("prepared restoration envelope changed")
             return cast(dict[str, Any], saved)
+        observed_database_state: RestorationDatabaseState = "unknown"
+        empty_materializer: list[str] | None = None
         with machine_budget(870):
             async with manager.operation_lock.hold(request.workspace_id):
                 try:
@@ -510,6 +754,21 @@ class CodeRestorationEngine:
                         observation_kind="source",
                     )
                 if empty_witness is not None:
+                    observed_database_state = "empty"
+                    empty_materializer = empty_database_materializer(files)
+                    if empty_materializer is None:
+                        return {
+                            "state": "needs_changes",
+                            "candidate_id": None,
+                            "report": preparation_report(
+                                blockers=[
+                                    "В выбранной версии нет поддерживаемого описания "
+                                    "исторической схемы."
+                                ],
+                                observed_database_state=observed_database_state,
+                                capabilities=capabilities,
+                            ),
+                        }
                     live_before = await machine_effect(
                         observe_live_source,
                         source,
@@ -612,7 +871,6 @@ class CodeRestorationEngine:
                     source_business, source_technical = await machine_effect(
                         exact_inventory_partition_digests, source, inventory
                     )
-            observed_database_state: RestorationDatabaseState = "unknown"
             try:
                 if cancelled():
                     return cancelled_result()
@@ -638,17 +896,28 @@ class CodeRestorationEngine:
                 target_witness = None
                 database_digest = None
                 if empty_witness is not None:
-                    if "scripts/apply-migrations.mjs" not in files:
-                        raise PreparationNeedsChanges(
-                            "В выбранной версии нет доверенного запуска исторических миграций."
-                        )
+                    assert empty_materializer is not None
                     await self._run_stage(
                         request,
                         candidate,
-                        ["node", "scripts/apply-migrations.mjs"],
+                        empty_materializer,
                         90,
                         stage="empty-database-migrations",
                     )
+                    expected_contract = await machine_effect(candidate_contract, candidate, files)
+                    materialized_contract, catalog_blockers, unsupported = await machine_effect(
+                        describe_live_catalog, candidate
+                    )
+                    if (
+                        catalog_blockers
+                        or unsupported
+                        or not structural_materialization_matches(
+                            expected_contract, materialized_contract
+                        )
+                    ):
+                        raise PreparationNeedsChanges(
+                            "Историческая схема не создана в изолированной базе."
+                        )
                     await machine_effect(
                         self._install_identity_rows,
                         candidate,
@@ -656,28 +925,12 @@ class CodeRestorationEngine:
                         identity_dump,
                     )
                     assessment = ContractAssessment()
-                    observed_database_state = "empty"
                     candidate_business = candidate_technical = ""
                 else:
                     old_contract = await machine_effect(candidate_contract, candidate, files)
                     # Template MAX tables are served by the CURRENT trusted core, not
                     # by this project's dedicated database. No app role gains access.
-                    managed = {
-                        "max_users",
-                        "max_webhook_events",
-                        "max_catalog_items",
-                        "max_business_actions",
-                        "max_consents",
-                        "max_analytics_events",
-                        "max_bot_outbox",
-                        "max_audit_log",
-                    }
-                    old_contract = DataContract(
-                        version=1,
-                        tables=[
-                            table for table in old_contract.tables if table.name not in managed
-                        ],
-                    )
+                    old_contract = _project_data_contract(old_contract)
                     assessment = assess_contract(old_contract, current_contract)
                     checks = [
                         *checks_from_diagnostics(assessment.diagnostics),
