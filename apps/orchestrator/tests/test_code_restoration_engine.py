@@ -456,6 +456,210 @@ async def test_archive_cleanup_failure_does_not_undo_observed_activation(tmp_pat
     assert "recover" not in engine.calls
 
 
+async def test_reverted_pair_cleanup_receipt_retries_exact_bound_operation(tmp_path):
+    engine = Engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "b" * 64})
+    path = engine._directory(value.operation_id) / "activation.json"
+    intent = {
+        "state": "reverted",
+        "cleanup_pending": True,
+        "database_strategy": "replace_verified_empty",
+        "binding_digest": value.binding_digest,
+    }
+    write_controller_json(path, intent)
+    attempts = []
+
+    def cleanup(*args, **kwargs):
+        attempts.append((args, kwargs))
+        if len(attempts) == 1:
+            raise OSError("docker busy")
+
+    backend = SimpleNamespace(cleanup_reverted_restoration=cleanup)
+    prepared = {"code_digest": "c" * 64, "database_digest": "d" * 64}
+
+    with pytest.raises(OSError, match="docker busy"):
+        await engine._cleanup_reverted_pair(backend, value, prepared, intent, path)
+    assert json.loads(path.read_text())["cleanup_pending"] is True
+
+    await engine._cleanup_reverted_pair(backend, value, prepared, intent, path)
+
+    assert len(attempts) == 2
+    assert attempts[-1][0] == (value.operation_id,)
+    assert attempts[-1][1] == {
+        "binding_digest": value.binding_digest,
+        "code_artifact_digest": "c" * 64,
+        "database_artifact_digest": "d" * 64,
+    }
+    assert "cleanup_pending" not in json.loads(path.read_text())
+
+
+@pytest.mark.parametrize("state", ["target_recovery", "target_writers_admitted", "active"])
+async def test_forward_or_active_pair_is_never_cleanup_eligible(tmp_path, state):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    engine = Engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "b" * 64})
+    path = engine._directory(value.operation_id) / "activation.json"
+    intent = {
+        "state": state,
+        "cleanup_pending": True,
+        "database_strategy": "replace_verified_empty",
+        "binding_digest": value.binding_digest,
+    }
+    called = False
+
+    def cleanup(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    backend = SimpleNamespace(cleanup_reverted_restoration=cleanup)
+
+    with pytest.raises(CellIdentityConflict, match="cleanup state"):
+        await engine._cleanup_reverted_pair(
+            backend,
+            value,
+            {"code_digest": "c" * 64, "database_digest": "d" * 64},
+            intent,
+            path,
+        )
+    assert not called
+
+
+async def test_empty_database_import_failure_recovers_old_and_cleans_exact_pair(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    from dataclasses import dataclass
+
+    from omnia_orchestrator.routers.runtime import _workspace_revision
+    from omnia_orchestrator.services.restoration_empty import EmptyDatabaseWitness
+
+    value = request().model_copy(update={"binding_digest": "b" * 64})
+    engine = Engine(tmp_path)
+    events = []
+    volumes: dict[str, dict[str, str]] = {}
+
+    @dataclass
+    class ApplyBackend:
+        stem: str = "fixture"
+        workspace_volume: str = "old-code"
+        project_postgres_volume: str = "old-db"
+
+        def _metadata(self):
+            return {"manifest": {}}
+
+        def _lookup(self, _collection, name, _kind):
+            return object() if name in volumes else None
+
+        def labels(self, _kind):
+            return {"omnia.machine": "true"}
+
+        def restoration_volume_labels(
+            self, operation_id, *, purpose, binding_digest, artifact_digest
+        ):
+            return {
+                "omnia.restoration_operation_id": str(operation_id),
+                "omnia.restoration_purpose": purpose,
+                "omnia.restoration_binding_digest": binding_digest,
+                "omnia.restoration_artifact_digest": artifact_digest,
+            }
+
+        def import_volume(self, name, _path):
+            events.append(("code-import", name))
+
+        def import_restoration_database(self, *_args, **_kwargs):
+            events.append("database-import-failed")
+            raise OSError("database import failed")
+
+        def cleanup_reverted_restoration(self, operation_id, **kwargs):
+            events.append(("cleanup", operation_id, kwargs, sorted(volumes)))
+            volumes.clear()
+
+    backend = ApplyBackend()
+    backend.client = SimpleNamespace(volumes=object())
+    engine.backend = backend
+    engine.manager.machine_runtime.parts = lambda _state: (
+        SimpleNamespace(state=lambda: {"manifest": {}}),
+        backend,
+    )
+    async def read_source_files(_name):
+        return {"src/page.tsx": b"current"}
+
+    engine.manager.docker = SimpleNamespace(read_workspace_source_files=read_source_files)
+    engine.manager._state_labels = lambda *_args: {"omnia.cell": "true"}
+
+    async def ensure_volume(name, labels):
+        volumes[name] = labels
+
+    engine.manager._ensure_volume = ensure_volume
+
+    async def preflight(*_args):
+        return engine.state, SimpleNamespace(state=lambda: {"manifest": {}}), backend
+
+    engine._activation_preflight = preflight
+    async def recover_old(*_args):
+        events.append("recover-old")
+        engine.matches = True
+
+    engine._recover_old = recover_old
+    async def read_workspace(*_args):
+        return {"src/page.tsx": "current"}
+
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", read_workspace
+    )
+    witness = EmptyDatabaseWitness(
+        project_id=value.project_id,
+        workspace_id=value.workspace_id,
+        operation_id=value.operation_id,
+        database_identity_digest="1" * 64,
+        catalog_digest="2" * 64,
+        objects_digest="3" * 64,
+        technical_state_digest="4" * 64,
+        identity_rows_digest="5" * 64,
+        observation_kind="source",
+        identity_relations=[],
+    )
+    monkeypatch.setattr(
+        "omnia_orchestrator.services.code_restoration_engine.observe_empty_database",
+        lambda *_args, **_kwargs: witness,
+    )
+    directory = engine._directory(value.operation_id)
+    (directory / "code.tar").write_bytes(b"code")
+    (directory / "database.tar").write_bytes(b"database")
+    prepared = {
+        "workspace_revision": _workspace_revision({"src/page.tsx": "current"}),
+        "current_files": [
+            {
+                "path": "src/page.tsx",
+                "sha256": hashlib.sha256(b"current").hexdigest(),
+            }
+        ],
+        "live_contract": {"version": 1, "tables": []},
+        "code_digest": hashlib.sha256(b"code").hexdigest(),
+        "database_digest": hashlib.sha256(b"database").hexdigest(),
+        "database_strategy": "replace_verified_empty",
+        "empty_witness": witness.model_dump(mode="json"),
+        "manifest": {},
+    }
+
+    result = await engine.apply(value, prepared)
+
+    assert result["applied"] is False
+    assert "recover-old" in events
+    assert "database-import-failed" in events
+    cleanup = next(item for item in events if isinstance(item, tuple) and item[0] == "cleanup")
+    assert cleanup[1] == value.operation_id
+    assert cleanup[3] == [
+        backend.stem + "-code-" + value.operation_id.hex,
+        backend.stem + "-db-" + value.operation_id.hex,
+    ]
+    assert volumes == {}
+    receipt = json.loads((directory / "activation.json").read_text())
+    assert receipt["state"] == "reverted"
+    assert "cleanup_pending" not in receipt
+
+
 @pytest.mark.parametrize("stage", ["intent", "switching", "reverting"])
 async def test_crash_before_proven_switch_restores_old_code_and_releases_exact_fence(
     tmp_path, stage

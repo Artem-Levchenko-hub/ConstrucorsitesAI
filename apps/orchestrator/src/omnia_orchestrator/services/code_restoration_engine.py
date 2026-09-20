@@ -1906,11 +1906,26 @@ for path,digest,mode in json.load(sys.stdin):
                 target = replace(backend, workspace_volume=volume)
                 # Source readers and future generations verify the canonical
                 # Project Cell identity as well as the machine-volume identity.
+                code_volume_labels: dict[str, str] = {}
+                if database_strategy == "replace_verified_empty":
+                    if request.binding_digest is None or not isinstance(
+                        prepared.get("database_digest"), str
+                    ):
+                        raise CellIdentityConflict(
+                            "empty restoration artifact identity is unavailable"
+                        )
+                    code_volume_labels = target.restoration_volume_labels(
+                        request.operation_id,
+                        purpose="code",
+                        binding_digest=request.binding_digest,
+                        artifact_digest=prepared["code_digest"],
+                    )
                 await manager._ensure_volume(
                     volume,
                     {
                         **manager._state_labels(state, "project-volume"),
                         **target.labels("project-volume"),
+                        **code_volume_labels,
                     },
                 )
                 await machine_effect(target.import_volume, volume, archive)
@@ -1927,12 +1942,20 @@ for path,digest,mode in json.load(sys.stdin):
                         {
                             **manager._state_labels(state, "project-volume"),
                             **target.labels("project-volume"),
+                            **target.restoration_volume_labels(
+                                request.operation_id,
+                                purpose="database",
+                                binding_digest=request.binding_digest,
+                                artifact_digest=prepared["database_digest"],
+                            ),
                         },
                     )
                     await machine_effect(
-                        target.import_volume,
-                        database_volume,
+                        target.import_restoration_database,
+                        request.operation_id,
                         directory / "database.tar",
+                        binding_digest=request.binding_digest,
+                        artifact_digest=prepared["database_digest"],
                     )
                     intent["state"] = "writers_stopping"
                     write_controller_json(directory / "activation.json", intent)
@@ -1992,8 +2015,16 @@ for path,digest,mode in json.load(sys.stdin):
                 intent["state"] = "reverting"
                 write_controller_json(directory / "activation.json", intent)
                 await self._recover_old(manager, state, backend, old, request.fencing_epoch)
-                intent["state"] = "reverted"
-                write_controller_json(directory / "activation.json", intent)
+                await self._record_reverted_pair(
+                    manager,
+                    state,
+                    backend,
+                    request,
+                    prepared,
+                    intent,
+                    directory / "activation.json",
+                    old,
+                )
                 self._discard_code(directory)
                 return self._observed(intent, applied=False)
             intent["state"] = "active"
@@ -2218,6 +2249,65 @@ for path,digest,mode in json.load(sys.stdin):
         )
         await self._complete_fence(manager, state, epoch, old["workspace_volume"])
 
+    async def _cleanup_reverted_pair(
+        self,
+        backend: Any,
+        request: CodeRestorationApply,
+        prepared: dict[str, Any],
+        intent: dict[str, Any],
+        path: Path,
+    ) -> None:
+        if (
+            intent.get("state") != "reverted"
+            or intent.get("cleanup_pending") is not True
+            or intent.get("database_strategy") != "replace_verified_empty"
+        ):
+            raise CellIdentityConflict("restoration cleanup state is invalid")
+        if request.binding_digest is None or intent.get("binding_digest") != request.binding_digest:
+            raise CellIdentityConflict("restoration cleanup binding changed")
+        code_digest = prepared.get("code_digest")
+        database_digest = prepared.get("database_digest")
+        if not isinstance(code_digest, str) or not isinstance(database_digest, str):
+            raise CellIdentityConflict("restoration cleanup artifacts are unavailable")
+        await machine_effect(
+            backend.cleanup_reverted_restoration,
+            request.operation_id,
+            binding_digest=request.binding_digest,
+            code_artifact_digest=code_digest,
+            database_artifact_digest=database_digest,
+        )
+        intent.pop("cleanup_pending", None)
+        write_controller_json(path, intent)
+
+    async def _record_reverted_pair(
+        self,
+        manager: Any,
+        state: Any,
+        backend: Any,
+        request: CodeRestorationApply,
+        prepared: dict[str, Any],
+        intent: dict[str, Any],
+        path: Path,
+        old: dict[str, Any],
+    ) -> None:
+        intent["state"] = "reverted"
+        if intent.get("database_strategy") != "replace_verified_empty":
+            write_controller_json(path, intent)
+            return
+        if not await self._running_matches(
+            manager,
+            state,
+            backend,
+            old["workspace_volume"],
+            request.fencing_epoch,
+            old["machine"]["manifest"],
+            old.get("database_volume"),
+        ):
+            raise CellResourceError("reverted restoration source pair is not confirmed")
+        intent["cleanup_pending"] = True
+        write_controller_json(path, intent)
+        await self._cleanup_reverted_pair(backend, request, prepared, intent, path)
+
     async def observe(
         self, request: CodeRestorationApply, prepared: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -2347,13 +2437,23 @@ for path,digest,mode in json.load(sys.stdin):
             old["machine"]["manifest"],
             old.get("database_volume"),
         ):
+            if intent.get("cleanup_pending") is True:
+                await self._cleanup_reverted_pair(backend, request, prepared, intent, path)
             self._discard_code(path.parent)
             return self._observed(intent, applied=False)
         intent["state"] = "reverting"
         write_controller_json(path, intent)
         await self._recover_old(manager, state, backend, old, request.fencing_epoch)
-        intent["state"] = "reverted"
-        write_controller_json(path, intent)
+        await self._record_reverted_pair(
+            manager,
+            state,
+            backend,
+            request,
+            prepared,
+            intent,
+            path,
+            old,
+        )
         self._discard_code(path.parent)
         return self._observed(intent, applied=False)
 

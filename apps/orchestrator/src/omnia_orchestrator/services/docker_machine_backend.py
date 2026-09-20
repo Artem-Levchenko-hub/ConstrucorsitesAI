@@ -1793,14 +1793,119 @@ class DockerMachineBackend:
         metadata["services"] = {}
         write_controller_json(self.metadata_path, metadata)
 
-    def _archive_helper(self, volume: str, *, writable: bool) -> Any:
-        metadata = self._metadata()
-        manifest = MachineManifest.model_validate(metadata["manifest"])
-        allowed: dict[str, dict[str, str]] = {
-            name: {} for name in self.environment_volume_names(manifest)
+    @staticmethod
+    def _restoration_identity_labels(
+        operation_id: UUID,
+        *,
+        purpose: str,
+        binding_digest: str,
+        artifact_digest: str,
+    ) -> dict[str, str]:
+        if (
+            not isinstance(operation_id, UUID)
+            or purpose not in {"code", "database"}
+            or re.fullmatch(r"[0-9a-f]{64}", binding_digest) is None
+            or re.fullmatch(r"[0-9a-f]{64}", artifact_digest) is None
+        ):
+            raise CellIdentityConflict("restoration volume identity is invalid")
+        return {
+            "omnia.restoration_operation_id": str(operation_id),
+            "omnia.restoration_purpose": purpose,
+            "omnia.restoration_binding_digest": binding_digest,
+            "omnia.restoration_artifact_digest": artifact_digest,
         }
-        if metadata.get("restore_in_progress"):
-            allowed = {item["name"]: {} for item in metadata["restore_target"]["volumes"]}
+
+    def restoration_volume_labels(
+        self,
+        operation_id: UUID,
+        *,
+        purpose: str,
+        binding_digest: str,
+        artifact_digest: str,
+    ) -> dict[str, str]:
+        return self._restoration_identity_labels(
+            operation_id,
+            purpose=purpose,
+            binding_digest=binding_digest,
+            artifact_digest=artifact_digest,
+        )
+
+    def _restoration_volume(
+        self,
+        operation_id: UUID,
+        *,
+        purpose: str,
+        binding_digest: str,
+        artifact_digest: str,
+        allow_missing: bool,
+    ) -> tuple[str, Any | None, dict[str, str]]:
+        suffix = "code" if purpose == "code" else "db"
+        name = f"{self.stem}-{suffix}-{operation_id.hex}"
+        immutable = self._restoration_identity_labels(
+            operation_id,
+            purpose=purpose,
+            binding_digest=binding_digest,
+            artifact_digest=artifact_digest,
+        )
+        volume = self._lookup(self.client.volumes, name, "project-volume")
+        if volume is None:
+            if allow_missing:
+                return name, None, immutable
+            raise CellIdentityConflict("restoration volume is missing")
+        attrs = volume.attrs or {}
+        labels = attrs.get("Labels") or {}
+        if attrs.get("Name") != name or any(
+            labels.get(key) != value for key, value in immutable.items()
+        ):
+            raise CellIdentityConflict("restoration volume identity mismatch")
+        return name, volume, immutable
+
+    def _require_restoration_volume_detached(self, name: str, *, purpose: str) -> None:
+        metadata = self._metadata()
+        if purpose == "database" and name == self.project_postgres_volume:
+            raise CellIdentityConflict("active restoration database cannot be imported or removed")
+        active_code = metadata.get("active_code_volume", self.workspace_volume)
+        if purpose == "code" and name in {self.workspace_volume, active_code}:
+            raise CellIdentityConflict("active restoration code cannot be removed")
+        if self.client.containers.list(all=True, filters={"volume": name}):
+            raise CellIdentityConflict("attached restoration volume cannot be imported or removed")
+
+    @staticmethod
+    def _archive_digest(path: Path) -> str:
+        if path.is_symlink() or not path.is_file():
+            raise CellIdentityConflict("restoration database archive is unavailable")
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _archive_helper(
+        self,
+        volume: str,
+        *,
+        writable: bool,
+        restoration_identity: dict[str, str] | None = None,
+    ) -> Any:
+        if restoration_identity is None:
+            metadata = self._metadata()
+            manifest = MachineManifest.model_validate(metadata["manifest"])
+            allowed: dict[str, dict[str, str]] = {
+                name: {} for name in self.environment_volume_names(manifest)
+            }
+            if metadata.get("restore_in_progress"):
+                allowed = {item["name"]: {} for item in metadata["restore_target"]["volumes"]}
+        else:
+            allowed = {}
+            if not writable:
+                raise CellIdentityConflict("restoration archive authorization is invalid")
+            resource = self._lookup(self.client.volumes, volume, "project-volume")
+            labels = (resource.attrs.get("Labels") or {}) if resource is not None else {}
+            if resource is None or any(
+                labels.get(key) != value for key, value in restoration_identity.items()
+            ):
+                raise CellIdentityConflict("restoration archive identity mismatch")
+            allowed[volume] = {}
         if volume not in allowed:
             raise CellIdentityConflict("volume is not owned by this machine")
         return self.client.containers.create(
@@ -1858,3 +1963,82 @@ class DockerMachineBackend:
                     raise CellResourceError("volume archive restore failed")
         finally:
             helper.remove(force=True)
+
+    def import_restoration_database(
+        self,
+        operation_id: UUID,
+        path: Path,
+        *,
+        binding_digest: str,
+        artifact_digest: str,
+    ) -> None:
+        """Import one bound empty-restoration DB without authorizing arbitrary volumes."""
+        self._reconcile_recovery_helpers()
+        name, _volume, immutable = self._restoration_volume(
+            operation_id,
+            purpose="database",
+            binding_digest=binding_digest,
+            artifact_digest=artifact_digest,
+            allow_missing=False,
+        )
+        self._require_restoration_volume_detached(name, purpose="database")
+        if self._archive_digest(path) != artifact_digest:
+            raise CellIdentityConflict("restoration database artifact changed")
+        helper = self._archive_helper(
+            name,
+            writable=True,
+            restoration_identity=immutable,
+        )
+        try:
+            helper.start()
+            result = helper.exec_run(
+                [
+                    "python3",
+                    "-c",
+                    "import os,shutil; "
+                    "[(shutil.rmtree('/volume/'+p) if os.path.isdir('/volume/'+p) "
+                    "and not os.path.islink('/volume/'+p) else "
+                    "os.unlink('/volume/'+p)) for p in os.listdir('/volume')]",
+                ]
+            )
+            if result.exit_code != 0:
+                raise CellResourceError("cannot clear owned restoration database")
+            with path.open("rb") as handle:
+                if not helper.put_archive("/volume", handle):
+                    raise CellResourceError("restoration database archive restore failed")
+        finally:
+            helper.remove(force=True)
+
+    def cleanup_reverted_restoration(
+        self,
+        operation_id: UUID,
+        *,
+        binding_digest: str,
+        code_artifact_digest: str,
+        database_artifact_digest: str,
+    ) -> None:
+        """Remove only the detached, exactly-bound pair of a reverted operation."""
+        self._reconcile_recovery_helpers()
+        candidates: list[tuple[str, Any, str]] = []
+        for purpose, artifact_digest in (
+            ("code", code_artifact_digest),
+            ("database", database_artifact_digest),
+        ):
+            name, volume, _immutable = self._restoration_volume(
+                operation_id,
+                purpose=purpose,
+                binding_digest=binding_digest,
+                artifact_digest=artifact_digest,
+                allow_missing=True,
+            )
+            if volume is None:
+                continue
+            self._require_restoration_volume_detached(name, purpose=purpose)
+            candidates.append((name, volume, purpose))
+        for name, volume, _purpose in candidates:
+            try:
+                volume.remove()
+            except docker.errors.NotFound:
+                continue
+            if self._lookup(self.client.volumes, name, "project-volume") is not None:
+                raise CellResourceError("reverted restoration volume removal was not confirmed")

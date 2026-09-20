@@ -1,10 +1,11 @@
+import hashlib
 import importlib
 import importlib.util
 import os
 import stat
 import subprocess
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -39,6 +40,324 @@ def backend(tmp_path, **overrides):
     )
     values.update(overrides)
     return module.DockerMachineBackend(**values)
+
+
+def restoration_volume_fixture(
+    tmp_path,
+    *,
+    attached: bool = False,
+    active: bool = False,
+    label_changes: dict[str, str] | None = None,
+    actual_name: str | None = None,
+):
+    import docker
+
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    operation_id = UUID("12345678-1234-5678-1234-567812345678")
+    binding_digest = "b" * 64
+    content = b"database archive"
+    artifact_digest = hashlib.sha256(content).hexdigest()
+    runtime = backend(tmp_path)
+    name = runtime.stem + "-db-" + operation_id.hex
+    labels = {
+        **runtime.labels("project-volume"),
+        "omnia.restoration_operation_id": str(operation_id),
+        "omnia.restoration_purpose": "database",
+        "omnia.restoration_binding_digest": binding_digest,
+        "omnia.restoration_artifact_digest": artifact_digest,
+    }
+    labels.update(label_changes or {})
+    removed: list[bool | None] = []
+    volumes: dict[str, object] = {}
+
+    class Volume:
+        def __init__(self):
+            self.name = name
+            self.attrs = {"Name": actual_name or name, "Labels": labels}
+
+        def remove(self, force=None):
+            removed.append(force)
+            volumes.pop(name, None)
+
+    volume = Volume()
+    volumes[name] = volume
+
+    def get_volume(candidate):
+        if candidate in volumes:
+            return volumes[candidate]
+        raise docker.errors.NotFound("missing")
+
+    helpers = []
+
+    class Helper:
+        id = "archive-helper"
+
+        def __init__(self, options):
+            self.options = options
+            self.started = False
+            self.removed = False
+
+        def start(self):
+            self.started = True
+
+        def exec_run(self, _argv):
+            return SimpleNamespace(exit_code=0)
+
+        def put_archive(self, _path, handle):
+            return handle.read() == content
+
+        def remove(self, **_kwargs):
+            self.removed = True
+
+    def create_helper(_image, _command, **options):
+        helper = Helper(options)
+        helpers.append(helper)
+        return helper
+
+    def list_containers(*, all, filters):
+        assert all is True
+        return [SimpleNamespace(id="writer")] if filters.get("volume") == name and attached else []
+
+    runtime.client = SimpleNamespace(
+        volumes=SimpleNamespace(get=get_volume),
+        containers=SimpleNamespace(
+            get=lambda _name: (_ for _ in ()).throw(docker.errors.NotFound("missing")),
+            list=list_containers,
+            create=create_helper,
+        ),
+    )
+    archive = tmp_path / "database.tar"
+    archive.write_bytes(content)
+    metadata = {"manifest": payload()}
+    if active:
+        metadata["active_database_volume"] = name
+    write_controller_json(runtime.metadata_path, metadata)
+    return SimpleNamespace(
+        runtime=runtime,
+        operation_id=operation_id,
+        binding_digest=binding_digest,
+        artifact_digest=artifact_digest,
+        name=name,
+        archive=archive,
+        labels=labels,
+        helpers=helpers,
+        removed=removed,
+        volumes=volumes,
+    )
+
+
+def test_private_restoration_database_import_is_exact_and_does_not_switch_metadata(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    fixture = restoration_volume_fixture(tmp_path)
+    before = fixture.runtime._metadata()
+
+    fixture.runtime.import_restoration_database(
+        fixture.operation_id,
+        fixture.archive,
+        binding_digest=fixture.binding_digest,
+        artifact_digest=fixture.artifact_digest,
+    )
+
+    assert fixture.runtime._metadata() == before
+    assert fixture.helpers[0].options["volumes"] == {
+        fixture.name: {"bind": "/volume", "mode": "rw"}
+    }
+    assert fixture.helpers[0].started and fixture.helpers[0].removed
+    with pytest.raises(CellIdentityConflict, match="volume is not owned"):
+        fixture.runtime.import_volume(fixture.name, fixture.archive)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "operation",
+        "name",
+        "operation_label",
+        "purpose",
+        "binding",
+        "artifact",
+        "active",
+        "attached",
+    ],
+)
+def test_private_restoration_database_import_rejects_ambiguous_identity(tmp_path, fault):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    changes = {}
+    if fault == "operation_label":
+        changes["omnia.restoration_operation_id"] = str(uuid4())
+    elif fault == "purpose":
+        changes["omnia.restoration_purpose"] = "code"
+    elif fault == "binding":
+        changes["omnia.restoration_binding_digest"] = "c" * 64
+    elif fault == "artifact":
+        changes["omnia.restoration_artifact_digest"] = "d" * 64
+    fixture = restoration_volume_fixture(
+        tmp_path,
+        attached=fault == "attached",
+        active=fault == "active",
+        label_changes=changes,
+        actual_name="wrong-name" if fault == "name" else None,
+    )
+
+    with pytest.raises(CellIdentityConflict):
+        fixture.runtime.import_restoration_database(
+            uuid4() if fault == "operation" else fixture.operation_id,
+            fixture.archive,
+            binding_digest=fixture.binding_digest,
+            artifact_digest=fixture.artifact_digest,
+        )
+    assert fixture.helpers == []
+
+
+def test_reverted_restoration_cleanup_removes_only_exact_detached_pair_and_retries(tmp_path):
+    fixture = restoration_volume_fixture(tmp_path)
+    code_name = fixture.runtime.stem + "-code-" + fixture.operation_id.hex
+    code_labels = {
+        **fixture.runtime.labels("project-volume"),
+        **fixture.labels,
+        "omnia.restoration_purpose": "code",
+        "omnia.restoration_artifact_digest": "c" * 64,
+    }
+    fixture.volumes[code_name] = SimpleNamespace(
+        name=code_name,
+        attrs={"Name": code_name, "Labels": code_labels},
+        remove=lambda force=None: fixture.volumes.pop(code_name, None),
+    )
+
+    fixture.runtime.cleanup_reverted_restoration(
+        fixture.operation_id,
+        binding_digest=fixture.binding_digest,
+        code_artifact_digest="c" * 64,
+        database_artifact_digest=fixture.artifact_digest,
+    )
+    fixture.runtime.cleanup_reverted_restoration(
+        fixture.operation_id,
+        binding_digest=fixture.binding_digest,
+        code_artifact_digest="c" * 64,
+        database_artifact_digest=fixture.artifact_digest,
+    )
+
+    assert fixture.volumes == {}
+    assert fixture.removed == [None]
+
+
+def test_reverted_restoration_cleanup_retains_tampered_volume(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    fixture = restoration_volume_fixture(
+        tmp_path,
+        label_changes={"omnia.restoration_binding_digest": "f" * 64},
+    )
+
+    with pytest.raises(CellIdentityConflict):
+        fixture.runtime.cleanup_reverted_restoration(
+            fixture.operation_id,
+            binding_digest=fixture.binding_digest,
+            code_artifact_digest="c" * 64,
+            database_artifact_digest=fixture.artifact_digest,
+        )
+
+    assert fixture.name in fixture.volumes
+    assert fixture.removed == []
+
+
+@pytest.mark.parametrize("status", ["running", "exited"])
+def test_reverted_restoration_cleanup_reconciles_owned_archive_helper_and_retries(
+    tmp_path, status
+):
+    import docker
+
+    fixture = restoration_volume_fixture(tmp_path)
+    remove_attempts = 0
+    helper_present = True
+
+    class InterruptedArchiveHelper:
+        def __init__(self):
+            self.id = "interrupted-archive-helper"
+            self.attrs = {
+                "Config": {"Labels": fixture.runtime.labels("archive")},
+                "State": {"Status": status},
+            }
+
+        def remove(self, *, force):
+            nonlocal helper_present, remove_attempts
+            assert force is True
+            remove_attempts += 1
+            if remove_attempts == 1:
+                raise OSError("docker helper removal failed")
+            helper_present = False
+
+    helper = InterruptedArchiveHelper()
+
+    def list_containers(*, all, filters):
+        assert all is True
+        if "label" in filters:
+            return [helper] if helper_present else []
+        if filters.get("volume") == fixture.name:
+            return [helper] if helper_present else []
+        return []
+
+    def get_container(candidate):
+        if candidate == helper.id and helper_present:
+            return helper
+        raise docker.errors.NotFound("missing")
+
+    fixture.runtime.client.containers.list = list_containers
+    fixture.runtime.client.containers.get = get_container
+
+    with pytest.raises(OSError, match="helper removal failed"):
+        fixture.runtime.cleanup_reverted_restoration(
+            fixture.operation_id,
+            binding_digest=fixture.binding_digest,
+            code_artifact_digest="c" * 64,
+            database_artifact_digest=fixture.artifact_digest,
+        )
+    assert fixture.name in fixture.volumes
+
+    fixture.runtime.cleanup_reverted_restoration(
+        fixture.operation_id,
+        binding_digest=fixture.binding_digest,
+        code_artifact_digest="c" * 64,
+        database_artifact_digest=fixture.artifact_digest,
+    )
+
+    assert remove_attempts == 2
+    assert fixture.volumes == {}
+
+
+def test_reverted_restoration_cleanup_retains_volume_attached_by_foreign_helper(tmp_path):
+    fixture = restoration_volume_fixture(tmp_path)
+    foreign = SimpleNamespace(
+        id="foreign-helper",
+        attrs={"Config": {"Labels": {"omnia.resource_kind": "archive"}}},
+        removed=False,
+    )
+
+    def list_containers(*, all, filters):
+        assert all is True
+        if "label" in filters:
+            return []
+        if filters.get("volume") == fixture.name:
+            return [foreign]
+        return []
+
+    fixture.runtime.client.containers.list = list_containers
+
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    with pytest.raises(CellIdentityConflict, match="attached restoration volume"):
+        fixture.runtime.cleanup_reverted_restoration(
+            fixture.operation_id,
+            binding_digest=fixture.binding_digest,
+            code_artifact_digest="c" * 64,
+            database_artifact_digest=fixture.artifact_digest,
+        )
+
+    assert fixture.name in fixture.volumes
+    assert foreign.removed is False
 
 
 def test_controller_metadata_selects_active_database_volume(tmp_path):
