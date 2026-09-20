@@ -454,6 +454,14 @@ async def run_agent_generation(
         plan=_prompt_plan,
         operations=_operations,
     )
+    _promotion_permit = None
+    if _max_finalization_proof is not None:
+        from omnia_api.services.promotion_permit import require_promotion_permit
+
+        _promotion_permit = require_promotion_permit(
+            _max_finalization_proof.permit,
+            proof=_max_finalization_proof,
+        )
 
     # One verdict for the whole turn: the run status, the chat text and the
     # «Продолжить» card below all follow it.
@@ -475,15 +483,22 @@ async def run_agent_generation(
     # must still prove that its FINAL live tree typechecks, serves and has
     # safe transport headers before its exact commit can be deployed.
     if files and get_settings().use_build_attestation:
-        from omnia_api.services.release_proof import run_release_proof
+        if _max_finalization_proof is not None:
+            from omnia_api.services.max_finalization import proof_bundle_verdict
 
-        _release_verdict = await run_release_proof(
-            ids.project_id,
-            project_info.slug,
-            proof=_max_finalization_proof,
-            require_max_data=project_info.template == "max_miniapp",
-            project_cell_handle=runtime.handle,
-        )
+            _release_verdict = proof_bundle_verdict(
+                _max_finalization_proof,
+                require_max_data=False,
+            )
+        else:
+            from omnia_api.services.release_proof import run_release_proof
+
+            _release_verdict = await run_release_proof(
+                ids.project_id,
+                project_info.slug,
+                require_max_data=project_info.template == "max_miniapp",
+                project_cell_handle=runtime.handle,
+            )
         if _att_capture is None:
             _att_capture = []
         _att_capture.append(("release", _release_verdict))
@@ -496,6 +511,7 @@ async def run_agent_generation(
         _attestation_stack=_attestation_stack,
         _consume_free_generation=_consume_free_generation,
         _max_finalization_proof=_max_finalization_proof,
+        _promotion_permit=_promotion_permit,
         _orch_name=_stack.orchestrator_template,
         accumulated=accumulated,
         baseline=baseline,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from functools import partial
 from uuid import uuid4
 
@@ -160,6 +161,8 @@ def context(rows, factory, trace, monkeypatch, **overrides):
         usage_data={"tokens_in": 11, "tokens_out": 23},
         _agent_step_log=[{"action": "write", "path": "page.txt"}],
         _max_finalization_proof=None,
+        _promotion_permit=None,
+        template="blank",
         is_free=True,
         free_business_id=None,
     )
@@ -173,7 +176,7 @@ async def execute(path, env):
     owner, project, _parent, message, run = rows[:5]
     ids = GenerationIds(run.id, project.id, owner.id, uuid4(), message.id)
     facts = ProjectGenerationFacts(
-        "blank", project.slug, project.name, None, None, False, "ru", False, "", ""
+        env["template"], project.slug, project.name, None, None, False, "ru", False, "", ""
     )
     baseline = SourceBaseline(
         env["current_snapshot_id"], env["current_sha"], {"old.txt": "preserve", "page.txt": "old"}
@@ -220,10 +223,11 @@ async def execute(path, env):
             _attestation_stack="",
             _orch_name=None,
             _max_finalization_proof=env["_max_finalization_proof"],
+            _promotion_permit=env["_promotion_permit"],
             progress=GenerationProgress(
                 env["factory"], run.id, project.id, message.id, env["_agent_step_log"]
             ),
-            runtime=GenerationRuntime(),
+            runtime=env.get("runtime", GenerationRuntime()),
         )
     return captured
 
@@ -448,6 +452,287 @@ async def test_agent_proof_exact_tree_deletes_absent_and_preserves_empty(monkeyp
     assert calls[0][1] == {"exact_tree": True}
     assert repo.read_files(rows[1].id, snapshot.commit_sha) == {"page.txt": "new", "empty.txt": ""}
     assert repo.read_files(rows[1].id, env["current_sha"]) == original
+
+
+async def test_max_publication_requires_green_promotion_permit_before_git(monkeypatch):
+    from omnia_api.services.promotion_permit import PromotionPermitError
+
+    rows, trace = records(), []
+    session = OfflineSession(rows, trace)
+    env, calls, original = context(
+        rows,
+        lambda: session,
+        trace,
+        monkeypatch,
+        template="max_miniapp",
+        _max_finalization_proof=object(),
+    )
+
+    with pytest.raises(PromotionPermitError) as raised:
+        await execute("agent", env)
+
+    assert raised.value.code == "PROMOTION_PERMIT_MISSING"
+    assert calls == [] and trace == []
+    assert session.durable[0].free_generations_used == 3
+    assert session.durable[1].current_snapshot_id == rows[2].id
+    assert session.durable[3].content == "before"
+    assert repo.read_files(rows[1].id, env["current_sha"]) == original
+
+
+async def test_tampered_promotion_permit_fails_before_git(monkeypatch):
+    from types import SimpleNamespace
+
+    from omnia_api.services.max_finalization import ProofBundle
+    from omnia_api.services.promotion_permit import (
+        PromotionPermitError,
+        issue_promotion_permit,
+        release_receipt_digest,
+        release_receipt_ref,
+    )
+
+    rows, trace = records(), []
+    session = OfflineSession(rows, trace)
+    identity = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        generation_run_id=rows[4].id,
+        fencing_epoch=7,
+        proof_key="1" * 64,
+        workspace_revision="2" * 64,
+    )
+    from omnia_api.services.promotion_permit import canonical_files_digest
+
+    build = SimpleNamespace(
+        proof_id=identity.id,
+        workspace_id=identity.workspace_id,
+        outcome="green",
+        artifact_ref="build/sha256/"
+        + canonical_files_digest({"page.txt": "new", "empty.txt": ""}),
+        redacted_detail="green",
+    )
+    behavior = SimpleNamespace(
+        proof_id=identity.id,
+        workspace_id=identity.workspace_id,
+        outcome="green",
+        artifact_ref="verification/sha256/" + "4" * 64,
+        redacted_detail="green",
+    )
+    release = SimpleNamespace(
+        proof_id=identity.id,
+        workspace_id=identity.workspace_id,
+        outcome="green",
+        artifact_ref=release_receipt_ref(
+            artifact_digest=build.artifact_ref.rsplit("/", 1)[-1],
+            receipt_digest=release_receipt_digest(
+                proof_key=identity.proof_key,
+                artifact_digest=build.artifact_ref.rsplit("/", 1)[-1],
+                detail="green",
+            ),
+        ),
+        redacted_detail="green",
+    )
+    proof = ProofBundle(
+        identity=identity,
+        full_build=build,
+        runtime=behavior,
+        release=release,
+    )
+    permit = issue_promotion_permit(proof)
+    tampered = replace(permit, workspace_revision="9" * 64)
+    env, calls, _original = context(
+        rows,
+        lambda: session,
+        trace,
+        monkeypatch,
+        template="max_miniapp",
+        _max_finalization_proof=proof,
+        _promotion_permit=tampered,
+    )
+
+    with pytest.raises(PromotionPermitError) as raised:
+        await execute("agent", env)
+
+    assert raised.value.code == "PROMOTION_PERMIT_TAMPERED"
+    assert calls == [] and trace == []
+    assert session.durable[0].free_generations_used == 3
+    assert session.durable[1].current_snapshot_id == rows[2].id
+
+    async def current_identity():
+        return identity
+
+    async def snapshot_files():
+        return {"page.txt": "new", "empty.txt": ""}
+
+    env["_promotion_permit"] = permit
+    env["runtime"] = GenerationRuntime(
+        handle=SimpleNamespace(
+            workspace_id=identity.workspace_id,
+            current_identity=current_identity,
+            refresh_snapshot_files=None,
+            snapshot_files=snapshot_files,
+        )
+    )
+    snapshot = (await execute("agent", env))["snapshot"]
+    assert calls and snapshot.parent_id == rows[2].id
+
+    stale_identity = SimpleNamespace(
+        proof_key=permit.proof_key,
+        workspace_id=permit.workspace_id,
+        generation_run_id=permit.generation_run_id,
+        fencing_epoch=permit.fencing_epoch,
+        workspace_revision="9" * 64,
+    )
+    from omnia_api.services.promotion_permit import require_promotion_permit
+
+    with pytest.raises(PromotionPermitError) as stale:
+        require_promotion_permit(permit, current_identity=stale_identity)
+    assert stale.value.code == "PROMOTION_PERMIT_STALE"
+
+
+async def test_max_publication_rejects_foreign_run_changed_tree_and_stale_fence_before_git(
+    monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from omnia_api.services.max_finalization import ProofBundle
+    from omnia_api.services.promotion_permit import (
+        PromotionPermitError,
+        canonical_files_digest,
+        issue_promotion_permit,
+        release_receipt_digest,
+        release_receipt_ref,
+    )
+
+    scenarios = ("foreign_run", "foreign_workspace", "changed_tree", "stale_fence")
+    for scenario in scenarios:
+        rows, trace = records(), []
+        session = OfflineSession(rows, trace)
+        run_id = uuid4() if scenario == "foreign_run" else rows[4].id
+        identity = SimpleNamespace(
+            id=uuid4(),
+            workspace_id=uuid4(),
+            generation_run_id=run_id,
+            fencing_epoch=7,
+            proof_key="1" * 64,
+            workspace_revision="2" * 64,
+        )
+        build_digest = canonical_files_digest({"page.txt": "new", "empty.txt": ""})
+        build = SimpleNamespace(
+            proof_id=identity.id,
+            workspace_id=identity.workspace_id,
+            outcome="green",
+            artifact_ref=f"build/sha256/{build_digest}",
+            redacted_detail="green",
+        )
+        behavior = SimpleNamespace(
+            proof_id=identity.id,
+            workspace_id=identity.workspace_id,
+            outcome="green",
+            artifact_ref="verification/sha256/" + "4" * 64,
+            redacted_detail="green",
+        )
+        release = SimpleNamespace(
+            proof_id=identity.id,
+            workspace_id=identity.workspace_id,
+            outcome="green",
+            artifact_ref=release_receipt_ref(
+                artifact_digest=build_digest,
+                receipt_digest=release_receipt_digest(
+                    proof_key=identity.proof_key,
+                    artifact_digest=build_digest,
+                    detail="green",
+                ),
+            ),
+            redacted_detail="green",
+        )
+        proof = ProofBundle(
+            identity=identity,
+            full_build=build,
+            runtime=behavior,
+            release=release,
+        )
+        permit = issue_promotion_permit(proof)
+        current = SimpleNamespace(
+            proof_key=identity.proof_key,
+            workspace_id=identity.workspace_id,
+            generation_run_id=identity.generation_run_id,
+            fencing_epoch=8 if scenario == "stale_fence" else identity.fencing_epoch,
+            workspace_revision=identity.workspace_revision,
+        )
+
+        async def current_identity(current=current):
+            return current
+
+        async def snapshot_files():
+            return {"page.txt": "new", "empty.txt": ""}
+
+        env, calls, original = context(
+            rows,
+            lambda: session,
+            trace,
+            monkeypatch,
+            template="max_miniapp",
+            _max_finalization_proof=proof,
+            _promotion_permit=permit,
+            runtime=GenerationRuntime(
+                handle=SimpleNamespace(
+                    workspace_id=(
+                        uuid4() if scenario == "foreign_workspace" else identity.workspace_id
+                    ),
+                    current_identity=current_identity,
+                    refresh_snapshot_files=None,
+                    snapshot_files=snapshot_files,
+                )
+            ),
+        )
+        if scenario == "changed_tree":
+            env["files"] = {"page.txt": "changed after proof", "empty.txt": ""}
+
+        with pytest.raises(PromotionPermitError) as raised:
+            await execute("agent", env)
+
+        assert raised.value.code == "PROMOTION_PERMIT_STALE"
+        assert calls == [] and trace == []
+        assert session.durable[0].free_generations_used == 3
+        assert session.durable[1].current_snapshot_id == rows[2].id
+        assert repo.read_files(rows[1].id, env["current_sha"]) == original
+
+
+def test_promotion_permit_rejects_missing_behavior_receipt() -> None:
+    from types import SimpleNamespace
+
+    from omnia_api.services.max_finalization import ProofBundle
+    from omnia_api.services.promotion_permit import PromotionPermitError, issue_promotion_permit
+
+    identity = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        generation_run_id=uuid4(),
+        fencing_epoch=7,
+        proof_key="1" * 64,
+        workspace_revision="2" * 64,
+    )
+    green = SimpleNamespace(
+        proof_id=identity.id,
+        workspace_id=identity.workspace_id,
+        outcome="green",
+        artifact_ref="build/sha256/" + "3" * 64,
+        redacted_detail="green",
+    )
+    release = SimpleNamespace(
+        proof_id=identity.id,
+        workspace_id=identity.workspace_id,
+        outcome="green",
+        artifact_ref="verification/sha256/" + "5" * 64,
+        redacted_detail="green",
+    )
+
+    with pytest.raises(PromotionPermitError) as raised:
+        issue_promotion_permit(
+            ProofBundle(identity=identity, full_build=green, runtime=None, release=release)
+        )
+
+    assert raised.value.code == "PROMOTION_EVIDENCE_MISSING"
 
 
 @pytest.mark.parametrize("path", ["agent"])

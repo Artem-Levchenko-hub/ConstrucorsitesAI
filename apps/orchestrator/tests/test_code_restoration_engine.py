@@ -459,17 +459,394 @@ async def test_missing_journal_with_possible_external_effect_cannot_claim_safe_r
     assert engine.calls == []
 
 
+def rejection_engine(tmp_path):
+    from dataclasses import replace
+
+    from omnia_orchestrator.core.cell_resources import CellResourceNames
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+
+    receipts = {}
+    state = SimpleNamespace(
+        workspace_id=UUID(int=2),
+        project_id=UUID(int=3),
+        owner_id=UUID(int=4),
+        fencing_epoch=3,
+        active_generation_run_id=None,
+        last_operation_id=UUID(int=90),
+        resource_names=CellResourceNames.for_workspace(UUID(int=2), namespace="test"),
+        bundle_state="resources_ready",
+        operation=lambda operation_id: receipts.get(operation_id),
+    )
+
+    class Store:
+        def load(self, _workspace):
+            return state
+
+        def begin(self, _spec, mutation, *, kind, phase, resource_names):
+            assert mutation.fencing_epoch == state.fencing_epoch + 1
+            assert resource_names is state.resource_names
+            receipts[mutation.operation_id] = CellOperationRecord(
+                operation_id=mutation.operation_id,
+                kind=kind,
+                status="running",
+                phase=phase,
+                request_digest=mutation.request_digest,
+                fencing_epoch=mutation.fencing_epoch,
+            )
+            state.fencing_epoch = mutation.fencing_epoch
+            state.last_operation_id = mutation.operation_id
+            return state
+
+        def complete(self, _workspace, mutation, *, phase, bundle_state, detail):
+            receipts[mutation.operation_id] = replace(
+                receipts[mutation.operation_id],
+                status="completed",
+                phase=phase,
+                bundle_state=bundle_state,
+                detail=detail,
+            )
+            state.bundle_state = bundle_state
+            return state
+
+    manager = SimpleNamespace(
+        operation_lock=Lock(),
+        state_store=Store(),
+        _spec_from_state=lambda _state: object(),
+    )
+    engine = object.__new__(CodeRestorationEngine)
+    engine.root = tmp_path
+    engine._manager = lambda _workspace: manager
+    return engine, manager, state, receipts
+
+
+async def test_pre_effect_binding_rejection_is_durable_and_restart_safe(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+
+    engine, manager, state, receipts = rejection_engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "f" * 64})
+    engine._state = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        CellIdentityConflict("ABA generation")
+    )
+    archive = engine._directory(value.operation_id) / "code.tar"
+    archive.write_bytes(b"candidate")
+
+    first = await engine.apply(value, {})
+    assert first["applied"] is False and first["safe_to_release"] is True
+    assert first["rejected_before_effect"] is True
+    assert first["retained_source_fencing_epoch"] == 3
+    assert engine.activation_journal_exists(value)
+    assert not archive.exists()
+    assert state.fencing_epoch == 4
+    assert serving_fencing_epoch(state) == 3
+    rejection = receipts[state.last_operation_id]
+    assert rejection.kind == "restoration_rejection"
+    assert rejection.detail == "retained_source_fencing_epoch=3"
+
+    restarted = object.__new__(CodeRestorationEngine)
+    restarted.root = tmp_path
+    restarted._manager = lambda _workspace: manager
+    second = await restarted.apply(value, {})
+    assert second == first
+
+    # A delayed retry never downgrades or overwrites a later operation.
+    newer = state.last_operation_id = UUID(int=91)
+    state.fencing_epoch = 5
+    receipts[newer] = receipts[rejection.operation_id].__class__(
+        operation_id=newer,
+        kind="ensure",
+        status="completed",
+        phase="completed",
+        request_digest="newer",
+        fencing_epoch=5,
+    )
+    assert await restarted.apply(value, {}) == first
+    assert state.fencing_epoch == 5 and state.last_operation_id == newer
+
+
+async def test_consecutive_rejections_retain_actual_serving_epoch(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+
+    engine, _, state, receipts = rejection_engine(tmp_path)
+    engine._state = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        CellIdentityConflict("detached database")
+    )
+    first_request = request().model_copy(update={"binding_digest": "f" * 64})
+    first = await engine.apply(first_request, {})
+    assert first["retained_source_fencing_epoch"] == 3
+    assert state.fencing_epoch == 4
+
+    second_request = first_request.model_copy(
+        update={
+            "operation_id": UUID(int=11),
+            "candidate_id": UUID(int=15),
+            "expected_fencing_epoch": 4,
+            "fencing_epoch": 5,
+        }
+    )
+    second = await engine.apply(second_request, {})
+
+    assert second["retained_source_fencing_epoch"] == 3
+    assert state.fencing_epoch == 5
+    assert serving_fencing_epoch(state) == 3
+    assert receipts[state.last_operation_id].detail == "retained_source_fencing_epoch=3"
+
+
+async def test_rejection_restart_carries_serving_epoch_across_fence_change(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    engine, manager, state, _ = rejection_engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "c" * 64})
+    engine._state = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        CellIdentityConflict("recreated resource")
+    )
+    complete = manager.state_store.complete
+
+    def interrupted_complete(*args, **kwargs):
+        manager.state_store.complete = complete
+        raise OSError("controller restart")
+
+    manager.state_store.complete = interrupted_complete
+    with pytest.raises(OSError, match="controller restart"):
+        await engine.apply(value, {})
+    receipt = json.loads(
+        (engine._directory(value.operation_id) / "activation.json").read_text()
+    )
+    assert receipt["retained_source_fencing_epoch"] == 3
+    assert state.fencing_epoch == 4
+
+    restarted = object.__new__(CodeRestorationEngine)
+    restarted.root = tmp_path
+    restarted._manager = lambda _workspace: manager
+    result = await restarted.apply(value, {})
+    assert result["retained_source_fencing_epoch"] == 3
+
+
+async def test_interrupted_unbound_preflight_is_superseded_by_newer_lifecycle(tmp_path):
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+
+    engine, manager, state, receipts = rejection_engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "b" * 64})
+    engine.begin_preflight(value)
+    assert engine._claim_preflight(value) == "start"
+    receipt_path = engine._directory(value.operation_id) / "activation.json"
+    assert json.loads(receipt_path.read_text())["retained_source_fencing_epoch"] is None
+    archive = receipt_path.parent / "code.tar"
+    archive.write_bytes(b"candidate")
+
+    newer = UUID(int=91)
+    state.fencing_epoch = 5
+    state.last_operation_id = newer
+    receipts[newer] = CellOperationRecord(
+        operation_id=newer,
+        kind="ensure",
+        status="completed",
+        phase="completed",
+        request_digest="newer",
+        fencing_epoch=5,
+    )
+
+    restarted = object.__new__(CodeRestorationEngine)
+    restarted.root = tmp_path
+    restarted._manager = lambda _workspace: manager
+    first = await restarted.apply(value, {})
+    assert first["applied"] is False and first["safe_to_release"] is True
+    assert first["superseded_before_effect"] is True
+    assert "retained_source_fencing_epoch" not in first
+    assert state.fencing_epoch == 5 and state.last_operation_id == newer
+    assert not archive.exists()
+    assert json.loads(receipt_path.read_text())["state"] == "superseded"
+
+    second = await restarted.apply(value, {})
+    assert second == first
+    assert state.fencing_epoch == 5 and state.last_operation_id == newer
+
+
+async def test_equal_target_fence_foreign_owner_is_terminal_superseded(tmp_path):
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+
+    engine, manager, state, receipts = rejection_engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "a" * 64})
+    engine.begin_preflight(value)
+    assert engine._claim_preflight(value) == "start"
+    receipt_path = engine._directory(value.operation_id) / "activation.json"
+    archive = receipt_path.parent / "code.tar"
+    archive.write_bytes(b"candidate")
+
+    foreign = UUID(int=92)
+    state.fencing_epoch = value.fencing_epoch
+    state.last_operation_id = foreign
+    receipts[foreign] = CellOperationRecord(
+        operation_id=foreign,
+        kind="ensure",
+        status="completed",
+        phase="completed",
+        request_digest="foreign",
+        fencing_epoch=value.fencing_epoch,
+    )
+
+    restarted = object.__new__(CodeRestorationEngine)
+    restarted.root = tmp_path
+    restarted._manager = lambda _workspace: manager
+    first = await restarted.apply(value, {})
+    assert first["superseded_before_effect"] is True
+    assert "retained_source_fencing_epoch" not in first
+    assert state.fencing_epoch == value.fencing_epoch
+    assert state.last_operation_id == foreign
+    assert receipts[foreign].request_digest == "foreign"
+    assert not archive.exists()
+
+    assert await restarted.apply(value, {}) == first
+    assert state.last_operation_id == foreign
+
+
+@pytest.mark.parametrize("checkpoint", range(3))
+async def test_cancel_at_each_preflight_await_recovers_safe_negative(tmp_path, checkpoint):
+    import asyncio
+
+    engine, manager, state, _ = rejection_engine(tmp_path / str(checkpoint))
+    value = request().model_copy(update={"binding_digest": "e" * 64})
+    reached = [asyncio.Event() for _ in range(3)]
+    gates = [asyncio.Event() for _ in range(3)]
+
+    async def interrupted_preflight(*_args):
+        for index in range(3):
+            reached[index].set()
+            await gates[index].wait()
+        pytest.fail("preflight must be cancelled")
+
+    engine._activation_preflight = interrupted_preflight
+    archive = engine._directory(value.operation_id) / "code.tar"
+    archive.write_bytes(b"candidate")
+    task = asyncio.create_task(engine.apply(value, {}))
+    for index in range(checkpoint):
+        await reached[index].wait()
+        gates[index].set()
+    await reached[checkpoint].wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    receipt = json.loads((archive.parent / "activation.json").read_text())
+    assert receipt["state"] == "preflight"
+    assert receipt["preflight_attempted"] is True
+    assert receipt["effects_admitted"] is False
+    assert receipt["retained_source_fencing_epoch"] == 3
+
+    restarted = object.__new__(CodeRestorationEngine)
+    restarted.root = engine.root
+    restarted._manager = lambda _workspace: manager
+    restarted._activation_preflight = lambda *_args: pytest.fail(
+        "recovery must not repeat a possibly interrupted preflight"
+    )
+    observed = await restarted.apply(value, {})
+    assert observed["applied"] is False
+    assert observed["rejected_before_effect"] is True
+    assert observed["retained_source_fencing_epoch"] == 3
+    assert state.fencing_epoch == 4
+    assert not archive.exists()
+
+
+async def test_rejected_archive_cleanup_retries_after_failure(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    engine, manager, state, _ = rejection_engine(tmp_path)
+    value = request().model_copy(update={"binding_digest": "d" * 64})
+    engine._state = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        CellIdentityConflict("detached database")
+    )
+    archive = engine._directory(value.operation_id) / "code.tar"
+    archive.write_bytes(b"candidate")
+    original_unlink = Path.unlink
+    failed = False
+
+    def flaky_unlink(path, *args, **kwargs):
+        nonlocal failed
+        if path == archive and not failed:
+            failed = True
+            raise PermissionError("archive busy")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+    with pytest.raises(PermissionError, match="archive busy"):
+        await engine.apply(value, {})
+    assert archive.exists()
+    assert state.fencing_epoch == 4
+
+    restarted = object.__new__(CodeRestorationEngine)
+    restarted.root = tmp_path
+    restarted._manager = lambda _workspace: manager
+    result = await restarted.apply(value, {})
+    assert result["rejected_before_effect"] is True
+    assert not archive.exists()
+
+
+def test_ddl_during_dump_is_rejected_before_ready():
+    from omnia_orchestrator.services.code_restoration_engine import verify_post_dump_catalog
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+
+    before = DataContract(version=1, tables=[])
+    after = DataContract.model_validate({
+        "version": 1,
+        "tables": [{"name": "clients", "columns": [{"name": "id", "type": "uuid"}]}],
+    })
+    with pytest.raises(RuntimeError, match="during export"):
+        verify_post_dump_catalog(before, [], [], after, [], [])
+
+
 async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, monkeypatch):
     import base64
 
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from omnia_orchestrator.schemas.code_restoration import (
+        CodeRestorationPrepare,
+        RestorationSourceBindingV2,
+    )
+    from omnia_orchestrator.services import code_restoration_engine as module
     from omnia_orchestrator.services.code_restorations import CodeRestorationService
+    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from tests.test_code_restorations import binding_payload
 
     engine, prepared = untouched_engine(tmp_path / "engine", monkeypatch)
+    _, rejection_manager, _, _ = rejection_engine(tmp_path / "rejection-state")
+    engine.manager.state_store = rejection_manager.state_store
+    engine.manager._spec_from_state = rejection_manager._spec_from_state
+    binding_model = RestorationSourceBindingV2.model_validate(binding_payload())
+    contract = DataContract(version=1, tables=[])
+    prepared["live_contract"] = contract.model_dump(mode="json")
+
+    async def read_source(_volume):
+        return {"src/page.tsx": b"current"}
+
+    engine.manager.docker = SimpleNamespace(read_workspace_source_files=read_source)
+    monkeypatch.setattr(module, "catalog_contract", lambda _backend: (contract, []))
+    monkeypatch.setattr(
+        module,
+        "observe_live_source",
+        lambda *_args, **_kwargs: {
+            name: getattr(binding_model, name)
+            for name in (
+                "serving_route_digest",
+                "serving_release_digest",
+                "controller_resource_digest",
+                "controller_incarnation_digest",
+                "controller_generation_digest",
+                "provider_digest",
+                "source_artifact_digest",
+                "database_identity_digest",
+                "database_schema_digest",
+                "database_role_binding_digest",
+                "database_system_identifier",
+            )
+        },
+    )
 
     async def prepare(_):
         return {
             **prepared,
+            "binding": binding_payload(),
             "state": "ready",
             "candidate_id": str(UUID(int=5)),
             "report": {
@@ -489,7 +866,8 @@ async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, mo
 
     engine.prepare, engine.apply = prepare, failed_apply
     service = CodeRestorationService(root=tmp_path / "journal", engine=engine)
-    body = request()
+    binding_digest = RestorationSourceBindingV2.model_validate(binding_payload()).digest()
+    body = request().model_copy(update={"binding_digest": binding_digest})
     await service.prepare(
         CodeRestorationPrepare(
             **body.model_dump(
@@ -498,9 +876,11 @@ async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, mo
                     "report_revision",
                     "expected_fencing_epoch",
                     "fencing_epoch",
+                    "binding_digest",
                 }
             ),
             fencing_epoch=3,
+            binding_contract_version=2,
             files=[{"path": "src/page.tsx", "content_base64": base64.b64encode(b"old").decode()}],
         )
     )
@@ -514,7 +894,7 @@ async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, mo
     observed = restarted._read(body.workspace_id, body.operation_id)
     assert observed["state"] == "failed"
     assert observed["observed"]["safe_to_release"] is True
-    assert engine.calls == ["recover"]
+    assert engine.calls == []
 
 
 def plain_prepare_request():
@@ -524,7 +904,13 @@ def plain_prepare_request():
 
     return CodeRestorationPrepare(
         **request().model_dump(
-            exclude={"candidate_id", "report_revision", "expected_fencing_epoch", "fencing_epoch"}
+            exclude={
+                "candidate_id",
+                "report_revision",
+                "expected_fencing_epoch",
+                "fencing_epoch",
+                "binding_digest",
+            }
         ),
         fencing_epoch=3,
         files=[{"path": "src/page.tsx", "content_base64": base64.b64encode(b"old").decode()}],
@@ -562,6 +948,10 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         stop=lambda: events.append("stop"),
         remove=lambda: pytest.fail("candidate must not restart for a database policy"),
         ensure=lambda *args: pytest.fail("candidate must not restart for a database policy"),
+        _container=lambda: __import__(
+            "tests.test_restoration_execution_cancellation",
+            fromlist=["candidate_container"],
+        ).candidate_container(plain_prepare_request()),
     )
     state = SimpleNamespace(workspace_id=UUID(int=2))
 
@@ -622,7 +1012,9 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
 
     engine._candidate = make_candidate
     engine._seed_source = lambda *_: events.append("seed")
-    engine._command = lambda backend, argv, *_: events.append("command:" + argv[0])
+    engine._command = lambda backend, container, argv, *_: events.append(
+        "command:" + argv[0]
+    )
     engine._disable_egress = lambda backend: events.append("egress-off")
     engine._start = start
     engine._verify_source = lambda *_: events.append("verify")

@@ -13,7 +13,10 @@ contracts (request/response schemas) are stable and consumed by apps/api today.
 from __future__ import annotations
 
 import asyncio
+import errno
+import json
 import os
+import posixpath
 import re
 import shutil
 import tempfile
@@ -25,7 +28,7 @@ from pathlib import Path
 from time import time
 from typing import Annotated
 from urllib.parse import urlencode
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header
 
@@ -120,10 +123,64 @@ _SANDBOX_SKIP_NAMES = frozenset(
     {"node_modules", ".next", ".git", "__pycache__", "dist", "build", ".venv", "vendor"}
 )
 _PROJECT_WORKSPACE_LOCKS: dict[str, asyncio.Lock] = {}
+_DIRECTORY_FSYNC_PLATFORM = os.name
 
 _MAX_PREVIEW_TEMPLATE = "max-miniapp-nextjs"
 _MAX_PREVIEW_BOOTSTRAP_TTL = timedelta(seconds=120)
 _MAX_PREVIEW_BOOTSTRAP_PATH = "/api/omnia/preview-session"
+_MAX_LEDGER_PREFIX = "__OMNIA_MIGRATION_LEDGER__"
+_MAX_LEDGER_QUERY = r"""
+import pg from "pg";
+const names = JSON.parse(process.argv[1]);
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 1,
+  connectionTimeoutMillis: 15000,
+});
+try {
+  const client = await pool.connect();
+  try {
+    const lock = await client.query(
+      "SELECT pg_try_advisory_lock(hashtext('omnia:max:migrations'), " +
+      "hashtext(current_schema())) AS acquired",
+    );
+    if (!lock.rows[0]?.acquired) {
+      console.log("__OMNIA_MIGRATION_LEDGER__" + JSON.stringify({
+        lock_acquired: false,
+        applied: [],
+      }));
+    } else {
+      try {
+        const present = await client.query(
+          "SELECT to_regclass('__omnia_migrations') AS ledger",
+        );
+        let applied = [];
+        if (present.rows[0]?.ledger) {
+          const result = await client.query(
+            "SELECT name FROM __omnia_migrations " +
+            "WHERE name = ANY($1::text[]) ORDER BY name",
+            [names],
+          );
+          applied = result.rows.map((row) => row.name);
+        }
+        console.log("__OMNIA_MIGRATION_LEDGER__" + JSON.stringify({
+          lock_acquired: true,
+          applied,
+        }));
+      } finally {
+        await client.query(
+          "SELECT pg_advisory_unlock(hashtext('omnia:max:migrations'), " +
+          "hashtext(current_schema()))",
+        );
+      }
+    }
+  } finally {
+    client.release();
+  }
+} finally {
+  await pool.end();
+}
+""".strip()
 
 
 def _max_preview_bootstrap_message(project_id: str, expires: int) -> bytes:
@@ -147,14 +204,631 @@ def _safe_app_path(path: str) -> str:
     container already runs non-root + cap-dropped; this is defense-in-depth so a
     tool call can never escape the project tree.
     """
-    p = (path or "").strip()
+    p = (path or "").strip().replace("\\", "/")
     if not p or p.startswith("/") or p.startswith("~") or "\x00" in p or ".." in p.split("/"):
         raise OrchestratorError(
             code="validation_failed",
             message=f"unsafe path: {path!r}",
             status_code=403,
         )
-    return p
+    normalized = posixpath.normpath(p)
+    if normalized in {"", "."} or normalized.startswith("../"):
+        raise OrchestratorError(
+            code="validation_failed",
+            message=f"unsafe path: {path!r}",
+            status_code=403,
+        )
+    return normalized
+
+
+def _canonical_hot_reload_payload(payload: HotReloadRequest) -> HotReloadRequest:
+    files: dict[str, str] = {}
+    raw_aliases: dict[str, str] = {}
+    for raw_path, content in payload.files.items():
+        path = _safe_app_path(raw_path)
+        previous = raw_aliases.get(path)
+        if previous is not None and previous != raw_path:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"conflicting path aliases: {previous!r} and {raw_path!r}",
+                status_code=409,
+            )
+        raw_aliases[path] = raw_path
+        files[path] = content
+
+    empty_files: list[str] = []
+    seen_empty: set[str] = set()
+    for raw_path in payload.empty_files:
+        path = _safe_app_path(raw_path)
+        if path in seen_empty:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=f"conflicting empty_files path alias: {raw_path!r}",
+                status_code=409,
+            )
+        seen_empty.add(path)
+        if files.get(path) != "":
+            raise OrchestratorError(
+                code="validation_failed",
+                message="empty_files paths must normalize to an empty file payload",
+                status_code=409,
+            )
+        empty_files.append(path)
+    return payload.model_copy(update={"files": files, "empty_files": empty_files})
+
+
+def _is_canonical_max_migration(path: str) -> bool:
+    return path.startswith("drizzle/") and path.count("/") == 1 and path.endswith(".sql")
+
+
+def _is_alternative_max_migration(path: str) -> bool:
+    return (
+        path.startswith("migrations/")
+        or path.startswith("src/lib/db/migrations/")
+        or (
+            path.startswith("drizzle/")
+            and path.endswith(".sql")
+            and not _is_canonical_max_migration(path)
+        )
+        or (
+            path.startswith("scripts/")
+            and path != "scripts/apply-migrations.mjs"
+            and "migrat" in path.rsplit("/", 1)[-1].lower()
+        )
+    )
+
+
+def _is_postgres_identifier_continuation(character: str) -> bool:
+    return bool(character) and (
+        ord(character) >= 0x80
+        or (
+            character.isascii()
+            and (character.isalnum() or character in {"_", "$"})
+        )
+    )
+
+
+def _sql_tokens_outside_literals(sql: str) -> list[str]:
+    tokens: list[str] = []
+    word: list[str] = []
+    index = 0
+    block_depth = 0
+    quote: str | None = None
+    backslash_quote = False
+    dollar: str | None = None
+
+    def flush() -> None:
+        if word:
+            tokens.append("".join(word).upper())
+            word.clear()
+
+    while index < len(sql):
+        if block_depth:
+            if sql.startswith("/*", index):
+                block_depth += 1
+                index += 2
+            elif sql.startswith("*/", index):
+                block_depth -= 1
+                index += 2
+            else:
+                index += 1
+            continue
+        if dollar is not None:
+            end = sql.find(dollar, index)
+            if end < 0:
+                return tokens
+            index = end + len(dollar)
+            dollar = None
+            continue
+        if quote is not None:
+            if backslash_quote and sql[index] == "\\":
+                index = min(index + 2, len(sql))
+                continue
+            if sql[index] == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+                backslash_quote = False
+            index += 1
+            continue
+        if sql.startswith("--", index):
+            flush()
+            end = sql.find("\n", index + 2)
+            index = len(sql) if end < 0 else end + 1
+            continue
+        if sql.startswith("/*", index):
+            flush()
+            block_depth = 1
+            index += 2
+            continue
+        if sql[index] in {"'", '"'}:
+            backslash_quote = sql[index] == "'" and "".join(word).upper() == "E"
+            flush()
+            quote = sql[index]
+            index += 1
+            continue
+        if sql[index] == "$":
+            previous = sql[index - 1] if index else ""
+            if not _is_postgres_identifier_continuation(previous):
+                match = re.match(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$", sql[index:])
+                if match is not None:
+                    flush()
+                    dollar = match.group(0)
+                    index += len(dollar)
+                    continue
+        if sql[index].isalpha() or sql[index] == "_":
+            word.append(sql[index])
+        else:
+            flush()
+            if sql[index] == ";":
+                tokens.append(";")
+        index += 1
+    flush()
+    return tokens
+
+
+def _transaction_control_statement(sql: str) -> str | None:
+    tokens = _sql_tokens_outside_literals(sql)
+    singles = {"ABORT", "BEGIN", "COMMIT", "END", "RELEASE", "ROLLBACK", "SAVEPOINT"}
+    statements: list[list[str]] = [[]]
+    for token in tokens:
+        if token == ";":
+            statements.append([])
+        else:
+            statements[-1].append(token)
+    for statement in statements:
+        if not statement:
+            continue
+        token = statement[0]
+        following = statement[1] if len(statement) > 1 else None
+        if token in singles:
+            return token
+        if token == "START" and following == "TRANSACTION":
+            return "START TRANSACTION"
+        if token == "PREPARE" and following == "TRANSACTION":
+            return "PREPARE TRANSACTION"
+        if token == "SET" and following == "TRANSACTION":
+            return "SET TRANSACTION"
+    return None
+
+
+def _migration_digest(content: str) -> str:
+    return sha256(content.encode("utf-8")).hexdigest()
+
+
+def _max_migration_receipt_path(workspace_root: Path) -> Path:
+    return workspace_root.parent / f".{workspace_root.name}.max-migration-receipt.json"
+
+
+def _load_max_migration_receipts(workspace_root: Path) -> dict[str, dict[str, str]]:
+    receipt_path = _max_migration_receipt_path(workspace_root)
+    if not receipt_path.is_file():
+        return {}
+    try:
+        document = json.loads(receipt_path.read_text(encoding="utf-8"))
+        entries = document["entries"]
+        if document.get("version") != 1 or not isinstance(entries, dict):
+            raise ValueError("unsupported receipt format")
+        normalized: dict[str, dict[str, str]] = {}
+        for path, raw in entries.items():
+            if (
+                not isinstance(path, str)
+                or not _is_canonical_max_migration(path)
+                or not isinstance(raw, dict)
+                or raw.get("state") not in {"intent", "staged_unapplied", "unknown"}
+                or not isinstance(raw.get("digest"), str)
+            ):
+                raise ValueError("invalid receipt entry")
+            entry = {
+                "state": raw["state"],
+                "digest": raw["digest"],
+            }
+            for key in ("execution_id", "operation", "previous_digest", "previous_state"):
+                value = raw.get(key)
+                if value is not None:
+                    if not isinstance(value, str):
+                        raise ValueError("invalid receipt metadata")
+                    entry[key] = value
+            normalized[path] = entry
+        return normalized
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message="MAX migration receipt is unreadable; reconcile before changing migrations",
+            status_code=409,
+        ) from exc
+
+
+def _save_max_migration_receipts(
+    workspace_root: Path,
+    entries: dict[str, dict[str, str]],
+) -> None:
+    receipt_path = _max_migration_receipt_path(workspace_root)
+    if not entries:
+        receipt_path.unlink(missing_ok=True)
+        return
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump({"version": 1, "entries": entries}, handle, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, receipt_path)
+    try:
+        directory_fd = os.open(receipt_path.parent, os.O_RDONLY)
+    except OSError as exc:
+        if _directory_fsync_unsupported(exc, operation="open"):
+            return
+        raise
+    try:
+        os.fsync(directory_fd)
+    except OSError as exc:
+        if not _directory_fsync_unsupported(exc, operation="fsync"):
+            raise
+    finally:
+        os.close(directory_fd)
+
+
+def _directory_fsync_unsupported(error: OSError, *, operation: str) -> bool:
+    # CPython on Windows rejects opening a directory with O_RDONLY/EACCES;
+    # verified on the supported Windows development host. Other I/O failures
+    # leave durability unknown and must fail before source mutation.
+    return (
+        _DIRECTORY_FSYNC_PLATFORM == "nt"
+        and operation == "open"
+        and error.errno == errno.EACCES
+    )
+
+
+async def _read_max_migration_ledger(
+    container_name: str,
+    paths: set[str],
+) -> set[str]:
+    if not paths:
+        return set()
+    names = sorted(Path(path).name for path in paths)
+    try:
+        result = await exec_cmd(
+            container_name,
+            cmd=[
+                "node",
+                "--input-type=module",
+                "-e",
+                _MAX_LEDGER_QUERY,
+                json.dumps(names),
+            ],
+            workdir="/app",
+            timeout_sec=30,
+            max_output=16_000,
+        )
+    except Exception as exc:
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message="MAX migration ledger is unavailable; reconcile before changing migrations",
+            status_code=409,
+        ) from exc
+    if str(result.get("exit_code")) != "0":
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message="MAX migration ledger query failed; reconcile before changing migrations",
+            status_code=409,
+        )
+    receipt_line = next(
+        (
+            line[len(_MAX_LEDGER_PREFIX) :]
+            for line in reversed(result.get("stdout", "").splitlines())
+            if line.startswith(_MAX_LEDGER_PREFIX)
+        ),
+        None,
+    )
+    try:
+        receipt = json.loads(receipt_line) if receipt_line is not None else None
+    except json.JSONDecodeError as exc:
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message="MAX migration ledger returned an invalid receipt",
+            status_code=409,
+        ) from exc
+    applied_names: object
+    if isinstance(receipt, list):
+        lock_acquired = True
+        applied_names = receipt
+    elif isinstance(receipt, dict):
+        lock_acquired = receipt.get("lock_acquired") is True
+        applied_names = receipt.get("applied")
+    else:
+        lock_acquired = False
+        applied_names = None
+    if not lock_acquired:
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message="a previous MAX migration runner is still active; retry after reconciliation",
+            status_code=409,
+        )
+    if not isinstance(applied_names, list) or not all(
+        isinstance(name, str) and name in names for name in applied_names
+    ):
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message="MAX migration ledger returned an invalid receipt",
+            status_code=409,
+        )
+    return {
+        path
+        for path in paths
+        if Path(path).name in set(applied_names)
+    }
+
+
+async def _reconcile_max_migration_receipts(
+    workspace_root: Path,
+    container_name: str,
+) -> dict[str, dict[str, str]]:
+    receipts = _load_max_migration_receipts(workspace_root)
+    if not receipts:
+        return receipts
+    applied = await _read_max_migration_ledger(container_name, set(receipts))
+    changed = False
+    for path, entry in list(receipts.items()):
+        target = workspace_root / path
+        current_digest = (
+            _migration_digest(target.read_text(encoding="utf-8"))
+            if target.is_file() and not target.is_symlink()
+            else None
+        )
+        if path in applied:
+            if current_digest != entry["digest"]:
+                entry["state"] = "unknown"
+                changed = True
+                _save_max_migration_receipts(workspace_root, receipts)
+                raise OrchestratorError(
+                    code="migration_reconciliation_required",
+                    message=f"{path} is ledger-applied but source digest does not match its intent",
+                    status_code=409,
+                )
+            receipts.pop(path, None)
+            changed = True
+            continue
+        if entry["state"] == "intent":
+            operation = entry.get("operation", "write")
+            source_reached_intent = (
+                current_digest is None
+                if operation == "delete"
+                else current_digest == entry["digest"]
+            )
+            if source_reached_intent:
+                if operation == "delete":
+                    # Only a proved-unapplied staged migration can reach a
+                    # deletion intent. Once its source is absent there is
+                    # nothing left for the runner or ledger to reconcile.
+                    receipts.pop(path, None)
+                else:
+                    entry["state"] = "staged_unapplied"
+                changed = True
+                continue
+            previous_state = entry.get("previous_state", "missing")
+            previous_digest = entry.get("previous_digest")
+            source_is_previous = (
+                current_digest is None
+                if previous_state == "missing"
+                else current_digest == previous_digest
+            )
+            if source_is_previous:
+                if previous_state == "staged_unapplied":
+                    entry["state"] = "staged_unapplied"
+                    entry["digest"] = previous_digest or ""
+                else:
+                    receipts.pop(path, None)
+                changed = True
+                continue
+        elif current_digest == entry["digest"]:
+            if entry["state"] == "unknown":
+                entry["state"] = "staged_unapplied"
+                changed = True
+            continue
+        entry["state"] = "unknown"
+        changed = True
+        _save_max_migration_receipts(workspace_root, receipts)
+        raise OrchestratorError(
+            code="migration_reconciliation_required",
+            message=f"{path} receipt does not match workspace source; reconcile manually",
+            status_code=409,
+        )
+    if changed:
+        _save_max_migration_receipts(workspace_root, receipts)
+    return receipts
+
+
+def _prepare_max_migration_intents(
+    workspace_root: Path,
+    payload: HotReloadRequest,
+    paths: set[str],
+) -> str | None:
+    if not paths:
+        return None
+    receipts = _load_max_migration_receipts(workspace_root)
+    execution_id = str(uuid4())
+    explicit_empty = set(payload.empty_files)
+    for path in paths:
+        target = workspace_root / path
+        previous = receipts.get(path)
+        previous_digest = (
+            _migration_digest(target.read_text(encoding="utf-8"))
+            if target.is_file() and not target.is_symlink()
+            else ""
+        )
+        if path in payload.files:
+            content = payload.files[path]
+            deletion = content == "" and path not in explicit_empty
+        else:
+            # A runner applies every pending canonical file, not only the file
+            # named in this request. Give all of them the same durable execution
+            # intent before launching the runner.
+            content = target.read_text(encoding="utf-8")
+            deletion = False
+        receipts[path] = {
+            "state": "intent",
+            "digest": _migration_digest(content),
+            "execution_id": execution_id,
+            "operation": "delete" if deletion else "write",
+            "previous_digest": previous_digest,
+            "previous_state": (
+                previous["state"]
+                if previous is not None
+                else "accepted"
+                if previous_digest
+                else "missing"
+            ),
+        }
+    _save_max_migration_receipts(workspace_root, receipts)
+    return execution_id
+
+
+async def _validate_max_hot_reload_contract(
+    payload: HotReloadRequest,
+    workspace_root: Path,
+    container_name: str,
+) -> set[str]:
+    runner_path = workspace_root / "scripts" / "apply-migrations.mjs"
+    if not runner_path.is_file() or runner_path.is_symlink():
+        raise OrchestratorError(
+            code="validation_failed",
+            message="MAX platform-owned migration runner is missing from the trusted workspace",
+            status_code=409,
+        )
+
+    explicit_empty = set(payload.empty_files)
+    existing_canonical = sorted(
+        path.relative_to(workspace_root).as_posix()
+        for path in (workspace_root / "drizzle").glob("*.sql")
+        if path.is_file() and not path.is_symlink()
+    ) if (workspace_root / "drizzle").is_dir() else []
+    new_canonical: list[str] = []
+    corrected_staged: set[str] = set()
+    receipts = await _reconcile_max_migration_receipts(workspace_root, container_name)
+    for path, content in payload.files.items():
+        target = workspace_root / path
+        deletion = content == "" and path not in explicit_empty
+        if path == "scripts/apply-migrations.mjs":
+            if deletion or content != runner_path.read_text(encoding="utf-8"):
+                raise OrchestratorError(
+                    code="validation_failed",
+                    message="scripts/apply-migrations.mjs is platform-owned and cannot be replaced",
+                    status_code=409,
+                )
+            continue
+        if _is_canonical_max_migration(path):
+            if not deletion:
+                forbidden = _transaction_control_statement(content)
+                if forbidden is not None:
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message=(
+                            f"{path} contains forbidden transaction control: {forbidden}"
+                        ),
+                        status_code=409,
+                    )
+            if target.is_file():
+                if target.is_symlink():
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message=f"workspace target is a symlink: {path}",
+                        status_code=403,
+                    )
+                current_content = target.read_text(encoding="utf-8")
+                if deletion or content != current_content:
+                    receipt = receipts.get(path)
+                    if receipt is None:
+                        raise OrchestratorError(
+                            code="validation_failed",
+                            message=(
+                                f"{path} is an accepted canonical migration "
+                                "and must remain immutable"
+                            ),
+                            status_code=409,
+                        )
+                    if (
+                        receipt["state"] == "unknown"
+                        or receipt["digest"] != _migration_digest(current_content)
+                    ):
+                        raise OrchestratorError(
+                            code="migration_reconciliation_required",
+                            message=(
+                                f"{path} has an unknown runner outcome; "
+                                "reconcile before overwrite"
+                            ),
+                            status_code=409,
+                        )
+                    applied = await _read_max_migration_ledger(container_name, {path})
+                    if path in applied:
+                        receipts.pop(path, None)
+                        _save_max_migration_receipts(workspace_root, receipts)
+                        raise OrchestratorError(
+                            code="validation_failed",
+                            message=f"{path} is applied and must remain immutable",
+                            status_code=409,
+                        )
+                    corrected_staged.add(path)
+            elif not deletion:
+                if not content.strip():
+                    raise OrchestratorError(
+                        code="validation_failed",
+                        message=f"{path} must contain a non-empty canonical migration",
+                        status_code=409,
+                    )
+                new_canonical.append(path)
+            continue
+        if _is_alternative_max_migration(path):
+            if deletion and target.is_file() and not target.is_symlink():
+                continue
+            if target.is_file() and not target.is_symlink() and content == target.read_text(
+                encoding="utf-8"
+            ):
+                continue
+            raise OrchestratorError(
+                code="validation_failed",
+                message=(
+                    f"{path} cannot be introduced or modified for MAX; "
+                    "remove it or use drizzle/*.sql"
+                ),
+                status_code=409,
+            )
+
+    if existing_canonical:
+        last_existing = existing_canonical[-1]
+        for path in sorted(new_canonical):
+            if path <= last_existing:
+                raise OrchestratorError(
+                    code="validation_failed",
+                    message=f"{path} must append after {last_existing}",
+                    status_code=409,
+                )
+    if new_canonical:
+        unresolved = sorted(path for path in receipts if path not in corrected_staged)
+        if unresolved:
+            raise OrchestratorError(
+                code="validation_failed",
+                message=(
+                    "resolve pending MAX migration before appending a newer file: "
+                    + ", ".join(unresolved)
+                ),
+                status_code=409,
+            )
+        already_applied = await _read_max_migration_ledger(
+            container_name,
+            set(new_canonical),
+        )
+        if already_applied:
+            raise OrchestratorError(
+                code="migration_reconciliation_required",
+                message=(
+                    "migration ledger already contains source-missing files: "
+                    + ", ".join(sorted(already_applied))
+                ),
+                status_code=409,
+            )
+    return corrected_staged
 
 
 def _project_workspace_dir(project_id: str) -> Path:
@@ -614,12 +1288,12 @@ async def hot_reload(
     orchestrator's internal concern).
 
     Side-effects beyond the file write:
-      - If any file under `src/lib/db/schema.ts` or `src/lib/db/migrations/`
-        changed, run `npm exec drizzle-kit push` in the container. This makes
-        the new schema/migrations land in the project's Postgres without
-        the user having to ask. Failure here is logged into the response but
-        does NOT fail the whole hot-reload (drizzle errors are far more
-        useful inside the dev preview than as a 5xx to the user).
+      - A MAX workspace accepts only direct `drizzle/*.sql` migrations and
+        applies them with its platform-owned `scripts/apply-migrations.mjs`.
+      - Other templates retain their legacy `drizzle-kit push` behavior when
+        `src/lib/db/schema.ts` or `src/lib/db/migrations/` changes.
+      - MAX migration failures raise a typed conflict after source persistence;
+        callers cannot attest or publish an unconfirmed database state.
     """
     _verify_token(x_internal_token)
     # A build writing files is activity too — keep hibernate off its back.
@@ -642,6 +1316,46 @@ async def hot_reload(
 
 async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, str]:
     container_name = f"omnia-dev-{slug}"
+    workspace_root = _project_workspace_dir(str(payload.project_id))
+    payload = _canonical_hot_reload_payload(payload)
+    max_migration_contract = (
+        await container_image_template(container_name) == _MAX_PREVIEW_TEMPLATE
+    )
+    corrected_staged: set[str] = set()
+    if max_migration_contract:
+        corrected_staged = await _validate_max_hot_reload_contract(
+            payload,
+            workspace_root,
+            container_name,
+        )
+    explicit_empty = set(payload.empty_files)
+    canonical_max_migration_touched = max_migration_contract and any(
+        _is_canonical_max_migration(path)
+        and not (content == "" and path not in explicit_empty)
+        for path, content in payload.files.items()
+    )
+    canonical_intent_paths = {
+        path
+        for path, content in payload.files.items()
+        if max_migration_contract
+        and _is_canonical_max_migration(path)
+        and (
+            not (content == "" and path not in explicit_empty)
+            or path in corrected_staged
+        )
+    }
+    if canonical_max_migration_touched:
+        canonical_intent_paths.update(
+            path
+            for path in _load_max_migration_receipts(workspace_root)
+            if (workspace_root / path).is_file()
+            and not (workspace_root / path).is_symlink()
+        )
+    _prepare_max_migration_intents(
+        workspace_root,
+        payload,
+        canonical_intent_paths,
+    )
 
     write_result = await write_files(
         container_name,
@@ -654,6 +1368,17 @@ async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, 
         payload.files,
         empty_files=tuple(payload.empty_files),
     )
+    if corrected_staged:
+        removed_staged = {
+            path
+            for path in corrected_staged
+            if payload.files.get(path) == "" and path not in explicit_empty
+        }
+        if removed_staged:
+            receipts = _load_max_migration_receipts(workspace_root)
+            for path in removed_staged:
+                receipts.pop(path, None)
+            _save_max_migration_receipts(workspace_root, receipts)
 
     # Seed PUBLIC entity catalogs with demo rows so the first browse screen
     # isn't an empty-state (NORTH STAR pillars 1 & 4). Idempotent (only fills
@@ -716,36 +1441,152 @@ async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, 
                 "stderr": f"orchestrator: {exc.message}",
             }
 
-    # If the AI touched the DB schema or migrations, push it to Postgres now.
+    # MAX uses the same platform-owned migration runner in development and in
+    # accepted runtime artifacts. Other templates retain their existing schema
+    # push behavior until they adopt an explicit migration contract.
     schema_touched = any(
         p == "src/lib/db/schema.ts" or p.startswith("src/lib/db/migrations/") for p in payload.files
     )
+    canonical_run_paths = {
+        path
+        for path, content in payload.files.items()
+        if max_migration_contract
+        and _is_canonical_max_migration(path)
+        and not (content == "" and path not in set(payload.empty_files))
+    }
+    if max_migration_contract:
+        canonical_run_paths.update(
+            path
+            for path in _load_max_migration_receipts(workspace_root)
+            if (workspace_root / path).is_file()
+        )
     drizzle_result: dict[str, str] | None = None
-    if schema_touched:
+    runner_outcome_unknown = False
+    if canonical_max_migration_touched or (schema_touched and not max_migration_contract):
         try:
             drizzle_result = await exec_cmd(
                 container_name,
-                # Deliberately omit --force. Drizzle applies additive changes
-                # directly but asks before statements it classifies as data
-                # loss; the non-interactive exec then fails closed and the API
-                # returns that failure to the agent for a safe rewrite.
-                cmd=[
-                    "npx",
-                    "--yes",
-                    "drizzle-kit",
-                    "push",
-                    "--config=drizzle.config.ts",
-                ],
+                cmd=(
+                    ["node", "scripts/apply-migrations.mjs"]
+                    if canonical_max_migration_touched
+                    else [
+                        "npx",
+                        "--yes",
+                        "drizzle-kit",
+                        "push",
+                        "--config=drizzle.config.ts",
+                    ]
+                ),
                 workdir="/app",
                 timeout_sec=90,
             )
-        except OrchestratorError as exc:
-            # Log as failure but don't propagate — see docstring.
+        except Exception as exc:
+            runner_outcome_unknown = True
+            error_message = exc.message if isinstance(exc, OrchestratorError) else str(exc)
             drizzle_result = {
                 "exit_code": "-1",
                 "stdout": "",
-                "stderr": f"orchestrator: {exc.message}",
+                "stderr": f"orchestrator: {error_message}",
             }
+
+    if max_migration_contract and drizzle_result is not None:
+        receipts = _load_max_migration_receipts(workspace_root)
+        if runner_outcome_unknown:
+            for path in canonical_run_paths:
+                source = (workspace_root / path).read_text(encoding="utf-8")
+                previous = receipts.get(path, {})
+                receipts[path] = {
+                    "state": "unknown",
+                    "digest": _migration_digest(source),
+                    "execution_id": previous.get("execution_id", str(uuid4())),
+                }
+            _save_max_migration_receipts(workspace_root, receipts)
+            raise OrchestratorError(
+                code="migration_reconciliation_required",
+                message=(
+                    "MAX migration runner outcome is unknown after source files were written; "
+                    "reconcile the ledger before retrying"
+                ),
+                status_code=409,
+                details={
+                    "source_files_written": True,
+                    "database_changes_confirmed": False,
+                },
+            )
+        try:
+            applied_paths = await _read_max_migration_ledger(
+                container_name,
+                canonical_run_paths,
+            )
+        except OrchestratorError as exc:
+            for path in canonical_run_paths:
+                source = (workspace_root / path).read_text(encoding="utf-8")
+                previous = receipts.get(path, {})
+                receipts[path] = {
+                    "state": "unknown",
+                    "digest": _migration_digest(source),
+                    "execution_id": previous.get("execution_id", str(uuid4())),
+                }
+            _save_max_migration_receipts(workspace_root, receipts)
+            raise OrchestratorError(
+                code="migration_reconciliation_required",
+                message=(
+                    "MAX migration ledger could not confirm the runner result after "
+                    "source files were written; reconcile before retrying"
+                ),
+                status_code=409,
+                details={
+                    "source_files_written": True,
+                    "database_changes_confirmed": False,
+                    "ledger_error": exc.message,
+                },
+            ) from exc
+        for path in canonical_run_paths:
+            if path in applied_paths:
+                receipts.pop(path, None)
+                continue
+            source = (workspace_root / path).read_text(encoding="utf-8")
+            previous = receipts.get(path, {})
+            receipts[path] = {
+                "state": (
+                    "unknown"
+                    if str(drizzle_result["exit_code"]) == "0"
+                    else "staged_unapplied"
+                ),
+                "digest": _migration_digest(source),
+                "execution_id": previous.get("execution_id", str(uuid4())),
+            }
+        _save_max_migration_receipts(workspace_root, receipts)
+        if str(drizzle_result["exit_code"]) == "0" and applied_paths != canonical_run_paths:
+            raise OrchestratorError(
+                code="migration_reconciliation_required",
+                message="MAX runner exited successfully without a complete ledger receipt",
+                status_code=409,
+                details={
+                    "source_files_written": True,
+                    "database_changes_confirmed": False,
+                },
+            )
+        if str(drizzle_result["exit_code"]) != "0":
+            all_confirmed_applied = applied_paths == canonical_run_paths
+            raise OrchestratorError(
+                code="migration_apply_failed",
+                message=(
+                    "MAX migration runner failed after source files were written; "
+                    + (
+                        "ledger confirms the migration files were applied"
+                        if all_confirmed_applied
+                        else "ledger proves the failed files were not applied"
+                    )
+                ),
+                status_code=409,
+                details={
+                    "source_files_written": True,
+                    "database_changes_confirmed": all_confirmed_applied,
+                    "exit_code": str(drizzle_result["exit_code"]),
+                    "stderr_tail": drizzle_result["stderr"][-500:],
+                },
+            )
 
     response: dict[str, str] = {
         "state": "hot_reloaded",

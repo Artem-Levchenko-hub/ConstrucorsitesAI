@@ -413,6 +413,11 @@ async def test_hot_reload_installs_changed_dependencies_without_lifecycle_script
     monkeypatch.setattr(runtime, "record_activity", AsyncMock())
     monkeypatch.setattr(
         runtime,
+        "container_image_template",
+        AsyncMock(return_value="nextjs-postgres-drizzle"),
+    )
+    monkeypatch.setattr(
+        runtime,
         "write_files",
         AsyncMock(return_value={"written": "1", "total_bytes": "20", "dropped": ""}),
     )
@@ -487,6 +492,11 @@ async def test_hot_reload_preserves_explicit_empty_files_while_deleting_legacy_e
         return_value={"written": "1", "total_bytes": "0", "dropped": "", "deleted": "1"}
     )
     monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "container_image_template",
+        AsyncMock(return_value="nextjs-postgres-drizzle"),
+    )
     monkeypatch.setattr(runtime, "write_files", write)
     monkeypatch.setattr(
         runtime.demo_seed_writer,
@@ -520,6 +530,11 @@ async def test_hot_reload_never_forces_data_loss_migrations(
 ) -> None:
     exec_mock = AsyncMock(return_value={"exit_code": "0", "stdout": "", "stderr": ""})
     monkeypatch.setattr(runtime, "record_activity", AsyncMock())
+    monkeypatch.setattr(
+        runtime,
+        "container_image_template",
+        AsyncMock(return_value="nextjs-postgres-drizzle"),
+    )
     monkeypatch.setattr(
         runtime,
         "write_files",

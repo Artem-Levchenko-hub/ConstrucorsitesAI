@@ -14,8 +14,62 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 RestorationDatabaseState = Literal["empty", "present", "unknown"]
 MAX_SOURCE_BYTES = 32 * 1024 * 1024
+
+
+class RestorationSourceBindingV2(BaseModel):
+    """Secret-free controller receipt binding one preparation to its live source."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[2] = 2
+    serving_route_digest: Sha256
+    serving_release_digest: Sha256
+    controller_resource_digest: Sha256
+    controller_incarnation_digest: Sha256
+    controller_generation_digest: Sha256
+    provider_digest: Sha256
+    source_artifact_digest: Sha256
+    database_identity_digest: Sha256
+    database_schema_digest: Sha256
+    database_role_binding_digest: Sha256
+    # Diagnostic only. Database identity also binds database/role/resource identity.
+    database_system_identifier: str | None = Field(default=None, max_length=128)
+    database_export_digest: Sha256
+    source_business_inventory_digest: Sha256
+    candidate_business_inventory_digest: Sha256
+    source_technical_inventory_digest: Sha256
+    candidate_technical_inventory_digest: Sha256
+    candidate_artifact_digest: Sha256
+
+    def digest(self) -> str:
+        from omnia_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(self.model_dump(mode="json"))
+
+    def live_identity_digest(self) -> str:
+        from omnia_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(
+            {
+                name: getattr(self, name)
+                for name in (
+                    "version",
+                    "serving_route_digest",
+                    "serving_release_digest",
+                    "controller_resource_digest",
+                    "controller_incarnation_digest",
+                    "controller_generation_digest",
+                    "provider_digest",
+                    "source_artifact_digest",
+                    "database_identity_digest",
+                    "database_schema_digest",
+                    "database_role_binding_digest",
+                )
+            }
+        )
 
 
 class RestorationSourceFile(BaseModel):
@@ -86,6 +140,9 @@ class RestorationIdentity(BaseModel):
 
 
 class CodeRestorationPrepare(RestorationIdentity):
+    # Optional only so journals admitted by an older controller remain parseable.
+    # CodeRestorationService rejects a new operation unless this is exactly v2.
+    binding_contract_version: Literal[2] | None = None
     files: list[RestorationSourceFile] = Field(min_length=1, max_length=20_000, repr=False)
     current_files: list[RestorationCurrentFile] = Field(
         default_factory=list, max_length=20_000, repr=False
@@ -122,6 +179,9 @@ class CodeRestorationApply(RestorationIdentity):
     candidate_id: UUID
     report_revision: int = Field(gt=0, strict=True)
     expected_fencing_epoch: int = Field(ge=1, strict=True)
+    # Missing only in an already-admitted legacy journal. It never authorizes a
+    # new effect on a v2 candidate.
+    binding_digest: Sha256 | None = None
 
 
 class CodeRestorationCancel(BaseModel):

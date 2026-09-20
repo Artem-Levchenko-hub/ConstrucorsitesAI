@@ -6,24 +6,32 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
+import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
+from omnia_api.models.project_cell import (
+    ProjectCellCandidate,
+    ProjectCellProofResult,
+    ProjectCellWorkspace,
+)
 from omnia_api.models.user import User
 from omnia_api.services.max_finalization import (
     MaxFinalizationCoordinator,
     MaxFinalizationStatus,
 )
 from omnia_api.services.max_runtime_probe import MaxRuntimeProbe
+from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
 from omnia_api.services.project_cell_executor import (
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
     ProjectCellExecutorHandle,
     ProjectCellPreviewSyncResult,
 )
-from omnia_api.services.project_cell_proofs import ProofIdentity
+from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
+from omnia_api.services.promotion_permit import workspace_revision_digest
 
 
 def _files() -> dict[str, str]:
@@ -48,10 +56,27 @@ def _files() -> dict[str, str]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _exact_release_probe(monkeypatch):
+    async def probe(_preview, **_kwargs) -> MaxRuntimeProbe:
+        return MaxRuntimeProbe(
+            True,
+            "signed preview auth and protected read green",
+            "8" * 64,
+            "runtime/sha256/" + "8" * 64,
+        )
+
+    monkeypatch.setattr(
+        "omnia_api.services.max_runtime_probe.probe_max_cell_runtime",
+        probe,
+    )
+
+
 @dataclass
 class _Harness:
     coordinator: MaxFinalizationCoordinator
     roles: list[ProjectCellCommandRole]
+    runtime_probes: list[str]
     set_build_green: Callable[[bool], None]
 
 
@@ -100,7 +125,7 @@ async def _new_harness(
         workspace_id=workspace.id,
         generation_run_id=run.id,
         fencing_epoch=7,
-        workspace_revision="1" * 64,
+        workspace_revision=workspace_revision_digest(_files()),
         dependency_digest="2" * 64,
         schema_data_digest="3" * 64,
         cell_manifest_digest="4" * 64,
@@ -110,6 +135,7 @@ async def _new_harness(
         build_config_digest="7" * 64,
     )
     roles: list[ProjectCellCommandRole] = []
+    runtime_probes: list[str] = []
     state = {"build_green": build_green}
 
     async def current_identity() -> ProofIdentity:
@@ -132,7 +158,8 @@ async def _new_harness(
             invalidated_dimensions=frozenset(),
         )
 
-    async def runtime_probe(_proof_key: str) -> MaxRuntimeProbe:
+    async def runtime_probe(proof_key: str) -> MaxRuntimeProbe:
+        runtime_probes.append(proof_key)
         return MaxRuntimeProbe(True, "runtime green", "8" * 64, "runtime/sha256/" + "8" * 64)
 
     async def operation_status(_operation_id: UUID):
@@ -140,6 +167,17 @@ async def _new_harness(
 
     async def noop() -> None:
         return None
+
+    async def create_preview_session() -> ProjectCellPreviewSession:
+        return ProjectCellPreviewSession(
+            workspace_id=workspace.id,
+            preview_url=f"https://cell-{workspace.id.hex[:12]}-dev.preview.test",
+            bootstrap_url=(
+                f"https://cell-{workspace.id.hex[:12]}-dev.preview.test/"
+                "api/omnia/preview-session?expires=4102444800&signature=" + "a" * 64
+            ),
+            expires_at="2100-01-01T00:00:00+00:00",
+        )
 
     async def snapshot_files() -> dict[str, str]:
         return _files()
@@ -165,7 +203,7 @@ async def _new_harness(
         apply_external_files=stage_files,
         export_files=snapshot_files,
         workspace_id=workspace.id,
-        create_preview_session=noop,  # type: ignore[arg-type]
+        create_preview_session=create_preview_session,
         release=noop,
         current_identity=current_identity,
         run_role=run_role,
@@ -185,7 +223,7 @@ async def _new_harness(
     def set_build_green(value: bool) -> None:
         state["build_green"] = value
 
-    return _Harness(coordinator, roles, set_build_green)
+    return _Harness(coordinator, roles, runtime_probes, set_build_green)
 
 
 async def test_finalize_runs_one_full_build_and_reuses_release_evidence(
@@ -205,7 +243,46 @@ async def test_finalize_runs_one_full_build_and_reuses_release_evidence(
     assert first.proof.full_build is not None
     assert first.proof.runtime is not None
     assert first.proof.release is not None
+    assert first.proof.permit is not None
+    assert second.proof.permit == first.proof.permit
     assert second.checkpoint.candidate_id == first.checkpoint.candidate_id
+
+
+async def test_resume_rebuilds_legacy_full_build_and_dependent_proofs(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    from omnia_api.services import release_proof
+
+    release_calls = 0
+    real_release_proof = release_proof.run_release_proof
+
+    async def counted_release(*args, **kwargs):
+        nonlocal release_calls
+        release_calls += 1
+        return await real_release_proof(*args, **kwargs)
+
+    monkeypatch.setattr(release_proof, "run_release_proof", counted_release)
+    harness = await _new_harness(db_session, test_engine)
+    first = await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
+
+    result = await db_session.scalar(
+        select(ProjectCellProofResult).where(
+            ProjectCellProofResult.dimension == ProofDimension.FULL_BUILD.value
+        )
+    )
+    assert result is not None
+    result.redacted_detail = "legacy unversioned build evidence"
+    await db_session.commit()
+
+    second = await harness.coordinator.resume(first.checkpoint)
+    third = await harness.coordinator.resume(second.checkpoint)
+
+    assert second.status is third.status is MaxFinalizationStatus.COMPLETE
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 2
+    assert len(harness.runtime_probes) == 2
+    assert release_calls == 2
 
 
 async def test_unchanged_red_build_is_terminal_without_retry(
@@ -236,6 +313,85 @@ async def test_source_gap_returns_to_edit_without_running_commands(
 
     assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
     assert harness.roles == []
+
+
+async def test_red_exact_behavior_creates_zero_candidates(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    from dataclasses import replace
+
+    harness = await _new_harness(db_session, test_engine)
+
+    async def red_behavior(_proof_key: str) -> MaxRuntimeProbe:
+        return MaxRuntimeProbe(False, "candidate behavior is red")
+
+    harness.coordinator.executor = replace(
+        harness.coordinator.executor,
+        runtime_probe=red_behavior,
+    )
+    outcome = await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
+
+    assert outcome.status is MaxFinalizationStatus.FAILED
+    async with async_sessionmaker(test_engine, expire_on_commit=False)() as session:
+        assert (await session.scalar(select(func.count(ProjectCellCandidate.id)))) == 0
+
+
+async def test_red_release_proof_creates_zero_candidates(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    from omnia_api.services.functional_gate import Check, FunctionalVerdict
+
+    harness = await _new_harness(db_session, test_engine)
+
+    async def red_release(*_args, **_kwargs) -> FunctionalVerdict:
+        return FunctionalVerdict(
+            passed=False,
+            checks=[Check("max_data_plane", False, "release behavior is red")],
+            summary="release behavior is red",
+        )
+
+    monkeypatch.setattr("omnia_api.services.release_proof.run_release_proof", red_release)
+    outcome = await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
+
+    assert outcome.status is MaxFinalizationStatus.FAILED
+    async with async_sessionmaker(test_engine, expire_on_commit=False)() as session:
+        assert (await session.scalar(select(func.count(ProjectCellCandidate.id)))) == 0
+
+
+async def test_stale_identity_blocks_candidate_prepare(
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    from dataclasses import replace
+
+    import pytest
+
+    from omnia_api.services.promotion_permit import PromotionPermitError
+
+    harness = await _new_harness(db_session, test_engine)
+    original = await harness.coordinator.executor.current_identity()
+    stale = replace(original, workspace_revision="9" * 64)
+    calls = 0
+
+    async def identity_changes_before_promotion() -> ProofIdentity:
+        nonlocal calls
+        calls += 1
+        return original if calls == 1 else stale
+
+    harness.coordinator.executor = replace(
+        harness.coordinator.executor,
+        current_identity=identity_changes_before_promotion,
+    )
+
+    with pytest.raises(PromotionPermitError) as raised:
+        await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
+
+    assert raised.value.code == "PROMOTION_PERMIT_STALE"
+    async with async_sessionmaker(test_engine, expire_on_commit=False)() as session:
+        assert (await session.scalar(select(func.count(ProjectCellCandidate.id)))) == 0
 
 
 async def test_changed_full_envelope_does_not_reuse_failed_bootstrap_command(

@@ -1667,6 +1667,14 @@ def make_container_executor(
                 "infra_dead": True,
             }
         except orchestrator_client.OrchestratorBadRequest as exc:
+            if exc.upstream_code in {
+                "migration_apply_failed",
+                "migration_reconciliation_required",
+            }:
+                # The source write already landed, but the canonical MAX runner
+                # did not confirm the database state. This is a mandatory gate,
+                # not a model-repair observation that may later be ignored.
+                raise
             # The orchestrator's structured 409 "container_not_running" (a dead
             # container that in-line wake could not revive) is infra death too.
             _infra = "container_not_running" in str(exc.details or "")

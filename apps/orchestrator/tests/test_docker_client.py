@@ -422,6 +422,124 @@ def test_module_exposes_expected_public_api() -> None:
         assert hasattr(docker_client, name), f"missing public symbol: {name}"
 
 
+async def test_copy_path_inventory_hashes_source_without_sensitive_or_generated_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    raw = _tar_bytes(
+        {
+            "drizzle/0000_max_core.sql": b"core sql\n",
+            "drizzle/.env": b"DATABASE_URL=secret",
+            "drizzle/node_modules/pkg/index.js": b"vendored",
+            "drizzle/.next/cache.bin": b"generated",
+            "drizzle/.git/config": b"private",
+        }
+    )
+
+    class SourceContainer:
+        def get_archive(self, path: str) -> tuple[list[bytes], dict[str, object]]:
+            assert path == "/app/drizzle"
+            return [raw], {}
+
+    monkeypatch.setattr(
+        docker_client,
+        "_get_client",
+        lambda: SimpleNamespace(
+            containers=SimpleNamespace(
+                get=lambda name: SourceContainer() if name == "dev" else None
+            )
+        ),
+    )
+    copy_with_inventory = getattr(
+        docker_client,
+        "copy_path_from_container_with_inventory",
+        None,
+    )
+    assert callable(copy_with_inventory), "copy+inventory API is missing"
+
+    inventory = await copy_with_inventory("dev", "/app/drizzle", str(tmp_path))
+
+    assert inventory == {
+        "drizzle/0000_max_core.sql": (
+            "abae62b3163dc8f45d6a9e1d189fe03f842780b3b07daea53ae1d81cff1a7958"
+        )
+    }
+
+
+async def test_image_path_inventory_hashes_files_and_always_removes_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _tar_bytes({"drizzle/0000_max_core.sql": b"core sql\n"})
+
+    class Probe:
+        removed = False
+
+        def get_archive(self, path: str) -> tuple[list[bytes], dict[str, object]]:
+            assert path == "/app/drizzle"
+            return [raw], {}
+
+        def remove(self, force: bool = False) -> None:
+            assert force is True
+            self.removed = True
+
+    probe = Probe()
+
+    def create(*, image: str, **kwargs: object) -> Probe:
+        assert image == "sha256:" + "a" * 64
+        assert kwargs == {"network_disabled": True, "command": ["true"]}
+        return probe
+
+    monkeypatch.setattr(
+        docker_client,
+        "_get_client",
+        lambda: SimpleNamespace(containers=SimpleNamespace(create=create)),
+    )
+    inspect_image = getattr(docker_client, "image_path_inventory", None)
+    assert callable(inspect_image), "built-image inventory API is missing"
+
+    inventory = await inspect_image(
+        "sha256:" + "a" * 64,
+        ("/app/drizzle",),
+    )
+
+    assert inventory == {
+        "drizzle/0000_max_core.sql": (
+            "abae62b3163dc8f45d6a9e1d189fe03f842780b3b07daea53ae1d81cff1a7958"
+        )
+    }
+    assert probe.removed is True
+
+
+async def test_image_path_inventory_removes_probe_when_archive_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Probe:
+        removed = False
+
+        def get_archive(self, _path: str) -> tuple[list[bytes], dict[str, object]]:
+            raise docker.errors.APIError("fixture archive failure")
+
+        def remove(self, force: bool = False) -> None:
+            assert force is True
+            self.removed = True
+
+    probe = Probe()
+    monkeypatch.setattr(
+        docker_client,
+        "_get_client",
+        lambda: SimpleNamespace(
+            containers=SimpleNamespace(create=lambda **_kwargs: probe)
+        ),
+    )
+    inspect_image = getattr(docker_client, "image_path_inventory", None)
+    assert callable(inspect_image), "built-image inventory API is missing"
+
+    with pytest.raises(OrchestratorError, match="built image inventory failed"):
+        await inspect_image("sha256:" + "a" * 64, ("/app/drizzle",))
+
+    assert probe.removed is True
+
+
 async def test_build_image_retries_one_transient_build_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -444,8 +562,17 @@ async def test_build_image_retries_one_transient_build_error(
     settings = type("Settings", (), {"docker_cli_config_dir": str(tmp_path)})()
     monkeypatch.setattr(docker_client, "get_settings", lambda: settings)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", start)
+    monkeypatch.setattr(
+        docker_client,
+        "_get_client",
+        lambda: SimpleNamespace(
+            images=SimpleNamespace(
+                get=lambda _tag: SimpleNamespace(id="sha256:" + "a" * 64)
+            )
+        ),
+    )
 
-    await docker_client.build_image(
+    image_id = await docker_client.build_image(
         ".",
         "Dockerfile.prod",
         "omnia-app-test:1",
@@ -454,6 +581,7 @@ async def test_build_image_retries_one_transient_build_error(
     )
 
     assert calls == 2
+    assert image_id == "sha256:" + "a" * 64
 
 
 async def test_build_image_reports_terminal_error_after_retry(

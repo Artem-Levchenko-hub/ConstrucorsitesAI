@@ -65,9 +65,22 @@ from omnia_api.services.project_cell_proofs import (
     find_proof_result,
     record_proof_result,
 )
+from omnia_api.services.promotion_permit import (
+    MAX_FULL_BUILD_CONTRACT_VERSION,
+    PromotionPermit,
+    PromotionPermitError,
+    canonical_files_digest,
+    issue_promotion_permit,
+    release_receipt_digest,
+    release_receipt_matches,
+    release_receipt_ref,
+    require_promotion_permit,
+    workspace_revision_digest,
+)
 from omnia_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
+_FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
 
 
 async def _discard_event(
@@ -125,14 +138,13 @@ class ProofBundle:
     full_build: ProjectCellProofResult | None = None
     runtime: ProjectCellProofResult | None = None
     release: ProjectCellProofResult | None = None
+    permit: PromotionPermit | None = None
 
     def release_checks(self, *, require_max_data: bool) -> list[Check]:
         checks = [
             _result_check("typecheck", self.full_build),
             _result_check("runtime", self.runtime),
         ]
-        if require_max_data:
-            checks.append(_result_check("max_data_plane", self.runtime))
         if self.release is not None:
             checks.append(_result_check("release", self.release))
         return checks
@@ -174,6 +186,18 @@ def _artifact_digest(result: ProjectCellProofResult) -> str:
 def _content_digest(label: str, *parts: str) -> str:
     payload = "\0".join((label, *parts)).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _versioned_build_detail(detail: str) -> str:
+    return _FULL_BUILD_DETAIL_PREFIX + ("\n" + detail if detail else "")
+
+
+def _current_build_result(result: ProjectCellProofResult, artifact_digest: str) -> bool:
+    if not result.redacted_detail.startswith(_FULL_BUILD_DETAIL_PREFIX):
+        return False
+    if result.outcome == ProofOutcome.RED.value:
+        return True
+    return result.artifact_ref == f"build/sha256/{artifact_digest}"
 
 
 class MaxFinalizationCoordinator:
@@ -295,6 +319,10 @@ class MaxFinalizationCoordinator:
         self._last_files = dict(files)
         self._last_prompt = prompt
         identity = await self._identity()
+        if workspace_revision_digest(files) != identity.workspace_revision:
+            raise MaxFinalizationConflict(
+                "source files do not match the active workspace revision"
+            )
         proof = await self._proof(identity)
         checkpoint = self._checkpoint(identity, GenerationPhase.PREPARE)
         source_gap = max_source_completion_gap(prompt, files, portable=True)
@@ -336,6 +364,13 @@ class MaxFinalizationCoordinator:
         await self._phase_finished(GenerationPhase.PREPARE)
 
         build = await self._find(proof, ProofDimension.FULL_BUILD)
+        refresh_dependents = False
+        if build is not None:
+            current_files = await self._verified_workspace_files(identity)
+            current_digest = canonical_files_digest(current_files)
+            if not _current_build_result(build, current_digest):
+                build = None
+                refresh_dependents = True
         if build is None:
             build = await self._run_role_result(
                 proof=proof,
@@ -358,13 +393,20 @@ class MaxFinalizationCoordinator:
             )
 
         build_digest = _artifact_digest(build)
-        runtime = await self._find(
-            proof,
-            ProofDimension.RUNTIME,
-            artifact_digest=build_digest,
-        )
+        runtime = None
+        if not refresh_dependents:
+            runtime = await self._find(
+                proof,
+                ProofDimension.RUNTIME,
+                artifact_digest=build_digest,
+            )
         if runtime is None:
-            runtime = await self._run_runtime(proof, identity, build_digest)
+            runtime = await self._run_runtime(
+                proof,
+                identity,
+                build_digest,
+                refresh_incompatible=refresh_dependents,
+            )
         else:
             await self._counter("proof_hit")
         bundle = ProofBundle(
@@ -383,11 +425,19 @@ class MaxFinalizationCoordinator:
                 bundle=bundle,
             )
 
-        release = await self._find(
-            proof,
-            ProofDimension.RELEASE,
-            artifact_digest=build_digest,
-        )
+        release = None
+        if not refresh_dependents:
+            release = await self._find(
+                proof,
+                ProofDimension.RELEASE,
+                artifact_digest=build_digest,
+            )
+        if release is not None and not release_receipt_matches(
+            release,
+            build_digest,
+            proof.proof_key,
+        ):
+            release = None
         if release is None:
             release = await self._record_release(bundle, build_digest)
         else:
@@ -409,7 +459,20 @@ class MaxFinalizationCoordinator:
                 bundle=bundle,
             )
 
-        candidate = await self._prepare_and_promote(identity, build, release)
+        final_files = await self._verified_workspace_files(identity)
+        if canonical_files_digest(final_files) != build_digest:
+            raise MaxFinalizationConflict("built artifact changed after release proof")
+        self._last_files = final_files
+        permit = issue_promotion_permit(bundle)
+        bundle = ProofBundle(
+            identity=proof,
+            bootstrap=bootstrap,
+            full_build=build,
+            runtime=runtime,
+            release=release,
+            permit=permit,
+        )
+        candidate = await self._prepare_and_promote(identity, build, release, permit)
         complete = self._checkpoint(
             identity,
             GenerationPhase.COMPLETE,
@@ -479,7 +542,10 @@ class MaxFinalizationCoordinator:
             raise MaxFinalizationConflict("checkpoint proof identity or fence changed")
         proof = await self._proof(identity)
         build = await self._find(proof, ProofDimension.FULL_BUILD)
-        if build is not None and build.outcome == ProofOutcome.RED.value:
+        current_files = await self._verified_workspace_files(identity)
+        current_digest = canonical_files_digest(current_files)
+        build_is_current = build is not None and _current_build_result(build, current_digest)
+        if build_is_current and build is not None and build.outcome == ProofOutcome.RED.value:
             return await self._failed(
                 identity,
                 proof,
@@ -493,12 +559,18 @@ class MaxFinalizationCoordinator:
                 candidate = await session.get(ProjectCellCandidate, checkpoint.candidate_id)
                 if candidate is None or candidate.status != "accepted":
                     raise MaxFinalizationConflict("accepted candidate checkpoint is stale")
-            return await self._outcome(
-                MaxFinalizationStatus.COMPLETE,
-                checkpoint,
-                await self._load_bundle(proof),
-                "final proof already accepted",
+            bundle = (
+                await self._load_bundle(proof)
+                if build_is_current
+                else ProofBundle(identity=proof)
             )
+            if bundle.permit is not None:
+                return await self._outcome(
+                    MaxFinalizationStatus.COMPLETE,
+                    checkpoint,
+                    bundle,
+                    "final proof already accepted",
+                )
         effective_files = dict(files) if files is not None else self._last_files
         effective_prompt = prompt if prompt is not None else self._last_prompt
         if effective_files is None or effective_prompt is None:
@@ -514,6 +586,19 @@ class MaxFinalizationCoordinator:
         ):
             raise MaxFinalizationConflict("executor returned a foreign proof identity")
         return identity
+
+    async def _verified_workspace_files(
+        self,
+        identity: ProofIdentity,
+    ) -> dict[str, str]:
+        reader = self.executor.refresh_snapshot_files or self.executor.snapshot_files
+        files = dict(await reader())
+        current = await self._identity()
+        if current != identity:
+            raise MaxFinalizationConflict("workspace identity changed while reading artifact")
+        if workspace_revision_digest(files) != identity.workspace_revision:
+            raise MaxFinalizationConflict("workspace files do not match the active revision")
+        return files
 
     async def _proof(self, identity: ProofIdentity) -> ProjectCellProof:
         async with self.session_factory() as session:
@@ -593,8 +678,12 @@ class MaxFinalizationCoordinator:
             outcome = ProofOutcome.GREEN if observation.ok else ProofOutcome.RED
         artifact_ref = None
         if dimension is ProofDimension.FULL_BUILD and outcome is ProofOutcome.GREEN:
-            digest = identity.dimension_key(ProofDimension.FULL_BUILD)
+            artifact_files = await self._verified_workspace_files(identity)
+            digest = canonical_files_digest(artifact_files)
+            self._last_files = artifact_files
             artifact_ref = f"build/sha256/{digest}"
+        if dimension is ProofDimension.FULL_BUILD:
+            detail = _versioned_build_detail(detail)
         return await self._record(
             proof=proof,
             dimension=dimension,
@@ -602,6 +691,7 @@ class MaxFinalizationCoordinator:
             operation_id=observation.operation_id,
             artifact_ref=artifact_ref,
             detail=detail,
+            refresh_incompatible=dimension is ProofDimension.FULL_BUILD,
         )
 
     async def _execute_role(
@@ -614,9 +704,16 @@ class MaxFinalizationCoordinator:
     ) -> ProjectCellCommandObservation:
         # Proof reuse is dimension-specific; commands carry the full fenced
         # envelope and must never alias after another identity field changes.
+        contract_version = (
+            MAX_FULL_BUILD_CONTRACT_VERSION
+            if role is ProjectCellCommandRole.FULL_BUILD
+            else "v1"
+        )
         operation_id = uuid5(
             self.generation_run_id,
-            f"command:{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:{role.value}",
+            "command:"
+            f"{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:"
+            f"{role.value}:{contract_version}",
         )
         await self._phase_started(phase, self._checkpoint(identity, phase, operation_id))
         run_role = self.executor.run_role
@@ -682,6 +779,8 @@ class MaxFinalizationCoordinator:
         proof: ProjectCellProof,
         identity: ProofIdentity,
         build_digest: str,
+        *,
+        refresh_incompatible: bool = False,
     ) -> ProjectCellProofResult:
         dimension_key = identity.dimension_key(
             ProofDimension.RUNTIME,
@@ -742,6 +841,7 @@ class MaxFinalizationCoordinator:
             artifact_ref=f"verification/sha256/{verification_digest}" if ok else None,
             detail=detail,
             artifact_digest=build_digest,
+            refresh_incompatible=refresh_incompatible,
         )
 
     async def _record_release(
@@ -760,16 +860,24 @@ class MaxFinalizationCoordinator:
         )
         dimension_key = bundle.identity.proof_key + build_digest
         operation_id = uuid5(self.generation_run_id, f"release:{dimension_key}")
-        detail = verdict.summary
-        digest = _content_digest("release", bundle.identity.proof_key, build_digest, detail)
+        detail = bounded_redacted_text(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
+        digest = release_receipt_digest(
+            proof_key=bundle.identity.proof_key,
+            artifact_digest=build_digest,
+            detail=detail,
+        )
         return await self._record(
             proof=bundle.identity,
             dimension=ProofDimension.RELEASE,
             outcome=ProofOutcome.GREEN if verdict.passed else ProofOutcome.RED,
             operation_id=operation_id,
-            artifact_ref=f"verification/sha256/{digest}" if verdict.passed else None,
+            artifact_ref=release_receipt_ref(
+                artifact_digest=build_digest,
+                receipt_digest=digest,
+            ),
             detail=detail,
             artifact_digest=build_digest,
+            refresh_incompatible=True,
         )
 
     async def _record(
@@ -782,7 +890,18 @@ class MaxFinalizationCoordinator:
         artifact_ref: str | None,
         detail: str,
         artifact_digest: str | None = None,
+        refresh_incompatible: bool = False,
     ) -> ProjectCellProofResult:
+        detail_text = bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
+
+        def needs_refresh(result: ProjectCellProofResult) -> bool:
+            return (
+                result.outcome != outcome.value
+                or result.operation_id != operation_id
+                or result.artifact_ref != artifact_ref
+                or result.redacted_detail != detail_text
+            )
+
         async with self.session_factory() as session:
             stored_result: ProjectCellProofResult | None
             try:
@@ -808,6 +927,28 @@ class MaxFinalizationCoordinator:
                 )
                 if stored_result is None:
                     raise
+                if refresh_incompatible and needs_refresh(stored_result):
+                    locked = await session.scalar(
+                        select(ProjectCellProofResult)
+                        .where(ProjectCellProofResult.id == stored_result.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
+                    )
+                    if locked is None:
+                        raise MaxFinalizationConflict(
+                            "proof result disappeared during refresh"
+                        ) from None
+                    if needs_refresh(locked):
+                        locked.outcome = outcome.value
+                        locked.operation_id = operation_id
+                        locked.artifact_ref = artifact_ref
+                        locked.redacted_detail = detail_text
+                        locked.detail_digest = hashlib.sha256(
+                            detail_text.encode("utf-8")
+                        ).hexdigest()
+                        await session.commit()
+                        await session.refresh(locked)
+                    stored_result = locked
             session.expunge(stored_result)
             return stored_result
 
@@ -816,11 +957,19 @@ class MaxFinalizationCoordinator:
         identity: ProofIdentity,
         build: ProjectCellProofResult,
         release: ProjectCellProofResult,
+        permit: PromotionPermit | None,
     ) -> ProjectCellCandidate:
+        require_promotion_permit(permit, current_identity=await self._identity())
         build_ref = build.artifact_ref
         verification_ref = release.artifact_ref
         if build_ref is None or verification_ref is None:
             raise MaxFinalizationConflict("green release evidence lacks artifact refs")
+        assert permit is not None
+        if permit.build_ref != build_ref or permit.verification_ref != verification_ref:
+            raise PromotionPermitError(
+                "PROMOTION_PERMIT_STALE",
+                "promotion permit does not match candidate artifact refs",
+            )
         snapshot_operation = uuid5(
             self.generation_run_id,
             f"snapshot:{identity.proof_key}",
@@ -836,6 +985,7 @@ class MaxFinalizationCoordinator:
             phase=GenerationPhase.SNAPSHOT,
             allow_completed_replay=True,
         )
+        require_promotion_permit(permit, current_identity=await self._identity())
         async with self.session_factory() as session:
             candidate = await prepare_candidate(
                 session,
@@ -876,6 +1026,7 @@ class MaxFinalizationCoordinator:
             phase=GenerationPhase.PROMOTE,
             allow_completed_replay=True,
         )
+        require_promotion_permit(permit, current_identity=await self._identity())
         async with self.session_factory() as session:
             candidate = await promote_candidate(
                 session,
@@ -1083,12 +1234,30 @@ class MaxFinalizationCoordinator:
             digest = _artifact_digest(build)
             runtime = await self._find(proof, ProofDimension.RUNTIME, artifact_digest=digest)
             release = await self._find(proof, ProofDimension.RELEASE, artifact_digest=digest)
+            if release is not None and not release_receipt_matches(
+                release,
+                digest,
+                proof.proof_key,
+            ):
+                release = None
+        bundle = ProofBundle(
+            identity=proof,
+            bootstrap=bootstrap,
+            full_build=build,
+            runtime=runtime,
+            release=release,
+        )
+        try:
+            permit = issue_promotion_permit(bundle)
+        except PromotionPermitError:
+            return bundle
         return ProofBundle(
             identity=proof,
             bootstrap=bootstrap,
             full_build=build,
             runtime=runtime,
             release=release,
+            permit=permit,
         )
 
     async def _locked_run(self, session: AsyncSession) -> GenerationRun:

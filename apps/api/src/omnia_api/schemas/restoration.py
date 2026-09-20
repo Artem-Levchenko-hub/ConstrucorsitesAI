@@ -1,7 +1,9 @@
 """Owner-facing restoration state and strictly validated controller evidence."""
 
+import hashlib
+import json
 from datetime import datetime
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
@@ -19,6 +21,37 @@ RestoreState = Literal[
     "failed",
     "reconciling",
 ]
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class RuntimeSourceBindingV2(BaseModel):
+    """Secret-free controller observation binding a candidate to its live source."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal[2]
+    serving_route_digest: Sha256
+    serving_release_digest: Sha256
+    controller_resource_digest: Sha256
+    controller_incarnation_digest: Sha256
+    controller_generation_digest: Sha256
+    provider_digest: Sha256
+    source_artifact_digest: Sha256
+    database_identity_digest: Sha256
+    database_schema_digest: Sha256
+    database_role_binding_digest: Sha256
+    database_system_identifier: str | None = Field(default=None, max_length=128)
+    database_export_digest: Sha256
+    source_business_inventory_digest: Sha256
+    candidate_business_inventory_digest: Sha256
+    source_technical_inventory_digest: Sha256
+    candidate_technical_inventory_digest: Sha256
+    candidate_artifact_digest: Sha256
+
+    def digest(self) -> str:
+        wire = self.model_dump(mode="json")
+        return hashlib.sha256(
+            json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
 
 
 class RestoreRequest(BaseModel):
@@ -139,6 +172,7 @@ class RuntimeObserved(BaseModel):
     source_commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     applied: Literal[True]
     fencing_epoch: int = Field(ge=0, strict=True)
+    binding_digest: Sha256 | None = None
     source_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("applied", mode="before")
@@ -156,6 +190,10 @@ class RuntimeRecoveryObserved(BaseModel):
     applied: Literal[False]
     safe_to_release: Literal[True]
     fencing_epoch: int = Field(ge=0, strict=True)
+    binding_digest: Sha256 | None = None
+    rejected_before_effect: Literal[True] | None = None
+    superseded_before_effect: Literal[True] | None = None
+    retained_source_fencing_epoch: int | None = Field(default=None, ge=1, strict=True)
 
     @field_validator("applied", "safe_to_release", mode="before")
     @classmethod
@@ -164,6 +202,32 @@ class RuntimeRecoveryObserved(BaseModel):
         if value is not expected:
             raise ValueError("runtime recovery flags must be exact booleans")
         return value
+
+    @field_validator("rejected_before_effect", "superseded_before_effect", mode="before")
+    @classmethod
+    def exact_optional_proof_flags(cls, value: object) -> object:
+        if value is not None and value is not True:
+            raise ValueError("runtime recovery proof flags must be exact booleans")
+        return value
+
+    @model_validator(mode="after")
+    def require_complete_pre_effect_rejection(self) -> Self:
+        if self.superseded_before_effect is True and (
+            self.rejected_before_effect is not None
+            or self.retained_source_fencing_epoch is not None
+        ):
+            raise ValueError("superseded receipt cannot assert a retained source fence")
+        if self.superseded_before_effect is None and (
+            (self.rejected_before_effect is None)
+            != (self.retained_source_fencing_epoch is None)
+        ):
+            raise ValueError("pre-effect rejection receipt must be complete")
+        if (
+            self.retained_source_fencing_epoch is not None
+            and self.retained_source_fencing_epoch >= self.fencing_epoch
+        ):
+            raise ValueError("retained source fence must precede the rejected fence")
+        return self
 
 
 class RuntimeRestoration(BaseModel):
@@ -181,9 +245,15 @@ class RuntimeRestoration(BaseModel):
     can_apply: bool = Field(strict=True)
     can_cancel: bool = Field(strict=True)
     observed: RuntimeObserved | RuntimeRecoveryObserved | None = None
+    binding: RuntimeSourceBindingV2 | None = None
+    binding_digest: Sha256 | None = None
 
     @model_validator(mode="after")
     def require_observed_completion(self) -> Self:
+        if (self.binding is None) != (self.binding_digest is None):
+            raise ValueError("runtime source binding must be complete")
+        if self.binding is not None and self.binding.digest() != self.binding_digest:
+            raise ValueError("runtime source binding digest mismatch")
         if (self.state == "completed") != isinstance(self.observed, RuntimeObserved):
             raise ValueError("only observed runtime activation may complete restoration")
         if isinstance(self.observed, RuntimeRecoveryObserved) and self.state != "failed":

@@ -315,8 +315,12 @@ def normalize_route(directory: str) -> str:
     return "/" + "/".join(segments)
 
 
+def _canonical_source_path(path: str) -> str:
+    return path.replace("\\", "/")
+
+
 def is_platform_route_path(path: str) -> bool:
-    match = _ROUTE_FILE.match(path)
+    match = _ROUTE_FILE.match(_canonical_source_path(path))
     if not match:
         return False
     route = normalize_route(match["dir"])
@@ -337,10 +341,12 @@ def route_manifest(
 ) -> RouteManifest:
     capabilities: set[tuple[str, str]] = set()
     unresolved: set[str] = set()
+    canonical_ignore = {_canonical_source_path(path) for path in ignore}
     for path, text in files.items():
-        if path in ignore or not isinstance(text, str):
+        canonical_path = _canonical_source_path(path)
+        if canonical_path in canonical_ignore or not isinstance(text, str):
             continue
-        match = _ROUTE_FILE.match(path)
+        match = _ROUTE_FILE.match(canonical_path)
         if not match:
             continue
         route = normalize_route(match["dir"])

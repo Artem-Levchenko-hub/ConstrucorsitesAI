@@ -35,6 +35,7 @@ _PUBLIC_ANONYMOUS = {
 _SESSION_COOKIE = "__Host-max_session"
 _EMBEDDED_COOKIES = ("__Host-max_session_embedded", "__Host-max_session_partitioned")
 _PUBLIC_FRAMING = "frame-ancestors 'self' https://web.max.ru https://max.ru"
+_OWNER_FRAMING = "frame-ancestors 'self' https://constructor.lead-generator.ru"
 _BOOTSTRAP_SCRIPT = """
 (() => {
   const message = document.getElementById('status');
@@ -244,10 +245,14 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def end_headers(self) -> None:
-        if cast(BoundaryServer, self.server).config.get("public_mode") is True:
-            # Origin checks stop CSRF, but not clicks inside a hostile iframe.
-            # A separate CSP intersects, never weakens any upstream policy.
-            self.send_header("Content-Security-Policy", _PUBLIC_FRAMING)
+        public = cast(BoundaryServer, self.server).config.get("public_mode") is True
+        # Origin checks stop CSRF, but not clicks inside a hostile iframe. Owner
+        # drafts embed only in Studio; public releases embed only in MAX clients.
+        # A separate CSP intersects, never weakens any upstream policy.
+        self.send_header(
+            "Content-Security-Policy",
+            _PUBLIC_FRAMING if public else _OWNER_FRAMING,
+        )
         super().end_headers()
 
     def do_GET(self) -> None:

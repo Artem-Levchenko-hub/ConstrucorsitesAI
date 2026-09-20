@@ -201,18 +201,18 @@ async def test_reconcile_failure_keeps_the_operation_scheduled(db_session, test_
     async def explode(*_args, **_kwargs):
         raise RuntimeError("boom")
 
-    original = service.get_restoration
-    service.get_restoration = explode  # type: ignore[assignment]
+    original = service.advance_restoration
+    service.advance_restoration = explode  # type: ignore[assignment]
     try:
         from omnia_api.services import restoration_reconciliation as module
 
-        module.get_restoration = explode  # type: ignore[assignment]
+        module.advance_restoration = explode  # type: ignore[assignment]
         assert await reconcile_due_restorations(
             factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
         ) == 1
     finally:
-        service.get_restoration = original  # type: ignore[assignment]
-        module.get_restoration = original  # type: ignore[assignment]
+        service.advance_restoration = original  # type: ignore[assignment]
+        module.advance_restoration = original  # type: ignore[assignment]
     row = await _row(db_session, operation_id)
     assert row.state == "reconciling"
     assert row.reconcile_lease_until is None
@@ -248,7 +248,7 @@ async def test_controller_outage_is_no_evidence_and_is_retried_with_backoff(
 
     # A client GET during the outage leaves the row alone as well.
     seen = await service.get_restoration(
-        db_session, row.project_id, row.owner_id, operation_id, runtime
+        db_session, row.project_id, row.owner_id, operation_id
     )
     row = await _row(db_session, operation_id)
     assert seen.state == snapshot[0]

@@ -36,6 +36,10 @@ from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.core.template_materialization import materialize_template
 from omnia_orchestrator.services import deploy_state, nginx_writer
+from omnia_orchestrator.services.build_artifact_inventory import (
+    verify_max_image_inventory,
+    verify_max_source_context,
+)
 from omnia_orchestrator.services.port_allocator import get_prod_port_allocator
 from omnia_orchestrator.services.provisioner import _template_source_dir
 
@@ -417,6 +421,7 @@ async def _run(
         log.info("deploy.template", project_id=project_id, template=template)
         stack = get_stack(template)
         is_next_template = _is_next_template(template)
+        is_max_template = template == "max-miniapp-nextjs"
         if stack.production_dockerfile is None:
             raise OrchestratorError(
                 code="unsupported_stack",
@@ -431,8 +436,23 @@ async def _run(
 
         # 2. Overlay the live app files from the dev container.
         await docker_client.unpause_container(dev_name)
+        source_artifact_inventory: dict[str, str] = {}
+        expected_max_artifacts: dict[str, str] | None = None
         for rel in _OVERLAY_PATHS:
-            await docker_client.copy_path_from_container(dev_name, f"/app/{rel}", str(build_dir))
+            if is_max_template and rel in {"drizzle", "scripts"}:
+                copied = await docker_client.copy_path_from_container_with_inventory(
+                    dev_name,
+                    f"/app/{rel}",
+                    str(build_dir),
+                )
+                if copied is not None:
+                    source_artifact_inventory.update(copied)
+            else:
+                await docker_client.copy_path_from_container(
+                    dev_name,
+                    f"/app/{rel}",
+                    str(build_dir),
+                )
         _restore_template_owned_prod_files(template_dir, build_dir)
 
         # 2b. Force a prod-safe next.config (tolerate AI type/lint errors +
@@ -463,6 +483,13 @@ async def _run(
             # copies this directory so the migration runner has a stable contract.
             (build_dir / "drizzle").mkdir(exist_ok=True)
 
+        if is_max_template:
+            expected_max_artifacts = verify_max_source_context(
+                source_artifact_inventory,
+                context_root=build_dir,
+                template_root=template_dir,
+            )
+
         dockerfile = stack.production_dockerfile
         if not (build_dir / dockerfile).exists():
             raise OrchestratorError(
@@ -473,7 +500,14 @@ async def _run(
 
         # 3. Build the prod image.
         tag = f"omnia-app-{slug}:{int(time.time())}"
-        await docker_client.build_image(str(build_dir), dockerfile, tag)
+        built_image_id = await docker_client.build_image(str(build_dir), dockerfile, tag)
+        if is_max_template:
+            assert expected_max_artifacts is not None
+            image_artifacts = await docker_client.image_path_inventory(
+                built_image_id,
+                ("/app/drizzle", "/app/scripts"),
+            )
+            verify_max_image_inventory(expected_max_artifacts, image_artifacts)
         deploy_state.update(project_id, image_tag=tag, phase="swapping")
         await publish_project_event(
             project_id,
@@ -526,7 +560,7 @@ async def _run(
         )
         spec = docker_client.ContainerSpec(
             name=prod_name,
-            image=tag,
+            image=built_image_id if is_max_template else tag,
             port=prod_port,
             project_id=project_id,
             env={

@@ -22,6 +22,7 @@ from omnia_api.schemas.restoration import (
     RestoreReport,
     RestoreRequest,
     RestoreState,
+    RuntimeRecoveryObserved,
     RuntimeRestoration,
 )
 from omnia_api.services import repo
@@ -108,6 +109,18 @@ async def _owned_project(
     return project
 
 
+async def _read_owned_project(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+) -> Project:
+    """Authorize a read without joining the mutation/admission lock domain."""
+    project = await session.get(Project, project_id)
+    if project is None or project.owner_id != owner_id:
+        raise ApiError("not_found", "project not found", 404)
+    return project
+
+
 async def lock_restoration_admission(
     session: AsyncSession,
     project_id: UUID,
@@ -153,6 +166,19 @@ async def _owned_operation(
     return project, operation
 
 
+async def _read_owned_operation(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+    operation_id: UUID,
+) -> tuple[Project, Restoration]:
+    project = await _read_owned_project(session, project_id, owner_id)
+    operation = await session.get(Restoration, operation_id)
+    if operation is None or operation.project_id != project_id or operation.owner_id != owner_id:
+        raise ApiError("not_found", "restoration not found", 404)
+    return project, operation
+
+
 def _touch(operation: Restoration) -> None:
     operation.revision += 1
     operation.updated_at = datetime.now(UTC)
@@ -178,6 +204,8 @@ def public_operation(operation: Restoration) -> RestoreOperation:
             operation.state == "ready"
             and report is not None
             and not report.blockers
+            and operation.source_binding is not None
+            and operation.source_binding_digest is not None
             and runtime.get("can_apply") is True
         ),
         can_cancel=(
@@ -197,7 +225,7 @@ async def list_operations(
     project_id: UUID,
     owner_id: UUID,
 ) -> list[RestoreOperation]:
-    await _owned_project(session, project_id, owner_id)
+    await _read_owned_project(session, project_id, owner_id)
     recent = (
         select(Restoration.id)
         .where(Restoration.project_id == project_id)
@@ -224,6 +252,20 @@ def validate_runtime_response(request: dict[str, Any], result: RuntimeRestoratio
     for key in ("operation_id", "workspace_id", "project_id", "owner_id"):
         if str(getattr(result, key)) != request[key]:
             raise ValueError("restoration response identity mismatch")
+    v2 = request.get("binding_contract_version") == 2
+    if v2 and result.state == "ready" and (
+        result.binding is None or result.binding_digest is None or result.can_apply is not True
+    ):
+        raise ValueError("restoration source binding is required")
+    expected_binding = request.get("binding_digest")
+    if expected_binding is not None and result.binding_digest != expected_binding:
+        raise ValueError("restoration source binding mismatch")
+    if (
+        result.observed is not None
+        and expected_binding is not None
+        and result.observed.binding_digest != expected_binding
+    ):
+        raise ValueError("restoration activation binding mismatch")
     if result.observed is not None and (
         result.observed.source_commit_sha != request["planned_commit_sha"]
         or result.observed.fencing_epoch != request["fencing_epoch"]
@@ -234,6 +276,18 @@ def validate_runtime_response(request: dict[str, Any], result: RuntimeRestoratio
         )
     ):
         raise ValueError("restoration activation evidence mismatch")
+    if (
+        isinstance(result.observed, RuntimeRecoveryObserved)
+        and result.observed.rejected_before_effect is True
+    ):
+        retained_epoch = result.observed.retained_source_fencing_epoch
+        expected_epoch = request.get("expected_fencing_epoch")
+        if (
+            type(retained_epoch) is not int
+            or type(expected_epoch) is not int
+            or retained_epoch > expected_epoch
+        ):
+            raise ValueError("restoration rejection fence mismatch")
 
 
 async def create_restoration(
@@ -264,7 +318,7 @@ async def create_restoration(
             raise ApiError("conflict", "Restoration idempotency key was reused", 409)
         identifier = existing.id
         await session.commit()
-        return await get_restoration(session, project_id, owner_id, identifier, runtime)
+        return await get_restoration(session, project_id, owner_id, identifier)
     project = await lock_restoration_admission(session, project_id, owner_id)
     if project.template != "max_miniapp":
         raise ApiError("conflict", "This restoration flow requires a MAX project", 409)
@@ -432,6 +486,7 @@ async def _prepare(
             "target_commit_sha": operation.target_commit_sha,
             "planned_commit_sha": operation.planned_commit_sha,
             "fencing_epoch": operation.fencing_epoch,
+            "binding_contract_version": 2,
             "files": prepared["files"],
             "current_files": prepared["current_files"],
         }
@@ -446,22 +501,28 @@ async def get_restoration(
     project_id: UUID,
     owner_id: UUID,
     operation_id: UUID,
-    runtime: RestorationRuntime,
-    *,
-    reconcile: bool = True,
 ) -> RestoreOperation:
+    """Return the durable owner projection; reads never drive recovery or effects."""
+    _, operation = await _read_owned_operation(session, project_id, owner_id, operation_id)
+    return public_operation(operation)
+
+
+async def advance_restoration(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+    operation_id: UUID,
+    runtime: RestorationRuntime,
+) -> RestoreOperation:
+    """Worker-only progression for a previously durable restoration intent."""
     _, operation = await _owned_operation(session, project_id, owner_id, operation_id)
-    if operation.state not in ACTIVE_RESTORATION_STATES:
+    if operation.state not in CONTROLLER_WAIT_STATES:
         return public_operation(operation)
-    response = public_operation(operation)
     pending_export = not operation.request_payload and operation.state == "preparing"
-    should_poll = reconcile and operation.state in ACTIVE_RESTORATION_STATES
     await session.commit()
-    if pending_export and reconcile:
+    if pending_export:
         return await _prepare(session, project_id, owner_id, operation_id, runtime)
-    if should_poll:
-        return await _dispatch(session, project_id, owner_id, operation_id, runtime, "status")
-    return response
+    return await _dispatch(session, project_id, owner_id, operation_id, runtime, "status")
 
 
 async def apply_restoration(
@@ -490,6 +551,10 @@ async def apply_restoration(
     ):
         raise ApiError("conflict", "The draft changed; prepare restoration again", 409)
     report = public_operation(operation)
+    if operation.source_binding is None or operation.source_binding_digest is None:
+        raise ApiError(
+            "conflict", "Restoration source binding is missing; prepare restoration again", 409
+        )
     if (
         not report.can_apply
         or report.report is None
@@ -525,6 +590,7 @@ async def apply_restoration(
         "expected_fencing_epoch": operation.prior_fencing_epoch,
         "report_revision": request.report_revision,
         "candidate_id": str(operation.candidate_id),
+        "binding_digest": operation.source_binding_digest,
     }
     _touch(operation)
     await session.commit()  # Once-only fence and planned identity precede external activation.
@@ -543,7 +609,7 @@ async def cancel_restoration(
         return public_operation(operation)
     if operation.phase == "cancel" and operation.state == "reconciling":
         await session.commit()
-        return await get_restoration(session, project_id, owner_id, operation_id, runtime)
+        return await get_restoration(session, project_id, owner_id, operation_id)
     if not public_operation(operation).can_cancel:
         raise ApiError("conflict", "Restoration can no longer be cancelled", 409)
     if not operation.request_payload:
@@ -609,10 +675,12 @@ async def _dispatch(
     # A delayed response to the old prepare envelope cannot overwrite an apply claim.
     if payload != operation.request_payload or result.revision < operation.runtime_revision:
         return public_operation(operation)
-    if (
+    same_receipt = (
         result.revision == operation.runtime_revision
         and operation.runtime_result is not None
-    ):
+    )
+    projection_before: tuple[Any, ...] | None = None
+    if same_receipt:
         try:
             # JSON validation retains strict flags/identity checks and supplies
             # defaults introduced after the prior durable receipt was written.
@@ -623,14 +691,42 @@ async def _dispatch(
             return await _unconfirmed(session, project_id, owner_id, operation_id)
         if result != previous:
             return await _unconfirmed(session, project_id, owner_id, operation_id)
+        # A receipt can already be durable while a later lost action response has
+        # moved the API projection back to reconciling. Re-evaluate projection
+        # rules for the same evidence, then persist only a semantic correction.
+        projection_before = (
+            operation.state,
+            operation.phase,
+            operation.error,
+            operation.applied_snapshot_id,
+            operation.applied_version_id,
+            operation.source_binding,
+            operation.source_binding_digest,
+            project.current_snapshot_id,
+        )
     if operation.state in {"completed", "cancelled", "failed"}:
         return public_operation(operation)
-    if result.revision != operation.runtime_revision:
+    result_binding = (
+        result.binding.model_dump(mode="json") if result.binding is not None else None
+    )
+    if operation.source_binding is not None and (
+        result_binding != operation.source_binding
+        or result.binding_digest != operation.source_binding_digest
+    ):
+        operation.state = "reconciling"
+        operation.error = "Runtime source binding changed; checking the same operation"
+        _touch(operation)
+        await session.commit()
+        return public_operation(operation)
+    if not same_receipt and operation.source_binding is None and result_binding is not None:
+        operation.source_binding = result_binding
+        operation.source_binding_digest = result.binding_digest
+    if not same_receipt:
         operation.reconcile_attempts = 0  # controller progress restarts the backoff
-    operation.runtime_revision = result.revision
-    operation.runtime_result = result.model_dump(mode="json")
-    operation.candidate_id = result.candidate_id
-    operation.report = result.report.model_dump(mode="json") if result.report else None
+        operation.runtime_revision = result.revision
+        operation.runtime_result = result.model_dump(mode="json")
+        operation.candidate_id = result.candidate_id
+        operation.report = result.report.model_dump(mode="json") if result.report else None
     operation.error = result.error
     if result.state == "completed":
         if operation.apply_digest is None:
@@ -648,6 +744,18 @@ async def _dispatch(
         operation.state = "reconciling"
     else:
         operation.state = result.state
+    if projection_before == (
+        operation.state,
+        operation.phase,
+        operation.error,
+        operation.applied_snapshot_id,
+        operation.applied_version_id,
+        operation.source_binding,
+        operation.source_binding_digest,
+        project.current_snapshot_id,
+    ):
+        await session.commit()
+        return public_operation(operation)
     _touch(operation)
     await session.commit()
     return public_operation(operation)

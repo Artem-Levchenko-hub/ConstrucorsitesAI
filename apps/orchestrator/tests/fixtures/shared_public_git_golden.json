@@ -125,9 +125,9 @@
       },
       "scripts/apply-migrations.mjs": {
         "mode": "100644",
-        "git_blob": "1420ef85beb788cc9aa4266bade032e05b472dc1",
-        "bytes": 1645,
-        "sha256": "8c242c55322936029993ce030fa67ffed8c9dd2cd2cc56f11d6c86f59b108373"
+        "git_blob": "248efe21dd41a2277828dd06a3aa49e851c4940b",
+        "bytes": 4897,
+        "sha256": "4342f2c97f114335617fe2d6fd2e2fba1cd510c8d5902121eeb2830b25e1e235"
       },
       "src/app/api/health/route.ts": {
         "mode": "100644",

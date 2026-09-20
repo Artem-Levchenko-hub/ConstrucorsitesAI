@@ -8,6 +8,31 @@ import pytest
 from omnia_api.services import repo
 
 
+def source_binding(**changes):
+    value = {
+        "version": 2,
+        "serving_route_digest": "1" * 64,
+        "serving_release_digest": "2" * 64,
+        "controller_resource_digest": "3" * 64,
+        "controller_incarnation_digest": "4" * 64,
+        "controller_generation_digest": "5" * 64,
+        "provider_digest": "6" * 64,
+        "source_artifact_digest": "7" * 64,
+        "database_identity_digest": "8" * 64,
+        "database_schema_digest": "9" * 64,
+        "database_role_binding_digest": "a" * 64,
+        "database_system_identifier": "7612345678901234567",
+        "database_export_digest": "b" * 64,
+        "source_business_inventory_digest": "c" * 64,
+        "candidate_business_inventory_digest": "c" * 64,
+        "source_technical_inventory_digest": "d" * 64,
+        "candidate_technical_inventory_digest": "d" * 64,
+        "candidate_artifact_digest": "e" * 64,
+    }
+    value.update(changes)
+    return value
+
+
 @pytest.fixture(autouse=True)
 def ready_source_resources(monkeypatch):
     from types import SimpleNamespace
@@ -157,7 +182,7 @@ class FakeRuntime:
         self.lose_apply_reply = False
 
     async def prepare(self, request):
-        from omnia_api.schemas.restoration import RuntimeRestoration
+        from omnia_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
 
         self.prepares += 1
         self.result = RuntimeRestoration(
@@ -173,6 +198,8 @@ class FakeRuntime:
             error=None,
             can_apply=True,
             can_cancel=True,
+            binding=source_binding(),
+            binding_digest=RuntimeSourceBindingV2.model_validate(source_binding()).digest(),
         )
         return self.result
 
@@ -200,6 +227,7 @@ class FakeRuntime:
             candidate_id=request["candidate_id"],
             source_commit_sha=request["planned_commit_sha"],
             fencing_epoch=request["fencing_epoch"],
+            binding_digest=request["binding_digest"],
             applied=True,
             source_revision="b" * 64,
         )
@@ -220,6 +248,17 @@ class FakeRuntime:
             }
         )
         return self.result
+
+
+def test_runtime_source_binding_digest_is_canonical_and_secret_free():
+    from omnia_api.schemas.restoration import RuntimeSourceBindingV2
+
+    first = RuntimeSourceBindingV2.model_validate(source_binding())
+    second = RuntimeSourceBindingV2.model_validate(
+        dict(reversed(list(source_binding().items())))
+    )
+    assert first.digest() == second.digest()
+    assert "secret" not in first.model_dump_json().lower()
 
 
 async def restoration_fixture(db):
@@ -312,10 +351,84 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
     assert current.commit_sha != old.commit_sha  # Existing source history is preserved.
 
 
+async def test_db_v2_binding_is_durable_and_required_before_apply(db_session):
+    from omnia_api.core.errors import ApiError
+    from omnia_api.models.restoration import Restoration
+    from omnia_api.schemas.restoration import RestoreApplyRequest
+    from omnia_api.services import restorations as service
+
+    owner, project, _, current, _, _, request = await restoration_fixture(db_session)
+    runtime = FakeRuntime()
+    operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
+    row = await db_session.get(Restoration, operation.id)
+    assert row.source_binding["version"] == 2
+    assert len(row.source_binding_digest) == 64
+    assert row.request_payload["binding_contract_version"] == 2
+
+    row.source_binding = None
+    row.source_binding_digest = None
+    await db_session.commit()
+    with pytest.raises(ApiError, match="binding"):
+        await service.apply_restoration(
+            db_session,
+            project.id,
+            owner.id,
+            operation.id,
+            RestoreApplyRequest(
+                report_revision=1,
+                expected_draft_snapshot_id=current.id,
+                idempotency_key="unbound-ready-apply",
+            ),
+            runtime,
+        )
+    assert runtime.applies == 0
+
+
+def test_v2_runtime_observation_requires_saved_binding_digest():
+    from omnia_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
+    from omnia_api.services.restorations import validate_runtime_response
+
+    identity = {
+        key: str(uuid4()) for key in ("operation_id", "workspace_id", "project_id", "owner_id")
+    }
+    binding = RuntimeSourceBindingV2.model_validate(source_binding())
+    candidate = uuid4()
+    request = {
+        **identity,
+        "binding_contract_version": 2,
+        "binding_digest": binding.digest(),
+        "planned_commit_sha": "a" * 40,
+        "fencing_epoch": 9,
+        "candidate_id": str(candidate),
+    }
+    response = RuntimeRestoration(
+        **identity,
+        state="completed",
+        phase="done",
+        revision=3,
+        candidate_id=candidate,
+        can_apply=False,
+        can_cancel=False,
+        binding=binding,
+        binding_digest=binding.digest(),
+        observed={
+            "candidate_id": candidate,
+            "source_commit_sha": "a" * 40,
+            "fencing_epoch": 9,
+            "binding_digest": "f" * 64,
+            "applied": True,
+        },
+    )
+    with pytest.raises(ValueError, match="binding"):
+        validate_runtime_response(request, response)
+
+
 @pytest.mark.parametrize(
     "case", ["legacy", "empty", "present", "different_state", "invalid_extra", "invalid_flag"]
 )
-async def test_db_same_revision_receipt_normalizes_only_valid_legacy_defaults(db_session, case):
+async def test_db_same_revision_receipt_is_noop_only_when_semantically_identical(
+    db_session, case
+):
     from copy import deepcopy
 
     from sqlalchemy.orm.attributes import flag_modified
@@ -327,7 +440,10 @@ async def test_db_same_revision_receipt_normalizes_only_valid_legacy_defaults(db
     runtime = FakeRuntime()
     operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
     row = await db_session.get(Restoration, operation.id)
-    receipt = deepcopy(row.runtime_result)
+    runtime.result = runtime.result.model_copy(
+        update={"state": "checking", "phase": "checking", "can_apply": False}
+    )
+    receipt = runtime.result.model_dump(mode="json")
     if case == "legacy":
         receipt["report"].pop("database_state")
         row.report = {key: value for key, value in row.report.items() if key != "database_state"}
@@ -341,21 +457,24 @@ async def test_db_same_revision_receipt_normalizes_only_valid_legacy_defaults(db
     else:
         receipt["can_apply"] = 1
     row.runtime_result = receipt
+    row.state = "checking"
+    row.phase = "checking"
     # JSON dirty detection uses Python equality (True == 1); persist the raw
     # malformed receipt so the test exercises strict validation after DB reload.
     flag_modified(row, "runtime_result")
     await db_session.commit()
     await db_session.refresh(row)
     assert row.runtime_result == receipt
+    before = (row.revision, row.updated_at, deepcopy(row.runtime_result), row.reconcile_attempts)
     if case == "invalid_flag":
         assert type(row.runtime_result["can_apply"]) is int
-    result = await service.get_restoration(db_session, project.id, owner.id, row.id, runtime)
+    result = await service.advance_restoration(
+        db_session, project.id, owner.id, row.id, runtime
+    )
     await db_session.refresh(row)
     if case in {"legacy", "empty", "present"}:
-        assert result.state == "ready" and result.can_apply
-        assert row.runtime_result["report"]["database_state"] == (
-            "unknown" if case == "legacy" else case
-        )
+        assert result.state == "checking" and not result.can_apply
+        assert (row.revision, row.updated_at, row.runtime_result, row.reconcile_attempts) == before
         assert row.runtime_revision == 1
     else:
         assert result.state == "reconciling" and not result.can_apply
@@ -385,7 +504,9 @@ async def test_db_lost_apply_reply_reconciles_without_second_activation(db_sessi
         runtime,
     )
     assert result.state == "reconciling" and project.current_snapshot_id == current.id
-    result = await service.get_restoration(db_session, project.id, owner.id, operation.id, runtime)
+    result = await service.advance_restoration(
+        db_session, project.id, owner.id, operation.id, runtime
+    )
     assert result.state == "completed" and runtime.applies == 1
     assert workspace.fencing_epoch == 8
 
@@ -473,7 +594,7 @@ async def test_db_every_operation_rejects_foreign_actor(db_session):
     foreign = uuid4()
     calls = [
         service.list_operations(db_session, project.id, foreign),
-        service.get_restoration(db_session, project.id, foreign, operation.id, runtime),
+        service.get_restoration(db_session, project.id, foreign, operation.id),
         service.cancel_restoration(db_session, project.id, foreign, operation.id, runtime),
         service.apply_restoration(
             db_session,
@@ -564,7 +685,7 @@ async def test_db_lost_initial_dispatch_resumes_same_operation(db_session, monke
     operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
     assert operation.state == "reconciling" and operation.can_cancel
     monkeypatch.setattr(runtime, "prepare", real_prepare)
-    recovered = await service.get_restoration(
+    recovered = await service.advance_restoration(
         db_session, project.id, owner.id, operation.id, runtime
     )
     assert recovered.id == operation.id and recovered.state == "ready"
@@ -609,7 +730,7 @@ async def test_db_database_commit_failure_after_activation_is_recoverable(db_ses
         )
     await db_session.rollback()
     monkeypatch.setattr(db_session, "commit", real_commit)
-    recovered = await service.get_restoration(
+    recovered = await service.advance_restoration(
         db_session, project_id, owner_id, operation.id, runtime
     )
     assert recovered.state == "completed" and runtime.applies == 1
@@ -781,7 +902,11 @@ async def test_db_lost_cancel_reply_replays_as_status(db_session, monkeypatch):
     repeated = await service.cancel_restoration(
         db_session, project.id, owner.id, operation.id, runtime
     )
-    assert repeated.state == "cancelled" and runtime.cancel_calls == 1
+    assert repeated.state == "reconciling" and runtime.cancel_calls == 1
+    recovered = await service.advance_restoration(
+        db_session, project.id, owner.id, operation.id, runtime
+    )
+    assert recovered.state == "cancelled" and runtime.cancel_calls == 1
 
 
 async def test_db_capacity_skips_restoration_until_cancelled(db_session):
@@ -854,6 +979,7 @@ def test_verified_negative_runtime_receipt_is_failed_only():
     from pydantic import ValidationError
 
     from omnia_api.schemas.restoration import RuntimeRestoration
+    from omnia_api.services.restorations import validate_runtime_response
 
     identity = {key: uuid4() for key in ("operation_id", "workspace_id", "project_id", "owner_id")}
     observed = {
@@ -874,6 +1000,64 @@ def test_verified_negative_runtime_receipt_is_failed_only():
         observed=observed,
     )
     assert result.observed.applied is False
+
+    pre_effect = RuntimeRestoration(
+        **identity,
+        state="failed",
+        phase="recovered",
+        revision=5,
+        candidate_id=observed["candidate_id"],
+        can_apply=False,
+        can_cancel=False,
+        observed={
+            **observed,
+            "rejected_before_effect": True,
+            "retained_source_fencing_epoch": 3,
+        },
+    )
+    assert pre_effect.observed.rejected_before_effect is True
+    assert pre_effect.observed.retained_source_fencing_epoch == 3
+    request_payload = {
+        **{key: str(value) for key, value in identity.items()},
+        "candidate_id": str(observed["candidate_id"]),
+        "planned_commit_sha": observed["source_commit_sha"],
+        "fencing_epoch": 8,
+        "expected_fencing_epoch": 7,
+    }
+    validate_runtime_response(request_payload, pre_effect)
+    with pytest.raises(ValueError, match="rejection fence mismatch"):
+        validate_runtime_response(
+            {**request_payload, "expected_fencing_epoch": 2}, pre_effect
+        )
+    superseded = RuntimeRestoration(
+        **identity,
+        state="failed",
+        phase="recovered",
+        revision=6,
+        candidate_id=observed["candidate_id"],
+        can_apply=False,
+        can_cancel=False,
+        observed={
+            **observed,
+            "superseded_before_effect": True,
+        },
+    )
+    validate_runtime_response(request_payload, superseded)
+    with pytest.raises(ValidationError, match="cannot assert"):
+        RuntimeRestoration(
+            **identity,
+            state="failed",
+            phase="recovered",
+            revision=6,
+            candidate_id=observed["candidate_id"],
+            can_apply=False,
+            can_cancel=False,
+            observed={
+                **observed,
+                "superseded_before_effect": True,
+                "retained_source_fencing_epoch": 3,
+            },
+        )
     with pytest.raises(ValidationError):
         RuntimeRestoration(
             **identity,
@@ -894,6 +1078,17 @@ def test_verified_negative_runtime_receipt_is_failed_only():
             can_apply=False,
             can_cancel=False,
             observed={**observed, "safe_to_release": 1},
+        )
+    with pytest.raises(ValidationError, match="receipt must be complete"):
+        RuntimeRestoration(
+            **identity,
+            state="failed",
+            phase="failed",
+            revision=5,
+            candidate_id=observed["candidate_id"],
+            can_apply=False,
+            can_cancel=False,
+            observed={**observed, "rejected_before_effect": True},
         )
 
 
@@ -919,6 +1114,7 @@ async def test_db_apply_failure_keeps_claim_until_verified_recovery(
                 "candidate_id": payload["candidate_id"],
                 "source_commit_sha": payload["planned_commit_sha"],
                 "fencing_epoch": payload["fencing_epoch"],
+                "binding_digest": payload["binding_digest"],
                 "applied": False,
                 "safe_to_release": True,
             }

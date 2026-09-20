@@ -18,8 +18,14 @@ unit-tested without a browser. Gated by ``Settings.use_security_gate``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from omnia_api.services.render_settle import goto_and_settle
+
+OWNER_PREVIEW_FRAMING_POLICY = (
+    "frame-ancestors 'self' https://constructor.lead-generator.ru"
+)
+PUBLIC_MAX_FRAMING_POLICY = "frame-ancestors 'self' https://web.max.ru https://max.ru"
 
 
 @dataclass
@@ -45,19 +51,53 @@ def _h(headers: dict[str, str], name: str) -> str | None:
     return None
 
 
-def assert_security_headers(headers: dict[str, str]) -> list[SecCheck]:
+def _has_embedded_framing_policy(value: str | None, expected: str) -> bool:
+    if value is None:
+        return False
+    expected_tokens = expected.casefold().split()
+    if not expected_tokens or expected_tokens[0] != "frame-ancestors":
+        return False
+    required_sources = set(expected_tokens[1:])
+    found = False
+    for policy in value.split(","):
+        directives: dict[str, list[str]] = {}
+        for raw_directive in policy.split(";"):
+            tokens = raw_directive.casefold().split()
+            if tokens:
+                # CSP ignores later instances of the same directive in one policy.
+                directives.setdefault(tokens[0], tokens[1:])
+        sources = directives.get("frame-ancestors")
+        if sources is None:
+            continue
+        found = True
+        if "'none'" in sources or not required_sources.issubset(sources):
+            return False
+    # Multiple CSP headers/policies are enforced together. At least one policy
+    # must carry the framing boundary and every such policy must allow it.
+    return found
+
+
+def assert_security_headers(
+    headers: dict[str, str],
+    *,
+    require_embedded_framing: bool = False,
+    framing_policy: str = OWNER_PREVIEW_FRAMING_POLICY,
+) -> list[SecCheck]:
     """The conservative headers G006 sets must be present on responses."""
     checks: list[SecCheck] = []
     nosniff = _h(headers, "x-content-type-options")
     checks.append(
         SecCheck("X-Content-Type-Options: nosniff", nosniff == "nosniff", str(nosniff))
     )
-    frame = _h(headers, "x-frame-options")
-    checks.append(
-        SecCheck(
-            "X-Frame-Options present", frame is not None and frame != "", str(frame)
+    if require_embedded_framing:
+        csp = _h(headers, "content-security-policy")
+        checks.append(
+            SecCheck(
+                "CSP frame-ancestors matches embedded MAX policy",
+                _has_embedded_framing_policy(csp, framing_policy),
+                "present" if csp else "missing",
+            )
         )
-    )
     return checks
 
 
@@ -101,7 +141,15 @@ def summarize(
     return SecurityVerdict(passed=passed, checks=checks, summary=summary)
 
 
-def surface_verdict_from_headers(headers: dict[str, str]) -> SecurityVerdict:
+def surface_verdict_from_headers(
+    headers: dict[str, str],
+    *,
+    require_embedded_framing: bool = False,
+    protected_status: int | None = None,
+    framing_policy: str = OWNER_PREVIEW_FRAMING_POLICY,
+    document_headers: dict[str, str] | None = None,
+    document_status: int | None = None,
+) -> SecurityVerdict:
     """Pure BLOCKING transport-surface verdict tuned to THIS product's preview
     architecture — the unit-tested heart of :func:`run_security_gate`.
 
@@ -119,17 +167,45 @@ def surface_verdict_from_headers(headers: dict[str, str]) -> SecurityVerdict:
       * Payload cap (413) — not yet enforced by the templates, so blocking on it
         would fail every build. (Add the cap to the templates first, then promote.)
     """
-    nosniff = _h(headers, "x-content-type-options")
-    checks = [
-        SecCheck(
-            "X-Content-Type-Options: nosniff", nosniff == "nosniff", str(nosniff)
-        ),
-        assert_cors_safe(headers),
-    ]
+    checks = assert_security_headers(
+        headers,
+        require_embedded_framing=False,
+    )
+    checks.append(assert_cors_safe(headers))
+    if require_embedded_framing:
+        document_checks = assert_security_headers(
+            document_headers or {},
+            require_embedded_framing=True,
+            framing_policy=framing_policy,
+        )
+        checks.extend(
+            SecCheck(f"final document {check.name}", check.ok, check.detail)
+            for check in document_checks
+        )
+        checks.append(
+            SecCheck(
+                "authenticated protected preview response",
+                protected_status == 200,
+                str(protected_status),
+            )
+        )
+        checks.append(
+            SecCheck(
+                "authenticated final product document",
+                document_status == 200,
+                str(document_status),
+            )
+        )
     return summarize(checks, [])
 
 
-async def run_security_gate(base_url: str) -> SecurityVerdict:
+async def run_security_gate(
+    base_url: str,
+    *,
+    bootstrap_url: str | None = None,
+    require_embedded_framing: bool = False,
+    framing_policy: str = OWNER_PREVIEW_FRAMING_POLICY,
+) -> SecurityVerdict:
     """Drive the live preview, capture the main route's response headers, and
     return the transport-surface verdict (:func:`surface_verdict_from_headers`).
 
@@ -139,6 +215,26 @@ async def run_security_gate(base_url: str) -> SecurityVerdict:
     base_url = (base_url or "").rstrip("/")
     if not base_url:
         return summarize([SecCheck("preview running", False, "no dev_url")], [])
+    navigation_url = f"{base_url}/"
+    if bootstrap_url is not None:
+        try:
+            base = urlsplit(base_url)
+            bootstrap = urlsplit(bootstrap_url)
+            same_origin = (
+                bootstrap.scheme == base.scheme
+                and bootstrap.hostname == base.hostname
+                and bootstrap.port == base.port
+                and bootstrap.username is None
+                and bootstrap.password is None
+            )
+        except ValueError:
+            same_origin = False
+        if not same_origin:
+            return summarize(
+                [SecCheck("signed preview bootstrap", False, "origin mismatch")],
+                [],
+            )
+        navigation_url = bootstrap_url
 
     from playwright.async_api import async_playwright
 
@@ -152,24 +248,95 @@ async def run_security_gate(base_url: str) -> SecurityVerdict:
             try:
                 ctx = await browser.new_context()
                 page = await ctx.new_page()
-                await goto_and_settle(page, f"{base_url}/", timeout_ms=30_000)
+                await goto_and_settle(page, navigation_url, timeout_ms=30_000)
+                protected_path = "/api/omnia/actions?limit=1" if require_embedded_framing else "/"
                 res = await page.evaluate(
-                    """async () => {
-                        const r = await fetch('/', { credentials: 'include' });
-                        const headers = {};
-                        r.headers.forEach((v, k) => { headers[k] = v; });
-                        return { headers };
-                    }"""
+                    """async ({ path, includeDocument }) => {
+                        const protectedResponse = await fetch(path, {
+                            credentials: 'include'
+                        });
+                        const protectedHeaders = {};
+                        protectedResponse.headers.forEach((v, k) => {
+                            protectedHeaders[k] = v;
+                        });
+                        const result = {
+                            protected: {
+                                headers: protectedHeaders,
+                                status: protectedResponse.status
+                            }
+                        };
+                        if (includeDocument) {
+                            const documentResponse = await fetch(window.location.href, {
+                                credentials: 'include',
+                                headers: { accept: 'text/html' },
+                                redirect: 'follow'
+                            });
+                            const documentHeaders = {};
+                            documentResponse.headers.forEach((v, k) => {
+                                documentHeaders[k] = v;
+                            });
+                            result.document = {
+                                headers: documentHeaders,
+                                status: documentResponse.status,
+                                url: documentResponse.url
+                            };
+                        }
+                        return result;
+                    }""",
+                    {
+                        "path": protected_path,
+                        "includeDocument": require_embedded_framing,
+                    },
                 )
             finally:
                 await browser.close()
     except Exception as exc:
         return summarize(
-            [SecCheck("security gate executed", False, f"{type(exc).__name__}: {exc}")],
+            [SecCheck("security gate executed", False, type(exc).__name__)],
             [],
         )
 
-    headers = res.get("headers") if isinstance(res, dict) else None
+    protected = res.get("protected") if isinstance(res, dict) else None
+    if not isinstance(protected, dict):
+        return summarize([SecCheck("capture response headers", False, "none")], [])
+    headers = protected.get("headers")
     if not isinstance(headers, dict):
         return summarize([SecCheck("capture response headers", False, "none")], [])
-    return surface_verdict_from_headers(headers)
+    status = protected.get("status")
+    if not require_embedded_framing:
+        return surface_verdict_from_headers(headers)
+
+    document = res.get("document") if isinstance(res, dict) else None
+    if not isinstance(document, dict):
+        return summarize([SecCheck("capture final document headers", False, "none")], [])
+    document_headers = document.get("headers")
+    if not isinstance(document_headers, dict):
+        return summarize([SecCheck("capture final document headers", False, "none")], [])
+    document_status = document.get("status")
+    document_url = document.get("url")
+    try:
+        base = urlsplit(base_url)
+        final_document = urlsplit(document_url if isinstance(document_url, str) else "")
+        final_document_ok = (
+            final_document.scheme == base.scheme
+            and final_document.hostname == base.hostname
+            and final_document.port == base.port
+            and final_document.username is None
+            and final_document.password is None
+            and final_document.path.rstrip("/") != "/api/omnia/preview-session"
+        )
+    except ValueError:
+        final_document_ok = False
+    if not final_document_ok:
+        return summarize(
+            [SecCheck("final product document", False, "unexpected location")],
+            [],
+        )
+    return surface_verdict_from_headers(
+        headers,
+        require_embedded_framing=require_embedded_framing,
+        protected_status=status if isinstance(status, int) else None,
+        framing_policy=framing_policy,
+        document_headers=document_headers,
+        document_status=document_status if isinstance(document_status, int) else None,
+    )

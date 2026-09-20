@@ -2156,6 +2156,43 @@ async def test_classified_protected_environment_failure_stops_before_another_too
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_code",
+    ["migration_apply_failed", "migration_reconciliation_required"],
+)
+async def test_mandatory_max_migration_failure_is_terminal_to_native_generation(
+    monkeypatch,
+    upstream_code,
+):
+    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append("model")
+        return _turn(
+            (
+                "write_file",
+                {"path": "drizzle/0004.sql", "content": "ALTER TABLE tasks ADD COLUMN x text;"},
+            ),
+            ("list_dir", {"path": "."}),
+        )
+
+    async def execute(action):
+        calls.append(action.name)
+        raise OrchestratorBadRequest(
+            "private migration diagnostic",
+            status_code=409,
+            upstream_code=upstream_code,
+        )
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    with pytest.raises(RuntimeError, match=upstream_code):
+        await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=40)
+    assert calls == ["model", "write_file"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fatal_at", ["build", "runtime_check"])
 async def test_terminal_infrastructure_during_local_proof_cannot_start_another_segment(
     monkeypatch, fatal_at

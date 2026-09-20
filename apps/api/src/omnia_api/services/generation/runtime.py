@@ -387,6 +387,7 @@ async def _abort_unsafe_max_backend(
     files: dict[str, str],
     unsafe_paths: Sequence[str],
     project_cell_handle: ProjectCellExecutorHandle | None = None,
+    violation_kind: str = "managed data isolation",
 ) -> None:
     """Fail closed on unsafe MAX backend writes.
 
@@ -423,10 +424,16 @@ async def _abort_unsafe_max_backend(
                 project_id,
                 exc_info=exc,
             )
-    message = (
-        "MAX generation was stopped before publication because product code "
-        "bypassed managed data isolation: " + ", ".join(normalized_paths)
-    )
+    if violation_kind == "managed data isolation":
+        message = (
+            "MAX generation was stopped before publication because product code "
+            "bypassed managed data isolation: " + ", ".join(normalized_paths)
+        )
+    else:
+        message = (
+            "MAX generation was stopped before publication because it violated the "
+            f"{violation_kind}: " + ", ".join(normalized_paths)
+        )
     if rollback_failed:
         message += (
             ". Live preview rollback also failed; the runtime may still show "

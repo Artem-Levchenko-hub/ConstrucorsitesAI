@@ -1664,8 +1664,10 @@ async def hot_reload(
     empty_files: Sequence[str] = (),
 ) -> dict[str, Any]:
     """POST /internal/projects/hot-reload — write AI-generated files into the
-    dev container; orchestrator additionally runs `drizzle-kit push` if the
-    diff touches `src/lib/db/schema.ts` or `src/lib/db/migrations/*`.
+    dev container. MAX runtimes apply direct ``drizzle/*.sql`` files through
+    the platform-owned runner and reject a failed apply after reporting that
+    source writes already landed. Other templates retain ``drizzle-kit push``
+    for schema and legacy migration-directory changes.
 
     `slug` is required as a query param because orchestrator's container
     lookup is `omnia-dev-<slug>` (no project_id ↔ container_name registry

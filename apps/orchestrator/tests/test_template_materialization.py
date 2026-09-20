@@ -261,6 +261,26 @@ async def test_real_production_builder_materializes_before_live_public_overlay(
 
     monkeypatch.setattr(builder.docker_client, "copy_path_from_container", copy_live)
 
+    async def copy_live_inventory(_container, source, _destination):
+        if name != "max-miniapp-nextjs":
+            return None
+        if source == "/app/drizzle":
+            return {
+                path.relative_to(TEMPLATES / name).as_posix(): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in (TEMPLATES / name / "drizzle").glob("*.sql")
+            }
+        if source == "/app/scripts":
+            return {}
+        return None
+
+    monkeypatch.setattr(
+        builder.docker_client,
+        "copy_path_from_container_with_inventory",
+        copy_live_inventory,
+    )
+
     async def build(context_dir, dockerfile, _tag):
         context = Path(context_dir)
         contexts.append(context)

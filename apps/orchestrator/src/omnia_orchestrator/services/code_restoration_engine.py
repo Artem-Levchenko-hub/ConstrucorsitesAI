@@ -30,12 +30,18 @@ from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationCancel,
     CodeRestorationPrepare,
     RestorationDatabaseState,
+    RestorationSourceBindingV2,
 )
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate
 from omnia_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
     write_controller_json,
+)
+from omnia_orchestrator.services.restoration_binding import (
+    exact_inventory_partition_digests,
+    observe_live_source,
+    serving_fencing_epoch,
 )
 from omnia_orchestrator.services.restoration_catalog import (
     candidate_contract,
@@ -47,6 +53,11 @@ from omnia_orchestrator.services.restoration_database import (
     admin_args,
     admin_sql,
     read_controller_output,
+)
+from omnia_orchestrator.services.restoration_execution import (
+    RestorationExecutionCancelled,
+    RestorationExecutionJournal,
+    dedicated_docker_api_factory,
 )
 from omnia_orchestrator.services.versioning.compatibility import (
     capability_diff,
@@ -259,6 +270,22 @@ def blocking_explanations(checks: list[CompatibilityCheck]) -> list[str]:
     return [check.explanation for check in checks if check.severity == "blocking"]
 
 
+def verify_post_dump_catalog(
+    before: DataContract,
+    before_blockers: list[str],
+    before_unsupported: list[dict[str, Any]],
+    after: DataContract,
+    after_blockers: list[str],
+    after_unsupported: list[dict[str, Any]],
+) -> None:
+    if (
+        after != before
+        or after_blockers != before_blockers
+        or after_unsupported != before_unsupported
+    ):
+        raise CellIdentityConflict("restoration database schema changed during export")
+
+
 class CodeRestorationEngine:
     def __init__(self, settings: Any = None, *, manager_factory: Any = None) -> None:
         if settings is None:
@@ -268,6 +295,16 @@ class CodeRestorationEngine:
         self.settings = settings
         self.root = Path(settings.cell_state_path).parent / "code-restoration-artifacts"
         self.manager_factory = manager_factory
+
+    def _execution_journal(self) -> RestorationExecutionJournal:
+        journal = getattr(self, "_restoration_execution_journal", None)
+        if journal is None:
+            journal = RestorationExecutionJournal(self.root)
+            self._restoration_execution_journal = journal
+        return cast(RestorationExecutionJournal, journal)
+
+    def begin_cancel(self, request: CodeRestorationCancel) -> None:
+        self._execution_journal().request_cancel(request)
 
     def _manager(self, workspace_id: UUID) -> Any:
         if self.manager_factory is not None:
@@ -319,7 +356,9 @@ class CodeRestorationEngine:
         def cancelled() -> bool:
             # Checked only between stages; an owner cancel never waits for the
             # whole install/build to finish (AV19.1). Cleanup runs in `finally`.
-            return bool(cancel_requested is not None and cancel_requested())
+            return self._execution_journal().cancel_requested(request.operation_id) or bool(
+                cancel_requested is not None and cancel_requested()
+            )
 
         def cancelled_result() -> dict[str, Any]:
             return {
@@ -373,9 +412,11 @@ class CodeRestorationEngine:
                 current_files = await _read_agent_workspace_files(manager, source.workspace_volume)
                 current_revision = _workspace_revision(current_files)
                 try:
+                    source_bytes = await manager.docker.read_workspace_source_files(
+                        source.workspace_volume
+                    )
                     verify_source_inventory(
-                        await manager.docker.read_workspace_source_files(source.workspace_volume),
-                        [item.model_dump() for item in request.current_files],
+                        source_bytes, [item.model_dump() for item in request.current_files]
                     )
                     validate_supported_runtime(current_files)
                 except (PreparationNeedsChanges, ValueError) as error:
@@ -413,20 +454,60 @@ class CodeRestorationEngine:
                             capabilities=capabilities,
                         ),
                     }
+                live_before = None
+                if request.binding_contract_version == 2:
+                    live_before = await machine_effect(
+                        observe_live_source,
+                        source,
+                        machine,
+                        state,
+                        source_files=source_bytes,
+                        schema=current_contract.model_dump(mode="json"),
+                    )
                 # Only the dedicated database is copied. The trusted MAX core,
                 # live managed database, credentials and queues are never attached.
                 dump = await machine_effect(self._dump, source)
+                fresh_contract, fresh_blockers, fresh_unsupported = await machine_effect(
+                    describe_live_catalog, source
+                )
+                verify_post_dump_catalog(
+                    current_contract,
+                    catalog_blockers,
+                    unsupported,
+                    fresh_contract,
+                    fresh_blockers,
+                    fresh_unsupported,
+                )
+                if live_before is not None:
+                    live_after = await machine_effect(
+                        observe_live_source,
+                        source,
+                        machine,
+                        state,
+                        source_files=await manager.docker.read_workspace_source_files(
+                            source.workspace_volume
+                        ),
+                        schema=fresh_contract.model_dump(mode="json"),
+                    )
+                    if live_after != live_before:
+                        raise CellIdentityConflict(
+                            "restoration source changed while database export was prepared"
+                        )
+                    source_business, source_technical = await machine_effect(
+                        exact_inventory_partition_digests, source, inventory
+                    )
             observed_database_state: RestorationDatabaseState = "unknown"
             try:
                 if cancelled():
                     return cancelled_result()
                 candidate = await self._candidate(manager, request, candidate_id, manifest)
                 await machine_effect(self._seed_source, candidate, request)
-                await machine_effect(
-                    self._command,
+                await self._run_stage(
+                    request,
                     candidate,
                     ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"],
                     360,
+                    stage="install",
                 )
                 if cancelled():
                     return cancelled_result()
@@ -465,11 +546,28 @@ class CodeRestorationEngine:
                 copied_inventory = await machine_effect(
                     observe_database, candidate, observed_on="candidate_copy"
                 )
-                if copied_inventory.coverage != "unavailable":
-                    inventory = copied_inventory.model_copy(
-                        update={"schema_analysis": inventory.schema_analysis}
-                    )
                 observed_database_state = inventory.presence
+                binding = None
+                if request.binding_contract_version == 2:
+                    if (
+                        live_before is None
+                        or inventory.coverage != "complete"
+                        or copied_inventory.coverage != "complete"
+                        or inventory.schema_analysis != "complete"
+                    ):
+                        raise PreparationNeedsChanges(
+                            "Полная проверка исходной базы и копии недоступна."
+                        )
+                    candidate_business, candidate_technical = await machine_effect(
+                        exact_inventory_partition_digests, candidate, copied_inventory
+                    )
+                    if (
+                        source_business != candidate_business
+                        or source_technical != candidate_technical
+                    ):
+                        raise PreparationNeedsChanges(
+                            "Состав или записи копии базы не совпали с исходной базой."
+                        )
                 # Empty rows do not make incompatible schema safe for future writes.
                 if assessment.blockers:
                     raise PreparationNeedsChanges(
@@ -481,33 +579,63 @@ class CodeRestorationEngine:
                 tasks = [task for task in manifest.tasks if task.role == "full_build"]
                 if not tasks:
                     tasks = [task for task in manifest.tasks if task.role == "build"]
-                for task in tasks:
-                    await machine_effect(
-                        self._command,
+                for index, task in enumerate(tasks):
+                    await self._run_stage(
+                        request,
                         candidate,
                         task.argv,
                         min(task.timeout_seconds, 420),
                         task.cwd,
+                        stage=f"build:{index}",
                     )
                 if cancelled():
                     return cancelled_result()
-                await self._start(candidate, manifest, 1)
-                await machine_effect(self._verify_source, candidate, request)
-                verify_source_inventory(
-                    await manager.docker.read_workspace_source_files(candidate.workspace_volume),
-                    [
-                        {"path": item.path, "sha256": hashlib.sha256(item.decoded()).hexdigest()}
-                        for item in request.files
-                    ],
-                )
-                archive = directory / "code.tar"
-                await machine_effect(candidate.stop)
-                digest = await machine_effect(
-                    self._capture_code,
-                    candidate,
-                    archive,
-                    reserve_bytes=self.settings.cell_required_free_disk_bytes,
-                )
+                async with self._execution_journal().producer(request, stage="launch"):
+                    if cancelled():
+                        raise RestorationExecutionCancelled(
+                            "restoration cancellation was requested"
+                        )
+                    await self._start(candidate, manifest, 1)
+                    if cancelled():
+                        raise RestorationExecutionCancelled(
+                            "restoration cancellation was requested"
+                        )
+                    await machine_effect(self._verify_source, candidate, request)
+                    verify_source_inventory(
+                        await manager.docker.read_workspace_source_files(
+                            candidate.workspace_volume
+                        ),
+                        [
+                            {
+                                "path": item.path,
+                                "sha256": hashlib.sha256(item.decoded()).hexdigest(),
+                            }
+                            for item in request.files
+                        ],
+                    )
+                    if cancelled():
+                        raise RestorationExecutionCancelled(
+                            "restoration cancellation was requested"
+                        )
+                    archive = directory / "code.tar"
+                    await machine_effect(candidate.stop)
+                    digest = await machine_effect(
+                        self._capture_code,
+                        candidate,
+                        archive,
+                        reserve_bytes=self.settings.cell_required_free_disk_bytes,
+                    )
+                if request.binding_contract_version == 2:
+                    assert live_before is not None
+                    binding = RestorationSourceBindingV2(
+                        **live_before,
+                        database_export_digest=hashlib.sha256(dump).hexdigest(),
+                        source_business_inventory_digest=source_business,
+                        candidate_business_inventory_digest=candidate_business,
+                        source_technical_inventory_digest=source_technical,
+                        candidate_technical_inventory_digest=candidate_technical,
+                        candidate_artifact_digest=digest,
+                    ).model_dump(mode="json")
                 prepared = {
                     "state": "ready",
                     "candidate_id": str(candidate_id),
@@ -529,9 +657,12 @@ class CodeRestorationEngine:
                     "manifest": manifest.model_dump(mode="json"),
                     "code_digest": digest,
                     "base_image": candidate.base_image,
+                    "binding": binding,
                 }
                 write_controller_json(prepared_path, prepared)
                 return prepared
+            except RestorationExecutionCancelled:
+                return cancelled_result()
             except (PreparationNeedsChanges, ValueError) as error:
                 return {
                     "state": "needs_changes",
@@ -581,24 +712,30 @@ class CodeRestorationEngine:
             profile_version=candidate_manager.profile.profile_version,
         )
         mutation = LifecycleMutation(uuid5(request.operation_id, "reserve"), 1, request.digest())
-        # Real host accounting; a check cannot steal a running app's reservation.
-        await candidate_manager.ensure(spec, mutation)
-        state = candidate_manager.state_store.load(candidate_id)
-        if state is None or candidate_manager.machine_runtime is None:
-            raise CellResourceError("candidate machine provider unavailable")
-        machine, backend = candidate_manager.machine_runtime.parts(state)
-        write_controller_json(
-            machine.path,
-            {
-                "workspace_id": str(candidate_id),
-                "manifest": manifest.model_dump(mode="json"),
-                "epoch": 1,
-                "ready_epoch": None,
-                "operations": {},
-            },
-        )
-        await machine_effect(backend.ensure, manifest, 1)
-        return backend
+        journal = self._execution_journal()
+        async with journal.producer(request, stage="provisioning"):
+            if journal.cancel_requested(request.operation_id):
+                raise RestorationExecutionCancelled("restoration cancellation was requested")
+            # Real host accounting; a check cannot steal a running app's reservation.
+            await candidate_manager.ensure(spec, mutation)
+            if journal.cancel_requested(request.operation_id):
+                raise RestorationExecutionCancelled("restoration cancellation was requested")
+            state = candidate_manager.state_store.load(candidate_id)
+            if state is None or candidate_manager.machine_runtime is None:
+                raise CellResourceError("candidate machine provider unavailable")
+            machine, backend = candidate_manager.machine_runtime.parts(state)
+            write_controller_json(
+                machine.path,
+                {
+                    "workspace_id": str(candidate_id),
+                    "manifest": manifest.model_dump(mode="json"),
+                    "epoch": 1,
+                    "ready_epoch": None,
+                    "operations": {},
+                },
+            )
+            await machine_effect(backend.ensure, manifest, 1)
+            return backend
 
     @staticmethod
     def _dump(backend: Any) -> bytes:
@@ -636,8 +773,14 @@ class CodeRestorationEngine:
             raise CellResourceError("candidate source upload failed")
 
     @staticmethod
-    def _command(backend: Any, argv: list[str], timeout: int, cwd: str = ".") -> None:
-        result = backend._container().exec_run(
+    def _command(
+        backend: Any,
+        container: Any,
+        argv: list[str],
+        timeout: int,
+        cwd: str = ".",
+    ) -> None:
+        result = container.exec_run(
             ["timeout", str(timeout), *argv], workdir="/workspace/" + cwd
         )
         if result.exit_code != 0:
@@ -647,6 +790,54 @@ class CodeRestorationEngine:
             raise PreparationNeedsChanges(
                 "Проверка исторического кода не прошла; нужна совместимая правка."
             )
+
+    async def _run_stage(
+        self,
+        request: CodeRestorationPrepare,
+        backend: Any,
+        argv: list[str],
+        command_timeout_seconds: int,
+        cwd: str = ".",
+        *,
+        stage: str,
+    ) -> None:
+        journal = self._execution_journal()
+        container = backend._container()
+        receipt = journal.begin_attempt(
+            request,
+            container,
+            stage=stage,
+            argv=argv,
+            cwd=cwd,
+        )
+        try:
+            if journal.cancel_requested(request.operation_id):
+                journal.finish_attempt(
+                    request.operation_id,
+                    receipt["attempt_id"],
+                    state="stopped",
+                )
+                raise RestorationExecutionCancelled("restoration cancellation was requested")
+            await machine_effect(
+                self._command,
+                backend,
+                container,
+                argv,
+                command_timeout_seconds,
+                cwd,
+            )
+        except PreparationNeedsChanges:
+            journal.finish_attempt(request.operation_id, receipt["attempt_id"])
+            raise
+        except BaseException:
+            journal.finish_attempt(
+                request.operation_id,
+                receipt["attempt_id"],
+                state="unknown",
+            )
+            raise
+        else:
+            journal.finish_attempt(request.operation_id, receipt["attempt_id"])
 
     @staticmethod
     def _disable_egress(backend: Any) -> None:
@@ -800,25 +991,282 @@ for path,digest,mode in json.load(sys.stdin):
         directory = self._directory(request.operation_id)
         if (directory / "activation.json").exists():
             raise CellIdentityConflict("an admitted activation cannot be cancelled")
-        await self._cleanup_candidate(
-            self._manager(request.workspace_id), request, uuid5(request.operation_id, "candidate")
+        journal = self._execution_journal()
+        journal.request_cancel(request)
+        manager = self._manager(request.workspace_id)
+        docker_host = getattr(manager.docker, "docker_host", None)
+        if not isinstance(docker_host, str) or not docker_host:
+            # No attempt means there is no container transport to contact. This
+            # keeps old cleanup-only journals and test providers replayable.
+            attempt_path = directory / "attempt.json"
+            if attempt_path.exists():
+                raise CellResourceError("restoration cancellation Docker client unavailable")
+
+            def api_factory() -> Any:
+                raise CellResourceError(
+                    "restoration cancellation Docker client unavailable"
+                )
+        else:
+            api_factory = dedicated_docker_api_factory(
+                docker_host,
+                transport_timeout_seconds=0.75,
+            )
+
+        # Exact-ID stop is independent of producer/default-executor locks. It
+        # must run first so a saturated controller pool cannot delay the kill.
+        await journal.stop_active(
+            request,
+            api_factory=api_factory,
+            timeout_seconds=4.0,
         )
-        self._discard_code(directory)
+        async with journal.no_producers(request, timeout_seconds=0.25):
+            await self._cleanup_candidate(
+                manager, request, uuid5(request.operation_id, "candidate")
+            )
+            # Recheck the immutable attempt while the producer lease excludes
+            # late ensure/launch work. Cleanup completion alone is insufficient.
+            await journal.stop_active(
+                request,
+                api_factory=api_factory,
+                timeout_seconds=4.0,
+            )
+            self._discard_code(directory)
+            journal.complete_cancel(request)
+
+    @staticmethod
+    def _preflight_receipt(request: CodeRestorationApply) -> dict[str, Any]:
+        return {
+            "operation_id": str(request.operation_id),
+            "workspace_id": str(request.workspace_id),
+            "project_id": str(request.project_id),
+            "owner_id": str(request.owner_id),
+            "candidate_id": str(request.candidate_id),
+            "source_commit_sha": request.planned_commit_sha,
+            "fencing_epoch": request.fencing_epoch,
+            "retained_source_fencing_epoch": None,
+            "binding_digest": request.binding_digest,
+            "state": "preflight",
+            "preflight_attempted": False,
+            "effects_admitted": False,
+        }
+
+    def begin_preflight(self, request: CodeRestorationApply) -> None:
+        path = self._directory(request.operation_id) / "activation.json"
+        if not path.exists():
+            write_controller_json(path, self._preflight_receipt(request))
+        self._validate_preflight_receipt(json.loads(path.read_text()), request)
+
+    @staticmethod
+    def _validate_preflight_receipt(
+        intent: dict[str, Any], request: CodeRestorationApply
+    ) -> None:
+        expected = {
+            "operation_id": str(request.operation_id),
+            "workspace_id": str(request.workspace_id),
+            "project_id": str(request.project_id),
+            "owner_id": str(request.owner_id),
+            "candidate_id": str(request.candidate_id),
+            "source_commit_sha": request.planned_commit_sha,
+            "fencing_epoch": request.fencing_epoch,
+            "binding_digest": request.binding_digest,
+        }
+        if any(intent.get(key) != value for key, value in expected.items()):
+            raise CellIdentityConflict("restoration preflight receipt identity mismatch")
+        retained_epoch = intent.get("retained_source_fencing_epoch")
+        if retained_epoch is not None and (
+            type(retained_epoch) is not int
+            or retained_epoch < 1
+            or retained_epoch > request.expected_fencing_epoch
+        ):
+            raise CellIdentityConflict("restoration retained serving epoch is invalid")
+
+    def _claim_preflight(self, request: CodeRestorationApply) -> str:
+        path = self._directory(request.operation_id) / "activation.json"
+        intent = json.loads(path.read_text())
+        self._validate_preflight_receipt(intent, request)
+        if intent.get("state") != "preflight":
+            return "observe"
+        if intent.get("preflight_attempted") is True:
+            return "recover"
+        intent["preflight_attempted"] = True
+        write_controller_json(path, intent)
+        return "start"
+
+    def _capture_preflight_serving_epoch(
+        self, manager: Any, request: CodeRestorationApply
+    ) -> None:
+        path = self._directory(request.operation_id) / "activation.json"
+        intent = json.loads(path.read_text())
+        self._validate_preflight_receipt(intent, request)
+        if (
+            intent.get("state") != "preflight"
+            or intent.get("retained_source_fencing_epoch") is not None
+        ):
+            return
+        current = manager.state_store.load(request.workspace_id)
+        if (
+            current is None
+            or current.project_id != request.project_id
+            or current.owner_id != request.owner_id
+            or current.fencing_epoch != request.expected_fencing_epoch
+        ):
+            return
+        intent["retained_source_fencing_epoch"] = serving_fencing_epoch(current)
+        write_controller_json(path, intent)
+
+    def _confirm_preflight_rejection(
+        self,
+        manager: Any,
+        request: CodeRestorationApply,
+        *,
+        reason_type: str,
+    ) -> dict[str, Any]:
+        path = self._directory(request.operation_id) / "activation.json"
+        intent = json.loads(path.read_text())
+        if intent.get("effects_admitted") is not False or intent.get("state") not in {
+            "preflight",
+            "rejected",
+            "superseded",
+        }:
+            raise CellIdentityConflict("restoration rejection receipt is not pre-effect")
+        current = manager.state_store.load(request.workspace_id)
+        if (
+            current is None
+            or current.project_id != request.project_id
+            or current.owner_id != request.owner_id
+        ):
+            raise CellIdentityConflict("restoration rejection owner changed")
+        mutation = LifecycleMutation(
+            uuid5(request.operation_id, "preflight-rejection"),
+            request.fencing_epoch,
+            hashlib.sha256(
+                (
+                    str(request.operation_id)
+                    + ":preflight-rejection:"
+                    + str(request.expected_fencing_epoch)
+                    + ":"
+                    + str(request.fencing_epoch)
+                    + ":"
+                    + str(request.binding_digest)
+                ).encode()
+            ).hexdigest(),
+        )
+        if current.fencing_epoch == request.expected_fencing_epoch:
+            if current.active_generation_run_id is not None:
+                raise CellIdentityConflict("restoration rejection cannot replace active generation")
+            if current.resource_names is None:
+                raise CellIdentityConflict("restoration rejection resources are unavailable")
+            retained_epoch = serving_fencing_epoch(current)
+            recorded_retained_epoch = intent.get("retained_source_fencing_epoch")
+            if recorded_retained_epoch not in {None, retained_epoch}:
+                raise CellIdentityConflict("restoration retained serving epoch changed")
+            intent["retained_source_fencing_epoch"] = retained_epoch
+            intent["retained_bundle_state"] = current.bundle_state
+            write_controller_json(path, intent)
+            manager.state_store.begin(
+                manager._spec_from_state(current),
+                mutation,
+                kind="restoration_rejection",
+                phase="rejected",
+                resource_names=current.resource_names,
+            )
+            current = manager.state_store.load(request.workspace_id)
+        if current is not None and current.fencing_epoch == request.fencing_epoch:
+            recorded = current.operation(mutation.operation_id)
+            if current.last_operation_id != mutation.operation_id:
+                intent["state"] = "superseded"
+                intent["fence_reconciled"] = False
+                intent["retained_source_fencing_epoch"] = None
+            else:
+                retained_epoch = intent.get("retained_source_fencing_epoch")
+                if (
+                    type(retained_epoch) is not int
+                    or retained_epoch < 1
+                    or retained_epoch > request.expected_fencing_epoch
+                ):
+                    raise CellIdentityConflict(
+                        "restoration retained serving epoch is unavailable"
+                    )
+                if recorded is None or not recorded.matches_replay_envelope(
+                    kind="restoration_rejection",
+                    request_digest=mutation.request_digest,
+                    fencing_epoch=mutation.fencing_epoch,
+                    checkpoint_ref=None,
+                ):
+                    raise CellIdentityConflict(
+                        "restoration rejection operation envelope changed"
+                    )
+                if recorded.status != "completed":
+                    retained_bundle_state = intent.get("retained_bundle_state")
+                    if (
+                        not isinstance(retained_bundle_state, str)
+                        or not retained_bundle_state
+                    ):
+                        raise CellIdentityConflict(
+                            "restoration rejection source state is unavailable"
+                        )
+                    current = manager.state_store.complete(
+                        request.workspace_id,
+                        mutation,
+                        phase="rejected",
+                        bundle_state=retained_bundle_state,
+                        detail="retained_source_fencing_epoch=" + str(retained_epoch),
+                    )
+                    recorded = current.operation(mutation.operation_id)
+                if (
+                    recorded is None
+                    or recorded.status != "completed"
+                    or recorded.detail
+                    != "retained_source_fencing_epoch=" + str(retained_epoch)
+                ):
+                    raise CellIdentityConflict("restoration rejection receipt is incomplete")
+                intent["fence_reconciled"] = True
+        elif current is not None and current.fencing_epoch > request.fencing_epoch:
+            # A later operation owns the monotonic fence. This rejected operation
+            # is still proven effect-free and must never rewrite the newer state.
+            intent["fence_reconciled"] = False
+            if intent.get("retained_source_fencing_epoch") is None:
+                intent["state"] = "superseded"
+        else:
+            raise CellIdentityConflict("restoration rejection fence cannot be reconciled")
+        if intent.get("state") != "superseded":
+            intent["state"] = "rejected"
+        intent["reason_type"] = reason_type
+        write_controller_json(path, intent)
+        self._discard_rejected_code(path.parent)
+        return self._observed(intent, applied=False)
 
     async def apply(
         self, request: CodeRestorationApply, prepared: dict[str, Any]
     ) -> dict[str, Any]:
+        # Written before the first await, including the coordinator's lock await.
+        # A crash/cancellation anywhere in preflight therefore proves no effect
+        # was admitted and recovery can finish a safe negative without rechecking.
+        self.begin_preflight(request)
         manager = self._manager(request.workspace_id)
+        self._capture_preflight_serving_epoch(manager, request)
+        preflight = self._claim_preflight(request)
         directory = self._directory(request.operation_id)
         async with manager.operation_lock.hold(request.workspace_id):
-            if (directory / "activation.json").exists():
+            if preflight == "observe":
                 result = await self._observe_locked(manager, request, prepared)
                 if result is None:
                     raise CellResourceError("activation outcome is not yet confirmed")
                 return result
-            state = self._state(manager, request, epoch=request.expected_fencing_epoch)
-            adapter = manager.machine_runtime
-            machine, backend = adapter.parts(state)
+            if preflight == "recover":
+                return self._confirm_preflight_rejection(
+                    manager, request, reason_type="InterruptedPreflight"
+                )
+            try:
+                state, machine, backend = await self._activation_preflight(
+                    manager, request, prepared
+                )
+            except Exception as exc:
+                if request.binding_digest is None:
+                    raise
+                return self._confirm_preflight_rejection(
+                    manager, request, reason_type=type(exc).__name__
+                )
             from omnia_orchestrator.routers.runtime import _workspace_revision
             from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
 
@@ -837,6 +1285,9 @@ for path,digest,mode in json.load(sys.stdin):
                 "candidate_id": str(request.candidate_id),
                 "source_commit_sha": request.planned_commit_sha,
                 "fencing_epoch": request.fencing_epoch,
+                "binding_digest": request.binding_digest,
+                "retained_source_fencing_epoch": request.expected_fencing_epoch,
+                "effects_admitted": True,
                 "old": old,
                 "volume": volume,
                 "state": "intent",
@@ -896,6 +1347,49 @@ for path,digest,mode in json.load(sys.stdin):
             write_controller_json(directory / "activation.json", intent)
             self._discard_code(directory)
             return self._observed(intent)
+
+    async def _activation_preflight(
+        self, manager: Any, request: CodeRestorationApply, prepared: dict[str, Any]
+    ) -> tuple[Any, Any, Any]:
+        from omnia_orchestrator.routers.runtime import _workspace_revision
+        from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
+
+        state = self._state(manager, request, epoch=request.expected_fencing_epoch)
+        machine, backend = manager.machine_runtime.parts(state)
+        if prepared.get("binding") is None:
+            if request.binding_digest is not None:
+                raise CellIdentityConflict("restoration source binding is unavailable")
+            return state, machine, backend
+        binding = RestorationSourceBindingV2.model_validate(prepared["binding"])
+        if request.binding_digest != binding.digest():
+            raise CellIdentityConflict("restoration source binding digest changed")
+        current = await _read_agent_workspace_files(manager, backend.workspace_volume)
+        if _workspace_revision(current) != prepared["workspace_revision"]:
+            raise CellIdentityConflict("restoration source changed after checking")
+        source_bytes = await manager.docker.read_workspace_source_files(backend.workspace_volume)
+        verify_source_inventory(source_bytes, prepared["current_files"])
+        live, blockers = await machine_effect(catalog_contract, backend)
+        if blockers or not contract_matches(live, prepared["live_contract"]):
+            raise CellIdentityConflict("restoration data contract changed after checking")
+        observed = await machine_effect(
+            observe_live_source,
+            backend,
+            machine,
+            state,
+            source_files=source_bytes,
+            schema=live.model_dump(mode="json"),
+        )
+        rebound = binding.model_copy(update=observed)
+        if rebound.live_identity_digest() != binding.live_identity_digest():
+            raise CellIdentityConflict("restoration live source binding changed")
+        archive = self._directory(request.operation_id) / "code.tar"
+        archive_digest = await machine_effect(self._file_digest, archive)
+        if (
+            archive_digest != prepared["code_digest"]
+            or archive_digest != binding.candidate_artifact_digest
+        ):
+            raise CellIdentityConflict("restoration code artifact changed")
+        return state, machine, backend
 
     async def _activate_code(
         self,
@@ -1007,6 +1501,10 @@ for path,digest,mode in json.load(sys.stdin):
         async with manager.operation_lock.hold(request.workspace_id):
             return await self._observe_locked(manager, request, prepared)
 
+    def activation_journal_exists(self, request: CodeRestorationApply) -> bool:
+        path = self.root / str(request.operation_id) / "activation.json"
+        return path.is_file() and not path.is_symlink() and not self.root.is_symlink()
+
     async def _observe_locked(
         self, manager: Any, request: CodeRestorationApply, prepared: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -1025,8 +1523,15 @@ for path,digest,mode in json.load(sys.stdin):
             or intent.get("candidate_id") != str(request.candidate_id)
             or intent.get("source_commit_sha") != request.planned_commit_sha
             or intent.get("fencing_epoch") != request.fencing_epoch
+            or intent.get("binding_digest") != request.binding_digest
         ):
             raise CellIdentityConflict("activation observation identity mismatch")
+        if intent.get("state") in {"preflight", "rejected", "superseded"}:
+            return self._confirm_preflight_rejection(
+                manager,
+                request,
+                reason_type=str(intent.get("reason_type") or "InterruptedPreflight"),
+            )
         state = manager.state_store.load(request.workspace_id)
         if (
             state is None
@@ -1084,6 +1589,13 @@ for path,digest,mode in json.load(sys.stdin):
             # failed operation or roll back the user's already-running code.
             logging.getLogger(__name__).warning("restoration archive cleanup needs retry")
 
+    @staticmethod
+    def _discard_rejected_code(directory: Path) -> None:
+        # A negative receipt is not terminal until its disposable archive has
+        # gone. Raising keeps the coordinator in reconciliation so a transient
+        # cleanup failure is retried after restart.
+        (directory / "code.tar").unlink(missing_ok=True)
+
     async def _record_untouched_source(
         self, manager: Any, request: CodeRestorationApply, prepared: dict[str, Any], path: Path
     ) -> None:
@@ -1113,6 +1625,28 @@ for path,digest,mode in json.load(sys.stdin):
         current = await _read_agent_workspace_files(manager, backend.workspace_volume)
         if _workspace_revision(current) != prepared["workspace_revision"]:
             raise CellIdentityConflict("unrecorded activation source changed")
+        if prepared.get("binding") is not None:
+            binding = RestorationSourceBindingV2.model_validate(prepared["binding"])
+            if request.binding_digest != binding.digest():
+                raise CellIdentityConflict("restoration source binding digest changed")
+            source_bytes = await manager.docker.read_workspace_source_files(
+                backend.workspace_volume
+            )
+            live, blockers = await machine_effect(catalog_contract, backend)
+            if blockers or not contract_matches(live, prepared["live_contract"]):
+                raise CellIdentityConflict("unrecorded activation database changed")
+            observed = await machine_effect(
+                observe_live_source,
+                backend,
+                machine,
+                state,
+                source_files=source_bytes,
+                schema=live.model_dump(mode="json"),
+            )
+            if binding.model_copy(update=observed).live_identity_digest() != (
+                binding.live_identity_digest()
+            ):
+                raise CellIdentityConflict("unrecorded activation source binding changed")
         write_controller_json(
             path,
             {
@@ -1123,6 +1657,7 @@ for path,digest,mode in json.load(sys.stdin):
                 "candidate_id": str(request.candidate_id),
                 "source_commit_sha": request.planned_commit_sha,
                 "fencing_epoch": request.fencing_epoch,
+                "binding_digest": request.binding_digest,
                 "volume": volume,
                 "state": "reverting",
                 "old": {
@@ -1223,10 +1758,29 @@ for path,digest,mode in json.load(sys.stdin):
             "fencing_epoch": intent["fencing_epoch"],
             "applied": applied,
         }
+        if intent.get("binding_digest") is not None:
+            result["binding_digest"] = intent["binding_digest"]
         if applied:
             result["source_revision"] = intent["source_revision"]
         else:
             result["safe_to_release"] = True
+            if intent.get("state") == "rejected" and intent.get("effects_admitted") is False:
+                retained_epoch = intent.get("retained_source_fencing_epoch")
+                if (
+                    type(retained_epoch) is not int
+                    or retained_epoch < 1
+                    or retained_epoch >= intent["fencing_epoch"]
+                ):
+                    raise CellIdentityConflict("restoration rejection epoch is invalid")
+                result["rejected_before_effect"] = True
+                result["retained_source_fencing_epoch"] = retained_epoch
+            elif (
+                intent.get("state") == "superseded"
+                and intent.get("effects_admitted") is False
+            ):
+                if intent.get("retained_source_fencing_epoch") is not None:
+                    raise CellIdentityConflict("superseded restoration asserted a serving epoch")
+                result["superseded_before_effect"] = True
         return result
 
     @staticmethod

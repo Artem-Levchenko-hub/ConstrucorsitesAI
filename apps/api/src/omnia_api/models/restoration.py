@@ -55,6 +55,8 @@ class Restoration(Base):
     prior_fencing_epoch: Mapped[int | None] = mapped_column(Integer)
     request_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     runtime_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    source_binding: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    source_binding_digest: Mapped[str | None] = mapped_column(Text)
     report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     applied_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     applied_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -166,6 +167,74 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
     repeated = await ensure_current_release_proof(db_session, project)
     assert repeated.passed
     assert len(synced) == 1
+
+
+async def test_release_proof_stops_when_runtime_reports_migration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from omnia_api.services import deploy_attestation
+    from omnia_api.services.deploy_attestation import DeployProof
+
+    project_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    snapshot = SimpleNamespace(
+        id=snapshot_id,
+        project_id=project_id,
+        commit_sha="b" * 40,
+    )
+    project = SimpleNamespace(
+        id=project_id,
+        slug="migration-failure",
+        template="max_miniapp",
+        current_snapshot_id=snapshot_id,
+    )
+
+    class Session:
+        async def get(self, _model, row_id):
+            assert row_id == snapshot_id
+            return snapshot
+
+    monkeypatch.setattr(
+        deploy_attestation,
+        "resolve_deploy_proof",
+        AsyncMock(return_value=DeployProof(False, "attestation_missing")),
+    )
+
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.repo_svc.read_files",
+        lambda _project_id, _commit_sha: {
+            "scripts/apply-migrations.mjs": "// platform-owned",
+            "drizzle/0004.sql": "SELECT 4;",
+        },
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.orchestrator_client.get_status",
+        AsyncMock(return_value={"state": "running"}),
+    )
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+        AsyncMock(return_value={
+            "state": "hot_reloaded",
+            "drizzle_exit_code": "1",
+            "drizzle_stderr_tail": "database down",
+        }),
+    )
+    release_proof = AsyncMock(side_effect=AssertionError("proof must not run"))
+    monkeypatch.setattr(
+        "omnia_api.services.deploy_attestation.run_release_proof",
+        release_proof,
+    )
+
+    proof = await ensure_current_release_proof(Session(), project)
+
+    assert proof == type(proof)(
+        passed=False,
+        reason="runtime_migration_failed",
+        commit_sha=snapshot.commit_sha,
+    )
+    release_proof.assert_not_awaited()
 
 
 @pytest.mark.parametrize("existing_cell", [False, True])

@@ -92,8 +92,6 @@ async def get_restoration(
         project_id,
         current_user.id,
         operation_id,
-        HttpRestorationRuntime(),
-        reconcile=get_settings().max_code_restoration_enabled,
     )
     return await _with_snapshot(session, operation)
 

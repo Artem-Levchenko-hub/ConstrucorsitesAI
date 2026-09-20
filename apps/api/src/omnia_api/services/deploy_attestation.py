@@ -150,11 +150,21 @@ async def ensure_current_release_proof(
     files = await asyncio.to_thread(repo_svc.read_files, project.id, snapshot.commit_sha)
     if not files:
         return DeployProof(False, "snapshot_empty", commit_sha=snapshot.commit_sha)
-    await orchestrator_client.hot_reload(
+    reload_result = await orchestrator_client.hot_reload(
         project_id=project.id,
         slug=project.slug,
         files=files,
     )
+    migration_exit_code = reload_result.get(
+        "migration_exit_code",
+        reload_result.get("drizzle_exit_code"),
+    )
+    if migration_exit_code not in {None, 0, "0"}:
+        return DeployProof(
+            False,
+            "runtime_migration_failed",
+            commit_sha=snapshot.commit_sha,
+        )
 
     verdict = await run_release_proof(
         project.id,

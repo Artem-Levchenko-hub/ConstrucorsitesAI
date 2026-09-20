@@ -1,11 +1,10 @@
 """AV19.1: keep restoration projections moving without a client GET.
 
 The orchestrator owns every physical action and finishes prepare/apply/cancel on
-its own schedule. This worker only re-observes operations that wait on the
-controller, through the very same guarded path a client GET takes
-(``get_restoration`` → pending source export or status dispatch, with identity
-and monotonic-revision checks). It never migrates, activates or cancels by
-itself; it re-sends an already durable intent when a dispatch was lost.
+its own schedule. This worker alone advances API projections that wait on the
+controller (pending source export or status dispatch, with identity and
+monotonic-revision checks). It never invents an intent; it re-sends an already
+durable one when a dispatch was lost. Public GETs remain pure SQL projections.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from omnia_api.models.restoration import Restoration
 from omnia_api.services.restoration_runtime import RestorationRuntime
 from omnia_api.services.restorations import (
     CONTROLLER_WAIT_STATES,
-    get_restoration,
+    advance_restoration,
     schedule_reconcile,
 )
 
@@ -80,11 +79,11 @@ async def _observe(
     operation_id, project_id, owner_id = claim
     try:
         async with factory() as session:
-            # HTTP to the controller happens inside, after the SQL locks are
-            # released — exactly as for a client GET. A hung controller call
-            # cannot outlive the lease and stall the whole cycle.
+            # HTTP to the controller happens inside the worker-only advance
+            # path after SQL locks are released. A hung controller call cannot
+            # outlive the lease and stall the whole cycle.
             await asyncio.wait_for(
-                get_restoration(session, project_id, owner_id, operation_id, runtime),
+                advance_restoration(session, project_id, owner_id, operation_id, runtime),
                 timeout=lease_seconds,
             )
     except Exception as exc:

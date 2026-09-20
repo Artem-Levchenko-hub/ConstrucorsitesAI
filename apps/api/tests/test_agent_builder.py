@@ -481,6 +481,41 @@ def test_container_write_surfaces_resolved_lockfile(
     assert observation["files"] == {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}
 
 
+@pytest.mark.parametrize(
+    "upstream_code",
+    ["migration_apply_failed", "migration_reconciliation_required"],
+)
+def test_container_write_propagates_mandatory_max_migration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream_code: str,
+) -> None:
+    from omnia_api.services import orchestrator_client
+
+    async def hot_reload(*args, **kwargs):
+        raise orchestrator_client.OrchestratorBadRequest(
+            "MAX migration runner failed after source files were written; "
+            "database changes were not confirmed",
+            status_code=409,
+            upstream_code=upstream_code,
+        )
+
+    monkeypatch.setattr(orchestrator_client, "hot_reload", hot_reload)
+    execute = ab.make_container_executor(project_id="project-1", slug="max-app")
+
+    with pytest.raises(
+        orchestrator_client.OrchestratorBadRequest,
+        match="source files were written",
+    ):
+        asyncio.run(
+            execute(
+                ab.Action(
+                    name="write_file",
+                    args={"path": "drizzle/0004.sql", "content": "SELECT 4;"},
+                )
+            )
+        )
+
+
 # ── removed visual action and functional verification ────────────────────────
 
 

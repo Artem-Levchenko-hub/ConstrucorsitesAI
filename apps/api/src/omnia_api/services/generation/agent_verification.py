@@ -147,6 +147,30 @@ async def check_backend_and_normalize_css(
                 project_id=str(ids.project_id),
             )
             files.update(_heal.files)
+        if project_info.template == "max_miniapp":
+            from omnia_api.services.max_data_evolution import max_migration_contract_errors
+
+            _migration_baseline = {**baseline.files, **_max_seed_files}
+            _migration_candidate = dict(_migration_baseline)
+            for _path, _content in files.items():
+                if _content == "":
+                    _migration_candidate.pop(_path, None)
+                else:
+                    _migration_candidate[_path] = _content
+            _migration_errors = max_migration_contract_errors(
+                _migration_baseline,
+                _migration_candidate,
+            )
+            if _migration_errors:
+                await _abort_unsafe_max_backend(
+                    project_id=ids.project_id,
+                    project_slug=project_info.slug,
+                    current_files=_migration_baseline,
+                    files=files,
+                    unsafe_paths=_migration_errors,
+                    project_cell_handle=runtime.handle,
+                    violation_kind="MAX migration contract",
+                )
         # Advisory log regardless of the heal flag — operators SEE a raw-DB
         # escape even when self-heal is off (the silent-failure guard).
         _final_guard = _backend_verdict()

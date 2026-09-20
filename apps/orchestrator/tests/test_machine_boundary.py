@@ -132,6 +132,9 @@ def test_actual_http_boundary_rejects_bad_auth_and_strips_product_credentials():
         }
         status, content, response_headers = request("/", headers)
         assert status == 200 and content == b"non-Next product"
+        assert response_headers["Content-Security-Policy"] == (
+            "frame-ancestors 'self' https://constructor.lead-generator.ru"
+        )
         assert "Set-Cookie" not in response_headers
         assert received[0]["X-Omnia-User-ID"] == "user-A"
         assert "Cookie" not in received[0] and "Authorization" not in received[0]

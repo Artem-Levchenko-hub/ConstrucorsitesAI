@@ -7,6 +7,13 @@ from uuid import UUID
 from omnia_api.services.orchestrator_client import OrchestratorBadRequest
 
 PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED = "protected_environment_recovery_required"
+TERMINAL_PROJECT_CELL_CODES = frozenset(
+    {
+        PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+        "migration_apply_failed",
+        "migration_reconciliation_required",
+    }
+)
 
 
 class ProjectCellInfrastructureError(RuntimeError):
@@ -27,7 +34,7 @@ def terminal_cell_error(
         return error
     if (
         isinstance(error, OrchestratorBadRequest)
-        and error.upstream_code == PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED
+        and error.upstream_code in TERMINAL_PROJECT_CELL_CODES
     ):
         return ProjectCellInfrastructureError(error.upstream_code, operation_id)
     return None

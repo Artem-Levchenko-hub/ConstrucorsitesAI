@@ -21,6 +21,12 @@ from omnia_api.services.generation.progress import GenerationProgress
 from omnia_api.services.generation.publication import _snapshot_payload
 from omnia_api.services.generation_artifacts import create_generation_snapshot
 from omnia_api.services.max_finalization import ProofBundle
+from omnia_api.services.promotion_permit import (
+    PromotionPermit,
+    PromotionPermitError,
+    canonical_files_digest,
+    require_promotion_permit,
+)
 from omnia_api.services.queue import enqueue_preview
 
 _log = logging.getLogger("omnia_api.routers.messages")
@@ -43,8 +49,38 @@ async def publish_agent_candidate(
     project_info: ProjectGenerationFacts,
     prompt_text: str,
     runtime: GenerationRuntime,
+    _promotion_permit: PromotionPermit | None = None,
 ) -> None:
     if files:
+        if project_info.template == "max_miniapp":
+            permit = require_promotion_permit(
+                _promotion_permit,
+                proof=_max_finalization_proof,
+                expected_generation_run_id=ids.run_id,
+                published_files=files,
+            )
+            handle = runtime.handle
+            if handle is None or handle.current_identity is None:
+                raise PromotionPermitError(
+                    "PROMOTION_PERMIT_STALE",
+                    "active MAX workspace identity is unavailable",
+                )
+            before = await handle.current_identity()
+            reader = handle.refresh_snapshot_files or handle.snapshot_files
+            runtime_files = dict(await reader())
+            after = await handle.current_identity()
+            if before != after or canonical_files_digest(
+                runtime_files
+            ) != canonical_files_digest(files):
+                raise PromotionPermitError(
+                    "PROMOTION_PERMIT_STALE",
+                    "active MAX workspace changed before publication",
+                )
+            require_promotion_permit(
+                permit,
+                current_identity=after,
+                expected_workspace_id=handle.workspace_id,
+            )
         new_sha = await asyncio.to_thread(
             repo_svc.commit_files,
             ids.project_id,

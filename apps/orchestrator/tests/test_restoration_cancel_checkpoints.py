@@ -5,6 +5,7 @@ never as a false "failed"."""
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -66,7 +67,7 @@ async def test_cancel_during_preparation_stops_at_the_next_checkpoint(tmp_path):
     assert engine.calls == ["prepare", "cancel"]
     observed = await status(svc, value)
     assert observed["state"] == "cancelled" and observed["phase"] == "cancelled"
-    assert observed["report"]["blockers"] == ["отменено"]
+    assert observed["report"] is None
 
 
 def test_engines_without_checkpoints_keep_the_bare_signature(tmp_path):
@@ -108,6 +109,10 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
     candidate = SimpleNamespace(
         name="candidate", workspace_volume="candidate-code", base_image="image",
         stop=lambda: events.append("stop"),
+        _container=lambda: __import__(
+            "tests.test_restoration_execution_cancellation",
+            fromlist=["candidate_container"],
+        ).candidate_container(plain_prepare_request()),
     )
 
     async def read_sources(_volume):
@@ -155,7 +160,19 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
 
     engine._candidate = make_candidate
     engine._seed_source = lambda *_: events.append("seed")
-    engine._command = lambda backend, argv, *_: events.append("command:" + " ".join(argv[:2]))
+    def command(_backend, _container, argv, *_args):
+        receipt = json.loads(
+            (
+                tmp_path
+                / str(plain_prepare_request().operation_id)
+                / "attempt.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert receipt["state"] == "running"
+        assert receipt["stage"] == "install"
+        events.append("command:" + " ".join(argv[:2]))
+
+    engine._command = command
     engine._disable_egress = lambda backend: events.append("egress-off")
     engine._start = start
     engine._verify_source = lambda *_: events.append("verify")

@@ -15,6 +15,7 @@ TODO sprint A1:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import shutil
 import stat
@@ -24,7 +25,7 @@ from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import docker  # type: ignore[import-untyped]
 import requests  # docker SDK transport — its timeouts surface as requests errors
@@ -1528,6 +1529,161 @@ async def copy_path_from_container(
     return await asyncio.to_thread(_do)
 
 
+_ARTIFACT_INVENTORY_EXCLUDED_PARTS = frozenset({".git", ".next", "node_modules"})
+_ARTIFACT_INVENTORY_SENSITIVE_NAMES = frozenset(
+    {".env", ".env.local", ".env.production", "secrets"}
+)
+
+
+def _extract_archive_with_inventory(raw: bytes, dest_dir: str | None) -> dict[str, str]:
+    """Extract regular, non-sensitive files and return their value-free digests."""
+    import io
+    import tarfile
+
+    inventory: dict[str, str] = {}
+    with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
+        allowed: list[tarfile.TarInfo] = []
+        for member in archive.getmembers():
+            name = member.name.replace("\\", "/")
+            while name.startswith("./"):
+                name = name[2:]
+            path = PurePosixPath(name)
+            if not name or path.is_absolute() or ".." in path.parts:
+                raise OrchestratorError(
+                    code="invalid_path",
+                    message="container archive contains an invalid path",
+                    status_code=400,
+                )
+            if any(
+                part in _ARTIFACT_INVENTORY_EXCLUDED_PARTS
+                or part in _ARTIFACT_INVENTORY_SENSITIVE_NAMES
+                or part.startswith(".env.")
+                for part in path.parts
+            ):
+                continue
+            if member.isdir():
+                allowed.append(member)
+                continue
+            if not member.isfile():
+                continue
+            handle = archive.extractfile(member)
+            if handle is None:
+                raise OrchestratorError(
+                    code="container_failure",
+                    message=f"container archive file cannot be read: {path.as_posix()}",
+                    status_code=500,
+                )
+            inventory[path.as_posix()] = hashlib.sha256(handle.read()).hexdigest()
+            allowed.append(member)
+        if dest_dir is not None:
+            archive.extractall(dest_dir, members=allowed, filter="data")
+    return inventory
+
+
+async def copy_path_from_container_with_inventory(
+    name: str,
+    container_path: str,
+    dest_dir: str,
+    *,
+    max_archive_bytes: int = 80 * 1024 * 1024,
+) -> dict[str, str] | None:
+    """Atomically copy one path and attest the copied source archive.
+
+    ``None`` means the source path does not exist.  The digest map never includes
+    generated trees, Git metadata or environment/secret files.
+    """
+    log.info("docker.copy_from_container_inventory", name=name, path=container_path)
+
+    def _do() -> dict[str, str] | None:
+        client = _get_client()
+        container = client.containers.get(name)
+        try:
+            bits, _stat = container.get_archive(container_path)
+        except docker.errors.NotFound:
+            return None
+        raw = _read_bounded_archive(
+            bits,
+            max_bytes=max_archive_bytes,
+            label=f"container path {container_path}",
+        )
+        return _extract_archive_with_inventory(raw, dest_dir)
+
+    return await asyncio.to_thread(_do)
+
+
+async def image_path_inventory(
+    image_id: str,
+    container_paths: tuple[str, ...],
+    *,
+    max_archive_bytes: int = 80 * 1024 * 1024,
+) -> dict[str, str]:
+    """Read a value-free file manifest from an exact, never-started image.
+
+    Docker's archive API works on stopped containers, so the probe gets no
+    network, environment or runtime secrets.  Its cleanup is part of the same
+    blocking operation and runs on every success/failure path.
+    """
+    log.info("docker.image_path_inventory", image=image_id, paths=container_paths)
+
+    def _do() -> dict[str, str]:
+        client = _get_client()
+        probe = None
+        result: dict[str, str] = {}
+        failure: Exception | None = None
+        try:
+            probe = client.containers.create(
+                image=image_id,
+                network_disabled=True,
+                command=["true"],
+            )
+            for container_path in container_paths:
+                try:
+                    bits, _stat = probe.get_archive(container_path)
+                except docker.errors.NotFound:
+                    continue
+                raw = _read_bounded_archive(
+                    bits,
+                    max_bytes=max_archive_bytes,
+                    label=f"built image path {container_path}",
+                )
+                captured = _extract_archive_with_inventory(raw, None)
+                for path, digest in captured.items():
+                    previous = result.get(path)
+                    if previous is not None and previous != digest:
+                        raise OrchestratorError(
+                            code="container_failure",
+                            message=f"built image inventory conflicts for {path}",
+                            status_code=500,
+                        )
+                    result[path] = digest
+        except Exception as exc:
+            failure = (
+                exc
+                if isinstance(exc, OrchestratorError)
+                else OrchestratorError(
+                    code="container_failure",
+                    message=f"built image inventory failed: {exc}",
+                    status_code=500,
+                )
+            )
+        finally:
+            if probe is not None:
+                try:
+                    probe.remove(force=True)
+                except Exception as exc:
+                    if failure is None:
+                        failure = OrchestratorError(
+                            code="container_failure",
+                            message=f"built image inventory cleanup failed: {exc}",
+                            status_code=500,
+                        )
+        if failure is not None:
+            raise failure
+        return result
+
+    return await asyncio.to_thread(_do)
+
+
 async def build_image(
     context_dir: str,
     dockerfile: str,
@@ -1536,7 +1692,7 @@ async def build_image(
     timeout_sec: float = 840,
     max_attempts: int = 2,
     retry_delay_sec: float = 2.0,
-) -> None:
+) -> str:
     """Build a prod image with a cancellable Docker CLI subprocess.
 
     One retry absorbs transient daemon/resource failures. A single total deadline
@@ -1606,7 +1762,30 @@ async def build_image(
                     raise
                 raise _timeout_error() from exc
             if process.returncode == 0:
-                return
+                def _image_id() -> str:
+                    try:
+                        image_id = str(_get_client().images.get(tag).id)
+                    except Exception as exc:
+                        raise OrchestratorError(
+                            code="container_failure",
+                            message=f"prod build image identity unavailable: {exc}",
+                            status_code=500,
+                        ) from exc
+                    prefix, separator, digest = image_id.partition(":")
+                    if (
+                        prefix != "sha256"
+                        or separator != ":"
+                        or len(digest) != 64
+                        or any(char not in "0123456789abcdef" for char in digest)
+                    ):
+                        raise OrchestratorError(
+                            code="container_failure",
+                            message="prod build returned an invalid immutable image id",
+                            status_code=500,
+                        )
+                    return image_id
+
+                return await asyncio.to_thread(_image_id)
             detail = (output or b"").decode("utf-8", errors="replace").strip()
             detail = detail[-_BUILD_ERROR_DETAIL_CHARS:]
             failure = OrchestratorError(
@@ -1639,6 +1818,7 @@ async def build_image(
                 )
             except TimeoutError as timeout_exc:
                 raise _timeout_error() from timeout_exc
+    raise RuntimeError("unreachable build retry state")
 
 
 async def container_logs(

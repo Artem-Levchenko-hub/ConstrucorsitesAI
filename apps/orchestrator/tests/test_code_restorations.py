@@ -20,12 +20,33 @@ def test_observed_preserves_verified_source_revision():
         candidate_id=str(body.candidate_id),
         source_commit_sha=body.planned_commit_sha,
         fencing_epoch=body.fencing_epoch,
+        binding_digest=body.binding_digest,
         applied=True,
         source_revision="a" * 64,
     )
     assert CodeRestorationService._observed(proof, body) == proof
     with pytest.raises(RuntimeError, match="revision"):
         CodeRestorationService._observed({**proof, "source_revision": "invalid"}, body)
+
+
+def test_observed_accepts_explicit_effect_free_superseded_receipt():
+    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+
+    body = apply_request(request())
+    proof = {
+        "candidate_id": str(body.candidate_id),
+        "source_commit_sha": body.planned_commit_sha,
+        "fencing_epoch": body.fencing_epoch,
+        "binding_digest": body.binding_digest,
+        "applied": False,
+        "safe_to_release": True,
+        "superseded_before_effect": True,
+    }
+    assert CodeRestorationService._observed(proof, body) == proof
+    with pytest.raises(RuntimeError, match="superseded"):
+        CodeRestorationService._observed(
+            {**proof, "retained_source_fencing_epoch": 3}, body
+        )
 
 
 def request(**changes):
@@ -39,6 +60,7 @@ def request(**changes):
             "target_commit_sha": "b" * 40,
             "planned_commit_sha": "c" * 40,
             "fencing_epoch": 3,
+            "binding_contract_version": 2,
             "files": [
                 {
                     "path": "src/app/page.tsx",
@@ -50,14 +72,46 @@ def request(**changes):
     )
 
 
+def binding_payload(**changes):
+    value = {
+        "version": 2,
+        "serving_route_digest": "1" * 64,
+        "serving_release_digest": "2" * 64,
+        "controller_resource_digest": "3" * 64,
+        "controller_incarnation_digest": "4" * 64,
+        "controller_generation_digest": "5" * 64,
+        "provider_digest": "6" * 64,
+        "source_artifact_digest": "7" * 64,
+        "database_identity_digest": "8" * 64,
+        "database_schema_digest": "9" * 64,
+        "database_role_binding_digest": "a" * 64,
+        "database_system_identifier": "7612345678901234567",
+        "database_export_digest": "b" * 64,
+        "source_business_inventory_digest": "c" * 64,
+        "candidate_business_inventory_digest": "c" * 64,
+        "source_technical_inventory_digest": "d" * 64,
+        "candidate_technical_inventory_digest": "d" * 64,
+        "candidate_artifact_digest": "e" * 64,
+    }
+    value.update(changes)
+    return value
+
+
 def apply_request(value):
+    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV2
+
     return CodeRestorationApply(
         **{
-            **value.model_dump(exclude={"files", "current_files"}),
+            **value.model_dump(
+                exclude={"files", "current_files", "binding_contract_version"}
+            ),
             "fencing_epoch": 4,
             "candidate_id": UUID(int=5),
             "report_revision": 1,
             "expected_fencing_epoch": 3,
+            "binding_digest": RestorationSourceBindingV2.model_validate(
+                binding_payload()
+            ).digest(),
         }
     )
 
@@ -82,6 +136,10 @@ class Engine:
         self.fail_apply = False
         self.fail_cancel = False
         self.observed = None
+        self.has_activation_journal = False
+
+    def activation_journal_exists(self, value):
+        return self.has_activation_journal
 
     async def prepare(self, value):
         self.calls.append("prepare")
@@ -102,6 +160,7 @@ class Engine:
                 "blockers": [],
                 "next_actions": [],
             },
+            "binding": binding_payload(),
         }
 
     async def apply(self, value, prepared):
@@ -111,6 +170,7 @@ class Engine:
             "source_commit_sha": value.planned_commit_sha,
             "applied": True,
             "fencing_epoch": value.fencing_epoch,
+            "binding_digest": value.binding_digest,
         }
         if self.fail_apply:
             raise RuntimeError("private password failure")
@@ -149,6 +209,110 @@ async def test_prepare_durable_retry_and_private_response(tmp_path):
     assert engine.calls == ["prepare"]
     assert "private" not in json.dumps(ready)
     assert "files" not in json.dumps(ready)
+
+
+async def test_v2_binding_survives_restart_and_is_required_for_apply(tmp_path):
+    engine = Engine()
+    value = request(binding_contract_version=2)
+    svc = service(tmp_path, engine)
+    await svc.prepare(value)
+    await svc.drain()
+
+    restarted = service(tmp_path, engine)
+    ready = await status(restarted, value)
+    assert ready["state"] == "ready" and ready["can_apply"] is True
+    assert ready["binding"]["version"] == 2
+    body = apply_request(value).model_copy(
+        update={"binding_digest": ready["binding_digest"]}
+    )
+    await restarted.apply(body)
+    await restarted.drain()
+    assert (await status(restarted, value))["state"] == "completed"
+
+
+async def test_v2_prepare_without_binding_never_becomes_ready(tmp_path):
+    value = request(binding_contract_version=2)
+    engine = Engine()
+    original = engine.prepare
+
+    async def unbound(body):
+        prepared = await original(body)
+        prepared.pop("binding")
+        return prepared
+
+    engine.prepare = unbound
+    svc = service(tmp_path, engine)
+    await svc.prepare(value)
+    await svc.drain()
+
+    assert (await status(svc, value))["state"] == "failed"
+
+
+async def test_legacy_ready_without_binding_cannot_start_apply(tmp_path):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    value = request(binding_contract_version=None)
+    engine = Engine()
+    svc = service(tmp_path, engine)
+    legacy = svc._new(value.model_dump(mode="json", exclude_none=True), "ready")
+    legacy.update(
+        prepare=value.model_dump(mode="json", exclude_none=True),
+        prepared={"legacy": True},
+        candidate_id=str(UUID(int=5)),
+    )
+    legacy["report"] = {
+        "revision": 1,
+        "mode": "exact",
+        "database_state": "unknown",
+        "changes": [],
+        "retained_data": [],
+        "unavailable_features": [],
+        "warnings": [],
+        "blockers": [],
+        "next_actions": [],
+    }
+    write_controller_json(svc._path(value.workspace_id, value.operation_id), legacy)
+    ready = await status(svc, value)
+
+    assert ready["state"] == "ready" and ready["can_apply"] is False
+    with pytest.raises(RuntimeError, match="binding"):
+        await svc.apply(apply_request(value).model_copy(update={"binding_digest": None}))
+    assert engine.calls == []
+
+
+async def test_legacy_applying_reconciles_only_from_existing_activation_journal(tmp_path):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    value = request(binding_contract_version=None)
+    engine = Engine()
+    svc = service(tmp_path, engine)
+    apply = apply_request(value).model_copy(update={"binding_digest": None})
+    legacy = svc._new(value.model_dump(mode="json", exclude_none=True), "applying")
+    legacy.update(
+        prepare=value.model_dump(mode="json", exclude_none=True),
+        apply=apply.model_dump(mode="json", exclude_none=True),
+        prepared={"legacy": True},
+        candidate_id=str(UUID(int=5)),
+        effect_started=True,
+    )
+    write_controller_json(svc._path(value.workspace_id, value.operation_id), legacy)
+
+    await svc.recover()
+    await svc.drain()
+    assert (await status(svc, value))["state"] == "reconciling"
+    assert engine.calls == []
+
+    engine.has_activation_journal = True
+    engine.observed = {
+        "candidate_id": str(apply.candidate_id),
+        "source_commit_sha": apply.planned_commit_sha,
+        "fencing_epoch": apply.fencing_epoch,
+        "applied": True,
+    }
+    await svc.recover()
+    await svc.drain()
+    assert (await status(svc, value))["state"] == "completed"
+    assert engine.calls == ["observe"]
 
 
 @pytest.mark.parametrize("database_state", ["empty", "present", "unknown", None])
@@ -295,9 +459,15 @@ async def test_only_exact_verified_negative_observation_releases_claim(tmp_path,
         "candidate_id": str(UUID(int=5)),
         "source_commit_sha": "c" * 40,
         "fencing_epoch": 4,
+        "binding_digest": apply_request(value).binding_digest,
         "applied": False,
         "safe_to_release": safe,
     }
+    if safe is True:
+        engine.observed.update(
+            rejected_before_effect=True,
+            retained_source_fencing_epoch=2,
+        )
     await svc.recover()
     await svc.drain()
     result = await status(svc, value)
@@ -305,6 +475,7 @@ async def test_only_exact_verified_negative_observation_releases_claim(tmp_path,
         assert result["state"] == "failed"
         assert result["observed"]["applied"] is False
         assert result["observed"]["safe_to_release"] is True
+        assert result["observed"]["retained_source_fencing_epoch"] == 2
         assert "прежняя версия" in result["error"]
     else:
         assert result["state"] == "reconciling"
@@ -343,6 +514,7 @@ async def test_cancellation_cleanup_failure_is_not_false_success(tmp_path):
     await svc.cancel(cancel_request(value))
     await svc.drain()
     assert (await status(svc, value))["state"] == "reconciling"
+    assert svc._read(value.workspace_id, value.operation_id)["state"] == "cleanup_pending"
     engine.fail_cancel = False
     restarted = service(tmp_path, engine)
     await restarted.recover()
