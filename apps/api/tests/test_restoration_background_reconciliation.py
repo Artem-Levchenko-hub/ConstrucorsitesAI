@@ -70,6 +70,80 @@ class AsyncCancelRuntime(FakeRuntime):
         return self.result
 
 
+class LostApplyDispatchRuntime(FakeRuntime):
+    """The API loses its first apply dispatch before controller acceptance."""
+
+    def __init__(self):
+        super().__init__()
+        self.apply_attempts = 0
+
+    async def apply(self, request):
+        self.apply_attempts += 1
+        if self.apply_attempts == 1:
+            raise TimeoutError("apply dispatch lost before controller acceptance")
+        return await super().apply(request)
+
+
+async def test_lost_apply_replay_requires_exact_durable_ready_receipt():
+    from types import SimpleNamespace
+
+    from omnia_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
+    from tests.test_restorations import source_binding
+
+    candidate_id = uuid4()
+    binding = RuntimeSourceBindingV2.model_validate(source_binding())
+    payload = {
+        "candidate_id": str(candidate_id),
+        "binding_digest": binding.digest(),
+        "report_revision": 1,
+        "fencing_epoch": 12,
+        "expected_fencing_epoch": 11,
+    }
+    result = RuntimeRestoration(
+        operation_id=uuid4(),
+        workspace_id=uuid4(),
+        project_id=uuid4(),
+        owner_id=uuid4(),
+        state="ready",
+        phase="checked",
+        revision=2,
+        candidate_id=candidate_id,
+        report={"revision": 1, "mode": "exact"},
+        can_apply=True,
+        can_cancel=True,
+        binding=binding,
+        binding_digest=binding.digest(),
+    )
+    operation = SimpleNamespace(
+        phase="apply",
+        apply_digest="a" * 64,
+        candidate_id=candidate_id,
+        source_binding_digest=binding.digest(),
+        runtime_revision=2,
+        fencing_epoch=12,
+        prior_fencing_epoch=11,
+    )
+
+    assert service._should_redispatch_lost_apply(
+        operation, payload, result, same_receipt=True
+    )
+    assert not service._should_redispatch_lost_apply(
+        operation, payload, result, same_receipt=False
+    )
+    assert not service._should_redispatch_lost_apply(
+        operation,
+        {**payload, "candidate_id": str(uuid4())},
+        result,
+        same_receipt=True,
+    )
+    assert not service._should_redispatch_lost_apply(
+        operation,
+        payload,
+        result.model_copy(update={"state": "failed", "can_apply": False}),
+        same_receipt=True,
+    )
+
+
 async def _row(session: AsyncSession, operation_id) -> Restoration:
     session.expire_all()
     row = await session.scalar(select(Restoration).where(Restoration.id == operation_id))
@@ -89,6 +163,28 @@ async def _prepared_then_cancelled(db_session, runtime):
     return owner, project, operation.id, cancelled
 
 
+async def _prepared_then_lost_apply(db_session, runtime):
+    from omnia_api.schemas.restoration import RestoreApplyRequest
+
+    owner, project, _, current, _, workspace, request = await restoration_fixture(db_session)
+    operation = await service.create_restoration(
+        db_session, project.id, owner.id, request, runtime
+    )
+    result = await service.apply_restoration(
+        db_session,
+        project.id,
+        owner.id,
+        operation.id,
+        RestoreApplyRequest(
+            report_revision=1,
+            expected_draft_snapshot_id=current.id,
+            idempotency_key="lost-apply-dispatch",
+        ),
+        runtime,
+    )
+    return owner, project, workspace, operation.id, result
+
+
 async def test_cancel_reaches_cancelled_in_sql_without_a_client_get(db_session, test_engine):
     runtime = AsyncCancelRuntime()
     _, _, operation_id, cancelled = await _prepared_then_cancelled(db_session, runtime)
@@ -106,6 +202,76 @@ async def test_cancel_reaches_cancelled_in_sql_without_a_client_get(db_session, 
     assert runtime.status_calls == 1  # the worker observed; no client GET was made
     # The next restoration is admitted again.
     await service.assert_no_active_restoration(db_session, row.project_id)
+
+
+async def test_worker_replays_exact_ready_receipt_after_lost_apply_dispatch(
+    db_session, test_engine
+):
+    runtime = LostApplyDispatchRuntime()
+    _, _, workspace, operation_id, result = await _prepared_then_lost_apply(
+        db_session, runtime
+    )
+    assert result.state == "reconciling"
+    row = await _row(db_session, operation_id)
+    assert row.phase == "apply" and row.apply_digest is not None
+    assert row.runtime_revision == 1 and runtime.apply_attempts == 1
+
+    # A fresh worker/session has no in-memory dispatch state. The durable apply
+    # claim plus the exact unchanged ready receipt are sufficient for replay.
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+
+    row = await _row(db_session, operation_id)
+    assert row.state == "completed" and row.phase == "complete"
+    assert row.runtime_revision == 2
+    assert runtime.apply_attempts == 2 and runtime.applies == 1
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 8
+
+
+@pytest.mark.parametrize("mismatch", ["candidate", "binding", "revision", "failed"])
+async def test_worker_does_not_replay_apply_from_ambiguous_ready_evidence(
+    db_session, test_engine, mismatch
+):
+    runtime = LostApplyDispatchRuntime()
+    _, _, workspace, operation_id, result = await _prepared_then_lost_apply(
+        db_session, runtime
+    )
+    assert result.state == "reconciling"
+    if mismatch == "candidate":
+        runtime.result = runtime.result.model_copy(update={"candidate_id": uuid4()})
+    elif mismatch == "binding":
+        runtime.result = runtime.result.model_copy(update={"binding_digest": "f" * 64})
+    elif mismatch == "revision":
+        runtime.result = runtime.result.model_copy(update={"revision": 2})
+    else:
+        runtime.result = runtime.result.model_copy(
+            update={
+                "state": "failed",
+                "phase": "failed",
+                "revision": 2,
+                "can_apply": False,
+                "error": "activation outcome is ambiguous",
+            }
+        )
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=120)
+    ) == 1
+
+    row = await _row(db_session, operation_id)
+    assert row.state == "reconciling" and row.phase == "apply"
+    assert runtime.apply_attempts == 1 and runtime.applies == 0
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 8
+    if mismatch == "revision":
+        assert row.runtime_revision == 1
 
 
 async def test_still_cancelling_controller_is_polled_again_with_backoff(db_session, test_engine):

@@ -290,6 +290,39 @@ def validate_runtime_response(request: dict[str, Any], result: RuntimeRestoratio
             raise ValueError("restoration rejection fence mismatch")
 
 
+def _should_redispatch_lost_apply(
+    operation: Restoration,
+    payload: dict[str, Any],
+    result: RuntimeRestoration,
+    *,
+    same_receipt: bool,
+) -> bool:
+    """Accept only the exact prepared receipt owned by the durable apply claim."""
+    return (
+        same_receipt
+        and operation.phase == "apply"
+        and operation.apply_digest is not None
+        and result.state == "ready"
+        and result.observed is None
+        and result.error is None
+        and result.can_apply is True
+        and result.candidate_id is not None
+        and operation.candidate_id == result.candidate_id
+        and payload.get("candidate_id") == str(result.candidate_id)
+        and operation.source_binding_digest is not None
+        and payload.get("binding_digest") == operation.source_binding_digest
+        and result.binding_digest == operation.source_binding_digest
+        and result.report is not None
+        and type(payload.get("report_revision")) is int
+        and result.report.revision == payload["report_revision"]
+        and result.revision == operation.runtime_revision
+        and type(payload.get("fencing_epoch")) is int
+        and operation.fencing_epoch == payload["fencing_epoch"]
+        and type(payload.get("expected_fencing_epoch")) is int
+        and operation.prior_fencing_epoch == payload["expected_fencing_epoch"]
+    )
+
+
 async def create_restoration(
     session: AsyncSession,
     project_id: UUID,
@@ -713,6 +746,31 @@ async def _dispatch(
             operation.source_binding_digest,
             project.current_snapshot_id,
         )
+    if (
+        action == "status"
+        and operation.phase == "apply"
+        and operation.apply_digest is not None
+        and result.state == "ready"
+    ):
+        if _should_redispatch_lost_apply(
+            operation,
+            payload,
+            result,
+            same_receipt=same_receipt,
+        ):
+            # The controller still owns the exact prepared receipt: activation
+            # was never admitted. Reuse the durable operation, candidate,
+            # binding and fencing envelope; no SQL fence or owner intent is
+            # created here.
+            await session.commit()
+            return await _dispatch(
+                session, project_id, owner_id, operation_id, runtime, "apply"
+            )
+        # A different ready receipt is not proof that this apply was never
+        # admitted. Keep the original preparation evidence as the only replay
+        # baseline and wait for an unambiguous controller outcome.
+        await session.commit()
+        return await _unconfirmed(session, project_id, owner_id, operation_id)
     if operation.state in {"completed", "cancelled", "failed"}:
         return public_operation(operation)
     result_binding = (
