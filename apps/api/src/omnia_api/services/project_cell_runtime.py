@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnia_api.core.db import get_engine
 from omnia_api.core.errors import ApiError
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
@@ -18,10 +21,15 @@ from omnia_api.services import orchestrator_client
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
 from omnia_api.services.project_cell_access import decide_project_cell_selection
 from omnia_api.services.project_cell_lifecycle import (
+    ProjectCellOperationOutcome,
     execute_cell_operation,
     replay_indeterminate_cell_operation,
 )
-from omnia_api.services.project_cells import ProjectCellBusy, reserve_cell_operation
+from omnia_api.services.project_cells import (
+    ProjectCellBusy,
+    ProjectCellStateConflict,
+    reserve_cell_operation,
+)
 
 _CELL_ACTION_UNAVAILABLE = (
     "Для owner-only Project Cell это действие пока недоступно в публичном runtime"
@@ -33,6 +41,7 @@ _CELL_LEASE_MISSING = (
     "Безопасная preview-сессия Project Cell потеряна; запустите сборку ещё раз"
 )
 _CELL_OWNERSHIP_MISMATCH = "Project Cell workspace identity mismatch"
+_OWNER_PREVIEW_PHASE_KEY = "owner_preview_continuation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +50,19 @@ class ProjectCellPublicSelection:
     source: Literal["legacy", "durable_workspace", "owner_canary", "project_admitted"]
     owner: User
     workspace: ProjectCellWorkspace | None
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnerPreviewContinuation:
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    fencing_epoch: int
+
+
+class _OwnerPreviewIdentityInvalidated(ProjectCellStateConflict):
+    """Raised only after the continuation was durably terminalized as failed."""
 
 
 async def resolve_project_cell_public_selection(
@@ -112,6 +134,12 @@ async def load_project_cell_runtime_status(
         return _pending_status(active_generation is not None)
     _require_workspace_identity(project, selection)
     resources = await _get_cell_resources(selection.workspace.id)
+    if (
+        selection.workspace.generation_run_id is None
+        and active_generation is None
+        and await _unfinished_owner_wake(session, selection.workspace.id) is not None
+    ):
+        return _pending_status(True, workspace=selection.workspace, resources=resources)
     return _runtime_status_from_resources(
         selection.workspace,
         resources,
@@ -151,8 +179,17 @@ async def start_project_cell_runtime(
     resources = await _get_cell_resources(selection.workspace.id)
     if selection.workspace.generation_run_id is None and active_generation is None:
         wake = await _unfinished_owner_wake(session, selection.workspace.id)
-        if resources.state in {"resources_paused", "retained"} or wake is not None:
-            await _wake_owner_workspace(session, selection.workspace, operation=wake)
+        if wake is not None:
+            return _pending_status(True, workspace=selection.workspace, resources=resources)
+        if resources.state in {"resources_paused", "retained"}:
+            preview_url = await _wake_owner_workspace(
+                session,
+                selection.workspace,
+                operation=None,
+                defer_incomplete=True,
+            )
+            if preview_url is None:
+                return _pending_status(True, workspace=selection.workspace, resources=resources)
             # Wake commits before dispatch. Reacquire the project lock and check
             # that a concurrent generation has not acquired mutation authority.
             await _try_preview_project_lock(session, project.id)
@@ -162,11 +199,15 @@ async def start_project_cell_runtime(
                 or await _active_generation(session, project.id) is not None
             ):
                 return _pending_status(True, workspace=selection.workspace)
-            resources = await _get_cell_resources(selection.workspace.id)
-            if resources.state != "resources_ready":
-                raise ApiError(
-                    "orchestrator_unavailable", "Среда проекта ещё не готова к открытию", 503,
-                )
+            return RuntimeStatus(
+                state="running",
+                container_name=_public_cell_ref(selection.workspace),
+                port=None,
+                dev_url=preview_url,
+                last_active_at=None,
+                hibernate_after_seconds=None,
+                keep_alive=False,
+            )
     status = _runtime_status_from_resources(
         selection.workspace,
         resources,
@@ -246,7 +287,10 @@ async def _unfinished_owner_wake(
     if (
         latest is not None and latest.kind == "wake"
         and latest.idempotency_key.startswith(f"owner-preview:wake:{workspace_id}:")
-        and latest.status in {"pending", "running", "waiting_capacity", "indeterminate"}
+        and (
+            latest.status in {"pending", "running", "waiting_capacity", "indeterminate"}
+            or _completed_wake_needs_owner_preview(latest)
+        )
     ):
         return latest
     return None
@@ -257,7 +301,8 @@ async def _wake_owner_workspace(
     workspace: ProjectCellWorkspace,
     *,
     operation: ProjectCellOperation | None,
-) -> None:
+    defer_incomplete: bool = False,
+) -> str | None:
     """Wake retained resources through the durable lifecycle, without an agent lease."""
     prefix = f"owner-preview:wake:{workspace.id}:"
     if operation is None:
@@ -269,7 +314,6 @@ async def _wake_owner_workspace(
         except ProjectCellBusy as exc:
             raise ApiError("conflict", "Операция со средой проекта ещё выполняется", 409) from exc
     operation_id = operation.id
-    workspace_id = workspace.id
     replay = operation.status == "indeterminate"
     factory = async_sessionmaker(session.bind, expire_on_commit=False)
     await session.commit()
@@ -282,23 +326,425 @@ async def _wake_owner_workspace(
         outcome.status != "completed" or outcome.response is None
         or outcome.response.state != "resources_ready"
     ):
+        if defer_incomplete and outcome.status in {
+            "pending",
+            "running",
+            "waiting_capacity",
+            "indeterminate",
+        }:
+            return None
         raise ApiError(
             "orchestrator_unavailable", "Не удалось подтвердить пробуждение среды проекта", 503,
         )
-    async with factory() as update_session:
-        current = await update_session.scalar(
+    preview_url = await _continue_owner_preview(factory, outcome)
+    if preview_url is not None:
+        return preview_url
+    if defer_incomplete:
+        return None
+    raise ApiError(
+        "orchestrator_unavailable", "Не удалось подтвердить запуск среды проекта", 503,
+    )
+
+
+async def advance_owner_wake_operations(
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    client: orchestrator_client.ProjectCellOrchestratorClient | None = None,
+    *,
+    limit: int = 25,
+) -> int:
+    """Advance due owner-preview wakes independently of browser polling."""
+
+    factory = session_factory or async_sessionmaker(get_engine(), expire_on_commit=False)
+    controller = client or orchestrator_client.HttpProjectCellOrchestratorClient()
+    now = datetime.now(UTC)
+    continuation_phase = ProjectCellOperation.result_payload[_OWNER_PREVIEW_PHASE_KEY].as_string()
+    resource_state = ProjectCellOperation.result_payload["state"].as_string()
+    async with factory() as session:
+        operation_ids = list(
+            (
+                await session.scalars(
+                    select(ProjectCellOperation.id)
+                    .join(
+                        ProjectCellWorkspace,
+                        ProjectCellWorkspace.id == ProjectCellOperation.workspace_id,
+                    )
+                    .where(
+                        ProjectCellOperation.kind == "wake",
+                        ProjectCellOperation.generation_run_id.is_(None),
+                        ProjectCellOperation.idempotency_key.like("owner-preview:wake:%"),
+                        ProjectCellWorkspace.generation_run_id.is_(None),
+                        ProjectCellWorkspace.deleted_at.is_(None),
+                        or_(
+                            and_(
+                                ProjectCellOperation.status.in_({"pending", "indeterminate"}),
+                                or_(
+                                    ProjectCellOperation.fencing_epoch.is_(None),
+                                    ProjectCellWorkspace.fencing_epoch
+                                    == ProjectCellOperation.fencing_epoch,
+                                ),
+                            ),
+                            and_(
+                                ProjectCellOperation.status == "waiting_capacity",
+                                ProjectCellOperation.next_attempt_at.is_not(None),
+                                ProjectCellOperation.next_attempt_at <= now,
+                                ProjectCellWorkspace.fencing_epoch
+                                == ProjectCellOperation.fencing_epoch,
+                            ),
+                            and_(
+                                ProjectCellOperation.status == "completed",
+                                ProjectCellWorkspace.fencing_epoch
+                                == ProjectCellOperation.fencing_epoch,
+                                resource_state == "resources_ready",
+                                or_(
+                                    continuation_phase.is_(None),
+                                    continuation_phase != "completed",
+                                ),
+                            ),
+                        ),
+                    )
+                    .order_by(ProjectCellOperation.created_at, ProjectCellOperation.id)
+                    .limit(limit)
+                )
+            ).all()
+        )
+
+    completed = 0
+    for operation_id in operation_ids:
+        async with factory() as session:
+            operation = await session.get(ProjectCellOperation, operation_id)
+            if operation is None:
+                continue
+            replay = operation.status == "indeterminate"
+        outcome = await (
+            replay_indeterminate_cell_operation(factory, operation_id, controller)
+            if replay
+            else execute_cell_operation(factory, operation_id, controller)
+        )
+        if await _continue_owner_preview(factory, outcome) is not None:
+            completed += 1
+    return completed
+
+
+async def _continue_owner_preview(
+    session_factory: async_sessionmaker[AsyncSession],
+    outcome: object,
+) -> str | None:
+    if not isinstance(outcome, ProjectCellOperationOutcome):
+        return None
+    if (
+        outcome.status != "completed"
+        or outcome.response is None
+        or outcome.response.state != "resources_ready"
+        or outcome.fencing_epoch is None
+    ):
+        return None
+    continuation = await _begin_owner_preview_continuation_cancellation_safe(
+        session_factory, outcome
+    )
+    if continuation is None:
+        return None
+    preview_url = outcome.response.preview_url
+    try:
+        if outcome.response.draft_state != "running" or not preview_url:
+            preview = await orchestrator_client.project_cell_start_owner_preview(
+                continuation.workspace_id,
+                project_id=continuation.project_id,
+                owner_id=continuation.owner_id,
+            )
+            preview_url = preview.preview_url
+        if not await _finish_owner_preview_continuation(session_factory, continuation):
+            return None
+    except asyncio.CancelledError:
+        await _mark_owner_preview_continuation_indeterminate(
+            session_factory, continuation, "cancelled"
+        )
+        raise
+    except _OwnerPreviewIdentityInvalidated:
+        raise
+    except Exception as exc:
+        await _mark_owner_preview_continuation_indeterminate(
+            session_factory, continuation, exc.__class__.__name__
+        )
+        return None
+    return preview_url
+
+
+async def _begin_owner_preview_continuation(
+    session_factory: async_sessionmaker[AsyncSession],
+    outcome: ProjectCellOperationOutcome,
+) -> _OwnerPreviewContinuation | None:
+    async with session_factory() as session:
+        operation = await session.scalar(
+            select(ProjectCellOperation)
+            .where(ProjectCellOperation.id == outcome.operation_id)
+            .with_for_update()
+        )
+        if operation is None or operation.status != "completed":
+            return None
+        workspace = await session.scalar(
             select(ProjectCellWorkspace)
-            .where(ProjectCellWorkspace.id == workspace_id)
+            .where(ProjectCellWorkspace.id == outcome.workspace_id)
+            .with_for_update()
+        )
+        project = (
+            await session.scalar(
+                select(Project).where(Project.id == workspace.project_id)
+            )
+            if workspace is not None
+            else None
+        )
+        if (
+            workspace is None
+            or project is None
+            or operation.workspace_id != workspace.id
+            or operation.kind != "wake"
+            or not operation.idempotency_key.startswith(
+                f"owner-preview:wake:{workspace.id}:"
+            )
+            or operation.generation_run_id is not None
+            or operation.fencing_epoch != outcome.fencing_epoch
+            or workspace.generation_run_id is not None
+            or workspace.fencing_epoch != outcome.fencing_epoch
+            or workspace.deleted_at is not None
+            or project.owner_id != workspace.owner_id
+        ):
+            return None
+        if _continuation_phase(operation) == "completed":
+            return None
+        operation.status = "running"
+        operation.execution_run_id = None
+        operation.error = None
+        operation.started_at = datetime.now(UTC)
+        operation.finished_at = None
+        _set_continuation_phase(operation, "running")
+        await session.commit()
+        return _OwnerPreviewContinuation(
+            operation_id=operation.id,
+            workspace_id=workspace.id,
+            project_id=project.id,
+            owner_id=workspace.owner_id,
+            fencing_epoch=outcome.fencing_epoch,
+        )
+
+
+async def _begin_owner_preview_continuation_cancellation_safe(
+    session_factory: async_sessionmaker[AsyncSession],
+    outcome: ProjectCellOperationOutcome,
+) -> _OwnerPreviewContinuation | None:
+    """Resolve a committed claim before cancellation can strand it as running."""
+
+    claim_task = asyncio.create_task(
+        _begin_owner_preview_continuation(session_factory, outcome)
+    )
+    try:
+        return await asyncio.shield(claim_task)
+    except asyncio.CancelledError as cancelled:
+        try:
+            continuation = await asyncio.shield(claim_task)
+        except asyncio.CancelledError:
+            await _mark_owner_preview_claim_indeterminate(
+                session_factory, outcome, "claim_cancelled"
+            )
+        except Exception:
+            await _mark_owner_preview_claim_indeterminate(
+                session_factory, outcome, "claim_response_unknown"
+            )
+        else:
+            if continuation is not None:
+                await _mark_owner_preview_continuation_indeterminate(
+                    session_factory, continuation, "claim_cancelled"
+                )
+            else:
+                await _mark_owner_preview_claim_indeterminate(
+                    session_factory, outcome, "claim_cancelled"
+                )
+        raise cancelled
+    except Exception:
+        await _mark_owner_preview_claim_indeterminate(
+            session_factory, outcome, "claim_response_unknown"
+        )
+        return None
+
+
+async def _mark_owner_preview_claim_indeterminate(
+    session_factory: async_sessionmaker[AsyncSession],
+    outcome: ProjectCellOperationOutcome,
+    reason: str,
+) -> None:
+    """Reconcile an unknown claim result from its immutable operation identity."""
+
+    async with session_factory() as session:
+        operation = await session.scalar(
+            select(ProjectCellOperation)
+            .where(ProjectCellOperation.id == outcome.operation_id)
+            .with_for_update()
+        )
+        if operation is None or operation.status in {
+            "completed",
+            "failed",
+            "cancelled",
+            "indeterminate",
+        }:
+            return
+        if operation.status != "running":
+            return
+        stored_payload = (
+            dict(operation.result_payload)
+            if isinstance(operation.result_payload, dict)
+            else None
+        )
+        expected_payload = (
+            dict(outcome.result_payload)
+            if isinstance(outcome.result_payload, dict)
+            else None
+        )
+        stored_phase = (
+            stored_payload.pop(_OWNER_PREVIEW_PHASE_KEY, None)
+            if stored_payload is not None
+            else None
+        )
+        if expected_payload is not None:
+            expected_payload.pop(_OWNER_PREVIEW_PHASE_KEY, None)
+        identity_matches = (
+            operation.workspace_id == outcome.workspace_id
+            and operation.kind == "wake"
+            and operation.idempotency_key.startswith(
+                f"owner-preview:wake:{outcome.workspace_id}:"
+            )
+            and operation.generation_run_id is None
+            and operation.fencing_epoch == outcome.fencing_epoch
+            and stored_phase == "running"
+            and stored_payload == expected_payload
+        )
+        if not identity_matches:
+            operation.status = "failed"
+            operation.error = hashlib.sha256(
+                b"owner_preview:claim_identity_changed"
+            ).hexdigest()
+            operation.finished_at = datetime.now(UTC)
+            _set_continuation_phase(operation, "identity_invalidated")
+            await session.commit()
+            return
+        operation.status = "indeterminate"
+        operation.error = hashlib.sha256(
+            f"owner_preview:{reason}".encode()
+        ).hexdigest()
+        operation.finished_at = datetime.now(UTC)
+        _set_continuation_phase(operation, "indeterminate")
+        await session.commit()
+
+
+async def _mark_owner_preview_continuation_indeterminate(
+    session_factory: async_sessionmaker[AsyncSession],
+    continuation: _OwnerPreviewContinuation,
+    reason: str,
+) -> None:
+    async with session_factory() as session:
+        operation = await session.scalar(
+            select(ProjectCellOperation)
+            .where(ProjectCellOperation.id == continuation.operation_id)
             .with_for_update()
         )
         if (
-            current is not None and current.generation_run_id is None
-            and current.fencing_epoch == outcome.fencing_epoch
-            and current.deleted_at is None
+            operation is None
+            or operation.status != "running"
+            or operation.workspace_id != continuation.workspace_id
+            or operation.fencing_epoch != continuation.fencing_epoch
         ):
-            current.state = "ready"
-            current.ready_at = datetime.now(UTC)
-            await update_session.commit()
+            return
+        operation.status = "indeterminate"
+        operation.error = hashlib.sha256(
+            f"owner_preview:{reason}".encode()
+        ).hexdigest()
+        operation.finished_at = datetime.now(UTC)
+        _set_continuation_phase(operation, "indeterminate")
+        await session.commit()
+
+
+async def _finish_owner_preview_continuation(
+    session_factory: async_sessionmaker[AsyncSession],
+    continuation: _OwnerPreviewContinuation,
+) -> bool:
+    async with session_factory() as session:
+        operation = await session.scalar(
+            select(ProjectCellOperation)
+            .where(ProjectCellOperation.id == continuation.operation_id)
+            .with_for_update()
+        )
+        workspace = await session.scalar(
+            select(ProjectCellWorkspace)
+            .where(ProjectCellWorkspace.id == continuation.workspace_id)
+            .with_for_update()
+        )
+        project = (
+            await session.scalar(
+                select(Project).where(Project.id == continuation.project_id)
+            )
+            if workspace is not None
+            else None
+        )
+        valid = (
+            operation is not None
+            and workspace is not None
+            and project is not None
+            and operation.status == "running"
+            and operation.workspace_id == workspace.id
+            and operation.generation_run_id is None
+            and operation.fencing_epoch == continuation.fencing_epoch
+            and workspace.project_id == project.id
+            and workspace.owner_id == continuation.owner_id
+            and workspace.generation_run_id is None
+            and workspace.fencing_epoch == continuation.fencing_epoch
+            and workspace.deleted_at is None
+            and project.owner_id == continuation.owner_id
+        )
+        if not valid:
+            if operation is not None and operation.status == "running":
+                operation.status = "failed"
+                operation.error = hashlib.sha256(
+                    b"owner_preview:envelope_changed"
+                ).hexdigest()
+                operation.finished_at = datetime.now(UTC)
+                _set_continuation_phase(operation, "identity_invalidated")
+                await session.commit()
+            raise _OwnerPreviewIdentityInvalidated(
+                "owner preview continuation identity or fence changed"
+            )
+        assert operation is not None
+        assert workspace is not None
+        operation.status = "completed"
+        operation.error = None
+        operation.finished_at = datetime.now(UTC)
+        _set_continuation_phase(operation, "completed")
+        workspace.state = "ready"
+        workspace.ready_at = workspace.ready_at or datetime.now(UTC)
+        await session.commit()
+        return True
+
+
+def _completed_wake_needs_owner_preview(operation: ProjectCellOperation) -> bool:
+    payload = operation.result_payload
+    return (
+        operation.status == "completed"
+        and isinstance(payload, dict)
+        and payload.get("state") == "resources_ready"
+        and payload.get("draft_state") != "running"
+        and payload.get(_OWNER_PREVIEW_PHASE_KEY) != "completed"
+    )
+
+
+def _continuation_phase(operation: ProjectCellOperation) -> str | None:
+    payload = operation.result_payload
+    if not isinstance(payload, dict):
+        return None
+    phase = payload.get(_OWNER_PREVIEW_PHASE_KEY)
+    return phase if isinstance(phase, str) else None
+
+
+def _set_continuation_phase(operation: ProjectCellOperation, phase: str) -> None:
+    operation.result_payload = dict(operation.result_payload or {}) | {
+        _OWNER_PREVIEW_PHASE_KEY: phase,
+    }
 
 
 async def create_project_cell_preview_session(

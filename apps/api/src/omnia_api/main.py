@@ -48,6 +48,7 @@ from omnia_api.routers import ws as ws_router
 from omnia_api.services import readiness
 from omnia_api.services.generation.supervisor import resume_capacity_queued_generations
 from omnia_api.services.generation_runs import recover_interrupted_generation_runs
+from omnia_api.services.project_cell_runtime import advance_owner_wake_operations
 from omnia_api.services.project_cells import recover_interrupted_cell_operations
 from omnia_api.services.ws_hub import hub
 
@@ -62,12 +63,29 @@ async def _monitor_capacity_queued_generations() -> None:
         try:
             resumed = await resume_capacity_queued_generations()
         except Exception:
-            logger.exception("capacity queue recovery scan failed")
+            logger.exception("generation capacity queue recovery scan failed")
             continue
         if resumed:
             logger.warning(
                 "resumed expired capacity-queued generation dispatches",
                 extra={"generation_run_count": resumed},
+            )
+
+
+async def _monitor_owner_wake_operations() -> None:
+    """Advance owner preview wakes without blocking generation admission recovery."""
+
+    while True:
+        await asyncio.sleep(10)
+        try:
+            advanced = await advance_owner_wake_operations()
+        except Exception:
+            logger.exception("owner preview capacity queue recovery scan failed")
+            continue
+        if advanced:
+            logger.warning(
+                "advanced capacity-queued owner preview wakes",
+                extra={"project_cell_operation_count": advanced},
             )
 
 
@@ -94,12 +112,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             extra={"generation_run_count": resumed},
         )
     capacity_monitor = asyncio.create_task(_monitor_capacity_queued_generations())
+    owner_wake_monitor = asyncio.create_task(_monitor_owner_wake_operations())
     try:
         yield
     finally:
         capacity_monitor.cancel()
+        owner_wake_monitor.cancel()
         with suppress(asyncio.CancelledError):
             await capacity_monitor
+        with suppress(asyncio.CancelledError):
+            await owner_wake_monitor
         await hub.stop_listener()
         await dispose_redis()
         await dispose_engine()

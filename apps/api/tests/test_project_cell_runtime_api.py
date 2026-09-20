@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from omnia_api.core.config import get_settings
@@ -15,11 +15,15 @@ from omnia_api.core.deps import get_current_user
 from omnia_api.main import app
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
+from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.user import User
 from omnia_api.services import orchestrator_client as oc
 from omnia_api.services import project_cell_runtime as runtime
+from omnia_api.services.project_cells import (
+    claim_cell_operation_committed,
+    recover_interrupted_cell_operations,
+)
 
 
 async def _seed(session, monkeypatch, *, cell=True, enabled=False, active=False):
@@ -69,6 +73,18 @@ def _resources(workspace, *, running=True):
 
 def _origin(workspace_id):
     return f"https://cell-{workspace_id.hex[:12]}-dev.{get_settings().project_cell_preview_host_suffix}"
+
+
+def _preview_session(workspace_id):
+    origin = _origin(workspace_id)
+    return oc.ProjectCellPreviewSession(
+        workspace_id=workspace_id,
+        preview_url=origin,
+        bootstrap_url=(
+            f"{origin}/api/omnia/preview-session?expires=1893456000&signature=" + "a" * 43
+        ),
+        expires_at="2030-01-01T00:00:00+00:00",
+    )
 
 
 def _deny_legacy(monkeypatch):
@@ -371,7 +387,7 @@ async def test_released_owner_can_restart_preview_without_agent_bootstrap(
 @pytest.mark.parametrize("paused_state", ["resources_paused", "retained"])
 @pytest.mark.parametrize("lost_wake_response", [False, True])
 async def test_owner_start_wakes_paused_cell_with_durable_retry_and_no_agent_lease(
-    client, db_session, monkeypatch, paused_state, lost_wake_response,
+    client, db_session, test_engine, monkeypatch, paused_state, lost_wake_response,
 ):
     from sqlalchemy import select
 
@@ -412,7 +428,16 @@ async def test_owner_start_wakes_paused_cell_with_durable_retry_and_no_agent_lea
     monkeypatch.setattr(oc, "project_cell_agent_bootstrap", bootstrap)
     if lost_wake_response:
         first = await client.post(f"/api/projects/{project.id}/runtime/start")
-        assert first.status_code == 503, first.text
+        assert first.status_code == 200, first.text
+        assert first.json()["state"] == "provisioning"
+        repeated = await client.post(f"/api/projects/{project.id}/runtime/start")
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["state"] == "provisioning"
+        assert len(wake_envelopes) == 1
+        factory = async_sessionmaker(test_engine, expire_on_commit=False)
+        assert await runtime.advance_owner_wake_operations(
+            factory, oc.HttpProjectCellOrchestratorClient()
+        ) == 1
     response = await client.post(f"/api/projects/{project.id}/runtime/start")
     assert response.status_code == 200, response.text
     assert response.json()["state"] == "running"
@@ -447,4 +472,441 @@ async def test_owner_start_wakes_paused_cell_with_durable_retry_and_no_agent_lea
     assert wake_envelopes[-1]["operation_id"] != wake_envelopes[0]["operation_id"]
     await db_session.refresh(workspace)
     assert workspace.fencing_epoch == 10
+    assert workspace.generation_run_id is None
+
+
+async def test_owner_capacity_wait_is_visible_without_polling_redispatch(
+    client, db_session, monkeypatch,
+):
+    _owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+    control_calls = 0
+
+    async def request(method, path, **kwargs):
+        nonlocal control_calls
+        if method == "GET":
+            payload = _resources(workspace, running=False)
+            payload["state"] = "resources_paused"
+            return payload
+        assert method == "POST" and path.endswith("/control")
+        control_calls += 1
+        payload = kwargs["json"]
+        raise oc.ProjectCellCapacityWait(
+            oc.ProjectCellCapacityRejection(
+                operation_id=UUID(payload["operation_id"]),
+                fencing_epoch=payload["fencing_epoch"],
+                request_digest=payload["request_digest"],
+                effect_applied=False,
+                reason="insufficient_cpu",
+                retry_after_seconds=1,
+            )
+        )
+
+    monkeypatch.setattr(oc, "_request", request)
+    url = f"/api/projects/{project.id}/runtime"
+
+    first = await client.post(url + "/start")
+    second = await client.post(url + "/start")
+    status = await client.get(url)
+
+    assert first.status_code == second.status_code == status.status_code == 200
+    assert first.json()["state"] == "provisioning"
+    assert second.json()["state"] == "provisioning"
+    assert status.json()["state"] == "provisioning"
+    assert control_calls == 1
+    operations = list(
+        (
+            await db_session.scalars(
+                select(ProjectCellOperation).where(
+                    ProjectCellOperation.workspace_id == workspace.id
+                )
+            )
+        ).all()
+    )
+    assert len(operations) == 1
+    assert operations[0].status == "waiting_capacity"
+    assert operations[0].attempt_count == 1
+
+
+async def test_owner_capacity_consumer_completes_once_after_capacity_release(
+    client, db_session, test_engine, monkeypatch,
+):
+    owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+    first_dispatch = True
+
+    async def request(method, path, **kwargs):
+        nonlocal first_dispatch
+        if method == "GET":
+            payload = _resources(workspace, running=False)
+            payload["state"] = "resources_paused"
+            return payload
+        payload = kwargs["json"]
+        assert first_dispatch
+        first_dispatch = False
+        raise oc.ProjectCellCapacityWait(
+            oc.ProjectCellCapacityRejection(
+                operation_id=UUID(payload["operation_id"]),
+                fencing_epoch=payload["fencing_epoch"],
+                request_digest=payload["request_digest"],
+                effect_applied=False,
+                reason="insufficient_cpu",
+                retry_after_seconds=1,
+            )
+        )
+
+    monkeypatch.setattr(oc, "_request", request)
+    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    assert response.status_code == 200
+    assert response.json()["state"] == "provisioning"
+
+    operation = await db_session.scalar(
+        select(ProjectCellOperation).where(
+            ProjectCellOperation.workspace_id == workspace.id
+        )
+    )
+    assert operation is not None
+    operation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.commit()
+    dispatched: list[object] = []
+
+    async def control(request):
+        dispatched.append(request)
+        return oc.ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref=f"docker-owner-canary:{workspace.id}",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+            has_draft_runtime=True,
+            draft_state=None,
+            preview_url=None,
+        )
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    worker_client = SimpleNamespace(control=control)
+    start_preview = AsyncMock(return_value=_preview_session(workspace.id))
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", start_preview)
+    assert await runtime.advance_owner_wake_operations(factory, worker_client) == 1
+    assert await runtime.advance_owner_wake_operations(factory, worker_client) == 0
+
+    await db_session.refresh(operation)
+    await db_session.refresh(workspace)
+    assert operation.status == "completed"
+    assert operation.attempt_count == 2
+    assert workspace.state == "ready"
+    assert workspace.generation_run_id is None
+    assert len(dispatched) == 1
+    envelope = dispatched[0]
+    assert envelope.operation_id == operation.id
+    assert envelope.fencing_epoch == operation.fencing_epoch
+    assert envelope.request_digest == operation.request_digest
+    assert owner.id == workspace.owner_id
+    start_preview.assert_awaited_once_with(
+        workspace.id, project_id=project.id, owner_id=owner.id
+    )
+
+
+@pytest.mark.parametrize("claim_failure", ["lost_response", "cancelled"])
+async def test_owner_preview_claim_unknown_commit_replays_same_envelope(
+    client, db_session, test_engine, monkeypatch, claim_failure,
+):
+    owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+
+    async def request(method, path, **kwargs):
+        if method == "GET":
+            payload = _resources(workspace, running=False)
+            payload["state"] = "resources_paused"
+            return payload
+        payload = kwargs["json"]
+        raise oc.ProjectCellCapacityWait(
+            oc.ProjectCellCapacityRejection(
+                operation_id=UUID(payload["operation_id"]),
+                fencing_epoch=payload["fencing_epoch"],
+                request_digest=payload["request_digest"],
+                effect_applied=False,
+                reason="insufficient_cpu",
+                retry_after_seconds=1,
+            )
+        )
+
+    monkeypatch.setattr(oc, "_request", request)
+    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    assert response.status_code == 200
+    operation = await db_session.scalar(
+        select(ProjectCellOperation).where(ProjectCellOperation.workspace_id == workspace.id)
+    )
+    assert operation is not None
+    operation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.commit()
+
+    replayed = []
+
+    async def control(request):
+        replayed.append(request)
+        return oc.ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref=f"docker-owner-canary:{workspace.id}",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+            has_draft_runtime=True,
+            draft_state=None,
+            preview_url=None,
+        )
+
+    begin = runtime._begin_owner_preview_continuation
+    claim_attempts = 0
+    claim_committed = asyncio.Event()
+    release_claim_receipt = asyncio.Event()
+
+    async def uncertain_begin(*args, **kwargs):
+        nonlocal claim_attempts
+        continuation = await begin(*args, **kwargs)
+        claim_attempts += 1
+        if claim_attempts == 1:
+            if claim_failure == "cancelled":
+                claim_committed.set()
+                await release_claim_receipt.wait()
+                return continuation
+            raise ConnectionError("owner preview claim commit response lost")
+        return continuation
+
+    monkeypatch.setattr(runtime, "_begin_owner_preview_continuation", uncertain_begin)
+    start_preview = AsyncMock(return_value=_preview_session(workspace.id))
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", start_preview)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    worker_client = SimpleNamespace(control=control)
+
+    if claim_failure == "cancelled":
+        advance = asyncio.create_task(
+            runtime.advance_owner_wake_operations(factory, worker_client)
+        )
+        await asyncio.wait_for(claim_committed.wait(), timeout=1)
+        advance.cancel()
+        await asyncio.sleep(0)
+        release_claim_receipt.set()
+        with pytest.raises(asyncio.CancelledError):
+            await advance
+    else:
+        assert await runtime.advance_owner_wake_operations(factory, worker_client) == 0
+    await db_session.refresh(operation)
+    assert operation.status == "indeterminate"
+    assert operation.result_payload["owner_preview_continuation"] == "indeterminate"
+    start_preview.assert_not_awaited()
+
+    assert await runtime.advance_owner_wake_operations(factory, worker_client) == 1
+    await db_session.refresh(operation)
+    assert operation.status == "completed"
+    assert operation.result_payload["owner_preview_continuation"] == "completed"
+    assert claim_attempts == 2
+    start_preview.assert_awaited_once_with(
+        workspace.id, project_id=project.id, owner_id=owner.id
+    )
+    assert len(replayed) == 2
+    assert {request.operation_id for request in replayed} == {operation.id}
+    assert {request.fencing_epoch for request in replayed} == {operation.fencing_epoch}
+    assert {request.request_digest for request in replayed} == {operation.request_digest}
+
+
+async def test_owner_capacity_unknown_start_and_finalization_failures_replay_same_envelope(
+    client, db_session, test_engine, monkeypatch,
+):
+    owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+
+    async def request(method, path, **kwargs):
+        if method == "GET":
+            payload = _resources(workspace, running=False)
+            payload["state"] = "resources_paused"
+            return payload
+        payload = kwargs["json"]
+        raise oc.ProjectCellCapacityWait(
+            oc.ProjectCellCapacityRejection(
+                operation_id=UUID(payload["operation_id"]),
+                fencing_epoch=payload["fencing_epoch"],
+                request_digest=payload["request_digest"],
+                effect_applied=False,
+                reason="insufficient_cpu",
+                retry_after_seconds=1,
+            )
+        )
+
+    monkeypatch.setattr(oc, "_request", request)
+    response = await client.post(f"/api/projects/{project.id}/runtime/start")
+    assert response.status_code == 200
+    operation = await db_session.scalar(
+        select(ProjectCellOperation).where(ProjectCellOperation.workspace_id == workspace.id)
+    )
+    assert operation is not None
+    operation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.commit()
+
+    replayed = []
+
+    async def control(request):
+        replayed.append(request)
+        return oc.ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref=f"docker-owner-canary:{workspace.id}",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+            has_draft_runtime=True,
+            draft_state=None,
+            preview_url=None,
+        )
+
+    start_preview = AsyncMock(
+        side_effect=[
+            oc.OrchestratorUnavailable("owner preview response lost"),
+            _preview_session(workspace.id),
+            _preview_session(workspace.id),
+            _preview_session(workspace.id),
+        ]
+    )
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", start_preview)
+    finish = runtime._finish_owner_preview_continuation
+    finish_calls = 0
+
+    async def flaky_finish(*args, **kwargs):
+        nonlocal finish_calls
+        finish_calls += 1
+        if finish_calls == 1:
+            raise ConnectionError("SQL finalization response lost")
+        if finish_calls == 2:
+            raise asyncio.CancelledError
+        return await finish(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_finish_owner_preview_continuation", flaky_finish)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    worker_client = SimpleNamespace(control=control)
+
+    assert await runtime.advance_owner_wake_operations(factory, worker_client) == 0
+    await db_session.refresh(operation)
+    assert operation.status == "indeterminate"
+    assert await runtime.advance_owner_wake_operations(factory, worker_client) == 0
+    await db_session.refresh(operation)
+    assert operation.status == "indeterminate"
+    with pytest.raises(asyncio.CancelledError):
+        await runtime.advance_owner_wake_operations(factory, worker_client)
+    await db_session.refresh(operation)
+    assert operation.status == "indeterminate"
+    assert await runtime.advance_owner_wake_operations(factory, worker_client) == 1
+    await db_session.refresh(operation)
+    assert operation.status == "completed"
+    assert start_preview.await_count == 4
+    assert finish_calls == 3
+    assert len(replayed) == 4
+    assert {request.operation_id for request in replayed} == {operation.id}
+    assert {request.fencing_epoch for request in replayed} == {operation.fencing_epoch}
+    assert {request.request_digest for request in replayed} == {operation.request_digest}
+    assert all(
+        call.kwargs == {"project_id": project.id, "owner_id": owner.id}
+        for call in start_preview.await_args_list
+    )
+
+
+async def test_owner_capacity_consumer_replays_same_envelope_after_restart(
+    client, db_session, test_engine, monkeypatch,
+):
+    _owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    _deny_legacy(monkeypatch)
+
+    async def request(method, path, **kwargs):
+        if method == "GET":
+            payload = _resources(workspace, running=False)
+            payload["state"] = "resources_paused"
+            return payload
+        payload = kwargs["json"]
+        raise oc.ProjectCellCapacityWait(
+            oc.ProjectCellCapacityRejection(
+                operation_id=UUID(payload["operation_id"]),
+                fencing_epoch=payload["fencing_epoch"],
+                request_digest=payload["request_digest"],
+                effect_applied=False,
+                reason="insufficient_cpu",
+                retry_after_seconds=1,
+            )
+        )
+
+    monkeypatch.setattr(oc, "_request", request)
+    assert (
+        await client.post(f"/api/projects/{project.id}/runtime/start")
+    ).json()["state"] == "provisioning"
+    operation = await db_session.scalar(
+        select(ProjectCellOperation).where(
+            ProjectCellOperation.workspace_id == workspace.id
+        )
+    )
+    assert operation is not None
+    operation.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.commit()
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    claimed = await claim_cell_operation_committed(factory, operation.id)
+    assert claimed.operation_id == operation.id
+    assert claimed.fencing_epoch == 9
+    async with factory() as recovery_session:
+        assert await recover_interrupted_cell_operations(recovery_session) == 1
+        await recovery_session.commit()
+
+    replayed: list[object] = []
+
+    async def control(request):
+        replayed.append(request)
+        return oc.ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref=f"docker-owner-canary:{workspace.id}",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+            has_draft_runtime=True,
+            draft_state="running",
+            preview_url=_origin(workspace.id),
+        )
+
+    assert await runtime.advance_owner_wake_operations(
+        factory, SimpleNamespace(control=control)
+    ) == 1
+    await db_session.refresh(operation)
+    assert operation.status == "completed"
+    assert operation.attempt_count == 3
+    assert len(replayed) == 1
+    assert replayed[0].operation_id == operation.id
+    assert replayed[0].request_digest == operation.request_digest
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 9
+    assert workspace.state == "ready"
     assert workspace.generation_run_id is None

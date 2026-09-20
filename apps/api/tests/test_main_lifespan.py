@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 
@@ -65,3 +67,44 @@ async def test_lifespan_recovers_cell_operations_before_serving(
         "dispose_redis",
         "dispose_engine",
     ]
+
+
+async def test_owner_wake_monitor_cannot_block_generation_capacity_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    owner_started = asyncio.Event()
+    generation_scanned = asyncio.Event()
+    never = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def resume_generations() -> int:
+        events.append("generations")
+        generation_scanned.set()
+        return 0
+
+    async def advance_owner_wakes() -> int:
+        events.append("owner_wakes")
+        owner_started.set()
+        await never.wait()
+        return 0
+
+    async def yield_immediately(_seconds: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr(main, "resume_capacity_queued_generations", resume_generations)
+    monkeypatch.setattr(main, "advance_owner_wake_operations", advance_owner_wakes)
+    monkeypatch.setattr(main.asyncio, "sleep", yield_immediately)
+
+    generation_monitor = asyncio.create_task(main._monitor_capacity_queued_generations())
+    owner_monitor = asyncio.create_task(main._monitor_owner_wake_operations())
+    try:
+        await asyncio.wait_for(owner_started.wait(), timeout=1)
+        await asyncio.wait_for(generation_scanned.wait(), timeout=1)
+    finally:
+        generation_monitor.cancel()
+        owner_monitor.cancel()
+        await asyncio.gather(generation_monitor, owner_monitor, return_exceptions=True)
+
+    assert "owner_wakes" in events
+    assert "generations" in events
