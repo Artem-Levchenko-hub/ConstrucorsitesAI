@@ -5,6 +5,20 @@ from typing import Any, Protocol
 from omnia_api.schemas.restoration import RuntimeRestoration
 from omnia_api.services.orchestrator_client import _request
 
+_APPLY_REQUIRED_KEYS = (
+    "operation_id",
+    "workspace_id",
+    "project_id",
+    "owner_id",
+    "expected_source_head",
+    "target_commit_sha",
+    "planned_commit_sha",
+    "fencing_epoch",
+    "candidate_id",
+    "report_revision",
+    "expected_fencing_epoch",
+)
+
 
 class RestorationRuntime(Protocol):
     async def prepare(self, request: dict[str, Any]) -> RuntimeRestoration: ...
@@ -23,11 +37,9 @@ class HttpRestorationRuntime:
         if action == "cancel":
             wire = {key: request[key] for key in identity_keys}
         elif action == "apply":
-            wire = {
-                key: value
-                for key, value in request.items()
-                if key not in {"files", "current_files"}
-            }
+            wire = {key: request[key] for key in _APPLY_REQUIRED_KEYS}
+            if "binding_digest" in request:
+                wire["binding_digest"] = request["binding_digest"]
         else:
             wire = dict(request)
             if action == "prepare":

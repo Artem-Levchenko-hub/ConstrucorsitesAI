@@ -643,6 +643,7 @@ async def test_runtime_wire_shape_and_deadlines(monkeypatch):
         "target_commit_sha": "b" * 40,
         "planned_commit_sha": "c" * 40,
         "fencing_epoch": 7,
+        "binding_contract_version": 2,
         "files": [{"path": "test.bin", "content_base64": "AP8=", "mode": 0o100755}],
         "current_files": [{"path": "test.bin", "sha256": "a" * 64, "mode": 0o100755}],
     }
@@ -658,11 +659,24 @@ async def test_runtime_wire_shape_and_deadlines(monkeypatch):
             "expected_fencing_epoch": 7,
             "candidate_id": str(uuid4()),
             "report_revision": 1,
+            "binding_digest": "d" * 64,
+            "sentinel_prepare_only_extra": "must-not-cross-apply-boundary",
         }
     )
-    assert "files" not in calls[-1][2]["json"]
-    assert "current_files" not in calls[-1][2]["json"]
-    assert calls[-1][2]["json"]["expected_fencing_epoch"] == 7
+    assert set(calls[-1][2]["json"]) == {
+        "operation_id",
+        "workspace_id",
+        "project_id",
+        "owner_id",
+        "expected_source_head",
+        "target_commit_sha",
+        "planned_commit_sha",
+        "fencing_epoch",
+        "candidate_id",
+        "report_revision",
+        "expected_fencing_epoch",
+        "binding_digest",
+    }
     await runtime.cancel(request)
     assert calls[-1][2]["json"] == identity
     await runtime.status(request)
