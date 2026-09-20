@@ -818,9 +818,10 @@ class MachineAdapter:
         runtime_stamp = self.root / (
             "public-boundary-runtime" if public_mode else "owner-boundary-runtime"
         ) / f"{state.workspace_id}.json"
-        wire_config: dict[str, Any] = config
-        if business_config is not None or public_mode:
-            wire_config = {"config": config, "server": boundary_source()}
+        # The guard image is only a pinned bootstrap. Always run the current
+        # controller-owned boundary source so owner previews receive the same
+        # framing/auth policy as public and configured gateways.
+        wire_config: dict[str, Any] = {"config": config, "server": boundary_source()}
         # Reconcile trusted code updates as well as configuration changes. Reusing
         # a healthy old gateway must not strand already-published apps on old auth.
         runtime_digest = hashlib.sha256(
@@ -854,12 +855,10 @@ class MachineAdapter:
             old.remove(force=True)
         gateway = client.containers.create(
             backend.guard_image,
-            (["python3", "-c", "import os,time,runpy; "
-              "p='/run/omnia-boundary/server.py'; "
-              "exec('while not os.path.isfile(p): time.sleep(0.1)'); "
-              "runpy.run_path(p,run_name='__main__')"]
-             if business_config is not None or public_mode
-             else ["python3", "/opt/omnia/machine_boundary.py"]),
+            ["python3", "-c", "import os,time,runpy; "
+             "p='/run/omnia-boundary/server.py'; "
+             "exec('while not os.path.isfile(p): time.sleep(0.1)'); "
+             "runpy.run_path(p,run_name='__main__')"],
             name=gateway_name,
             labels=backend.labels("max-gateway"),
             detach=True,
@@ -886,20 +885,14 @@ class MachineAdapter:
         # Runtime tmpfs is invisible to Docker29/containerd archive APIs. Send
         # secrets through exec stdin and atomically publish inside the tmpfs;
         # neither image/rootfs nor Docker command arguments contain this config.
+        # Existing pinned guard images stay unchanged. Seed only trusted
+        # controller code into gateway tmpfs; no project executable input.
         script = (
-            "import os,sys; data=sys.stdin.buffer.read(); "
-            "p='/run/omnia-boundary/.next'; open(p,'wb').write(data); "
-            "os.replace(p,'/run/omnia-boundary/config.json')"
+            "import os,sys,json; v=json.load(sys.stdin); "
+            "open('/run/omnia-boundary/config.json','w').write(json.dumps(v['config'])); "
+            "p='/run/omnia-boundary/.server'; open(p,'w').write(v['server']); "
+            "os.replace(p,'/run/omnia-boundary/server.py')"
         )
-        if business_config is not None or public_mode:
-            # Existing pinned guard images stay unchanged. Seed only trusted
-            # controller code into gateway tmpfs; no project executable input.
-            script = (
-                "import os,sys,json; v=json.load(sys.stdin); "
-                "open('/run/omnia-boundary/config.json','w').write(json.dumps(v['config'])); "
-                "p='/run/omnia-boundary/.server'; open(p,'w').write(v['server']); "
-                "os.replace(p,'/run/omnia-boundary/server.py')"
-            )
         execution = client.api.exec_create(gateway.id, ["python3", "-c", script], stdin=True)
         connection = client.api.exec_start(execution["Id"], socket=True)
         try:

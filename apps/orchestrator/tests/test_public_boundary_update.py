@@ -48,6 +48,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     def create(_image, _command, **kwargs):
         # No product or database container may be recreated by a gateway update.
         assert kwargs["name"] == "public-test-gateway"
+        assert _command[:2] == ["python3", "-c"]
+        assert "/run/omnia-boundary/server.py" in _command[2]
         expected = 401 if configured else 503
         if public_mode:
             assert ("POST", "/api/max/session", expected, b'{"initData":""}') in readiness
@@ -148,8 +150,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     first = containers["public-test-gateway"]
     assert quotas == [{"cpu_period": 100_000, "cpu_quota": 5_000}]
     assert first.attrs["HostConfig"]["CpuQuota"] == 5_000
+    assert delivered[-1]["server"] == "first trusted server"
     if public_mode:
-        assert delivered[-1]["server"] == "first trusted server"
         assert delivered[-1]["config"]["public_origin"] == runtime_env["OMNIA_PUBLIC_APP_ORIGIN"]
     adapter._start_boundary(state, manifest, backend, 7, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
@@ -164,9 +166,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     adapter._start_boundary(state, manifest, backend, 7, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
     assert containers["public-test-gateway"] is not first
-    if public_mode:
-        assert delivered[-1]["server"] == "updated trusted server"
-        assert delivered[-1]["config"] == delivered[0]["config"]
+    assert delivered[-1]["server"] == "updated trusted server"
+    assert delivered[-1]["config"] == delivered[0]["config"]
     assert removed == [first]
     assert containers["public-test-max-core"] is core
 
