@@ -236,6 +236,36 @@ def test_retained_receipt_binds_trusted_runtime_and_still_fences_product(tmp_pat
     assert "retained_preview_receipt" not in runtime._metadata()
 
 
+def test_trusted_container_identity_ignores_docker_mount_order_but_binds_mounts(tmp_path):
+    runtime = backend(tmp_path)
+    mounts = [
+        {"Type": "volume", "Name": "workspace", "Source": "/var/lib/docker/a",
+         "Destination": "/workspace", "Driver": "local", "Mode": "rw", "RW": True},
+        {"Type": "volume", "Name": "home", "Source": "/var/lib/docker/b",
+         "Destination": "/root", "Driver": "local", "Mode": "rw", "RW": True},
+    ]
+    container = SimpleNamespace(
+        id="trusted-app", status="running", reload=lambda: None,
+        attrs={
+            "Id": "trusted-app", "Image": "sha256:" + "e" * 64,
+            "State": {"StartedAt": "2026-09-20T01:59:47Z"},
+            "Config": {"Labels": runtime.labels("development"), "Env": ["SECRET=private"]},
+            "HostConfig": {"Privileged": False},
+            "NetworkSettings": {"Networks": {"internal": {"IPAddress": "10.0.0.8"}}},
+            "Mounts": mounts,
+        },
+    )
+
+    first = runtime.trusted_container_identity(container, "development")
+    container.attrs["Mounts"] = list(reversed(mounts))
+    reordered = runtime.trusted_container_identity(container, "development")
+    assert reordered == first
+
+    container.attrs["Mounts"][0] = {**container.attrs["Mounts"][0], "RW": False}
+    changed = runtime.trusted_container_identity(container, "development")
+    assert changed != first
+
+
 @pytest.mark.parametrize("running", [True, False])
 @pytest.mark.parametrize("include_logs", [True, False])
 def test_owner_readiness_can_skip_unused_success_logs_but_keeps_failure_logs(

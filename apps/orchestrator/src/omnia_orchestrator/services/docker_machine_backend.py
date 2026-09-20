@@ -1227,9 +1227,17 @@ class DockerMachineBackend:
             or attrs["HostConfig"].get("Privileged") is not False
         ):
             return None
-        fingerprint = {key: attrs[key] for key in (
-            "Config", "HostConfig", "NetworkSettings", "Mounts",
-        )}
+        # Docker does not promise a stable order for the inspect ``Mounts``
+        # array.  The order has no runtime meaning, but every mount field does:
+        # canonicalize the set while keeping the complete records in the proof.
+        mounts = sorted(
+            attrs["Mounts"],
+            key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+        )
+        fingerprint = {
+            **{key: attrs[key] for key in ("Config", "HostConfig", "NetworkSettings")},
+            "Mounts": mounts,
+        }
         return {
             "id": container.id, "started_at": started, "image": image,
             "configuration_digest": hashlib.sha256(
