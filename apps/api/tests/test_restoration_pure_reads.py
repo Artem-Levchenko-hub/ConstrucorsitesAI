@@ -116,9 +116,10 @@ async def test_public_detail_get_is_a_pure_projection_across_one_hundred_reads(
         assert response.status_code == 200
         assert response.json()["state"] == "preparing"
 
+    project_id = project.id
     db_session.expire_all()
     persisted = await db_session.get(Restoration, operation.id)
-    persisted_project = await db_session.get(type(project), project.id)
+    persisted_project = await db_session.get(type(project), project_id)
     assert persisted is not None and persisted_project is not None
     assert (
         persisted.revision,
@@ -219,9 +220,10 @@ async def test_worker_owns_lost_dispatch_replay_and_completed_apply(
     later = datetime.now(UTC) + timedelta(seconds=60)
 
     assert await reconcile_due_restorations(factory, runtime, now=later) == 1
+    project_id = project.id
     db_session.expire_all()
     persisted = await db_session.get(Restoration, operation.id)
-    persisted_project = await db_session.get(type(project), project.id)
+    persisted_project = await db_session.get(type(project), project_id)
     assert persisted is not None and persisted_project is not None
     assert persisted.state == "completed"
     assert persisted.applied_snapshot_id == persisted_project.current_snapshot_id

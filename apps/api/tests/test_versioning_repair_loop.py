@@ -7,9 +7,9 @@ catalogued as not_run in fixtures/versioning_v4/mutations.json."""
 
 from __future__ import annotations
 
-import dataclasses
 import uuid
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from omnia_api.models.generation_run import GenerationRun
@@ -20,26 +20,26 @@ from tests.test_max_finalization import (
     _VISITS_ROUTE,
     _adaptation_run,
     _files,
+    _install_exact_release_probe,
     _new_harness,
 )
 
 PROMPT = "Верни экраны выбранной исторической версии"
 
 
+@pytest.fixture(autouse=True)
+def _exact_release_probe(monkeypatch: pytest.MonkeyPatch):
+    cleanup = _install_exact_release_probe(monkeypatch)
+    yield
+    cleanup()
+
+
 def _with_files(harness, box: list[dict[str, str]]) -> None:
     """Let the test decide what the workspace holds at every finalization pass."""
 
-    async def snapshot_files() -> dict[str, str]:
-        return dict(box[0])
-
-    handle = harness.coordinator.executor
-    if dataclasses.is_dataclass(handle):
-        handle = dataclasses.replace(
-            handle, snapshot_files=snapshot_files, export_files=snapshot_files
-        )
-    else:  # NamedTuple
-        handle = handle._replace(snapshot_files=snapshot_files, export_files=snapshot_files)
-    harness.coordinator.executor = handle
+    harness.files.clear()
+    harness.files.update(box[0])
+    box[0] = harness.files
 
 
 def _broken() -> dict[str, str]:
@@ -67,7 +67,8 @@ async def test_missing_get_is_repaired_then_built(
 
     async def repair(detail: str) -> None:
         details.append(detail)
-        box[0] = _fixed()
+        box[0].clear()
+        box[0].update(_fixed())
 
     outcome = await harness.coordinator.finalize_with_repair(prompt=PROMPT, repair=repair)
 
@@ -91,7 +92,13 @@ async def test_comment_only_fix_is_rejected_until_attempts_run_out(
         nonlocal calls
         calls += 1
         # Satisfies a naive text search, not the check: the handler is a comment.
-        box[0] = {**_broken(), "src/app/api/visits/route.ts": "// export async function GET() {}\n"}
+        box[0].clear()
+        box[0].update(
+            {
+                **_broken(),
+                "src/app/api/visits/route.ts": "// export async function GET() {}\n",
+            }
+        )
 
     outcome = await harness.coordinator.finalize_with_repair(prompt=PROMPT, repair=repair)
 
