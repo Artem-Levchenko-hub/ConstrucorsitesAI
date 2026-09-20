@@ -8,6 +8,7 @@ catalogued as not_run in fixtures/versioning_v4/mutations.json."""
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.services.max_finalization import MaxFinalizationStatus
 from omnia_api.services.project_cell_executor import ProjectCellCommandRole
+from omnia_api.services.restoration_adaptation import _preservation_contract
 from tests.test_max_finalization import (
     _CLIENTS_ROUTE,
     _VISITS_ROUTE,
@@ -40,6 +42,32 @@ def _with_files(harness, box: list[dict[str, str]]) -> None:
     harness.files.clear()
     harness.files.update(box[0])
     box[0] = harness.files
+
+
+def _set_current_adaptation(harness, run: GenerationRun, snapshot_id: uuid.UUID) -> None:
+    """Keep baseline failure tests behind the current proof-capability gate."""
+    run.agent_state = {
+        "restoration_adaptation": {
+            "version": 2,
+            "base_draft_snapshot_id": str(snapshot_id),
+            "preservation_contract": _preservation_contract(),
+            "data_contract_diff": {
+                "version": 1,
+                "historical_source": "selected_historical_code",
+                "current_source": "controller_observed_catalog",
+                "findings": [],
+                "blockers": [],
+            },
+        }
+    }
+    harness.coordinator.executor = replace(
+        harness.coordinator.executor,
+        capabilities={
+            **harness.coordinator.executor.capabilities,
+            "restoration_adaptation_database_copy_v1": True,
+            "restoration_adaptation_proof_v1": True,
+        },
+    )
 
 
 def _broken() -> dict[str, str]:
@@ -133,7 +161,7 @@ async def test_recognised_adaptation_without_baseline_fails_and_skips_repair(
     harness = await _new_harness(db_session, test_engine)
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
     assert run is not None
-    run.agent_state = {"restoration_adaptation": {"base_draft_snapshot_id": str(uuid.uuid4())}}
+    _set_current_adaptation(harness, run, uuid.uuid4())
     await db_session.commit()
     _with_files(harness, [_fixed()])
     repairs: list[str] = []
@@ -173,7 +201,7 @@ async def test_foreign_baseline_is_never_compared(
     await db_session.flush()
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
     assert run is not None
-    run.agent_state = {"restoration_adaptation": {"base_draft_snapshot_id": str(foreign.id)}}
+    _set_current_adaptation(harness, run, foreign.id)
     await db_session.commit()
     _with_files(harness, [_fixed()])
 
