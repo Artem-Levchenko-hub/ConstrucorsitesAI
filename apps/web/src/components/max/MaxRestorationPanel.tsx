@@ -32,6 +32,8 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
   onAdapt?: (prompt: string, reference: RestorationAdaptationReference) => void | Promise<void>;
 }) {
   const operation = r.operation;
+  const automatic = operation?.execution_policy === "automatic_when_safe";
+  const retryPreparation = operation?.phase === "retry_prepare";
   const scope = useRef<object>({});
   const adaptationPending = useRef(false);
   const [adapting, setAdapting] = useState(false);
@@ -44,7 +46,9 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
     ? operation.report : null;
   return <section className="mx-4 my-3 max-w-full rounded-xl border border-border-default bg-surface-raised p-4 text-sm"
     aria-label="Восстановление версии" data-testid="max-restoration-panel">
-    <h3 className="font-semibold" role="status">{operation ? labels[operation.state] : r.busy
+    <h3 className="font-semibold" role="status">{operation?.state === "ready" && automatic
+      ? "Проверка завершена — применяем автоматически"
+      : operation ? labels[operation.state] : r.busy
       ? "Отправляем запрос на подготовку" : "Проверяем результат запроса"}</h3>
     <p className="mt-2 text-fg-secondary">Публикация — отдельный шаг. Восстановление в редакторе не публикует изменения.</p>
     {operation?.state === "reconciling" && <p className="mt-2" data-testid="max-restoration-reconciling">
@@ -54,10 +58,12 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
       && <p className="mt-2">Проверяем сохранность данных. Результат появится здесь.</p>}
     {report && <div className="mt-3 space-y-3 break-words">
       <p>{operation?.state === "needs_changes"
-        ? "Выбранной версии нужны изменения для работы с текущими данными."
+        ? retryPreparation
+          ? "Условия применения изменились. Отмените эту подготовку и запустите восстановление версии заново."
+          : "Выбранной версии нужны изменения для работы с текущими данными."
         : report.mode === "exact" ? "Подготовлен выбранный код без запуска ИИ."
           : "Подготовлен вариант с адаптацией. Проверьте отличия."}</p>
-      {report.database_state === "empty" && <p>В проверенной базе нет бизнес-записей. Восстановление сохраняет текущую базу и файлы.</p>}
+      {report.database_state === "empty" && <p>В проверенной базе нет бизнес-записей. Перед применением сервер проверяет структуру и изолированную копию.</p>}
       {report.database_state === "present" && <p>В базе есть бизнес-данные. Восстанавливаем код с сохранением текущих данных.</p>}
       <ReportList title="Что изменится" items={report.changes} />
       <ReportList title="Что проверено" items={(report.checks ?? [])
@@ -72,7 +78,7 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
       {r.error ?? operation?.error}
     </p>}
     <div className="mt-3 flex flex-wrap gap-2">
-      {operation?.state === "needs_changes" && operation.can_cancel && report && onAdapt && <div>
+      {operation?.state === "needs_changes" && !retryPreparation && operation.can_cancel && report && onAdapt && <div>
         <Button data-testid="max-restoration-adapt" disabled={adapting || r.busy || r.hasPendingRequest || r.headChanged || !operation.base_draft_snapshot_id}
           onClick={async () => {
             const baseSnapshotId = operation.base_draft_snapshot_id;
@@ -99,7 +105,7 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
           }}>{adapting ? "Запускаем адаптацию…" : "Адаптировать и восстановить"}</Button>
         <p className="mt-2 text-fg-secondary">Кнопка запустит ИИ после отмены подготовки. Он создаст новый черновик с прежними экранами и функциями для текущих данных. Потребуется расход лимита ИИ.</p>
       </div>}
-      {operation?.state === "ready" && operation.can_apply && report && <Button
+      {operation?.state === "ready" && !automatic && operation.can_apply && report && <Button
         data-testid="max-restoration-apply" disabled={r.busy || r.headChanged || !!r.error || r.hasPendingRequest} onClick={() => void r.apply()}>
         Сделать текущей в редакторе
       </Button>}

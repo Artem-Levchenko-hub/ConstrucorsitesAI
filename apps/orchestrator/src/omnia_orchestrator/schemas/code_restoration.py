@@ -72,6 +72,71 @@ class RestorationSourceBindingV2(BaseModel):
         )
 
 
+class RestorationSourceBindingV3(BaseModel):
+    """V2 source seal plus an explicit, crash-recoverable database strategy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[3] = 3
+    serving_route_digest: Sha256
+    serving_release_digest: Sha256
+    controller_resource_digest: Sha256
+    controller_incarnation_digest: Sha256
+    controller_generation_digest: Sha256
+    provider_digest: Sha256
+    source_artifact_digest: Sha256
+    database_identity_digest: Sha256
+    database_schema_digest: Sha256
+    database_role_binding_digest: Sha256
+    database_system_identifier: str | None = Field(default=None, max_length=128)
+    database_export_digest: Sha256
+    source_business_inventory_digest: Sha256
+    candidate_business_inventory_digest: Sha256
+    source_technical_inventory_digest: Sha256
+    candidate_technical_inventory_digest: Sha256
+    candidate_artifact_digest: Sha256
+    database_strategy: Literal["preserve_current", "replace_verified_empty"]
+    witness_digest: Sha256 | None = None
+    target_database_artifact_digest: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def strategy_evidence_is_complete(self) -> RestorationSourceBindingV3:
+        evidence = (self.witness_digest, self.target_database_artifact_digest)
+        if self.database_strategy == "replace_verified_empty":
+            if any(value is None for value in evidence):
+                raise ValueError("verified empty replacement requires witness and artifact")
+        elif any(value is not None for value in evidence):
+            raise ValueError("preserved database cannot carry replacement evidence")
+        return self
+
+    def digest(self) -> str:
+        from omnia_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(self.model_dump(mode="json"))
+
+    def live_identity_digest(self) -> str:
+        from omnia_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(
+            {
+                name: getattr(self, name)
+                for name in (
+                    "version",
+                    "serving_route_digest",
+                    "serving_release_digest",
+                    "controller_resource_digest",
+                    "controller_incarnation_digest",
+                    "controller_generation_digest",
+                    "provider_digest",
+                    "source_artifact_digest",
+                    "database_identity_digest",
+                    "database_schema_digest",
+                    "database_role_binding_digest",
+                )
+            }
+        )
+
+
 class RestorationSourceFile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     path: str = Field(min_length=1, max_length=1024)
@@ -142,7 +207,7 @@ class RestorationIdentity(BaseModel):
 class CodeRestorationPrepare(RestorationIdentity):
     # Optional only so journals admitted by an older controller remain parseable.
     # CodeRestorationService rejects a new operation unless this is exactly v2.
-    binding_contract_version: Literal[2] | None = None
+    binding_contract_version: Literal[2, 3] | None = None
     files: list[RestorationSourceFile] = Field(min_length=1, max_length=20_000, repr=False)
     current_files: list[RestorationCurrentFile] = Field(
         default_factory=list, max_length=20_000, repr=False

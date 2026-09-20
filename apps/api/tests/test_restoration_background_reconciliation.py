@@ -84,6 +84,24 @@ class LostApplyDispatchRuntime(FakeRuntime):
         return await super().apply(request)
 
 
+@pytest.mark.parametrize("contract_version", [2, 3])
+async def test_async_cancel_runtime_negotiates_the_persisted_binding_contract(
+    contract_version,
+):
+    runtime = AsyncCancelRuntime()
+    identity = {
+        key: str(uuid4())
+        for key in ("operation_id", "workspace_id", "project_id", "owner_id")
+    }
+
+    result = await runtime.prepare(
+        {**identity, "binding_contract_version": contract_version}
+    )
+
+    assert result.binding is not None
+    assert result.binding.version == contract_version
+
+
 async def test_lost_apply_replay_requires_exact_durable_ready_receipt():
     from types import SimpleNamespace
 
@@ -229,6 +247,197 @@ async def test_worker_replays_exact_ready_receipt_after_lost_apply_dispatch(
     assert runtime.apply_attempts == 2 and runtime.applies == 1
     await db_session.refresh(workspace)
     assert workspace.fencing_epoch == 8
+
+
+async def test_worker_auto_applies_verified_exact_restoration_once_after_restart(
+    db_session, test_engine
+):
+    owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
+    automatic = request.model_copy(
+        update={"execution_policy": "automatic_when_safe"}
+    )
+    runtime = FakeRuntime()
+
+    prepared = await service.create_restoration(
+        db_session, project.id, owner.id, automatic, runtime
+    )
+    row = await _row(db_session, prepared.id)
+    assert prepared.state == "ready"
+    assert prepared.execution_policy == "automatic_when_safe"
+    assert prepared.selected_branch == "exact"
+    assert row.apply_digest is None
+    assert row.next_reconcile_at is not None
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 7
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+
+    row = await _row(db_session, prepared.id)
+    assert row.state == "completed"
+    assert row.apply_digest is not None
+    assert row.apply_idempotency_key == f"restoration-auto-apply:{prepared.id}"
+    assert runtime.applies == 1
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 8
+
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=120)
+    ) == 0
+    assert runtime.applies == 1
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 8
+
+
+async def test_owner_cancel_wins_before_automatic_apply_is_admitted(
+    db_session, test_engine
+):
+    owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
+    automatic = request.model_copy(
+        update={"execution_policy": "automatic_when_safe"}
+    )
+    runtime = AsyncCancelRuntime()
+    prepared = await service.create_restoration(
+        db_session, project.id, owner.id, automatic, runtime
+    )
+
+    cancelled = await service.cancel_restoration(
+        db_session, project.id, owner.id, prepared.id, runtime
+    )
+    assert cancelled.state == "reconciling"
+    assert cancelled.phase == "cancel"
+    assert runtime.applies == 0
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+
+    row = await _row(db_session, prepared.id)
+    assert row.state == "cancelled"
+    assert row.apply_digest is None
+    assert row.next_reconcile_at is None
+    assert runtime.applies == 0
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 7
+
+
+async def test_worker_recovers_lost_automatic_apply_without_a_second_fence(
+    db_session, test_engine
+):
+    owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
+    automatic = request.model_copy(
+        update={"execution_policy": "automatic_when_safe"}
+    )
+    runtime = LostApplyDispatchRuntime()
+    prepared = await service.create_restoration(
+        db_session, project.id, owner.id, automatic, runtime
+    )
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+    row = await _row(db_session, prepared.id)
+    assert row.state == "reconciling" and row.phase == "apply"
+    assert runtime.apply_attempts == 1
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 8
+
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=120)
+    ) == 1
+    row = await _row(db_session, prepared.id)
+    assert row.state == "completed"
+    assert runtime.apply_attempts == 2 and runtime.applies == 1
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 8
+
+
+@pytest.mark.parametrize("outcome", ["needs_changes", "failed", "cancelled"])
+async def test_worker_never_auto_applies_an_unverified_or_terminal_outcome(
+    db_session, test_engine, outcome
+):
+    class NonReadyRuntime(FakeRuntime):
+        async def prepare(self, request):
+            result = await super().prepare(request)
+            report = result.report.model_copy(
+                update={"mode": "adapted", "blockers": ["compatibility unknown"]}
+            )
+            self.result = result.model_copy(
+                update={
+                    "state": outcome,
+                    "phase": outcome,
+                    "revision": 2,
+                    "report": report,
+                    "candidate_id": None,
+                    "can_apply": False,
+                    "can_cancel": outcome == "needs_changes",
+                    "binding": None,
+                    "binding_digest": None,
+                }
+            )
+            return self.result
+
+    owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
+    automatic = request.model_copy(
+        update={"execution_policy": "automatic_when_safe"}
+    )
+    runtime = NonReadyRuntime()
+    operation = await service.create_restoration(
+        db_session, project.id, owner.id, automatic, runtime
+    )
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    assert operation.state == outcome
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 0
+    assert runtime.applies == 0
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == 7
+
+
+@pytest.mark.parametrize("stale", ["draft", "workspace_fence"])
+async def test_automatic_pre_admission_conflict_stops_without_retrying_or_applying(
+    db_session, test_engine, stale
+):
+    owner, project, old, _, _, workspace, request = await restoration_fixture(db_session)
+    automatic = request.model_copy(
+        update={"execution_policy": "automatic_when_safe"}
+    )
+    runtime = FakeRuntime()
+    prepared = await service.create_restoration(
+        db_session, project.id, owner.id, automatic, runtime
+    )
+    await db_session.refresh(project)
+    await db_session.refresh(workspace)
+    if stale == "draft":
+        project.current_snapshot_id = old.id
+    else:
+        workspace.fencing_epoch += 1
+    await db_session.commit()
+
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+
+    row = await _row(db_session, prepared.id)
+    assert row.state == "needs_changes"
+    assert row.phase == "retry_prepare"
+    assert row.apply_digest is None
+    assert row.next_reconcile_at is None
+    assert runtime.applies == 0
+    await db_session.refresh(workspace)
+    fence = workspace.fencing_epoch
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=120)
+    ) == 0
+    await db_session.refresh(workspace)
+    assert workspace.fencing_epoch == fence
 
 
 @pytest.mark.parametrize("mismatch", ["candidate", "binding", "revision", "failed"])

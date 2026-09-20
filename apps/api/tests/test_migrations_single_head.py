@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_project_versions_is_the_only_head() -> None:
+def test_restoration_execution_policy_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0064_restoration_binding"]
+    assert heads == ["0065_restoration_execution_policy"]
+    assert chain["0065_restoration_execution_policy"] == "0064_restoration_binding"
     assert chain["0064_restoration_binding"] == "0063_restoration_reconcile"
     assert chain["0063_restoration_reconcile"] == "0062_project_cell_rollout"
     assert chain["0062_project_cell_rollout"] == "0061_code_restorations"

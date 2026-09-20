@@ -186,7 +186,24 @@ class DockerMachineBackend:
 
     @property
     def project_postgres_volume(self) -> str:
-        return self.stem + "-app-postgres-data"
+        legacy = self.stem + "-app-postgres-data"
+        if getattr(self, "_resolving_database_volume", False):
+            return legacy
+        self._resolving_database_volume = True
+        try:
+            active = self._metadata().get("active_database_volume")
+        finally:
+            self._resolving_database_volume = False
+        if active is None:
+            return legacy
+        if active == legacy:
+            return legacy
+        if (
+            not isinstance(active, str)
+            or re.fullmatch(re.escape(self.stem) + r"-db-[0-9a-f]{32}", active) is None
+        ):
+            raise CellIdentityConflict("invalid active database volume identity")
+        return active
 
     @property
     def pnpm_cache_volume(self) -> str:
@@ -723,9 +740,7 @@ class DockerMachineBackend:
                 raise CellResourceError("project postgres volume ownership setup failed")
         finally:
             if (
-                self._lookup(
-                    self.client.containers, helper_name, "project-postgres-prepare"
-                )
+                self._lookup(self.client.containers, helper_name, "project-postgres-prepare")
                 is not None
             ):
                 helper.remove(force=True)
@@ -741,11 +756,11 @@ class DockerMachineBackend:
                 # mounted volume root at 0755. PostgreSQL requires 0700/0750;
                 # repair only PGDATA as its owner, including an existing seed.
                 'chmod 0700 "$PGDATA";',
-                "if [ ! -f \"$PGDATA/PG_VERSION\" ]; then",
+                'if [ ! -f "$PGDATA/PG_VERSION" ]; then',
                 "umask 077;",
                 "printf '%s' \"$POSTGRES_PASSWORD\" > /tmp/postgres-password;",
                 "initdb --username=postgres --auth-host=scram-sha-256",
-                "--pwfile=/tmp/postgres-password -D \"$PGDATA\";",
+                '--pwfile=/tmp/postgres-password -D "$PGDATA";',
                 "rm -f /tmp/postgres-password;",
                 "fi",
             ]
@@ -855,8 +870,7 @@ class DockerMachineBackend:
             and "/tmp" in (host.get("Tmpfs") or {})
             and host.get("Memory") == self.project_postgres_memory_bytes
             and host.get("MemorySwap") == self.project_postgres_memory_bytes
-            and host.get("NanoCpus")
-            == int(self.project_postgres_cpu_cores * 1_000_000_000)
+            and host.get("NanoCpus") == int(self.project_postgres_cpu_cores * 1_000_000_000)
             and host.get("PidsLimit") == 128
             and volume_matches
         )
@@ -1006,11 +1020,11 @@ class DockerMachineBackend:
             "import os,signal,sys,time; p=sys.argv[1]; grace=float(sys.argv[2]); "
             "pid=int(open(p).read()); os.killpg(pid,signal.SIGTERM); "
             "deadline=time.monotonic()+grace; "
-            "exec(\"while time.monotonic()<deadline:\\n"
+            'exec("while time.monotonic()<deadline:\\n'
             " try: os.kill(pid,0)\\n"
             " except ProcessLookupError: break\\n"
             " time.sleep(.1)\\n"
-            "else:\\n os.killpg(pid,signal.SIGKILL)\")"
+            'else:\\n os.killpg(pid,signal.SIGKILL)")'
         )
         result = machine.exec_run(
             ["python3", "-I", "-S", "-c", script, pidfile, str(grace_seconds)],
@@ -1048,7 +1062,11 @@ class DockerMachineBackend:
         self.client.api.exec_start(response["Id"], detach=True)
 
     def service_status(
-        self, service: MachineService, epoch: int, *, include_logs: bool = True,
+        self,
+        service: MachineService,
+        epoch: int,
+        *,
+        include_logs: bool = True,
     ) -> dict[str, Any]:
         metadata = self._metadata()
         record = metadata["services"].get(service.name)
@@ -1175,14 +1193,25 @@ class DockerMachineBackend:
             "print(json.dumps([[x.st_dev,x.st_ino,x.st_ctime_ns] for x in s]))"
         )
         helper = self.client.containers.create(
-            self.base_image, ["python3", "-I", "-S", "-c", command],
-            name=name, labels=self.labels("retained-proof"), entrypoint=[],
-            network_mode="none", cap_drop=["ALL"], privileged=False, read_only=True,
-            security_opt=["no-new-privileges:true"], user="0:0", pids_limit=16,
-            mem_limit=64 * 1024**2, memswap_limit=64 * 1024**2,
+            self.base_image,
+            ["python3", "-I", "-S", "-c", command],
+            name=name,
+            labels=self.labels("retained-proof"),
+            entrypoint=[],
+            network_mode="none",
+            cap_drop=["ALL"],
+            privileged=False,
+            read_only=True,
+            security_opt=["no-new-privileges:true"],
+            user="0:0",
+            pids_limit=16,
+            mem_limit=64 * 1024**2,
+            memswap_limit=64 * 1024**2,
             nano_cpus=100_000_000,
-            volumes={volume: {"bind": f"/proof/{index}", "mode": "ro"}
-                     for index, volume in enumerate(names)},
+            volumes={
+                volume: {"bind": f"/proof/{index}", "mode": "ro"}
+                for index, volume in enumerate(names)
+            },
         )
         try:
             helper.start()
@@ -1195,10 +1224,15 @@ class DockerMachineBackend:
                 values = json.loads(output)
             except (ValueError, TypeError):
                 return None
-            if not isinstance(values, list) or len(values) != len(names) or any(
-                not isinstance(item, list) or len(item) != 3
-                or any(type(value) is not int or value < 0 for value in item)
-                for item in values
+            if (
+                not isinstance(values, list)
+                or len(values) != len(names)
+                or any(
+                    not isinstance(item, list)
+                    or len(item) != 3
+                    or any(type(value) is not int or value < 0 for value in item)
+                    for item in values
+                )
             ):
                 return None
             return values
@@ -1217,9 +1251,12 @@ class DockerMachineBackend:
         started = attrs.get("State", {}).get("StartedAt")
         image = attrs.get("Image")
         if (
-            container.status != "running" or not container.id
-            or not isinstance(started, str) or not started
-            or not isinstance(image, str) or not _PIN.fullmatch(image)
+            container.status != "running"
+            or not container.id
+            or not isinstance(started, str)
+            or not started
+            or not isinstance(image, str)
+            or not _PIN.fullmatch(image)
             or not isinstance(attrs.get("Config"), dict)
             or not isinstance(attrs.get("HostConfig"), dict)
             or not isinstance(attrs.get("NetworkSettings"), dict)
@@ -1239,22 +1276,31 @@ class DockerMachineBackend:
             "Mounts": mounts,
         }
         return {
-            "id": container.id, "started_at": started, "image": image,
+            "id": container.id,
+            "started_at": started,
+            "image": image,
             "configuration_digest": hashlib.sha256(
                 json.dumps(fingerprint, sort_keys=True).encode(),
             ).hexdigest(),
         }
 
     def _retained_preview_proof(
-        self, reference: MachineEnvironmentRef, *, epoch: int, retain_trusted: bool = False,
+        self,
+        reference: MachineEnvironmentRef,
+        *,
+        epoch: int,
+        retain_trusted: bool = False,
     ) -> dict[str, Any] | None:
         self.validate_restore_reference(reference)
         metadata = self._metadata()
         if (
-            type(epoch) is not int or epoch <= 0 or metadata.get("epoch") != epoch
+            type(epoch) is not int
+            or epoch <= 0
+            or metadata.get("epoch") != epoch
             or metadata.get("environment_ref") != reference.model_dump(mode="json")
             or metadata.get("restored_image") != reference.image_id
-            or metadata.get("restore_in_progress") or metadata.get("restore_target")
+            or metadata.get("restore_in_progress")
+            or metadata.get("restore_target")
             or metadata.get("pending_image")
             or metadata.get("quiesce_state") in {"pending", "failed"}
             or reference.manifest is None
@@ -1267,9 +1313,12 @@ class DockerMachineBackend:
         try:
             trusted = {}
             for suffix, kind in (
-                ("dev", "development"), ("project-postgres", "project-postgres"),
-                ("gateway", "max-gateway"), ("max-core", "managed-max-core"),
-                ("guard", "namespace-guard"), ("proxy", "egress-proxy"),
+                ("dev", "development"),
+                ("project-postgres", "project-postgres"),
+                ("gateway", "max-gateway"),
+                ("max-core", "managed-max-core"),
+                ("guard", "namespace-guard"),
+                ("proxy", "egress-proxy"),
             ):
                 container = self._lookup(self.client.containers, self.stem + "-" + suffix, kind)
                 if container is not None:
@@ -1301,15 +1350,18 @@ class DockerMachineBackend:
                 # Activated restoration code has its own owned project volume.
                 # The original Cell workspace uses the older workspace labels.
                 restored_code = re.fullmatch(
-                    re.escape(self.stem) + r"-code-[0-9a-f]{32}", item.name,
+                    re.escape(self.stem) + r"-code-[0-9a-f]{32}",
+                    item.name,
                 )
                 if item.name == self.workspace_volume and restored_code is None:
                     expected = {
-                        "omnia.managed": "true", "omnia.project_cell": "true",
+                        "omnia.managed": "true",
+                        "omnia.project_cell": "true",
                         "omnia.workspace_id": str(self.workspace_id),
                         "omnia.project_id": str(self.project_id),
                         "omnia.owner_id": str(self.owner_id),
-                        "omnia.provider": "docker_owner_canary", "omnia.resource_kind": "workspace",
+                        "omnia.provider": "docker_owner_canary",
+                        "omnia.resource_kind": "workspace",
                         "omnia.profile_version": self.resource_profile_version,
                     }
                 labels = attrs.get("Labels") or {}
@@ -1320,8 +1372,10 @@ class DockerMachineBackend:
                 }
                 if (
                     not all(isinstance(value, str) and value for value in identity.values())
-                    or identity["Name"] != item.name or identity["Driver"] != "local"
-                    or attrs.get("Options") or attrs.get("Scope") != "local"
+                    or identity["Name"] != item.name
+                    or identity["Driver"] != "local"
+                    or attrs.get("Options")
+                    or attrs.get("Scope") != "local"
                 ):
                     return None
                 if self.client.containers.list(all=True, filters={"volume": item.name}):
@@ -1333,7 +1387,10 @@ class DockerMachineBackend:
             for identity, inode in zip(identities.values(), stats, strict=True):
                 identity["inode"] = inode
             return {
-                "version": 2, "epoch": epoch, "daemon_id": daemon_id, "volumes": identities,
+                "version": 2,
+                "epoch": epoch,
+                "daemon_id": daemon_id,
+                "volumes": identities,
                 "trusted": trusted,
                 "reference_digest": hashlib.sha256(
                     reference.model_dump_json().encode()
@@ -1345,7 +1402,11 @@ class DockerMachineBackend:
             return None
 
     def record_retained_preview(
-        self, reference: MachineEnvironmentRef, *, epoch: int, retain_trusted: bool = False,
+        self,
+        reference: MachineEnvironmentRef,
+        *,
+        epoch: int,
+        retain_trusted: bool = False,
     ) -> bool:
         self.invalidate_retained_preview()
         proof = self._retained_preview_proof(reference, epoch=epoch, retain_trusted=retain_trusted)
@@ -1363,9 +1424,14 @@ class DockerMachineBackend:
         self.invalidate_retained_preview()
         if not isinstance(receipt, dict):
             return False
-        return self._retained_preview_proof(
-            reference, epoch=epoch, retain_trusted=bool(receipt.get("trusted")),
-        ) == receipt
+        return (
+            self._retained_preview_proof(
+                reference,
+                epoch=epoch,
+                retain_trusted=bool(receipt.get("trusted")),
+            )
+            == receipt
+        )
 
     def can_reuse_image(self, reference: MachineEnvironmentRef) -> bool:
         if reference.workspace_id != self.workspace_id:
@@ -1596,9 +1662,7 @@ class DockerMachineBackend:
                 raise CellResourceError("project postgres restore smoke failed")
         finally:
             if (
-                self._lookup(
-                    self.client.containers, helper_name, "project-postgres-restore"
-                )
+                self._lookup(self.client.containers, helper_name, "project-postgres-restore")
                 is not None
             ):
                 helper.remove(force=True)
@@ -1706,15 +1770,11 @@ class DockerMachineBackend:
             self._reset_project_postgres_volume()
 
     def _reset_project_postgres_volume(self) -> None:
-        volume = self._lookup(
-            self.client.volumes, self.project_postgres_volume, "project-volume"
-        )
+        volume = self._lookup(self.client.volumes, self.project_postgres_volume, "project-volume")
         if volume is not None:
             volume.remove()
             if (
-                self._lookup(
-                    self.client.volumes, self.project_postgres_volume, "project-volume"
-                )
+                self._lookup(self.client.volumes, self.project_postgres_volume, "project-volume")
                 is not None
             ):
                 raise CellResourceError("project postgres volume removal was not confirmed")

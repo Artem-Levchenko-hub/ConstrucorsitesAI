@@ -45,9 +45,7 @@ def test_observed_accepts_explicit_effect_free_superseded_receipt():
     }
     assert CodeRestorationService._observed(proof, body) == proof
     with pytest.raises(RuntimeError, match="superseded"):
-        CodeRestorationService._observed(
-            {**proof, "retained_source_fencing_epoch": 3}, body
-        )
+        CodeRestorationService._observed({**proof, "retained_source_fencing_epoch": 3}, body)
 
 
 def request(**changes):
@@ -103,16 +101,12 @@ def apply_request(value):
 
     return CodeRestorationApply(
         **{
-            **value.model_dump(
-                exclude={"files", "current_files", "binding_contract_version"}
-            ),
+            **value.model_dump(exclude={"files", "current_files", "binding_contract_version"}),
             "fencing_epoch": 4,
             "candidate_id": UUID(int=5),
             "report_revision": 1,
             "expected_fencing_epoch": 3,
-            "binding_digest": RestorationSourceBindingV2.model_validate(
-                binding_payload()
-            ).digest(),
+            "binding_digest": RestorationSourceBindingV2.model_validate(binding_payload()).digest(),
         }
     )
 
@@ -223,9 +217,7 @@ async def test_v2_binding_survives_restart_and_is_required_for_apply(tmp_path):
     ready = await status(restarted, value)
     assert ready["state"] == "ready" and ready["can_apply"] is True
     assert ready["binding"]["version"] == 2
-    body = apply_request(value).model_copy(
-        update={"binding_digest": ready["binding_digest"]}
-    )
+    body = apply_request(value).model_copy(update={"binding_digest": ready["binding_digest"]})
     await restarted.apply(body)
     await restarted.drain()
     assert (await status(restarted, value))["state"] == "completed"

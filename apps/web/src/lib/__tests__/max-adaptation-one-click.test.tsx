@@ -42,6 +42,7 @@ const blocked: RestoreOperation = {
   source_snapshot_id: "old-snapshot", base_draft_snapshot_id: "head", state: "needs_changes",
   phase: "needs_changes", updated_at: "2026-09-12T00:00:00Z", revision: 1,
   candidate_id: null, can_apply: false, can_cancel: true, applied_version: null,
+  execution_policy: "manual", selected_branch: null, adaptation_run_id: null,
   applied_snapshot: null, error: null,
   report: { revision: 1, mode: "exact", database_state: "present", changes: [], retained_data: [],
     unavailable_features: [], warnings: [], blockers: ["Требуется совместимость новых полей"], next_actions: [] },

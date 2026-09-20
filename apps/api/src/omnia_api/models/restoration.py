@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, Text, UniqueConstraint, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +54,13 @@ class Restoration(Base):
     planned_commit_sha: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     request_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    execution_policy: Mapped[str] = mapped_column(
+        Text, nullable=False, default="manual", server_default="manual"
+    )
+    selected_branch: Mapped[str | None] = mapped_column(Text)
+    adaptation_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+    )
     apply_idempotency_key: Mapped[str | None] = mapped_column(Text)
     apply_digest: Mapped[str | None] = mapped_column(Text)
     state: Mapped[str] = mapped_column(Text, nullable=False, default="preparing")
@@ -80,6 +97,24 @@ class Restoration(Base):
     )
     __table_args__ = (
         UniqueConstraint("project_id", "idempotency_key", name="uq_restorations_request"),
+        CheckConstraint(
+            "execution_policy IN ('manual','automatic_when_safe')",
+            name="ck_restorations_execution_policy",
+        ),
+        CheckConstraint(
+            "selected_branch IS NULL OR selected_branch IN ('exact','adaptive')",
+            name="ck_restorations_selected_branch",
+        ),
+        CheckConstraint(
+            "adaptation_run_id IS NULL OR selected_branch = 'adaptive'",
+            name="ck_restorations_adaptation_branch",
+        ),
+        Index(
+            "uq_restorations_adaptation_run_id",
+            "adaptation_run_id",
+            unique=True,
+            postgresql_where=text("adaptation_run_id IS NOT NULL"),
+        ),
         Index(
             "uq_restorations_active_project",
             "project_id",

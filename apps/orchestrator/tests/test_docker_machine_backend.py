@@ -41,6 +41,34 @@ def backend(tmp_path, **overrides):
     return module.DockerMachineBackend(**values)
 
 
+def test_controller_metadata_selects_active_database_volume(tmp_path):
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    legacy = runtime.stem + "-app-postgres-data"
+    selected = runtime.stem + "-db-" + "e" * 32
+    assert runtime.project_postgres_volume == legacy
+
+    write_controller_json(runtime.metadata_path, {"active_database_volume": selected})
+    assert runtime.project_postgres_volume == selected
+    assert runtime._project_postgres_options("guard", 7)["volumes"] == {
+        selected: {"bind": "/var/lib/postgresql/data", "mode": "rw"}
+    }
+    write_controller_json(runtime.metadata_path, {"active_database_volume": legacy})
+    assert runtime.project_postgres_volume == legacy
+
+
+def test_controller_metadata_rejects_untrusted_database_volume(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    write_controller_json(runtime.metadata_path, {"active_database_volume": "foreign-volume"})
+
+    with pytest.raises(CellIdentityConflict, match="active database volume"):
+        _ = runtime.project_postgres_volume
+
+
 def test_development_pid_one_handles_stop_signal_without_waiting_for_kill(tmp_path, monkeypatch):
     import signal
     import sys
@@ -53,10 +81,15 @@ def test_development_pid_one_handles_stop_signal_without_waiting_for_kill(tmp_pa
         assert signal.SIGTERM in handlers, "namespace PID1 ignores default SIGTERM"
         handlers[signal.SIGTERM](signal.SIGTERM, None)
 
-    monkeypatch.setitem(sys.modules, "signal", SimpleNamespace(
-        SIGTERM=signal.SIGTERM, signal=lambda sig, handler: handlers.update({sig: handler}),
-        pause=pause,
-    ))
+    monkeypatch.setitem(
+        sys.modules,
+        "signal",
+        SimpleNamespace(
+            SIGTERM=signal.SIGTERM,
+            signal=lambda sig, handler: handlers.update({sig: handler}),
+            pause=pause,
+        ),
+    )
     assert options["entrypoint"] == ["python3", "-c"]
     with pytest.raises(SystemExit) as stopped:
         exec(options["command"][0], {})
@@ -83,20 +116,29 @@ def retained_preview_fixture(tmp_path, *, restored_code=False):
         labels = runtime.labels("project-volume")
         if name == runtime.workspace_volume and not restored_code:
             labels = {
-                "omnia.managed": "true", "omnia.project_cell": "true",
+                "omnia.managed": "true",
+                "omnia.project_cell": "true",
                 "omnia.workspace_id": str(runtime.workspace_id),
                 "omnia.project_id": str(runtime.project_id),
                 "omnia.owner_id": str(runtime.owner_id),
-                "omnia.provider": "docker_owner_canary", "omnia.resource_kind": "workspace",
+                "omnia.provider": "docker_owner_canary",
+                "omnia.resource_kind": "workspace",
                 "omnia.profile_version": runtime.resource_profile_version,
             }
-        volumes[name] = SimpleNamespace(attrs={
-            "Name": name, "CreatedAt": "2026-09-07T12:00:00Z", "Driver": "local",
-            "Scope": "local", "Mountpoint": str(mountpoint), "Labels": labels,
-        })
+        volumes[name] = SimpleNamespace(
+            attrs={
+                "Name": name,
+                "CreatedAt": "2026-09-07T12:00:00Z",
+                "Driver": "local",
+                "Scope": "local",
+                "Mountpoint": str(mountpoint),
+                "Labels": labels,
+            }
+        )
     image_id = "sha256:" + "d" * 64
-    image = SimpleNamespace(id=image_id, attrs={"Config": {
-        "Labels": runtime.labels("environment")}})
+    image = SimpleNamespace(
+        id=image_id, attrs={"Config": {"Labels": runtime.labels("environment")}}
+    )
 
     def missing(_):
         raise docker.errors.NotFound("absent")
@@ -123,10 +165,10 @@ def retained_preview_fixture(tmp_path, *, restored_code=False):
         def logs(self, **_):
             import json
 
-            stats = [os.stat(volumes[name].attrs["Mountpoint"])
-                     for name in self.options["volumes"]]
-            return json.dumps([[item.st_dev, item.st_ino, item.st_ctime_ns]
-                               for item in stats]).encode()
+            stats = [os.stat(volumes[name].attrs["Mountpoint"]) for name in self.options["volumes"]]
+            return json.dumps(
+                [[item.st_dev, item.st_ino, item.st_ctime_ns] for item in stats]
+            ).encode()
 
         def remove(self, **_):
             helpers.pop(self.options["name"])
@@ -145,22 +187,39 @@ def retained_preview_fixture(tmp_path, *, restored_code=False):
     runtime.client = SimpleNamespace(
         info=lambda: {"ID": "local-daemon"},
         images=SimpleNamespace(get=lambda _: image),
-        containers=SimpleNamespace(get=get_container, list=lambda **_: attached,
-                                   create=create_helper),
+        containers=SimpleNamespace(
+            get=get_container, list=lambda **_: attached, create=create_helper
+        ),
         volumes=SimpleNamespace(get=get_volume),
     )
     reference = MachineEnvironmentRef(
-        workspace_id=runtime.workspace_id, image_id=image_id, artifact_ref="a" * 32 + ".tar",
-        sha256="a" * 64, size=100, base_image=runtime.base_image,
-        manifest_digest=manifest.digest(), manifest=manifest,
-        volumes=tuple(VolumeEnvironmentRef(
-            name=name, artifact_ref=f"{index:032x}.tar", sha256="c" * 64, size=10,
-        ) for index, name in enumerate(volumes)),
+        workspace_id=runtime.workspace_id,
+        image_id=image_id,
+        artifact_ref="a" * 32 + ".tar",
+        sha256="a" * 64,
+        size=100,
+        base_image=runtime.base_image,
+        manifest_digest=manifest.digest(),
+        manifest=manifest,
+        volumes=tuple(
+            VolumeEnvironmentRef(
+                name=name,
+                artifact_ref=f"{index:032x}.tar",
+                sha256="c" * 64,
+                size=10,
+            )
+            for index, name in enumerate(volumes)
+        ),
     )
-    write_controller_json(runtime.metadata_path, {
-        "environment_ref": reference.model_dump(mode="json"), "restored_image": image_id,
-        "manifest": manifest.model_dump(mode="json"), "epoch": 7,
-    })
+    write_controller_json(
+        runtime.metadata_path,
+        {
+            "environment_ref": reference.model_dump(mode="json"),
+            "restored_image": image_id,
+            "manifest": manifest.model_dump(mode="json"),
+            "epoch": 7,
+        },
+    )
     return runtime, reference, volumes, image, attached
 
 
@@ -191,19 +250,38 @@ def test_restored_code_volume_still_requires_exact_ownership(tmp_path, key):
     assert not runtime.consume_retained_preview(reference, epoch=7)
 
 
-@pytest.mark.parametrize("fault", [None, "restarted", "replaced", "foreign", "attached",
-                                 "missing", "changed_config", "product_alive"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "restarted",
+        "replaced",
+        "foreign",
+        "attached",
+        "missing",
+        "changed_config",
+        "product_alive",
+    ],
+)
 def test_retained_receipt_binds_trusted_runtime_and_still_fences_product(tmp_path, fault):
     from omnia_orchestrator.core.cell_resources import CellIdentityConflict
 
     runtime, reference, _volumes, _image, attached = retained_preview_fixture(tmp_path)
     original_get = runtime.client.containers.get
-    trusted = SimpleNamespace(id="trusted-core", status="running", reload=lambda: None, attrs={
-        "Id": "trusted-core", "Image": "sha256:" + "e" * 64,
-        "State": {"StartedAt": "2026-09-07T10:00:00Z"},
-        "Config": {"Labels": runtime.labels("managed-max-core"), "Env": ["SECRET=private"]},
-        "HostConfig": {"Privileged": False}, "NetworkSettings": {}, "Mounts": [],
-    })
+    trusted = SimpleNamespace(
+        id="trusted-core",
+        status="running",
+        reload=lambda: None,
+        attrs={
+            "Id": "trusted-core",
+            "Image": "sha256:" + "e" * 64,
+            "State": {"StartedAt": "2026-09-07T10:00:00Z"},
+            "Config": {"Labels": runtime.labels("managed-max-core"), "Env": ["SECRET=private"]},
+            "HostConfig": {"Privileged": False},
+            "NetworkSettings": {},
+            "Mounts": [],
+        },
+    )
     resources = {runtime.stem + "-max-core": trusted}
     runtime.client.containers.get = lambda name: (
         resources[name] if name in resources else original_get(name)
@@ -225,9 +303,11 @@ def test_retained_receipt_binds_trusted_runtime_and_still_fences_product(tmp_pat
     elif fault == "changed_config":
         trusted.attrs["Config"]["Env"] = ["SECRET=changed"]
     elif fault == "product_alive":
-        resources[runtime.machine_name] = SimpleNamespace(attrs={
-            "Config": {"Labels": runtime.labels("development")},
-        })
+        resources[runtime.machine_name] = SimpleNamespace(
+            attrs={
+                "Config": {"Labels": runtime.labels("development")},
+            }
+        )
     if fault == "foreign":
         with pytest.raises(CellIdentityConflict):
             runtime.consume_retained_preview(reference, epoch=7)
@@ -239,15 +319,32 @@ def test_retained_receipt_binds_trusted_runtime_and_still_fences_product(tmp_pat
 def test_trusted_container_identity_ignores_docker_mount_order_but_binds_mounts(tmp_path):
     runtime = backend(tmp_path)
     mounts = [
-        {"Type": "volume", "Name": "workspace", "Source": "/var/lib/docker/a",
-         "Destination": "/workspace", "Driver": "local", "Mode": "rw", "RW": True},
-        {"Type": "volume", "Name": "home", "Source": "/var/lib/docker/b",
-         "Destination": "/root", "Driver": "local", "Mode": "rw", "RW": True},
+        {
+            "Type": "volume",
+            "Name": "workspace",
+            "Source": "/var/lib/docker/a",
+            "Destination": "/workspace",
+            "Driver": "local",
+            "Mode": "rw",
+            "RW": True,
+        },
+        {
+            "Type": "volume",
+            "Name": "home",
+            "Source": "/var/lib/docker/b",
+            "Destination": "/root",
+            "Driver": "local",
+            "Mode": "rw",
+            "RW": True,
+        },
     ]
     container = SimpleNamespace(
-        id="trusted-app", status="running", reload=lambda: None,
+        id="trusted-app",
+        status="running",
+        reload=lambda: None,
         attrs={
-            "Id": "trusted-app", "Image": "sha256:" + "e" * 64,
+            "Id": "trusted-app",
+            "Image": "sha256:" + "e" * 64,
             "State": {"StartedAt": "2026-09-20T01:59:47Z"},
             "Config": {"Labels": runtime.labels("development"), "Env": ["SECRET=private"]},
             "HostConfig": {"Privileged": False},
@@ -269,18 +366,28 @@ def test_trusted_container_identity_ignores_docker_mount_order_but_binds_mounts(
 @pytest.mark.parametrize("running", [True, False])
 @pytest.mark.parametrize("include_logs", [True, False])
 def test_owner_readiness_can_skip_unused_success_logs_but_keeps_failure_logs(
-    tmp_path, running, include_logs,
+    tmp_path,
+    running,
+    include_logs,
 ):
     runtime = backend(tmp_path)
-    service = MachineManifest.model_validate(payload()).services[0].model_copy(
-        update={"readiness": None},
+    service = (
+        MachineManifest.model_validate(payload())
+        .services[0]
+        .model_copy(
+            update={"readiness": None},
+        )
     )
-    runtime._metadata = lambda: {"services": {
-        service.name: {"epoch": 7, "exec_id": "service", "log": "service.log"},
-    }}
-    runtime.client = SimpleNamespace(api=SimpleNamespace(
-        exec_inspect=lambda _: {"Running": running},
-    ))
+    runtime._metadata = lambda: {
+        "services": {
+            service.name: {"epoch": 7, "exec_id": "service", "log": "service.log"},
+        }
+    }
+    runtime.client = SimpleNamespace(
+        api=SimpleNamespace(
+            exec_inspect=lambda _: {"Running": running},
+        )
+    )
     reads = []
     runtime._read_log = lambda path: reads.append(path) or "diagnostic"
     result = runtime.service_status(service, 7, include_logs=include_logs)
@@ -290,7 +397,9 @@ def test_owner_readiness_can_skip_unused_success_logs_but_keeps_failure_logs(
 
 @pytest.mark.parametrize("failure", ["timeout", "bad_output"])
 def test_interrupted_stat_helper_is_removed_without_certifying_volumes(
-    tmp_path, monkeypatch, failure,
+    tmp_path,
+    monkeypatch,
+    failure,
 ):
     import docker
 
@@ -300,6 +409,7 @@ def test_interrupted_stat_helper_is_removed_without_certifying_volumes(
     def broken_create(*args, **kwargs):
         helper = create(*args, **kwargs)
         if failure == "timeout":
+
             def expired(**_):
                 raise TimeoutError("proof deadline expired")
 
@@ -319,11 +429,26 @@ def test_interrupted_stat_helper_is_removed_without_certifying_volumes(
         runtime.client.containers.get(runtime.stem + "-retained-proof")
 
 
-@pytest.mark.parametrize("fault", [
-    "missing", "recreated", "same_timestamp_recreated", "foreign_volume", "foreign_workspace",
-    "reference", "epoch", "dirty_receipt", "image", "foreign_image", "daemon", "writer",
-    "restore_in_progress", "quiesce_failed", "quiesce_pending",
-])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "recreated",
+        "same_timestamp_recreated",
+        "foreign_volume",
+        "foreign_workspace",
+        "reference",
+        "epoch",
+        "dirty_receipt",
+        "image",
+        "foreign_image",
+        "daemon",
+        "writer",
+        "restore_in_progress",
+        "quiesce_failed",
+        "quiesce_pending",
+    ],
+)
 def test_retained_preview_never_trusts_stale_or_unsafe_resources(tmp_path, fault):
     from omnia_orchestrator.core.cell_resources import CellIdentityConflict
     from omnia_orchestrator.services.project_machine import write_controller_json
@@ -394,6 +519,7 @@ def test_mutation_invalidates_halted_receipt_before_first_effect(tmp_path, monke
 
         def call():
             runtime.begin_restore(reference)
+
     with pytest.raises(RuntimeError, match="interrupted"):
         call()
 
@@ -421,10 +547,27 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
     assert not any(name.startswith("/") for name in options["volumes"])
 
 
-@pytest.mark.parametrize("fault", [None, "empty_null", "dirty", "unknown_diff", "diff_error",
-                                  "image", "false_diff", "string_diff",
-                                  "base", "running", "owner", "image_owner", "workspace",
-                                  "missing_image", "runtime_config", "deadline"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "empty_null",
+        "dirty",
+        "unknown_diff",
+        "diff_error",
+        "image",
+        "false_diff",
+        "string_diff",
+        "base",
+        "running",
+        "owner",
+        "image_owner",
+        "workspace",
+        "missing_image",
+        "runtime_config",
+        "deadline",
+    ],
+)
 def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
     import docker
 
@@ -433,9 +576,16 @@ def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
 
     runtime = backend(tmp_path)
     image_id = "sha256:" + "d" * 64
-    ref = MachineEnvironmentRef(workspace_id=runtime.workspace_id, image_id=image_id,
-        artifact_ref="a" * 32 + ".tar", sha256="b" * 64, size=100,
-        base_image=runtime.base_image, manifest_digest="c" * 64, volumes=())
+    ref = MachineEnvironmentRef(
+        workspace_id=runtime.workspace_id,
+        image_id=image_id,
+        artifact_ref="a" * 32 + ".tar",
+        sha256="b" * 64,
+        size=100,
+        base_image=runtime.base_image,
+        manifest_digest="c" * 64,
+        volumes=(),
+    )
     image_labels = runtime.labels("environment")
     container_labels = runtime.labels("development")
     if fault == "owner":
@@ -458,12 +608,21 @@ def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
             return False
         if fault == "string_diff":
             return ""
-        return [{"Path": "/usr/bin/new", "Kind": 1}] if fault == "dirty" else (
-            {} if fault == "unknown_diff" else [])
+        return (
+            [{"Path": "/usr/bin/new", "Kind": 1}]
+            if fault == "dirty"
+            else ({} if fault == "unknown_diff" else [])
+        )
 
-    machine = SimpleNamespace(status="running" if fault == "running" else "exited",
-        reload=lambda: None, diff=diff, attrs={"Image": image_id if fault != "image" else
-        "sha256:" + "f" * 64, "Config": {"Labels": container_labels}})
+    machine = SimpleNamespace(
+        status="running" if fault == "running" else "exited",
+        reload=lambda: None,
+        diff=diff,
+        attrs={
+            "Image": image_id if fault != "image" else "sha256:" + "f" * 64,
+            "Config": {"Labels": container_labels},
+        },
+    )
     image = SimpleNamespace(id=image_id, attrs={"Config": {"Labels": image_labels}})
     if fault == "runtime_config":
         image.attrs["Config"]["Env"] = ["UNTRUSTED=1"]
@@ -473,8 +632,9 @@ def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
             raise docker.errors.ImageNotFound("gone")
         return image
 
-    runtime.client = SimpleNamespace(containers=SimpleNamespace(get=lambda _: machine),
-                                     images=SimpleNamespace(get=get_image))
+    runtime.client = SimpleNamespace(
+        containers=SimpleNamespace(get=lambda _: machine), images=SimpleNamespace(get=get_image)
+    )
     if fault in {"owner", "image_owner", "workspace"}:
         with pytest.raises(CellIdentityConflict, match="identity"):
             runtime.can_reuse_image(ref)

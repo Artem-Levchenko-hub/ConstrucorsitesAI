@@ -262,6 +262,32 @@ class Lock:
         yield
 
 
+def test_controller_socket_closes_owning_response_before_raw_socket():
+    from omnia_orchestrator.services.restoration_database import close_controller_socket
+
+    events = []
+
+    class Response:
+        closed = False
+
+        def close(self):
+            events.append("response")
+            self.closed = True
+
+    response = Response()
+
+    class Connection:
+        _response = response
+
+        def close(self):
+            if not response.closed:
+                raise ValueError("raw socket detached before owning response")
+            events.append("socket")
+
+    close_controller_socket(Connection())
+    assert events == ["response", "socket"]
+
+
 def request():
     return CodeRestorationApply(
         operation_id=UUID(int=1),
@@ -338,6 +364,73 @@ def save_intent(engine, stage):
     }
     write_controller_json(engine._directory(value.operation_id) / "activation.json", intent)
     return value
+
+
+def save_empty_forward_intent(engine, stage="target_writers_admitted"):
+    value = save_intent(engine, stage)
+    path = engine._directory(value.operation_id) / "activation.json"
+    intent = json.loads(path.read_text())
+    intent.update(
+        database_strategy="replace_verified_empty",
+        database_volume="new-db",
+        binding_digest=value.binding_digest,
+    )
+    intent["old"]["database_volume"] = "old-db"
+    write_controller_json(path, intent)
+    return value, path
+
+
+class ForwardEngine(Engine):
+    def __init__(self, tmp_path, *, volumes):
+        super().__init__(tmp_path, matches=False)
+        self.volumes = set(volumes)
+        self.backend = SimpleNamespace(
+            client=SimpleNamespace(volumes=object()),
+            _lookup=lambda _collection, name, _kind: object() if name in self.volumes else None,
+            remove=lambda: self.calls.append("remove-target-runtime"),
+        )
+        self.manager.machine_runtime.parts = lambda _: (None, self.backend)
+
+    async def _activate_code(self, _manager, _state, _backend, prepared, volume, epoch, **kwargs):
+        self.calls.append(("activate-target", volume, prepared["target_database_volume"], epoch))
+        kwargs["before_writers"]()
+
+
+async def test_forward_recovery_missing_target_volume_fails_without_old_recovery(tmp_path):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+
+    engine = ForwardEngine(tmp_path, volumes={"new-code"})
+    value, path = save_empty_forward_intent(engine)
+
+    with pytest.raises(CellIdentityConflict, match="target restoration pair is incomplete"):
+        await engine.observe(value, {"manifest": {}})
+
+    assert "recover" not in engine.calls
+    assert not any(
+        isinstance(call, tuple) and call[0] == "activate-target" for call in engine.calls
+    )
+    intent = json.loads(path.read_text())
+    assert intent["state"] == "target_recovery"
+    assert intent["database_volume"] == "new-db"
+
+
+async def test_forward_recovery_restarts_only_bound_target_pair(tmp_path):
+    engine = ForwardEngine(tmp_path, volumes={"new-code", "new-db"})
+    value, path = save_empty_forward_intent(engine)
+
+    result = await engine.observe(value, {"manifest": {}})
+
+    assert result["applied"] is True
+    assert "recover" not in engine.calls
+    assert engine.calls == [
+        "observe",
+        "remove-target-runtime",
+        ("activate-target", "new-code", "new-db", 4),
+        "complete",
+    ]
+    intent = json.loads(path.read_text())
+    assert intent["state"] == "active"
+    assert intent["database_volume"] == "new-db"
 
 
 async def test_lost_success_response_observes_without_restarting_app(tmp_path):
@@ -610,9 +703,7 @@ async def test_rejection_restart_carries_serving_epoch_across_fence_change(tmp_p
     manager.state_store.complete = interrupted_complete
     with pytest.raises(OSError, match="controller restart"):
         await engine.apply(value, {})
-    receipt = json.loads(
-        (engine._directory(value.operation_id) / "activation.json").read_text()
-    )
+    receipt = json.loads((engine._directory(value.operation_id) / "activation.json").read_text())
     assert receipt["retained_source_fencing_epoch"] == 3
     assert state.fencing_epoch == 4
 
@@ -789,10 +880,12 @@ def test_ddl_during_dump_is_rejected_before_ready():
     from omnia_orchestrator.services.restoration_data_contract import DataContract
 
     before = DataContract(version=1, tables=[])
-    after = DataContract.model_validate({
-        "version": 1,
-        "tables": [{"name": "clients", "columns": [{"name": "id", "type": "uuid"}]}],
-    })
+    after = DataContract.model_validate(
+        {
+            "version": 1,
+            "tables": [{"name": "clients", "columns": [{"name": "id", "type": "uuid"}]}],
+        }
+    )
     with pytest.raises(RuntimeError, match="during export"):
         verify_post_dump_catalog(before, [], [], after, [], [])
 
@@ -930,21 +1023,34 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         assert not hasattr(module, removed)
     manifest = MachineManifest.model_validate(payload())
     # An ordinary table without any owner column must not block restoration.
-    contract = DataContract.model_validate({"version": 1, "tables": [{
-        "name": "price_list",
-        "columns": [{"name": "id", "type": "uuid"}, {"name": "title", "type": "text"}],
-    }]})
+    contract = DataContract.model_validate(
+        {
+            "version": 1,
+            "tables": [
+                {
+                    "name": "price_list",
+                    "columns": [{"name": "id", "type": "uuid"}, {"name": "title", "type": "text"}],
+                }
+            ],
+        }
+    )
     events, statements = [], []
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
     source = SimpleNamespace(
-        workspace_volume="live-code", is_running=lambda: True, name="source",
-        _metadata=lambda: {"epoch": 3}, _container=lambda: None, _project_postgres=lambda: None,
+        workspace_volume="live-code",
+        is_running=lambda: True,
+        name="source",
+        _metadata=lambda: {"epoch": 3},
+        _container=lambda: None,
+        _project_postgres=lambda: None,
     )
     machine = SimpleNamespace(state=lambda: {"epoch": 3, "manifest": manifest.model_dump()})
     candidate = SimpleNamespace(
-        name="candidate", workspace_volume="candidate-code", base_image="image",
+        name="candidate",
+        workspace_volume="candidate-code",
+        base_image="image",
         stop=lambda: events.append("stop"),
         remove=lambda: pytest.fail("candidate must not restart for a database policy"),
         ensure=lambda *args: pytest.fail("candidate must not restart for a database policy"),
@@ -972,8 +1078,9 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     async def workspace_files(*_):
         return {"src/page.tsx": "current"}
 
-    monkeypatch.setattr("omnia_orchestrator.routers.workspace._read_agent_workspace_files",
-                        workspace_files)
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
+    )
 
     def catalog(backend):
         events.append("catalog:" + backend.name)
@@ -988,14 +1095,14 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
 
         events.append("inventory:" + backend.name)
         return InventoryReport(
-            presence="present", coverage="complete", schema_analysis="complete",
+            presence="present",
+            coverage="complete",
+            schema_analysis="complete",
             observed_on=observed_on,
         )
 
     monkeypatch.setattr(module, "catalog_contract", catalog)
-    monkeypatch.setattr(
-        module, "describe_live_catalog", lambda backend: (*catalog(backend), [])
-    )
+    monkeypatch.setattr(module, "describe_live_catalog", lambda backend: (*catalog(backend), []))
     monkeypatch.setattr(module, "candidate_contract", lambda *_: contract)
     monkeypatch.setattr(module, "admin_sql", sql)
     monkeypatch.setattr(module, "observe_database", inventory)
@@ -1012,9 +1119,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
 
     engine._candidate = make_candidate
     engine._seed_source = lambda *_: events.append("seed")
-    engine._command = lambda backend, container, argv, *_: events.append(
-        "command:" + argv[0]
-    )
+    engine._command = lambda backend, container, argv, *_: events.append("command:" + argv[0])
     engine._disable_egress = lambda backend: events.append("egress-off")
     engine._start = start
     engine._verify_source = lambda *_: events.append("verify")
@@ -1025,8 +1130,8 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     assert statements == [("candidate", "COPY price_list;")]
     assert "omnia_runtime" not in json.dumps(result)
     assert "policy" not in json.dumps(result)
-    assert events.index("dump:source") < events.index("egress-off") < events.index(
-        "catalog:candidate"
+    assert (
+        events.index("dump:source") < events.index("egress-off") < events.index("catalog:candidate")
     )
     assert "start:candidate:1" in events
     assert result["report"]["blockers"] == []
@@ -1118,13 +1223,16 @@ async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_pa
         return json.loads(metadata_path.read_text())
 
     backend = SimpleNamespace(
-        metadata_path=metadata_path, _metadata=metadata, workspace_volume="old-code",
+        metadata_path=metadata_path,
+        _metadata=metadata,
+        workspace_volume="old-code",
         ensure=lambda _manifest, epoch: events.append(("ensure", backend.workspace_volume, epoch)),
         remove=lambda: events.append("remove"),
         import_volume=lambda *_: pytest.fail("the live database is never overwritten"),
     )
     machine = SimpleNamespace(
-        path=machine_path, state=lambda: json.loads(machine_path.read_text()),
+        path=machine_path,
+        state=lambda: json.loads(machine_path.read_text()),
     )
     adapter = SimpleNamespace(
         parts=lambda _: (machine, backend),
@@ -1146,13 +1254,122 @@ async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_pa
     assert events == [("ensure", "new-code", 4), ("start", 4), "boundary", "fence"]
     assert metadata()["active_code_volume"] == "new-code"
     events.clear()
-    old = {"metadata": {"epoch": 3}, "machine": {"epoch": 3, "manifest": manifest},
-           "workspace_volume": "old-code", "contract": {"version": 1, "tables": []},
-           # Intents recorded by the removed protected mode are ignored.
-           "policy": {"epoch": 2, "contract": {"version": 1, "tables": []}}}
+    old = {
+        "metadata": {"epoch": 3},
+        "machine": {"epoch": 3, "manifest": manifest},
+        "workspace_volume": "old-code",
+        "contract": {"version": 1, "tables": []},
+        # Intents recorded by the removed protected mode are ignored.
+        "policy": {"epoch": 2, "contract": {"version": 1, "tables": []}},
+    }
     await engine._recover_old(manager, object(), backend, old, 4)
     assert events == ["remove", ("ensure", "old-code", 4), ("start", 4), "boundary", "fence"]
     assert metadata()["active_code_volume"] == "old-code"
+
+
+@pytest.mark.asyncio
+async def test_empty_activation_and_recovery_switch_code_and_database_as_one_pair(tmp_path):
+    from omnia_orchestrator.core.project_machine import MachineManifest
+    from tests.test_project_machine_manifest import payload
+
+    events = []
+    manifest = MachineManifest.model_validate(payload()).model_dump(mode="json")
+    metadata_path = tmp_path / "docker.json"
+    machine_path = tmp_path / "machine" / "machine.json"
+    write_controller_json(
+        metadata_path,
+        {"epoch": 3, "active_code_volume": "old-code", "active_database_volume": "old-db"},
+    )
+    write_controller_json(machine_path, {"epoch": 3, "manifest": manifest})
+
+    backend = SimpleNamespace(
+        metadata_path=metadata_path,
+        workspace_volume="old-code",
+        _metadata=lambda: json.loads(metadata_path.read_text()),
+        ensure=lambda _manifest, epoch: events.append(("ensure", backend.workspace_volume, epoch)),
+        remove=lambda: events.append("remove"),
+    )
+    machine = SimpleNamespace(path=machine_path, state=lambda: json.loads(machine_path.read_text()))
+    adapter = SimpleNamespace(
+        parts=lambda _: (machine, backend),
+        _start_boundary=lambda *args: events.append("boundary"),
+    )
+    manager = SimpleNamespace(machine_runtime=adapter)
+    engine = object.__new__(CodeRestorationEngine)
+
+    async def start(_backend, _manifest, epoch):
+        events.append(("start", epoch))
+
+    async def fence(*_args):
+        events.append("fence")
+
+    engine._start = start
+    engine._complete_fence = fence
+    prepared = {
+        "manifest": manifest,
+        "base_image": "image",
+        "database_strategy": "replace_verified_empty",
+        "target_database_volume": "new-db",
+    }
+    await engine._activate_code(manager, object(), backend, prepared, "new-code", 4)
+    active = json.loads(metadata_path.read_text())
+    assert (active["active_code_volume"], active["active_database_volume"]) == (
+        "new-code",
+        "new-db",
+    )
+
+    old = {
+        "metadata": {"epoch": 3},
+        "machine": {"epoch": 3, "manifest": manifest},
+        "workspace_volume": "old-code",
+        "database_volume": "old-db",
+        "contract": {"version": 1, "tables": []},
+    }
+    await engine._recover_old(manager, object(), backend, old, 4)
+    recovered = json.loads(metadata_path.read_text())
+    assert (recovered["active_code_volume"], recovered["active_database_volume"]) == (
+        "old-code",
+        "old-db",
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_apply_stops_writers_then_fails_closed_on_race_insert(monkeypatch):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services import code_restoration_engine as module
+    from omnia_orchestrator.services.restoration_empty import EmptyDatabaseWitness
+
+    events = []
+    prepared_witness = EmptyDatabaseWitness(
+        project_id=UUID(int=3),
+        workspace_id=UUID(int=2),
+        operation_id=UUID(int=1),
+        database_identity_digest="a" * 64,
+        catalog_digest="b" * 64,
+        objects_digest="c" * 64,
+        technical_state_digest="d" * 64,
+        identity_rows_digest="e" * 64,
+        observation_kind="source",
+        identity_relations=[],
+    )
+    changed = prepared_witness.model_copy(
+        update={"observation_kind": "quiesced_source", "objects_digest": "f" * 64}
+    )
+    backend = SimpleNamespace(stop_machine=lambda: events.append("writers-stopped"))
+    monkeypatch.setattr(
+        module,
+        "observe_empty_database",
+        lambda *_args, **_kwargs: events.append("witness") or changed,
+    )
+    engine = object.__new__(CodeRestorationEngine)
+
+    with pytest.raises(CellIdentityConflict, match="no longer empty"):
+        await engine._quiesce_empty_source(
+            backend,
+            request().model_copy(update={"operation_id": UUID(int=1)}),
+            {"empty_witness": prepared_witness.model_dump(mode="json")},
+        )
+    assert events == ["writers-stopped", "witness"]
 
 
 async def test_prepared_runtime_identity_from_protected_era_still_recovers(tmp_path, monkeypatch):

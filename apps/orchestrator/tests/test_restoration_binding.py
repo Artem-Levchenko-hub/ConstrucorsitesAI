@@ -47,6 +47,44 @@ def test_binding_digest_is_canonical_and_contains_no_secret_values():
     assert "database_url" not in binding.model_dump_json().lower()
 
 
+def test_v3_empty_database_binding_requires_both_artifact_and_witness():
+    from pydantic import ValidationError
+
+    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV3
+
+    value = _binding().model_dump(mode="json")
+    value.update(
+        version=3,
+        database_strategy="replace_verified_empty",
+        witness_digest="f" * 64,
+        target_database_artifact_digest="0" * 64,
+    )
+    binding = RestorationSourceBindingV3.model_validate(value)
+
+    assert binding.digest() != _binding().digest()
+    for missing in ("witness_digest", "target_database_artifact_digest"):
+        invalid = dict(value)
+        invalid[missing] = None
+        with pytest.raises(ValidationError):
+            RestorationSourceBindingV3.model_validate(invalid)
+
+
+def test_v3_preserved_database_cannot_carry_empty_replacement_evidence():
+    from pydantic import ValidationError
+
+    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV3
+
+    value = _binding().model_dump(mode="json")
+    value.update(
+        version=3,
+        database_strategy="preserve_current",
+        witness_digest="f" * 64,
+        target_database_artifact_digest=None,
+    )
+    with pytest.raises(ValidationError):
+        RestorationSourceBindingV3.model_validate(value)
+
+
 def test_live_identity_ignores_normal_row_changes_and_export_receipts():
     baseline = _binding()
     after_insert = _binding(
@@ -80,9 +118,7 @@ def test_database_oid_query_casts_pg_oid_to_canonical_json_number(monkeypatch):
 
     from omnia_orchestrator.services import restoration_binding as module
 
-    backend = SimpleNamespace(
-        project_database_env=lambda: {"PGDATABASE": "app", "PGUSER": "app"}
-    )
+    backend = SimpleNamespace(project_database_env=lambda: {"PGDATABASE": "app", "PGUSER": "app"})
 
     def execute(_backend, sql, **_kwargs):
         # PostgreSQL's oid type is emitted as a JSON string in production unless
@@ -155,8 +191,11 @@ def _live_source_fixture(monkeypatch):
 
     expected = {
         "DATABASE_URL": "postgresql://app:secret@db/app",
-        "PGHOST": "db", "PGPORT": "5432", "PGUSER": "app",
-        "PGPASSWORD": "secret", "PGDATABASE": "app",
+        "PGHOST": "db",
+        "PGPORT": "5432",
+        "PGUSER": "app",
+        "PGPASSWORD": "secret",
+        "PGDATABASE": "app",
     }
     app = SimpleNamespace(
         attrs={"Config": {"Env": [f"{key}={value}" for key, value in expected.items()]}}
@@ -171,34 +210,62 @@ def _live_source_fixture(monkeypatch):
     containers, volumes = object(), object()
     backend = SimpleNamespace(
         client=SimpleNamespace(containers=containers, volumes=volumes),
-        stem="owned", namespace="prod", internal_network="internal",
+        stem="owned",
+        namespace="prod",
+        internal_network="internal",
         project_postgres_volume="db-volume",
-        _container=lambda: app, _project_postgres=lambda: postgres,
+        _container=lambda: app,
+        _project_postgres=lambda: postgres,
         _lookup=lambda collection, _name, kind: (
-            core if kind == "managed-max-core" else gateway
-        ) if collection is containers else volume,
-        project_database_env=lambda: expected, address=lambda: "10.0.0.7",
+            (core if kind == "managed-max-core" else gateway)
+            if collection is containers
+            else volume
+        ),
+        project_database_env=lambda: expected,
+        address=lambda: "10.0.0.7",
     )
     monkeypatch.setattr(
-        module, "_trusted_identity",
+        module,
+        "_trusted_identity",
         lambda _backend, resource, kind: {"id": kind + "-" + str(id(resource))},
     )
-    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
-        "project_id": str(UUID(int=3)), "epoch": 7, "core_host": "10.0.0.8",
-        "machine_host": "10.0.0.7",
-        "routes": [{"path": "/", "service": "web", "port": 3000}],
-    })
-    monkeypatch.setattr(module, "_database_observation", lambda _backend: {
-        "database_name": "app", "database_oid": 42, "role_name": "app",
-        "role_login": True, "role_superuser": False, "role_create_db": False,
-        "role_create_role": False, "database_acl": "",
-        "system_identifier": "7612345678901234567",
-    })
+    monkeypatch.setattr(
+        module,
+        "_gateway_config",
+        lambda _gateway: {
+            "project_id": str(UUID(int=3)),
+            "epoch": 7,
+            "core_host": "10.0.0.8",
+            "machine_host": "10.0.0.7",
+            "routes": [{"path": "/", "service": "web", "port": 3000}],
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_database_observation",
+        lambda _backend: {
+            "database_name": "app",
+            "database_oid": 42,
+            "role_name": "app",
+            "role_login": True,
+            "role_superuser": False,
+            "role_create_db": False,
+            "role_create_role": False,
+            "database_acl": "",
+            "system_identifier": "7612345678901234567",
+        },
+    )
     state = SimpleNamespace(
-        workspace_id=UUID(int=2), project_id=UUID(int=3), owner_id=UUID(int=4),
-        profile_version="v2", resource_names=None, fencing_epoch=7,
-        active_generation_run_id=None, active_generation_fencing_epoch=None,
-        last_operation_id=UUID(int=5), provider_ref="docker://owned",
+        workspace_id=UUID(int=2),
+        project_id=UUID(int=3),
+        owner_id=UUID(int=4),
+        profile_version="v2",
+        resource_names=None,
+        fencing_epoch=7,
+        active_generation_run_id=None,
+        active_generation_fencing_epoch=None,
+        last_operation_id=UUID(int=5),
+        provider_ref="docker://owned",
         operation=lambda _operation_id: None,
     )
     machine = SimpleNamespace(
@@ -272,10 +339,17 @@ def _set_serving_epoch(monkeypatch, module, machine, epoch):
         "ready_epoch": epoch,
         "epoch": epoch,
     }
-    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
-        "project_id": str(UUID(int=3)), "epoch": epoch, "core_host": "10.0.0.8",
-        "machine_host": "10.0.0.7", "routes": [],
-    })
+    monkeypatch.setattr(
+        module,
+        "_gateway_config",
+        lambda _gateway: {
+            "project_id": str(UUID(int=3)),
+            "epoch": epoch,
+            "core_host": "10.0.0.8",
+            "machine_host": "10.0.0.7",
+            "routes": [],
+        },
+    )
 
 
 def test_detached_application_database_binding_fails_closed(monkeypatch):
@@ -325,16 +399,28 @@ def test_stale_large_table_estimates_are_never_copy_proof(monkeypatch):
     from omnia_orchestrator.services import restoration_binding as module
     from omnia_orchestrator.services.versioning.contracts import InventoryReport
 
-    inventory = InventoryReport.model_validate({
-        "presence": "present", "coverage": "complete", "schema_analysis": "complete",
-        "observed_on": "source", "objects": [{
-            "object": "public.clients", "kind": "table", "classification": "business",
-            "presence": "present", "row_count": 100_001, "count_kind": "estimate",
-        }],
-    })
+    inventory = InventoryReport.model_validate(
+        {
+            "presence": "present",
+            "coverage": "complete",
+            "schema_analysis": "complete",
+            "observed_on": "source",
+            "objects": [
+                {
+                    "object": "public.clients",
+                    "kind": "table",
+                    "classification": "business",
+                    "presence": "present",
+                    "row_count": 100_001,
+                    "count_kind": "estimate",
+                }
+            ],
+        }
+    )
     monkeypatch.setattr(
-        module, "admin_sql", lambda backend, *_args, **_kwargs: b"[100001]"
-        if backend == "source" else b"[100002]",
+        module,
+        "admin_sql",
+        lambda backend, *_args, **_kwargs: b"[100001]" if backend == "source" else b"[100002]",
     )
     source = module.exact_inventory_partition_digests("source", inventory)
     candidate = module.exact_inventory_partition_digests("candidate", inventory)
@@ -346,10 +432,17 @@ def test_stale_large_table_estimates_are_never_copy_proof(monkeypatch):
 
 def test_managed_core_upstream_mismatch_fails_closed(monkeypatch):
     module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
-    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
-        "project_id": str(UUID(int=3)), "epoch": 7, "core_host": "10.0.0.99",
-        "machine_host": "10.0.0.7", "routes": [],
-    })
+    monkeypatch.setattr(
+        module,
+        "_gateway_config",
+        lambda _gateway: {
+            "project_id": str(UUID(int=3)),
+            "epoch": 7,
+            "core_host": "10.0.0.99",
+            "machine_host": "10.0.0.7",
+            "routes": [],
+        },
+    )
     with pytest.raises(RuntimeError, match="detached"):
         module.observe_live_source(
             backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
@@ -395,10 +488,17 @@ def test_legacy_release_route_must_match_proven_serving_epoch(monkeypatch):
     module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
     _legacy_release_state(state)
     _set_serving_epoch(monkeypatch, module, machine, 10)
-    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
-        "project_id": str(UUID(int=3)), "epoch": 9, "core_host": "10.0.0.8",
-        "machine_host": "10.0.0.7", "routes": [],
-    })
+    monkeypatch.setattr(
+        module,
+        "_gateway_config",
+        lambda _gateway: {
+            "project_id": str(UUID(int=3)),
+            "epoch": 9,
+            "core_host": "10.0.0.8",
+            "machine_host": "10.0.0.7",
+            "routes": [],
+        },
+    )
 
     with pytest.raises(RuntimeError, match="detached"):
         module.observe_live_source(
@@ -448,10 +548,17 @@ def test_two_rejections_keep_actual_serving_epoch_for_next_prepare(monkeypatch):
     state.last_operation_id = second_id
     state.operation = operations.get
     machine.state = lambda: {"manifest": {"routes": ["/"]}, "ready_epoch": 3, "epoch": 3}
-    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
-        "project_id": str(UUID(int=3)), "epoch": 3, "core_host": "10.0.0.8",
-        "machine_host": "10.0.0.7", "routes": [],
-    })
+    monkeypatch.setattr(
+        module,
+        "_gateway_config",
+        lambda _gateway: {
+            "project_id": str(UUID(int=3)),
+            "epoch": 3,
+            "core_host": "10.0.0.8",
+            "machine_host": "10.0.0.7",
+            "routes": [],
+        },
+    )
 
     observed = module.observe_live_source(
         backend, machine, state, source_files={"page.tsx": b"x"}, schema={}

@@ -54,11 +54,62 @@ class RuntimeSourceBindingV2(BaseModel):
         ).hexdigest()
 
 
+class RuntimeSourceBindingV3(BaseModel):
+    """V2 live identity plus the verified database handling strategy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal[3]
+    serving_route_digest: Sha256
+    serving_release_digest: Sha256
+    controller_resource_digest: Sha256
+    controller_incarnation_digest: Sha256
+    controller_generation_digest: Sha256
+    provider_digest: Sha256
+    source_artifact_digest: Sha256
+    database_identity_digest: Sha256
+    database_schema_digest: Sha256
+    database_role_binding_digest: Sha256
+    database_system_identifier: str | None = Field(default=None, max_length=128)
+    database_export_digest: Sha256
+    source_business_inventory_digest: Sha256
+    candidate_business_inventory_digest: Sha256
+    source_technical_inventory_digest: Sha256
+    candidate_technical_inventory_digest: Sha256
+    candidate_artifact_digest: Sha256
+    database_strategy: Literal["preserve_current", "replace_verified_empty"]
+    witness_digest: Sha256 | None = None
+    target_database_artifact_digest: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def require_strategy_evidence(self) -> Self:
+        evidence = (self.witness_digest, self.target_database_artifact_digest)
+        if self.database_strategy == "replace_verified_empty" and None in evidence:
+            raise ValueError("replace_verified_empty requires both evidence digests")
+        if self.database_strategy == "preserve_current" and any(evidence):
+            raise ValueError("preserve_current must not carry replacement evidence")
+        return self
+
+    def digest(self) -> str:
+        wire = self.model_dump(mode="json")
+        return hashlib.sha256(
+            json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+RuntimeSourceBinding = Annotated[
+    RuntimeSourceBindingV2 | RuntimeSourceBindingV3,
+    Field(discriminator="version"),
+]
+
+
 class RestoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_version_id: UUID
     expected_draft_snapshot_id: UUID
     idempotency_key: str = Field(min_length=8, max_length=128)
+    # Legacy clients omit this and keep the reviewed/manual apply step. The MAX
+    # one-click flow explicitly opts into the durable server-owned continuation.
+    execution_policy: Literal["manual", "automatic_when_safe"] = "manual"
 
 
 class RestoreApplyRequest(BaseModel):
@@ -152,6 +203,9 @@ class RestoreOperation(BaseModel):
     updated_at: datetime
     revision: int
     candidate_id: UUID | None
+    execution_policy: Literal["manual", "automatic_when_safe"]
+    selected_branch: Literal["exact", "adaptive"] | None
+    adaptation_run_id: UUID | None
     report: RestoreReport | None
     can_apply: bool
     can_cancel: bool
@@ -245,7 +299,7 @@ class RuntimeRestoration(BaseModel):
     can_apply: bool = Field(strict=True)
     can_cancel: bool = Field(strict=True)
     observed: RuntimeObserved | RuntimeRecoveryObserved | None = None
-    binding: RuntimeSourceBindingV2 | None = None
+    binding: RuntimeSourceBinding | None = None
     binding_digest: Sha256 | None = None
 
     @model_validator(mode="after")

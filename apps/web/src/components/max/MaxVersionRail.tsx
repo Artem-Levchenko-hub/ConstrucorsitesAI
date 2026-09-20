@@ -70,7 +70,7 @@ export function MaxVersionRail({ versions, selectedVersionId, loading, error, ha
               data-testid={`max-history-prepare-${version.id}`}
               disabled={!restorationEnabled || restorationBusy}
               onClick={() => { setActivityOpen(false); onPrepareRestoration(version); }}>
-              Подготовить восстановление v{version.number}
+              Восстановить версию v{version.number}
             </Button>}
             {!!image && failedImages.has(image.url) && <Button variant="outline" size="sm" data-retry-image onClick={onRetryImages}>Повторить загрузку</Button>}
           </li>;

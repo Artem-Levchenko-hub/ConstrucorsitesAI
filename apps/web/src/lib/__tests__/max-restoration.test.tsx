@@ -27,6 +27,8 @@ function operation(state: api.RestoreOperation["state"] = "ready"): api.RestoreO
     id: "op-a", project_id: "a", target: "draft", source_version_id: "v3",
     source_snapshot_id: "s3", base_draft_snapshot_id: "s11", state, phase: state,
     updated_at: "2026-09-09T01:00:00Z", revision: 2, candidate_id: "candidate",
+    execution_policy: "manual", selected_branch: state === "ready" ? "exact" : null,
+    adaptation_run_id: null,
     report: {
       revision: 2, mode: "exact", changes: ["Вернётся список клиентов"],
       retained_data: ["Фамилии сохранятся"], unavailable_features: ["Ввод фамилии"],
@@ -126,9 +128,43 @@ it("prepares retained source without a screenshot or legacy can_restore and dedu
   expect(api.prepareRestoration).toHaveBeenCalledTimes(1);
   expect(api.prepareRestoration).toHaveBeenCalledWith("a", expect.objectContaining({
     target_version_id: "v3", expected_draft_snapshot_id: "s11", idempotency_key: expect.any(String),
+    execution_policy: "automatic_when_safe",
   }));
   await act(async () => { resolve(operation("checking")); await first; });
   expect(completed).not.toHaveBeenCalled();
+});
+it("keeps automatic apply server-owned and never shows a second action", async () => {
+  const automatic = {
+    ...operation(),
+    execution_policy: "automatic_when_safe" as const,
+    selected_branch: "exact" as const,
+  };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [automatic] });
+  vi.mocked(api.getRestoration).mockResolvedValue(automatic);
+
+  await render();
+
+  expect(container.textContent).toContain("применяем автоматически");
+  expect(container.querySelector("[data-testid='max-restoration-apply']")).toBeNull();
+  expect(api.applyRestoration).not.toHaveBeenCalled();
+});
+it("shows a stale automatic admission as retry-only without offering paid adaptation", async () => {
+  const stale = {
+    ...operation("needs_changes"),
+    phase: "retry_prepare",
+    execution_policy: "automatic_when_safe" as const,
+    selected_branch: "exact" as const,
+    can_cancel: true,
+    error: "Черновик изменился до применения",
+  };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [stale] });
+  vi.mocked(api.getRestoration).mockResolvedValue(stale);
+
+  await render();
+
+  expect(container.textContent).toContain("запустите восстановление версии заново");
+  expect(container.querySelector("[data-testid='max-restoration-adapt']")).toBeNull();
+  expect(container.querySelector("[data-testid='max-restoration-apply']")).toBeNull();
 });
 it("keeps the logical prepare key after a lost POST response", async () => {
   vi.mocked(api.prepareRestoration).mockRejectedValueOnce(new Error("Соединение прервано"));

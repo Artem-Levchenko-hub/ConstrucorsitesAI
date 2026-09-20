@@ -31,6 +31,7 @@ from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationPrepare,
     RestorationDatabaseState,
     RestorationSourceBindingV2,
+    RestorationSourceBindingV3,
 )
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate
 from omnia_orchestrator.services.cell_state import legacy_release_serving_epoch
@@ -40,6 +41,7 @@ from omnia_orchestrator.services.project_machine import (
     write_controller_json,
 )
 from omnia_orchestrator.services.restoration_binding import (
+    canonical_digest,
     exact_inventory_partition_digests,
     observe_live_source,
     serving_fencing_epoch,
@@ -49,11 +51,21 @@ from omnia_orchestrator.services.restoration_catalog import (
     catalog_contract,
     describe_live_catalog,
 )
-from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
+from omnia_orchestrator.services.restoration_data_contract import (
+    ContractAssessment,
+    DataContract,
+    assess_contract,
+)
 from omnia_orchestrator.services.restoration_database import (
     admin_args,
     admin_sql,
+    close_controller_socket,
     read_controller_output,
+)
+from omnia_orchestrator.services.restoration_empty import (
+    EmptyDatabaseWitness,
+    observe_empty_database,
+    same_empty_source,
 )
 from omnia_orchestrator.services.restoration_execution import (
     RestorationExecutionCancelled,
@@ -231,10 +243,13 @@ def preparation_report(
         if blocked
         else [],
     }
-    resolutions = list(dict.fromkeys(
-        check.resolution for check in checks or []
-        if check.severity == "blocking" and check.resolution
-    ))
+    resolutions = list(
+        dict.fromkeys(
+            check.resolution
+            for check in checks or []
+            if check.severity == "blocking" and check.resolution
+        )
+    )
     if blocked and resolutions:
         report["next_actions"] = [*resolutions, *report["next_actions"]]
     if inventory is not None and inventory.schema_analysis == "partial":
@@ -450,64 +465,133 @@ class CodeRestorationEngine:
                         "report": preparation_report(blockers=[str(error)]),
                     }
                 source_runtime = self._runtime_identity(source, machine)
-                # Evidence is gathered independently: row counts first (read-only),
-                # so a schema-analysis gap can never hide that the data exist.
-                inventory = await machine_effect(observe_database, source, observed_on="source")
                 capabilities = capability_diff(current_files, files)
-                current_contract, catalog_blockers, unsupported = await machine_effect(
-                    describe_live_catalog, source
-                )
-                inventory = inventory.model_copy(
-                    update={"schema_analysis": "partial" if unsupported else "complete"}
-                )
-                checks = checks_from_unsupported(unsupported)
-                blockers = blocking_explanations(checks) if catalog_blockers else []
                 current_manifest = MachineManifest.model_validate(machine.state()["manifest"])
+                storage_blockers = []
                 if current_manifest.data_stores or any(
                     service.mounts for service in current_manifest.services
                 ):
-                    blockers.append("Нужна проверка текущих файловых хранилищ.")
-                if blockers:
+                    storage_blockers.append("Нужна проверка текущих файловых хранилищ.")
+                if storage_blockers:
                     return {
                         "state": "needs_changes",
                         "candidate_id": None,
                         "report": preparation_report(
-                            blockers=blockers,
-                            inventory=inventory,
-                            checks=checks,
+                            blockers=storage_blockers,
                             capabilities=capabilities,
                         ),
                     }
+                inventory = None
+                checks: list[CompatibilityCheck] = []
+                current_contract = DataContract(version=1)
+                dump = b""
+                identity_dump = b""
+                empty_witness = None
                 live_before = None
-                if request.binding_contract_version == 2:
+                source_business = source_technical = ""
+                if request.binding_contract_version == 3:
                     source_machine_state = machine.state()
+                    provisional = await machine_effect(
+                        observe_live_source,
+                        source,
+                        machine,
+                        state,
+                        source_files=source_bytes,
+                        schema={"empty_database_probe": 1},
+                        machine_state=source_machine_state,
+                    )
+                    empty_witness = await machine_effect(
+                        observe_empty_database,
+                        source,
+                        operation_id=request.operation_id,
+                        workspace_id=request.workspace_id,
+                        project_id=request.project_id,
+                        database_identity_digest=provisional["database_identity_digest"],
+                        observation_kind="source",
+                    )
+                if empty_witness is not None:
                     live_before = await machine_effect(
                         observe_live_source,
                         source,
                         machine,
                         state,
                         source_files=source_bytes,
-                        schema=current_contract.model_dump(mode="json"),
-                        machine_state=source_machine_state,
+                        schema={"empty_witness_catalog_digest": empty_witness.catalog_digest},
+                        machine_state=machine.state(),
                     )
                     state = self._repair_legacy_release_receipt(
                         manager, request, state, source_machine_state
                     )
-                # Only the dedicated database is copied. The trusted MAX core,
-                # live managed database, credentials and queues are never attached.
-                dump = await machine_effect(self._dump, source)
-                fresh_contract, fresh_blockers, fresh_unsupported = await machine_effect(
-                    describe_live_catalog, source
-                )
-                verify_post_dump_catalog(
-                    current_contract,
-                    catalog_blockers,
-                    unsupported,
-                    fresh_contract,
-                    fresh_blockers,
-                    fresh_unsupported,
-                )
-                if live_before is not None:
+                    identity_dump = await machine_effect(
+                        self._dump_identity_rows, source, empty_witness.identity_relations
+                    )
+                    fresh_witness = await machine_effect(
+                        observe_empty_database,
+                        source,
+                        operation_id=request.operation_id,
+                        workspace_id=request.workspace_id,
+                        project_id=request.project_id,
+                        database_identity_digest=empty_witness.database_identity_digest,
+                        observation_kind="source",
+                    )
+                    if fresh_witness is None or not same_empty_source(empty_witness, fresh_witness):
+                        raise CellIdentityConflict(
+                            "restoration source changed while identity rows were prepared"
+                        )
+                    source_business = empty_witness.objects_digest
+                    source_technical = empty_witness.technical_state_digest
+                else:
+                    # Evidence is gathered independently: row counts first, so a
+                    # schema-analysis gap can never hide that data exist.
+                    inventory = await machine_effect(observe_database, source, observed_on="source")
+                    current_contract, catalog_blockers, unsupported = await machine_effect(
+                        describe_live_catalog, source
+                    )
+                    inventory = inventory.model_copy(
+                        update={"schema_analysis": "partial" if unsupported else "complete"}
+                    )
+                    checks = checks_from_unsupported(unsupported)
+                    blockers = blocking_explanations(checks) if catalog_blockers else []
+                    if blockers:
+                        return {
+                            "state": "needs_changes",
+                            "candidate_id": None,
+                            "report": preparation_report(
+                                blockers=blockers,
+                                inventory=inventory,
+                                checks=checks,
+                                capabilities=capabilities,
+                            ),
+                        }
+                    if request.binding_contract_version in {2, 3}:
+                        source_machine_state = machine.state()
+                        live_before = await machine_effect(
+                            observe_live_source,
+                            source,
+                            machine,
+                            state,
+                            source_files=source_bytes,
+                            schema=current_contract.model_dump(mode="json"),
+                            machine_state=source_machine_state,
+                        )
+                        state = self._repair_legacy_release_receipt(
+                            manager, request, state, source_machine_state
+                        )
+                    # Only the dedicated database is copied. The trusted MAX core,
+                    # credentials and queues are never attached.
+                    dump = await machine_effect(self._dump, source)
+                    fresh_contract, fresh_blockers, fresh_unsupported = await machine_effect(
+                        describe_live_catalog, source
+                    )
+                    verify_post_dump_catalog(
+                        current_contract,
+                        catalog_blockers,
+                        unsupported,
+                        fresh_contract,
+                        fresh_blockers,
+                        fresh_unsupported,
+                    )
+                if live_before is not None and empty_witness is None:
                     state = self._state(manager, request, epoch=request.fencing_epoch)
                     fresh_machine_state = machine.state()
                     live_after = await machine_effect(
@@ -546,41 +630,76 @@ class CodeRestorationEngine:
                 # Dependency installation has no customer data. Once data enter the
                 # candidate, its public-egress proxy stays stopped until destruction.
                 await machine_effect(self._disable_egress, candidate)
-                old_contract = await machine_effect(candidate_contract, candidate, files)
-                # Template MAX tables are served by the CURRENT trusted core, not
-                # by this project's dedicated database. No app role gains access.
-                managed = {
-                    "max_users",
-                    "max_webhook_events",
-                    "max_catalog_items",
-                    "max_business_actions",
-                    "max_consents",
-                    "max_analytics_events",
-                    "max_bot_outbox",
-                    "max_audit_log",
-                }
-                old_contract = DataContract(
-                    version=1,
-                    tables=[table for table in old_contract.tables if table.name not in managed],
-                )
-                assessment = assess_contract(old_contract, current_contract)
-                checks = [
-                    *checks_from_diagnostics(assessment.diagnostics),
-                    *delete_warnings(assessment.blocked_deletes),
-                ]
-                # The copy lives only in this candidate's own isolated database.
-                await machine_effect(admin_sql, candidate, dump.decode(), max_bytes=4 * 1024 * 1024)
-                copied, copied_blockers = await machine_effect(catalog_contract, candidate)
-                if copied_blockers or copied != current_contract:
-                    raise PreparationNeedsChanges(
-                        "Структура копии данных не совпала с проверенной базой."
+                package_scripts = json.loads(files.get("package.json", "{}")).get("scripts", {})
+                if any(
+                    key in package_scripts for key in ("prestart", "poststart", "predev", "postdev")
+                ):
+                    raise PreparationNeedsChanges("historical startup hooks require adaptation")
+                target_witness = None
+                database_digest = None
+                if empty_witness is not None:
+                    if "scripts/apply-migrations.mjs" not in files:
+                        raise PreparationNeedsChanges(
+                            "В выбранной версии нет доверенного запуска исторических миграций."
+                        )
+                    await self._run_stage(
+                        request,
+                        candidate,
+                        ["node", "scripts/apply-migrations.mjs"],
+                        90,
+                        stage="empty-database-migrations",
                     )
-                copied_inventory = await machine_effect(
-                    observe_database, candidate, observed_on="candidate_copy"
-                )
-                observed_database_state = inventory.presence
+                    await machine_effect(
+                        self._install_identity_rows,
+                        candidate,
+                        empty_witness.identity_relations,
+                        identity_dump,
+                    )
+                    assessment = ContractAssessment()
+                    observed_database_state = "empty"
+                    candidate_business = candidate_technical = ""
+                else:
+                    old_contract = await machine_effect(candidate_contract, candidate, files)
+                    # Template MAX tables are served by the CURRENT trusted core, not
+                    # by this project's dedicated database. No app role gains access.
+                    managed = {
+                        "max_users",
+                        "max_webhook_events",
+                        "max_catalog_items",
+                        "max_business_actions",
+                        "max_consents",
+                        "max_analytics_events",
+                        "max_bot_outbox",
+                        "max_audit_log",
+                    }
+                    old_contract = DataContract(
+                        version=1,
+                        tables=[
+                            table for table in old_contract.tables if table.name not in managed
+                        ],
+                    )
+                    assessment = assess_contract(old_contract, current_contract)
+                    checks = [
+                        *checks_from_diagnostics(assessment.diagnostics),
+                        *delete_warnings(assessment.blocked_deletes),
+                    ]
+                    # The copy lives only in this candidate's own isolated database.
+                    await machine_effect(
+                        admin_sql, candidate, dump.decode(), max_bytes=4 * 1024 * 1024
+                    )
+                    copied, copied_blockers = await machine_effect(catalog_contract, candidate)
+                    if copied_blockers or copied != current_contract:
+                        raise PreparationNeedsChanges(
+                            "Структура копии данных не совпала с проверенной базой."
+                        )
+                    copied_inventory = await machine_effect(
+                        observe_database, candidate, observed_on="candidate_copy"
+                    )
+                    assert inventory is not None
+                    observed_database_state = inventory.presence
                 binding = None
-                if request.binding_contract_version == 2:
+                if request.binding_contract_version in {2, 3} and empty_witness is None:
+                    assert inventory is not None
                     if (
                         live_before is None
                         or inventory.coverage != "complete"
@@ -649,7 +768,39 @@ class CodeRestorationEngine:
                         raise RestorationExecutionCancelled(
                             "restoration cancellation was requested"
                         )
+                    if empty_witness is not None:
+                        await machine_effect(candidate.stop_machine)
+                        target_witness = await machine_effect(
+                            observe_empty_database,
+                            candidate,
+                            operation_id=request.operation_id,
+                            workspace_id=request.workspace_id,
+                            project_id=request.project_id,
+                            database_identity_digest=canonical_digest(
+                                {
+                                    "candidate_id": str(candidate_id),
+                                    "database_volume": candidate.project_postgres_volume,
+                                }
+                            ),
+                            observation_kind="candidate_copy",
+                        )
+                        if (
+                            target_witness is None
+                            or target_witness.identity_rows_digest
+                            != empty_witness.identity_rows_digest
+                        ):
+                            raise PreparationNeedsChanges(
+                                "Техническая идентичность новой пустой базы не совпала."
+                            )
+                        candidate_business = target_witness.objects_digest
+                        candidate_technical = target_witness.technical_state_digest
+                        await machine_effect(
+                            self._rotate_database_password,
+                            candidate,
+                            source.project_postgres_password,
+                        )
                     archive = directory / "code.tar"
+                    database_archive = directory / "database.tar"
                     await machine_effect(candidate.stop)
                     digest = await machine_effect(
                         self._capture_code,
@@ -657,6 +808,13 @@ class CodeRestorationEngine:
                         archive,
                         reserve_bytes=self.settings.cell_required_free_disk_bytes,
                     )
+                    if empty_witness is not None:
+                        database_digest = await machine_effect(
+                            self._capture_database,
+                            candidate,
+                            database_archive,
+                            reserve_bytes=self.settings.cell_required_free_disk_bytes,
+                        )
                 if request.binding_contract_version == 2:
                     assert live_before is not None
                     binding = RestorationSourceBindingV2(
@@ -668,6 +826,33 @@ class CodeRestorationEngine:
                         candidate_technical_inventory_digest=candidate_technical,
                         candidate_artifact_digest=digest,
                     ).model_dump(mode="json")
+                elif request.binding_contract_version == 3:
+                    assert live_before is not None
+                    if empty_witness is not None:
+                        assert database_digest is not None and target_witness is not None
+                        binding = RestorationSourceBindingV3(
+                            **live_before,
+                            database_strategy="replace_verified_empty",
+                            witness_digest=empty_witness.digest(),
+                            target_database_artifact_digest=database_digest,
+                            database_export_digest=database_digest,
+                            source_business_inventory_digest=source_business,
+                            candidate_business_inventory_digest=candidate_business,
+                            source_technical_inventory_digest=source_technical,
+                            candidate_technical_inventory_digest=candidate_technical,
+                            candidate_artifact_digest=digest,
+                        ).model_dump(mode="json")
+                    else:
+                        binding = RestorationSourceBindingV3(
+                            **live_before,
+                            database_strategy="preserve_current",
+                            database_export_digest=hashlib.sha256(dump).hexdigest(),
+                            source_business_inventory_digest=source_business,
+                            candidate_business_inventory_digest=candidate_business,
+                            source_technical_inventory_digest=source_technical,
+                            candidate_technical_inventory_digest=candidate_technical,
+                            candidate_artifact_digest=digest,
+                        ).model_dump(mode="json")
                 prepared = {
                     "state": "ready",
                     "candidate_id": str(candidate_id),
@@ -690,6 +875,20 @@ class CodeRestorationEngine:
                     "code_digest": digest,
                     "base_image": candidate.base_image,
                     "binding": binding,
+                    "database_strategy": (
+                        "replace_verified_empty"
+                        if empty_witness is not None
+                        else "preserve_current"
+                    ),
+                    "empty_witness": (
+                        empty_witness.model_dump(mode="json") if empty_witness is not None else None
+                    ),
+                    "target_empty_witness": (
+                        target_witness.model_dump(mode="json")
+                        if target_witness is not None
+                        else None
+                    ),
+                    "database_digest": database_digest,
                 }
                 write_controller_json(prepared_path, prepared)
                 return prepared
@@ -789,13 +988,96 @@ class CodeRestorationEngine:
             connection._sock.settimeout(machine_remaining_seconds(65))
             output = read_controller_output(connection, max_bytes=64 * 1024 * 1024)
         finally:
-            connection.close()
+            close_controller_socket(connection)
         result = backend.client.api.exec_inspect(execution["Id"])
         if result.get("Running") or result.get("ExitCode") != 0:
             raise PreparationNeedsChanges(
                 "Не удалось подготовить изолированную копию данных в пределах лимита."
             )
         return output
+
+    @staticmethod
+    def _dump_identity_rows(backend: Any, relations: list[str]) -> bytes:
+        """Copy only attested platform identity rows; never product relations."""
+        if not relations:
+            return b""
+        allowed = {"public.__omnia_migrations", "public.max_users"}
+        if not set(relations).issubset(allowed):
+            raise CellIdentityConflict("empty restoration identity relation is invalid")
+        from omnia_orchestrator.services.project_machine import machine_remaining_seconds
+
+        args, env = admin_args(backend)
+        command = [
+            "pg_dump",
+            "--data-only",
+            "--no-owner",
+            "--no-privileges",
+            "--column-inserts",
+            *["--table=" + name for name in relations],
+            *args,
+        ]
+        execution = backend.client.api.exec_create(
+            backend._project_postgres().id, command, environment=env
+        )
+        connection = backend.client.api.exec_start(execution["Id"], socket=True)
+        try:
+            connection._sock.settimeout(machine_remaining_seconds(65))
+            output = read_controller_output(connection, max_bytes=8 * 1024 * 1024)
+        finally:
+            close_controller_socket(connection)
+        result = backend.client.api.exec_inspect(execution["Id"])
+        if result.get("Running") or result.get("ExitCode") != 0:
+            raise PreparationNeedsChanges("Не удалось сохранить техническую идентичность базы.")
+        return output
+
+    @staticmethod
+    def _install_identity_rows(backend: Any, relations: list[str], dump: bytes) -> None:
+        if not relations:
+            if dump:
+                raise CellIdentityConflict("unexpected empty restoration identity artifact")
+            return
+        allowed = {"public.__omnia_migrations", "public.max_users"}
+        if not set(relations).issubset(allowed):
+            raise CellIdentityConflict("empty restoration identity relation is invalid")
+        names = ",".join(
+            '"public"."' + name.split(".", 1)[1].replace('"', '""') + '"' for name in relations
+        )
+        admin_sql(backend, "TRUNCATE " + names + " CASCADE;\n" + dump.decode("utf-8"))
+
+    @staticmethod
+    def _rotate_database_password(backend: Any, password: str) -> None:
+        escaped = password.replace("'", "''")
+        admin_sql(backend, "ALTER ROLE postgres PASSWORD '" + escaped + "';")
+
+    @staticmethod
+    def _capture_database(backend: Any, path: Path, *, reserve_bytes: int) -> str:
+        postgres = backend._project_postgres()
+        if postgres is None:
+            raise CellIdentityConflict("restoration candidate database is missing")
+        postgres.reload()
+        if postgres.status == "running":
+            raise CellIdentityConflict("restoration candidate database is still running")
+        return CodeRestorationEngine._capture_volume(
+            backend, backend.project_postgres_volume, path, reserve_bytes=reserve_bytes
+        )
+
+    @staticmethod
+    def _capture_volume(backend: Any, volume: str, path: Path, *, reserve_bytes: int) -> str:
+        digest = hashlib.sha256()
+        total = 0
+        reserve = max(1024**3, reserve_bytes)
+        limit = min(backend.disk_bytes, shutil.disk_usage(path.parent).free - reserve)
+        if limit <= 0:
+            raise PreparationNeedsChanges("Недостаточно места для проверенной копии базы.")
+        with path.open("wb") as handle:
+            path.chmod(0o600)
+            for chunk in backend.export_volume(volume):
+                total += len(chunk)
+                if total > limit or shutil.disk_usage(path.parent).free - len(chunk) < reserve:
+                    raise CellResourceError("restoration database artifact budget exceeded")
+                digest.update(chunk)
+                handle.write(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def _seed_source(backend: Any, request: CodeRestorationPrepare) -> None:
@@ -812,9 +1094,7 @@ class CodeRestorationEngine:
         timeout: int,
         cwd: str = ".",
     ) -> None:
-        result = container.exec_run(
-            ["timeout", str(timeout), *argv], workdir="/workspace/" + cwd
-        )
+        result = container.exec_run(["timeout", str(timeout), *argv], workdir="/workspace/" + cwd)
         if result.exit_code != 0:
             log = Path(backend.root) / str(backend.workspace_id) / "restoration-check.log"
             log.write_bytes(result.output[-24000:])
@@ -915,7 +1195,7 @@ for path,digest,mode in json.load(sys.stdin):
             while connection._sock.recv(65536):
                 pass
         finally:
-            connection.close()
+            close_controller_socket(connection)
         result = backend.client.api.exec_inspect(execution["Id"])
         if result.get("Running") or result.get("ExitCode") != 0:
             raise PreparationNeedsChanges(
@@ -1035,9 +1315,7 @@ for path,digest,mode in json.load(sys.stdin):
                 raise CellResourceError("restoration cancellation Docker client unavailable")
 
             def api_factory() -> Any:
-                raise CellResourceError(
-                    "restoration cancellation Docker client unavailable"
-                )
+                raise CellResourceError("restoration cancellation Docker client unavailable")
         else:
             api_factory = dedicated_docker_api_factory(
                 docker_host,
@@ -1089,9 +1367,7 @@ for path,digest,mode in json.load(sys.stdin):
         self._validate_preflight_receipt(json.loads(path.read_text()), request)
 
     @staticmethod
-    def _validate_preflight_receipt(
-        intent: dict[str, Any], request: CodeRestorationApply
-    ) -> None:
+    def _validate_preflight_receipt(intent: dict[str, Any], request: CodeRestorationApply) -> None:
         expected = {
             "operation_id": str(request.operation_id),
             "workspace_id": str(request.workspace_id),
@@ -1124,9 +1400,7 @@ for path,digest,mode in json.load(sys.stdin):
         write_controller_json(path, intent)
         return "start"
 
-    def _capture_preflight_serving_epoch(
-        self, manager: Any, request: CodeRestorationApply
-    ) -> None:
+    def _capture_preflight_serving_epoch(self, manager: Any, request: CodeRestorationApply) -> None:
         path = self._directory(request.operation_id) / "activation.json"
         intent = json.loads(path.read_text())
         self._validate_preflight_receipt(intent, request)
@@ -1216,24 +1490,17 @@ for path,digest,mode in json.load(sys.stdin):
                     or retained_epoch < 1
                     or retained_epoch > request.expected_fencing_epoch
                 ):
-                    raise CellIdentityConflict(
-                        "restoration retained serving epoch is unavailable"
-                    )
+                    raise CellIdentityConflict("restoration retained serving epoch is unavailable")
                 if recorded is None or not recorded.matches_replay_envelope(
                     kind="restoration_rejection",
                     request_digest=mutation.request_digest,
                     fencing_epoch=mutation.fencing_epoch,
                     checkpoint_ref=None,
                 ):
-                    raise CellIdentityConflict(
-                        "restoration rejection operation envelope changed"
-                    )
+                    raise CellIdentityConflict("restoration rejection operation envelope changed")
                 if recorded.status != "completed":
                     retained_bundle_state = intent.get("retained_bundle_state")
-                    if (
-                        not isinstance(retained_bundle_state, str)
-                        or not retained_bundle_state
-                    ):
+                    if not isinstance(retained_bundle_state, str) or not retained_bundle_state:
                         raise CellIdentityConflict(
                             "restoration rejection source state is unavailable"
                         )
@@ -1248,8 +1515,7 @@ for path,digest,mode in json.load(sys.stdin):
                 if (
                     recorded is None
                     or recorded.status != "completed"
-                    or recorded.detail
-                    != "retained_source_fencing_epoch=" + str(retained_epoch)
+                    or recorded.detail != "retained_source_fencing_epoch=" + str(retained_epoch)
                 ):
                     raise CellIdentityConflict("restoration rejection receipt is incomplete")
                 intent["fence_reconciled"] = True
@@ -1303,10 +1569,17 @@ for path,digest,mode in json.load(sys.stdin):
             from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
 
             volume = backend.stem + "-code-" + request.operation_id.hex
+            database_strategy = prepared.get("database_strategy", "preserve_current")
+            database_volume = (
+                backend.stem + "-db-" + request.operation_id.hex
+                if database_strategy == "replace_verified_empty"
+                else backend.project_postgres_volume
+            )
             old = {
                 "metadata": backend._metadata(),
                 "machine": machine.state(),
                 "workspace_volume": backend.workspace_volume,
+                "database_volume": backend.project_postgres_volume,
                 "contract": prepared["live_contract"],
             }
             intent = {
@@ -1322,6 +1595,20 @@ for path,digest,mode in json.load(sys.stdin):
                 "effects_admitted": True,
                 "old": old,
                 "volume": volume,
+                "database_strategy": database_strategy,
+                "database_volume": database_volume,
+                "pair_plan_digest": canonical_digest(
+                    {
+                        "code_digest": prepared["code_digest"],
+                        "database_digest": prepared.get("database_digest"),
+                        "database_strategy": database_strategy,
+                        "old_code_volume": backend.workspace_volume,
+                        "old_database_volume": backend.project_postgres_volume,
+                        "new_code_volume": volume,
+                        "new_database_volume": database_volume,
+                        "witness": prepared.get("empty_witness"),
+                    }
+                ),
                 "state": "intent",
             }
             write_controller_json(directory / "activation.json", intent)
@@ -1333,9 +1620,29 @@ for path,digest,mode in json.load(sys.stdin):
                     await manager.docker.read_workspace_source_files(backend.workspace_volume),
                     prepared["current_files"],
                 )
-                live, blockers = await machine_effect(catalog_contract, backend)
-                if blockers or not contract_matches(live, prepared["live_contract"]):
-                    raise CellIdentityConflict("restoration data contract changed after checking")
+                if database_strategy == "replace_verified_empty":
+                    prepared_witness = EmptyDatabaseWitness.model_validate(
+                        prepared["empty_witness"]
+                    )
+                    current_witness = await machine_effect(
+                        observe_empty_database,
+                        backend,
+                        operation_id=request.operation_id,
+                        workspace_id=request.workspace_id,
+                        project_id=request.project_id,
+                        database_identity_digest=prepared_witness.database_identity_digest,
+                        observation_kind="source",
+                    )
+                    if current_witness is None or not same_empty_source(
+                        prepared_witness, current_witness
+                    ):
+                        raise CellIdentityConflict("restoration source is no longer empty")
+                else:
+                    live, blockers = await machine_effect(catalog_contract, backend)
+                    if blockers or not contract_matches(live, prepared["live_contract"]):
+                        raise CellIdentityConflict(
+                            "restoration data contract changed after checking"
+                        )
                 archive = directory / "code.tar"
                 if await machine_effect(self._file_digest, archive) != prepared["code_digest"]:
                     raise CellIdentityConflict("restoration code artifact changed")
@@ -1354,20 +1661,81 @@ for path,digest,mode in json.load(sys.stdin):
                     },
                 )
                 await machine_effect(target.import_volume, volume, archive)
+                if database_strategy == "replace_verified_empty":
+                    if (
+                        backend._lookup(backend.client.volumes, database_volume, "project-volume")
+                        is not None
+                    ):
+                        raise CellIdentityConflict(
+                            "activation database volume already exists without observation"
+                        )
+                    await manager._ensure_volume(
+                        database_volume,
+                        {
+                            **manager._state_labels(state, "project-volume"),
+                            **target.labels("project-volume"),
+                        },
+                    )
+                    await machine_effect(
+                        target.import_volume,
+                        database_volume,
+                        directory / "database.tar",
+                    )
+                    intent["state"] = "writers_stopping"
+                    write_controller_json(directory / "activation.json", intent)
+                    final_witness = await self._quiesce_empty_source(backend, request, prepared)
+                    intent["final_witness"] = final_witness.model_dump(mode="json")
+                    intent["final_witness_digest"] = final_witness.digest()
+                    intent["pair_seal"] = canonical_digest(
+                        {
+                            "code_digest": prepared["code_digest"],
+                            "database_digest": prepared["database_digest"],
+                            "witness_digest": final_witness.digest(),
+                            "old_code_volume": old["workspace_volume"],
+                            "old_database_volume": old["database_volume"],
+                            "new_code_volume": volume,
+                            "new_database_volume": database_volume,
+                        }
+                    )
                 intent["state"] = "switching"
                 write_controller_json(directory / "activation.json", intent)
                 # Writers stop only after all checks and code import have succeeded.
                 await machine_effect(backend.remove)
+                activation_prepared = {
+                    **prepared,
+                    "target_database_volume": database_volume,
+                }
+
+                def admit_target_writers() -> None:
+                    intent["state"] = "target_writers_admitted"
+                    write_controller_json(directory / "activation.json", intent)
+
                 await self._activate_code(
-                    manager, state, backend, prepared, volume, request.fencing_epoch
+                    manager,
+                    state,
+                    backend,
+                    activation_prepared,
+                    volume,
+                    request.fencing_epoch,
+                    before_writers=(
+                        admit_target_writers
+                        if database_strategy == "replace_verified_empty"
+                        else None
+                    ),
                 )
                 intent["source_revision"] = await self._complete_activation(
                     manager, state, backend, request, intent
                 )
-            except Exception:
+            except Exception as error:
                 error_path = directory / "activation-error.log"
                 error_path.write_text(traceback.format_exc(), encoding="utf-8")
                 error_path.chmod(0o600)
+                if intent.get("state") in {"target_writers_admitted", "target_recovery"}:
+                    intent["state"] = "target_recovery"
+                    write_controller_json(directory / "activation.json", intent)
+                    raise CellResourceError(
+                        "target restoration requires forward recovery"
+                    ) from error
                 intent["state"] = "reverting"
                 write_controller_json(directory / "activation.json", intent)
                 await self._recover_old(manager, state, backend, old, request.fencing_epoch)
@@ -1392,7 +1760,12 @@ for path,digest,mode in json.load(sys.stdin):
             if request.binding_digest is not None:
                 raise CellIdentityConflict("restoration source binding is unavailable")
             return state, machine, backend
-        binding = RestorationSourceBindingV2.model_validate(prepared["binding"])
+        binding_payload = prepared["binding"]
+        binding = (
+            RestorationSourceBindingV3.model_validate(binding_payload)
+            if binding_payload.get("version") == 3
+            else RestorationSourceBindingV2.model_validate(binding_payload)
+        )
         if request.binding_digest != binding.digest():
             raise CellIdentityConflict("restoration source binding digest changed")
         current = await _read_agent_workspace_files(manager, backend.workspace_volume)
@@ -1400,17 +1773,42 @@ for path,digest,mode in json.load(sys.stdin):
             raise CellIdentityConflict("restoration source changed after checking")
         source_bytes = await manager.docker.read_workspace_source_files(backend.workspace_volume)
         verify_source_inventory(source_bytes, prepared["current_files"])
-        live, blockers = await machine_effect(catalog_contract, backend)
-        if blockers or not contract_matches(live, prepared["live_contract"]):
-            raise CellIdentityConflict("restoration data contract changed after checking")
-        observed = await machine_effect(
-            observe_live_source,
-            backend,
-            machine,
-            state,
-            source_files=source_bytes,
-            schema=live.model_dump(mode="json"),
-        )
+        if (
+            isinstance(binding, RestorationSourceBindingV3)
+            and binding.database_strategy == "replace_verified_empty"
+        ):
+            prepared_witness = EmptyDatabaseWitness.model_validate(prepared["empty_witness"])
+            current_witness = await machine_effect(
+                observe_empty_database,
+                backend,
+                operation_id=request.operation_id,
+                workspace_id=request.workspace_id,
+                project_id=request.project_id,
+                database_identity_digest=prepared_witness.database_identity_digest,
+                observation_kind="source",
+            )
+            if current_witness is None or not same_empty_source(prepared_witness, current_witness):
+                raise CellIdentityConflict("restoration source is no longer empty")
+            observed = await machine_effect(
+                observe_live_source,
+                backend,
+                machine,
+                state,
+                source_files=source_bytes,
+                schema={"empty_witness_catalog_digest": current_witness.catalog_digest},
+            )
+        else:
+            live, blockers = await machine_effect(catalog_contract, backend)
+            if blockers or not contract_matches(live, prepared["live_contract"]):
+                raise CellIdentityConflict("restoration data contract changed after checking")
+            observed = await machine_effect(
+                observe_live_source,
+                backend,
+                machine,
+                state,
+                source_files=source_bytes,
+                schema=live.model_dump(mode="json"),
+            )
         rebound = binding.model_copy(update=observed)
         if rebound.live_identity_digest() != binding.live_identity_digest():
             raise CellIdentityConflict("restoration live source binding changed")
@@ -1421,7 +1819,39 @@ for path,digest,mode in json.load(sys.stdin):
             or archive_digest != binding.candidate_artifact_digest
         ):
             raise CellIdentityConflict("restoration code artifact changed")
+        if isinstance(binding, RestorationSourceBindingV3):
+            database_archive = self._directory(request.operation_id) / "database.tar"
+            if binding.database_strategy == "replace_verified_empty":
+                if (
+                    not database_archive.is_file()
+                    or await machine_effect(self._file_digest, database_archive)
+                    != binding.target_database_artifact_digest
+                ):
+                    raise CellIdentityConflict("restoration database artifact changed")
+            elif database_archive.exists():
+                raise CellIdentityConflict("preserved restoration has database artifact")
         return state, machine, backend
+
+    async def _quiesce_empty_source(
+        self,
+        backend: Any,
+        request: CodeRestorationApply,
+        prepared: dict[str, Any],
+    ) -> EmptyDatabaseWitness:
+        prepared_witness = EmptyDatabaseWitness.model_validate(prepared["empty_witness"])
+        await machine_effect(backend.stop_machine)
+        current = await machine_effect(
+            observe_empty_database,
+            backend,
+            operation_id=request.operation_id,
+            workspace_id=request.workspace_id,
+            project_id=request.project_id,
+            database_identity_digest=prepared_witness.database_identity_digest,
+            observation_kind="quiesced_source",
+        )
+        if current is None or not same_empty_source(prepared_witness, current):
+            raise CellIdentityConflict("restoration source is no longer empty")
+        return cast(EmptyDatabaseWitness, current)
 
     async def _activate_code(
         self,
@@ -1431,12 +1861,18 @@ for path,digest,mode in json.load(sys.stdin):
         prepared: dict[str, Any],
         volume: str,
         epoch: int,
+        before_writers: Callable[[], None] | None = None,
     ) -> None:
         adapter = manager.machine_runtime
         manifest = MachineManifest.model_validate(prepared["manifest"])
         metadata = backend._metadata()
         metadata.update(
             active_code_volume=volume,
+            active_database_volume=(
+                prepared["target_database_volume"]
+                if prepared.get("database_strategy") == "replace_verified_empty"
+                else metadata.get("active_database_volume")
+            ),
             manifest=manifest.model_dump(mode="json"),
             restored_image=prepared["base_image"],
             environment_ref=None,
@@ -1460,6 +1896,8 @@ for path,digest,mode in json.load(sys.stdin):
         write_controller_json(machine.path, saved)
         # The live database volume is reused as-is; only the code volume changes.
         await machine_effect(backend.ensure, manifest, epoch)
+        if before_writers is not None:
+            before_writers()
         await self._start(backend, manifest, epoch)
         await machine_effect(adapter._start_boundary, state, manifest, backend, epoch)
         await self._complete_fence(manager, state, epoch, volume)
@@ -1505,6 +1943,7 @@ for path,digest,mode in json.load(sys.stdin):
         previous = dict(old["metadata"])
         previous.update(
             active_code_volume=old["workspace_volume"],
+            active_database_volume=old.get("database_volume"),
             services={},
             exec_logs={},
             exec_pids={},
@@ -1574,16 +2013,70 @@ for path,digest,mode in json.load(sys.stdin):
         ):
             raise CellIdentityConflict("activation owner, fence or activity changed")
         _, backend = manager.machine_runtime.parts(state)
-        if intent["state"] in {"switching", "active"} and await self._running_matches(
+        target_forward_only = intent.get(
+            "database_strategy"
+        ) == "replace_verified_empty" and intent.get("state") in {
+            "target_writers_admitted",
+            "target_recovery",
+            "active",
+        }
+        if intent["state"] in {
+            "switching",
+            "target_writers_admitted",
+            "target_recovery",
+            "active",
+        } and await self._running_matches(
             manager,
             state,
             backend,
             intent["volume"],
             request.fencing_epoch,
             prepared["manifest"],
+            intent.get("database_volume"),
         ):
             # The external switch already happened. Observe it; never restart an
             # app which may already be accepting new business writes.
+            intent["source_revision"] = await self._complete_activation(
+                manager, state, backend, request, intent
+            )
+            intent["state"] = "active"
+            write_controller_json(path, intent)
+            self._discard_code(path.parent)
+            return self._observed(intent)
+        if target_forward_only:
+            # Once target writers were admitted, target rows may exist. Recovery
+            # may repair/restart only the bound target pair; old DB is forbidden.
+            intent["state"] = "target_recovery"
+            write_controller_json(path, intent)
+            activation_prepared = {
+                **prepared,
+                "target_database_volume": intent["database_volume"],
+            }
+            if (
+                backend._lookup(backend.client.volumes, intent["volume"], "project-volume") is None
+                or backend._lookup(
+                    backend.client.volumes,
+                    intent["database_volume"],
+                    "project-volume",
+                )
+                is None
+            ):
+                raise CellIdentityConflict("target restoration pair is incomplete")
+            await machine_effect(backend.remove)
+
+            def readmit_target_writers() -> None:
+                intent["state"] = "target_writers_admitted"
+                write_controller_json(path, intent)
+
+            await self._activate_code(
+                manager,
+                state,
+                backend,
+                activation_prepared,
+                intent["volume"],
+                request.fencing_epoch,
+                before_writers=readmit_target_writers,
+            )
             intent["source_revision"] = await self._complete_activation(
                 manager, state, backend, request, intent
             )
@@ -1599,6 +2092,7 @@ for path,digest,mode in json.load(sys.stdin):
             old["workspace_volume"],
             request.fencing_epoch,
             old["machine"]["manifest"],
+            old.get("database_volume"),
         ):
             self._discard_code(path.parent)
             return self._observed(intent, applied=False)
@@ -1616,6 +2110,7 @@ for path,digest,mode in json.load(sys.stdin):
         # disposable build archive must not accumulate once it can no longer apply.
         try:
             (directory / "code.tar").unlink(missing_ok=True)
+            (directory / "database.tar").unlink(missing_ok=True)
         except OSError:
             # Cleanup cannot turn an observed successful activation into a
             # failed operation or roll back the user's already-running code.
@@ -1627,6 +2122,7 @@ for path,digest,mode in json.load(sys.stdin):
         # gone. Raising keeps the coordinator in reconciliation so a transient
         # cleanup failure is retried after restart.
         (directory / "code.tar").unlink(missing_ok=True)
+        (directory / "database.tar").unlink(missing_ok=True)
 
     async def _record_untouched_source(
         self, manager: Any, request: CodeRestorationApply, prepared: dict[str, Any], path: Path
@@ -1637,7 +2133,11 @@ for path,digest,mode in json.load(sys.stdin):
         state = self._state(manager, request, epoch=request.expected_fencing_epoch)
         machine, backend = manager.machine_runtime.parts(state)
         volume = backend.stem + "-code-" + request.operation_id.hex
+        database_volume = backend.stem + "-db-" + request.operation_id.hex
         metadata, saved = backend._metadata(), machine.state()
+        current_database_volume = getattr(
+            backend, "project_postgres_volume", backend.stem + "-app-postgres-data"
+        )
         # Preparations recorded while databases were protected also carry a
         # policy epoch; that obsolete field is not part of the runtime identity.
         recorded = {
@@ -1647,6 +2147,8 @@ for path,digest,mode in json.load(sys.stdin):
         }
         if (
             backend._lookup(backend.client.volumes, volume, "project-volume") is not None
+            or backend._lookup(backend.client.volumes, database_volume, "project-volume")
+            is not None
             or self._runtime_identity(backend, machine) != recorded
             or type(metadata.get("epoch")) is not int
             or metadata["epoch"] > request.expected_fencing_epoch
@@ -1658,22 +2160,48 @@ for path,digest,mode in json.load(sys.stdin):
         if _workspace_revision(current) != prepared["workspace_revision"]:
             raise CellIdentityConflict("unrecorded activation source changed")
         if prepared.get("binding") is not None:
-            binding = RestorationSourceBindingV2.model_validate(prepared["binding"])
+            binding_payload = prepared["binding"]
+            binding = (
+                RestorationSourceBindingV3.model_validate(binding_payload)
+                if binding_payload.get("version") == 3
+                else RestorationSourceBindingV2.model_validate(binding_payload)
+            )
             if request.binding_digest != binding.digest():
                 raise CellIdentityConflict("restoration source binding digest changed")
             source_bytes = await manager.docker.read_workspace_source_files(
                 backend.workspace_volume
             )
-            live, blockers = await machine_effect(catalog_contract, backend)
-            if blockers or not contract_matches(live, prepared["live_contract"]):
-                raise CellIdentityConflict("unrecorded activation database changed")
+            if (
+                isinstance(binding, RestorationSourceBindingV3)
+                and binding.database_strategy == "replace_verified_empty"
+            ):
+                prepared_witness = EmptyDatabaseWitness.model_validate(prepared["empty_witness"])
+                current_witness = await machine_effect(
+                    observe_empty_database,
+                    backend,
+                    operation_id=request.operation_id,
+                    workspace_id=request.workspace_id,
+                    project_id=request.project_id,
+                    database_identity_digest=prepared_witness.database_identity_digest,
+                    observation_kind="source",
+                )
+                if current_witness is None or not same_empty_source(
+                    prepared_witness, current_witness
+                ):
+                    raise CellIdentityConflict("unrecorded activation database changed")
+                schema = {"empty_witness_catalog_digest": current_witness.catalog_digest}
+            else:
+                live, blockers = await machine_effect(catalog_contract, backend)
+                if blockers or not contract_matches(live, prepared["live_contract"]):
+                    raise CellIdentityConflict("unrecorded activation database changed")
+                schema = live.model_dump(mode="json")
             observed = await machine_effect(
                 observe_live_source,
                 backend,
                 machine,
                 state,
                 source_files=source_bytes,
-                schema=live.model_dump(mode="json"),
+                schema=schema,
             )
             if binding.model_copy(update=observed).live_identity_digest() != (
                 binding.live_identity_digest()
@@ -1696,6 +2224,7 @@ for path,digest,mode in json.load(sys.stdin):
                     "metadata": metadata,
                     "machine": saved,
                     "workspace_volume": backend.workspace_volume,
+                    "database_volume": current_database_volume,
                     "contract": prepared["live_contract"],
                 },
             },
@@ -1723,9 +2252,13 @@ for path,digest,mode in json.load(sys.stdin):
         volume: str,
         epoch: int,
         raw_manifest: dict[str, Any],
+        database_volume: str | None = None,
     ) -> bool:
         manifest = MachineManifest.model_validate(raw_manifest)
         if backend.workspace_volume != volume:
+            return False
+        expected_database = database_volume or backend.project_postgres_volume
+        if backend.project_postgres_volume != expected_database:
             return False
         for container in (backend._container(), backend._project_postgres()):
             if container is None or container.labels.get("omnia.fencing_epoch") != str(epoch):
@@ -1737,6 +2270,13 @@ for path,digest,mode in json.load(sys.stdin):
         if not any(
             item.get("Name") == volume and item.get("Destination") == "/workspace"
             for item in mounts
+        ):
+            return False
+        postgres_mounts = backend._project_postgres().attrs.get("Mounts", [])
+        if not any(
+            item.get("Name") == expected_database
+            and item.get("Destination") == "/var/lib/postgresql/data"
+            for item in postgres_mounts
         ):
             return False
         for service in manifest.services:
@@ -1778,6 +2318,16 @@ for path,digest,mode in json.load(sys.stdin):
             )
         }
         metadata["restoration_proof"]["source_revision"] = revision
+        for key in (
+            "binding_digest",
+            "database_strategy",
+            "database_volume",
+            "final_witness_digest",
+            "pair_plan_digest",
+            "pair_seal",
+        ):
+            if intent.get(key) is not None:
+                metadata["restoration_proof"][key] = intent[key]
         write_controller_json(backend.metadata_path, metadata)
         await self._complete_fence(manager, state, request.fencing_epoch, intent["volume"])
         return revision
@@ -1806,10 +2356,7 @@ for path,digest,mode in json.load(sys.stdin):
                     raise CellIdentityConflict("restoration rejection epoch is invalid")
                 result["rejected_before_effect"] = True
                 result["retained_source_fencing_epoch"] = retained_epoch
-            elif (
-                intent.get("state") == "superseded"
-                and intent.get("effects_admitted") is False
-            ):
+            elif intent.get("state") == "superseded" and intent.get("effects_admitted") is False:
                 if intent.get("retained_source_fencing_epoch") is not None:
                     raise CellIdentityConflict("superseded restoration asserted a serving epoch")
                 result["superseded_before_effect"] = True

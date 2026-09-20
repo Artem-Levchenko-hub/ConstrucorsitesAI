@@ -647,7 +647,7 @@ export function MaxLivePreview({
                 title={!selectedSnapshot?.snapshot_id ? "У этой версии нет сохранённых исходников"
                   : !restorationEnabled ? "Подготовка восстановления сейчас недоступна"
                     : restorationBusy ? "Сначала завершите текущую операцию восстановления" : undefined}
-              >Подготовить восстановление v{selectedVersion}</button> : !historyUnavailable && <button
+              >Восстановить версию v{selectedVersion}</button> : !historyUnavailable && <button
                 type="button"
                 onClick={() => setRestoreTargetId(selectedSnapshot?.id ?? null)}
                 disabled={restoringSnapshot || !selectedSnapshot?.can_restore || !selectedSnapshot.snapshot_id}

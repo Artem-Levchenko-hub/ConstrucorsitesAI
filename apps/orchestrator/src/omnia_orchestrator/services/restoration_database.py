@@ -34,12 +34,22 @@ def admin_sql(backend: Any, sql: str, *, max_bytes: int = 4 * 1024 * 1024) -> by
         connection._sock.shutdown(socket.SHUT_WR)
         output = read_controller_output(connection, max_bytes=max_bytes)
     finally:
-        connection.close()
+        close_controller_socket(connection)
     outcome = backend.client.api.exec_inspect(execution["Id"])
     if outcome.get("Running") or outcome.get("ExitCode") != 0:
         # PostgreSQL errors can echo SQL, credentials or row contents.
         raise CellResourceError("controller database operation failed")
     return output
+
+
+def close_controller_socket(connection: Any) -> None:
+    """Close Docker's owning HTTP response before its borrowed raw socket."""
+    response = getattr(connection, "_response", None)
+    try:
+        if response is not None:
+            response.close()
+    finally:
+        connection.close()
 
 
 def read_controller_output(connection: Any, *, max_bytes: int) -> bytes:

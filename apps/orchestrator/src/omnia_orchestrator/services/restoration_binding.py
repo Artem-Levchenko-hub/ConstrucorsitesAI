@@ -37,9 +37,7 @@ def inventory_partition_digests(inventory: InventoryReport) -> tuple[str, str]:
     return digest({"business", "unknown"}), digest({"technical"})
 
 
-def exact_inventory_partition_digests(
-    backend: Any, inventory: InventoryReport
-) -> tuple[str, str]:
+def exact_inventory_partition_digests(backend: Any, inventory: InventoryReport) -> tuple[str, str]:
     """Replace bounded/stats estimates with exact read-only counts for copy proof."""
     measured = [
         item
@@ -53,9 +51,7 @@ def exact_inventory_partition_digests(
         if "." not in item.object:
             raise CellIdentityConflict("restoration inventory identity is invalid")
         schema, name = item.object.split(".", 1)
-        expressions.append(
-            f"(SELECT count(*) FROM {quote_ident(schema)}.{quote_ident(name)})"
-        )
+        expressions.append(f"(SELECT count(*) FROM {quote_ident(schema)}.{quote_ident(name)})")
     sql = (
         "SET statement_timeout = '60s';\nSET default_transaction_read_only = on;\n"
         + "SELECT json_build_array("
@@ -205,9 +201,7 @@ def observe_live_source(
     """Resolve the live serving/runtime/DB identity without returning secrets."""
     app = backend._container()
     postgres = backend._project_postgres()
-    gateway = backend._lookup(
-        backend.client.containers, backend.stem + "-gateway", "max-gateway"
-    )
+    gateway = backend._lookup(backend.client.containers, backend.stem + "-gateway", "max-gateway")
     core = backend._lookup(
         backend.client.containers, backend.stem + "-max-core", "managed-max-core"
     )
@@ -220,9 +214,7 @@ def observe_live_source(
     )
     if volume is None:
         raise CellIdentityConflict("restoration database volume is missing")
-    volume_identity = {
-        key: volume.attrs.get(key) for key in ("Name", "CreatedAt", "Labels")
-    }
+    volume_identity = {key: volume.attrs.get(key) for key in ("Name", "CreatedAt", "Labels")}
     expected_env = backend.project_database_env()
     actual_env = _environment(app)
     if any(actual_env.get(key) != value for key, value in expected_env.items()):
@@ -294,10 +286,12 @@ def observe_live_source(
                 "fencing_epoch": state.fencing_epoch,
                 "serving_fencing_epoch": serving_epoch,
                 "active_generation_run_id": str(state.active_generation_run_id)
-                if state.active_generation_run_id else None,
+                if state.active_generation_run_id
+                else None,
                 "active_generation_fencing_epoch": state.active_generation_fencing_epoch,
                 "last_operation_id": str(state.last_operation_id)
-                if state.last_operation_id else None,
+                if state.last_operation_id
+                else None,
                 "machine_epoch": observed_machine_state.get("epoch"),
             }
         ),

@@ -14,16 +14,18 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from omnia_api.core.config import get_settings
 from omnia_api.models.restoration import Restoration
 from omnia_api.services.restoration_runtime import RestorationRuntime
 from omnia_api.services.restorations import (
+    AUTOMATIC_EXECUTION_POLICY,
     CONTROLLER_WAIT_STATES,
     advance_restoration,
     schedule_reconcile,
+    waits_for_reconciliation,
 )
 
 log = structlog.get_logger("restoration_reconciliation")
@@ -46,7 +48,15 @@ async def claim_due_restorations(
         await session.scalars(
             select(Restoration)
             .where(
-                Restoration.state.in_(tuple(CONTROLLER_WAIT_STATES)),
+                or_(
+                    Restoration.state.in_(tuple(CONTROLLER_WAIT_STATES)),
+                    and_(
+                        Restoration.state == "ready",
+                        Restoration.execution_policy == AUTOMATIC_EXECUTION_POLICY,
+                        Restoration.selected_branch == "exact",
+                        Restoration.apply_digest.is_(None),
+                    ),
+                ),
                 Restoration.next_reconcile_at.is_not(None),
                 Restoration.next_reconcile_at <= now,
                 or_(
@@ -97,7 +107,7 @@ async def _observe(
         if operation is None:
             return
         operation.reconcile_lease_until = None
-        if operation.state not in CONTROLLER_WAIT_STATES:
+        if not waits_for_reconciliation(operation):
             # Owner-facing or terminal by now (a client may have moved it while
             # we observed): nothing to poll until someone acts.
             operation.next_reconcile_at = None
@@ -138,7 +148,15 @@ async def oldest_pending_age_seconds(
 ) -> float | None:
     oldest = await session.scalar(
         select(func.min(Restoration.next_reconcile_at)).where(
-            Restoration.state.in_(tuple(CONTROLLER_WAIT_STATES)),
+            or_(
+                Restoration.state.in_(tuple(CONTROLLER_WAIT_STATES)),
+                and_(
+                    Restoration.state == "ready",
+                    Restoration.execution_policy == AUTOMATIC_EXECUTION_POLICY,
+                    Restoration.selected_branch == "exact",
+                    Restoration.apply_digest.is_(None),
+                ),
+            ),
             Restoration.next_reconcile_at.is_not(None),
         )
     )

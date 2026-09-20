@@ -10,8 +10,9 @@ it("reads list and operation with caller cancellation and bounded requests", asy
   expect(apiFetch).toHaveBeenNthCalledWith(1, "/api/projects/project/restorations", { signal, timeoutMs: 15_000 });
   expect(apiFetch).toHaveBeenNthCalledWith(2, "/api/projects/project/restorations/operation", { signal, timeoutMs: 15_000 });
 });
-it("sends explicit preparation identity without invoking legacy rollback or publication", async () => {
-  const payload = { target_version_id: "v3", expected_draft_snapshot_id: "s11", idempotency_key: "logical-prepare" };
+it("sends explicit one-click policy without invoking legacy rollback or publication", async () => {
+  const payload = { target_version_id: "v3", expected_draft_snapshot_id: "s11",
+    idempotency_key: "logical-prepare", execution_policy: "automatic_when_safe" as const };
   await prepareRestoration("project", payload);
   expect(apiFetch).toHaveBeenCalledExactlyOnceWith("/api/projects/project/restorations", {
     method: "POST", json: payload, timeoutMs: 30_000,

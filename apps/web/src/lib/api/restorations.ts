@@ -53,6 +53,9 @@ export interface RestoreOperation {
   updated_at: string;
   revision: number;
   candidate_id: string | null;
+  execution_policy: "manual" | "automatic_when_safe";
+  selected_branch: "exact" | "adaptive" | null;
+  adaptation_run_id: string | null;
   report: RestoreReport | null;
   can_apply: boolean;
   can_cancel: boolean;
@@ -64,6 +67,7 @@ export interface PrepareRestorationRequest {
   target_version_id: string;
   expected_draft_snapshot_id: string | null;
   idempotency_key: string;
+  execution_policy: "manual" | "automatic_when_safe";
 }
 export interface ApplyRestorationRequest {
   report_revision: number;

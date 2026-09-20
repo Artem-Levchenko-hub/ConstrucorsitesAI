@@ -54,7 +54,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-it("prepares a source version without its screenshot using the new durable flow", async () => {
+it("offers one-click restoration without requiring a screenshot", async () => {
   const prepare = vi.fn(async () => {});
   const target = version(31, { previews: [], preview_status: "missing", can_restore: false });
   render(<MaxLivePreview project={project} versions={[version(32), target]} snapshotsLoading={false}
@@ -62,6 +62,8 @@ it("prepares a source version without its screenshot using the new durable flow"
     onRestoreSnapshot={api.rollback} restoringSnapshot={false}
     onPrepareRestoration={prepare} restorationEnabled restorationBusy={false} />);
   expect(api.runtime).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-testid='max-prepare-restoration']")?.textContent)
+    .toContain("Восстановить версию");
   click("[data-testid='max-prepare-restoration']");
   expect(prepare).toHaveBeenCalledExactlyOnceWith(target);
   expect(api.rollback).not.toHaveBeenCalled();
@@ -77,6 +79,7 @@ it("allows explicit preparation from image-less history while preserving server 
   click("[data-testid='max-history-activity-open']");
   const button = document.querySelector<HTMLButtonElement>("[data-testid='max-history-prepare-v31']");
   expect(button).not.toBeNull(); expect(button?.disabled).toBe(true);
+  expect(button?.textContent).toContain("Восстановить версию");
   expect(api.runtime).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
 });
 

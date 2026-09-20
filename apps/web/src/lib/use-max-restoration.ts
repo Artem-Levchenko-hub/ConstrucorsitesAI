@@ -23,6 +23,8 @@ function readRequest(project: string): Request | null {
       typeof value.payload?.idempotency_key !== "string"
       || !(value.payload.expected_draft_snapshot_id === null || typeof value.payload.expected_draft_snapshot_id === "string")
       || (value.kind === "prepare" && typeof value.payload.target_version_id !== "string")
+      || (value.kind === "prepare" && value.payload.execution_policy !== undefined
+        && !["manual", "automatic_when_safe"].includes(value.payload.execution_policy))
       || (value.kind === "apply" && !Number.isInteger(value.payload.report_revision))
     )) return null;
     if (value.error !== undefined && typeof value.error !== "string") return null;
@@ -144,7 +146,8 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     const previous = stored?.rejected ? null : stored;
     const request: Request = previous?.kind === "prepare" && previous.payload.target_version_id === version.id
       ? previous : { kind: "prepare", payload: { target_version_id: version.id,
-        expected_draft_snapshot_id: currentSnapshotId, idempotency_key: crypto.randomUUID() } };
+        expected_draft_snapshot_id: currentSnapshotId, idempotency_key: crypto.randomUUID(),
+        execution_policy: "automatic_when_safe" } };
     await execute(request);
   }
   async function apply() {

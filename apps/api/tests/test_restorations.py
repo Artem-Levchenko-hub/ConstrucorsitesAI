@@ -33,6 +33,17 @@ def source_binding(**changes):
     return value
 
 
+def source_binding_v3(**changes):
+    value = {
+        **source_binding(version=3),
+        "database_strategy": "preserve_current",
+        "witness_digest": None,
+        "target_database_artifact_digest": None,
+    }
+    value.update(changes)
+    return value
+
+
 @pytest.fixture(autouse=True)
 def ready_source_resources(monkeypatch):
     from types import SimpleNamespace
@@ -186,6 +197,40 @@ def test_restoration_request_and_runtime_contracts_are_strict():
         )
 
 
+def test_restore_request_policy_is_strict_and_changes_the_durable_request_digest():
+    from pydantic import ValidationError
+
+    from omnia_api.schemas.restoration import RestoreRequest
+    from omnia_api.services.restorations import _digest, restoration_request_digest
+
+    identity = {
+        "target_version_id": uuid4(),
+        "expected_draft_snapshot_id": uuid4(),
+        "idempotency_key": "one-click-restore",
+    }
+    manual = RestoreRequest(**identity)
+    automatic = RestoreRequest(**identity, execution_policy="automatic_when_safe")
+
+    assert manual.execution_policy == "manual"
+    assert automatic.execution_policy == "automatic_when_safe"
+    project_id, owner_id = uuid4(), uuid4()
+    legacy_wire = manual.model_dump(mode="json")
+    legacy_wire.pop("execution_policy")
+    legacy = _digest(
+        {
+            "project_id": str(project_id),
+            "owner_id": str(owner_id),
+            **legacy_wire,
+        }
+    )
+    assert restoration_request_digest(project_id, owner_id, manual) == legacy
+    assert restoration_request_digest(
+        project_id, owner_id, automatic
+    ) != legacy
+    with pytest.raises(ValidationError):
+        RestoreRequest(**identity, execution_policy="automatic_unverified")
+
+
 def test_runtime_observation_must_match_planned_activation():
     from omnia_api.schemas.restoration import RuntimeRestoration
     from omnia_api.services.restorations import validate_runtime_response
@@ -227,9 +272,19 @@ class FakeRuntime:
         self.lose_apply_reply = False
 
     async def prepare(self, request):
-        from omnia_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
+        from omnia_api.schemas.restoration import (
+            RuntimeRestoration,
+            RuntimeSourceBindingV2,
+            RuntimeSourceBindingV3,
+        )
 
         self.prepares += 1
+        contract_version = request["binding_contract_version"]
+        binding = (
+            RuntimeSourceBindingV3.model_validate(source_binding_v3())
+            if contract_version == 3
+            else RuntimeSourceBindingV2.model_validate(source_binding())
+        )
         self.result = RuntimeRestoration(
             **{
                 key: request[key]
@@ -243,8 +298,8 @@ class FakeRuntime:
             error=None,
             can_apply=True,
             can_cancel=True,
-            binding=source_binding(),
-            binding_digest=RuntimeSourceBindingV2.model_validate(source_binding()).digest(),
+            binding=binding,
+            binding_digest=binding.digest(),
         )
         return self.result
 
@@ -296,12 +351,95 @@ class FakeRuntime:
 
 
 def test_runtime_source_binding_digest_is_canonical_and_secret_free():
-    from omnia_api.schemas.restoration import RuntimeSourceBindingV2
+    from pydantic import ValidationError
+
+    from omnia_api.schemas.restoration import RuntimeSourceBindingV2, RuntimeSourceBindingV3
 
     first = RuntimeSourceBindingV2.model_validate(source_binding())
     second = RuntimeSourceBindingV2.model_validate(dict(reversed(list(source_binding().items()))))
     assert first.digest() == second.digest()
     assert "secret" not in first.model_dump_json().lower()
+    v3 = RuntimeSourceBindingV3.model_validate(source_binding_v3())
+    assert v3.version == 3 and v3.digest() != first.digest()
+    replacement = RuntimeSourceBindingV3.model_validate(
+        source_binding_v3(
+            database_strategy="replace_verified_empty",
+            witness_digest="f" * 64,
+            target_database_artifact_digest="0" * 64,
+        )
+    )
+    assert replacement.database_strategy == "replace_verified_empty"
+    with pytest.raises(ValidationError, match="requires both"):
+        RuntimeSourceBindingV3.model_validate(
+            source_binding_v3(
+                database_strategy="replace_verified_empty",
+                witness_digest=None,
+                target_database_artifact_digest="f" * 64,
+            )
+        )
+    with pytest.raises(ValidationError, match="must not carry"):
+        RuntimeSourceBindingV3.model_validate(
+            source_binding_v3(witness_digest="f" * 64)
+        )
+
+
+@pytest.mark.parametrize("contract_version", [2, 3])
+def test_runtime_ready_requires_the_exact_requested_binding_contract(contract_version):
+    from omnia_api.schemas.restoration import (
+        RuntimeRestoration,
+        RuntimeSourceBindingV2,
+        RuntimeSourceBindingV3,
+    )
+    from omnia_api.services.restorations import validate_runtime_response
+
+    identity = {
+        key: str(uuid4())
+        for key in ("operation_id", "workspace_id", "project_id", "owner_id")
+    }
+    binding = (
+        RuntimeSourceBindingV3.model_validate(source_binding_v3())
+        if contract_version == 3
+        else RuntimeSourceBindingV2.model_validate(source_binding())
+    )
+    result = RuntimeRestoration(
+        **identity,
+        state="ready",
+        phase="checked",
+        revision=1,
+        candidate_id=uuid4(),
+        report={"revision": 1, "mode": "exact"},
+        can_apply=True,
+        can_cancel=True,
+        binding=binding.model_dump(mode="json"),
+        binding_digest=binding.digest(),
+    )
+    assert result.binding is not None
+    assert result.binding.version == contract_version
+    request = {
+        **identity,
+        "binding_contract_version": contract_version,
+        "planned_commit_sha": "a" * 40,
+        "fencing_epoch": 7,
+    }
+    validate_runtime_response(request, result)
+    with pytest.raises(ValueError, match="binding is required"):
+        validate_runtime_response(
+            request,
+            result.model_copy(update={"binding": None, "binding_digest": None}),
+        )
+
+    wrong_binding = (
+        RuntimeSourceBindingV2.model_validate(source_binding())
+        if contract_version == 3
+        else RuntimeSourceBindingV3.model_validate(source_binding_v3())
+    )
+    with pytest.raises(ValueError, match="binding contract mismatch"):
+        validate_runtime_response(
+            request,
+            result.model_copy(
+                update={"binding": wrong_binding, "binding_digest": wrong_binding.digest()}
+            ),
+        )
 
 
 async def restoration_fixture(db):
@@ -398,6 +536,35 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
     assert current.commit_sha != old.commit_sha  # Existing source history is preserved.
 
 
+async def test_db_legacy_manual_idempotency_replays_but_cannot_be_upgraded_to_automatic(
+    db_session,
+):
+    from omnia_api.core.errors import ApiError
+    from omnia_api.models.restoration import Restoration
+    from omnia_api.services import restorations as service
+
+    owner, project, _, _, _, _, request = await restoration_fixture(db_session)
+    runtime = FakeRuntime()
+    created = await service.create_restoration(
+        db_session, project.id, owner.id, request, runtime
+    )
+    row = await db_session.get(Restoration, created.id)
+    assert row.execution_policy == "manual"
+
+    replay = await service.create_restoration(
+        db_session, project.id, owner.id, request, runtime
+    )
+    assert replay.id == created.id and runtime.prepares == 1
+
+    automatic = request.model_copy(
+        update={"execution_policy": "automatic_when_safe"}
+    )
+    with pytest.raises(ApiError, match="idempotency key was reused"):
+        await service.create_restoration(
+            db_session, project.id, owner.id, automatic, runtime
+        )
+
+
 async def test_db_restoration_overlays_complete_current_max_kit_when_configured(db_session):
     from omnia_api.models.max_project_config import MaxProjectConfig
     from omnia_api.models.restoration import Restoration
@@ -430,7 +597,7 @@ async def test_db_restoration_overlays_complete_current_max_kit_when_configured(
     assert runtime.prepares == 1
 
 
-async def test_db_v2_binding_is_durable_and_required_before_apply(db_session):
+async def test_db_v3_binding_is_durable_and_required_before_apply(db_session):
     from omnia_api.core.errors import ApiError
     from omnia_api.models.restoration import Restoration
     from omnia_api.schemas.restoration import RestoreApplyRequest
@@ -440,9 +607,9 @@ async def test_db_v2_binding_is_durable_and_required_before_apply(db_session):
     runtime = FakeRuntime()
     operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
     row = await db_session.get(Restoration, operation.id)
-    assert row.source_binding["version"] == 2
+    assert row.source_binding["version"] == 3
     assert len(row.source_binding_digest) == 64
-    assert row.request_payload["binding_contract_version"] == 2
+    assert row.request_payload["binding_contract_version"] == 3
 
     row.source_binding = None
     row.source_binding_digest = None
@@ -779,6 +946,51 @@ async def test_db_lost_initial_dispatch_resumes_same_operation(db_session, monke
     )
     assert recovered.id == operation.id and recovered.state == "ready"
     assert runtime.prepares == 1 and project.current_snapshot_id == current.id
+
+
+async def test_db_lost_initial_dispatch_replays_persisted_legacy_v2_payload_unchanged(
+    db_session, monkeypatch
+):
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from omnia_api.models.restoration import Restoration
+    from omnia_api.services import restorations as service
+
+    class CapturingRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__()
+            self.prepare_payloads = []
+
+        async def prepare(self, payload):
+            self.prepare_payloads.append(dict(payload))
+            return await super().prepare(payload)
+
+    owner, project, _, _, _, _, request = await restoration_fixture(db_session)
+    runtime = CapturingRuntime()
+    real_prepare = runtime.prepare
+
+    async def not_dispatched(payload):
+        raise TimeoutError("connection lost before dispatch")
+
+    monkeypatch.setattr(runtime, "prepare", not_dispatched)
+    operation = await service.create_restoration(
+        db_session, project.id, owner.id, request, runtime
+    )
+    row = await db_session.get(Restoration, operation.id)
+    row.request_payload = {**row.request_payload, "binding_contract_version": 2}
+    flag_modified(row, "request_payload")
+    await db_session.commit()
+
+    monkeypatch.setattr(runtime, "prepare", real_prepare)
+    recovered = await service.advance_restoration(
+        db_session, project.id, owner.id, operation.id, runtime
+    )
+
+    assert recovered.state == "ready"
+    assert runtime.prepare_payloads[-1]["binding_contract_version"] == 2
+    row = await db_session.get(Restoration, operation.id)
+    assert row.request_payload["binding_contract_version"] == 2
+    assert row.source_binding["version"] == 2
 
 
 async def test_db_database_commit_failure_after_activation_is_recoverable(db_session, monkeypatch):

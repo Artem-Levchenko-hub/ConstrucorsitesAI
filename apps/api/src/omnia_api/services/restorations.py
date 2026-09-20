@@ -37,15 +37,55 @@ def _digest(payload: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def restoration_request_digest(
+    project_id: UUID, owner_id: UUID, request: RestoreRequest
+) -> str:
+    wire = request.model_dump(mode="json")
+    if request.execution_policy == "manual":
+        # Pre-policy clients hashed this exact payload. Keep their durable
+        # idempotency identity byte-compatible across a rolling deployment.
+        wire.pop("execution_policy")
+    return _digest(
+        {"project_id": str(project_id), "owner_id": str(owner_id), **wire}
+    )
+
+
 # States in which the next transition depends on the controller, not on the owner.
-# The worker re-observes these (AV19.1); ready/needs_changes wait for a person.
+# A verified automatic ``ready`` is handled separately: it waits on the API
+# worker to persist the existing apply claim, not on another owner action.
 CONTROLLER_WAIT_STATES = frozenset({"preparing", "checking", "applying", "reconciling"})
 _RECONCILE_DELAYS_SECONDS = (3, 5, 10, 20, 30)
+AUTOMATIC_EXECUTION_POLICY = "automatic_when_safe"
 
 
 def reconcile_delay_seconds(attempts: int) -> int:
     index = min(max(attempts, 0), len(_RECONCILE_DELAYS_SECONDS) - 1)
     return _RECONCILE_DELAYS_SECONDS[index]
+
+
+def automatic_apply_ready(operation: Restoration) -> bool:
+    """True only for the exact immutable receipt selected by the owner policy."""
+    report = operation.report
+    runtime = operation.runtime_result or {}
+    return bool(
+        operation.execution_policy == AUTOMATIC_EXECUTION_POLICY
+        and operation.selected_branch == "exact"
+        and operation.state == "ready"
+        and operation.phase != "cancel"
+        and operation.apply_digest is None
+        and operation.candidate_id is not None
+        and operation.source_binding is not None
+        and operation.source_binding_digest is not None
+        and isinstance(report, dict)
+        and report.get("mode") == "exact"
+        and report.get("blockers") == []
+        and type(report.get("revision")) is int
+        and runtime.get("can_apply") is True
+    )
+
+
+def waits_for_reconciliation(operation: Restoration) -> bool:
+    return operation.state in CONTROLLER_WAIT_STATES or automatic_apply_ready(operation)
 
 
 def schedule_reconcile(operation: Restoration, *, now: datetime | None = None) -> None:
@@ -55,7 +95,7 @@ def schedule_reconcile(operation: Restoration, *, now: datetime | None = None) -
     controller again. Owner-facing and terminal states clear the schedule so a
     ready candidate is never polled forever."""
     moment = now or datetime.now(UTC)
-    if operation.state in CONTROLLER_WAIT_STATES:
+    if waits_for_reconciliation(operation):
         # A row built in memory has no server default yet.
         delay = reconcile_delay_seconds(operation.reconcile_attempts or 0)
         operation.next_reconcile_at = moment + timedelta(seconds=delay)
@@ -198,6 +238,9 @@ def public_operation(operation: Restoration) -> RestoreOperation:
         updated_at=operation.updated_at,
         revision=operation.revision,
         candidate_id=operation.candidate_id,
+        execution_policy=cast(Any, operation.execution_policy),
+        selected_branch=cast(Any, operation.selected_branch),
+        adaptation_run_id=operation.adaptation_run_id,
         report=report,
         can_apply=(
             operation.state == "ready"
@@ -251,15 +294,22 @@ def validate_runtime_response(request: dict[str, Any], result: RuntimeRestoratio
     for key in ("operation_id", "workspace_id", "project_id", "owner_id"):
         if str(getattr(result, key)) != request[key]:
             raise ValueError("restoration response identity mismatch")
-    v2 = request.get("binding_contract_version") == 2
+    binding_contract_version = request.get("binding_contract_version")
+    bound_contract = binding_contract_version in {2, 3}
     if (
-        v2
+        bound_contract
         and result.state == "ready"
         and (
             result.binding is None or result.binding_digest is None or result.can_apply is not True
         )
     ):
         raise ValueError("restoration source binding is required")
+    if (
+        bound_contract
+        and result.binding is not None
+        and result.binding.version != binding_contract_version
+    ):
+        raise ValueError("restoration source binding contract mismatch")
     expected_binding = request.get("binding_digest")
     if expected_binding is not None and result.binding_digest != expected_binding:
         raise ValueError("restoration source binding mismatch")
@@ -336,13 +386,7 @@ async def create_restoration(
     _source_attempt: int = 0,
 ) -> RestoreOperation:
     project = await _owned_project(session, project_id, owner_id)
-    digest = _digest(
-        {
-            "project_id": str(project_id),
-            "owner_id": str(owner_id),
-            **request.model_dump(mode="json"),
-        }
-    )
+    digest = restoration_request_digest(project_id, owner_id, request)
     existing = await session.scalar(
         select(Restoration).where(
             Restoration.project_id == project_id,
@@ -411,6 +455,9 @@ async def create_restoration(
         base_commit_sha=base.commit_sha,
         idempotency_key=request.idempotency_key,
         request_digest=digest,
+        execution_policy=request.execution_policy,
+        selected_branch=None,
+        adaptation_run_id=None,
         fencing_epoch=workspace.fencing_epoch,
         state="preparing",
         phase="prepare",
@@ -540,7 +587,7 @@ async def _prepare(
             "target_commit_sha": operation.target_commit_sha,
             "planned_commit_sha": operation.planned_commit_sha,
             "fencing_epoch": operation.fencing_epoch,
-            "binding_contract_version": 2,
+            "binding_contract_version": 3,
             "files": prepared["files"],
             "current_files": prepared["current_files"],
         }
@@ -570,13 +617,63 @@ async def advance_restoration(
 ) -> RestoreOperation:
     """Worker-only progression for a previously durable restoration intent."""
     _, operation = await _owned_operation(session, project_id, owner_id, operation_id)
-    if operation.state not in CONTROLLER_WAIT_STATES:
+    auto_apply = automatic_apply_ready(operation)
+    if operation.state not in CONTROLLER_WAIT_STATES and not auto_apply:
         return public_operation(operation)
     pending_export = not operation.request_payload and operation.state == "preparing"
+    if auto_apply:
+        report = public_operation(operation).report
+        if report is None:
+            return public_operation(operation)
+        request = RestoreApplyRequest(
+            report_revision=report.revision,
+            expected_draft_snapshot_id=operation.base_draft_snapshot_id,
+            idempotency_key=f"restoration-auto-apply:{operation.id}",
+        )
     await session.commit()
     if pending_export:
         return await _prepare(session, project_id, owner_id, operation_id, runtime)
+    if auto_apply:
+        try:
+            return await apply_restoration(
+                session, project_id, owner_id, operation_id, request, runtime
+            )
+        except ApiError as exc:
+            if exc.status_code != 409:
+                raise
+            return await _stop_automatic_pre_admission(
+                session, project_id, owner_id, operation_id
+            )
     return await _dispatch(session, project_id, owner_id, operation_id, runtime, "status")
+
+
+async def _stop_automatic_pre_admission(
+    session: AsyncSession,
+    project_id: UUID,
+    owner_id: UUID,
+    operation_id: UUID,
+) -> RestoreOperation:
+    """Make a definitive automatic-apply rejection owner-visible.
+
+    Re-read under the canonical project/operation lock. A concurrent cancel or
+    admitted apply owns the operation and must never be overwritten here.
+    """
+    _, operation = await _owned_operation(session, project_id, owner_id, operation_id)
+    if (
+        operation.execution_policy == AUTOMATIC_EXECUTION_POLICY
+        and operation.state == "ready"
+        and operation.phase != "cancel"
+        and operation.apply_digest is None
+    ):
+        operation.state = "needs_changes"
+        operation.phase = "retry_prepare"
+        operation.error = (
+            "Черновик, отчёт или среда проекта изменились до применения. "
+            "Запустите восстановление выбранной версии заново."
+        )
+        _touch(operation)
+        await session.commit()
+    return public_operation(operation)
 
 
 async def apply_restoration(
@@ -764,6 +861,7 @@ async def _dispatch(
             operation.applied_version_id,
             operation.source_binding,
             operation.source_binding_digest,
+            operation.selected_branch,
             project.current_snapshot_id,
         )
     if (
@@ -810,6 +908,16 @@ async def _dispatch(
         operation.runtime_result = result.model_dump(mode="json")
         operation.candidate_id = result.candidate_id
         operation.report = result.report.model_dump(mode="json") if result.report else None
+    if (
+        result.state == "ready"
+        and result.report is not None
+        and result.report.mode == "exact"
+        and not result.report.blockers
+        and result.can_apply is True
+        and result.binding is not None
+        and result.binding_digest is not None
+    ):
+        operation.selected_branch = "exact"
     operation.error = result.error
     if result.state == "completed":
         if operation.apply_digest is None:
@@ -835,6 +943,7 @@ async def _dispatch(
         operation.applied_version_id,
         operation.source_binding,
         operation.source_binding_digest,
+        operation.selected_branch,
         project.current_snapshot_id,
     ):
         await session.commit()

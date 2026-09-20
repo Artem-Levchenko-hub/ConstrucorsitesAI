@@ -19,6 +19,7 @@ from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationCancel,
     CodeRestorationPrepare,
     RestorationSourceBindingV2,
+    RestorationSourceBindingV3,
 )
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
 from omnia_orchestrator.services.project_machine import write_controller_json
@@ -126,14 +127,10 @@ class CodeRestorationService:
     @staticmethod
     def _public(saved: dict[str, Any]) -> dict[str, Any]:
         wire_state = (
-            "reconciling"
-            if saved["state"] in {"cancelling", "cleanup_pending"}
-            else saved["state"]
+            "reconciling" if saved["state"] in {"cancelling", "cleanup_pending"} else saved["state"]
         )
         wire_phase = (
-            "reconciling"
-            if saved["phase"] in {"cancelling", "cleanup_pending"}
-            else saved["phase"]
+            "reconciling" if saved["phase"] in {"cancelling", "cleanup_pending"} else saved["phase"]
         )
         return {
             **{name: saved[name] for name in _IDENTITY},
@@ -184,9 +181,7 @@ class CodeRestorationService:
             return
         task = asyncio.create_task(self._cancel_drive(workspace, operation))
         self._cancel_tasks[key] = task
-        task.add_done_callback(
-            lambda done: self._cancel_finished(done, key, workspace, operation)
-        )
+        task.add_done_callback(lambda done: self._cancel_finished(done, key, workspace, operation))
 
     def _cancel_finished(
         self, done: asyncio.Task[None], key: str, workspace: UUID, operation: UUID
@@ -242,7 +237,7 @@ class CodeRestorationService:
                     raise CellIdentityConflict("restoration prepare envelope mismatch")
                 # An earlier cancel is a permanent tombstone, even before source arrived.
                 return self._public(saved)
-            if request.binding_contract_version != 2:
+            if request.binding_contract_version not in {2, 3}:
                 raise CellIdentityConflict("restoration binding capability is required")
             for path in (self.root / str(request.workspace_id)).glob("*.json"):
                 other = self._read(request.workspace_id, UUID(path.stem))
@@ -367,13 +362,15 @@ class CodeRestorationService:
                 raise ValueError("invalid restoration report")
             result.update(
                 format=2,
-                inventory=None if inventory is None
+                inventory=None
+                if inventory is None
                 else InventoryReport.model_validate(inventory).model_dump(mode="json"),
                 checks=[
                     CompatibilityCheck.model_validate(check).model_dump(mode="json")
                     for check in report.get("checks") or []
                 ],
-                capabilities=None if capabilities is None
+                capabilities=None
+                if capabilities is None
                 else CapabilityDiff.model_validate(capabilities).model_dump(mode="json"),
             )
         return result
@@ -514,17 +511,11 @@ class CodeRestorationService:
     async def _cancel_drive(self, workspace: UUID, operation: UUID) -> None:
         try:
             saved = self._read(workspace, operation)
-            if (
-                saved is None
-                or saved["state"] in _TERMINAL
-                or not saved["cancel_requested"]
-            ):
+            if saved is None or saved["state"] in _TERMINAL or not saved["cancel_requested"]:
                 return
             if saved["apply"] is not None:
                 raise CellIdentityConflict("an admitted restoration cannot be cancelled")
-            cancel = CodeRestorationCancel.model_validate(
-                {name: saved[name] for name in _IDENTITY}
-            )
+            cancel = CodeRestorationCancel.model_validate({name: saved[name] for name in _IDENTITY})
             await self._engine().cancel(cancel, saved["prepared"])
             async with self._lock.hold(workspace):
                 current = self._read(workspace, operation)
@@ -586,11 +577,7 @@ class CodeRestorationService:
     ) -> dict[str, Any] | None:
         async with self._lock.hold(workspace):
             saved = self._read(workspace, operation)
-            if (
-                saved is None
-                or saved["state"] in _TERMINAL
-                or saved["cancel_requested"]
-            ):
+            if saved is None or saved["state"] in _TERMINAL or saved["cancel_requested"]:
                 return None
             report = self._report(prepared)
             candidate = (
@@ -602,8 +589,11 @@ class CodeRestorationService:
             binding = None
             binding_digest = None
             if prepared.get("binding") is not None:
-                binding_model = RestorationSourceBindingV2.model_validate(
-                    prepared["binding"]
+                binding_payload = prepared["binding"]
+                binding_model = (
+                    RestorationSourceBindingV3.model_validate(binding_payload)
+                    if binding_payload.get("version") == 3
+                    else RestorationSourceBindingV2.model_validate(binding_payload)
                 )
                 binding = binding_model.model_dump(mode="json")
                 binding_digest = binding_model.digest()
@@ -650,9 +640,7 @@ class CodeRestorationService:
                 if saved is not None and saved["state"] not in _TERMINAL:
                     if saved["cancel_requested"]:
                         self._schedule_cancel(workspace, operation)
-                    elif (
-                        saved["state"] not in {"ready", "needs_changes"}
-                    ):
+                    elif saved["state"] not in {"ready", "needs_changes"}:
                         self._schedule(workspace, operation)
 
 
