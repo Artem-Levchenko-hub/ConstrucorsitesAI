@@ -9,6 +9,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, cast
 
 from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+from omnia_orchestrator.services.cell_state import retained_serving_fencing_epoch
 from omnia_orchestrator.services.restoration_database import admin_sql
 from omnia_orchestrator.services.versioning.contracts import InventoryReport
 from omnia_orchestrator.services.versioning.inventory import quote_ident
@@ -178,25 +179,17 @@ WHERE d.datname = '{database}';
     return value
 
 
-def serving_fencing_epoch(state: Any) -> int:
-    latest = state.operation(state.last_operation_id) if state.last_operation_id else None
-    prefix = "retained_source_fencing_epoch="
-    if (
-        latest is not None
-        and latest.kind == "restoration_rejection"
-        and latest.status == "completed"
-        and latest.fencing_epoch == state.fencing_epoch
-        and isinstance(latest.detail, str)
-        and latest.detail.startswith(prefix)
-    ):
-        try:
-            retained = int(latest.detail.removeprefix(prefix))
-        except ValueError as exc:
-            raise CellIdentityConflict("restoration rejection epoch is invalid") from exc
-        if retained < 1 or retained >= state.fencing_epoch:
-            raise CellIdentityConflict("restoration rejection epoch is inconsistent")
-        return retained
-    return int(state.fencing_epoch)
+def serving_fencing_epoch(
+    state: Any,
+    *,
+    machine_state: dict[str, Any] | None = None,
+) -> int:
+    snapshot = machine_state or {}
+    return retained_serving_fencing_epoch(
+        state,
+        machine_epoch=snapshot.get("epoch"),
+        machine_ready_epoch=snapshot.get("ready_epoch"),
+    )
 
 
 def observe_live_source(
@@ -206,6 +199,7 @@ def observe_live_source(
     *,
     source_files: dict[str, bytes],
     schema: object,
+    machine_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve the live serving/runtime/DB identity without returning secrets."""
     app = backend._container()
@@ -233,7 +227,15 @@ def observe_live_source(
     if any(actual_env.get(key) != value for key, value in expected_env.items()):
         raise CellIdentityConflict("serving application is bound to another database")
     route = _gateway_config(gateway)
-    serving_epoch = serving_fencing_epoch(state)
+    observed_machine_state = machine_state if machine_state is not None else machine.state()
+    if not isinstance(observed_machine_state, dict):
+        raise CellIdentityConflict("restoration serving machine state is unavailable")
+    serving_epoch = serving_fencing_epoch(state, machine_state=observed_machine_state)
+    if (
+        observed_machine_state.get("epoch") != serving_epoch
+        or observed_machine_state.get("ready_epoch") != serving_epoch
+    ):
+        raise CellIdentityConflict("restoration serving machine epoch is detached")
     networks = core.attrs.get("NetworkSettings", {}).get("Networks", {})
     core_network = networks.get(backend.internal_network) if isinstance(networks, dict) else None
     core_ip = core_network.get("IPAddress") if isinstance(core_network, dict) else None
@@ -252,7 +254,6 @@ def observe_live_source(
         if is_dataclass(state.resource_names)
         else None
     )
-    machine_state = machine.state()
     return {
         "serving_route_digest": canonical_digest(route),
         "serving_release_digest": canonical_digest(
@@ -260,8 +261,8 @@ def observe_live_source(
                 "app": app_identity,
                 "gateway": gateway_identity,
                 "core": core_identity,
-                "manifest": machine_state.get("manifest"),
-                "ready_epoch": machine_state.get("ready_epoch"),
+                "manifest": observed_machine_state.get("manifest"),
+                "ready_epoch": observed_machine_state.get("ready_epoch"),
             }
         ),
         "controller_resource_digest": canonical_digest(
@@ -291,7 +292,7 @@ def observe_live_source(
                 "active_generation_fencing_epoch": state.active_generation_fencing_epoch,
                 "last_operation_id": str(state.last_operation_id)
                 if state.last_operation_id else None,
-                "machine_epoch": machine_state.get("epoch"),
+                "machine_epoch": observed_machine_state.get("epoch"),
             }
         ),
         "provider_digest": canonical_digest(

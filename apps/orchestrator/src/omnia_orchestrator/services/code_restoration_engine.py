@@ -33,6 +33,7 @@ from omnia_orchestrator.schemas.code_restoration import (
     RestorationSourceBindingV2,
 )
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate
+from omnia_orchestrator.services.cell_state import legacy_release_serving_epoch
 from omnia_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
@@ -345,6 +346,29 @@ class CodeRestorationEngine:
             )
         return state
 
+    @staticmethod
+    def _repair_legacy_release_receipt(
+        manager: Any,
+        request: CodeRestorationPrepare,
+        state: Any,
+        machine_state: dict[str, Any],
+    ) -> Any:
+        retained_epoch = legacy_release_serving_epoch(
+            state,
+            machine_epoch=machine_state.get("epoch"),
+            machine_ready_epoch=machine_state.get("ready_epoch"),
+        )
+        if retained_epoch is None:
+            return state
+        return manager.state_store.repair_legacy_release_serving_epoch(
+            request.workspace_id,
+            expected_control_fencing_epoch=state.fencing_epoch,
+            expected_last_operation_id=state.last_operation_id,
+            retained_fencing_epoch=retained_epoch,
+            machine_epoch=machine_state.get("epoch"),
+            machine_ready_epoch=machine_state.get("ready_epoch"),
+        )
+
     async def prepare(
         self,
         request: CodeRestorationPrepare,
@@ -456,6 +480,7 @@ class CodeRestorationEngine:
                     }
                 live_before = None
                 if request.binding_contract_version == 2:
+                    source_machine_state = machine.state()
                     live_before = await machine_effect(
                         observe_live_source,
                         source,
@@ -463,6 +488,10 @@ class CodeRestorationEngine:
                         state,
                         source_files=source_bytes,
                         schema=current_contract.model_dump(mode="json"),
+                        machine_state=source_machine_state,
+                    )
+                    state = self._repair_legacy_release_receipt(
+                        manager, request, state, source_machine_state
                     )
                 # Only the dedicated database is copied. The trusted MAX core,
                 # live managed database, credentials and queues are never attached.
@@ -479,6 +508,8 @@ class CodeRestorationEngine:
                     fresh_unsupported,
                 )
                 if live_before is not None:
+                    state = self._state(manager, request, epoch=request.fencing_epoch)
+                    fresh_machine_state = machine.state()
                     live_after = await machine_effect(
                         observe_live_source,
                         source,
@@ -488,6 +519,7 @@ class CodeRestorationEngine:
                             source.workspace_volume
                         ),
                         schema=fresh_contract.model_dump(mode="json"),
+                        machine_state=fresh_machine_state,
                     )
                     if live_after != live_before:
                         raise CellIdentityConflict(

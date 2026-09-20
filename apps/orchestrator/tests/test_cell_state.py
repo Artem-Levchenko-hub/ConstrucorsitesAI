@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -140,6 +140,110 @@ def test_release_generation_clears_only_matching_active_lease(tmp_path: Path) ->
     assert released.active_generation_fencing_epoch is None
     assert released.bundle_state == "resources_ready"
     assert released.operation(release.operation_id).status == "completed"
+    assert released.operation(release.operation_id).detail == (
+        "retained_source_fencing_epoch=1"
+    )
+
+
+def test_legacy_release_receipt_repair_is_cas_bound_and_idempotent(tmp_path: Path) -> None:
+    store = CellStateStore(tmp_path / "project-cells.json")
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    ensure = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    store.begin(spec, ensure, kind="ensure", phase="planned", resource_names=names)
+    store.complete(workspace_id, ensure, bundle_state="resources_ready")
+    release = _mutation("b", 2)
+    store.begin(spec, release, kind="release", phase="planned", resource_names=names)
+    released = store.release_generation(
+        workspace_id, release, generation_run_id=spec.generation_run_id
+    )
+    legacy = replace(
+        released,
+        operations=tuple(
+            replace(item, detail=None)
+            if item.operation_id == release.operation_id
+            else item
+            for item in released.operations
+        ),
+    )
+    store._persist_state(legacy)
+
+    repaired = store.repair_legacy_release_serving_epoch(
+        workspace_id,
+        expected_control_fencing_epoch=2,
+        expected_last_operation_id=release.operation_id,
+        retained_fencing_epoch=1,
+        machine_epoch=1,
+        machine_ready_epoch=1,
+    )
+    repeated = store.repair_legacy_release_serving_epoch(
+        workspace_id,
+        expected_control_fencing_epoch=2,
+        expected_last_operation_id=release.operation_id,
+        retained_fencing_epoch=1,
+        machine_epoch=1,
+        machine_ready_epoch=1,
+    )
+
+    assert repaired == repeated
+    assert repaired.operation(release.operation_id).detail == (
+        "retained_source_fencing_epoch=1"
+    )
+    assert replace(
+        repaired,
+        operations=tuple(
+            replace(item, detail=None)
+            if item.operation_id == release.operation_id
+            else item
+            for item in repaired.operations
+        ),
+    ) == legacy
+
+
+@pytest.mark.parametrize(
+    ("control_epoch", "machine_epoch"),
+    [(3, 1), (2, 2)],
+)
+def test_legacy_release_receipt_repair_rejects_stale_or_detached_proof(
+    tmp_path: Path,
+    control_epoch: int,
+    machine_epoch: int,
+) -> None:
+    store = CellStateStore(tmp_path / "project-cells.json")
+    workspace_id = uuid4()
+    spec = _spec(workspace_id)
+    ensure = _mutation("a", 1)
+    names = CellResourceNames.for_workspace(workspace_id, namespace="test")
+    store.begin(spec, ensure, kind="ensure", phase="planned", resource_names=names)
+    store.complete(workspace_id, ensure, bundle_state="resources_ready")
+    release = _mutation("b", 2)
+    store.begin(spec, release, kind="release", phase="planned", resource_names=names)
+    released = store.release_generation(
+        workspace_id, release, generation_run_id=spec.generation_run_id
+    )
+    legacy = replace(
+        released,
+        operations=tuple(
+            replace(item, detail=None)
+            if item.operation_id == release.operation_id
+            else item
+            for item in released.operations
+        ),
+    )
+    store._persist_state(legacy)
+
+    with pytest.raises(RuntimeError, match="release receipt repair"):
+        store.repair_legacy_release_serving_epoch(
+            workspace_id,
+            expected_control_fencing_epoch=control_epoch,
+            expected_last_operation_id=release.operation_id,
+            retained_fencing_epoch=1,
+            machine_epoch=machine_epoch,
+            machine_ready_epoch=machine_epoch,
+        )
+
+    assert store.load(workspace_id) == legacy
 
 
 def test_release_generation_rejects_wrong_run_without_state_change(tmp_path: Path) -> None:

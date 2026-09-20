@@ -1036,6 +1036,73 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     assert "live-code" not in json.dumps(statements)
 
 
+def test_prepare_legacy_release_repair_uses_exact_proven_epochs():
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+
+    request = plain_prepare_request()
+    generation_run_id = UUID(int=31)
+    ensure = CellOperationRecord(
+        operation_id=UUID(int=32),
+        kind="ensure",
+        status="completed",
+        phase="completed",
+        request_digest="a" * 64,
+        fencing_epoch=2,
+        generation_run_id=generation_run_id,
+        bundle_state="resources_ready",
+    )
+    release = CellOperationRecord(
+        operation_id=UUID(int=33),
+        kind="release",
+        status="completed",
+        phase="completed",
+        request_digest="b" * 64,
+        fencing_epoch=3,
+        generation_run_id=generation_run_id,
+        bundle_state="resources_ready",
+    )
+    state = SimpleNamespace(
+        fencing_epoch=3,
+        last_operation_id=release.operation_id,
+        operations=(ensure, release),
+        operation=lambda operation_id: {
+            ensure.operation_id: ensure,
+            release.operation_id: release,
+        }.get(operation_id),
+    )
+    repaired = object()
+    calls = []
+
+    def repair(workspace_id, **proof):
+        calls.append((workspace_id, proof))
+        return repaired
+
+    manager = SimpleNamespace(
+        state_store=SimpleNamespace(repair_legacy_release_serving_epoch=repair)
+    )
+
+    result = CodeRestorationEngine._repair_legacy_release_receipt(
+        manager,
+        request,
+        state,
+        {"epoch": 2, "ready_epoch": 2},
+    )
+
+    assert result is repaired
+    assert calls == [
+        (
+            request.workspace_id,
+            {
+                "expected_control_fencing_epoch": 3,
+                "expected_last_operation_id": release.operation_id,
+                "retained_fencing_epoch": 2,
+                "machine_epoch": 2,
+                "machine_ready_epoch": 2,
+            },
+        )
+    ]
+
+
 async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_path):
     from omnia_orchestrator.core.project_machine import MachineManifest
     from tests.test_project_machine_manifest import payload

@@ -675,6 +675,15 @@ async def _dispatch(
     # A delayed response to the old prepare envelope cannot overwrite an apply claim.
     if payload != operation.request_payload or result.revision < operation.runtime_revision:
         return public_operation(operation)
+    if (
+        action == "status"
+        and operation.phase == "cancel"
+        and (result.can_cancel or result.state == "failed")
+    ):
+        # The controller has not accepted the durable cancel intent. This also
+        # covers preparation failure winning the race immediately before cancel.
+        await session.commit()
+        return await _dispatch(session, project_id, owner_id, operation_id, runtime, "cancel")
     same_receipt = (
         result.revision == operation.runtime_revision
         and operation.runtime_result is not None
@@ -740,7 +749,7 @@ async def _dispatch(
     elif operation.apply_digest and result.state not in {"applying", "reconciling", "failed"}:
         # A stale pre-apply result is not evidence that an accepted apply did not execute.
         operation.state = "reconciling"
-    elif operation.phase == "cancel" and result.state not in {"cancelled", "failed"}:
+    elif operation.phase == "cancel" and result.state != "cancelled":
         operation.state = "reconciling"
     else:
         operation.state = result.state

@@ -193,6 +193,125 @@ async def test_failed_cancel_dispatch_is_finished_by_the_worker(db_session, test
     assert row.state == "cancelled"
 
 
+async def test_worker_replays_cancel_when_prepare_failure_won_the_dispatch_race(
+    db_session, test_engine
+):
+    class FailureWonRuntime(AsyncCancelRuntime):
+        async def cancel(self, request):
+            self.cancel_calls += 1
+            if self.cancel_calls == 1:
+                self.result = self.result.model_copy(
+                    update={
+                        "state": "failed",
+                        "phase": "failed",
+                        "revision": 2,
+                        "can_apply": False,
+                        "can_cancel": False,
+                        "error": "Не удалось завершить проверку восстановления.",
+                    }
+                )
+                raise ApiError("conflict", "restoration state changed", 409)
+            self.cancelling = True
+            self.result = self.result.model_copy(
+                update={
+                    "state": "reconciling",
+                    "phase": "reconciling",
+                    "revision": 3,
+                    "error": None,
+                }
+            )
+            return self.result
+
+        async def status(self, request):
+            self.status_calls += 1
+            if self.cancelling:
+                self.result = self.result.model_copy(
+                    update={"state": "cancelled", "phase": "cancelled", "revision": 4}
+                )
+            return self.result
+
+    runtime = FailureWonRuntime()
+    _, _, operation_id, cancelled = await _prepared_then_cancelled(db_session, runtime)
+    assert cancelled.state == "reconciling" and runtime.cancel_calls == 1
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+    row = await _row(db_session, operation_id)
+    assert row.state == "reconciling" and row.phase == "cancel"
+    assert runtime.cancel_calls == 2
+    assert row.runtime_revision == 3
+    assert row.runtime_result is not None
+    assert row.runtime_result["state"] == "reconciling"
+
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=120)
+    ) == 1
+    row = await _row(db_session, operation_id)
+    assert row.state == "cancelled" and row.next_reconcile_at is None
+
+
+async def test_stale_failed_status_cannot_overwrite_newer_cancel_receipt(
+    db_session, test_engine
+):
+    class CancelWonRuntime(AsyncCancelRuntime):
+        async def cancel(self, request):
+            self.cancel_calls += 1
+            self.cancelling = True
+            self.result = self.result.model_copy(
+                update={
+                    "state": "reconciling",
+                    "phase": "reconciling",
+                    "revision": 3,
+                    "can_apply": False,
+                    "can_cancel": False,
+                    "error": None,
+                }
+            )
+            return self.result
+
+        async def status(self, request):
+            self.status_calls += 1
+            if self.status_calls == 1:
+                # This response was sampled before cancel was accepted and arrives
+                # after the revision-3 cancel receipt is already durable in SQL.
+                return self.result.model_copy(
+                    update={
+                        "state": "failed",
+                        "phase": "failed",
+                        "revision": 2,
+                        "error": "Не удалось завершить проверку восстановления.",
+                    }
+                )
+            return self.result.model_copy(
+                update={"state": "cancelled", "phase": "cancelled", "revision": 4}
+            )
+
+    runtime = CancelWonRuntime()
+    _, _, operation_id, cancelled = await _prepared_then_cancelled(db_session, runtime)
+    assert cancelled.state == "reconciling"
+    assert cancelled.phase == "cancel"
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+
+    # A fresh worker/session represents process restart: only the durable SQL
+    # cancel intent and controller revision participate in recovery.
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=60)
+    ) == 1
+    row = await _row(db_session, operation_id)
+    assert row.state == "reconciling" and row.phase == "cancel"
+    assert row.runtime_revision == 3
+    assert row.runtime_result is not None
+    assert row.runtime_result["state"] == "reconciling"
+
+    assert await reconcile_due_restorations(
+        factory, runtime, now=datetime.now(UTC) + timedelta(seconds=120)
+    ) == 1
+    row = await _row(db_session, operation_id)
+    assert row.state == "cancelled" and row.next_reconcile_at is None
+
+
 async def test_reconcile_failure_keeps_the_operation_scheduled(db_session, test_engine):
     runtime = AsyncCancelRuntime()
     _, _, operation_id, _ = await _prepared_then_cancelled(db_session, runtime)

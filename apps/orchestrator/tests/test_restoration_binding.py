@@ -173,6 +173,77 @@ def _live_source_fixture(monkeypatch):
     return module, backend, machine, state, app
 
 
+def _legacy_release_state(
+    state,
+    *,
+    predecessor_kind="ensure",
+    predecessor_status="completed",
+    predecessor_bundle="resources_ready",
+    same_run=True,
+    immediate=True,
+    release_detail=None,
+):
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+
+    generation_run_id = UUID(int=20)
+    predecessor_id, release_id = UUID(int=21), UUID(int=23)
+    predecessor = CellOperationRecord(
+        operation_id=predecessor_id,
+        kind=predecessor_kind,
+        status=predecessor_status,
+        phase=predecessor_status,
+        request_digest="a" * 64,
+        fencing_epoch=10,
+        generation_run_id=generation_run_id,
+        bundle_state=predecessor_bundle,
+    )
+    operations = [predecessor]
+    if not immediate:
+        operations.append(
+            CellOperationRecord(
+                operation_id=UUID(int=22),
+                kind="checkpoint",
+                status="completed",
+                phase="completed",
+                request_digest="b" * 64,
+                fencing_epoch=10,
+                generation_run_id=generation_run_id,
+                bundle_state="resources_ready",
+            )
+        )
+    release = CellOperationRecord(
+        operation_id=release_id,
+        kind="release",
+        status="completed",
+        phase="completed",
+        request_digest="c" * 64,
+        fencing_epoch=11,
+        generation_run_id=(generation_run_id if same_run else UUID(int=24)),
+        bundle_state="resources_ready",
+        detail=release_detail,
+    )
+    operations.append(release)
+    state.fencing_epoch = 11
+    state.last_operation_id = release_id
+    state.operations = tuple(operations)
+    state.operation = lambda operation_id: next(
+        (item for item in state.operations if item.operation_id == operation_id), None
+    )
+    return generation_run_id, predecessor_id, release_id
+
+
+def _set_serving_epoch(monkeypatch, module, machine, epoch):
+    machine.state = lambda: {
+        "manifest": {"routes": ["/"]},
+        "ready_epoch": epoch,
+        "epoch": epoch,
+    }
+    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
+        "project_id": str(UUID(int=3)), "epoch": epoch, "core_host": "10.0.0.8",
+        "machine_host": "10.0.0.7", "routes": [],
+    })
+
+
 def test_detached_application_database_binding_fails_closed(monkeypatch):
     module, backend, machine, state, app = _live_source_fixture(monkeypatch)
     app.attrs["Config"]["Env"] = ["PGDATABASE=another"]
@@ -229,6 +300,76 @@ def test_managed_core_upstream_mismatch_fails_closed(monkeypatch):
         )
 
 
+def test_legacy_release_uses_exact_same_generation_predecessor(monkeypatch):
+    module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
+    _legacy_release_state(state)
+    _set_serving_epoch(monkeypatch, module, machine, 10)
+
+    observed = module.observe_live_source(
+        backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+    )
+
+    assert module.serving_fencing_epoch(state, machine_state=machine.state()) == 10
+    assert observed["controller_generation_digest"]
+
+
+@pytest.mark.parametrize(
+    ("changes", "machine_epoch"),
+    [
+        ({"same_run": False}, 10),
+        ({"predecessor_kind": "checkpoint"}, 10),
+        ({"predecessor_status": "failed"}, 10),
+        ({"predecessor_bundle": "retained"}, 10),
+        ({"immediate": False}, 10),
+        ({}, 9),
+    ],
+)
+def test_legacy_release_proof_fails_closed(monkeypatch, changes, machine_epoch):
+    module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
+    _legacy_release_state(state, **changes)
+    _set_serving_epoch(monkeypatch, module, machine, machine_epoch)
+
+    with pytest.raises(RuntimeError, match="release epoch proof"):
+        module.observe_live_source(
+            backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+        )
+
+
+def test_legacy_release_route_must_match_proven_serving_epoch(monkeypatch):
+    module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
+    _legacy_release_state(state)
+    _set_serving_epoch(monkeypatch, module, machine, 10)
+    monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
+        "project_id": str(UUID(int=3)), "epoch": 9, "core_host": "10.0.0.8",
+        "machine_host": "10.0.0.7", "routes": [],
+    })
+
+    with pytest.raises(RuntimeError, match="detached"):
+        module.observe_live_source(
+            backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+        )
+
+
+def test_explicit_release_receipt_is_authoritative_but_machine_bound(monkeypatch):
+    module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
+    _legacy_release_state(
+        state,
+        predecessor_kind="checkpoint",
+        release_detail="retained_source_fencing_epoch=10",
+    )
+    _set_serving_epoch(monkeypatch, module, machine, 10)
+
+    assert module.observe_live_source(
+        backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+    )
+
+    machine.state = lambda: {"manifest": {}, "ready_epoch": 10, "epoch": 9}
+    with pytest.raises(RuntimeError, match="serving machine epoch"):
+        module.observe_live_source(
+            backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+        )
+
+
 def test_two_rejections_keep_actual_serving_epoch_for_next_prepare(monkeypatch):
     from omnia_orchestrator.services.cell_state import CellOperationRecord
 
@@ -250,6 +391,7 @@ def test_two_rejections_keep_actual_serving_epoch_for_next_prepare(monkeypatch):
     state.fencing_epoch = 5
     state.last_operation_id = second_id
     state.operation = operations.get
+    machine.state = lambda: {"manifest": {"routes": ["/"]}, "ready_epoch": 3, "epoch": 3}
     monkeypatch.setattr(module, "_gateway_config", lambda _gateway: {
         "project_id": str(UUID(int=3)), "epoch": 3, "core_host": "10.0.0.8",
         "machine_host": "10.0.0.7", "routes": [],

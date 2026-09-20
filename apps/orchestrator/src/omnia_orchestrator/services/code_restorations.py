@@ -306,12 +306,17 @@ class CodeRestorationService:
             self._check(saved, wire)
             if saved["state"] == "cancelled":
                 return self._public(saved)
-            if saved["apply"] is not None or saved["state"] in _TERMINAL:
+            if saved["apply"] is not None or saved["state"] == "completed":
                 raise CellIdentityConflict("restoration application cannot be cancelled")
             begin_cancel = getattr(self._engine(), "begin_cancel", None)
             if callable(begin_cancel):
                 begin_cancel(request)
-            saved.update(cancel_requested=True, state="cancelling", phase="cancelling")
+            saved.update(
+                cancel_requested=True,
+                state="cancelling",
+                phase="cancelling",
+                error=None,
+            )
             saved["revision"] += 1
             self._write(saved)
             self._schedule_cancel(request.workspace_id, request.operation_id)

@@ -13,11 +13,16 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from omnia_orchestrator.core.cell_resources import CellResourceNames, LifecycleMutation
+from omnia_orchestrator.core.cell_resources import (
+    CellIdentityConflict,
+    CellResourceNames,
+    LifecycleMutation,
+)
 from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
 
 _FILE_MODE = 0o600
 _DIR_MODE = 0o700
+RETAINED_SOURCE_FENCING_EPOCH_PREFIX = "retained_source_fencing_epoch="
 _WORKSPACE_STATE_KEYS = frozenset(
     {
         "workspace_id",
@@ -212,6 +217,87 @@ class CellWorkspaceState:
             resource_names=_parse_resource_names(payload["resource_names"], workspace_id),
             operations=tuple(_require_operation_records(payload["operations"])),
         )
+
+
+def _retained_epoch_from_detail(
+    state: CellWorkspaceState,
+    operation: CellOperationRecord,
+) -> int:
+    detail = operation.detail
+    if not isinstance(detail, str) or not detail.startswith(
+        RETAINED_SOURCE_FENCING_EPOCH_PREFIX
+    ):
+        raise CellIdentityConflict("serving release epoch receipt is invalid")
+    try:
+        retained = int(detail.removeprefix(RETAINED_SOURCE_FENCING_EPOCH_PREFIX))
+    except ValueError as exc:
+        raise CellIdentityConflict("serving release epoch receipt is invalid") from exc
+    if retained < 1 or retained >= state.fencing_epoch:
+        raise CellIdentityConflict("serving release epoch receipt is inconsistent")
+    return retained
+
+
+def legacy_release_serving_epoch(
+    state: CellWorkspaceState,
+    *,
+    machine_epoch: object,
+    machine_ready_epoch: object,
+) -> int | None:
+    """Prove the serving epoch of a pre-receipt completed release."""
+    latest = state.operation(state.last_operation_id)
+    if (
+        latest is None
+        or latest.kind != "release"
+        or latest.status != "completed"
+        or latest.fencing_epoch != state.fencing_epoch
+        or latest.detail is not None
+    ):
+        return None
+    if not state.operations or state.operations[-1].operation_id != latest.operation_id:
+        raise CellIdentityConflict("serving release epoch proof is unavailable")
+    if len(state.operations) < 2:
+        raise CellIdentityConflict("serving release epoch proof is unavailable")
+    predecessor = state.operations[-2]
+    if (
+        predecessor.kind not in {"ensure", "reconcile"}
+        or predecessor.status != "completed"
+        or predecessor.bundle_state != "resources_ready"
+        or predecessor.generation_run_id is None
+        or predecessor.generation_run_id != latest.generation_run_id
+        or predecessor.fencing_epoch >= latest.fencing_epoch
+        or type(machine_epoch) is not int
+        or type(machine_ready_epoch) is not int
+        or machine_epoch != predecessor.fencing_epoch
+        or machine_ready_epoch != predecessor.fencing_epoch
+    ):
+        raise CellIdentityConflict("serving release epoch proof is unavailable")
+    return predecessor.fencing_epoch
+
+
+def retained_serving_fencing_epoch(
+    state: CellWorkspaceState,
+    *,
+    machine_epoch: object | None = None,
+    machine_ready_epoch: object | None = None,
+) -> int:
+    latest = state.operation(state.last_operation_id)
+    if (
+        latest is not None
+        and latest.kind in {"release", "restoration_rejection"}
+        and latest.status == "completed"
+        and latest.fencing_epoch == state.fencing_epoch
+    ):
+        if latest.detail is not None:
+            return _retained_epoch_from_detail(state, latest)
+        if latest.kind == "release":
+            legacy = legacy_release_serving_epoch(
+                state,
+                machine_epoch=machine_epoch,
+                machine_ready_epoch=machine_ready_epoch,
+            )
+            if legacy is not None:
+                return legacy
+    return int(state.fencing_epoch)
 
 
 class CellStateStore:
@@ -478,6 +564,8 @@ class CellStateStore:
             ),
             workspace.bundle_state,
         )
+        retained_fencing_epoch = workspace.active_generation_fencing_epoch
+        assert retained_fencing_epoch is not None
         operations = tuple(
             replace(
                 item,
@@ -485,6 +573,7 @@ class CellStateStore:
                 phase="completed",
                 provider_ref=workspace.provider_ref,
                 bundle_state=retained_bundle_state,
+                detail=f"retained_source_fencing_epoch={retained_fencing_epoch}",
             )
             if item.operation_id == mutation.operation_id
             else item
@@ -497,6 +586,80 @@ class CellStateStore:
             active_generation_run_id=None,
             active_generation_fencing_epoch=None,
             operations=operations,
+        )
+        self._persist_state(next_state)
+        return next_state
+
+    def repair_legacy_release_serving_epoch(
+        self,
+        workspace_id: UUID,
+        *,
+        expected_control_fencing_epoch: int,
+        expected_last_operation_id: UUID,
+        retained_fencing_epoch: int,
+        machine_epoch: object,
+        machine_ready_epoch: object,
+    ) -> CellWorkspaceState:
+        """Persist an old release's serving epoch after trusted live observation."""
+        workspace = self._require_state(workspace_id)
+        if (
+            workspace.fencing_epoch != expected_control_fencing_epoch
+            or workspace.last_operation_id != expected_last_operation_id
+        ):
+            raise CellIdentityConflict("legacy release receipt repair fence changed")
+        operation = workspace.operation(workspace.last_operation_id)
+        if (
+            operation is None
+            or operation.kind != "release"
+            or operation.status != "completed"
+            or operation.fencing_epoch != workspace.fencing_epoch
+        ):
+            raise CellIdentityConflict("legacy release receipt repair owner changed")
+        if (
+            type(machine_epoch) is not int
+            or type(machine_ready_epoch) is not int
+            or machine_epoch != retained_fencing_epoch
+            or machine_ready_epoch != retained_fencing_epoch
+        ):
+            raise CellIdentityConflict("legacy release receipt repair machine changed")
+        if operation.detail is not None:
+            try:
+                current = retained_serving_fencing_epoch(
+                    workspace,
+                    machine_epoch=machine_epoch,
+                    machine_ready_epoch=machine_ready_epoch,
+                )
+            except CellIdentityConflict as exc:
+                raise CellIdentityConflict(
+                    "legacy release receipt repair is inconsistent"
+                ) from exc
+            if current != retained_fencing_epoch:
+                raise CellIdentityConflict("legacy release receipt repair is inconsistent")
+            return workspace
+        try:
+            proven = legacy_release_serving_epoch(
+                workspace,
+                machine_epoch=machine_epoch,
+                machine_ready_epoch=machine_ready_epoch,
+            )
+        except CellIdentityConflict as exc:
+            raise CellIdentityConflict("legacy release receipt repair proof failed") from exc
+        if proven != retained_fencing_epoch:
+            raise CellIdentityConflict("legacy release receipt repair proof failed")
+        next_state = replace(
+            workspace,
+            operations=tuple(
+                replace(
+                    item,
+                    detail=(
+                        RETAINED_SOURCE_FENCING_EPOCH_PREFIX
+                        + str(retained_fencing_epoch)
+                    ),
+                )
+                if item.operation_id == operation.operation_id
+                else item
+                for item in workspace.operations
+            ),
         )
         self._persist_state(next_state)
         return next_state

@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from omnia_orchestrator.core.cell_resources import CellIdentityConflict
 from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationApply,
     CodeRestorationCancel,
@@ -383,6 +384,42 @@ async def test_cancel_during_prepare_cleans_candidate_before_terminal(tmp_path):
     assert (await status(svc, value))["state"] == "cancelled"
 
 
+async def test_cancel_after_prepare_failure_still_cleans_before_terminal(tmp_path):
+    engine = Engine()
+
+    async def failed_prepare(_value):
+        engine.calls.append("prepare")
+        raise CellIdentityConflict("candidate preparation identity changed")
+
+    engine.prepare = failed_prepare
+    svc = service(tmp_path, engine)
+    value = request()
+    await svc.prepare(value)
+    await svc.drain()
+    assert (await status(svc, value))["state"] == "failed"
+
+    pending = await svc.cancel(cancel_request(value))
+    assert pending["state"] == "reconciling"
+    await svc.drain()
+
+    assert engine.calls == ["prepare", "cancel"]
+    assert (await status(svc, value))["state"] == "cancelled"
+
+
+async def test_cancel_after_admitted_apply_remains_forbidden(tmp_path):
+    engine = Engine()
+    engine.fail_apply = True
+    svc = service(tmp_path, engine)
+    value = request()
+    await svc.prepare(value)
+    await svc.drain()
+    await svc.apply(apply_request(value))
+    await svc.drain()
+
+    with pytest.raises(CellIdentityConflict, match="cannot be cancelled"):
+        await svc.cancel(cancel_request(value))
+
+
 async def test_apply_intent_written_before_effect_and_duplicate_is_not_reapplied(tmp_path):
     engine = Engine()
     svc = service(tmp_path, engine)
@@ -659,3 +696,41 @@ async def test_internal_routes_auth_identity_and_durable_status(tmp_path, monkey
         assert (await client.get(path, params=params)).json()["state"] == "ready"
         params["owner_id"] = str(UUID(int=99))
         assert (await client.get(path, params=params)).status_code == 409
+
+
+async def test_internal_cancel_accepts_exact_pre_apply_failure(tmp_path, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+
+    from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+    from omnia_orchestrator.routers import code_restorations
+
+    engine = Engine()
+
+    async def failed_prepare(_value):
+        engine.calls.append("prepare")
+        raise CellIdentityConflict("candidate preparation identity changed")
+
+    engine.prepare = failed_prepare
+    svc = service(tmp_path, engine)
+    value = request()
+    await svc.prepare(value)
+    await svc.drain()
+    monkeypatch.setattr(code_restorations, "get_code_restoration_service", lambda: svc)
+    monkeypatch.setattr(code_restorations, "verify_internal_token", lambda _token: None)
+    app = FastAPI()
+    app.add_exception_handler(OrchestratorError, orchestrator_error_handler)
+    app.include_router(code_restorations.router)
+    path = f"/internal/workspaces/{value.workspace_id}/code-restorations/{value.operation_id}"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            path + "/cancel", json=cancel_request(value).model_dump(mode="json")
+        )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "reconciling"
+    await svc.drain()
+    assert (await status(svc, value))["state"] == "cancelled"
