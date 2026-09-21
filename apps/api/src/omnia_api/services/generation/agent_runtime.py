@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from omnia_api.core.config import get_settings
-from omnia_api.models.generation_run import GenerationRun
 from omnia_api.services import (
     agent_builder,
     orchestrator_client,
@@ -174,7 +172,7 @@ async def prepare_agent_runtime(
         ):
             from omnia_api.services.max_finalization import (
                 MaxFinalizationCoordinator,
-                watch_generation_deadline,
+                run_generation_deadline_watchdog,
             )
 
             runtime.coordinator = MaxFinalizationCoordinator(
@@ -186,26 +184,13 @@ async def prepare_agent_runtime(
                 emit=progress.record_generation_event,
             )
 
-            async def _max_generation_deadline_watchdog() -> None:
-                async with factory() as _deadline_session:
-                    _deadline_run = await _deadline_session.get(
-                        GenerationRun,
-                        ids.run_id,
-                    )
-                    if _deadline_run is None:
-                        return
-                    _deadline_started = _deadline_run.started_at or _deadline_run.created_at
-                _deadline_at = _deadline_started + timedelta(
-                    seconds=get_settings().max_generation_deadline_seconds
-                )
-                await asyncio.sleep(max(0.0, (_deadline_at - datetime.now(UTC)).total_seconds()))
-                await watch_generation_deadline(
-                    session_factory=factory,
-                    generation_run_id=ids.run_id,
-                )
-
             if get_settings().use_project_cell_activity_watchdog:
-                runtime.deadline_task = asyncio.create_task(_max_generation_deadline_watchdog())
+                runtime.deadline_task = asyncio.create_task(
+                    run_generation_deadline_watchdog(
+                        session_factory=factory,
+                        generation_run_id=ids.run_id,
+                    )
+                )
             _direct_max_agent_executor = bindings.execute
 
             async def _agent_executor(

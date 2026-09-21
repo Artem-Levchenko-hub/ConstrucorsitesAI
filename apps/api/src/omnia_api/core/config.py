@@ -1059,6 +1059,16 @@ class Settings(BaseSettings):
     use_generation_event_replay: bool = Field(default=False)
     use_cell_resource_profile_v2: bool = Field(default=False)
     max_generation_deadline_seconds: int = Field(default=1500, ge=60, le=7200)
+    # A restoration adaptation gets this much for checks and repairs once the agent's own
+    # turn is over, even when the turn used the whole limit above. The sealed proof and
+    # activation hand-off is outside both. Env: RESTORATION_ADAPTATION_REPAIR_SECONDS.
+    restoration_adaptation_repair_seconds: int = Field(default=900, ge=60, le=3600)
+    # A durable proof/activation intent is finished by the reconciler and must not be cut
+    # by the editing deadline — but it cannot hold the Project Cell forever either. This is
+    # the ceiling for the whole sealed hand-off, generous enough for the controller's own
+    # timeouts (prove 900 s + offer 120 s + apply 930 s). Env:
+    # RESTORATION_ADAPTATION_ACTIVATION_SECONDS.
+    restoration_adaptation_activation_seconds: int = Field(default=2400, ge=300, le=7200)
     # Separate admission budget: serialized jobs may wait longer than one run.
     project_cell_capacity_wait_seconds: int = Field(default=3600, ge=30, le=7200)
     project_cell_heartbeat_seconds: int = Field(default=15, ge=1, le=300)

@@ -595,3 +595,57 @@ it("shows the precise format-2 reason, counts, lost functions and passed checks"
   expect(text).toContain("может читать таблицу clients");
   expect(text).not.toContain("нестандартн");
 });
+
+it.each([
+  ["generation deadline exceeded; stage=repair; phase=final_build; restoration_operation_id=op-a; agent_operation_id=none; proof_key=abc",
+    "не успел исправить замечания проверки", "repair / final_build"],
+  ["generation deadline exceeded; stage=edit; phase=edit; restoration_operation_id=op-a; agent_operation_id=none; proof_key=abc",
+    "не успел адаптировать версию", "edit / edit"],
+  // Runs that failed before the split carry the old text; they still read as a deadline.
+  ["generation deadline exceeded; phase=edit; proof_key=abc; operation_id=unknown",
+    "не успел адаптировать версию", "edit"],
+  ["generation deadline exceeded; stage=proof; phase=promote; restoration_operation_id=op-a; agent_operation_id=none; proof_key=abc",
+    "Проверка результата не завершилась", "proof / promote"],
+  // The owner's own cancel produces the same structured line with the other verb.
+  ["generation cancelled; stage=edit; phase=edit; restoration_operation_id=op-a; agent_operation_id=none; proof_key=abc",
+    "остановлена по вашей отмене", "edit / edit"],
+] as const)("explains a missed adaptation deadline instead of printing it: %s", async (error, shown, code) => {
+  const failed = { ...operation("failed"), phase: "generation", selected_branch: "adaptive" as const,
+    report: null, can_apply: false, can_cancel: false, error };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [failed] });
+  vi.mocked(api.getRestoration).mockResolvedValue(failed);
+  await render();
+  const alert = container.querySelector('[role="alert"]')!.textContent ?? "";
+  expect(alert).toContain(shown);
+  expect(alert).toContain("Текущая версия и данные не изменены");
+  expect(alert).not.toContain("generation deadline exceeded");
+  expect(alert).not.toContain("proof_key");
+  expect(container.querySelector('[data-testid="max-restoration-failure-code"]')!.textContent).toContain(code);
+});
+
+it.each([
+  ["generation deadline exceeded before source repair", "не успел завершить доработку"],
+  ["generation deadline exceeded during source repair", "не успел завершить доработку"],
+  ["adaptation activation was not completed", "остановилась до проверки результата"],
+  ["adaptation generation failed", "остановилась до проверки результата"],
+])("explains the plain-text terminal reason %s", async (error, shown) => {
+  const failed = { ...operation("failed"), report: null, can_apply: false, can_cancel: false, error };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [failed] });
+  vi.mocked(api.getRestoration).mockResolvedValue(failed);
+  await render();
+  const alert = container.querySelector('[role="alert"]')!.textContent ?? "";
+  expect(alert).toContain(shown);
+  expect(alert).toContain("Текущая версия и данные не изменены");
+  expect(alert).not.toContain(error);
+  expect(container.querySelector('[data-testid="max-restoration-failure-code"]')).toBeNull();
+});
+
+it("keeps an unknown server reason as it is", async () => {
+  const failed = { ...operation("failed"), report: null, can_apply: false, can_cancel: false,
+    error: "Версия недоступна: исходный снимок удалён." };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [failed] });
+  vi.mocked(api.getRestoration).mockResolvedValue(failed);
+  await render();
+  expect(container.querySelector('[role="alert"]')!.textContent).toBe("Версия недоступна: исходный снимок удалён.");
+  expect(container.querySelector('[data-testid="max-restoration-failure-code"]')).toBeNull();
+});

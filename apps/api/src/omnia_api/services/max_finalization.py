@@ -27,6 +27,12 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.services import repo
 from omnia_api.services.agent_progress import bounded_redacted_text
 from omnia_api.services.functional_gate import Check, FunctionalVerdict, summarize
+from omnia_api.services.generation_deadline import (
+    generation_deadline,
+    note_proof_sealed,
+    note_proof_settled,
+    note_repair_stage_started,
+)
 from omnia_api.services.generation_metrics import (
     GenerationPhase,
     increment_generation_counter,
@@ -84,6 +90,10 @@ from omnia_api.services.restoration_adaptation import restoration_probe_source_g
 from omnia_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
+# A repair is one model turn plus a build; starting it with less time only burns the rest.
+_MIN_REPAIR_SECONDS = 120
+# How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
+_SEALED_RECHECK_SECONDS = 15.0
 _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
 
 
@@ -539,6 +549,12 @@ class MaxFinalizationCoordinator:
         unchanged source cannot earn another build or an infinite model loop.
         """
         await self._raise_persisted_infrastructure_failure()
+        async with self.session_factory() as session:
+            run = await self._locked_run(session)
+            # The agent's own turn is over: an adaptation's checks and repairs no
+            # longer compete with it for one limit.
+            note_repair_stage_started(run)
+            await session.commit()
         files = await self.executor.snapshot_files()
         for attempt in range(3):
             outcome = await self.finalize(files=files, prompt=prompt)
@@ -548,14 +564,22 @@ class MaxFinalizationCoordinator:
                 run = await self._locked_run(session)
                 if run.status == "cancel_requested":
                     raise asyncio.CancelledError
-                deadline = (run.started_at or run.created_at) + timedelta(
-                    seconds=get_settings().max_generation_deadline_seconds
+                deadline = generation_deadline(run).at
+            # NEEDS_EDIT means the last proof, if any, was settled; a run still holding a
+            # durable intent has no business starting another editing pass.
+            if deadline is None:
+                raise MaxFinalizationConflict(
+                    "sealed restoration adaptation cannot enter a source repair"
                 )
             remaining = (deadline - datetime.now(UTC)).total_seconds()
-            if remaining <= 0:
+            if remaining < _MIN_REPAIR_SECONDS:
                 raise TimeoutError("generation deadline exceeded before source repair")
-            async with asyncio.timeout(remaining):
-                await repair(outcome.redacted_detail)
+            try:
+                async with asyncio.timeout(remaining):
+                    await repair(outcome.redacted_detail)
+            except TimeoutError as exc:
+                # A bare TimeoutError has no text; the run would fail with an empty reason.
+                raise TimeoutError("generation deadline exceeded during source repair") from exc
             updated = await self.executor.snapshot_files()
             if updated == files:
                 return outcome
@@ -908,6 +932,7 @@ class MaxFinalizationCoordinator:
             }
             root["max_finalization"] = state
             run.agent_state = root
+            note_proof_sealed(run)
             operation.activation_request = intent
             operation.activation_request_digest = hashlib.sha256(
                 json.dumps(intent, sort_keys=True, separators=(",", ":")).encode()
@@ -1191,6 +1216,9 @@ class MaxFinalizationCoordinator:
                 operation.phase = "generation"
                 operation.error = None
             _touch(operation)
+        if receipt.state != "proof_ready":
+            # Back to repairs: the sealed wait is not charged to their window.
+            note_proof_settled(run)
         await session.commit()
 
 
@@ -1229,6 +1257,11 @@ class MaxFinalizationCoordinator:
                 source_gap,
             )
 
+        # Phases are recorded here as on the ordinary path: a deadline or a crash then
+        # names the check that was running instead of the last edit checkpoint.
+        await self._phase_started(
+            GenerationPhase.PREPARE, self._checkpoint(identity, GenerationPhase.PREPARE)
+        )
         bootstrap, identity, proof = await self._adaptation_role_result(
             identity=identity,
             proof=proof,
@@ -1243,6 +1276,10 @@ class MaxFinalizationCoordinator:
                 bootstrap,
                 bootstrap.redacted_detail,
             )
+        await self._phase_finished(GenerationPhase.PREPARE)
+        await self._phase_started(
+            GenerationPhase.FINAL_BUILD, self._checkpoint(identity, GenerationPhase.FINAL_BUILD)
+        )
         build, _after, _proof = await self._adaptation_role_result(
             identity=identity,
             proof=proof,
@@ -1259,7 +1296,12 @@ class MaxFinalizationCoordinator:
                 build.redacted_detail,
                 bundle=bundle,
             )
+        await self._phase_finished(GenerationPhase.FINAL_BUILD)
         build_digest = _artifact_digest(build)
+        await self._phase_started(
+            GenerationPhase.RUNTIME_PROBE,
+            self._checkpoint(identity, GenerationPhase.RUNTIME_PROBE),
+        )
         runtime = await self._adaptation_runtime_result(
             identity=identity,
             proof=proof,
@@ -1301,10 +1343,14 @@ class MaxFinalizationCoordinator:
                 release.redacted_detail,
                 bundle=bundle,
             )
+        await self._phase_finished(GenerationPhase.RUNTIME_PROBE)
         final_files = await self._verified_workspace_files(identity)
         if canonical_files_digest(final_files) != build_digest:
             raise MaxFinalizationConflict("candidate artifact changed after release proof")
         self._last_files = final_files
+        await self._phase_started(
+            GenerationPhase.PROMOTE, self._checkpoint(identity, GenerationPhase.PROMOTE)
+        )
         prove = self.executor.prove_restoration_adaptation
         assert prove is not None
         proof_attempt = await self._issue_adaptation_proof_attempt(
@@ -1326,6 +1372,7 @@ class MaxFinalizationCoordinator:
                     "sealed restoration adaptation proof requires recovery"
                 ) from exc
             raise
+        await self._phase_finished(GenerationPhase.PROMOTE)
         if preservation.state == "migration_required":
             return await self._outcome(
                 MaxFinalizationStatus.NEEDS_EDIT,
@@ -2219,42 +2266,92 @@ def proof_bundle_verdict(
     return summarize(proof.release_checks(require_max_data=require_max_data))
 
 
+_ACTIVE_RUN_STATUSES = frozenset({"pending", "queued_for_capacity", "running", "cancel_requested"})
+
+
+async def generation_deadline_wait(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    generation_run_id: UUID,
+    now: datetime | None = None,
+) -> float | None:
+    """Seconds until the watchdog has to look again; None once the run is over."""
+    async with session_factory() as session:
+        run = await session.get(GenerationRun, generation_run_id)
+        if run is None or run.status not in _ACTIVE_RUN_STATUSES:
+            return None
+        deadline = generation_deadline(run)
+    assert deadline.at is not None
+    wait = max(0.0, (deadline.at - (now or datetime.now(UTC))).total_seconds())
+    # A rejected proof puts the run back under the much nearer editing limit, so do not
+    # sleep through the whole hand-off ceiling waiting to notice.
+    return min(wait, _SEALED_RECHECK_SECONDS) if deadline.stage == "proof" else wait
+
+
+async def run_generation_deadline_watchdog(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    generation_run_id: UUID,
+) -> None:
+    """Follow the run until it ends or its deadline is written.
+
+    The deadline moves: an adaptation opens a repair window after the agent's turn and
+    is exempt while its proof or activation intent is sealed, so one sleep is not enough.
+    """
+    while True:
+        wait = await generation_deadline_wait(
+            session_factory=session_factory,
+            generation_run_id=generation_run_id,
+        )
+        if wait is None:
+            return
+        if wait > 0:
+            await asyncio.sleep(wait)
+            continue
+        if await watch_generation_deadline(
+            session_factory=session_factory,
+            generation_run_id=generation_run_id,
+        ):
+            return
+        # The run was sealed or finished between the two reads; look again shortly.
+        await asyncio.sleep(1.0)
+
+
+def _restoration_operation_id(run: GenerationRun) -> str | None:
+    binding = run.agent_state.get("restoration_adaptation")
+    if not isinstance(binding, dict) or binding.get("adaptation_run_id") != str(run.id):
+        return None
+    try:
+        return str(UUID(str(binding["operation_id"])))
+    except (KeyError, ValueError):
+        return None
+
+
 async def watch_generation_deadline(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     generation_run_id: UUID,
     now: datetime | None = None,
 ) -> bool:
-    """Write one terminal state when the overall generation deadline expires."""
+    """Write one terminal state when the deadline of the run's current stage expires."""
     current = now or datetime.now(UTC)
     async with session_factory() as session:
         run = await session.scalar(
             select(GenerationRun).where(GenerationRun.id == generation_run_id).with_for_update()
         )
-        if run is None or run.status not in {
-            "pending",
-            "queued_for_capacity",
-            "running",
-            "cancel_requested",
-        }:
+        if run is None or run.status not in _ACTIVE_RUN_STATUSES:
             return False
-        started = run.started_at or run.created_at
-        deadline = started + timedelta(seconds=get_settings().max_generation_deadline_seconds)
-        if current < deadline:
+        deadline = generation_deadline(run)
+        if deadline.at is None or current < deadline.at:
             return False
         raw_state = run.agent_state.get("max_finalization", {})
         state = dict(raw_state) if isinstance(raw_state, dict) else {}
         raw_checkpoint = state.get("checkpoint", {})
         checkpoint = raw_checkpoint if isinstance(raw_checkpoint, dict) else {}
-        phase = str(checkpoint.get("phase") or state.get("current_phase") or "unknown")
+        # No checkpoint yet means finalization never began: the agent is still editing.
+        phase = str(checkpoint.get("phase") or state.get("current_phase") or "edit")
         proof_key = str(checkpoint.get("proof_key") or "unknown")
-        operation_id = str(checkpoint.get("operation_id") or "unknown")
         cancelled = run.status == "cancel_requested"
-        diagnostic = bounded_redacted_text(
-            f"generation {'cancelled' if cancelled else 'deadline exceeded'}; "
-            f"phase={phase}; proof_key={proof_key}; operation_id={operation_id}",
-            max_bytes=_MAX_DETAIL_BYTES,
-        )
         leases = list(
             await session.scalars(
                 select(ProjectCellActivityLease)
@@ -2262,8 +2359,30 @@ async def watch_generation_deadline(
                     ProjectCellActivityLease.generation_run_id == generation_run_id,
                     ProjectCellActivityLease.state == ActivityState.ACTIVE.value,
                 )
+                .order_by(ProjectCellActivityLease.started_at)
                 .with_for_update()
             )
+        )
+        # The command or tool that was running, when there was one; a checkpoint that
+        # carries no operation must not read as a lost restoration id.
+        agent_operation_id = (
+            str(leases[-1].operation_id) if leases else checkpoint.get("operation_id")
+        )
+        terminal = {
+            "reason": "cancelled" if cancelled else "deadline",
+            "stage": deadline.stage,
+            "phase": phase,
+            "restoration_operation_id": _restoration_operation_id(run),
+            "agent_operation_id": str(agent_operation_id) if agent_operation_id else None,
+            "proof_key": proof_key,
+        }
+        diagnostic = bounded_redacted_text(
+            f"generation {'cancelled' if cancelled else 'deadline exceeded'}; "
+            f"stage={terminal['stage']}; phase={phase}; "
+            f"restoration_operation_id={terminal['restoration_operation_id'] or 'none'}; "
+            f"agent_operation_id={terminal['agent_operation_id'] or 'none'}; "
+            f"proof_key={proof_key}",
+            max_bytes=_MAX_DETAIL_BYTES,
         )
         terminal_activity = (
             ActivityState.CANCELLED.value if cancelled else ActivityState.TIMED_OUT.value
@@ -2282,6 +2401,7 @@ async def watch_generation_deadline(
         )
         state["outcome"] = run.status
         state["terminal_reason"] = diagnostic
+        state["terminal"] = terminal
         root = dict(run.agent_state)
         root["max_finalization"] = state
         run.agent_state = root
@@ -2296,6 +2416,8 @@ __all__ = [
     "MaxFinalizationOutcome",
     "MaxFinalizationStatus",
     "ProofBundle",
+    "generation_deadline_wait",
     "proof_bundle_verdict",
+    "run_generation_deadline_watchdog",
     "watch_generation_deadline",
 ]

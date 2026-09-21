@@ -28,6 +28,8 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     USE_GENERATION_EVENT_REPLAY="true" \
     USE_CELL_RESOURCE_PROFILE_V2="true" \
     MAX_GENERATION_DEADLINE_SECONDS="1600" \
+    RESTORATION_ADAPTATION_REPAIR_SECONDS="950" \
+    RESTORATION_ADAPTATION_ACTIVATION_SECONDS="2500" \
     PROJECT_CELL_HEARTBEAT_SECONDS="16" \
     PROJECT_CELL_WATCHDOG_GRACE_SECONDS="21" \
     docker compose --env-file "${blank_env}" -f "${compose_file}" config --format json
@@ -57,12 +59,17 @@ expected_finalization = {
     "USE_GENERATION_EVENT_REPLAY": "true",
     "USE_CELL_RESOURCE_PROFILE_V2": "true",
     "MAX_GENERATION_DEADLINE_SECONDS": "1600",
+    "RESTORATION_ADAPTATION_REPAIR_SECONDS": "950",
+    "RESTORATION_ADAPTATION_ACTIVATION_SECONDS": "2500",
     "PROJECT_CELL_HEARTBEAT_SECONDS": "16",
     "PROJECT_CELL_WATCHDOG_GRACE_SECONDS": "21",
 }
+generation_worker = services["generation-worker"]["environment"]
 for key, value in expected_finalization.items():
     assert api[key] == value
     assert worker[key] == value
+    # The deadline watchdog runs here; a missing variable must not slip through.
+    assert generation_worker[key] == value
 assert "generation-report-worker" not in services
 for service in services.values():
     environment = service.get("environment", {})

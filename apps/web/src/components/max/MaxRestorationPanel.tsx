@@ -22,6 +22,31 @@ const reconcilingText: Record<string, string> = {
   cancel: "Отменяем подготовку и ждём подтверждения. Применение не запускалось.",
   apply: "Связь прервалась во время применения. Уточняем, какая версия сейчас работает.",
 };
+// The server keeps machine text for operators. The owner gets the meaning; the stage and
+// phase stay visible underneath so support can find the run.
+const UNCHANGED = "Текущая версия и данные не изменены — откат можно запустить ещё раз.";
+function failureText(error: string): { text: string; code: string | null } {
+  const structured = /^generation (deadline exceeded|cancelled); /.exec(error);
+  if (structured) {
+    const stage = /stage=([a-z_]+)/.exec(error)?.[1] ?? null;
+    const phase = /phase=([a-z_]+)/.exec(error)?.[1] ?? null;
+    const code = [stage, phase].filter(Boolean).join(" / ") || null;
+    if (structured[1] === "cancelled")
+      return { text: `Адаптация остановлена по вашей отмене. ${UNCHANGED}`, code };
+    const what = stage === "repair"
+      ? "ИИ не успел исправить замечания проверки за отведённое время."
+      : stage === "proof"
+      ? "Проверка результата не завершилась за отведённое время."
+      : "ИИ не успел адаптировать версию за отведённое время.";
+    return { text: `${what} ${UNCHANGED}`, code };
+  }
+  // The repair window closes with its own plain-text messages, which carry no fields.
+  if (error.startsWith("generation deadline exceeded"))
+    return { text: `ИИ не успел завершить доработку за отведённое время. ${UNCHANGED}`, code: null };
+  if (/^adaptation (generation (failed|cancelled)|activation was not completed)$/.test(error))
+    return { text: `Адаптация остановилась до проверки результата. ${UNCHANGED}`, code: null };
+  return { text: error, code: null };
+}
 function ReportList({ title, items }: { title: string; items: string[] }) {
   return items.length ? <div><h4 className="font-medium">{title}</h4>
     <ul className="list-disc space-y-1 pl-5">{items.map((item, index) => <li key={index}>{item}</li>)}</ul>
@@ -48,6 +73,7 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
   const catalogObserved = (report?.database_state === "present" || report?.database_state === "empty")
     && !!report.checks?.some(check => check.evidence === "observed_catalog" || check.evidence === "structural_rule");
   const retryCatalogPreparation = operation?.state === "needs_changes" && !catalogObserved;
+  const failure = operation?.error ? failureText(operation.error) : null;
   return <section className="mx-4 my-3 max-w-full rounded-xl border border-border-default bg-surface-raised p-4 text-sm"
     aria-label="Восстановление версии" data-testid="max-restoration-panel">
     <h3 className="font-semibold" role="status">{operation?.state === "ready" && automatic
@@ -82,7 +108,9 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
       <ReportList title="Следующие действия" items={report.next_actions} />
     </div>}
     {(r.error || operation?.error) && <p role="alert" className="mt-3 break-words text-danger-fg">
-      {r.error ?? operation?.error}
+      {r.error || failure?.text}
+      {!r.error && failure?.code && <span className="mt-1 block text-xs text-fg-secondary"
+        data-testid="max-restoration-failure-code">Код для поддержки: {failure.code}</span>}
     </p>}
     <div className="mt-3 flex flex-wrap gap-2">
       {operation?.state === "needs_changes" && !retryPreparation && catalogObserved && operation.can_cancel && report && onAdapt && <div>

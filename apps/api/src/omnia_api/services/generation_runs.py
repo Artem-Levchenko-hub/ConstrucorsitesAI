@@ -37,7 +37,8 @@ class _AdaptationOwnerStatusTarget:
     owner_id: UUID
 
 
-def _has_sealed_adaptation_proof(run: GenerationRun) -> bool:
+def has_sealed_adaptation_proof(run: GenerationRun) -> bool:
+    """True while a durable proof or activation intent of an adaptation is unsettled."""
     root = run.agent_state if isinstance(run.agent_state, dict) else {}
     state = root.get("max_finalization")
     proof = state.get("restoration_adaptation_proof") if isinstance(state, dict) else None
@@ -264,7 +265,7 @@ async def terminalize_generation_run_locked(
         isinstance(raw_adaptation, dict)
         and raw_adaptation.get("adaptation_run_id") == str(run.id)
     ):
-        sealed = _has_sealed_adaptation_proof(run)
+        sealed = has_sealed_adaptation_proof(run)
         run.agent_state = {
             **state,
             **(

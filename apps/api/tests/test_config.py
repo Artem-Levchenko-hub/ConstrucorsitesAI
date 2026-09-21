@@ -26,6 +26,8 @@ def isolated_settings_env(
         "USE_GENERATION_EVENT_REPLAY",
         "USE_CELL_RESOURCE_PROFILE_V2",
         "MAX_GENERATION_DEADLINE_SECONDS",
+        "RESTORATION_ADAPTATION_REPAIR_SECONDS",
+        "RESTORATION_ADAPTATION_ACTIVATION_SECONDS",
         "PROJECT_CELL_HEARTBEAT_SECONDS",
         "PROJECT_CELL_WATCHDOG_GRACE_SECONDS",
     ):
@@ -45,6 +47,8 @@ def test_max_finalization_defaults_are_dark_and_deadlines_are_exact(
     assert settings.use_generation_event_replay is False
     assert settings.use_cell_resource_profile_v2 is False
     assert settings.max_generation_deadline_seconds == 1500
+    assert settings.restoration_adaptation_repair_seconds == 900
+    assert settings.restoration_adaptation_activation_seconds == 2400
     assert settings.project_cell_heartbeat_seconds == 15
     assert settings.project_cell_watchdog_grace_seconds == 20
 
@@ -64,10 +68,18 @@ def test_product_advisor_default_uses_a_current_gateway_model(
     ("field_name", "value"),
     [
         ("max_generation_deadline_seconds", 0),
+        ("restoration_adaptation_repair_seconds", 0),
+        ("restoration_adaptation_activation_seconds", 0),
         ("project_cell_heartbeat_seconds", 0),
         ("project_cell_watchdog_grace_seconds", 0),
     ],
-    ids=["deadline", "heartbeat", "watchdog-grace"],
+    ids=[
+        "deadline",
+        "adaptation-repair",
+        "adaptation-activation",
+        "heartbeat",
+        "watchdog-grace",
+    ],
 )
 def test_max_finalization_bounds_reject_nonpositive_values(
     field_name: str,
