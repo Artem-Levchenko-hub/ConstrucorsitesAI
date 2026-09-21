@@ -24,7 +24,14 @@ RETENTION_DAYS="${RETENTION_DAYS:-14}"
 OFFHOST_DEST="${BACKUP_OFFHOST_DEST:-}" # optional second encrypted copy via rsync/scp
 PUBLIC_CERT="${BACKUP_PUBLIC_CERT:-/opt/omnia/infra/backup/offhost-backup-cert.pem}"
 MINIO_VOLUME="${MINIO_VOLUME:-full_minio-data}"
-MINIO_BACKUP_IMAGE="${MINIO_BACKUP_IMAGE:-omnia-api:prod}"
+# The archive helper only needs `tar`. Releases run SHA-tagged images, so the
+# floating `omnia-api:prod` tag may be absent (that silently broke three nightly
+# backups in September 2026): prefer the image of the running API container.
+API_CTR="${API_CTR:-omnia-prod-api}"
+if [ -z "${MINIO_BACKUP_IMAGE:-}" ]; then
+  MINIO_BACKUP_IMAGE="$(docker inspect "$API_CTR" --format '{{.Config.Image}}' 2>/dev/null || true)"
+  MINIO_BACKUP_IMAGE="${MINIO_BACKUP_IMAGE:-omnia-api:prod}"
+fi
 RUNTIME_ENV="${RUNTIME_ENV:-/opt/omnia-runtime/.env}"
 # This is the EnvironmentFile loaded by omnia-orchestrator.service. Backing up
 # a legacy mirror would produce a bundle that cannot faithfully boot the daemon.
