@@ -619,6 +619,7 @@ def test_manifest_schema_and_private_file_modes(state_root: Path, tmp_path: Path
         "volume",
         "status",
         "method",
+        "format",
         "file",
         "bytes",
         "sha256",
@@ -733,3 +734,51 @@ def test_verify_reports_partial_when_the_backup_itself_was_partial(
 
     verifier = FakeRunner()
     assert _verify(out, verifier) == 2
+
+
+def test_the_restore_tool_follows_the_format_not_the_file_name(tmp_path: Path) -> None:
+    """A halted cell's core dump is a plain script in a `-core.dump` file.
+
+    On production every cell is halted between builds, so `pg_restore` was tried on
+    15 of 15 core dumps and every one of them failed with "input file appears to be
+    a text format dump" — the backups were fine, their verification was not.
+    """
+    from scripts.backup_cells import _dump_format, _restore_command
+
+    plain = tmp_path / "ws-core.dump"
+    plain.write_bytes(b"--\n-- PostgreSQL database cluster dump\n")
+    custom = tmp_path / "ws2-core.dump"
+    custom.write_bytes(b"PGDMP\x00\x01")
+
+    # The format recorded by the backup wins.
+    assert _dump_format(plain, {"format": "plain"}) == "plain"
+    assert _dump_format(custom, {"format": "custom"}) == "custom"
+    # A backup written before the field existed is sniffed, not guessed from the name.
+    assert _dump_format(plain, {}) == "plain"
+    assert _dump_format(custom, {}) == "custom"
+    assert _dump_format(plain, {"format": "nonsense"}) == "plain"
+
+    assert _restore_command("custom")[0] == "pg_restore"
+    assert _restore_command("plain")[0] == "psql"
+
+
+def test_every_dump_records_the_format_it_actually_wrote(
+    state_root: Path, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    # One cell is running (exec path), the rest are halted (scratch path).
+    _backup(state_root, out, _runner(running=[core_volume(EDITOR)]))
+    manifest = _manifest(out)
+
+    formats = {
+        (db["method"], db["kind"]): db["format"]
+        for item in manifest["workspaces"]
+        for db in item["databases"]
+        if db["status"] == "ok"
+    }
+    assert formats, "the fixture produced no successful dump"
+    for (method, kind), value in formats.items():
+        # exec + core is the only custom-format pg_dump; everything else is pg_dumpall.
+        assert value == ("custom" if (method, kind) == ("exec", "core") else "plain"), (
+            method, kind, value,
+        )

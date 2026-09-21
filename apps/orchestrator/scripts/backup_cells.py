@@ -111,6 +111,7 @@ _SCRATCH_SERVER_SCRIPT = (
 _OWNERSHIP_SCRIPT = 'chown -R postgres:postgres "$1" && chmod 0700 "$1"'
 _EXPORT_SCRIPT = 'test -f "$1/PG_VERSION" || exit 3\nexec tar -cf - -C "$1" .\n'
 
+DumpFormat = Literal["custom", "plain"]
 Status = Literal["ok", "busy", "deferred_active_generation", "failed"]
 
 
@@ -630,6 +631,10 @@ def build_inventory(
 class DumpOutcome:
     status: Status
     method: str | None = None
+    # The restore tool follows the FORMAT, not the file name: the exec path writes a
+    # custom-format pg_dump, the scratch path a plain pg_dumpall script, and both land
+    # in a `-core.dump` file. Picking pg_restore by name failed every halted cell.
+    dump_format: DumpFormat | None = None
     file: str | None = None
     bytes: int | None = None
     sha256: str | None = None
@@ -797,6 +802,7 @@ class CellBackup:
         return DumpOutcome(
             status="ok",
             method="exec",
+            dump_format="custom" if target.kind == "core" else "plain",
             file=path.name,
             bytes=result.size_bytes,
             sha256=result.sha256,
@@ -932,6 +938,7 @@ class CellBackup:
         return DumpOutcome(
             status="ok",
             method="scratch_copy",
+            dump_format="plain",
             file=destination.name,
             bytes=result.size_bytes,
             sha256=result.sha256,
@@ -1140,6 +1147,7 @@ def _outcome_payload(outcome: DumpOutcome) -> dict[str, Any]:
     return {
         "status": outcome.status,
         "method": outcome.method,
+        "format": outcome.dump_format,
         "file": outcome.file,
         "bytes": outcome.bytes,
         "sha256": outcome.sha256,
@@ -1333,7 +1341,7 @@ def _restore_entry(
         if isinstance(server, DumpOutcome):
             return {"status": "failed", "detail": server.detail}
         restored = backup.runner.run(
-            ["exec", "--interactive", server, *_restore_command(kind)],
+            ["exec", "--interactive", server, *_restore_command(_dump_format(path, entry))],
             timeout=_DUMP_TIMEOUT,
             stdin_path=path,
         )
@@ -1358,8 +1366,21 @@ def _restore_entry(
         pool.release()
 
 
-def _restore_command(kind: str) -> list[str]:
-    if kind == "core":
+# A custom-format pg_dump starts with this magic; a plain script never does.
+_CUSTOM_DUMP_MAGIC = b"PGDMP"
+
+
+def _dump_format(path: Path, entry: Mapping[str, Any]) -> DumpFormat:
+    """The recorded format wins; a backup written before it existed is sniffed."""
+    recorded = entry.get("format")
+    if recorded == "custom" or recorded == "plain":
+        return recorded
+    with path.open("rb") as handle:
+        return "custom" if handle.read(len(_CUSTOM_DUMP_MAGIC)) == _CUSTOM_DUMP_MAGIC else "plain"
+
+
+def _restore_command(dump_format: DumpFormat) -> list[str]:
+    if dump_format == "custom":
         return ["pg_restore", "--clean", "--if-exists", *CellBackup.scratch_connection()]
     # pg_dumpall recreates the bootstrap role, so a harmless "already exists" is
     # expected on restore: the table count, not psql's exit code, is the verdict.
