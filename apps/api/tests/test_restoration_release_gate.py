@@ -98,11 +98,13 @@ def test_missing_canary_cannot_skip_release_gate() -> None:
 
 
 def test_artifact_carries_both_identity_maps_and_the_runner() -> None:
+    expected, observed = _identity(), _identity(web=_SHA_B)
     artifact = smoke_artifact(
         runner_sha=_SHA_B,
-        expected=_identity(),
-        observed=_identity(web=_SHA_B),
-        failures=[],
+        expected=expected,
+        observed=observed,
+        # The record stores the verdict of the run; it does not re-decide it.
+        failures=validate_smoke_identity(_SHA_B, expected, observed),
         started_at="2026-09-22T06:00:00Z",
         finished_at="2026-09-22T06:00:04Z",
     )

@@ -140,9 +140,13 @@ def smoke_artifact(
     started_at: str,
     finished_at: str,
 ) -> dict[str, object]:
-    """The durable record of one smoke run, written whatever the outcome."""
-    combined = [*validate_smoke_identity(runner_sha, expected, observed), *failures]
-    unique = sorted(dict.fromkeys(combined))
+    """The durable record of one smoke run, written whatever the outcome.
+
+    The record does not judge: it stores what the run reported. Service revisions are
+    compared once, inside the run itself; re-deciding them here produced mismatches for
+    services that were never reached, which is a different claim from "they drifted".
+    """
+    unique = sorted(dict.fromkeys(failures))
     return {
         "runner_sha": runner_sha,
         "expected": expected.as_map(),
@@ -348,11 +352,18 @@ def main() -> int:
     # The revision the workflow itself is running from is part of the verdict: an older
     # runner cannot certify a newer release, however healthy production looks.
     runner_sha = os.environ.get("GITHUB_SHA", config.expected["api"])
+    # Only the runner's own revision is decided here; the service revisions were already
+    # compared against what was actually observed during the run.
+    runner_failures = [
+        code
+        for code in validate_smoke_identity(runner_sha, expected, expected)
+        if code == "runner.release_mismatch"
+    ]
     artifact = smoke_artifact(
         runner_sha=runner_sha,
         expected=expected,
         observed=observed,
-        failures=failures,
+        failures=[*failures, *runner_failures],
         started_at=started_at,
         finished_at=finished_at,
     )
