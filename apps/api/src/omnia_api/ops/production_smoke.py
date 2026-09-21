@@ -13,8 +13,9 @@ import queue
 import re
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
@@ -68,7 +69,89 @@ class Configuration:
             if re.fullmatch(r"[0-9a-f]{40}", value) is None:
                 raise ValueError(f"config.expected_{component}_release")
             expected[component] = value
+        # The generation worker is its own container. It may be pinned separately;
+        # without its own variable it inherits the worker's revision, as before.
+        generation = env.get("PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA", "")
+        if generation and re.fullmatch(r"[0-9a-f]{40}", generation) is None:
+            raise ValueError("config.expected_generation_worker_release")
+        expected["generation_worker"] = generation or expected["worker"]
         return cls(urls[0], urls[1], expected)
+
+
+_IDENTITY_FIELDS = ("web", "api", "worker", "generation_worker", "orchestrator")
+
+
+def _release_of(payload: Mapping[str, object]) -> str | None:
+    value = payload.get("release_sha")
+    return value if isinstance(value, str) else None
+
+
+@dataclass(frozen=True)
+class ReleaseIdentity:
+    """The five service revisions a smoke result is allowed to certify.
+
+    Both workers run the same image but are separate containers: a generation worker
+    left behind on an older revision must be reported on its own, not absorbed by the
+    ordinary worker that happens to share the expected value.
+    """
+
+    web: str
+    api: str
+    worker: str
+    generation_worker: str
+    orchestrator: str
+
+    def as_map(self) -> dict[str, str | None]:
+        return {
+            "web": self.web,
+            "api": self.api,
+            "worker": self.worker,
+            "generation_worker": self.generation_worker,
+            "orchestrator": self.orchestrator,
+        }
+
+
+def validate_smoke_identity(
+    runner_sha: str,
+    expected: ReleaseIdentity,
+    observed: ReleaseIdentity,
+) -> list[str]:
+    """Return the identity failures of this run; never adopt what was observed.
+
+    The runner's own revision is part of the verdict: a workflow checked out at an
+    older commit cannot certify a newer release, however healthy production looks.
+    """
+    failures: list[str] = []
+    if runner_sha != expected.api:
+        failures.append("runner.release_mismatch")
+    expected_map, observed_map = expected.as_map(), observed.as_map()
+    for component in sorted(expected_map):
+        if observed_map.get(component) != expected_map[component]:
+            failures.append(f"{component}.release_mismatch")
+    return failures
+
+
+def smoke_artifact(
+    *,
+    runner_sha: str,
+    expected: ReleaseIdentity,
+    observed: ReleaseIdentity,
+    failures: Sequence[str],
+    started_at: str,
+    finished_at: str,
+) -> dict[str, object]:
+    """The durable record of one smoke run, written whatever the outcome."""
+    combined = [*validate_smoke_identity(runner_sha, expected, observed), *failures]
+    unique = sorted(dict.fromkeys(combined))
+    return {
+        "runner_sha": runner_sha,
+        "expected": expected.as_map(),
+        "observed": observed.as_map(),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "failures": unique,
+        "status": "failed" if unique else "passed",
+    }
 
 
 @dataclass(frozen=True)
@@ -129,6 +212,7 @@ def run_smoke(
     *,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    observed: dict[str, str | None] | None = None,
 ) -> list[str]:
     deadline = clock() + TOTAL_DEADLINE
     failures: list[str] = []
@@ -199,6 +283,8 @@ def run_smoke(
         require(web.get("status") == "ok", "web.status")
         require(web.get("service") == "web", "web.service")
         require_release("web.release_mismatch", config.expected["web"], web.get("release_sha"))
+        if observed is not None:
+            observed["web"] = _release_of(web)
     api = health("api", config.platform_url + "/api/health")
     if api is not None:
         require(api.get("status") == "ok", "api.status")
@@ -207,13 +293,18 @@ def run_smoke(
         for name in READINESS_CHECKS:
             require(isinstance(checks, dict) and checks.get(name) == "ok", f"api.readiness.{name}")
         require_release("api.release_mismatch", config.expected["api"], api.get("release_sha"))
+        if observed is not None:
+            observed["api"] = _release_of(api)
         dependencies = api.get("dependencies")
         for component in ("worker", "generation_worker", "orchestrator"):
-            expected = config.expected["worker" if component == "generation_worker" else component]
-            observed = dependencies.get(f"{component}_release_sha") if isinstance(
+            reported = dependencies.get(f"{component}_release_sha") if isinstance(
                 dependencies, dict
             ) else None
-            require_release(f"{component}.release_mismatch", expected, observed)
+            require_release(
+                f"{component}.release_mismatch", config.expected[component], reported
+            )
+            if observed is not None:
+                observed[component] = reported if isinstance(reported, str) else None
     mvp = probe("mvp", config.platform_url + "/mvp")
     if mvp is not None:
         require("Путь до полностью рабочего MVP".encode() in mvp, "mvp.text_missing")
@@ -225,22 +316,53 @@ def run_smoke(
     return failures
 
 
+def _now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _write_artifact(path: str, artifact: Mapping[str, object]) -> None:
+    """Best effort: a smoke run is not failed because its record could not be saved."""
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(artifact, handle, ensure_ascii=False, indent=1, sort_keys=True)
+    except OSError as error:
+        print(f"WARN smoke.artifact_unwritten {type(error).__name__}")
+
+
 def main() -> int:
     try:
         config = Configuration.from_env(os.environ)
     except ValueError as error:
         print(f"FAIL {error}")
         return 1
+    started_at = _now()
+    seen: dict[str, str | None] = {}
     try:
-        failures = run_smoke(config, HTTPClient())
+        failures = run_smoke(config, HTTPClient(), observed=seen)
     except Exception:
         print("FAIL smoke.internal_error")
-        return 1
-    for code in failures:
+        failures = ["smoke.internal_error"]
+    finished_at = _now()
+    expected = ReleaseIdentity(**{name: config.expected[name] for name in _IDENTITY_FIELDS})
+    observed = ReleaseIdentity(**{name: seen.get(name) for name in _IDENTITY_FIELDS})  # type: ignore[arg-type]
+    # The revision the workflow itself is running from is part of the verdict: an older
+    # runner cannot certify a newer release, however healthy production looks.
+    runner_sha = os.environ.get("GITHUB_SHA", config.expected["api"])
+    artifact = smoke_artifact(
+        runner_sha=runner_sha,
+        expected=expected,
+        observed=observed,
+        failures=failures,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+    _write_artifact(os.environ.get("SMOKE_ARTIFACT_PATH", "smoke.json"), artifact)
+    reported = artifact["failures"]
+    for code in reported if isinstance(reported, list) else []:
         print(f"FAIL {code}")
-    if not failures:
+    if artifact["status"] == "passed":
         print("PASS production_smoke")
-    return int(bool(failures))
+    return int(artifact["status"] != "passed")
 
 
 if __name__ == "__main__":

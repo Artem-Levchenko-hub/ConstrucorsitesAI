@@ -10,6 +10,14 @@ on:
       - "apps/api/src/omnia_api/ops/production_smoke.py"
       - "apps/api/tests/test_production_smoke.py"
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: >-
+          The exact revision this run is meant to certify. It must match the checked-out
+          commit and the expected API revision; an older runner cannot certify a newer
+          release. Leave empty to certify whatever main currently points at.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +34,8 @@ env:
   PRODUCTION_EXPECTED_API_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_API_RELEASE_SHA }}
   PRODUCTION_EXPECTED_WORKER_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WORKER_RELEASE_SHA }}
   PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA }}
+  PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA }}
+  SMOKE_ARTIFACT_PATH: smoke.json
 
 jobs:
   smoke:
@@ -33,6 +43,18 @@ jobs:
     timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
+
+      - name: Refuse a runner that cannot certify the requested release
+        if: inputs.release_sha != ''
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          requested="${{ inputs.release_sha }}"
+          checked_out="$(git rev-parse HEAD)"
+          if [ "${requested}" != "${checked_out}" ]; then
+            echo "runner.checkout_mismatch requested=${requested} checked_out=${checked_out}"
+            exit 1
+          fi
 
       - name: Probe platform and MAX canary
         id: smoke
@@ -96,6 +118,15 @@ jobs:
                 state: "closed",
               });
             }
+
+      - name: Keep the smoke record whatever happened
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-smoke-${{ github.run_id }}
+          path: smoke.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Mark failed smoke red
         if: steps.smoke.outcome == 'failure'
