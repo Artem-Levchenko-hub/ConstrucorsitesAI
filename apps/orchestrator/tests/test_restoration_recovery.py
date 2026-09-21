@@ -280,3 +280,170 @@ def test_refusing_to_touch_a_resource_outside_this_recovery() -> None:
 
     with pytest.raises(ValueError, match="outside this recovery"):
         pool.release()
+
+
+# --------------------------------------------------------------------------- #
+# RC3: вернуть ровно один известный устаревший файл, ничего больше
+# --------------------------------------------------------------------------- #
+
+
+class _Source:
+    """Двойник редактируемого дерева проекта."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = dict(files)
+        self.writes: list[str] = []
+
+    def read(self, path: str) -> bytes | None:
+        return self.files.get(path)
+
+    def write(self, path: str, data: bytes) -> bool:
+        self.writes.append(path)
+        self.files[path] = data
+        return True
+
+    def inventory(self) -> dict[str, str]:
+        import hashlib
+
+        return {p: hashlib.sha256(d).hexdigest() for p, d in sorted(self.files.items())}
+
+
+_PAGE = "src/app/page.tsx"
+_STALE = b"export default function Page(){return <h1>Controlnaya versiya v6</h1>}\n"
+_TRUSTED = b"export default function Page(){return <h1>Controlnaya versiya v4</h1>}\n"
+
+
+def _digest(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def _tree(page: bytes = _STALE) -> _Source:
+    return _Source({_PAGE: page, "package.json": b'{"name":"qa"}', "src/lib/db.ts": b"export {}\n"})
+
+
+def _trusted_inventory(source: _Source) -> dict[str, str]:
+    inventory = source.inventory()
+    inventory[_PAGE] = _digest(_TRUSTED)
+    return inventory
+
+
+def test_recovery_replaces_only_known_stale_page() -> None:
+    from omnia_orchestrator.services.restoration_recovery import source_sync
+
+    source = _tree()
+    report = source_sync(
+        _intent(),
+        source=source,
+        page_path=_PAGE,
+        expected_stale_digest=_digest(_STALE),
+        trusted_page_bytes=_TRUSTED,
+        trusted_inventory=_trusted_inventory(source),
+    )
+
+    assert report.ok is True
+    assert source.writes == [_PAGE], "only the one known page may be written"
+    assert source.files[_PAGE] == _TRUSTED
+    assert source.files["src/lib/db.ts"] == b"export {}\n"
+
+
+def test_a_page_that_is_not_the_observed_one_stops_the_recovery() -> None:
+    from omnia_orchestrator.services.restoration_recovery import source_sync
+
+    source = _tree(page=b"someone edited this meanwhile\n")
+    report = source_sync(
+        _intent(),
+        source=source,
+        page_path=_PAGE,
+        expected_stale_digest=_digest(_STALE),
+        trusted_page_bytes=_TRUSTED,
+        trusted_inventory=_trusted_inventory(source),
+    )
+
+    assert report.ok is False
+    assert any(f.check == "source_changed" for f in report.findings)
+    assert source.writes == [], "nothing may be written after a failed compare-and-swap"
+
+
+def test_an_already_restored_page_is_reported_not_rewritten() -> None:
+    from omnia_orchestrator.services.restoration_recovery import source_sync
+
+    source = _tree(page=_TRUSTED)
+    report = source_sync(
+        _intent(),
+        source=source,
+        page_path=_PAGE,
+        expected_stale_digest=_digest(_STALE),
+        trusted_page_bytes=_TRUSTED,
+        trusted_inventory=_trusted_inventory(source),
+    )
+
+    assert report.ok is False
+    assert any("already matches" in f.detail for f in report.findings)
+    assert source.writes == []
+
+
+def test_drift_in_another_file_cancels_instead_of_blanket_restore() -> None:
+    from omnia_orchestrator.services.restoration_recovery import source_sync
+
+    source = _tree()
+    trusted = _trusted_inventory(source)
+    source.files["src/lib/db.ts"] = b"export const changed = true\n"
+
+    report = source_sync(
+        _intent(),
+        source=source,
+        page_path=_PAGE,
+        expected_stale_digest=_digest(_STALE),
+        trusted_page_bytes=_TRUSTED,
+        trusted_inventory=trusted,
+    )
+
+    assert report.ok is False
+    assert any(f.check == "inventory_matches_snapshot" and not f.ok for f in report.findings)
+    assert source.writes == []
+
+
+def test_a_missing_file_is_not_silently_accepted() -> None:
+    from omnia_orchestrator.services.restoration_recovery import source_sync
+
+    source = _tree()
+    trusted = _trusted_inventory(source)
+    trusted["src/app/layout.tsx"] = _digest(b"missing from the tree")
+
+    report = source_sync(
+        _intent(),
+        source=source,
+        page_path=_PAGE,
+        expected_stale_digest=_digest(_STALE),
+        trusted_page_bytes=_TRUSTED,
+        trusted_inventory=trusted,
+    )
+
+    assert report.ok is False and source.writes == []
+
+
+def test_the_result_is_checked_again_after_the_write() -> None:
+    from omnia_orchestrator.services.restoration_recovery import source_sync
+
+    class _Liar(_Source):
+        def write(self, path: str, data: bytes) -> bool:
+            self.writes.append(path)
+            self.files[path] = b"not what was asked for\n"
+            return True
+
+    source = _Liar(_tree().files)
+    report = source_sync(
+        _intent(),
+        source=source,
+        page_path=_PAGE,
+        expected_stale_digest=_digest(_STALE),
+        trusted_page_bytes=_TRUSTED,
+        trusted_inventory=_trusted_inventory(source),
+    )
+
+    assert report.ok is False
+    assert any(
+        f.check == "inventory_equals_snapshot_after_write" and not f.ok for f in report.findings
+    )

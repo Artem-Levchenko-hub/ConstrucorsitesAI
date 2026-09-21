@@ -270,11 +270,103 @@ def clone_witness(
         pool.release()
 
 
+class SourceGateway(Protocol):
+    """Доступ к редактируемому дереву проекта; в тестах подменяется двойником."""
+
+    def read(self, path: str) -> bytes | None: ...
+
+    def write(self, path: str, data: bytes) -> bool: ...
+
+    def inventory(self) -> Mapping[str, str]: ...
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def source_sync(
+    intent: RestorationRecoveryIntent,
+    *,
+    source: SourceGateway,
+    page_path: str,
+    expected_stale_digest: str,
+    trusted_page_bytes: bytes,
+    trusted_inventory: Mapping[str, str],
+) -> RecoveryReport:
+    """Вернуть ровно один известный устаревший файл к доверенным байтам снимка.
+
+    Сначала сверка-и-замена: файл должен быть ИМЕННО тем устаревшим, который мы
+    наблюдали. Если он другой — значит, с деревом что-то произошло после
+    расследования, и восстановление останавливается, а не переписывает вслепую.
+    Полная опись сверяется до и после: расхождение в любом другом файле — тоже
+    остановка. База на этой фазе не монтируется вовсе.
+    """
+    findings: list[RecoveryFinding] = []
+
+    observed = source.read(page_path)
+    if observed is None:
+        return _report("source_sync", [_finding("stale_page_present", False, "page not found")])
+    observed_digest = _sha256(observed)
+    if observed_digest != expected_stale_digest:
+        # Может быть уже и целевое содержимое — тогда чинить нечего.
+        already = observed_digest == _sha256(trusted_page_bytes)
+        return _report(
+            "source_sync",
+            [
+                _finding(
+                    "source_changed",
+                    False,
+                    "the page already matches the trusted snapshot"
+                    if already
+                    else "the editable page is not the observed stale one",
+                )
+            ],
+        )
+    findings.append(_finding("stale_page_compare_and_swap", True))
+
+    before = source.inventory()
+    unexpected = sorted(
+        path
+        for path, digest in before.items()
+        if path != page_path and trusted_inventory.get(path) != digest
+    )
+    missing = sorted(set(trusted_inventory) - set(before))
+    if unexpected or missing:
+        return _report(
+            "source_sync",
+            [
+                _finding(
+                    "inventory_matches_snapshot",
+                    False,
+                    f"{len(unexpected)} changed, {len(missing)} missing besides the known page",
+                )
+            ],
+        )
+    findings.append(_finding("inventory_matches_snapshot", True))
+
+    if not source.write(page_path, trusted_page_bytes):
+        return _report("source_sync", [*findings, _finding("page_restored", False, "write failed")])
+    findings.append(_finding("page_restored", True))
+
+    after = source.inventory()
+    drift = sorted(path for path, digest in after.items() if trusted_inventory.get(path) != digest)
+    findings.append(
+        _finding(
+            "inventory_equals_snapshot_after_write",
+            not drift,
+            f"{len(drift)} files differ from the snapshot" if drift else "",
+        )
+    )
+    return _report("source_sync", findings)
+
+
 __all__ = [
     "SCRATCH_PREFIX",
     "CommandResult",
     "DockerRunner",
     "ScratchPool",
+    "SourceGateway",
     "clone_witness",
     "inspect_recovery",
+    "source_sync",
 ]
