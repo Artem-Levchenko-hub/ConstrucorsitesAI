@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["approved", "changes_required", "blocked"]
+    },
+    "summary": {"type": "string"},
+    "failure_fingerprint": {"type": "string"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+          "title": {"type": "string"},
+          "evidence": {"type": "string"},
+          "required_change": {"type": "string"}
+        },
+        "required": ["priority", "title", "evidence", "required_change"]
+      }
+    },
+    "failed_gates": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "required": ["status", "summary", "failure_fingerprint", "findings", "failed_gates"]
+}
