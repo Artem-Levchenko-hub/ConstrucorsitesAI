@@ -1,0 +1,219 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $root := . -}}
+{{/*
+The Docker runtime isolates a published app with a namespace guard that sets
+iptables INPUT/OUTPUT/FORWARD to DROP and then re-opens exactly the egress
+proxy and the declared data endpoints
+(scripts/project_machine_namespace_guard.py:26-66). These policies are the
+Kubernetes translation of that posture: deny everything in the namespace, then
+name each flow. Install one release per namespace — the first policy is
+namespace-wide on purpose.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# DNS is the one egress every workload needs before anything else works.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-allow-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          {{- with .Values.networkPolicy.dns.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.dns.ports }}
+        - port: {{ .port }}
+          protocol: {{ .protocol | default "UDP" }}
+        {{- end }}
+---
+# Public traffic may enter only from the ingress controller.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-app-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "app") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "app") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          {{- with .Values.networkPolicy.ingressController.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - port: {{ .Values.app.containerPort }}
+          protocol: TCP
+{{- if .Values.core.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-core-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "max-core") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "max-core") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          {{- with .Values.networkPolicy.ingressController.podSelector }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - port: {{ .Values.core.containerPort }}
+          protocol: TCP
+{{- end }}
+---
+# Database reachability, both directions. The product and the trusted core are
+# the only clients; nothing else in the namespace may open 5432.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "postgres") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "max-app.selectorLabels" (dict "context" . "component" "app") | nindent 14 }}
+        {{- if .Values.core.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "max-app.selectorLabels" (dict "context" . "component" "max-core") | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-app-egress-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "app") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "app") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "max-app.selectorLabels" (dict "context" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+{{- if .Values.core.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" . }}-core-egress-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "max-core") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "max-core") | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "max-app.selectorLabels" (dict "context" . "component" "postgres") | nindent 14 }}
+      ports:
+        - port: {{ .Values.postgres.service.port }}
+          protocol: TCP
+{{- end }}
+{{- range .Values.networkPolicy.egressAllowlist }}
+{{- $component := .component }}
+{{- if and (eq $component "core") (not $root.Values.core.enabled) }}
+{{- fail (printf "max-app: egress allow-list entry %q targets the core, which is disabled" .name) }}
+{{- end }}
+{{- $selectorComponent := ternary "max-core" $component (eq $component "core") }}
+---
+# Named outbound destination, e.g. the MAX Bot API or the Omnia platform API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "max-app.fullname" $root }}-egress-{{ $component }}-{{ .name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" $root "component" $selectorComponent) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" $root "component" $selectorComponent) | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- range .cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- with .ports }}
+      ports:
+        {{- range . }}
+        - port: {{ .port }}
+          protocol: {{ .protocol | default "TCP" }}
+        {{- end }}
+      {{- end }}
+{{- end }}
+{{- end }}

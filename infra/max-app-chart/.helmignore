@@ -1,0 +1,10 @@
+.DS_Store
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# CI-only value files; they carry stub images and sentinel secrets.
+ci/

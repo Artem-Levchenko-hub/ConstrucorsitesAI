@@ -1,0 +1,370 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "max-app values",
+  "description": "Values for one published MAX Studio mini-app. Unknown keys are rejected so a typo fails the install instead of silently doing nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["app", "core", "postgres", "secrets", "ingress", "serviceAccount", "networkPolicy"],
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "description": "Image repository without tag or digest. Empty makes rendering fail.",
+          "pattern": "^$|^[a-z0-9][a-z0-9._-]*(:[0-9]{1,5})?(/[a-z0-9][a-z0-9._-]*)*$"
+        },
+        "digest": {
+          "type": "string",
+          "description": "Immutable content digest. Preferred over tag; wins when both are set.",
+          "pattern": "^$|^sha256:[0-9a-f]{64}$"
+        },
+        "tag": {
+          "type": "string",
+          "description": "Mutable tag. Rendering fails when it is exactly 'latest'.",
+          "pattern": "^$|^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "quantity": {
+      "type": ["string", "number"]
+    },
+    "resourceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "$ref": "#/definitions/quantity" },
+        "memory": { "$ref": "#/definitions/quantity" },
+        "ephemeral-storage": { "$ref": "#/definitions/quantity" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceList" },
+        "limits": { "$ref": "#/definitions/resourceList" }
+      }
+    },
+    "writablePaths": {
+      "type": "array",
+      "description": "Absolute paths backed by an emptyDir so a read-only root filesystem still works.",
+      "items": { "type": "string", "pattern": "^/[^\\s]*$" }
+    },
+    "labelSelectorMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "envList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "portList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["port"],
+        "properties": {
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "protocol": { "type": "string", "enum": ["TCP", "UDP", "SCTP"] }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "annotations": { "$ref": "#/definitions/stringMap" }
+      }
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object",
+      "description": "Reserved for Helm global values; unused by this chart."
+    },
+    "nameOverride": { "type": "string", "maxLength": 63 },
+    "fullnameOverride": { "type": "string", "maxLength": 63 },
+    "projectId": {
+      "type": "string",
+      "description": "OMNIA_PROJECT_ID. UUID in production; empty omits the variable.",
+      "pattern": "^$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "publicOrigin": {
+      "type": "string",
+      "description": "OMNIA_PUBLIC_APP_ORIGIN. Must be https:// — the core rejects anything else.",
+      "pattern": "^$|^https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "containerPort", "healthPath", "resources"],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "replicaCount": { "type": "integer", "minimum": 0, "maximum": 50 },
+        "containerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "healthPath": { "type": "string", "pattern": "^/[^\\s]*$" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "service": { "$ref": "#/definitions/service" },
+        "resources": { "$ref": "#/definitions/resources" },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "writablePaths": { "$ref": "#/definitions/writablePaths" },
+        "runAsUser": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "runAsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "nodeSelector": { "$ref": "#/definitions/labelSelectorMap" },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" },
+        "extraEnv": { "$ref": "#/definitions/envList" }
+      }
+    },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "containerPort", "healthPath", "resources"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/image" },
+        "replicaCount": { "type": "integer", "minimum": 0, "maximum": 50 },
+        "containerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "healthPath": { "type": "string", "pattern": "^/[^\\s]*$" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "service": { "$ref": "#/definitions/service" },
+        "resources": { "$ref": "#/definitions/resources" },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "writablePaths": { "$ref": "#/definitions/writablePaths" },
+        "runAsUser": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "runAsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "nodeOptions": { "type": "string" },
+        "maxApiBaseUrl": { "type": "string", "pattern": "^$|^https://[^\\s]+$" },
+        "platformApiUrl": { "type": "string", "pattern": "^$|^https://[^\\s]+$" },
+        "nodeSelector": { "$ref": "#/definitions/labelSelectorMap" },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" },
+        "extraEnv": { "$ref": "#/definitions/envList" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "username", "database", "persistence", "resources"],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "username": { "type": "string", "minLength": 1, "pattern": "^[a-z_][a-z0-9_]*$" },
+        "database": { "type": "string", "minLength": 1, "pattern": "^[a-z_][a-z0-9_]*$" },
+        "coreDatabase": { "type": "string", "minLength": 1, "pattern": "^[a-z_][a-z0-9_]*$" },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["port"],
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "annotations": { "$ref": "#/definitions/stringMap" }
+          }
+        },
+        "persistence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size"],
+          "properties": {
+            "size": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$" },
+            "storageClassName": { "type": "string", "maxLength": 253 },
+            "accessModes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"]
+              }
+            }
+          }
+        },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "resources": { "$ref": "#/definitions/resources" },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "writablePaths": { "$ref": "#/definitions/writablePaths" },
+        "runAsUser": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "runAsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "fsGroup": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "dataMountPath": { "type": "string", "pattern": "^/[^\\s]*$" },
+        "pgdataSubPath": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$" },
+        "nodeSelector": { "$ref": "#/definitions/labelSelectorMap" },
+        "tolerations": { "type": "array", "items": { "type": "object" } },
+        "affinity": { "type": "object" },
+        "podAnnotations": { "$ref": "#/definitions/stringMap" }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keys"],
+      "properties": {
+        "existingSecret": {
+          "type": "string",
+          "description": "Name of a Secret created out of band. Empty renders one from secrets.values.",
+          "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+          "maxLength": 253
+        },
+        "keys": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "postgresPassword",
+            "databaseUrl",
+            "coreDatabaseUrl",
+            "authSecret",
+            "maxBotToken",
+            "maxWebhookSecret",
+            "redisUrl"
+          ],
+          "properties": {
+            "postgresPassword": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "databaseUrl": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "coreDatabaseUrl": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "authSecret": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "maxBotToken": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "maxWebhookSecret": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+            "redisUrl": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+          }
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "postgresPassword": { "type": "string", "maxLength": 8192 },
+            "authSecret": { "type": "string", "maxLength": 8192 },
+            "maxBotToken": { "type": "string", "maxLength": 8192 },
+            "maxWebhookSecret": { "type": "string", "maxLength": 8192 },
+            "redisUrl": { "type": "string", "maxLength": 8192 }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string", "maxLength": 253 },
+        "host": {
+          "type": "string",
+          "description": "Single public hostname. Wildcards are not accepted here.",
+          "pattern": "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$",
+          "maxLength": 253
+        },
+        "path": { "type": "string", "pattern": "^/[^\\s]*$" },
+        "pathType": { "type": "string", "enum": ["Prefix", "Exact", "ImplementationSpecific"] },
+        "annotations": { "$ref": "#/definitions/stringMap" },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "secretName": {
+              "type": "string",
+              "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+              "maxLength": 253
+            }
+          }
+        },
+        "service": { "type": "string", "enum": ["core", "app"] },
+        "acknowledgeMissingAuthBoundary": { "type": "boolean" }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string", "pattern": "^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", "maxLength": 253 },
+        "annotations": { "$ref": "#/definitions/stringMap" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressController": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespaceSelector"],
+          "properties": {
+            "namespaceSelector": { "$ref": "#/definitions/labelSelectorMap" },
+            "podSelector": { "$ref": "#/definitions/labelSelectorMap" }
+          }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespaceSelector", "ports"],
+          "properties": {
+            "namespaceSelector": { "$ref": "#/definitions/labelSelectorMap" },
+            "podSelector": { "$ref": "#/definitions/labelSelectorMap" },
+            "ports": { "$ref": "#/definitions/portList" }
+          }
+        },
+        "egressAllowlist": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "component", "cidrs"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", "maxLength": 40 },
+              "component": { "type": "string", "enum": ["app", "core"] },
+              "cidrs": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "pattern": "^[0-9a-fA-F.:]+/[0-9]{1,3}$" }
+              },
+              "ports": { "$ref": "#/definitions/portList" }
+            }
+          }
+        }
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": { "type": ["integer", "string", "null"] },
+        "maxUnavailable": { "type": ["integer", "string", "null"] }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": { "name": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "commonLabels": { "$ref": "#/definitions/stringMap" },
+    "commonAnnotations": { "$ref": "#/definitions/stringMap" }
+  }
+}

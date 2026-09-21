@@ -1,0 +1,27 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+Workloads:
+  product   {{ include "max-app.app.fullname" . }}      health {{ .Values.app.healthPath }} on :{{ .Values.app.containerPort }}
+{{- if .Values.core.enabled }}
+  max-core  {{ include "max-app.core.fullname" . }}     health {{ .Values.core.healthPath }} on :{{ .Values.core.containerPort }}
+{{- end }}
+  postgres  {{ include "max-app.postgres.fullname" . }} (headless, :{{ .Values.postgres.service.port }}, {{ .Values.postgres.persistence.size }} PVC)
+
+Credentials come from Secret {{ include "max-app.secretName" . }}{{ if .Values.secrets.existingSecret }} (existing){{ end }}.
+
+{{ if .Values.ingress.enabled -}}
+Public host: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }} -> {{ .Values.ingress.service }} Service.
+{{- if eq .Values.ingress.service "app" }}
+WARNING: traffic reaches generated code with no MAX authentication in front of it.
+{{- end }}
+{{- else -}}
+Ingress is disabled; nothing is published yet.
+{{- end }}
+
+Check:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "max-app.app.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} get all,netpol,pvc
+
+This chart is packaging scaffolding, not a production switch. The trusted MAX
+boundary gateway, image build/push, data migration and PVC backups are still
+missing — see infra/max-app-chart/README.md.

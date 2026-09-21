@@ -1,0 +1,145 @@
+{{- if .Values.core.enabled }}
+{{- $component := "max-core" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "max-app.core.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.core.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with merge (dict) (.Values.core.podAnnotations | default dict) (.Values.commonAnnotations | default dict) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "max-app.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "max-app.podSecurityContext" (dict "context" . "component" .Values.core) | nindent 8 }}
+      containers:
+        - name: max-core
+          image: {{ include "max-app.image" (dict "image" .Values.core.image "component" $component) | quote }}
+          imagePullPolicy: {{ .Values.core.image.pullPolicy }}
+          {{- with .Values.core.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.core.containerPort }}
+              protocol: TCP
+          env:
+            # Credential-bearing variables (machine_adapter.py:741-752 and the
+            # runtime_env allow-list in schemas/cell_publication.py:45).
+            {{- include "max-app.secretEnv" (dict "context" . "name" "DATABASE_URL" "key" .Values.secrets.keys.coreDatabaseUrl) | nindent 12 }}
+            {{- include "max-app.secretEnv" (dict "context" . "name" "AUTH_SECRET" "key" .Values.secrets.keys.authSecret) | nindent 12 }}
+            {{- include "max-app.secretEnv" (dict "context" . "name" "MAX_BOT_TOKEN" "key" .Values.secrets.keys.maxBotToken "optional" true) | nindent 12 }}
+            {{- include "max-app.secretEnv" (dict "context" . "name" "MAX_WEBHOOK_SECRET" "key" .Values.secrets.keys.maxWebhookSecret "optional" true) | nindent 12 }}
+            {{- include "max-app.secretEnv" (dict "context" . "name" "REDIS_URL" "key" .Values.secrets.keys.redisUrl "optional" true) | nindent 12 }}
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: {{ .Values.core.containerPort | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: NEXT_TELEMETRY_DISABLED
+              value: "1"
+            {{- with .Values.core.nodeOptions }}
+            - name: NODE_OPTIONS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.projectId }}
+            - name: OMNIA_PROJECT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with include "max-app.publicOrigin" . }}
+            # The core compares the Origin header against this exact value
+            # before it accepts any state-changing public request
+            # (machine_boundary.py:336-338).
+            - name: OMNIA_PUBLIC_APP_ORIGIN
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.core.maxApiBaseUrl }}
+            - name: MAX_API_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.core.platformApiUrl }}
+            - name: OMNIA_PLATFORM_API_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.core.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.core.resources | nindent 12 }}
+          securityContext:
+            {{- include "max-app.containerSecurityContext" (dict "context" . "component" .Values.core) | nindent 12 }}
+          startupProbe:
+            # The orchestrator allows the core 120s to answer this path
+            # (machine_adapter.py:771).
+            httpGet:
+              path: {{ .Values.core.healthPath }}
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.core.healthPath }}
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.core.healthPath }}
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- if .Values.core.writablePaths }}
+          volumeMounts:
+            {{- range $index, $path := .Values.core.writablePaths }}
+            - name: writable-{{ $index }}
+              mountPath: {{ $path }}
+            {{- end }}
+          {{- end }}
+      {{- if .Values.core.writablePaths }}
+      volumes:
+        {{- range $index, $path := .Values.core.writablePaths }}
+        - name: writable-{{ $index }}
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.core.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.core.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.core.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

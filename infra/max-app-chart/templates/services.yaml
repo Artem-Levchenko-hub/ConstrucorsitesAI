@@ -1,0 +1,70 @@
+# Product Service — the generated app.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "max-app.app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "app") | nindent 4 }}
+  {{- with merge (dict) (.Values.app.service.annotations | default dict) (.Values.commonAnnotations | default dict) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.app.service.type }}
+  selector:
+    {{- include "max-app.selectorLabels" (dict "context" . "component" "app") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.app.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.core.enabled }}
+---
+# Trusted MAX core Service. Separate identity from the product on purpose.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "max-app.core.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "max-core") | nindent 4 }}
+  {{- with merge (dict) (.Values.core.service.annotations | default dict) (.Values.commonAnnotations | default dict) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.core.service.type }}
+  selector:
+    {{- include "max-app.selectorLabels" (dict "context" . "component" "max-core") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.core.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
+---
+# Headless Service governing the PostgreSQL StatefulSet. Headless (clusterIP
+# None) so the DSN resolves straight to the pod, the way the Docker runtime
+# reached the database over loopback inside a shared network namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "max-app.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+  {{- with merge (dict) (.Values.postgres.service.annotations | default dict) (.Values.commonAnnotations | default dict) }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    {{- include "max-app.selectorLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: {{ .Values.postgres.service.port }}
+      targetPort: postgres
+      protocol: TCP

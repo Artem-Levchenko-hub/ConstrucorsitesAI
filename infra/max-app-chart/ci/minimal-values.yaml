@@ -1,0 +1,70 @@
+# CI values: rendered-Secret mode with public stub images.
+#
+# The stubs are NOT the real MAX images. They answer HTTP on the contract port
+# so a cluster can prove wiring, scheduling, probes, DNS, the PVC and the
+# Secret plumbing. They prove nothing about MAX behaviour.
+#
+# agnhost digest is the one already pinned by infra/project-cell/versions.env.
+# postgres digest is the one already pinned by
+# infra/release/convert-protected-project-databases.sh.
+
+projectId: "00000000-0000-4000-8000-000000000000"
+# publicOrigin is deliberately left empty so the chart derives it from the host.
+
+app:
+  image:
+    repository: registry.k8s.io/e2e-test-images/agnhost
+    digest: sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+    pullPolicy: IfNotPresent
+  # agnhost serves /healthz, not the real /api/omnia/health.
+  healthPath: /healthz
+  args:
+    - netexec
+    - "--http-port=3000"
+  runAsUser: 65532
+  runAsGroup: 65532
+
+core:
+  image:
+    repository: registry.k8s.io/e2e-test-images/agnhost
+    digest: sha256:99c6b4bb4a1e1df3f0b3752168c89358794d02258ebebc26bf21c29399011a85
+    pullPolicy: IfNotPresent
+  # agnhost serves /healthz, not the real /api/health.
+  healthPath: /healthz
+  args:
+    - netexec
+    - "--http-port=3000"
+  runAsUser: 65532
+  runAsGroup: 65532
+
+postgres:
+  image:
+    repository: postgres
+    digest: sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+    pullPolicy: IfNotPresent
+  persistence:
+    size: 1Gi
+    # Empty on purpose: use whatever default StorageClass the cluster has
+    # (kind ships local-path as "standard").
+    storageClassName: ""
+
+secrets:
+  values:
+    # Sentinels. The lint job asserts that each of these strings appears only
+    # inside a `kind: Secret` document of the rendered output.
+    postgresPassword: "s3ntinel-postgres-password-7f3a91"
+    authSecret: "s3ntinel-auth-secret-4c8e02"
+    maxBotToken: "s3ntinel-bot-token-11d5aa"
+    maxWebhookSecret: "s3ntinel-webhook-secret-93b7c4"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: app.example.test
+  tls:
+    enabled: true
+    secretName: max-app-example-wildcard-tls
+  service: core
+
+networkPolicy:
+  enabled: true

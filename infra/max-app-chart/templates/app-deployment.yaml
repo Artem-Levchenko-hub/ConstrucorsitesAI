@@ -1,0 +1,128 @@
+{{- $component := "app" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "max-app.app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.app.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 8 }}
+      annotations:
+        # Rotating the database password restarts the pod instead of leaving it
+        # connected with a stale DSN. The checksum is a hash, not a credential.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with merge (dict) (.Values.app.podAnnotations | default dict) (.Values.commonAnnotations | default dict) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "max-app.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "max-app.podSecurityContext" (dict "context" . "component" .Values.app) | nindent 8 }}
+      containers:
+        - name: app
+          image: {{ include "max-app.image" (dict "image" .Values.app.image "component" $component) | quote }}
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          {{- with .Values.app.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.app.containerPort }}
+              protocol: TCP
+          env:
+            # Same variable set the Docker runtime injects
+            # (docker_machine_backend.py:364-371). Only the two credential-
+            # bearing ones come from the Secret; the rest are plain coordinates.
+            {{- include "max-app.secretEnv" (dict "context" . "name" "DATABASE_URL" "key" .Values.secrets.keys.databaseUrl) | nindent 12 }}
+            {{- include "max-app.secretEnv" (dict "context" . "name" "PGPASSWORD" "key" .Values.secrets.keys.postgresPassword) | nindent 12 }}
+            - name: PGHOST
+              value: {{ include "max-app.postgres.fullname" . | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PGUSER
+              value: {{ .Values.postgres.username | quote }}
+            - name: PGDATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: {{ .Values.app.containerPort | quote }}
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: NEXT_TELEMETRY_DISABLED
+              value: "1"
+            {{- with .Values.app.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          securityContext:
+            {{- include "max-app.containerSecurityContext" (dict "context" . "component" .Values.app) | nindent 12 }}
+          startupProbe:
+            # The Docker readiness budget for this service is 120s
+            # (machine_defaults.py:51); 30 x 5s matches it with slack.
+            httpGet:
+              path: {{ .Values.app.healthPath }}
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.app.healthPath }}
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.app.healthPath }}
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- if .Values.app.writablePaths }}
+          volumeMounts:
+            {{- range $index, $path := .Values.app.writablePaths }}
+            - name: writable-{{ $index }}
+              mountPath: {{ $path }}
+            {{- end }}
+          {{- end }}
+      {{- if .Values.app.writablePaths }}
+      volumes:
+        {{- range $index, $path := .Values.app.writablePaths }}
+        - name: writable-{{ $index }}
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.app.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.app.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.app.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

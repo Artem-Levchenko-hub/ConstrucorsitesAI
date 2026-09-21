@@ -1,0 +1,21 @@
+apiVersion: v2
+name: max-app
+description: One published MAX Studio mini-app — product container, trusted MAX core and its project PostgreSQL.
+type: application
+# Chart version. Bump on every change to templates, values or schema.
+version: 0.1.0
+# The runtime contract this chart packages, not a release of the product itself.
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords:
+  - max
+  - miniapp
+  - omnia
+home: https://github.com/omnia/omnia-mvp
+sources:
+  - https://github.com/omnia/omnia-mvp/tree/main/infra/max-app-chart
+maintainers:
+  - name: Omnia platform
+annotations:
+  omnia.io/stage: scaffolding
+  omnia.io/verified-by: .github/workflows/max-app-chart.yml

@@ -1,0 +1,499 @@
+name: MAX app chart
+
+# Packaging half of "run a MAX app on a cluster without servers": the chart in
+# infra/max-app-chart is authored without a local Helm, so this workflow is the
+# only place its correctness is actually proven.
+
+on:
+  push:
+    paths:
+      - "infra/max-app-chart/**"
+      - ".github/workflows/max-app-chart.yml"
+  pull_request:
+    paths:
+      - "infra/max-app-chart/**"
+      - ".github/workflows/max-app-chart.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: max-app-chart-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tool versions are exact. Integrity for the three Go tools comes from the Go
+  # module checksum database (sum.golang.org), the same mechanism the repo
+  # already relies on for actionlint in ci.yml; kubectl is verified against the
+  # checksum file published next to the binary.
+  HELM_VERSION: v3.16.4
+  KUBECONFORM_VERSION: v0.6.7
+  KIND_VERSION: v0.27.0
+  KUBECTL_VERSION: v1.32.2
+  # Node image of the pinned kind release, by digest. This is the exact image
+  # kind v0.27.0 ships as its default, read out of that pinned binary.
+  KIND_NODE_IMAGE: kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f
+  # Schema set kubeconform validates against; matches the kind node above.
+  KUBERNETES_VERSION: "1.32.0"
+  CHART_DIR: infra/max-app-chart
+  RELEASE_NAME: max-app
+  NAMESPACE: max-app-ci
+
+jobs:
+  lint:
+    name: Lint, render and assert the contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Helm and kubeconform
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install "helm.sh/helm/v3/cmd/helm@${HELM_VERSION}"
+          go install "github.com/yannh/kubeconform/cmd/kubeconform@${KUBECONFORM_VERSION}"
+          echo "${HOME}/go/bin" >> "${GITHUB_PATH}"
+
+      - name: Record tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          helm version
+          kubeconform -v
+
+      - name: Install the pinned YAML parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check "PyYAML==6.0.2"
+
+      - name: helm lint --strict with both ci value files
+        shell: bash
+        run: |
+          set -euo pipefail
+          for values in "${CHART_DIR}"/ci/*-values.yaml; do
+            echo "::group::helm lint ${values}"
+            helm lint --strict "${CHART_DIR}" --values "${values}"
+            echo "::endgroup::"
+          done
+
+      - name: Render both value files
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Without --kube-version `helm template` assumes Kubernetes 1.20 and the
+          # chart's kubeVersion floor refuses to render at all.
+          helm template "${RELEASE_NAME}" "${CHART_DIR}" \
+            --namespace "${NAMESPACE}" \
+            --kube-version "${KUBERNETES_VERSION}" \
+            --values "${CHART_DIR}/ci/minimal-values.yaml" \
+            > "${RUNNER_TEMP}/rendered-minimal.yaml"
+          helm template "${RELEASE_NAME}" "${CHART_DIR}" \
+            --namespace "${NAMESPACE}" \
+            --kube-version "${KUBERNETES_VERSION}" \
+            --values "${CHART_DIR}/ci/existing-secret-values.yaml" \
+            > "${RUNNER_TEMP}/rendered-existing-secret.yaml"
+          wc -l "${RUNNER_TEMP}/rendered-minimal.yaml" \
+                "${RUNNER_TEMP}/rendered-existing-secret.yaml"
+
+      - name: Validate against real Kubernetes schemas
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubeconform -strict -summary -verbose \
+            -kubernetes-version "${KUBERNETES_VERSION}" \
+            "${RUNNER_TEMP}/rendered-minimal.yaml" \
+            "${RUNNER_TEMP}/rendered-existing-secret.yaml"
+
+      - name: Assert the security and secret-scope contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/assert_contract.py" <<'PYTHON'
+          """Assertions on rendered max-app manifests.
+
+          1. no secret value may appear outside a `kind: Secret` document;
+          2. every container carries resources and a restricted securityContext;
+          3. every pod refuses a service-account token;
+          4. images are digest- or tag-pinned and never `latest`.
+          """
+          import re
+          import sys
+
+          import yaml
+
+          SENTINEL = re.compile(r"s3ntinel-[a-z0-9-]+")
+          FAILURES = []
+
+
+          def fail(message):
+              FAILURES.append(message)
+
+
+          def check_container(kind, name, container):
+              where = "%s/%s:%s" % (kind, name, container.get("name"))
+              resources = container.get("resources") or {}
+              for section in ("requests", "limits"):
+                  for key in ("cpu", "memory"):
+                      if not (resources.get(section) or {}).get(key):
+                          fail("%s: missing resources.%s.%s" % (where, section, key))
+              security = container.get("securityContext") or {}
+              if security.get("allowPrivilegeEscalation") is not False:
+                  fail("%s: allowPrivilegeEscalation must be false" % where)
+              if security.get("privileged") is not False:
+                  fail("%s: privileged must be false" % where)
+              if security.get("runAsNonRoot") is not True:
+                  fail("%s: runAsNonRoot must be true" % where)
+              if (security.get("capabilities") or {}).get("drop") != ["ALL"]:
+                  fail("%s: capabilities.drop must be exactly [ALL]" % where)
+              if (security.get("seccompProfile") or {}).get("type") != "RuntimeDefault":
+                  fail("%s: seccompProfile must be RuntimeDefault" % where)
+              image = container.get("image") or ""
+              if "@sha256:" not in image and not re.search(r":[^/:]+$", image):
+                  fail("%s: image %r is neither digest- nor tag-pinned" % (where, image))
+              if image.endswith(":latest"):
+                  fail("%s: image uses the mutable latest tag" % where)
+              if not any(p in container for p in ("readinessProbe", "livenessProbe", "startupProbe")):
+                  fail("%s: no probe" % where)
+              for env in container.get("env") or []:
+                  if "value" in env and SENTINEL.search(str(env["value"])):
+                      fail("%s: env %s carries a secret as a literal value" % (where, env.get("name")))
+              for arg in container.get("args") or []:
+                  if SENTINEL.search(str(arg)):
+                      fail("%s: a secret was passed as a container argument" % where)
+
+
+          def check_workload(document):
+              kind = document["kind"]
+              name = document["metadata"]["name"]
+              pod = document["spec"]["template"]["spec"]
+              if pod.get("automountServiceAccountToken") is not False:
+                  fail("%s/%s: automountServiceAccountToken must be false" % (kind, name))
+              if not pod.get("serviceAccountName"):
+                  fail("%s/%s: no serviceAccountName" % (kind, name))
+              security = pod.get("securityContext") or {}
+              if security.get("runAsNonRoot") is not True:
+                  fail("%s/%s: pod runAsNonRoot must be true" % (kind, name))
+              if (security.get("seccompProfile") or {}).get("type") != "RuntimeDefault":
+                  fail("%s/%s: pod seccompProfile must be RuntimeDefault" % (kind, name))
+              containers = (pod.get("containers") or []) + (pod.get("initContainers") or [])
+              if not containers:
+                  fail("%s/%s: no containers" % (kind, name))
+              for container in containers:
+                  check_container(kind, name, container)
+
+
+          def check_secret_scope(path):
+              with open(path, encoding="utf-8") as handle:
+                  text = handle.read()
+              inside = 0
+              for chunk in re.split(r"^---\s*$", text, flags=re.MULTILINE):
+                  hits = SENTINEL.findall(chunk)
+                  if not hits:
+                      continue
+                  if re.search(r"^kind:\s*Secret\s*$", chunk, flags=re.MULTILINE):
+                      inside += len(hits)
+                  else:
+                      fail("secret value(s) %s rendered outside kind: Secret" % sorted(set(hits)))
+              return inside
+
+
+          def main(path, expect_secret):
+              with open(path, encoding="utf-8") as handle:
+                  documents = [d for d in yaml.safe_load_all(handle) if d]
+              kinds = [d.get("kind") for d in documents]
+              for document in documents:
+                  if document.get("kind") in ("Deployment", "StatefulSet"):
+                      check_workload(document)
+                  if document.get("kind") == "ConfigMap":
+                      for key, value in (document.get("data") or {}).items():
+                          if SENTINEL.search(str(value)):
+                              fail("ConfigMap %s key %s carries a secret" % (document["metadata"]["name"], key))
+                  for key, value in (document.get("metadata", {}).get("annotations") or {}).items():
+                      if SENTINEL.search(str(value)):
+                          fail("%s: annotation %s carries a secret" % (document["metadata"]["name"], key))
+              inside = check_secret_scope(path)
+              if expect_secret == "yes":
+                  if "Secret" not in kinds:
+                      fail("expected a rendered Secret and found none")
+                  if inside == 0:
+                      fail("a Secret was rendered but it carries none of the sentinel values")
+              else:
+                  if "Secret" in kinds:
+                      fail("existingSecret mode must render no Secret of its own")
+                  if inside:
+                      fail("existingSecret mode leaked sentinel values")
+              for message in FAILURES:
+                  print("::error::%s" % message)
+              if FAILURES:
+                  sys.exit(1)
+              print("contract ok: %d documents (%s), %d secret value(s), all inside kind: Secret"
+                    % (len(documents), ",".join(sorted(set(kinds))), inside))
+
+
+          if __name__ == "__main__":
+              main(sys.argv[1], sys.argv[2])
+          PYTHON
+          python3 "${RUNNER_TEMP}/assert_contract.py" "${RUNNER_TEMP}/rendered-minimal.yaml" yes
+          python3 "${RUNNER_TEMP}/assert_contract.py" "${RUNNER_TEMP}/rendered-existing-secret.yaml" no
+
+      - name: Assert the chart refuses unsafe values
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The expected reason is asserted too: a refusal for some unrelated
+          # reason (a kubeVersion floor, a typo in a flag) must not pass as proof
+          # that the guard works.
+          expect_failure() {
+            local description="$1"
+            local expected="$2"
+            shift 2
+            if helm template "${RELEASE_NAME}" "${CHART_DIR}" \
+                 --namespace "${NAMESPACE}" \
+                 --kube-version "${KUBERNETES_VERSION}" \
+                 --values "${CHART_DIR}/ci/minimal-values.yaml" \
+                 "$@" > /dev/null 2> "${RUNNER_TEMP}/refusal.log"; then
+              echo "::error::chart rendered although it must refuse: ${description}"
+              return 1
+            fi
+            if ! grep -qF -- "${expected}" "${RUNNER_TEMP}/refusal.log"; then
+              echo "::error::refused for the wrong reason: ${description}"
+              cat "${RUNNER_TEMP}/refusal.log"
+              return 1
+            fi
+            echo "refused as expected: ${description}"
+          }
+          expect_failure "mutable latest tag" \
+            'max-app: app image tag "latest" is mutable' \
+            --set app.image.digest= --set app.image.tag=latest
+          expect_failure "empty image repository" \
+            'max-app: app image repository is empty' \
+            --set app.image.digest= --set app.image.repository=
+          expect_failure "malformed digest rejected by the schema" \
+            'app.image.digest: Does not match pattern' \
+            --set app.image.digest=sha256:not-a-digest
+          expect_failure "rendered secret mode without a database password" \
+            'max-app: secrets.values.postgresPassword is required' \
+            --set secrets.values.postgresPassword=
+          expect_failure "ingress pointed at the product without acknowledging the missing auth boundary" \
+            'max-app: routing the Ingress straight to the product' \
+            --set ingress.service=app
+          expect_failure "unknown value key rejected by values.schema.json" \
+            'Additional property totallyUnknownKey is not allowed' \
+            --set app.totallyUnknownKey=1
+
+  kind:
+    name: Install on a temporary cluster
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Install pinned Helm and kind
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install "helm.sh/helm/v3/cmd/helm@${HELM_VERSION}"
+          go install "sigs.k8s.io/kind@${KIND_VERSION}"
+          echo "${HOME}/go/bin" >> "${GITHUB_PATH}"
+
+      - name: Install pinned kubectl with checksum verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64"
+          curl -fsSL -o "${RUNNER_TEMP}/kubectl" "${base}/kubectl"
+          curl -fsSL -o "${RUNNER_TEMP}/kubectl.sha256" "${base}/kubectl.sha256"
+          read -r expected_sha < "${RUNNER_TEMP}/kubectl.sha256"
+          printf '%s  %s\n' "${expected_sha}" "${RUNNER_TEMP}/kubectl" | sha256sum -c -
+          chmod +x "${RUNNER_TEMP}/kubectl"
+          mkdir -p "${HOME}/go/bin"
+          mv "${RUNNER_TEMP}/kubectl" "${HOME}/go/bin/kubectl"
+          echo "${HOME}/go/bin" >> "${GITHUB_PATH}"
+
+      - name: Create the temporary cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          kind version
+          kind create cluster \
+            --name "${RELEASE_NAME}" \
+            --image "${KIND_NODE_IMAGE}" \
+            --wait 180s
+          kubectl version
+          kubectl get nodes -o wide
+          kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}{"\n"}'
+
+      - name: Install the chart
+        shell: bash
+        run: |
+          set -euo pipefail
+          # --atomic is what the orchestrator will use; it is deliberately not
+          # used here, so a failed install leaves the objects for the dump step.
+          helm upgrade --install "${RELEASE_NAME}" "${CHART_DIR}" \
+            --namespace "${NAMESPACE}" --create-namespace \
+            --values "${CHART_DIR}/ci/minimal-values.yaml" \
+            --wait --timeout 8m
+          helm -n "${NAMESPACE}" status "${RELEASE_NAME}"
+
+      - name: Wait for every workload
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl -n "${NAMESPACE}" rollout status \
+            "deployment/${RELEASE_NAME}-app" --timeout=180s
+          kubectl -n "${NAMESPACE}" rollout status \
+            "deployment/${RELEASE_NAME}-core" --timeout=180s
+          kubectl -n "${NAMESPACE}" rollout status \
+            "statefulset/${RELEASE_NAME}-postgres" --timeout=300s
+          kubectl -n "${NAMESPACE}" get pvc
+          kubectl -n "${NAMESPACE}" get endpointslices
+
+      - name: Prove the Services answer from inside the namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The probe pod carries the product's identity labels, so it is on the
+          # allowed side of the NetworkPolicy. It uses the same digest-pinned
+          # postgres image as the database, which gives it bash (for a raw HTTP
+          # request over /dev/tcp) and psql, with no extra image to pull.
+          kubectl apply -f - <<'MANIFEST'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: max-app-probe
+            namespace: max-app-ci
+            labels:
+              app.kubernetes.io/name: max-app
+              app.kubernetes.io/instance: max-app
+              app.kubernetes.io/component: app
+          spec:
+            restartPolicy: Never
+            automountServiceAccountToken: false
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 999
+              runAsGroup: 999
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: probe
+                image: postgres@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+                env:
+                  - name: PGPASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: max-app
+                        key: postgres-password
+                command:
+                  - bash
+                  - -c
+                  - |
+                    set -euo pipefail
+                    check_http() {
+                      local host="$1"
+                      local response first
+                      exec 3<>"/dev/tcp/${host}/3000"
+                      printf 'GET /healthz HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' \
+                        "${host}" >&3
+                      response="$(cat <&3)"
+                      exec 3<&-
+                      first="${response%%$'\r'*}"
+                      echo "   ${host} -> ${first}"
+                      case "${first}" in
+                        "HTTP/1.1 200"*) return 0 ;;
+                        *) return 1 ;;
+                      esac
+                    }
+                    echo "== app Service answers its health path"
+                    check_http max-app-app
+                    echo "== core Service answers its health path"
+                    check_http max-app-core
+                    echo "== postgres accepts the password from the Secret"
+                    psql -w -h max-app-postgres -p 5432 -U postgres -d postgres \
+                      -v ON_ERROR_STOP=1 -qAt -c 'select current_user'
+                    echo "== the trusted core database exists"
+                    psql -w -h max-app-postgres -p 5432 -U postgres -d maxcore \
+                      -v ON_ERROR_STOP=1 -qAt -c 'select current_database()'
+                    echo "ALL PROBES PASSED"
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  privileged: false
+                  readOnlyRootFilesystem: true
+                  runAsNonRoot: true
+                  runAsUser: 999
+                  runAsGroup: 999
+                  capabilities:
+                    drop:
+                      - ALL
+                  seccompProfile:
+                    type: RuntimeDefault
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+                volumeMounts:
+                  - name: tmp
+                    mountPath: /tmp
+            volumes:
+              - name: tmp
+                emptyDir: {}
+          MANIFEST
+          kubectl -n "${NAMESPACE}" wait \
+            --for=jsonpath='{.status.phase}'=Succeeded \
+            pod/max-app-probe --timeout=240s
+          kubectl -n "${NAMESPACE}" logs pod/max-app-probe
+
+      - name: Accept the referenced-Secret values against the real API server
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The referenced Secret does not exist in this cluster, which is fine:
+          # a server dry run validates the manifests, not the references.
+          helm install "${RELEASE_NAME}-external" "${CHART_DIR}" \
+            --namespace "${NAMESPACE}" \
+            --values "${CHART_DIR}/ci/existing-secret-values.yaml" \
+            --dry-run=server > /dev/null
+          echo "referenced-Secret values accepted by the API server"
+
+      - name: Dump the namespace on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+          kubectl -n "${NAMESPACE}" get all,netpol,pvc,secret,configmap,ingress -o wide || true
+          kubectl -n "${NAMESPACE}" describe pods || true
+          kubectl -n "${NAMESPACE}" get events --sort-by=.lastTimestamp || true
+          echo "::group::pod logs"
+          kubectl -n "${NAMESPACE}" logs --selector "app.kubernetes.io/instance=${RELEASE_NAME}" \
+            --all-containers --tail=200 --prefix || true
+          kubectl -n "${NAMESPACE}" logs --selector "app.kubernetes.io/instance=${RELEASE_NAME}" \
+            --all-containers --tail=200 --prefix --previous || true
+          echo "::endgroup::"
+
+      - name: Delete the temporary cluster
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          kind delete cluster --name "${RELEASE_NAME}" || true

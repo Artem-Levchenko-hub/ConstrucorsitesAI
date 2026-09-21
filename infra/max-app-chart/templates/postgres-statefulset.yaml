@@ -1,0 +1,165 @@
+{{- $component := "postgres" -}}
+{{- $pg := .Values.postgres -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "max-app.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # One primary. This chart does not package replication or failover.
+  replicas: 1
+  serviceName: {{ include "max-app.postgres.fullname" . }}
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with merge (dict) ($pg.podAnnotations | default dict) (.Values.commonAnnotations | default dict) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "max-app.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "max-app.podSecurityContext" (dict "context" . "component" $pg) | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "max-app.image" (dict "image" $pg.image "component" $component) | quote }}
+          imagePullPolicy: {{ $pg.image.pullPolicy }}
+          {{- with $pg.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: postgres
+              containerPort: {{ $pg.service.port }}
+              protocol: TCP
+          env:
+            {{- include "max-app.secretEnv" (dict "context" . "name" "POSTGRES_PASSWORD" "key" .Values.secrets.keys.postgresPassword) | nindent 12 }}
+            - name: POSTGRES_USER
+              value: {{ $pg.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ $pg.database | quote }}
+            # The Docker runtime initialises the cluster with
+            # --auth-host=scram-sha-256 (docker_machine_backend.py:762).
+            - name: POSTGRES_INITDB_ARGS
+              value: "--auth-host=scram-sha-256"
+            # PGDATA is a sub-directory of the mount so initdb can create it
+            # itself and own it 0700 inside an fsGroup-shared volume.
+            - name: PGDATA
+              value: {{ printf "%s/%s" $pg.dataMountPath $pg.pgdataSubPath | quote }}
+          resources:
+            {{- toYaml $pg.resources | nindent 12 }}
+          securityContext:
+            {{- include "max-app.containerSecurityContext" (dict "context" . "component" $pg) | nindent 12 }}
+          startupProbe:
+            # Same readiness proof the controller uses
+            # (docker_machine_backend.py:884-896), with its 60s budget.
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - {{ $pg.service.port | quote }}
+                - -U
+                - {{ $pg.username | quote }}
+                - -d
+                - {{ $pg.database | quote }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - {{ $pg.service.port | quote }}
+                - -U
+                - {{ $pg.username | quote }}
+                - -d
+                - {{ $pg.database | quote }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -h
+                - 127.0.0.1
+                - -p
+                - {{ $pg.service.port | quote }}
+                - -U
+                - {{ $pg.username | quote }}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: {{ $pg.dataMountPath }}
+            {{- if and .Values.core.enabled (ne $pg.coreDatabase $pg.database) }}
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            {{- end }}
+            {{- range $index, $path := $pg.writablePaths }}
+            - name: writable-{{ $index }}
+              mountPath: {{ $path }}
+            {{- end }}
+      volumes:
+        {{- if and .Values.core.enabled (ne $pg.coreDatabase $pg.database) }}
+        - name: init
+          configMap:
+            name: {{ include "max-app.postgres.fullname" . }}-init
+        {{- end }}
+        {{- range $index, $path := $pg.writablePaths }}
+        - name: writable-{{ $index }}
+          emptyDir: {}
+        {{- end }}
+      {{- with $pg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "max-app.componentLabels" (dict "context" . "component" $component) | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml $pg.persistence.accessModes | nindent 10 }}
+        resources:
+          requests:
+            storage: {{ $pg.persistence.size | quote }}
+        {{- if $pg.persistence.storageClassName }}
+        storageClassName: {{ $pg.persistence.storageClassName | quote }}
+        {{- end }}

@@ -1,0 +1,309 @@
+# max-app — one published MAX Studio mini-app on Kubernetes.
+#
+# Every default below is traced to the Docker runtime the orchestrator runs
+# today (apps/orchestrator/src/omnia_orchestrator/...). Where this chart has to
+# deviate from that runtime the deviation is called out in a comment and in
+# README.md. Nothing here is a production switch yet — see "What is NOT covered
+# yet" in README.md.
+#
+# Install one release per namespace. The NetworkPolicy set below writes a
+# namespace-wide default deny, so a second, unrelated workload in the same
+# namespace would lose its connectivity.
+
+# Override the chart name / the generated resource prefix.
+nameOverride: ""
+fullnameOverride: ""
+
+# Identity of the published app. projectId is the OMNIA_PROJECT_ID the trusted
+# core signs platform calls with (machine_adapter.py:744, integrations route).
+# It is an identifier, not a credential, so it travels as a plain env value.
+projectId: ""
+
+# Public origin the core enforces as the CSRF/same-origin boundary
+# (cell_publication.py:877 sets OMNIA_PUBLIC_APP_ORIGIN to the prod URL,
+# machine_boundary.py:336 compares the Origin header against it).
+# Leave empty to derive "https://<ingress.host>".
+publicOrigin: ""
+
+# ---------------------------------------------------------------------------
+# Generated product container (the app the agent wrote).
+# Untrusted code. It never receives AUTH_SECRET or the bot token.
+# ---------------------------------------------------------------------------
+app:
+  # repository + digest (preferred) or repository + tag.
+  # A "latest" tag or an empty repository makes rendering fail on purpose.
+  image:
+    repository: ""
+    # Immutable digest, e.g. sha256:<64 hex>. Wins over tag when both are set.
+    digest: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # Next.js standalone listens on PORT/HOSTNAME
+  # (templates/max-miniapp-nextjs/Dockerfile.prod:28, package.json "start").
+  containerPort: 3000
+  # Readiness/liveness path. The orchestrator proves this exact path
+  # (machine_defaults.py:50 readiness -> /api/omnia/health).
+  healthPath: /api/omnia/health
+  # Container args. The real image has its own ENTRYPOINT; leave empty.
+  # Never put a credential here — secrets reach containers only through
+  # Secret -> env or Secret -> volume.
+  args: []
+  service:
+    type: ClusterIP
+    port: 3000
+    annotations: {}
+  # Matches cell_public_machine_* (core/config.py:272-273): 0.5 CPU / 2 GiB cap.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+      ephemeral-storage: 128Mi
+    limits:
+      cpu: 500m
+      memory: 2Gi
+      ephemeral-storage: 2Gi
+  # The Docker dev machine runs writable (docker_machine_backend.py:456) because
+  # the coding agent edits sources inside it. A *published* image does not, so
+  # this chart hardens it and mounts emptyDir on the paths Next.js still writes.
+  readOnlyRootFilesystem: true
+  writablePaths:
+    - /tmp
+    - /app/.next/cache
+  # Dockerfile.prod runs USER node (uid 1000).
+  runAsUser: 1000
+  runAsGroup: 1000
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  # Extra plain (non-secret) environment. Use secrets.* for anything sensitive.
+  extraEnv: []
+
+# ---------------------------------------------------------------------------
+# Trusted MAX core (max-core). Immutable platform image, holds the session key,
+# the bot token and the owner boundary. Deliberately a separate Deployment —
+# see README "Why max-core is not a sidecar".
+# ---------------------------------------------------------------------------
+core:
+  enabled: true
+  image:
+    repository: ""
+    digest: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  containerPort: 3000
+  # The orchestrator waits for 200 on this exact path (machine_adapter.py:771).
+  healthPath: /api/health
+  args: []
+  service:
+    type: ClusterIP
+    port: 3000
+    annotations: {}
+  # Matches cell_public_core_* (core/config.py:274-275): 0.2 CPU / 768 MiB cap.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 200m
+      memory: 768Mi
+      ephemeral-storage: 1Gi
+  # The controller uploads /app/omnia-business-config.json into the running core
+  # (machine_business_config.py:68-82), so /app must stay writable. The Docker
+  # core is not read-only either (machine_adapter.py:728-757 sets no read_only).
+  readOnlyRootFilesystem: false
+  writablePaths:
+    - /tmp
+  # The public core image runs USER node (scripts/public-max-core/Dockerfile:32).
+  runAsUser: 1000
+  runAsGroup: 1000
+  # V8 heap cap. machine_adapter.py:707 computes clamp(mem/2MiB, 64..384);
+  # with the 768 MiB core budget that is 384.
+  nodeOptions: "--max-old-space-size=384"
+  # MAX Bot API base (templates/.../src/lib/max/bot-api.ts:4).
+  maxApiBaseUrl: "https://platform-api2.max.ru"
+  # Omnia platform API the core signs integration calls to
+  # (src/app/api/omnia/integrations/[...path]/route.ts:8). Empty = image default.
+  platformApiUrl: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  extraEnv: []
+
+# ---------------------------------------------------------------------------
+# Project PostgreSQL (StatefulSet + PVC + headless Service).
+# ---------------------------------------------------------------------------
+postgres:
+  image:
+    repository: ""
+    digest: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Superuser role and the product database (docker_machine_backend.py:44-45).
+  username: postgres
+  database: postgres
+  # Database used by the trusted core. In Docker the core talks to a *different*
+  # PostgreSQL instance with different credentials (machine_adapter.py:745-746
+  # points at names.postgres_container, the cell bundle DB, while the product
+  # uses the project DB). This chart collapses both onto one instance and
+  # separates them only by database name — see README, that is a known gap.
+  coreDatabase: maxcore
+  service:
+    port: 5432
+    annotations: {}
+  persistence:
+    size: 10Gi
+    # Empty = the cluster default StorageClass.
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+  # Extra postgres flags. The Docker contract pins listen_addresses to 127.0.0.1
+  # because the product shares the database's network namespace
+  # (docker_machine_backend.py:658, 662). A StatefulSet is reached over the
+  # pod network, so it must listen on all interfaces instead.
+  args:
+    - "-c"
+    - "listen_addresses=*"
+  # Matches cell_project_postgres_* (core/config.py:263-264): 0.15 CPU / 256 MiB.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+      ephemeral-storage: 64Mi
+    limits:
+      cpu: 150m
+      memory: 256Mi
+      ephemeral-storage: 1Gi
+  # The Docker project database already runs read-only with a tmpfs /tmp
+  # (docker_machine_backend.py:669, 680-682).
+  readOnlyRootFilesystem: true
+  writablePaths:
+    - /tmp
+    - /var/run/postgresql
+  # uid/gid of the postgres role in the official image.
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+  # PGDATA is a sub-directory of the mount so initdb can own it 0700 inside an
+  # fsGroup-shared volume.
+  dataMountPath: /var/lib/postgresql/data
+  pgdataSubPath: pgdata
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# ---------------------------------------------------------------------------
+# Secrets. Two modes:
+#   1. rendered   — leave existingSecret empty and fill secrets.values.*
+#   2. referenced — set existingSecret to a Secret you created out of band;
+#                   secrets.values.* is then ignored and the keys below must
+#                   exist in that Secret.
+# Either way every value reaches a container only as a Secret-backed env var.
+# ---------------------------------------------------------------------------
+secrets:
+  existingSecret: ""
+  keys:
+    postgresPassword: postgres-password
+    databaseUrl: database-url
+    coreDatabaseUrl: core-database-url
+    authSecret: auth-secret
+    maxBotToken: max-bot-token
+    maxWebhookSecret: max-webhook-secret
+    redisUrl: redis-url
+  values:
+    # Superuser password for the project database. Required in rendered mode.
+    postgresPassword: ""
+    # Cookie signing key for the trusted core (AUTH_SECRET, machine_adapter.py:743).
+    # Required in rendered mode when core.enabled is true.
+    authSecret: ""
+    # Optional MAX bot credentials. The publication schema allows exactly
+    # MAX_BOT_TOKEN, MAX_WEBHOOK_SECRET and MAX_API_BASE_URL
+    # (schemas/cell_publication.py:45). Empty = key omitted; the core then
+    # answers 503 on /api/max/session (machine_adapter.py:800).
+    maxBotToken: ""
+    maxWebhookSecret: ""
+    # Optional REDIS_URL for the core (machine_adapter.py:747). The shipped MAX
+    # kit does not read it; see README open questions.
+    redisUrl: ""
+
+# ---------------------------------------------------------------------------
+# Ingress. No cert-manager assumptions: annotations are passed through verbatim
+# and the TLS secret is referenced by name only.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+  tls:
+    enabled: false
+    # Name of an existing kubernetes.io/tls Secret. Not created by this chart.
+    secretName: ""
+  # Which in-chart Service receives public traffic: "core" or "app".
+  #
+  # In production neither is correct on its own: the public entrypoint is the
+  # trusted boundary gateway (services/machine_boundary.py), which authenticates
+  # the MAX session and only then forwards to the core or the product. That
+  # gateway is NOT packaged by this chart. Routing straight to "app" therefore
+  # publishes generated code with no MAX authentication in front of it, so it
+  # requires an explicit acknowledgement.
+  service: core
+  acknowledgeMissingAuthBoundary: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# NetworkPolicy. Default deny for the whole namespace plus the few flows the
+# runtime needs. Requires a CNI that enforces NetworkPolicy (Calico, Cilium,
+# k3s+Flannel with the built-in controller, ...). kind's default CNI does not.
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # Where the ingress controller lives. Only pods matching this may open a
+  # connection to the app/core Services.
+  ingressController:
+    namespaceSelector:
+      kubernetes.io/metadata.name: ingress-nginx
+    podSelector: {}
+  dns:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      k8s-app: kube-dns
+    ports:
+      - port: 53
+        protocol: UDP
+      - port: 53
+        protocol: TCP
+  # Optional egress allow-list. The Docker runtime forces every outbound
+  # connection through a filtering proxy (docker_machine_backend.py:492-495,
+  # machine_egress.py) and drops everything else (namespace guard, OUTPUT DROP).
+  # There is no such proxy here, so name the destinations explicitly.
+  # Each entry becomes one NetworkPolicy for one component.
+  #   - name: max-bot-api
+  #     component: core          # "app" or "core"
+  #     cidrs: ["203.0.113.0/24"]
+  #     ports: [{port: 443, protocol: TCP}]
+  egressAllowlist: []
+
+podDisruptionBudget:
+  enabled: false
+  # Set exactly one of them.
+  minAvailable: 1
+  maxUnavailable: null
+
+imagePullSecrets: []
+
+# Extra labels/annotations merged into every object this chart creates.
+commonLabels: {}
+commonAnnotations: {}

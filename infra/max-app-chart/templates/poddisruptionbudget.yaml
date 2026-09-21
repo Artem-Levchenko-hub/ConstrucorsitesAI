@@ -1,0 +1,42 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- if and .Values.podDisruptionBudget.minAvailable .Values.podDisruptionBudget.maxUnavailable }}
+{{- fail "max-app: set either podDisruptionBudget.minAvailable or podDisruptionBudget.maxUnavailable, not both" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "max-app.app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "app") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "app") | nindent 6 }}
+  {{- with .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+{{- if .Values.core.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "max-app.core.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "max-core") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "max-app.selectorLabels" (dict "context" . "component" "max-core") | nindent 6 }}
+  {{- with .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,57 @@
+{{- if .Values.ingress.enabled }}
+{{- if not .Values.ingress.host }}
+{{- fail "max-app: ingress.host is required when ingress.enabled is true" }}
+{{- end }}
+{{- if and .Values.ingress.tls.enabled (not .Values.ingress.tls.secretName) }}
+{{- fail "max-app: ingress.tls.secretName is required when ingress.tls.enabled is true; this chart never issues a certificate" }}
+{{- end }}
+{{- if and (eq .Values.ingress.service "core") (not .Values.core.enabled) }}
+{{- fail "max-app: ingress.service is \"core\" but core.enabled is false" }}
+{{- end }}
+{{- if eq .Values.ingress.service "app" }}
+{{- if not .Values.ingress.acknowledgeMissingAuthBoundary }}
+{{- fail "max-app: routing the Ingress straight to the product bypasses the MAX authentication boundary (services/machine_boundary.py is not packaged by this chart). Set ingress.acknowledgeMissingAuthBoundary=true to accept that." }}
+{{- end }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "max-app.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.labels" . | nindent 4 }}
+  {{- with merge (dict) (.Values.ingress.annotations | default dict) (.Values.commonAnnotations | default dict) }}
+  # Passed through verbatim. The chart assumes nothing about the controller and
+  # nothing about cert-manager.
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      # An existing kubernetes.io/tls Secret, usually the shared wildcard.
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                {{- if eq .Values.ingress.service "core" }}
+                name: {{ include "max-app.core.fullname" . }}
+                port:
+                  number: {{ .Values.core.service.port }}
+                {{- else }}
+                name: {{ include "max-app.app.fullname" . }}
+                port:
+                  number: {{ .Values.app.service.port }}
+                {{- end }}
+{{- end }}

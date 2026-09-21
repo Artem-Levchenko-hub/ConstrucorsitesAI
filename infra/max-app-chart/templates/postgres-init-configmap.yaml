@@ -1,0 +1,19 @@
+{{- if and .Values.core.enabled (ne .Values.postgres.coreDatabase .Values.postgres.database) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "max-app.postgres.fullname" . }}-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "max-app.componentLabels" (dict "context" . "component" "postgres") | nindent 4 }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  # Schema-only DDL. No password, DSN or token may ever be placed in a
+  # ConfigMap; credentials reach PostgreSQL through the Secret env only.
+  # Runs once, on an empty PGDATA, via the official image's initdb hook.
+  01-core-database.sql: |
+    CREATE DATABASE {{ .Values.postgres.coreDatabase | quote }};
+{{- end }}
