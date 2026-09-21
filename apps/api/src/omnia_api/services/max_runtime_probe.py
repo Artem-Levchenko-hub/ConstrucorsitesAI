@@ -161,6 +161,97 @@ async def probe_max_cell_runtime(
     )
 
 
+# Platform-managed endpoints answer for every generated app, so they prove nothing
+# about the product's own data plane.
+_MANAGED_PREFIXES = ("/api/omnia/", "/api/max/")
+_BUSINESS_PATH_RE = re.compile(r"^/api/[A-Za-z0-9][A-Za-z0-9._~/-]{0,200}$")
+
+
+def _shape_of(value: object, depth: int = 0) -> object:
+    """Describe an answer by its structure only; no value ever leaves this function."""
+    if depth > 6:
+        return "..."
+    if isinstance(value, dict):
+        return {str(key): _shape_of(item, depth + 1) for key, item in sorted(value.items())}
+    if isinstance(value, list):
+        return [_shape_of(value[0], depth + 1)] if value else []
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+async def probe_signed_business_endpoint(
+    client: httpx.AsyncClient,
+    path: str,
+    expected_status: int = 200,
+    *,
+    expected_origin: str | None = None,
+) -> dict[str, object]:
+    """Read one business route with the signed owner session and report it safely.
+
+    A green build and a healthy platform endpoint say nothing about whether the
+    generated application can serve its own data: in the live failure the schema
+    declared nine technical tables, the database had one, and the product route
+    answered 500 while everything else was green. This is the missing proof.
+
+    The result carries a status, a reason and a digest of the answer's SHAPE. The
+    answer itself — business rows, error text — never travels out of here.
+    """
+    if (
+        _BUSINESS_PATH_RE.fullmatch(path) is None
+        or path.startswith(_MANAGED_PREFIXES)
+        or "//" in path
+    ):
+        return {
+            "ok": False,
+            "status": None,
+            "reason": "signed_business_route_invalid",
+            "shape_digest": None,
+        }
+    if expected_origin is not None and str(client.base_url).rstrip("/") != expected_origin.rstrip(
+        "/"
+    ):
+        return {
+            "ok": False,
+            "status": None,
+            "reason": "signed_business_route_foreign_binding",
+            "shape_digest": None,
+        }
+    try:
+        response = await client.get(path)
+    except httpx.HTTPError:
+        return {
+            "ok": False,
+            "status": None,
+            "reason": "signed_business_route_unreachable",
+            "shape_digest": None,
+        }
+    status = response.status_code
+    if 300 <= status < 400:
+        reason = "signed_business_route_redirected"
+    elif status in {401, 403}:
+        reason = "signed_business_route_unauthorized"
+    elif status != expected_status:
+        reason = "signed_business_route_failed"
+    else:
+        reason = "ok"
+    shape_digest: str | None = None
+    if reason == "ok":
+        try:
+            shape = _shape_of(response.json())
+        except ValueError:
+            shape = "non-json"
+        shape_digest = hashlib.sha256(
+            json.dumps(shape, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    return {
+        "ok": reason == "ok",
+        "status": status,
+        "reason": reason,
+        "shape_digest": shape_digest,
+    }
+
+
 async def _probe_signed_runtime(
     bootstrap_url: str,
     *,
