@@ -155,6 +155,109 @@ def restoration_probe_source_gap(files: dict[str, str] | Any) -> str | None:
     return None
 
 
+# The plan below is computed at prompt time from data the bundle already carries. It
+# stays OUTSIDE the digest-protected bundle: adding it there would fail the integrity
+# check of a request prepared by an older revision.
+_PLAN_MAX_ITEMS = 12
+_PLAN_MAX_BYTES = 8 * 1024
+# Schema/owner names that identify nothing on their own.
+_PLAN_GENERIC_IDENTIFIERS = frozenset({"public", "postgres", "information_schema", "pg_catalog"})
+
+
+def _plan_identifiers(object_name: str) -> list[str]:
+    parts = [part.strip('"') for part in str(object_name or "").split(".")]
+    return [
+        part
+        for part in parts
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{2,62}", part or "")
+        and part.lower() not in _PLAN_GENERIC_IDENTIFIERS
+    ]
+
+
+def _blocking_findings(diff: dict[str, Any] | None) -> list[dict[str, Any]]:
+    findings = diff.get("findings") if isinstance(diff, dict) else None
+    if not isinstance(findings, list):
+        return []
+    return [
+        item
+        for item in findings
+        if isinstance(item, dict)
+        and (item.get("severity") == "blocking" or item.get("status") == "incompatible")
+    ][:_PLAN_MAX_ITEMS]
+
+
+def _adaptation_work_plan(
+    diff: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+    files: dict[str, str],
+) -> str:
+    """Name the conflicts, the routes to keep and the files that mention them.
+
+    A live adaptation spent most of its budget re-reading the project to rediscover
+    exactly this. It is a starting point, not a substitute for checking the current
+    schema: every line here is evidence the controller already collected.
+    """
+    lines: list[str] = []
+    findings = _blocking_findings(diff)
+    identifiers: list[str] = []
+    if findings:
+        lines.append("Blocking conflicts to resolve (from the accepted compatibility report):")
+        for index, item in enumerate(findings, start=1):
+            operation = str(item.get("operation") or "?")[:200]
+            object_name = str(item.get("object") or "?")[:300]
+            resolution = str(item.get("resolution") or "")[:300]
+            lines.append(
+                f"{index}. {object_name} — {operation}"
+                + (f" — {resolution}" if resolution else "")
+            )
+            identifiers.extend(_plan_identifiers(object_name))
+    blockers = diff.get("blockers") if isinstance(diff, dict) else None
+    if isinstance(blockers, list) and blockers:
+        lines.append(
+            "Owner-visible blockers: "
+            + "; ".join(str(item)[:200] for item in blockers[:_PLAN_MAX_ITEMS])
+        )
+    capabilities = report.get("capabilities") if isinstance(report, dict) else None
+    lost = capabilities.get("lost") if isinstance(capabilities, dict) else None
+    if isinstance(lost, list) and lost:
+        routes = [
+            f"{item.get('method')} {item.get('path')}"
+            for item in lost[:_PLAN_MAX_ITEMS]
+            if isinstance(item, dict)
+        ]
+        if routes:
+            lines.append(
+                "Routes the current app serves and the historical version lacks — they serve "
+                "data that still exists, so keep each one working: " + ", ".join(routes)
+            )
+    if identifiers:
+        unique = sorted(set(identifiers))
+        hits: list[str] = []
+        for path, content in sorted(files.items()):
+            matched = [name for name in unique if name in content]
+            if matched:
+                hits.append(f"{path} ({', '.join(matched[:4])})")
+            if len(hits) >= _PLAN_MAX_ITEMS:
+                break
+        if hits:
+            lines.append(
+                "Historical files that mention the conflicting objects — start here instead of "
+                "re-reading the project: " + "; ".join(hits)
+            )
+    if not lines:
+        return ""
+    lines.append(
+        "Allowed schema changes: additive only (new nullable columns, new tables, new "
+        "indexes). Never drop or rename an existing column, never run a historical "
+        "migration, never rewrite existing rows."
+    )
+    block = (
+        "\n\nADAPTATION WORK PLAN (server-computed from controller evidence; verify against "
+        "the CURRENT schema before you rely on it)\n" + "\n".join(lines) + "\n"
+    )
+    return block if len(block.encode("utf-8")) <= _PLAN_MAX_BYTES else ""
+
+
 def _preservation_contract() -> dict[str, Any]:
     return {
         "version": 1,
@@ -545,6 +648,7 @@ async def append_adaptation_context(
             "functions and verified checks. This is a new draft, not publication.\n"
         )
         + restoration_probe_requirements()
+        + _adaptation_work_plan(raw.get("data_contract_diff"), report, files)
         + "\n"
         + json.dumps({**bundle, "files": files}, ensure_ascii=False)
     )

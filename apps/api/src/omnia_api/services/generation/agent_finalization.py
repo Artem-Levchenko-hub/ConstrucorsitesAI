@@ -92,12 +92,28 @@ async def finalize_max_candidate(
 
         assert runtime.handle is not None
 
+        _repair_history: list[str] = []
+
         async def _repair_finalization_source(detail: str) -> None:
             from omnia_api.services import agent_native
             from omnia_api.services.max_generation_contract import max_source_completion_gap
 
             assert runtime.handle is not None
             baseline = await runtime.handle.snapshot_files()
+            # Each repair opens a fresh transcript, so the agent cannot see what it
+            # already changed or what the earlier passes were told. Hand both over.
+            _changed = sorted(set(baseline) - set(files)) + sorted(
+                path for path in set(baseline) & set(files) if baseline[path] != files[path]
+            )
+            _carry = "".join(
+                f"\n\nEARLIER CHECK FEEDBACK (pass {index}, already addressed or not):\n{text}"
+                for index, text in enumerate(_repair_history, start=1)
+            ) + (
+                "\n\nFILES YOU ALREADY CHANGED IN THIS RUN: " + ", ".join(_changed[:40])
+                if _changed
+                else ""
+            )
+            _repair_history.append(detail)
             await operations.emit(
                 "agent.step",
                 {
@@ -111,7 +127,7 @@ async def finalize_max_candidate(
             result = await agent_native.run_native_build(
                 system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
                 task=(
-                    f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}\n"
+                    f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
                     "Fix the existing product in this same workspace. Preserve working "
                     "features and data. Do not repeat SQL effects already completed. "
                     "Make real source changes, run build, then done."

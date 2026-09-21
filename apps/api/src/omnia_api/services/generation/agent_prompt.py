@@ -91,6 +91,27 @@ async def prepare_agent_prompt(
         # A manual resume is a full completion pass, not a short edit.
         # Keep the same ceiling as the initial MAX product build.
         _agent_steps = 30
+    elif _is_edit and project_info.restoration_context:
+        # A restoration adaptation is not a point edit: it brings whole historical
+        # screens back and fits them to the current database. The edit template
+        # ("find the file, make the MINIMAL change") and its 18-step budget cost a
+        # live run its whole deadline. The server-computed work plan and the
+        # historical source ride in the seed block.
+        _agent_user = (
+            "Верни экраны и функции выбранной исторической версии в этот черновик и "
+            "приведи их к ТЕКУЩЕЙ базе данных.\n\n"
+            f"Запрос владельца:\n\n{prompt_text}\n{_seed_block}\n\n"
+            "Ниже уже собраны: исторические файлы, отчёт совместимости и план работ "
+            "(конфликты, маршруты, файлы). Начни с плана, а не с повторного обхода "
+            "проекта. Проверь текущую схему прежде чем полагаться на план, вноси "
+            "только additive-изменения схемы, сохраняй существующие строки, скрытые "
+            "поля и границы владельцев. Затем build, проверка и done."
+        )
+        _agent_system = stack.system
+        _agent_steps = _agent_step_budget(
+            project_info.template,
+            configured_steps=min(40, max(1, int(get_settings().agent_builder_max_steps))),
+        )
     elif _is_edit:
         _sel_block = ""
         try:
