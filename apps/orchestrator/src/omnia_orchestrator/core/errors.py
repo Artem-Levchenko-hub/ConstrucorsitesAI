@@ -26,6 +26,9 @@ ErrorCode = Literal[
     # (abort the build honestly) from a transient exec problem (retryable).
     "container_not_running",
     "docker_unavailable",
+    # Another operation holds this workspace right now — expected contention,
+    # not a failure: the caller may retry after the advertised delay.
+    "workspace_busy",
     "postgres_unavailable",
     "port_exhausted",
     "invalid_identifier",
@@ -64,6 +67,27 @@ async def orchestrator_error_handler(request: Request, exc: Exception) -> JSONRe
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": body.model_dump(exclude_none=True)},
+    )
+
+
+async def workspace_busy_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer lock contention with a retryable 503 instead of a 500 traceback.
+
+    Registered for the exception class itself, so a route that did not think to
+    catch it still answers honestly. Starlette looks a class handler up before the
+    catch-all, so nothing is re-raised and no traceback is logged for a wait that
+    is part of normal operation.
+    """
+    retry_after = 2
+    body = ErrorBody(
+        code="workspace_busy",
+        message="Проект сейчас занят другой операцией. Повторите запрос через несколько секунд.",
+        details={"retryable": True, "retry_after_seconds": retry_after},
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"error": body.model_dump(exclude_none=True)},
+        headers={"Retry-After": str(retry_after)},
     )
 
 

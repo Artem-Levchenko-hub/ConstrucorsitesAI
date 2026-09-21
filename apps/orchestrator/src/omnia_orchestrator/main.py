@@ -13,11 +13,13 @@ import structlog
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
+from omnia_orchestrator.core.cell_resources import WorkspaceLockTimeout
 from omnia_orchestrator.core.config import get_settings
 from omnia_orchestrator.core.errors import (
     OrchestratorError,
     orchestrator_error_handler,
     unhandled_error_handler,
+    workspace_busy_handler,
 )
 from omnia_orchestrator.core.sentry import init_sentry
 from omnia_orchestrator.routers import (
@@ -131,6 +133,7 @@ def create_app() -> FastAPI:
     )
 
     app.add_exception_handler(OrchestratorError, orchestrator_error_handler)
+    app.add_exception_handler(WorkspaceLockTimeout, workspace_busy_handler)
     app.add_exception_handler(RequestValidationError, unhandled_error_handler)
     app.add_exception_handler(Exception, unhandled_error_handler)
 
