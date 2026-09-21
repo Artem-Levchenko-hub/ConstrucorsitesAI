@@ -321,7 +321,10 @@ jobs:
           base="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64"
           curl -fsSL -o "${RUNNER_TEMP}/kubectl" "${base}/kubectl"
           curl -fsSL -o "${RUNNER_TEMP}/kubectl.sha256" "${base}/kubectl.sha256"
-          read -r expected_sha < "${RUNNER_TEMP}/kubectl.sha256"
+          # dl.k8s.io serves the checksum without a trailing newline, so `read`
+          # reports EOF and `set -e` would kill the step before any verification.
+          expected_sha="$(tr -d '\r\n' < "${RUNNER_TEMP}/kubectl.sha256")"
+          [ -n "${expected_sha}" ] || { echo "empty kubectl checksum"; exit 1; }
           printf '%s  %s\n' "${expected_sha}" "${RUNNER_TEMP}/kubectl" | sha256sum -c -
           chmod +x "${RUNNER_TEMP}/kubectl"
           mkdir -p "${HOME}/go/bin"
