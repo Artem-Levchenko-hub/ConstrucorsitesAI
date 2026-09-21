@@ -462,9 +462,19 @@ jobs:
               - name: tmp
                 emptyDir: {}
           MANIFEST
-          kubectl -n "${NAMESPACE}" wait \
+          # A blind `wait` hides why the probe never finished, so dump everything
+          # that explains it before failing the job.
+          if ! kubectl -n "${NAMESPACE}" wait \
             --for=jsonpath='{.status.phase}'=Succeeded \
-            pod/max-app-probe --timeout=240s
+            pod/max-app-probe --timeout=240s; then
+            echo "::group::probe pod did not succeed"
+            kubectl -n "${NAMESPACE}" get pod/max-app-probe -o wide || true
+            kubectl -n "${NAMESPACE}" describe pod/max-app-probe || true
+            kubectl -n "${NAMESPACE}" logs pod/max-app-probe --all-containers --tail=200 || true
+            kubectl -n "${NAMESPACE}" get events --sort-by=.lastTimestamp | tail -30 || true
+            echo "::endgroup::"
+            exit 1
+          fi
           kubectl -n "${NAMESPACE}" logs pod/max-app-probe
 
       - name: Accept the referenced-Secret values against the real API server
