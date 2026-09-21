@@ -7,7 +7,7 @@ import type { Project, Message } from "@/lib/api/types";
 import type { RestoreOperation } from "@/lib/api/restorations";
 
 const api = vi.hoisted(() => ({
-  submit: vi.fn(), cancel: vi.fn(), list: vi.fn(), detail: vi.fn(), snapshots: vi.fn(),
+  submit: vi.fn(), cancel: vi.fn(), prepare: vi.fn(), list: vi.fn(), detail: vi.fn(), snapshots: vi.fn(),
   pendingPrompt: null as string | null,
 }));
 vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({
@@ -15,7 +15,7 @@ vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({
 }) }));
 vi.mock("@/lib/api/restorations", () => ({
   listRestorations: api.list, getRestoration: api.detail, cancelRestoration: api.cancel,
-  prepareRestoration: vi.fn(), applyRestoration: vi.fn(),
+  prepareRestoration: api.prepare, applyRestoration: vi.fn(),
 }));
 vi.mock("@/lib/api/projects", () => ({ listProjects: async () => [] }));
 vi.mock("@/lib/api/snapshots", () => ({
@@ -45,7 +45,10 @@ const blocked: RestoreOperation = {
   execution_policy: "manual", selected_branch: null, adaptation_run_id: null,
   applied_snapshot: null, error: null,
   report: { revision: 1, mode: "exact", database_state: "present", changes: [], retained_data: [],
-    unavailable_features: [], warnings: [], blockers: ["Требуется совместимость новых полей"], next_actions: [] },
+    unavailable_features: [], warnings: [], blockers: ["Требуется совместимость новых полей"], next_actions: [],
+    format: 2, checks: [{ code: "catalog_observed", status: "compatible", severity: "info",
+      operation: "catalog.read", object: "public", evidence: "observed_catalog",
+      explanation: "Текущий каталог подтверждён." }] },
 };
 let currentOperation: RestoreOperation;
 let root: Root, container: HTMLDivElement, client: QueryClient;
@@ -75,6 +78,13 @@ beforeEach(() => {
   api.detail.mockImplementation(async () => currentOperation);
   api.cancel.mockImplementation(async () => {
     currentOperation = { ...blocked, state: "cancelled", revision: 2, can_cancel: false };
+    return currentOperation;
+  });
+  api.prepare.mockImplementation(async () => {
+    currentOperation = {
+      ...blocked, id: "fresh-operation", state: "checking", phase: "checking",
+      revision: 3, report: null, can_cancel: true,
+    };
     return currentOperation;
   });
   api.snapshots.mockResolvedValue([{ id: "head", project_id: "a" }]);
@@ -157,10 +167,24 @@ it("ordinary compatible restoration does not offer or start an AI generation", a
   expect(api.submit).not.toHaveBeenCalled();
 });
 
-it("unknown data inventory never promises an empty database", async () => {
-  currentOperation = { ...blocked, report: { ...blocked.report!, database_state: "unknown" } };
+it.each([
+  ["unknown", { ...blocked.report!, database_state: "unknown" as const }],
+  ["missing", null],
+  ["present without evidence", { ...blocked.report!, database_state: "present" as const, checks: [] }],
+  ["empty with source scan", { ...blocked.report!, database_state: "empty" as const,
+    checks: [{ ...blocked.report!.checks![0], evidence: "source_scan" as const }] }],
+])("%s data inventory never offers paid adaptation", async (_case, report) => {
+  currentOperation = { ...blocked, report };
   await render();
   expect(container.textContent).not.toContain("нет бизнес-записей");
+  expect(container.textContent).toContain("Текущий каталог базы данных не удалось подтвердить");
+  expect(container.querySelector('[data-testid="max-restoration-adapt"]')).toBeNull();
+  await click("Повторить подготовку");
+  expect(api.cancel).toHaveBeenCalledExactlyOnceWith("a", "operation");
+  expect(api.prepare).toHaveBeenCalledExactlyOnceWith("a", expect.objectContaining({
+    target_version_id: "old-version", expected_draft_snapshot_id: "head",
+    idempotency_key: expect.any(String), execution_policy: "automatic_when_safe",
+  }));
   expect(api.submit).not.toHaveBeenCalled();
 });
 

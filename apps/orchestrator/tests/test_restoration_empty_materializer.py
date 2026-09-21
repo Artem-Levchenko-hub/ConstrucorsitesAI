@@ -332,14 +332,70 @@ async def _prepare_empty(
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
-    state = SimpleNamespace(workspace_id=request.workspace_id)
+    state = SimpleNamespace(
+        workspace_id=request.workspace_id,
+        fencing_epoch=request.fencing_epoch,
+        last_operation_id=None,
+        operations=(),
+        operation=lambda _operation_id: None,
+    )
+    expected_labels = {
+        "omnia.workspace_id": str(request.workspace_id),
+        "omnia.project_id": str(request.project_id),
+        "omnia.owner_id": str(request.owner_id),
+        "omnia.resource_kind": "project-volume",
+    }
+    volume = SimpleNamespace(
+        attrs={
+            "Name": "live-db",
+            "CreatedAt": "2026-09-21T00:00:00Z",
+            "Driver": "local",
+            "Scope": "local",
+            "Options": {},
+            "Labels": expected_labels,
+        }
+    )
+
+    class Container:
+        def __init__(self, *, database):
+            self.labels = {"omnia.fencing_epoch": str(request.fencing_epoch)}
+            self.status = "running"
+            self.attrs = {
+                "Mounts": [
+                    {
+                        "Name": "live-db" if database else "live-code",
+                        "Destination": ("/var/lib/postgresql/data" if database else "/workspace"),
+                    }
+                ]
+            }
+
+        def reload(self):
+            return None
+
+    application = Container(database=False)
+    postgres = Container(database=True)
     source = SimpleNamespace(
         name="source",
         workspace_volume="live-code",
+        project_postgres_volume="live-db",
         project_postgres_password="live-password",
+        client=SimpleNamespace(volumes=object()),
+        labels=lambda kind: {**expected_labels, "omnia.resource_kind": kind},
+        _lookup=lambda _collection, name, kind: (
+            volume if name == "live-db" and kind == "project-volume" else None
+        ),
+        _container=lambda: application,
+        _project_postgres=lambda: postgres,
+        service_status=lambda *_args, **_kwargs: {"state": "running", "ready": True},
         is_running=lambda: True,
     )
-    machine = SimpleNamespace(state=lambda: {"epoch": 3, "manifest": manifest.model_dump()})
+    machine = SimpleNamespace(
+        state=lambda: {
+            "epoch": request.fencing_epoch,
+            "ready_epoch": request.fencing_epoch,
+            "manifest": manifest.model_dump(),
+        }
+    )
     candidate = SimpleNamespace(
         name="candidate",
         workspace_volume="candidate-code",
@@ -352,9 +408,18 @@ async def _prepare_empty(
     async def read_sources(_volume):
         return {}
 
+    class Runtime:
+        def parts(self, observed_state):
+            assert observed_state is state
+            return machine, source
+
+        def preview(self, observed_state):
+            assert observed_state is state
+            return "running", "127.0.0.1"
+
     manager = SimpleNamespace(
         operation_lock=Lock(),
-        machine_runtime=SimpleNamespace(parts=lambda _: (machine, source)),
+        machine_runtime=Runtime(),
         docker=SimpleNamespace(read_workspace_source_files=read_sources),
     )
     engine._manager = lambda _: manager

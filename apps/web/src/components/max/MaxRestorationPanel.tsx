@@ -45,6 +45,9 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
   if (!operation && !r.busy && !r.error && !r.hasPendingRequest) return null;
   const report = operation && ["ready", "needs_changes", "applying", "completed"].includes(operation.state)
     ? operation.report : null;
+  const catalogObserved = (report?.database_state === "present" || report?.database_state === "empty")
+    && !!report.checks?.some(check => check.evidence === "observed_catalog" || check.evidence === "structural_rule");
+  const retryCatalogPreparation = operation?.state === "needs_changes" && !catalogObserved;
   return <section className="mx-4 my-3 max-w-full rounded-xl border border-border-default bg-surface-raised p-4 text-sm"
     aria-label="Восстановление версии" data-testid="max-restoration-panel">
     <h3 className="font-semibold" role="status">{operation?.state === "ready" && automatic
@@ -57,15 +60,18 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
     {r.headChanged && <p role="alert" className="mt-2">Черновик изменился после подготовки. Отмените эту подготовку и проверьте выбранную версию заново.</p>}
     {operation && !report && ["preparing", "checking"].includes(operation.state)
       && <p className="mt-2">Проверяем сохранность данных. Результат появится здесь.</p>}
+    {retryCatalogPreparation && <p className="mt-2" data-testid="max-restoration-catalog-unavailable">
+      Текущий каталог базы данных не удалось подтвердить. Повторите подготовку восстановления, когда проект снова будет доступен. Платная адаптация не запущена.
+    </p>}
     {report && <div className="mt-3 space-y-3 break-words">
-      <p>{operation?.state === "needs_changes"
+      {!retryCatalogPreparation && <p>{operation?.state === "needs_changes"
         ? retryPreparation
           ? "Условия применения изменились. Отмените эту подготовку и запустите восстановление версии заново."
           : "Выбранной версии нужны изменения для работы с текущими данными."
         : report.mode === "exact" ? "Подготовлен выбранный код без запуска ИИ."
-          : "Подготовлен вариант с адаптацией. Проверьте отличия."}</p>
-      {report.database_state === "empty" && <p>В проверенной базе нет бизнес-записей. Перед применением сервер проверяет структуру и изолированную копию.</p>}
-      {report.database_state === "present" && <p>В базе есть бизнес-данные. Восстанавливаем код с сохранением текущих данных.</p>}
+          : "Подготовлен вариант с адаптацией. Проверьте отличия."}</p>}
+      {catalogObserved && report.database_state === "empty" && <p>В проверенной базе нет бизнес-записей. Перед применением сервер проверяет структуру и изолированную копию.</p>}
+      {catalogObserved && report.database_state === "present" && <p>В базе есть бизнес-данные. Восстанавливаем код с сохранением текущих данных.</p>}
       <ReportList title="Что изменится" items={report.changes} />
       <ReportList title="Что проверено" items={(report.checks ?? [])
         .filter((check) => check.status === "compatible").slice(0, 8).map((check) => check.explanation)} />
@@ -79,7 +85,7 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
       {r.error ?? operation?.error}
     </p>}
     <div className="mt-3 flex flex-wrap gap-2">
-      {operation?.state === "needs_changes" && !retryPreparation && operation.can_cancel && report && onAdapt && <div>
+      {operation?.state === "needs_changes" && !retryPreparation && catalogObserved && operation.can_cancel && report && onAdapt && <div>
         <Button data-testid="max-restoration-adapt" disabled={adapting || r.busy || r.hasPendingRequest || r.headChanged || !operation.base_draft_snapshot_id}
           onClick={async () => {
             const baseSnapshotId = operation.base_draft_snapshot_id;
@@ -110,6 +116,8 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
         data-testid="max-restoration-apply" disabled={r.busy || r.headChanged || !!r.error || r.hasPendingRequest} onClick={() => void r.apply()}>
         Сделать текущей в редакторе
       </Button>}
+      {retryCatalogPreparation && <Button data-testid="max-restoration-retry-preparation"
+        variant="outline" disabled={r.busy} onClick={() => void r.reprepare()}>Повторить подготовку</Button>}
       {operation?.can_cancel && <Button variant="outline" disabled={r.busy} onClick={() => void r.cancel()}>Отменить подготовку</Button>}
       {(r.error || r.hasPendingRequest || operation?.state === "reconciling") && <Button
         variant="outline" disabled={r.busy} onClick={() => void r.retry()}>Повторить проверку</Button>}

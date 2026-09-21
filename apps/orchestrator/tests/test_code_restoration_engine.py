@@ -1239,12 +1239,38 @@ def plain_prepare_request():
     )
 
 
+def bound_prepare_request():
+    import hashlib
+
+    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+
+    value = plain_prepare_request()
+    return CodeRestorationPrepare.model_validate(
+        {
+            **value.model_dump(mode="json"),
+            "binding_contract_version": 2,
+            "current_files": [
+                {
+                    "path": "src/page.tsx",
+                    "sha256": hashlib.sha256(b"current").hexdigest(),
+                }
+            ],
+        }
+    )
+
+
+@pytest.mark.parametrize("initially_running", [True, False])
 async def test_prepare_copies_current_data_into_candidate_without_database_policy(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, initially_running
 ):
     from omnia_orchestrator.core.project_machine import MachineManifest
     from omnia_orchestrator.services import code_restoration_engine as module
     from omnia_orchestrator.services import project_machine
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from omnia_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
     from omnia_orchestrator.services.restoration_data_contract import DataContract
     from tests.test_project_machine_manifest import payload
 
@@ -1264,18 +1290,107 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         }
     )
     events, statements = [], []
+    prepare_request = bound_prepare_request()
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
+    serving_epoch = 2
+    running = {"value": initially_running, "machine_epoch": serving_epoch}
+    base_image = "omnia/source-current:sealed"
+    environment_volumes = ("live-code", "source-home", "live-db")
+    reference = MachineEnvironmentRef(
+        workspace_id=prepare_request.workspace_id,
+        image_id="sha256:" + "a" * 64,
+        artifact_ref="a" * 32 + ".tar",
+        sha256="b" * 64,
+        size=1,
+        base_image=base_image,
+        manifest_digest=manifest.digest(),
+        volumes=tuple(
+            VolumeEnvironmentRef(
+                name=name,
+                artifact_ref=f"{index:032x}.tar",
+                sha256=f"{index:064x}",
+                size=1,
+            )
+            for index, name in enumerate(environment_volumes, start=1)
+        ),
+        manifest=manifest,
+    )
+    expected_volume_labels = {
+        "omnia.workspace_id": str(prepare_request.workspace_id),
+        "omnia.project_id": str(prepare_request.project_id),
+        "omnia.owner_id": str(prepare_request.owner_id),
+        "omnia.resource_kind": "project-volume",
+    }
+    volume = SimpleNamespace(
+        attrs={
+            "Name": "live-db",
+            "CreatedAt": "2026-09-21T00:00:00Z",
+            "Driver": "local",
+            "Scope": "local",
+            "Options": {},
+            "Labels": expected_volume_labels,
+        }
+    )
+
+    class Container:
+        def __init__(self, *, database):
+            self.labels = {"omnia.fencing_epoch": str(serving_epoch)}
+            self.status = "running"
+            self.id = "database" if database else "application"
+            self.attrs = {
+                "Mounts": [
+                    {
+                        "Name": "live-db" if database else "live-code",
+                        "Destination": ("/var/lib/postgresql/data" if database else "/workspace"),
+                    }
+                ]
+            }
+
+        def reload(self):
+            events.append("reload:" + self.id)
+
+    application = Container(database=False)
+    postgres = Container(database=True)
     source = SimpleNamespace(
         workspace_volume="live-code",
-        is_running=lambda: True,
+        project_postgres_volume="live-db",
+        base_image=base_image,
+        client=SimpleNamespace(volumes=object()),
+        labels=lambda kind: {**expected_volume_labels, "omnia.resource_kind": kind},
+        _lookup=lambda _collection, name, kind: (
+            volume if name == "live-db" and kind == "project-volume" else None
+        ),
+        environment_volume_names=lambda observed_manifest: (
+            environment_volumes if observed_manifest.digest() == manifest.digest() else ()
+        ),
+        is_running=lambda: running["value"],
         name="source",
-        _metadata=lambda: {"epoch": 3},
-        _container=lambda: None,
-        _project_postgres=lambda: None,
+        _metadata=lambda: {
+            "epoch": 3,
+            "environment_ref": reference.model_dump(mode="json"),
+            "environment_revision": __import__(
+                "omnia_orchestrator.routers.runtime",
+                fromlist=["_workspace_revision"],
+            )._workspace_revision({"src/page.tsx": "current"}),
+            "environment_schema_digest": "c" * 64,
+            "environment_sealed_at": "2026-09-21T00:00:00+00:00",
+        },
+        _container=lambda: application if running["value"] else None,
+        _project_postgres=lambda: postgres if running["value"] else None,
+        service_status=lambda *_args, **_kwargs: {
+            "state": "running",
+            "ready": running["value"],
+        },
     )
-    machine = SimpleNamespace(state=lambda: {"epoch": 3, "manifest": manifest.model_dump()})
+    machine = SimpleNamespace(
+        state=lambda: {
+            "epoch": running["machine_epoch"],
+            "ready_epoch": serving_epoch,
+            "manifest": manifest.model_dump(),
+        }
+    )
     candidate = SimpleNamespace(
         name="candidate",
         workspace_volume="candidate-code",
@@ -1288,20 +1403,50 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
             fromlist=["candidate_container"],
         ).candidate_container(plain_prepare_request()),
     )
-    state = SimpleNamespace(workspace_id=UUID(int=2))
+    release = CellOperationRecord(
+        operation_id=UUID(int=41),
+        kind="release",
+        status="completed",
+        phase="completed",
+        request_digest="d" * 64,
+        fencing_epoch=prepare_request.fencing_epoch,
+        generation_run_id=UUID(int=42),
+        bundle_state="resources_ready",
+        detail=f"retained_source_fencing_epoch={serving_epoch}",
+    )
+    state = SimpleNamespace(
+        workspace_id=prepare_request.workspace_id,
+        fencing_epoch=prepare_request.fencing_epoch,
+        last_operation_id=release.operation_id,
+        operations=(release,),
+        operation=lambda operation_id: release if operation_id == release.operation_id else None,
+    )
 
-    async def read_sources(_volume):
-        return {}
+    async def read_sources(volume_name):
+        return {"src/page.tsx": b"old" if volume_name == "candidate-code" else b"current"}
+
+    class Runtime:
+        def parts(self, observed_state):
+            assert observed_state is state
+            return machine, source
+
+        async def resume_preview(self, observed_state, *, epoch):
+            assert observed_state is state and epoch == serving_epoch
+            events.append("resume")
+            running.update(value=True, machine_epoch=epoch)
+
+        def preview(self, observed_state):
+            assert observed_state is state
+            return ("running", "127.0.0.1") if running["value"] else None
 
     manager = SimpleNamespace(
         operation_lock=Lock(),
-        machine_runtime=SimpleNamespace(parts=lambda _: (machine, source)),
+        machine_runtime=Runtime(),
         docker=SimpleNamespace(read_workspace_source_files=read_sources),
     )
     engine._manager = lambda _: manager
     engine._state = lambda *args, **kwargs: state
     monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
-    monkeypatch.setattr(module, "verify_source_inventory", lambda *_: None)
     monkeypatch.setattr(
         module,
         "empty_database_materializer",
@@ -1340,6 +1485,34 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     monkeypatch.setattr(module, "candidate_contract", lambda *_: contract)
     monkeypatch.setattr(module, "admin_sql", sql)
     monkeypatch.setattr(module, "observe_database", inventory)
+    live = {
+        "serving_route_digest": "1" * 64,
+        "serving_release_digest": "2" * 64,
+        "controller_resource_digest": "3" * 64,
+        "controller_incarnation_digest": "4" * 64,
+        "controller_generation_digest": "5" * 64,
+        "provider_digest": "6" * 64,
+        "source_artifact_digest": "7" * 64,
+        "database_identity_digest": "8" * 64,
+        "database_schema_digest": "9" * 64,
+        "database_role_binding_digest": "a" * 64,
+        "database_system_identifier": "system",
+    }
+
+    def observe_live(_source, _machine, observed_state, **kwargs):
+        from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+
+        assert observed_state is state
+        assert serving_fencing_epoch(state, machine_state=kwargs["machine_state"]) == serving_epoch
+        events.append("observe-live")
+        return live
+
+    monkeypatch.setattr(module, "observe_live_source", observe_live)
+    monkeypatch.setattr(
+        module,
+        "exact_inventory_partition_digests",
+        lambda *_args, **_kwargs: ("b" * 64, "c" * 64),
+    )
     engine._dump = lambda backend: events.append("dump:" + backend.name) or b"COPY price_list;"
 
     async def make_candidate(*_):
@@ -1357,9 +1530,9 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     engine._disable_egress = lambda backend: events.append("egress-off")
     engine._start = start
     engine._verify_source = lambda *_: events.append("verify")
-    engine._capture_code = lambda *_args, **_kwargs: "digest"
+    engine._capture_code = lambda *_args, **_kwargs: "d" * 64
     engine._cleanup_candidate = cleanup
-    result = await engine.prepare(plain_prepare_request())
+    result = await engine.prepare(prepare_request)
     assert result["state"] == "ready", result["report"]
     assert statements == [("candidate", "COPY price_list;")]
     assert "omnia_runtime" not in json.dumps(result)
@@ -1370,6 +1543,10 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     assert "start:candidate:1" in events
     assert result["report"]["blockers"] == []
     assert result["report"]["database_state"] == "present"
+    assert events.count("resume") == (0 if initially_running else 1)
+    if not initially_running:
+        assert events.index("resume") < events.index("inventory:source")
+    assert events.count("observe-live") == 2
     # Row presence is observed on the source before any schema analysis.
     assert events.index("inventory:source") < events.index("catalog:source")
     assert "live-code" not in json.dumps(statements)
@@ -1994,30 +2171,197 @@ async def test_prepared_runtime_identity_from_protected_era_still_recovers(tmp_p
     assert engine.calls == ["recover"]
 
 
-async def test_sleeping_draft_is_reported_as_needs_changes_not_failure(tmp_path, monkeypatch):
-    """A draft whose machine is not running (editor closed) must yield an
-    actionable report, not the generic «Не удалось завершить проверку»."""
-    from types import SimpleNamespace
-
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "missing_attestation",
+        "revision",
+        "foreign_workspace",
+        "foreign_volume",
+        "forged_serving_epoch",
+        "mismatched_serving_epoch",
+    ],
+)
+async def test_prepare_rejects_unbound_sleeping_source_before_resume(
+    tmp_path,
+    monkeypatch,
+    changed,
+):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
     from omnia_orchestrator.core.project_machine import MachineManifest
     from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from omnia_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
     from tests.test_project_machine_manifest import payload
 
     manifest = MachineManifest.model_validate(payload())
+    prepare_request = bound_prepare_request()
+    files = {"src/page.tsx": "current"}
+    original_files = dict(files)
+    base_image = "omnia/source-current:sealed"
+    environment_volumes = ("live-code", "source-home", "live-db")
+    reference = MachineEnvironmentRef(
+        workspace_id=prepare_request.workspace_id,
+        image_id="sha256:" + "a" * 64,
+        artifact_ref="a" * 32 + ".tar",
+        sha256="b" * 64,
+        size=1,
+        base_image=base_image,
+        manifest_digest=manifest.digest(),
+        volumes=tuple(
+            VolumeEnvironmentRef(
+                name=name,
+                artifact_ref=f"{index:032x}.tar",
+                sha256=f"{index:064x}",
+                size=1,
+            )
+            for index, name in enumerate(environment_volumes, start=1)
+        ),
+        manifest=manifest,
+    )
+    if changed == "foreign_workspace":
+        reference = reference.model_copy(update={"workspace_id": UUID(int=99)})
+    elif changed == "foreign_volume":
+        reference = reference.model_copy(
+            update={
+                "volumes": (
+                    *reference.volumes[:-1],
+                    reference.volumes[-1].model_copy(update={"name": "foreign-db"}),
+                )
+            }
+        )
+    from omnia_orchestrator.routers.runtime import _workspace_revision
+
+    metadata = {
+        "environment_ref": reference.model_dump(mode="json"),
+        "environment_revision": _workspace_revision(files),
+        "environment_schema_digest": "c" * 64,
+        "environment_sealed_at": "2026-09-21T00:00:00+00:00",
+    }
+    if changed == "missing_attestation":
+        metadata.pop("environment_ref")
+    elif changed == "revision":
+        metadata["environment_revision"] = "f" * 64
+    expected_labels = {
+        "omnia.workspace_id": str(prepare_request.workspace_id),
+        "omnia.project_id": str(prepare_request.project_id),
+        "omnia.owner_id": str(prepare_request.owner_id),
+        "omnia.resource_kind": "project-volume",
+    }
+    volume = SimpleNamespace(
+        attrs={
+            "Name": "live-db",
+            "CreatedAt": "2026-09-21T00:00:00Z",
+            "Driver": "local",
+            "Scope": "local",
+            "Options": {},
+            "Labels": expected_labels,
+        }
+    )
+    events = []
+    source = SimpleNamespace(
+        workspace_volume="live-code",
+        project_postgres_volume="live-db",
+        base_image=base_image,
+        client=SimpleNamespace(volumes=object()),
+        labels=lambda kind: {**expected_labels, "omnia.resource_kind": kind},
+        _lookup=lambda _collection, name, kind: (
+            volume if name == "live-db" and kind == "project-volume" else None
+        ),
+        environment_volume_names=lambda observed_manifest: (
+            environment_volumes if observed_manifest.digest() == manifest.digest() else ()
+        ),
+        is_running=lambda: False,
+        _metadata=lambda: metadata,
+        _container=lambda: None,
+        _project_postgres=lambda: None,
+    )
+    serving_epoch = 2
+    machine = SimpleNamespace(
+        state=lambda: {
+            "epoch": serving_epoch,
+            "ready_epoch": serving_epoch,
+            "manifest": manifest.model_dump(mode="json"),
+        }
+    )
+    release = CellOperationRecord(
+        operation_id=UUID(int=41),
+        kind="release",
+        status="completed",
+        phase="completed",
+        request_digest="d" * 64,
+        fencing_epoch=prepare_request.fencing_epoch,
+        generation_run_id=UUID(int=42),
+        bundle_state="resources_ready",
+        detail=(
+            f"retained_source_fencing_epoch={prepare_request.fencing_epoch}"
+            if changed == "forged_serving_epoch"
+            else (
+                "retained_source_fencing_epoch=1"
+                if changed == "mismatched_serving_epoch"
+                else f"retained_source_fencing_epoch={serving_epoch}"
+            )
+        ),
+    )
+    state = SimpleNamespace(
+        workspace_id=prepare_request.workspace_id,
+        fencing_epoch=prepare_request.fencing_epoch,
+        last_operation_id=release.operation_id,
+        operations=(release,),
+        operation=lambda operation_id: release if operation_id == release.operation_id else None,
+    )
+
+    class Runtime:
+        def parts(self, observed_state):
+            assert observed_state is state
+            return machine, source
+
+        async def resume_preview(self, observed_state, *, epoch):
+            assert observed_state is state
+            events.append(f"resume:{epoch}")
+            files["src/page.tsx"] = "stale-checkpoint"
+
+        def preview(self, observed_state):
+            assert observed_state is state
+            return None
+
+    async def read_source_files(volume_name):
+        assert volume_name == "live-code"
+        return {path: content.encode() for path, content in files.items()}
+
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
-    source = SimpleNamespace(is_running=lambda: False, name="source")
     manager = SimpleNamespace(
         operation_lock=Lock(),
-        machine_runtime=SimpleNamespace(parts=lambda _: (object(), source)),
+        machine_runtime=Runtime(),
+        docker=SimpleNamespace(read_workspace_source_files=read_source_files),
     )
     engine._manager = lambda _: manager
-    engine._state = lambda *args, **kwargs: SimpleNamespace(workspace_id=UUID(int=2))
+    engine._state = lambda *args, **kwargs: state
     monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
-    result = await engine.prepare(plain_prepare_request())
-    assert result["state"] == "needs_changes"
-    assert result["report"]["blockers"] == [
-        "Откройте текущую версию и повторите подготовку восстановления."
-    ]
+
+    async def workspace_files(*_args):
+        return files
+
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        workspace_files,
+    )
+    monkeypatch.setattr(
+        module,
+        "observe_database",
+        lambda *_args, **_kwargs: pytest.fail("database must remain untouched"),
+    )
+
+    with pytest.raises(
+        CellIdentityConflict,
+        match=r"checkpoint|serving release|serving machine epoch",
+    ):
+        await engine.prepare(prepare_request)
+
+    assert events == []
+    assert files == original_files

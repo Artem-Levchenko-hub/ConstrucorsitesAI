@@ -393,6 +393,16 @@ async def prepare_adaptation(
         raise _conflict("Черновик изменился. Подготовьте адаптацию выбранной версии заново.")
     if operation.adaptation_run_id not in {None, adaptation_run.id}:
         raise _conflict("Адаптация восстановления уже привязана к другому запуску.")
+    report = _compatibility_report(operation.report)
+    contract_diff = _data_contract_diff(report)
+    if contract_diff["current_source"] != "controller_observed_catalog":
+        raise ApiError(
+            "conflict",
+            "Текущий каталог базы данных не подтверждён. "
+            "Повторите подготовку восстановления, когда среда проекта будет доступна.",
+            409,
+            details={"retryable": True},
+        )
     source = await session.get(Snapshot, operation.source_snapshot_id)
     version = await session.get(ProjectVersion, operation.source_version_id)
     if (
@@ -430,7 +440,6 @@ async def prepare_adaptation(
             "Не удалось прочитать исходник выбранной версии. Повторите подготовку."
         ) from exc
     safe, excluded = _source_files(files)
-    report = _compatibility_report(operation.report)
     if not replay:
         operation.selected_branch = "adaptive"
         operation.adaptation_run_id = adaptation_run.id
@@ -452,7 +461,7 @@ async def prepare_adaptation(
         "files": safe,
         "excluded_paths": excluded,
         "compatibility_report": report,
-        "data_contract_diff": _data_contract_diff(report),
+        "data_contract_diff": contract_diff,
         "preservation_contract": _preservation_contract(),
     }
     return {**bundle, "sha256": _digest(bundle)}

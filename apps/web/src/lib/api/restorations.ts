@@ -17,6 +17,7 @@ export interface RestoreCheck {
   severity: "blocking" | "warning" | "info";
   operation: string;
   object: string;
+  evidence?: "structural_rule" | "observed_catalog" | "source_scan";
   explanation: string;
   resolution?: string | null;
 }

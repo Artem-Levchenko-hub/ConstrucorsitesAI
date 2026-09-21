@@ -15,6 +15,7 @@ import tarfile
 import traceback
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID, uuid5
@@ -36,6 +37,7 @@ from omnia_orchestrator.schemas.code_restoration import (
 )
 from omnia_orchestrator.services.cell_admission import CellAdmissionGate
 from omnia_orchestrator.services.cell_state import legacy_release_serving_epoch
+from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
 from omnia_orchestrator.services.project_machine import (
     machine_budget,
     machine_effect,
@@ -988,6 +990,130 @@ class CodeRestorationEngine:
             machine_ready_epoch=machine_state.get("ready_epoch"),
         )
 
+    @staticmethod
+    async def _source_database_volume_binding(source: Any) -> str:
+        volume_name = source.project_postgres_volume
+        if source.workspace_volume == volume_name:
+            raise CellIdentityConflict("restoration source code and database volumes alias")
+        volume = await machine_effect(
+            source._lookup,
+            source.client.volumes,
+            volume_name,
+            "project-volume",
+        )
+        attrs = volume.attrs if volume is not None else {}
+        labels = attrs.get("Labels") or {}
+        expected_labels = source.labels("project-volume")
+        created_at = attrs.get("CreatedAt")
+        if (
+            volume is None
+            or attrs.get("Name") != volume_name
+            or not isinstance(created_at, str)
+            or not created_at
+            or any(labels.get(key) != value for key, value in expected_labels.items())
+        ):
+            raise CellIdentityConflict("restoration source database volume changed")
+        return canonical_digest(
+            {
+                "name": volume_name,
+                "created_at": created_at,
+                "driver": attrs.get("Driver"),
+                "scope": attrs.get("Scope"),
+                "options": attrs.get("Options") or {},
+                "labels": labels,
+            }
+        )
+
+    @staticmethod
+    async def _require_resume_checkpoint(
+        request: CodeRestorationPrepare,
+        source: Any,
+        manifest: MachineManifest,
+        revision: str,
+    ) -> None:
+        metadata = await machine_effect(source._metadata)
+        if not isinstance(metadata, dict):
+            raise CellIdentityConflict("restoration source checkpoint is unattested")
+        sealed_at = metadata.get("environment_sealed_at")
+        try:
+            reference = MachineEnvironmentRef.model_validate(metadata.get("environment_ref"))
+            if not isinstance(sealed_at, str):
+                raise TypeError("checkpoint seal time is not a string")
+            sealed = datetime.fromisoformat(sealed_at)
+        except (TypeError, ValueError) as exc:
+            raise CellIdentityConflict("restoration source checkpoint is unattested") from exc
+        schema_digest = metadata.get("environment_schema_digest")
+        manifest_digest = manifest.digest()
+        expected_volumes = tuple(await machine_effect(source.environment_volume_names, manifest))
+        reference_volumes = tuple(item.name for item in reference.volumes)
+        if (
+            metadata.get("environment_revision") != revision
+            or not isinstance(schema_digest, str)
+            or len(schema_digest) != 64
+            or any(char not in "0123456789abcdef" for char in schema_digest)
+            or sealed.tzinfo is None
+            or reference.workspace_id != request.workspace_id
+            or reference.manifest_digest != manifest_digest
+            or reference.manifest is None
+            or reference.manifest.digest() != manifest_digest
+            or reference.base_image != source.base_image
+            or source.workspace_volume not in reference_volumes
+            or len(reference_volumes) != len(set(reference_volumes))
+            or set(reference_volumes) != set(expected_volumes)
+        ):
+            raise CellIdentityConflict("restoration source checkpoint is unattested")
+
+    @staticmethod
+    async def _source_pair_running(
+        manager: Any,
+        state: Any,
+        machine: Any,
+        source: Any,
+        manifest: MachineManifest,
+        epoch: int,
+    ) -> bool:
+        saved = machine.state()
+        try:
+            saved_manifest = MachineManifest.model_validate(saved["manifest"])
+        except (KeyError, TypeError, ValueError):
+            raise CellIdentityConflict("restoration source manifest is unavailable") from None
+        if (
+            saved.get("epoch") != epoch
+            or saved.get("ready_epoch") != epoch
+            or saved_manifest.digest() != manifest.digest()
+        ):
+            return False
+        application = await machine_effect(source._container)
+        postgres = await machine_effect(source._project_postgres)
+        for container in (application, postgres):
+            if container is None or container.labels.get("omnia.fencing_epoch") != str(epoch):
+                return False
+            await machine_effect(container.reload)
+            if container.status != "running":
+                return False
+        if not any(
+            item.get("Name") == source.workspace_volume and item.get("Destination") == "/workspace"
+            for item in application.attrs.get("Mounts", [])
+        ):
+            return False
+        if not any(
+            item.get("Name") == source.project_postgres_volume
+            and item.get("Destination") == "/var/lib/postgresql/data"
+            for item in postgres.attrs.get("Mounts", [])
+        ):
+            return False
+        for service in manifest.services:
+            status = await machine_effect(
+                source.service_status,
+                service,
+                epoch,
+                include_logs=False,
+            )
+            if status.get("state") != "running" or status.get("ready") is not True:
+                return False
+        preview = await machine_effect(manager.machine_runtime.preview, state)
+        return preview is not None and preview[0] == "running"
+
     async def prepare(
         self,
         request: CodeRestorationPrepare,
@@ -1037,20 +1163,14 @@ class CodeRestorationEngine:
             async with manager.operation_lock.hold(request.workspace_id):
                 try:
                     state = self._state(manager, request, epoch=request.fencing_epoch)
-                    adapter = manager.machine_runtime
-                    machine, source = adapter.parts(state)
-                    if not await machine_effect(source.is_running):
-                        raise PreparationNeedsChanges(
-                            "Откройте текущую версию и повторите подготовку восстановления."
-                        )
                 except PreparationNeedsChanges as error:
-                    # A sleeping/unprovisioned draft is an actionable condition for
-                    # the owner, not a controller failure.
                     return {
                         "state": "needs_changes",
                         "candidate_id": None,
                         "report": preparation_report(blockers=[str(error)]),
                     }
+                adapter = manager.machine_runtime
+                machine, source = adapter.parts(state)
                 from omnia_orchestrator.routers.runtime import _workspace_revision
                 from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
 
@@ -1063,16 +1183,107 @@ class CodeRestorationEngine:
                     verify_source_inventory(
                         source_bytes, [item.model_dump() for item in request.current_files]
                     )
-                    validate_supported_runtime(current_files)
+                    current_manifest = validate_supported_runtime(current_files)
                 except (PreparationNeedsChanges, ValueError) as error:
                     return {
                         "state": "needs_changes",
                         "candidate_id": None,
                         "report": preparation_report(blockers=[str(error)]),
                     }
+                source_machine_state = machine.state()
+                try:
+                    saved_manifest = MachineManifest.model_validate(
+                        source_machine_state["manifest"]
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise CellIdentityConflict(
+                        "restoration source manifest is unavailable"
+                    ) from exc
+                if saved_manifest.digest() != current_manifest.digest():
+                    raise CellIdentityConflict("restoration source manifest changed")
+                source_code_volume = source.workspace_volume
+                source_database_volume = source.project_postgres_volume
+                source_database_binding = await self._source_database_volume_binding(source)
+                source_serving_epoch = serving_fencing_epoch(
+                    state,
+                    machine_state=source_machine_state,
+                )
+                if (
+                    source_machine_state.get("epoch") != source_serving_epoch
+                    or source_machine_state.get("ready_epoch") != source_serving_epoch
+                ):
+                    raise CellIdentityConflict(
+                        "restoration source serving machine epoch is detached"
+                    )
+                if not await self._source_pair_running(
+                    manager,
+                    state,
+                    machine,
+                    source,
+                    current_manifest,
+                    source_serving_epoch,
+                ):
+                    await self._require_resume_checkpoint(
+                        request,
+                        source,
+                        current_manifest,
+                        current_revision,
+                    )
+                    await adapter.resume_preview(state, epoch=source_serving_epoch)
+
+                resumed_state = self._state(manager, request, epoch=request.fencing_epoch)
+                resumed_machine, resumed_source = adapter.parts(resumed_state)
+                resumed_machine_state = resumed_machine.state()
+                resumed_serving_epoch = serving_fencing_epoch(
+                    resumed_state,
+                    machine_state=resumed_machine_state,
+                )
+                if (
+                    resumed_serving_epoch != source_serving_epoch
+                    or resumed_source.workspace_volume != source_code_volume
+                    or resumed_source.project_postgres_volume != source_database_volume
+                    or await self._source_database_volume_binding(resumed_source)
+                    != source_database_binding
+                ):
+                    raise CellIdentityConflict("restoration source runtime changed during resume")
+                resumed_files = await _read_agent_workspace_files(
+                    manager,
+                    resumed_source.workspace_volume,
+                )
+                resumed_revision = _workspace_revision(resumed_files)
+                resumed_source_bytes = await manager.docker.read_workspace_source_files(
+                    resumed_source.workspace_volume
+                )
+                try:
+                    verify_source_inventory(
+                        resumed_source_bytes,
+                        [item.model_dump() for item in request.current_files],
+                    )
+                    resumed_manifest = validate_supported_runtime(resumed_files)
+                except (PreparationNeedsChanges, ValueError) as exc:
+                    raise CellIdentityConflict("restoration source changed during resume") from exc
+                if (
+                    resumed_revision != current_revision
+                    or resumed_manifest.digest() != current_manifest.digest()
+                    or not await self._source_pair_running(
+                        manager,
+                        resumed_state,
+                        resumed_machine,
+                        resumed_source,
+                        resumed_manifest,
+                        resumed_serving_epoch,
+                    )
+                ):
+                    raise CellIdentityConflict("restoration source changed during resume")
+                state = resumed_state
+                machine = resumed_machine
+                source = resumed_source
+                current_files = resumed_files
+                current_revision = resumed_revision
+                source_bytes = resumed_source_bytes
+                current_manifest = resumed_manifest
                 source_runtime = self._runtime_identity(source, machine)
                 capabilities = capability_diff(current_files, files)
-                current_manifest = MachineManifest.model_validate(machine.state()["manifest"])
                 storage_blockers = []
                 if current_manifest.data_stores or any(
                     service.mounts for service in current_manifest.services

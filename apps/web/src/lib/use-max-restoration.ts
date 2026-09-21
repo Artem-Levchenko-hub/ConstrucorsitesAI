@@ -7,25 +7,38 @@ import type { ProjectVersion, Snapshot } from "@/lib/api/types";
 import { ApiError } from "@/lib/api/client";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 
-type Request = (
+type DirectRequest = (
   | { kind: "prepare"; payload: api.PrepareRestorationRequest }
   | { kind: "apply"; operationId: string; payload: api.ApplyRestorationRequest }
   | { kind: "cancel"; operationId: string }
 ) & { error?: string; rejected?: boolean };
+type ReprepareRequest = {
+  kind: "reprepare";
+  projectId: string;
+  operationId: string;
+  payload: api.PrepareRestorationRequest;
+  error?: string;
+  rejected?: boolean;
+};
+type Request = DirectRequest | ReprepareRequest;
 const storageKey = (project: string) => `omnia:restore:request:${project}`;
 function readRequest(project: string): Request | null {
   try {
     if (typeof window === "undefined") return null;
     const value = JSON.parse(window.localStorage.getItem(storageKey(project)) ?? "null");
-    if (!value || !["prepare", "apply", "cancel"].includes(value.kind)) return null;
+    if (!value || !["prepare", "apply", "cancel", "reprepare"].includes(value.kind)) return null;
     if (value.kind !== "prepare" && typeof value.operationId !== "string") return null;
     if (value.kind !== "cancel" && (
       typeof value.payload?.idempotency_key !== "string"
       || !(value.payload.expected_draft_snapshot_id === null || typeof value.payload.expected_draft_snapshot_id === "string")
-      || (value.kind === "prepare" && typeof value.payload.target_version_id !== "string")
-      || (value.kind === "prepare" && value.payload.execution_policy !== undefined
+      || (["prepare", "reprepare"].includes(value.kind) && typeof value.payload.target_version_id !== "string")
+      || (["prepare", "reprepare"].includes(value.kind) && value.payload.execution_policy !== undefined
         && !["manual", "automatic_when_safe"].includes(value.payload.execution_policy))
       || (value.kind === "apply" && !Number.isInteger(value.payload.report_revision))
+    )) return null;
+    if (value.kind === "reprepare" && (
+      typeof value.projectId !== "string"
+      || value.payload.execution_policy !== "automatic_when_safe"
     )) return null;
     if (value.error !== undefined && typeof value.error !== "string") return null;
     if (value.rejected !== undefined && typeof value.rejected !== "boolean") return null;
@@ -37,6 +50,18 @@ const running = (state: api.RestoreState) => ["preparing", "checking", "adapting
 function newer(previous: api.RestoreOperation | undefined, next: api.RestoreOperation) {
   return previous && previous.revision > next.revision ? previous : next;
 }
+function reprepareBindingMatches(
+  intent: ReprepareRequest,
+  candidate: api.RestoreOperation,
+  projectId: string,
+  currentSnapshotId: string | null,
+) {
+  return intent.projectId === projectId
+    && intent.payload.expected_draft_snapshot_id === currentSnapshotId
+    && candidate.project_id === projectId
+    && candidate.id === intent.operationId
+    && candidate.source_version_id === intent.payload.target_version_id;
+}
 
 export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }: {
   projectId: string;
@@ -45,6 +70,16 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
 }) {
   const qc = useQueryClient();
   const inflight = useRef(new Set<string>());
+  const currentContext = useRef({
+    projectId,
+    currentSnapshotId,
+    operationId: null as string | null,
+    sourceVersionId: null as string | null,
+  });
+  const resumeReprepareRef = useRef<(
+    intent: ReprepareRequest,
+    candidate: api.RestoreOperation,
+  ) => Promise<void>>(async () => undefined);
   const [busyProjects, setBusyProjects] = useState<ReadonlySet<string>>(new Set());
   const requestKey = ["restoration-request", projectId];
   const saved = useQuery({ queryKey: requestKey, queryFn: () => readRequest(projectId),
@@ -81,6 +116,15 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     && operation.base_draft_snapshot_id !== currentSnapshotId;
 
   useEffect(() => {
+    currentContext.current = {
+      projectId,
+      currentSnapshotId,
+      operationId: operation?.id ?? null,
+      sourceVersionId: operation?.source_version_id ?? null,
+    };
+  }, [projectId, currentSnapshotId, operation]);
+
+  useEffect(() => {
     if (!operation || operation.state !== "completed" || !operation.applied_snapshot) return;
     const snapshot = operation.applied_snapshot;
     if (snapshot.project_id !== projectId) return;
@@ -103,14 +147,11 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     } catch { /* Private browsing may deny storage; keep the in-tab key. */ }
     qc.setQueryData(requestKey, request);
   }
-  async function execute(request: Request) {
-    if (inflight.current.has(projectId)) return;
+  async function dispatch(request: DirectRequest) {
     if (request.kind !== "cancel" && readMaxLaunch(projectId)) {
       saveRequest({ ...request, rejected: true, error: "Сначала проверьте результат публикации приложения." });
       return;
     }
-    inflight.current.add(projectId);
-    setBusyProjects(previous => new Set([...previous, projectId]));
     saveRequest(request);
     try {
       const next = request.kind === "prepare" ? await api.prepareRestoration(projectId, request.payload)
@@ -133,10 +174,22 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
         error: error instanceof Error ? error.message : "Не удалось получить ответ сервера" });
       void qc.invalidateQueries({ queryKey: ["restorations", projectId] });
       if (request.kind !== "prepare") void qc.invalidateQueries({ queryKey: ["restoration", projectId, request.operationId] });
+    }
+  }
+  async function runExclusive<T>(action: () => Promise<T>) {
+    if (inflight.current.has(projectId)) return;
+    inflight.current.add(projectId);
+    setBusyProjects(previous => new Set([...previous, projectId]));
+    try {
+      return await action();
     } finally {
       inflight.current.delete(projectId);
       setBusyProjects(previous => { const next = new Set(previous); next.delete(projectId); return next; });
     }
+  }
+  async function execute(request: Request) {
+    if (request.kind === "reprepare") return;
+    return runExclusive(() => dispatch(request));
   }
   async function prepare(version: ProjectVersion) {
     if (!list.data?.enabled || version.project_id !== projectId || !version.snapshot_id || inflight.current.has(projectId)) return;
@@ -167,6 +220,95 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     const next = await execute({ kind: "cancel", operationId: operation.id });
     return next?.state === "cancelled";
   }
+  async function cancelForReprepare(intent: ReprepareRequest) {
+    saveRequest(intent);
+    try {
+      const next = await api.cancelRestoration(projectId, intent.operationId);
+      if (next.project_id !== projectId || next.id !== intent.operationId) {
+        saveRequest({
+          ...intent,
+          rejected: true,
+          error: "Повтор подготовки остановлен: сервер вернул другую операцию. Запустите восстановление версии заново.",
+        });
+        return;
+      }
+      qc.setQueryData<api.RestoreOperation>(["restoration", projectId, next.id], previous => newer(previous, next));
+      qc.setQueryData(["restoration-selection", projectId], next.id);
+      void qc.invalidateQueries({ queryKey: ["restorations", projectId] });
+      if (next.state !== "cancelled") saveRequest(intent);
+      return next;
+    } catch (error) {
+      const rejected = error instanceof ApiError && error.status >= 400 && error.status < 500
+        && error.status !== 408 && error.status !== 429;
+      saveRequest({ ...intent, rejected,
+        error: error instanceof Error ? error.message : "Не удалось получить ответ сервера" });
+      void qc.invalidateQueries({ queryKey: ["restorations", projectId] });
+      void qc.invalidateQueries({ queryKey: ["restoration", projectId, intent.operationId] });
+    }
+  }
+  async function resumeReprepare(
+    intent: ReprepareRequest,
+    candidate: api.RestoreOperation,
+  ) {
+    await runExclusive(async () => {
+      if (!reprepareBindingMatches(intent, candidate, projectId, currentSnapshotId)) {
+        saveRequest({
+          ...intent,
+          rejected: true,
+          error: "Повтор подготовки остановлен: проект, версия или черновик изменились. Запустите восстановление версии заново.",
+        });
+        return;
+      }
+      let cancelled = candidate.state === "cancelled" ? candidate : null;
+      if (!cancelled) {
+        if (candidate.state !== "needs_changes" || !candidate.can_cancel) return;
+        const next = await cancelForReprepare(intent);
+        if (next?.state !== "cancelled") return;
+        cancelled = next;
+      }
+      const context = currentContext.current;
+      if (context.projectId !== intent.projectId
+        || context.currentSnapshotId !== intent.payload.expected_draft_snapshot_id
+        || context.operationId !== intent.operationId
+        || context.sourceVersionId !== intent.payload.target_version_id
+        || !reprepareBindingMatches(intent, cancelled, projectId, currentSnapshotId)) {
+        saveRequest({
+          ...intent,
+          rejected: true,
+          error: "Повтор подготовки остановлен: проект, версия или черновик изменились. Запустите восстановление версии заново.",
+        });
+        return;
+      }
+      await dispatch({ kind: "prepare", payload: intent.payload });
+    });
+  }
+  async function reprepare() {
+    const target = operation;
+    const catalogObserved = (target?.report?.database_state === "present"
+      || target?.report?.database_state === "empty")
+      && !!target.report.checks?.some(check => check.evidence === "observed_catalog"
+        || check.evidence === "structural_rule");
+    if (!target || target.state !== "needs_changes" || catalogObserved
+      || !target.can_cancel || headChanged || inflight.current.has(projectId)) return;
+    const stored = saved.data ?? readRequest(projectId);
+    if (stored?.kind === "reprepare" && !stored.rejected) {
+      await resumeReprepare(stored, target);
+      return;
+    }
+    if (stored && !stored.rejected) return;
+    const intent: ReprepareRequest = {
+      kind: "reprepare",
+      projectId,
+      operationId: target.id,
+      payload: {
+        target_version_id: target.source_version_id,
+        expected_draft_snapshot_id: currentSnapshotId,
+        idempotency_key: crypto.randomUUID(),
+        execution_policy: "automatic_when_safe",
+      },
+    };
+    await resumeReprepare(intent, target);
+  }
   function observeCancelled(next: api.RestoreOperation) {
     if (next.project_id !== projectId || next.state !== "cancelled") return;
     qc.setQueryData<api.RestoreOperation>(["restoration", projectId, next.id], previous => newer(previous, next));
@@ -176,16 +318,34 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
   }
   async function retry() {
     const request = saved.data ?? readRequest(projectId);
-    if (request && !request.rejected) await execute(request);
+    if (request?.kind === "reprepare") {
+      if (request.rejected) {
+        saveRequest(null);
+        await list.refetch();
+        if (operationId) await detail.refetch();
+      } else if (operation) await resumeReprepare(request, operation);
+      else { await list.refetch(); if (operationId) await detail.refetch(); }
+    } else if (request && !request.rejected) await execute(request);
     else { saveRequest(null); await list.refetch(); if (operationId) await detail.refetch(); }
   }
+  const projectBusy = busyProjects.has(projectId);
+  useEffect(() => {
+    resumeReprepareRef.current = resumeReprepare;
+  });
+  useEffect(() => {
+    const intent = saved.data;
+    if (projectBusy || intent?.kind !== "reprepare" || intent.rejected
+      || operation?.state !== "cancelled") return;
+    void resumeReprepareRef.current(intent, operation);
+  }, [projectBusy, saved.data, operation, projectId, currentSnapshotId]);
   return {
     operation, enabled: list.isSuccess && list.data.enabled,
-    loading: list.isPending, busy: busyProjects.has(projectId), headChanged,
-    preparing: busyProjects.has(projectId) && saved.data?.kind === "prepare",
+    loading: list.isPending, busy: projectBusy, headChanged,
+    preparing: projectBusy && saved.data?.kind === "prepare",
     active: !!operation && !terminal(operation.state), running: !!operation && running(operation.state),
     error: saved.data?.error ?? (list.error || detail.error)?.message ?? null,
-    hasPendingRequest: !!saved.data && !saved.data.rejected, prepare, apply, cancel, observeCancelled, retry,
+    hasPendingRequest: !!saved.data && !saved.data.rejected,
+    prepare, reprepare, apply, cancel, observeCancelled, retry,
   };
 }
 export type MaxRestorationController = ReturnType<typeof useMaxRestoration>;

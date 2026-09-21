@@ -918,10 +918,100 @@ async def test_one_click_adaptation_uses_durable_server_report_not_prompt(source
 
 
 async def test_invalid_compatibility_report_blocks_adaptation_before_dispatch(source_case):
-    service, session, project, operation, run, reference, _, _ = source_case
+    service, session, project, operation, run, reference, _, reads = source_case
     operation.report = {"revision": 1, "mode": "exact", "database_state": "assumed_empty"}
-    with pytest.raises(ApiError, match="совместимости"):
+    before = (
+        operation.state,
+        operation.selected_branch,
+        operation.adaptation_run_id,
+        operation.phase,
+        operation.revision,
+        run.agent_state,
+    )
+    with pytest.raises(ApiError, match="совместимости") as error:
         await service.prepare_adaptation(session, project, project.owner_id, reference, run)
+    assert error.value.details is None
+    assert (
+        operation.state,
+        operation.selected_branch,
+        operation.adaptation_run_id,
+        operation.phase,
+        operation.revision,
+        run.agent_state,
+    ) == before
+    assert reads == []
+
+
+@pytest.mark.parametrize("report_kind", ["missing", "unknown", "source_only"])
+async def test_unobserved_current_catalog_blocks_adaptation_before_dispatch(
+    source_case,
+    report_kind,
+):
+    service, session, project, operation, run, reference, _, reads = source_case
+    if report_kind == "missing":
+        operation.report = None
+    elif report_kind == "unknown":
+        operation.report = {**operation.report, "database_state": "unknown"}
+    else:
+        operation.report = {
+            **operation.report,
+            "checks": [{**operation.report["checks"][0], "evidence": "source_scan"}],
+        }
+    before = (
+        operation.state,
+        operation.selected_branch,
+        operation.adaptation_run_id,
+        operation.phase,
+        operation.error,
+        operation.revision,
+        operation.updated_at,
+        run.status,
+        run.agent_state,
+    )
+
+    with pytest.raises(ApiError) as error:
+        await service.prepare_adaptation(session, project, project.owner_id, reference, run)
+
+    assert error.value.code == "conflict"
+    assert error.value.status_code == 409
+    assert error.value.details == {"retryable": True}
+    assert error.value.message == (
+        "Текущий каталог базы данных не подтверждён. "
+        "Повторите подготовку восстановления, когда среда проекта будет доступна."
+    )
+    assert (
+        operation.state,
+        operation.selected_branch,
+        operation.adaptation_run_id,
+        operation.phase,
+        operation.error,
+        operation.revision,
+        operation.updated_at,
+        run.status,
+        run.agent_state,
+    ) == before
+    assert reads == []
+
+
+@pytest.mark.parametrize("database_state", ["present", "empty"])
+async def test_observed_current_catalog_keeps_adaptation_admission(
+    source_case,
+    database_state,
+):
+    service, session, project, operation, run, reference, _, reads = source_case
+    operation.report = {**operation.report, "database_state": database_state}
+
+    bundle = await service.prepare_adaptation(
+        session, project, project.owner_id, reference, run
+    )
+
+    assert bundle["compatibility_report"]["database_state"] == database_state
+    assert bundle["data_contract_diff"]["current_source"] == (
+        "controller_observed_catalog"
+    )
+    assert operation.state == "adapting"
+    assert operation.selected_branch == "adaptive"
+    assert reads == [(project.id, operation.target_commit_sha)]
 
 
 async def test_reads_selected_git_commit_not_current_tree(source_case, monkeypatch, tmp_path):

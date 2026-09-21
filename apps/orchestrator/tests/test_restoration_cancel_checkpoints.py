@@ -98,14 +98,68 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
         "columns": [{"name": "id", "type": "uuid"}, {"name": "title", "type": "text"}],
     }]})
     events: list[str] = []
+    prepare_request = plain_prepare_request()
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
-    source = SimpleNamespace(
-        workspace_volume="live-code", is_running=lambda: True, name="source",
-        _metadata=lambda: {"epoch": 3}, _container=lambda: None, _project_postgres=lambda: None,
+    expected_labels = {
+        "omnia.workspace_id": str(prepare_request.workspace_id),
+        "omnia.project_id": str(prepare_request.project_id),
+        "omnia.owner_id": str(prepare_request.owner_id),
+        "omnia.resource_kind": "project-volume",
+    }
+    volume = SimpleNamespace(
+        attrs={
+            "Name": "live-db",
+            "CreatedAt": "2026-09-21T00:00:00Z",
+            "Driver": "local",
+            "Scope": "local",
+            "Options": {},
+            "Labels": expected_labels,
+        }
     )
-    machine = SimpleNamespace(state=lambda: {"epoch": 3, "manifest": manifest.model_dump()})
+
+    class Container:
+        def __init__(self, *, database):
+            self.id = "database" if database else "application"
+            self.labels = {"omnia.fencing_epoch": str(prepare_request.fencing_epoch)}
+            self.status = "running"
+            self.attrs = {
+                "Mounts": [
+                    {
+                        "Name": "live-db" if database else "live-code",
+                        "Destination": ("/var/lib/postgresql/data" if database else "/workspace"),
+                    }
+                ]
+            }
+
+        def reload(self):
+            return None
+
+    application = Container(database=False)
+    postgres = Container(database=True)
+    source = SimpleNamespace(
+        workspace_volume="live-code",
+        project_postgres_volume="live-db",
+        client=SimpleNamespace(volumes=object()),
+        labels=lambda kind: {**expected_labels, "omnia.resource_kind": kind},
+        _lookup=lambda _collection, name, kind: (
+            volume if name == "live-db" and kind == "project-volume" else None
+        ),
+        is_running=lambda: True,
+        name="source",
+        _metadata=lambda: {"epoch": 3},
+        _container=lambda: application,
+        _project_postgres=lambda: postgres,
+        service_status=lambda *_args, **_kwargs: {"state": "running", "ready": True},
+    )
+    machine = SimpleNamespace(
+        state=lambda: {
+            "epoch": prepare_request.fencing_epoch,
+            "ready_epoch": prepare_request.fencing_epoch,
+            "manifest": manifest.model_dump(),
+        }
+    )
     candidate = SimpleNamespace(
         name="candidate", workspace_volume="candidate-code", base_image="image",
         stop=lambda: events.append("stop"),
@@ -118,13 +172,30 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
     async def read_sources(_volume):
         return {}
 
+    state = SimpleNamespace(
+        workspace_id=prepare_request.workspace_id,
+        fencing_epoch=prepare_request.fencing_epoch,
+        last_operation_id=None,
+        operations=(),
+        operation=lambda _operation_id: None,
+    )
+
+    class Runtime:
+        def parts(self, observed_state):
+            assert observed_state is state
+            return machine, source
+
+        def preview(self, observed_state):
+            assert observed_state is state
+            return "running", "127.0.0.1"
+
     manager = SimpleNamespace(
         operation_lock=Lock(),
-        machine_runtime=SimpleNamespace(parts=lambda _: (machine, source)),
+        machine_runtime=Runtime(),
         docker=SimpleNamespace(read_workspace_source_files=read_sources),
     )
     engine._manager = lambda _: manager
-    engine._state = lambda *args, **kwargs: SimpleNamespace(workspace_id=UUID(int=2))
+    engine._state = lambda *args, **kwargs: state
     monkeypatch.setattr(module, "validate_supported_runtime", lambda _files: manifest)
     monkeypatch.setattr(module, "verify_source_inventory", lambda *_: None)
     monkeypatch.setattr(project_machine, "machine_remaining_seconds", lambda value: value or 1)
@@ -180,7 +251,7 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
     engine._cleanup_candidate = cleanup
 
     result = await engine.prepare(
-        plain_prepare_request(),
+        prepare_request,
         cancel_requested=lambda: "command:pnpm install" in events,
     )
 
