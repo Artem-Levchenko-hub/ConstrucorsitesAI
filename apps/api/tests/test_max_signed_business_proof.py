@@ -164,3 +164,59 @@ async def test_a_transport_failure_is_reported_not_raised() -> None:
     assert result["reason"] == "signed_business_route_unreachable"
     assert result["status"] is None
     assert "no route to host" not in str(result)
+
+
+async def test_the_cell_probe_refuses_a_green_page_with_a_broken_data_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point of LIVE-04: the page renders, the data route is 500."""
+    from types import SimpleNamespace
+
+    from omnia_api.services import max_runtime_probe as probe_module
+
+    async def signed_runtime(*args: object, **kwargs: object) -> probe_module.MaxRuntimeProbe:
+        return probe_module.MaxRuntimeProbe(True, "product page served")
+
+    async def business(client: object, path: str, *a: object, **k: object) -> dict[str, object]:
+        return {
+            "ok": False,
+            "status": 500,
+            "reason": "signed_business_route_failed",
+            "shape_digest": None,
+        }
+
+    monkeypatch.setattr(probe_module, "_probe_signed_runtime", signed_runtime)
+    monkeypatch.setattr(probe_module, "probe_signed_business_endpoint", business)
+    preview = SimpleNamespace(bootstrap_url=f"{_ORIGIN}/api/omnia/preview-session?s=x")
+
+    result = await probe_module.probe_max_cell_runtime(
+        preview,  # type: ignore[arg-type]
+        business_path="/api/qa-clients",
+        proof_key="a" * 64,
+    )
+
+    assert result.ok is False
+    assert "signed_business_route_failed" in result.detail
+    assert result.artifact_digest is None
+
+
+async def test_without_a_contract_route_the_probe_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from omnia_api.services import max_runtime_probe as probe_module
+
+    async def signed_runtime(*args: object, **kwargs: object) -> probe_module.MaxRuntimeProbe:
+        return probe_module.MaxRuntimeProbe(True, "product page served")
+
+    async def business(*a: object, **k: object) -> dict[str, object]:  # pragma: no cover
+        raise AssertionError("no contract route means no business probe")
+
+    monkeypatch.setattr(probe_module, "_probe_signed_runtime", signed_runtime)
+    monkeypatch.setattr(probe_module, "probe_signed_business_endpoint", business)
+    preview = SimpleNamespace(bootstrap_url=f"{_ORIGIN}/api/omnia/preview-session?s=x")
+
+    result = await probe_module.probe_max_cell_runtime(preview, proof_key="a" * 64)  # type: ignore[arg-type]
+
+    assert result.ok is True and result.artifact_digest is not None

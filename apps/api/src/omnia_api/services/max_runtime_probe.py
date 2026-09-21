@@ -78,89 +78,6 @@ def _valid_bootstrap_url(
     return raw if valid else None
 
 
-async def probe_max_runtime(
-    project_id: UUID,
-    project_slug: str,
-    *,
-    base_url: str | None = None,
-) -> MaxRuntimeProbe:
-    """Prove signed preview auth plus one tenant-scoped protected DB read.
-
-    Returned details contain status/cause only. The signed URL and session cookie
-    never reach logs, model observations, or persisted attestations.
-    """
-
-    try:
-        payload = await orchestrator_client.create_max_preview_session(project_id)
-    except Exception as exc:
-        return MaxRuntimeProbe(False, f"preview session unavailable: {type(exc).__name__}")
-    bootstrap_url = _valid_bootstrap_url(
-        payload,
-        project_id=project_id,
-        project_slug=project_slug,
-        base_url=base_url,
-    )
-    if not bootstrap_url:
-        return MaxRuntimeProbe(False, "preview session returned an invalid signed URL")
-
-    return await _probe_signed_runtime(bootstrap_url)
-
-
-async def probe_max_cell_runtime(
-    preview: orchestrator_client.ProjectCellPreviewSession,
-    *,
-    path: str = "/",
-    fallback_paths: Sequence[str] = (),
-    portable_project_id: UUID | None = None,
-    expected_epoch: int | None = None,
-    proof_key: str | None = None,
-) -> MaxRuntimeProbe:
-    """Use the validated, lease-scoped cell session without project-runtime fallback."""
-    candidate_paths = (path, *tuple(fallback_paths))
-    for candidate_path in candidate_paths:
-        if (
-            not candidate_path
-            or not candidate_path.startswith("/")
-            or candidate_path.startswith("//")
-            or "\\" in candidate_path
-        ):
-            return MaxRuntimeProbe(False, "runtime path must be same-origin")
-    if portable_project_id is not None and (type(expected_epoch) is not int or expected_epoch < 1):
-        return MaxRuntimeProbe(False, "portable proof requires the active lease epoch")
-    result = await _probe_signed_runtime(
-        preview.bootstrap_url,
-        path=path,
-        fallback_paths=fallback_paths,
-        request_timeout=_CELL_STARTUP_TIMEOUT,
-        portable_project_id=portable_project_id,
-        expected_epoch=expected_epoch,
-    )
-    if not result.ok or proof_key is None:
-        return result
-    if not re.fullmatch(r"[0-9a-f]{64}", proof_key):
-        return MaxRuntimeProbe(False, "runtime proof key is invalid")
-    artifact_digest = hashlib.sha256(
-        json.dumps(
-            {
-                "proof_key": proof_key,
-                "path": path,
-                "fallback_paths": list(fallback_paths),
-                "project_id": str(portable_project_id),
-                "fencing_epoch": expected_epoch,
-                "evidence": result.detail,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    return MaxRuntimeProbe(
-        True,
-        result.detail,
-        artifact_digest=artifact_digest,
-        artifact_ref=f"runtime/sha256/{artifact_digest}",
-    )
-
-
 # Platform-managed endpoints answer for every generated app, so they prove nothing
 # about the product's own data plane.
 _MANAGED_PREFIXES = ("/api/omnia/", "/api/max/")
@@ -250,6 +167,112 @@ async def probe_signed_business_endpoint(
         "reason": reason,
         "shape_digest": shape_digest,
     }
+
+
+async def probe_max_runtime(
+    project_id: UUID,
+    project_slug: str,
+    *,
+    base_url: str | None = None,
+) -> MaxRuntimeProbe:
+    """Prove signed preview auth plus one tenant-scoped protected DB read.
+
+    Returned details contain status/cause only. The signed URL and session cookie
+    never reach logs, model observations, or persisted attestations.
+    """
+
+    try:
+        payload = await orchestrator_client.create_max_preview_session(project_id)
+    except Exception as exc:
+        return MaxRuntimeProbe(False, f"preview session unavailable: {type(exc).__name__}")
+    bootstrap_url = _valid_bootstrap_url(
+        payload,
+        project_id=project_id,
+        project_slug=project_slug,
+        base_url=base_url,
+    )
+    if not bootstrap_url:
+        return MaxRuntimeProbe(False, "preview session returned an invalid signed URL")
+
+    return await _probe_signed_runtime(bootstrap_url)
+
+
+async def probe_max_cell_runtime(
+    preview: orchestrator_client.ProjectCellPreviewSession,
+    *,
+    path: str = "/",
+    fallback_paths: Sequence[str] = (),
+    portable_project_id: UUID | None = None,
+    expected_epoch: int | None = None,
+    proof_key: str | None = None,
+    business_path: str | None = None,
+) -> MaxRuntimeProbe:
+    """Use the validated, lease-scoped cell session without project-runtime fallback.
+
+    ``business_path`` is the product's own data route from the accepted contract. When
+    it is given, serving a page is no longer enough: the same signed session must also
+    read that route, because a green build with a broken data plane looked identical to
+    success in the live failure. It is never a path chosen by the model.
+    """
+    candidate_paths = (path, *tuple(fallback_paths))
+    for candidate_path in candidate_paths:
+        if (
+            not candidate_path
+            or not candidate_path.startswith("/")
+            or candidate_path.startswith("//")
+            or "\\" in candidate_path
+        ):
+            return MaxRuntimeProbe(False, "runtime path must be same-origin")
+    if portable_project_id is not None and (type(expected_epoch) is not int or expected_epoch < 1):
+        return MaxRuntimeProbe(False, "portable proof requires the active lease epoch")
+    result = await _probe_signed_runtime(
+        preview.bootstrap_url,
+        path=path,
+        fallback_paths=fallback_paths,
+        request_timeout=_CELL_STARTUP_TIMEOUT,
+        portable_project_id=portable_project_id,
+        expected_epoch=expected_epoch,
+    )
+    if not result.ok:
+        return result
+    if business_path is not None:
+        parsed = urlsplit(preview.bootstrap_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        async with httpx.AsyncClient(
+            base_url=origin, timeout=_TIMEOUT, follow_redirects=False
+        ) as business_client:
+            business = await probe_signed_business_endpoint(business_client, business_path)
+        if not business["ok"]:
+            return MaxRuntimeProbe(
+                False,
+                f"{business['reason']} (HTTP {business['status']})"
+                if business["status"] is not None
+                else str(business["reason"]),
+            )
+    if proof_key is None:
+        return result
+    if not re.fullmatch(r"[0-9a-f]{64}", proof_key):
+        return MaxRuntimeProbe(False, "runtime proof key is invalid")
+    artifact_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "proof_key": proof_key,
+                "path": path,
+                "fallback_paths": list(fallback_paths),
+                "project_id": str(portable_project_id),
+                "fencing_epoch": expected_epoch,
+                "evidence": result.detail,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return MaxRuntimeProbe(
+        True,
+        result.detail,
+        artifact_digest=artifact_digest,
+        artifact_ref=f"runtime/sha256/{artifact_digest}",
+    )
 
 
 async def _probe_signed_runtime(
