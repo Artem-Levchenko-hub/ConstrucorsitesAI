@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, Server, X } from "lucide-react";
+import { ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -118,9 +118,8 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
         </section>
         <MaxPublicationRequirements projectId={project.id} items={items} status={readiness.isError ? "error" : available ? "ready" : "loading"} />
         <section aria-label="Другие разделы проекта" data-testid="max-launch-actions" className="max-launch-options">
-          <header><h3>Сервисы и размещение</h3><p>Необязательно для запуска</p></header>
+          <header><h3>Сервисы</h3><p>Необязательно для запуска</p></header>
           <div className="max-launch-option"><Plug className="size-4" /><div><h4>Подключить сервисы</h4><p>Платежи, CRM и аналитика</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=services`}>Выбрать сервисы</Link></Button></div>
-          <div className="max-launch-option"><Server className="size-4" /><div><h4>Собственный сервер</h4><p>Размещение на вашей VPS</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=hosting`}>Настроить сервер</Link></Button></div>
         </section>
         <div className="max-launch-configuration"><Button asChild variant="outline"><Link href={`/max/${project.id}?panel=max`}>Подключение MAX</Link></Button></div>
         {busyDeploy && (deploy.data?.logs.length ?? 0) > 0 && <details className="max-launch-checks"><summary>Подробности публикации</summary><pre className="max-launch-logs">{deploy.data!.logs.slice(-12).join("\n")}</pre></details>}

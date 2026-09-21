@@ -31,7 +31,7 @@ it("does not redirect through a failed ownership check", async () => {
   await expect(MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab: "app" }) })).rejects.toBe(denied);
 });
 
-it.each([["bot", "max"], ["vps", "hosting"]])("redirects old %s settings into its editor modal", async (tab, panel) => {
+it.each([["bot", "max"], ["vps", "publish"]])("redirects old %s settings into its editor modal", async (tab, panel) => {
   mocks.load.mockResolvedValue(project);
   await expect(MaxSettingsPage({ params: Promise.resolve({ id: project.id }), searchParams: Promise.resolve({ tab }) }))
     .rejects.toMatchObject({ digest: expect.stringContaining(`/max/${project.id}?panel=${panel}`) });

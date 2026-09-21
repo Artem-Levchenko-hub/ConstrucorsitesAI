@@ -37,13 +37,13 @@ async function mount(node: ReactNode) {
 async function settle(check: () => void) { await act(async () => { await vi.waitFor(check); }); }
 const dashboard = () => <MaxPostLaunchDashboard projectId={project.id} projectName={project.name} />;
 
-it("keeps optional services and server actions discoverable outside collapsed readiness details", async () => {
+it("keeps optional services discoverable outside collapsed readiness details and offers no own-server hosting", async () => {
   await mount(<MaxLaunchPanel project={project} />);
   await settle(() => expect(container.querySelector('[data-testid="max-one-click-launch"]')).not.toBeNull());
-  const server = container.querySelector('a[href="/max/project-surfaces?panel=hosting"]');
-  expect(server).not.toBeNull();
-  expect(server!.closest("details")).toBeNull();
   expect(container.querySelector('a[href="/max/project-surfaces?panel=services"]')!.closest("details")).toBeNull();
+  // MAX apps run on the platform; own-server hosting left with the site builder.
+  expect(container.querySelector('a[href*="panel=hosting"]')).toBeNull();
+  expect(container.textContent).not.toContain("Собственный сервер");
   expect(container.querySelector('[data-testid="max-one-click-launch"]')).not.toBeNull();
 });
 it("does not call an older release the current version in launch", async () => {

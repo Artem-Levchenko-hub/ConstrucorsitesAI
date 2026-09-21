@@ -2,7 +2,9 @@ import { expect, it } from "vitest";
 import { readMaxEditorEntry, maxEditorLinkEntry } from "@/lib/max-editor-entry";
 
 it("recognizes every dialog and ignores unknown query values", () => {
-  for (const panel of ["max", "hosting", "services", "publish"]) expect(readMaxEditorEntry(new URLSearchParams(`panel=${panel}`))).toBe(panel);
+  for (const panel of ["max", "services", "publish"]) expect(readMaxEditorEntry(new URLSearchParams(`panel=${panel}`))).toBe(panel);
+  // Own-server hosting moved out with the site builder: a saved link must not land on a blank editor.
+  expect(readMaxEditorEntry(new URLSearchParams("panel=hosting"))).toBe("publish");
   expect(readMaxEditorEntry(new URLSearchParams("data=owner"))).toBe("data:owner");
   expect(readMaxEditorEntry(new URLSearchParams("panel=unknown"))).toBeNull();
   expect(readMaxEditorEntry(new URLSearchParams("panel=max&data=policies"))).toBe("data:policies");

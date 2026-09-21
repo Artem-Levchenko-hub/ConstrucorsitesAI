@@ -5,7 +5,7 @@
 .max-editor-modal-back { padding: 16px 28px 0; }
 .max-editor-modal-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 28px 28px; }
 .max-editor-modal-lead { color: #52627b; font-size: 14px; line-height: 1.7; margin-bottom: 20px; }
-.max-editor-modal-services, .max-editor-modal-hosting { width: min(920px, calc(100vw - 32px)); }
+.max-editor-modal-services { width: min(920px, calc(100vw - 32px)); }
 .max-editor-modal-navigation { width: min(400px, calc(100vw - 32px)); }
 .max-editor-modal-tools { width: min(480px, calc(100vw - 32px)); }
 .max-editor-modal-preview { width: min(560px, calc(100vw - 16px)); height: calc(100dvh - 16px); }
@@ -73,7 +73,6 @@
   .max-editor-modal-project { max-width: 230px; }
   .max-editor-modal-scroll { padding: 20px 18px; }
   .max-editor-modal-back { padding: 12px 18px 0; }
-  .max-editor-modal-hosting [data-testid=external-deploy-wizard] .grid-cols-2 { grid-template-columns: 1fr; }
   .max-connect-progress { gap: 6px; margin-bottom: 22px; }
   .max-connect-progress li { flex-direction: column; gap: 7px; text-align: center; }
   .max-connect-progress small { font-size: 10px; }

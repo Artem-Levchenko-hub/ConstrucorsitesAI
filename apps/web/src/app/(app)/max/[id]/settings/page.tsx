@@ -20,5 +20,5 @@ export default async function MaxSettingsPage({
   const tab = query.tab === "app" || query.tab === "vps" ? query.tab : "bot";
   const project = await loadMaxProject(id, `/max/${id}/settings?tab=${tab}`);
   if (tab === "app") redirect(`/max/${project.id}?data=details`);
-  redirect(`/max/${project.id}?panel=${tab === "vps" ? "hosting" : "max"}`);
+  redirect(`/max/${project.id}?panel=${tab === "vps" ? "publish" : "max"}`);
 }

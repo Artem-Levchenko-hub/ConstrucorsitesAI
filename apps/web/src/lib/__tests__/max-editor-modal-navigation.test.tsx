@@ -10,7 +10,6 @@ vi.mock("next/navigation", () => ({ useSearchParams: () => state.params }));
 vi.mock("@/components/marketing/BrandMark", () => ({ BrandMark: () => null }));
 vi.mock("@/components/max/MaxConnectionWizard", () => ({ MaxConnectionWizard: ({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) => <><h2>Создайте бота</h2><button onClick={() => onBusyChange(true)}>Начать проверку</button><button onClick={() => onBusyChange(false)}>Завершить проверку</button></> }));
 vi.mock("@/components/max/FigmaIntegrationHub", () => ({ FigmaIntegrationHub: ({ embedded }: { embedded?: boolean }) => <div>Каталог {embedded ? "в окне" : "страница"}</div> }));
-vi.mock("@/components/workspace/ExternalDeployWizard", () => ({ ExternalDeployWizard: () => <div>Настройка сервера</div> }));
 vi.mock("@/components/max/MaxProjectSetupDialog", () => ({ MaxProjectSetupDialog: () => <button aria-label="Данные приложения">Данные</button> }));
 afterEach(() => vi.restoreAllMocks());
 

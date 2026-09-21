@@ -15,7 +15,6 @@ import "./max-editor-modals.css";
 
 const MaxConnectionWizard = lazy(() => import("./MaxConnectionWizard").then(module => ({ default: module.MaxConnectionWizard })));
 const FigmaIntegrationHub = lazy(() => import("./FigmaIntegrationHub").then(module => ({ default: module.FigmaIntegrationHub })));
-const ExternalDeployWizard = lazy(() => import("@/components/workspace/ExternalDeployWizard").then(module => ({ default: module.ExternalDeployWizard })));
 
 const desktopQuery = "(min-width: 1024px)";
 function subscribeViewport(onChange: () => void) {
@@ -28,7 +27,7 @@ const serverViewport = () => false;
 const titles: Record<string, string> = {
   navigation: "Проекты и аккаунт", tools: "Инструменты редактора",
   preview: "Предпросмотр приложения", publish: "Публикация приложения",
-  max: "Подключение MAX", hosting: "Собственный сервер", services: "Подключение сервисов",
+  max: "Подключение MAX", services: "Подключение сервисов",
 };
 
 /** A single dialog surface over a persistent editor. Only published management is a page. */
@@ -111,7 +110,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
               <div><span className="max-editor-modal-project">{project.name}</span><Dialog.Title>{titles[modal ?? ""]}</Dialog.Title></div>
               <Dialog.Close asChild><Button variant="outline" size="icon" disabled={modalBusy} aria-label="Закрыть окно"><X className="size-5" /></Button></Dialog.Close>
             </div>
-            {modal && ["max", "services", "hosting"].includes(modal) && <div className="max-editor-modal-back"><Button variant="outline" size="sm" disabled={modalBusy} onClick={() => select("publish")}><ArrowLeft className="size-4" />К публикации</Button></div>}
+            {modal && ["max", "services"].includes(modal) && <div className="max-editor-modal-back"><Button variant="outline" size="sm" disabled={modalBusy} onClick={() => select("publish")}><ArrowLeft className="size-4" />К публикации</Button></div>}
             <div className="max-editor-modal-scroll" key={modal}>
               <Suspense fallback={<p role="status">Открываем настройки…</p>}>
               {modal === "navigation" && <div data-testid="max-navigation-scroll" className="max-editor-drawer-scroll">{navigation}</div>}
@@ -119,7 +118,6 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
               {modal === "preview" && <div className="max-editor-modal-preview-content">{previewContent}</div>}
               {modal === "publish" && launch}
               {modal === "max" && <MaxConnectionWizard projectId={project.id} onNavigate={select} onBusyChange={setModalBusy} />}
-              {modal === "hosting" && <><p className="max-editor-modal-lead">Это необязательно. По умолчанию приложение размещается на хостинге Omnia. Свой сервер нужен, только если вы хотите управлять размещением самостоятельно.</p><ExternalDeployWizard projectId={project.id} maxStudio /></>}
               {modal === "services" && <FigmaIntegrationHub projectId={project.id} projectName={project.name} embedded onBusyChange={setModalBusy} onExit={() => selectEntry(null)} />}
               </Suspense>
             </div>
