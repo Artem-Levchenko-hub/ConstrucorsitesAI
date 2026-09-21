@@ -1079,7 +1079,6 @@ class CodeRestorationEngine:
             raise CellIdentityConflict("restoration source manifest is unavailable") from None
         if (
             saved.get("epoch") != epoch
-            or saved.get("ready_epoch") != epoch
             or saved_manifest.digest() != manifest.digest()
         ):
             return False
@@ -1208,21 +1207,36 @@ class CodeRestorationEngine:
                     state,
                     machine_state=source_machine_state,
                 )
-                if (
-                    source_machine_state.get("epoch") != source_serving_epoch
-                    or source_machine_state.get("ready_epoch") != source_serving_epoch
-                ):
+                if source_machine_state.get("epoch") != source_serving_epoch:
                     raise CellIdentityConflict(
                         "restoration source serving machine epoch is detached"
                     )
-                if not await self._source_pair_running(
+                source_pair_running = await self._source_pair_running(
                     manager,
                     state,
                     machine,
                     source,
                     current_manifest,
                     source_serving_epoch,
-                ):
+                )
+                source_ready_epoch = source_machine_state.get("ready_epoch")
+                if source_pair_running and source_ready_epoch != source_serving_epoch:
+                    cancelled_epoch = source_machine_state.get("cancelled_epoch")
+                    if (
+                        type(source_ready_epoch) is not int
+                        or source_ready_epoch >= source_serving_epoch
+                        or type(cancelled_epoch) is not int
+                        or cancelled_epoch >= source_serving_epoch
+                    ):
+                        raise CellIdentityConflict(
+                            "restoration source serving machine epoch is detached"
+                        )
+                    await adapter.resume_preview(state, epoch=source_serving_epoch)
+                elif not source_pair_running:
+                    if source_ready_epoch != source_serving_epoch:
+                        raise CellIdentityConflict(
+                            "restoration source serving machine epoch is detached"
+                        )
                     await self._require_resume_checkpoint(
                         request,
                         source,
@@ -1240,6 +1254,8 @@ class CodeRestorationEngine:
                 )
                 if (
                     resumed_serving_epoch != source_serving_epoch
+                    or resumed_machine_state.get("epoch") != resumed_serving_epoch
+                    or resumed_machine_state.get("ready_epoch") != resumed_serving_epoch
                     or resumed_source.workspace_volume != source_code_volume
                     or resumed_source.project_postgres_volume != source_database_volume
                     or await self._source_database_volume_binding(resumed_source)

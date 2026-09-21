@@ -17,6 +17,7 @@ import docker  # type: ignore[import-untyped]
 
 from omnia_orchestrator.core.cell_resources import (
     CellFenceRejected,
+    CellIdentityConflict,
     CellResourceError,
     LifecycleMutation,
 )
@@ -1147,3 +1148,8 @@ class MachineAdapter:
         saved["epoch"] = runtime_epoch
         write_controller_json(machine.path, saved)
         await machine_effect(self._start_boundary, state, manifest, backend, runtime_epoch)
+        if machine.state() != saved:
+            raise CellIdentityConflict("preview resume machine state changed before readiness")
+        completed = dict(saved)
+        completed["ready_epoch"] = runtime_epoch
+        write_controller_json(machine.path, completed)

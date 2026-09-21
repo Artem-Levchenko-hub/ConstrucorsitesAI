@@ -1259,10 +1259,33 @@ def bound_prepare_request():
     )
 
 
-@pytest.mark.parametrize("initially_running", [True, False])
+@pytest.mark.parametrize(
+    (
+        "initially_running",
+        "ready_epoch",
+        "cancelled_epoch",
+        "expected_resumes",
+        "expect_error",
+    ),
+    [
+        (True, 27, 0, 0, False),
+        (False, 27, 0, 1, False),
+        (True, 23, 0, 1, False),
+        (True, None, 0, 0, True),
+        (True, 28, 0, 0, True),
+        (True, 23, 27, 0, True),
+    ],
+)
 async def test_prepare_copies_current_data_into_candidate_without_database_policy(
-    tmp_path, monkeypatch, initially_running
+    tmp_path,
+    monkeypatch,
+    initially_running,
+    ready_epoch,
+    cancelled_epoch,
+    expected_resumes,
+    expect_error,
 ):
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
     from omnia_orchestrator.core.project_machine import MachineManifest
     from omnia_orchestrator.services import code_restoration_engine as module
     from omnia_orchestrator.services import project_machine
@@ -1290,12 +1313,16 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         }
     )
     events, statements = [], []
-    prepare_request = bound_prepare_request()
+    prepare_request = bound_prepare_request().model_copy(update={"fencing_epoch": 28})
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
-    serving_epoch = 2
-    running = {"value": initially_running, "machine_epoch": serving_epoch}
+    serving_epoch = 27
+    running = {
+        "value": initially_running,
+        "machine_epoch": serving_epoch,
+        "ready_epoch": ready_epoch,
+    }
     base_image = "omnia/source-current:sealed"
     environment_volumes = ("live-code", "source-home", "live-db")
     reference = MachineEnvironmentRef(
@@ -1368,7 +1395,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         is_running=lambda: running["value"],
         name="source",
         _metadata=lambda: {
-            "epoch": 3,
+            "epoch": prepare_request.fencing_epoch,
             "environment_ref": reference.model_dump(mode="json"),
             "environment_revision": __import__(
                 "omnia_orchestrator.routers.runtime",
@@ -1387,7 +1414,8 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     machine = SimpleNamespace(
         state=lambda: {
             "epoch": running["machine_epoch"],
-            "ready_epoch": serving_epoch,
+            "ready_epoch": running["ready_epoch"],
+            "cancelled_epoch": cancelled_epoch,
             "manifest": manifest.model_dump(),
         }
     )
@@ -1433,7 +1461,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         async def resume_preview(self, observed_state, *, epoch):
             assert observed_state is state and epoch == serving_epoch
             events.append("resume")
-            running.update(value=True, machine_epoch=epoch)
+            running.update(value=True, machine_epoch=epoch, ready_epoch=epoch)
 
         def preview(self, observed_state):
             assert observed_state is state
@@ -1532,6 +1560,13 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     engine._verify_source = lambda *_: events.append("verify")
     engine._capture_code = lambda *_args, **_kwargs: "d" * 64
     engine._cleanup_candidate = cleanup
+    if expect_error:
+        with pytest.raises(CellIdentityConflict, match="serving machine epoch"):
+            await engine.prepare(prepare_request)
+        assert events.count("resume") == 0
+        assert "inventory:source" not in events
+        return
+
     result = await engine.prepare(prepare_request)
     assert result["state"] == "ready", result["report"]
     assert statements == [("candidate", "COPY price_list;")]
@@ -1543,13 +1578,19 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     assert "start:candidate:1" in events
     assert result["report"]["blockers"] == []
     assert result["report"]["database_state"] == "present"
-    assert events.count("resume") == (0 if initially_running else 1)
+    assert events.count("resume") == expected_resumes
     if not initially_running:
         assert events.index("resume") < events.index("inventory:source")
     assert events.count("observe-live") == 2
     # Row presence is observed on the source before any schema analysis.
     assert events.index("inventory:source") < events.index("catalog:source")
     assert "live-code" not in json.dumps(statements)
+    if ready_epoch == 23:
+        settled_events = list(events)
+        settled_machine = machine.state()
+        assert await engine.prepare(prepare_request) == result
+        assert events == settled_events
+        assert machine.state() == settled_machine
 
 
 def test_prepare_legacy_release_repair_uses_exact_proven_epochs():
@@ -2180,6 +2221,10 @@ async def test_prepared_runtime_identity_from_protected_era_still_recovers(tmp_p
         "foreign_volume",
         "forged_serving_epoch",
         "mismatched_serving_epoch",
+        "stale_ready_epoch",
+        "missing_ready_epoch",
+        "future_ready_epoch",
+        "cancelled_serving_epoch",
     ],
 )
 async def test_prepare_rejects_unbound_sleeping_source_before_resume(
@@ -2280,10 +2325,17 @@ async def test_prepare_rejects_unbound_sleeping_source_before_resume(
         _project_postgres=lambda: None,
     )
     serving_epoch = 2
+    observed_ready_epoch = {
+        "stale_ready_epoch": 1,
+        "missing_ready_epoch": None,
+        "future_ready_epoch": 3,
+        "cancelled_serving_epoch": 1,
+    }.get(changed, serving_epoch)
     machine = SimpleNamespace(
         state=lambda: {
             "epoch": serving_epoch,
-            "ready_epoch": serving_epoch,
+            "ready_epoch": observed_ready_epoch,
+            "cancelled_epoch": serving_epoch if changed == "cancelled_serving_epoch" else 0,
             "manifest": manifest.model_dump(mode="json"),
         }
     )

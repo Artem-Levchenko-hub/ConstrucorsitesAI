@@ -526,6 +526,54 @@ def test_explicit_release_receipt_is_authoritative_but_machine_bound(monkeypatch
         )
 
 
+def test_live_source_stays_detached_until_stale_ready_epoch_is_reproved(monkeypatch):
+    from omnia_orchestrator.services.cell_state import CellOperationRecord
+
+    module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
+    release = CellOperationRecord(
+        operation_id=UUID(int=28),
+        kind="release",
+        status="completed",
+        phase="completed",
+        request_digest="d" * 64,
+        fencing_epoch=28,
+        bundle_state="resources_ready",
+        detail="retained_source_fencing_epoch=27",
+    )
+    state.fencing_epoch = 28
+    state.last_operation_id = release.operation_id
+    state.operations = (release,)
+    state.operation = lambda operation_id: release if operation_id == release.operation_id else None
+    observed_machine = {
+        "manifest": {"routes": ["/"]},
+        "epoch": 27,
+        "ready_epoch": 23,
+        "cancelled_epoch": 0,
+    }
+    machine.state = lambda: dict(observed_machine)
+    monkeypatch.setattr(
+        module,
+        "_gateway_config",
+        lambda _gateway: {
+            "project_id": str(state.project_id),
+            "epoch": 27,
+            "core_host": "10.0.0.8",
+            "machine_host": "10.0.0.7",
+            "routes": [],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="serving machine epoch"):
+        module.observe_live_source(
+            backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+        )
+
+    observed_machine["ready_epoch"] = 27
+    assert module.observe_live_source(
+        backend, machine, state, source_files={"page.tsx": b"x"}, schema={}
+    )
+
+
 def test_two_rejections_keep_actual_serving_epoch_for_next_prepare(monkeypatch):
     from omnia_orchestrator.services.cell_state import CellOperationRecord
 

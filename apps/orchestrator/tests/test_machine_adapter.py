@@ -319,9 +319,14 @@ async def test_halt_failed_quiesce_preserves_rootfs_without_recapturing(tmp_path
 
 
 @pytest.mark.parametrize("receipt_valid", [False, True])
-async def test_preview_resume_uses_only_consumed_halt_receipt(tmp_path, monkeypatch, receipt_valid):
+@pytest.mark.parametrize("state_changed", [False, True])
+async def test_preview_resume_uses_only_consumed_halt_receipt(
+    tmp_path, monkeypatch, receipt_valid, state_changed
+):
+    import json
     from unittest.mock import AsyncMock
 
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
     from tests.test_docker_machine_backend import retained_preview_fixture
 
     api = module()
@@ -329,9 +334,21 @@ async def test_preview_resume_uses_only_consumed_halt_receipt(tmp_path, monkeypa
     runtime = api.MachineAdapter(
         SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "states")), SimpleNamespace()
     )
-    machine = SimpleNamespace(path=tmp_path / "machine.json", state=lambda: {
-        "manifest": reference.manifest.model_dump(mode="json"), "epoch": 7,
-    })
+    machine_path = tmp_path / "machine.json"
+    machine_path.write_text(
+        json.dumps(
+            {
+                "manifest": reference.manifest.model_dump(mode="json"),
+                "epoch": 7,
+                "ready_epoch": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+    machine = SimpleNamespace(
+        path=machine_path,
+        state=lambda: json.loads(machine_path.read_text(encoding="utf-8")),
+    )
     runtime.parts = lambda _: (machine, backend)
     events = []
 
@@ -346,11 +363,26 @@ async def test_preview_resume_uses_only_consumed_halt_receipt(tmp_path, monkeypa
     monkeypatch.setattr(backend, "service_status", lambda *_, **kw: {"ready": True})
     monkeypatch.setattr(api.MachineEnvironmentStore, "restore", lambda *_args, **_kwargs:
                         events.append("restore"))
-    runtime._start_boundary = lambda *_: events.append("boundary")
+    def boundary(*_):
+        assert json.loads(machine_path.read_text(encoding="utf-8"))["ready_epoch"] == 3
+        events.append("boundary")
+        if state_changed:
+            changed = json.loads(machine_path.read_text(encoding="utf-8"))
+            changed["epoch"] = 8
+            machine_path.write_text(json.dumps(changed), encoding="utf-8")
+
+    runtime._start_boundary = boundary
     runtime.checkpoint = AsyncMock(side_effect=AssertionError("resume must not recapture"))
-    await runtime.resume_preview(SimpleNamespace(workspace_id=backend.workspace_id))
+    if state_changed:
+        with pytest.raises(CellIdentityConflict, match="state changed"):
+            await runtime.resume_preview(SimpleNamespace(workspace_id=backend.workspace_id))
+    else:
+        await runtime.resume_preview(SimpleNamespace(workspace_id=backend.workspace_id))
     assert events == ["consume", *([] if receipt_valid else ["restore"]),
                       "ensure", "service", "service", "boundary"]
+    completed = json.loads(machine_path.read_text(encoding="utf-8"))
+    assert completed["ready_epoch"] == (3 if state_changed else 7)
+    assert completed["epoch"] == (8 if state_changed else 7)
 
 
 @pytest.mark.parametrize("failure", [None, "capture", "teardown", "no_capture", "already_absent"])
