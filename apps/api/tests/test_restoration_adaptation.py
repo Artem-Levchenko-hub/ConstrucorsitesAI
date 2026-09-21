@@ -295,6 +295,26 @@ async def test_adaptation_admission_binds_locked_operation_to_exact_run(source_c
         )
 
 
+def _observed_catalog_report(report):
+    return {
+        **(report or {}),
+        "database_state": "present",
+        "format": 2,
+        "checks": [
+            {
+                "code": "catalog_observed_for_adaptation_fixture",
+                "status": "compatible",
+                "severity": "info",
+                "operation": "catalog.read",
+                "object": "public",
+                "evidence": "observed_catalog",
+                "explanation": "The current catalog was observed before adaptation admission.",
+                "resolution": None,
+            }
+        ],
+    }
+
+
 async def test_db_adaptation_admission_is_atomic_and_blocks_competing_work(
     db_session, monkeypatch
 ):
@@ -321,6 +341,10 @@ async def test_db_adaptation_admission_is_atomic_and_blocks_competing_work(
     operation = await restorations.cancel_restoration(
         db_session, project.id, owner.id, operation.id, runtime
     )
+    operation_row = await db_session.get(Restoration, operation.id)
+    assert operation_row is not None
+    operation_row.report = _observed_catalog_report(operation_row.report)
+    await db_session.flush()
     run, replayed = await reserve_generation_run(
         db_session,
         project_id=project.id,
@@ -426,6 +450,7 @@ async def test_delayed_legacy_cancel_response_cannot_overwrite_adapting(
     )
     operation = await db_session.get(Restoration, public.id)
     assert operation is not None
+    operation.report = _observed_catalog_report(operation.report)
     operation.state, operation.phase = "reconciling", "cancel"
     await db_session.commit()
 
