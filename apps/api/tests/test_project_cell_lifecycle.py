@@ -35,6 +35,11 @@ from omnia_api.services.project_cells import (
     reserve_cell_operation,
 )
 
+# How long a test waits for a background task to reach a checkpoint. The
+# assertion is that the checkpoint happens at all, not that it is fast: a
+# one-second budget failed the release gate on a slow CI runner.
+_EVENT_WAIT_SECONDS = 10
+
 pytestmark = pytest.mark.asyncio
 
 _LIFECYCLE_NAMES = (
@@ -342,7 +347,7 @@ async def test_cancellation_after_own_claim_receipt_becomes_indeterminate(
     client = ClientHarness.with_default_response(workspace.id, fence=1)
     execute = replay_indeterminate_cell_operation if replay else execute_cell_operation
     task = asyncio.create_task(execute(factory, operation.id, client))
-    await asyncio.wait_for(claimed.wait(), timeout=1)
+    await asyncio.wait_for(claimed.wait(), timeout=_EVENT_WAIT_SECONDS)
 
     task.cancel()
     await asyncio.sleep(0)
@@ -401,7 +406,7 @@ async def test_cancelled_competing_claim_does_not_reclassify_foreign_running_ope
     client = ClientHarness.with_default_response(workspace.id, fence=1)
     execute = replay_indeterminate_cell_operation if replay else execute_cell_operation
     task = asyncio.create_task(execute(factory, operation.id, client))
-    await asyncio.wait_for(contender_started.wait(), timeout=1)
+    await asyncio.wait_for(contender_started.wait(), timeout=_EVENT_WAIT_SECONDS)
 
     await claim(factory, operation.id)
     task.cancel()

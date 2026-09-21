@@ -25,6 +25,11 @@ from omnia_api.services.project_cells import (
     recover_interrupted_cell_operations,
 )
 
+# How long a test waits for a background task to reach a checkpoint. The
+# assertion is that the checkpoint happens at all, not that it is fast: a
+# one-second budget failed the release gate on a slow CI runner.
+_EVENT_WAIT_SECONDS = 10
+
 
 async def _seed(session, monkeypatch, *, cell=True, enabled=False, active=False):
     owner = User(
@@ -700,7 +705,7 @@ async def test_owner_preview_claim_unknown_commit_replays_same_envelope(
         advance = asyncio.create_task(
             runtime.advance_owner_wake_operations(factory, worker_client)
         )
-        await asyncio.wait_for(claim_committed.wait(), timeout=1)
+        await asyncio.wait_for(claim_committed.wait(), timeout=_EVENT_WAIT_SECONDS)
         advance.cancel()
         await asyncio.sleep(0)
         release_claim_receipt.set()

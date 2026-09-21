@@ -7,6 +7,12 @@ from fastapi import FastAPI
 
 from omnia_api import main
 
+# How long a test waits for a background task to reach a checkpoint. The
+# assertion is that the checkpoint happens at all, not that it is fast: a
+# one-second budget failed the release gate on a slow CI runner.
+_EVENT_WAIT_SECONDS = 10
+
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -99,8 +105,8 @@ async def test_owner_wake_monitor_cannot_block_generation_capacity_recovery(
     generation_monitor = asyncio.create_task(main._monitor_capacity_queued_generations())
     owner_monitor = asyncio.create_task(main._monitor_owner_wake_operations())
     try:
-        await asyncio.wait_for(owner_started.wait(), timeout=1)
-        await asyncio.wait_for(generation_scanned.wait(), timeout=1)
+        await asyncio.wait_for(owner_started.wait(), timeout=_EVENT_WAIT_SECONDS)
+        await asyncio.wait_for(generation_scanned.wait(), timeout=_EVENT_WAIT_SECONDS)
     finally:
         generation_monitor.cancel()
         owner_monitor.cancel()
