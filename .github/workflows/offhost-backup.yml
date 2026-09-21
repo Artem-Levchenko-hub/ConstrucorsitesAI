@@ -13,6 +13,9 @@ on:
 
 permissions:
   contents: read
+  # A failed backup opens (and a recovered one closes) one tracking issue: a red
+  # scheduled run alone went unnoticed for twelve days in September 2026.
+  issues: write
 
 concurrency:
   group: offhost-encrypted-backup
@@ -44,7 +47,11 @@ jobs:
             echo "::error::Backup age is outside the allowed 30-hour window: ${age_seconds}s"
             exit 1
           fi
-          if (( expected_size < 10485760 )); then
+          # The floor only rejects an empty or truncated bundle. It used to be
+          # 10 MiB, which became wrong the day production data was reset
+          # (2026-09-10): honest bundles of 1-10 MiB were refused every night.
+          # The bundle always contains the gzipped platform dump (> 0.5 MiB).
+          if (( expected_size < 524288 )); then
             echo "::error::Backup is suspiciously small: ${expected_size} bytes"
             exit 1
           fi
@@ -84,4 +91,35 @@ jobs:
             status.json
           if-no-files-found: error
           compression-level: 0
-          retention-days: 7
+          # Bundles are ~10 MiB since the data reset; a month of copies is cheap and
+          # survives a long weekend of unnoticed failures.
+          retention-days: 30
+
+      - name: Raise the alarm when the off-host copy failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Внешняя резервная копия прода не снята"
+          body="Задача off-host backup упала: ${RUN_URL}. Пока она красная, свежей копии вне сервера нет. Проверить на сервере: tail /opt/omnia-runtime/logs/backup.log и GET /api/backups/offhost/status."
+          number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title ${title}" --json number,title --jq "map(select(.title == \"${title}\")) | .[0].number // empty")"
+          if [[ -n "${number}" ]]; then
+            gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${title}" --body "${body}"
+          fi
+
+      - name: Close the alarm when the copy is back
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_TS: ${{ steps.backup.outputs.timestamp }}
+        run: |
+          set -euo pipefail
+          title="Внешняя резервная копия прода не снята"
+          number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title ${title}" --json number,title --jq "map(select(.title == \"${title}\")) | .[0].number // empty")"
+          if [[ -n "${number}" ]]; then
+            gh issue close "${number}" --repo "${GITHUB_REPOSITORY}" --comment "Копия снята и проверена: ${BACKUP_TS}."
+          fi
