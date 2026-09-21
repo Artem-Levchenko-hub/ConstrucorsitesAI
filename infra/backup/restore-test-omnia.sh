@@ -6,6 +6,8 @@
 set -euo pipefail
 
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/omnia-runtime/backups}"
+CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.py}"
+ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
@@ -118,5 +120,36 @@ echo "[restore-test] extracted files: ${source_files:-0}"
 [ "${users_tables:-0}" -ge "$(( ${live_users_tables:-0} - 2 ))" ] || {
   echo "[restore-test] FAIL — project DB dump restored ${users_tables} of ${live_users_tables} live tables"; exit 1;
 }
+# The owners' MAX apps live in Project Cell databases, not in the two above. Their
+# dumps are restored into throwaway PostgreSQL instances by the same tool that took
+# them; live cells are never touched.
+cells_note="not in this backup"
+if [ -f "${latest}/cells.tgz" ]; then
+  mkdir -p "${extract_dir}/cells"
+  tar -xzf "${latest}/cells.tgz" -C "${extract_dir}/cells"
+  cells_dir="${extract_dir}/cells/cells"
+  [ -f "${cells_dir}/MANIFEST.json" ] || {
+    echo "[restore-test] FAIL — Project Cell archive holds no manifest"; exit 1;
+  }
+  if [ -x "$CELLS_SCRIPT" ]; then
+    for name in CELL_POSTGRES_IMAGE CELL_BACKUP_IMAGE; do
+      if [ -z "${!name:-}" ] && [ -r "$ORCHESTRATOR_ENV" ]; then
+        value="$(sed -n "s/^${name}=//p" "$ORCHESTRATOR_ENV" | tail -1)"
+        [ -n "$value" ] && export "${name}=${value}"
+      fi
+    done
+    cells_status=0
+    "$CELLS_SCRIPT" verify --backup "$cells_dir" || cells_status=$?
+    case "$cells_status" in
+      0) cells_note="restored" ;;
+      2) cells_note="restored, partial source backup" ;;
+      *) echo "[restore-test] FAIL — Project Cell dumps are not restorable"; exit 1 ;;
+    esac
+  else
+    cells_note="archive present, verifier missing"
+  fi
+fi
+echo "[restore-test] Project Cell databases: ${cells_note}"
+
 verdict=true
-echo "[restore-test] OK — databases, runtime config, project sources and MinIO objects are restorable."
+echo "[restore-test] OK — databases, Project Cells, runtime config, project sources and MinIO objects are restorable."

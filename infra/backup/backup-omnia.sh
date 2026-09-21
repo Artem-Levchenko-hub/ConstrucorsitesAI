@@ -7,6 +7,8 @@
 #   3. Project sources  — /opt/omnia-runtime/projects (generated source + snapshots)
 #   4. MinIO objects    — photos, generated media, uploads and preview artefacts
 #   5. Runtime config   — current production env files needed to boot a new host
+#   6. Project Cells    — the databases of the owners' MAX apps plus the
+#                         orchestrator state journal (backup_cells.py)
 #
 # pg_dump is a consistent, read-only snapshot: it does NOT lock or interrupt the
 # running apps. The complete bundle is checksummed and CMS-encrypted before it is
@@ -36,6 +38,11 @@ RUNTIME_ENV="${RUNTIME_ENV:-/opt/omnia-runtime/.env}"
 # This is the EnvironmentFile loaded by omnia-orchestrator.service. Backing up
 # a legacy mirror would produce a bundle that cannot faithfully boot the daemon.
 ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
+# The MAX apps' own data lives in per-cell volumes, not in the databases above.
+# backup_cells.py dumps each one logically; it needs the same digest-pinned
+# images the orchestrator uses, which are declared in that env file.
+CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.py}"
+STATE_ROOT="${STATE_ROOT:-/opt/omnia-runtime/state}"
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
@@ -47,6 +54,7 @@ USERS_DB="${USERS_DB:-omnia_users}"
 
 # UTC makes the directory name portable across the VPS, GitHub runners and a
 # future restore host in another timezone.
+cells_archive=""
 ts="$(date -u +%Y%m%d-%H%M%S)"
 dir="${BACKUP_ROOT}/${ts}"
 bundle_tmp="${BACKUP_ROOT}/.omnia-backup-${ts}.tgz"
@@ -101,6 +109,34 @@ docker run --rm \
   tar -czf /backup/minio-data.tgz -C /source . \
   || fail "MinIO archive failed"
 
+# 5b. Project Cell databases and the orchestrator state journal. A single busy or
+#     halted cell must not cost the whole nightly backup, so a partial result
+#     (exit 2) is reported and kept; only a hard failure aborts.
+if [ -x "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
+  for name in CELL_POSTGRES_IMAGE CELL_BACKUP_IMAGE; do
+    if [ -z "${!name:-}" ] && [ -r "$ORCHESTRATOR_ENV" ]; then
+      # Read only these two lines: the file holds production secrets.
+      value="$(sed -n "s/^${name}=//p" "$ORCHESTRATOR_ENV" | tail -1)"
+      [ -n "$value" ] && export "${name}=${value}"
+    fi
+  done
+  log "backing up Project Cell databases..."
+  cells_status=0
+  "$CELLS_SCRIPT" backup --state-root "$STATE_ROOT" --out "${dir}/cells" || cells_status=$?
+  case "$cells_status" in
+    0) : ;;
+    2) log "WARNING: Project Cell backup is partial — see cells/MANIFEST.json" ;;
+    *) fail "Project Cell backup failed (exit ${cells_status})" ;;
+  esac
+  [ -f "${dir}/cells/MANIFEST.json" ] || fail "Project Cell backup left no manifest"
+  tar -czf "${dir}/cells.tgz" -C "${dir}" cells || fail "Project Cell archive failed"
+  rm -rf "${dir}/cells"
+  chmod 600 "${dir}/cells.tgz"
+  cells_archive=1
+else
+  log "WARNING: Project Cell backup skipped (no ${CELLS_SCRIPT} or ${STATE_ROOT})"
+fi
+
 # 6. Integrity: refuse a backup whose payloads are suspiciously empty (a silent
 #    pg_dump failure that still exits 0 would otherwise ship a useless backup).
 for f in "${dir}/platform-${PLATFORM_DB}.sql.gz" "${dir}/projects-${USERS_DB}.sql.gz"; do
@@ -111,6 +147,10 @@ for f in "${dir}/projects-src.tgz" "${dir}/minio-data.tgz" "${dir}/runtime-confi
   sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
   [ "$sz" -ge 200 ] || fail "archive ${f} is only ${sz} bytes — aborting"
 done
+if [ -f "${dir}/cells.tgz" ]; then
+  sz=$(stat -c%s "${dir}/cells.tgz" 2>/dev/null || echo 0)
+  [ "$sz" -ge 200 ] || fail "archive ${dir}/cells.tgz is only ${sz} bytes — aborting"
+fi
 (
   cd "$dir"
   sha256sum \
@@ -119,13 +159,15 @@ done
     projects-src.tgz \
     minio-data.tgz > SHA256SUMS
   sha256sum runtime-config.tgz >> SHA256SUMS
+  [ -f cells.tgz ] && sha256sum cells.tgz >> SHA256SUMS
 )
 du -sh \
   "${dir}/platform-${PLATFORM_DB}.sql.gz" \
   "${dir}/projects-${USERS_DB}.sql.gz" \
   "${dir}/projects-src.tgz" \
   "${dir}/minio-data.tgz" \
-  "${dir}/runtime-config.tgz" | tee "${dir}/MANIFEST.txt"
+  "${dir}/runtime-config.tgz" \
+  ${cells_archive:+"${dir}/cells.tgz"} | tee "${dir}/MANIFEST.txt"
 
 # 7. Build one portable payload and encrypt it with AES-256 + the offline RSA
 #    recipient certificate. The unencrypted temporary bundle is always removed.
@@ -136,6 +178,7 @@ tar -czf "$bundle_tmp" -C "$dir" \
   projects-src.tgz \
   minio-data.tgz \
   runtime-config.tgz \
+  ${cells_archive:+cells.tgz} \
   SHA256SUMS \
   MANIFEST.txt \
   || fail "portable backup bundle failed"
