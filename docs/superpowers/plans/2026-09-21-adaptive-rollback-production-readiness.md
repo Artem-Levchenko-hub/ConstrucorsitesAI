@@ -6,7 +6,7 @@
 
 **Architecture:** Существующие `Restoration`, isolated candidate, proof, activation journal и reconciliation остаются единственным продуктовым механизмом. Отдельный закрытый QA runner создаёт одноразовые проекты с синтетическими данными и проверяет тот же пользовательский API, реальный runtime, SQL-свидетеля и durable receipts; он не открывает тестовые HTTP endpoints в production. Детерминированные сценарии и fault injection работают в выделенном Linux/Docker стенде, а узкая проверка настоящей адаптации — на одноразовом QA-проекте точного production release.
 
-**Tech Stack:** Python 3.12, uv frozen environments, pytest/pytest-asyncio, PostgreSQL 16, Redis 7, FastAPI/SQLAlchemy/Alembic, Docker Project Cell, Next.js/React/TypeScript, pnpm 9.15.0, Vitest/jsdom, GitHub Actions. Новая очередь, новый restoration engine и отдельная система авторизации не нужны.
+**Tech Stack:** Python 3.12, uv frozen environments, pytest/pytest-asyncio/pytest-cov, PostgreSQL 16, Redis 7, FastAPI/SQLAlchemy/Alembic, Docker Project Cell, Next.js/React/TypeScript, pnpm 9.15.0, Vitest/jsdom, Playwright, GitHub Actions, Codex CLI non-interactive mode. Новая очередь, новый restoration engine и отдельная система авторизации не нужны.
 
 **Spec:** `docs/operations/2026-09-21-max-studio-rollback-live-result.md`, `docs/operations/2026-09-20-max-studio-rollback-production-readiness.md`, `docs/operations/2026-09-19-max-studio-versioning-fresh-e2e-audit.md`, `docs/operations/client-code-restoration.md`, `docs/operations/adaptive-versioning-baseline.md`, `docs/operations/versioning-v4-baseline.md`, `docs/plans/2026-09-21-max-rollback-completion.md`; уточнение владельца: прежние успешные live-сценарии сохраняются как baseline, повторяется изменённая защищённая цепочка на свежем release.
 
@@ -24,6 +24,7 @@
 - `activation_effects_admitted=true`, потерянный ответ или недоступный controller не разрешают возврат старого кода. После возможных эффектов — наблюдение и forward recovery. Продуктовый schema downgrade и восстановление старых бизнес-строк запрещены.
 - Данные, личности, ресурсы, receipts и release SHA связываются immutable manifest. Недостаточно зелёного UI, `completed`, совпадения HTTP-методов или общего `/health`.
 - Все будущие изменения: проверка → commit → push `origin/main` без force → deploy pushed SHA через full Compose → service/HTTP/revision evidence. Архитектура/код восстановления — один Sol owner, Astra review; commit/push/delivery — Luna. Параллельные writers только в отдельных worktrees.
+- До первого product edit выполнить T00: Astra пишет полный исполняемый тестовый контракт, независимая Astra проверяет его, baseline RED подтверждается внешним runner и весь contract surface замораживается SHA-256. Sol не имеет права менять frozen tests, fixtures, runner, thresholds или CI assertions.
 - Этот документ — результат аудита и планирования; product remediation этим не начата. После фиксации live-матрицы сам документ проходит обязательный delivery loop: проверка → commit → push origin/main → deploy pushed revision → service/HTTP/revision evidence. Docs-only характер не отменяет repository AGENTS.
 
 ## Review Focus
@@ -316,6 +317,8 @@ git diff --exit-code -- apps/web/pnpm-lock.yaml apps/api/uv.lock apps/orchestrat
 ## 3. Зависимости и порядок
 
 ```text
+T00 Astra frozen test contract ─→ baseline product RED ─→ любой product task
+
 T01 read-only 502 diagnosis ──→ T02 current-release smoke
              │                         ↑
              └── root-cause fix ─── T14 checkout/release gate
@@ -341,7 +344,93 @@ T17 signed business proof + T18 starter artifacts + T19 DB effect fencing
     → fresh generation/empty restore regression → protected adaptive acceptance
 ```
 
-Приоритет P0 задаёт blocking importance; T12/T14 разрешено выполнить раньше зависимых P0, поскольку без среды и чистой поставки их live acceptance невозможен. Сначала T01 read-only diagnosis; никаких speculative product fixes. Участки независимых read/test work могут идти параллельно, максимум два; shared product files редактируются одним owner последовательно.
+Приоритет P0 задаёт blocking importance; T12/T14 разрешено выполнить раньше зависимых P0, поскольку без среды и чистой поставки их live acceptance невозможен. Сначала T00, затем T01 read-only diagnosis; никаких speculative product fixes. Участки независимых read/test work могут идти параллельно, максимум два; shared product files редактируются одним owner последовательно.
+
+### Task T00 — заранее заморозить полный тестовый контракт и bounded agent pipeline
+
+**Files:** Add `docs/testing/max-restoration-test-contract.md`, `.codex/pipelines/max-restoration/*`, `scripts/run-max-restoration-agent-pipeline.ps1`; Astra test-author later creates `scripts/test-max-restoration.ps1`, `tools/restoration_contract/*`, browser/Docker acceptance tests and coverage configuration before Sol edits production code.
+
+**Interfaces:** `run-max-restoration-agent-pipeline.ps1` consumes the exact audit/plan plus Codex CLI; Astra writes/reviews tests, deterministic runner produces structured `gate-summary.json`, Sol implements against frozen tests, Astra reviews every iteration. Controller-owned hashes and candidate identity, not agent prose, decide PASS.
+
+#### T00.1. Три неизменяемых результата
+
+| Branch | Условие | Обязательный пользовательский результат | AI/billing |
+|---|---|---|---|
+| R0 | Полный inventory доказывает отсутствие бизнес-данных; historical schema materializable | Один automatic restore с `replace_verified_empty`; первая запись, update, reload и restart работают | 0 runs, 0 charges, 0 AI settlements |
+| R1 | Бизнес-данные есть; historical code совместим с current schema | Один automatic exact restore с `preserve_current`; original IDs/owners/hidden fields/relations сохранены | 0 runs, 0 charges, 0 AI settlements |
+| R2 | Бизнес-данные есть; historical/current несовместимы; затронутые сущности supported | Явное «Адаптировать и восстановить»; historical code адаптируется к current DB; независимый proof и code-only activation | 1 admitted generation run; bounded repair calls; 1 final billing result by fixture |
+
+R0 нельзя выбирать по одному `count(*)=0`: advanced sequence, чужие/скрытые rows,
+неполный inventory или неподдержанный объект дают safe refusal. R2 не меняет current
+schema digest и не получает live-DB write access.
+
+#### T00.2. Тестовые слои пишутся до product code
+
+- Unit/state machine: все разрешённые state/phase transitions, branch selection,
+  idempotency, capacity mapping, cancel/PONR, source delta, prompt, deletion guard.
+- PostgreSQL integration: R0/R1/R2, migration upgrade/downgrade/upgrade, row/schema
+  witnesses, sequences, hidden fields, constraints, RLS and concurrent locks.
+- Real Docker/orchestrator: candidate isolation, capacity resume, fencing, crash before
+  and after each effect, duplicate/reordered callback and cleanup.
+- API/web: all envelopes, cross-owner denial, billing cardinality, capacity UI,
+  refresh/reopen/error/cancel states and 390 px keyboard/focus behavior.
+- Full browser E2E: the actual owner clicks version/confirm/adapt through UI; API may
+  prepare synthetic fixtures but cannot perform the user action under test.
+- Security/fault/restart: two signed identities, no live secret/mount/socket/egress,
+  five deterministic fault points, app/Cell restart, deletion/forensic retention.
+
+Exact case IDs and oracles are normative in
+`docs/testing/max-restoration-test-contract.md`. Existing thousands of green tests do
+not substitute for these cases on the same candidate identity.
+
+#### T00.3. Coverage и артефакты
+
+- 100% branch coverage for admission, selection, cancel/PONR, fence checks, activation
+  recovery, billing idempotency, deletion guard and owner authorization.
+- Per critical module: at least 95% line and 90% branch; no global averaging.
+- 100% executable changed-line coverage and 100% kill rate for the frozen safety mutant
+  corpus. Any exclusion names an exact unreachable/type-only/generated line and needs
+  Astra approval.
+- Zero critical skip/xfail/todo/only/quarantine. Missing PostgreSQL/Docker/browser is
+  `blocked_environment`, never PASS or accepted RED.
+- Every job, including failure, stores JUnit, Cobertura/LCOV/HTML, frozen manifest,
+  candidate identity, SQL witness, redacted state/log bundle, migration output,
+  fault seed/receipt and Playwright trace/screenshots/video.
+
+#### T00.4. Anti-loop and anti-gaming
+
+1. Astra test-author may edit only tests, fixtures, runner, test dependencies/locks,
+   coverage config, CI and test docs. Any product source edit aborts the stage.
+2. Independent Astra rejects missing behaviors, mock-only proof, weak assertions,
+   hidden skips or tests that can pass without rollback.
+3. Controller freezes the complete dependency closure: existing conftest/fixtures/
+   configs/CI plus new tests. Sol cannot edit/remove/rename/weaken it; only a new
+   standalone regression test may be added and is immediately frozen.
+4. Deterministic runner executes outside Sol. Baseline runs in Local mode against the
+   controller-owned digest of baseline product code plus uncommitted Astra tests; that
+   digest must be unchanged after the run. A nonzero baseline is accepted only when the
+   structured summary says `product_defect`, lists known frozen case IDs and has zero
+   critical skips. Syntax/dependency/environment errors stop before implementation.
+5. Four Sol iterations by default, eight only by explicit release-owner setting. The
+   same normalized failure fingerprint twice without a smaller failing set stops as
+   `blocked`; timeout/provider/credentials/capacity/test defect are not fed endlessly
+   back as code repairs.
+6. Every iteration: Sol edit → frozen hash check → external gate → unchanged candidate
+   identity → Astra defect-first review. `approved` with P0/P1/P2 or failed gates is
+   rejected as inconsistent.
+
+#### T00.5. Local and release identities
+
+Local mode binds artifacts to a controller-computed working-tree digest before and after
+the gate; it can produce a reviewable candidate but never production acceptance.
+Release mode requires a clean committed SHA, immutable images and exact deployed SHA.
+Any code commit after acceptance invalidates the affected acceptance evidence.
+
+- [ ] 1: run `pwsh -NoLogo -NoProfile -File scripts/run-max-restoration-agent-pipeline.ps1 -ValidateOnly`; expected exit 0 and validated prompts/schema/Git/Codex CLI.
+- [ ] 2: from a clean checkout run `pwsh -NoLogo -NoProfile -File scripts/run-max-restoration-agent-pipeline.ps1`; expected separate `codex/max-restoration-*` branch and timestamped artifacts.
+- [ ] 3: Astra test-author creates executable contract and runner; Astra review status `approved`; baseline Contract profile produces known product RED, not infrastructure failure.
+- [ ] 4: Sol works only after step 3. Pipeline exits `verified` only on a stable local tree digest, all deterministic gates green and Astra approval; otherwise exact bounded blocker is retained.
+- [ ] 5: commit the verified candidate; require a clean tree; set `$releaseSha = (git rev-parse HEAD).Trim()`; run `pwsh -NoLogo -NoProfile -File scripts/test-max-restoration.ps1 -Profile Full -AcceptanceMode Release -CandidateIdentity $releaseSha`; then run ordinary delivery and live R0/R1/R2 acceptance.
 
 ## 4. P0 work packages
 
@@ -853,6 +942,7 @@ Cleanup не откатывает бизнес-БД. Он удаляет одн�
 | Gate | Условие PASS | Blocker |
 |---|---|---|
 | R0 Freshness | чистые проверенные checkout/upstream/production source, exact release map | dirty/diverged/unknown identity, unresolved T14 |
+| RT Frozen test contract | Astra contract/review approved; baseline RED is `product_defect`; frozen hashes unchanged; zero critical skips; branch/module/changed-line/mutation gates met on one candidate identity | tests written after product code, editable contract surface, infrastructure failure mislabeled as RED, missing coverage/mutation evidence |
 | RC Live recovery | RC0–RC6 после failed v8 PASS: exact registry DB, independent post-stop SQL, current #7 source on both surfaces, fresh signed runtime/owner proof | hard stop; stale v6 workspace, detached/unverified DB, missing SQL witness, preview 409, cached UI as evidence |
 | R1 Platform/canary | service + dependencies healthy; external health 200/webhook 401; current-SHA smoke PASS | 502, stale expectations, missing canary |
 | R2 Existing baseline | exact-commit full CI и targeted regressions PASS; environment gaps явно отделены | unexplained failure/skip required test |
@@ -863,7 +953,7 @@ Cleanup не откатывает бизнес-БД. Он удаляет одн�
 | R7 Operations | dashboard/alerts, safe retry, durable cleanup, redacted complete bundle | leaked secret, stuck admission hidden, cleanup false success |
 | R8 Delivery | commit + origin/main push + exact production deploy + health evidence | работа оставлена только локально или CI другой revision |
 
-Release result `READY` только при R0–R8 и дополнительном RC gate для текущего live incident. `PASS_WITH_ENV_LIMITATION` можно употреблять для локального unit этапа, но итоговый release gate — FAIL/BLOCKED до обязательного Linux real-runtime evidence. P2 UX может поставляться после gates, если он не блокирует выполнение сценария и его остаток явно записан. Empty exact PASS не отменяет subsequent failed-v8 hard stop и не переводит compatible/adaptive в PASS.
+Release result `READY` только при RT, R0–R8 и дополнительном RC gate для текущего live incident. `PASS_WITH_ENV_LIMITATION` можно употреблять для локального unit этапа, но итоговый release gate — FAIL/BLOCKED до обязательного Linux real-runtime evidence. P2 UX может поставляться после gates, если он не блокирует выполнение сценария и его остаток явно записан. Empty exact PASS не отменяет subsequent failed-v8 hard stop и не переводит compatible/adaptive в PASS.
 
 ## 9. Stop и recovery/rollback rules
 
@@ -940,7 +1030,7 @@ assert bundle.cleanup_status == 'PASS' and bundle.remaining_owned_resources == 0
 
 | Волна | Задачи | Начальный вход | Завершение / delivery |
 |---|---|---|---|
-| W0 | Hard stop RC0/RC1; T01 read-only, preflight | current stopping point §0.3, checkpoint `2fc1b3be`, exact live evidence | preserved frozen DB/code evidence, registry-bound identities, no normal restart/restore; canary root cause independently |
+| W0 | T00 frozen test contract; hard stop RC0/RC1; T01 read-only, preflight | current stopping point §0.3, checkpoint `2fc1b3be`, exact live evidence | Astra-approved executable contract and baseline product RED; preserved frozen DB/code evidence, registry-bound identities, no normal restart/restore; canary root cause independently |
 | WR | T20 RC2–RC6; T21/T22/T23 isolated reproductions | read-only authority binding + synthetic original volume + source snapshot #7 | post-stop SQL witness, safe current source sync and controlled current-v7 runtime; hard stop lifted only after RC6 PASS |
 | W1 | T14 hygiene и T12 harness; T01 minimal fix | named preservation manifest, isolated Linux resources | разрешённая чистая поставка; real Docker runner; canary 200/401 |
 | W2 | T02; T17–T23 P0 remediation; T03 fixture + T04 witness; T16 NEW-25 | RC recovery PASS before live resumption; exact pushed/deployed SHA, canary fixed | signed business route mandatory; starter preserved; failed generation has no hidden pre-admission DB effects; exact activation syncs agent workspace; terminal/runtime recovery coherent |
@@ -978,6 +1068,9 @@ assert bundle.cleanup_status == 'PASS' and bundle.remaining_owned_resources == 0
 - [x] Продолжение сохраняет historical empty/CRUD PASS, но failed compatible successor, stale-v6 workspace и stopped runtime вызывают hard safety stop. Compatible restore/adaptive/delete/hostile business rows/restart/faults не помечены выполненными.
 - [x] Original active DB выбирается только по registry binding; raw hits/different hash types не выдаются за SQL/коррупцию; independent post-stop SQL требует isolated clone, а source repair — fresh recovery intent, не terminal handle.
 - [x] Checkpoint commit/remote branch и четыре metadata-verified raw artifact path переданы следующему компьютеру; push/merge/deploy и runtime recovery явно различаются.
+- [x] До product code зафиксированы R0/R1/R2, полный unit/PostgreSQL/Docker/API/browser/security/fault contract, coverage/mutation gates и zero-skip правило.
+- [x] Pipeline ограничен числом итераций, останавливается на повторном failure fingerprint, не принимает environment failure как product RED и запрещает Sol менять замороженный contract surface.
+- [x] Local tree digest отделён от release SHA; production acceptance требует clean committed SHA, exact deployed revision и повторного полного gate.
 - [ ] Исполнитель перед стартом обновляет preflight и отмечает actual commits/check results; planner checkboxes выше подтверждают полноту документа, не выполнение задач.
 
 Итоговый handoff второго checkpoint: открыть ветку `codex/rollback-audit-20260921`, проверить remote и исходный checkpoint `2fc1b3bea50cc30e3356d193c9ad8f17db7f94c5`, прочитать §0.2/§0.3. **Первое действие — read-only RC0/RC1, не runtime start и не новый restore.** Frozen active DB и current #7 source должны пройти независимый SQL/authority gate; потом T20 controlled recovery, T21/T22/T23 prevention, и только затем compatible/adaptive acceptance. Empty exact и synthetic CRUD остаются PASS в своих временных границах. Документ готовится ко второму Luna commit/push в эту remote ветку; main integration/deploy/recovery не заявлены выполненными и остаются обязательными отдельными этапами после их safety gates.
