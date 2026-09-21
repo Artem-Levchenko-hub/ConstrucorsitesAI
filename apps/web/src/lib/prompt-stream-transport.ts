@@ -15,6 +15,24 @@ type StreamHandle = {
 };
 
 /**
+ * WebSocket base. By default the socket goes to the host that served the page
+ * and follows its scheme (https → wss, http → ws), so the same web image works
+ * under any domain. `NEXT_PUBLIC_WS_URL` is only for a split-origin setup
+ * (local dev: web :3000 → api :8000).
+ *
+ * `||`, not `??`: a build that defines the variable as "" must fall back to the
+ * page host instead of producing a host-less URL. Outside a browser there is no
+ * page to follow, so the base is empty — callers only open sockets in effects.
+ */
+export function wsBaseUrl(): string {
+  const configured = (process.env.NEXT_PUBLIC_WS_URL || "").replace(/\/+$/, "");
+  if (configured) return configured;
+  if (typeof window === "undefined") return "";
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}`;
+}
+
+/**
  * Opens a real WebSocket to /api/ws/projects/:id and routes server events
  * through `apply`. Returns a handle to close the socket and to send control
  * frames (resync). The session JWT cookie travels automatically on the WS
@@ -35,16 +53,11 @@ export function openRealStream(
     afterSeq?: number;
   },
 ): StreamHandle {
-  const wsBase =
-    process.env.NEXT_PUBLIC_WS_URL ??
-    (typeof window !== "undefined"
-      ? `wss://${window.location.host}`
-      : "wss://constructor.lead-generator.ru");
   const replayQuery = opts?.runId
     ? `?run_id=${encodeURIComponent(opts.runId)}&after_seq=${Math.max(0, opts.afterSeq ?? 0)}`
     : "";
   const ws = new WebSocket(
-    `${wsBase}/api/ws/projects/${projectId}${replayQuery}`,
+    `${wsBaseUrl()}/api/ws/projects/${projectId}${replayQuery}`,
   );
 
   // Keep-alive ping — many proxies (and our nginx) close idle WS at 60s.

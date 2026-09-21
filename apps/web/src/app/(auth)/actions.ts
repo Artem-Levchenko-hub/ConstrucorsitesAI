@@ -25,13 +25,32 @@ function validateCredentials(email: string, password: string): string | null {
 
 /**
  * Internal-network base URL for server-side calls (avoids the public nginx hop).
- * Falls back to the public URL if INTERNAL_API_URL is not set.
+ * Falls back to the public URL if INTERNAL_API_URL is not set — or is EMPTY
+ * (`||`, not `??`): Node cannot fetch the relative URL an empty base produces.
  */
 function apiBaseUrl(): string {
   return (
-    process.env.INTERNAL_API_URL ??
-    process.env.NEXT_PUBLIC_API_URL ??
+    process.env.INTERNAL_API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:8000"
+  );
+}
+
+/**
+ * Parent domain for the session cookie (e.g. ".example.ru" to share it across
+ * subdomains); unset = host-only cookie, which is what dev needs — browsers
+ * reject an explicit ".localhost".
+ *
+ * Deliberately a NON-public name: Next inlines every NEXT_PUBLIC_* that exists
+ * at build time, so a future build arg would silently freeze one domain into
+ * the image. The old public name is still honoured so an existing environment
+ * keeps working.
+ */
+function sessionCookieDomain(): string | undefined {
+  return (
+    process.env.COOKIE_DOMAIN ||
+    process.env.NEXT_PUBLIC_COOKIE_DOMAIN ||
+    undefined
   );
 }
 
@@ -123,10 +142,11 @@ async function callAuth(
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 7,
-    // Set to ".omniadevelop.ru" in prod env so the session cookie is visible
-    // on landing.* (marketing) and app.* (constructor). In dev, leave the env
-    // unset — browsers reject explicit ".localhost" and the request host is used.
-    domain: process.env.NEXT_PUBLIC_COOKIE_DOMAIN || undefined,
+    // Set COOKIE_DOMAIN (e.g. ".omniadevelop.ru") in the prod env so the session
+    // cookie is visible on landing.* (marketing) and app.* (constructor). In dev,
+    // leave it unset — browsers reject explicit ".localhost" and the request
+    // host is used.
+    domain: sessionCookieDomain(),
   });
   return null;
 }
@@ -229,7 +249,7 @@ export async function logoutAction() {
       value: "",
       path: "/",
       maxAge: 0,
-      domain: process.env.NEXT_PUBLIC_COOKIE_DOMAIN || undefined,
+      domain: sessionCookieDomain(),
     });
   } catch {
     // best-effort

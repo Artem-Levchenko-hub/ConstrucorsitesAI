@@ -20,7 +20,8 @@ beforeEach(() => {
   config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888" }] };
   payments = []; post = async () => Response.json(payment);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-    const path = new URL(url).pathname;
+    // Same-origin requests are relative ("/api/..."), so resolve like a browser.
+    const path = new URL(url, window.location.origin).pathname;
     if (path === "/api/max/account/access") return Response.json({ authenticated: true, email_verified: true, email_delivery_configured: true, business, can_create_project: true, reason: null, legal_document_version: "2026-07-30", payments_configured: true });
     if (path === "/api/max/account/business" && init?.method === "PUT") { const body = JSON.parse(String(init.body)); requests.push(body); business = { ...business, ...body, status: "pending" }; return Response.json(business); }
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }

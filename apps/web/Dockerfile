@@ -29,15 +29,20 @@ WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# NEXT_PUBLIC_* are inlined at build time — they MUST be supplied as
-# build args. Caller passes via `--build-arg NEXT_PUBLIC_API_URL=...`.
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_WS_URL
+# Every NEXT_PUBLIC_* that exists at build time is inlined into ALL bundles
+# (browser, node server and edge), so only domain-independent values may be
+# build args. The public domain is deliberately NOT one of them — one image
+# must run under any domain:
+#   - the browser calls the API and opens the WebSocket on the same origin that
+#     served the page (the edge proxy routes /api/ to the api);
+#   - the server reads PUBLIC_ORIGIN and INTERNAL_API_URL at run time.
+# Do NOT re-add NEXT_PUBLIC_API_URL / NEXT_PUBLIC_WS_URL here: `ENV X=$X`
+# defines X even when no --build-arg is passed, as an EMPTY string, and that
+# empty string is what gets inlined. CI greps the client bundle for the
+# production domain (.github/workflows/ci.yml, job image-build).
 ARG NEXT_PUBLIC_USE_MOCKS=false
 ARG NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=2026-07-30
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
-    NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL \
-    NEXT_PUBLIC_USE_MOCKS=$NEXT_PUBLIC_USE_MOCKS \
+ENV NEXT_PUBLIC_USE_MOCKS=$NEXT_PUBLIC_USE_MOCKS \
     NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION \
     NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { openRealStream } from "@/lib/prompt-stream-transport";
+import { openRealStream, wsBaseUrl } from "@/lib/prompt-stream-transport";
 
 class Socket {
   static OPEN = 1;
@@ -36,10 +36,31 @@ describe("prompt stream transport", () => {
     openRealStream("p", vi.fn(), options);
     expect(lastSocket().url).toBe(`wss://fixture.invalid/api/ws/projects/p${query}`);
   });
-  it("uses browser host when the configured WS base is absent", () => {
-    vi.stubEnv("NEXT_PUBLIC_WS_URL", undefined);
-    openRealStream("p", vi.fn());
-    expect(lastSocket().url).toBe(`wss://${window.location.host}/api/ws/projects/p`);
+  describe("WebSocket base — the image carries no domain, the socket follows the page", () => {
+    // Vitest exposes the live JSDOM instance; reconfigure() gives a real Location.
+    const openPage = (url: string) =>
+      (globalThis as unknown as { jsdom: { reconfigure(options: { url: string }): void } }).jsdom.reconfigure({ url });
+    afterEach(() => openPage("http://localhost:3000/"));
+
+    it.each<readonly [string, string | undefined, string, string]>([
+      ["an https page gets wss on its own host", undefined, "https://studio.example/max/1", "wss://studio.example"],
+      ["an http page gets ws, not a wss the server cannot answer", undefined, "http://localhost:3000/max/1", "ws://localhost:3000"],
+      ["a non-default page port is kept", undefined, "https://studio.example:8443/", "wss://studio.example:8443"],
+      ["an EMPTY configured value falls back to the page host", "", "https://studio.example/", "wss://studio.example"],
+      ["an absolute configured value wins over the page host", "wss://ws.example", "https://studio.example/", "wss://ws.example"],
+      ["a configured trailing slash never doubles up", "ws://localhost:8000/", "http://localhost:3000/", "ws://localhost:8000"],
+    ])("%s", (_case, configured, pageUrl, base) => {
+      vi.stubEnv("NEXT_PUBLIC_WS_URL", configured);
+      openPage(pageUrl);
+      expect(wsBaseUrl()).toBe(base);
+      openRealStream("p", vi.fn());
+      expect(lastSocket().url).toBe(`${base}/api/ws/projects/p`);
+    });
+    it("stays safe without a window: no throw and no baked-in production host", () => {
+      vi.stubEnv("NEXT_PUBLIC_WS_URL", undefined);
+      vi.stubGlobal("window", undefined);
+      expect(wsBaseUrl()).toBe("");
+    });
   });
   it("pings exactly every 25 seconds only while OPEN", () => {
     openRealStream("p", vi.fn()); const ws = lastSocket();

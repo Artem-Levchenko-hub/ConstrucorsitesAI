@@ -1,9 +1,13 @@
 import type { MetadataRoute } from "next";
 
-const PUBLIC_ORIGIN =
-  process.env.NEXT_PUBLIC_API_URL ?? "https://constructor.lead-generator.ru";
+import { publicOrigin } from "@/lib/public-origin";
+
+// Rendered per request, not once at build time: the domain is only known to the
+// running container (see lib/public-origin.ts and sitemap.ts).
+export const dynamic = "force-dynamic";
 
 export default function robots(): MetadataRoute.Robots {
+  const origin = publicOrigin();
   return {
     rules: [
       {
@@ -13,7 +17,7 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ["/account", "/billing", "/admin", "/api/", "/_next/"],
       },
     ],
-    sitemap: `${PUBLIC_ORIGIN}/sitemap.xml`,
-    host: PUBLIC_ORIGIN,
+    sitemap: `${origin}/sitemap.xml`,
+    host: origin,
   };
 }

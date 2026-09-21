@@ -1,9 +1,26 @@
 import type { ApiErrorBody, ApiErrorCode } from "./types";
 
-const baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+/**
+ * Browser-facing API base. Empty — the production default — means "same
+ * origin": the browser resolves `/api/...` against whichever domain served the
+ * page, so one web image runs under any domain. `NEXT_PUBLIC_API_URL` is only
+ * for a split-origin setup (local dev: web :3000 → api :8000, see
+ * `.env.local.example`).
+ *
+ * `||`, not `??`: Next inlines every NEXT_PUBLIC_* that exists at build time,
+ * and a Dockerfile `ENV X=$X` defines X as "" when no build arg is passed — an
+ * empty value must mean same-origin exactly like an unset one.
+ *
+ * Browser-only: Node cannot fetch a relative URL. Server code goes through
+ * `lib/api/server.ts` (INTERNAL_API_URL) instead.
+ */
+function apiBaseUrl(): string {
+  return (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
+}
 
+/** Absolute-or-same-origin URL for an API `path` (which starts with `/`). */
 export function apiUrl(path: string): string {
-  return `${baseUrl}${path}`;
+  return `${apiBaseUrl()}${path}`;
 }
 
 /**
@@ -85,7 +102,7 @@ export async function apiFetch<T>(
 
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}${path}`, {
+    response = await fetch(apiUrl(path), {
       ...rest,
       credentials: "include",
       headers: {
@@ -144,7 +161,7 @@ export async function postBlob<T>(
 ): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}${path}`, {
+    response = await fetch(apiUrl(path), {
       method: "POST",
       credentials: "include",
       headers: {

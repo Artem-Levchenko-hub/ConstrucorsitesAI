@@ -26,7 +26,8 @@ beforeEach(() => {
     return Response.json({ ...org, status: body.approved ? "verified" : "rejected" });
   };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-    const path = new URL(url).pathname;
+    // Same-origin requests are relative ("/api/..."), so resolve like a browser.
+    const path = new URL(url, window.location.origin).pathname;
     if (init?.method && init.method !== "GET") {
       const body = JSON.parse(String(init.body)); requests.push({ path, method: init.method, body }); return respondMutation(path, body);
     }

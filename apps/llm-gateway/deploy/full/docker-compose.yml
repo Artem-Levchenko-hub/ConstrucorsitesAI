@@ -617,8 +617,11 @@ services:
       context: ../../../web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
-        NEXT_PUBLIC_WS_URL: ${PUBLIC_WS_ORIGIN:-wss://constructor.lead-generator.ru}
+        # Only domain-independent values are baked into the image. The public
+        # domain is a RUN-TIME value (PUBLIC_ORIGIN below): the browser reaches
+        # the api and the WebSocket on the same origin that served the page, so
+        # the same image runs under any domain. Do not add URL build args here —
+        # infra/release/test-compose-policy.sh rejects them.
         NEXT_PUBLIC_USE_MOCKS: "false"
         NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
     image: ${WEB_IMAGE:-omnia-web:prod}
@@ -631,6 +634,9 @@ services:
       # avoiding the public nginx hop and DNS resolution.
       OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
       INTERNAL_API_URL: http://api:8000
+      # Public origin of this deployment, read per request for the absolute URLs
+      # in page metadata, sitemap.xml and robots.txt (apps/web/src/lib/public-origin.ts).
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
       NODE_ENV: production

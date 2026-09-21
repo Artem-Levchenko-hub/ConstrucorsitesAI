@@ -23,6 +23,7 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     ORCHESTRATOR_INTERNAL_TOKEN="compose-policy-orchestrator-token" \
     NEXTAUTH_SECRET="compose-policy-nextauth-secret" \
     OMNIA_RELEASE_SHA="0123456789abcdef0123456789abcdef01234567" \
+    PUBLIC_ORIGIN="https://compose-policy.example" \
     USE_MAX_FINALIZATION_COORDINATOR="true" \
     USE_PROJECT_CELL_ACTIVITY_WATCHDOG="true" \
     USE_GENERATION_EVENT_REPLAY="true" \
@@ -70,6 +71,20 @@ for key, value in expected_finalization.items():
     assert worker[key] == value
     # The deadline watchdog runs here; a missing variable must not slip through.
     assert generation_worker[key] == value
+
+# The web image is domain-agnostic: Next inlines every NEXT_PUBLIC_* build arg
+# into all bundles, so a URL build arg would freeze one domain into the image.
+# The public domain reaches the web container at run time only.
+web = services["web"]
+web_build_args = web["build"].get("args") or {}
+web_environment = web["environment"]
+assert "NEXT_PUBLIC_API_URL" not in web_build_args
+assert "NEXT_PUBLIC_WS_URL" not in web_build_args
+for name, value in web_build_args.items():
+    assert "compose-policy.example" not in str(value), name
+assert web_build_args["NEXT_PUBLIC_USE_MOCKS"] == "false"
+assert web_environment["PUBLIC_ORIGIN"] == "https://compose-policy.example"
+assert web_environment["INTERNAL_API_URL"] == "http://api:8000"
 assert "generation-report-worker" not in services
 for service in services.values():
     environment = service.get("environment", {})

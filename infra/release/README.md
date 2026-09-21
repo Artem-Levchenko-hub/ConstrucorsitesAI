@@ -243,12 +243,16 @@ for removed_name in DEV_GENERATION_TELEGRAM_REPORTS TELEGRAM_BOT_TOKEN TELEGRAM_
   jq -e --arg name "$removed_name" 'all(.services[]; ((.environment // {}) | has($name) | not))' "$rendered_compose" >/dev/null
 done
 
-web_api_url="$(jq -er '.services.web.build.args.NEXT_PUBLIC_API_URL' "$rendered_compose")"
-web_ws_url="$(jq -er '.services.web.build.args.NEXT_PUBLIC_WS_URL' "$rendered_compose")"
+# The web image is domain-agnostic: it takes no URL build args (Next would inline
+# them into every bundle). The public domain reaches the container at run time
+# through PUBLIC_ORIGIN; the browser uses the same origin that served the page.
+jq -e '(.services.web.build.args // {}) | (has("NEXT_PUBLIC_API_URL") or has("NEXT_PUBLIC_WS_URL")) | not' "$rendered_compose" >/dev/null
+public_origin="$(jq -er '.services.web.environment.PUBLIC_ORIGIN' "$rendered_compose")"
+public_origin="${public_origin%/}"
 legal_version="$(jq -er '.services.web.build.args.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION' "$rendered_compose")"
 # Stack templates are baked into the api image (named build context).
 docker build --build-context templates=apps/orchestrator/templates -t "omnia-api:$RELEASE_SHA" apps/api
-docker build --build-arg "NEXT_PUBLIC_API_URL=$web_api_url" --build-arg "NEXT_PUBLIC_WS_URL=$web_ws_url" --build-arg NEXT_PUBLIC_USE_MOCKS=false --build-arg "NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$legal_version" -t "omnia-web:$RELEASE_SHA" apps/web
+docker build --build-arg NEXT_PUBLIC_USE_MOCKS=false --build-arg "NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$legal_version" -t "omnia-web:$RELEASE_SHA" apps/web
 docker image inspect "omnia-api:$RELEASE_SHA" "omnia-web:$RELEASE_SHA" >/dev/null
 ~~~
 
@@ -298,6 +302,10 @@ test "$(jq -r .release_sha <<<"$web")" = "$RELEASE_SHA"
 test "$(jq -r .release_sha <<<"$api")" = "$RELEASE_SHA"
 test "$(jq -r .dependencies.worker_release_sha <<<"$api")" = "$RELEASE_SHA"
 test "$(jq -r .release_sha <<<"$orchestrator")" = "$RELEASE_SHA"
+# The domain is a run-time value of the web container, not part of the image:
+# robots.txt must carry the rendered PUBLIC_ORIGIN, not a build-time default.
+robots="$(fetch_health http://127.0.0.1:3100/robots.txt)"
+grep -Fx "Sitemap: $public_origin/sitemap.xml" <<<"$robots" >/dev/null
 
 public_web="$(fetch_health https://constructor.lead-generator.ru/web-health)"
 public_api="$(fetch_health https://constructor.lead-generator.ru/api/health)"

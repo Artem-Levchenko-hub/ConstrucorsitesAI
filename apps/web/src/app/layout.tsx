@@ -3,6 +3,7 @@ import { Geist, Inter, JetBrains_Mono, Outfit } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
 import "./globals.css";
+import { publicOrigin } from "@/lib/public-origin";
 import { Providers } from "./providers";
 
 const inter = Inter({
@@ -33,9 +34,6 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-const PUBLIC_ORIGIN =
-  process.env.NEXT_PUBLIC_API_URL ?? "https://constructor.lead-generator.ru";
-
 const SITE_NAME = "Omnia.AI";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -43,9 +41,12 @@ export async function generateMetadata(): Promise<Metadata> {
 
   const title = t("title");
   const description = t("description");
+  // Per request, never module scope: the domain belongs to the running
+  // container, not to the image (see lib/public-origin.ts).
+  const origin = publicOrigin();
 
   return {
-    metadataBase: new URL(PUBLIC_ORIGIN),
+    metadataBase: new URL(origin),
     title: {
       default: title,
       template: "%s · Omnia.AI",
@@ -75,7 +76,7 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: SITE_NAME,
       title,
       description,
-      url: PUBLIC_ORIGIN,
+      url: origin,
       images: [
         {
           url: "/og.png",
@@ -126,18 +127,21 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const ORG_JSON_LD = {
-  "@context": "https://schema.org",
-  "@type": "Organization",
-  name: SITE_NAME,
-  url: PUBLIC_ORIGIN,
-  logo: `${PUBLIC_ORIGIN}/icon.svg`,
-  sameAs: [
-    // Fill in as accounts are created
-    // "https://t.me/omnia_ai",
-    // "https://vk.com/omnia_ai",
-  ],
-};
+/** Built per request for the same reason as the metadata: the origin is a run-time value. */
+function organizationJsonLd(origin: string) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: SITE_NAME,
+    url: origin,
+    logo: `${origin}/icon.svg`,
+    sameAs: [
+      // Fill in as accounts are created
+      // "https://t.me/omnia_ai",
+      // "https://vk.com/omnia_ai",
+    ],
+  };
+}
 
 const APP_JSON_LD = {
   "@context": "https://schema.org",
@@ -160,6 +164,7 @@ export default async function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const locale = await getLocale();
   const messages = await getMessages();
+  const orgJsonLd = organizationJsonLd(publicOrigin());
 
   return (
     <html
@@ -169,7 +174,7 @@ export default async function RootLayout({
       <head>
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(ORG_JSON_LD) }}
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}
         />
         <script
           type="application/ld+json"

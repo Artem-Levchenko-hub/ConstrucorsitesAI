@@ -257,6 +257,23 @@ jobs:
         run: bash infra/release/test-compose-policy.sh
       - name: Build production API and web images
         run: docker compose -f apps/llm-gateway/deploy/full/docker-compose.yml build api web
+      - name: Verify the web client bundle carries no production domain
+        run: |
+          # One web image must run under any domain: the browser talks to the
+          # origin that served the page, so the production hostname must never
+          # be inlined into the static client bundle again.
+          web_scan=(docker run --rm --network none --read-only --cap-drop ALL
+            --security-opt no-new-privileges:true --pids-limit 64 --memory 256m)
+          bundle_files="$("${web_scan[@]}" --entrypoint find omnia-web:prod /app/.next/static -type f -name '*.js' | wc -l | tr -d '[:space:]')"
+          test "$bundle_files" -gt 0
+          status=0
+          "${web_scan[@]}" --entrypoint grep omnia-web:prod \
+            -rlF "constructor.lead-generator.ru" /app/.next/static || status=$?
+          case "$status" in
+            1) echo "client bundle is domain-agnostic ($bundle_files JS files scanned)" ;;
+            0) echo "::error::the production domain is inlined into the web client bundle (files listed above)"; exit 1 ;;
+            *) echo "::error::client bundle scan did not run (exit $status)"; exit 1 ;;
+          esac
       - name: Verify packaged API templates without source mounts or network
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \

@@ -18,10 +18,11 @@ export type SessionUser = {
   status: string;
 };
 
+/** Same order and empty-value rule as `lib/api/server.ts:apiBaseUrl`. */
 function apiBaseUrl(): string {
   return (
-    process.env.INTERNAL_API_URL ??
-    process.env.NEXT_PUBLIC_API_URL ??
+    process.env.INTERNAL_API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:8000"
   );
 }

@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, apiUrl } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
 import type { Project, ProjectTemplate } from "./types";
 
@@ -35,8 +35,7 @@ export async function downloadProjectFiles(
   projectId: string,
   slug?: string,
 ): Promise<void> {
-  const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  const res = await fetch(`${base}/api/projects/${projectId}/download`, {
+  const res = await fetch(apiUrl(`/api/projects/${projectId}/download`), {
     credentials: "include",
   });
   if (!res.ok) {

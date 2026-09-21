@@ -96,7 +96,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
-afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("image version history", () => {
   it("keeps the visual rail compact and uses each version's own mobile image", () => {
@@ -578,10 +578,14 @@ describe("image version history", () => {
     act(() => socket!.onmessage!({ data: JSON.stringify({ type, data: { message_id: "a", error: "failure" } }) })); await settle(); await settle();
     expect(document.querySelector("[data-testid='max-history-event-33']")?.textContent).toContain(type === "llm.error" ? "Не завершилась" : "Отменена");
   });
-  it("resolves API-relative authenticated images against the configured API origin", () => {
+  it.each<readonly [string, string | undefined, string]>([
+    ["the page's own origin when no API origin is configured", undefined, ""],
+    ["a configured split API origin", "https://api.example", "https://api.example"],
+  ])("resolves API-relative authenticated images against %s", (_case, configured, base) => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", configured);
     render(<Preview versions={[version(31, { previews: [{ url: "/api/projects/p/snapshots/s31/previews/0", width: 390, height: 1000, route: "/" }] })]} />);
-    expect(image()?.getAttribute("src")).toBe("http://localhost:8000/api/projects/p/snapshots/s31/previews/0");
-    expect(container.querySelector<HTMLImageElement>("[data-testid='max-version-31'] img")?.getAttribute("src")).toBe("http://localhost:8000/api/projects/p/snapshots/s31/previews/0");
+    expect(image()?.getAttribute("src")).toBe(`${base}/api/projects/p/snapshots/s31/previews/0`);
+    expect(container.querySelector<HTMLImageElement>("[data-testid='max-version-31'] img")?.getAttribute("src")).toBe(`${base}/api/projects/p/snapshots/s31/previews/0`);
   });
   it("shows reconstructed capture provenance in the prompt dialog outside the phone", () => {
     render(<Preview versions={[version(32), version(31, { previews: [{ url: "/rebuilt.png", width: 390, height: 1200, route: "/", reconstructed: true }] })]} />);

@@ -11,10 +11,16 @@ import { cookies } from "next/headers";
 
 const COOKIE_NAME = "omnia_session";
 
+/**
+ * API base for server-side fetches: the internal network address first (a
+ * run-time value, set in the prod compose), then the public one for a
+ * split-origin dev setup, then the dev default. `||`, not `??`: an EMPTY value
+ * must fall through — Node cannot fetch the relative URL it would produce.
+ */
 function apiBaseUrl(): string {
   return (
-    process.env.INTERNAL_API_URL ??
-    process.env.NEXT_PUBLIC_API_URL ??
+    process.env.INTERNAL_API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
     "http://localhost:8000"
   );
 }

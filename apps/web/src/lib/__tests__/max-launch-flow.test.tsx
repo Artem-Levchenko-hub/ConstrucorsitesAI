@@ -42,7 +42,8 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit = {}) => {
-    const path = new URL(url).pathname;
+    // Same-origin requests are relative ("/api/..."), so resolve like a browser.
+    const path = new URL(url, window.location.origin).pathname;
     const method = init.method ?? "GET";
     calls.push({ path, method, body: init.body ? JSON.parse(String(init.body)) : null });
     let response: unknown;
