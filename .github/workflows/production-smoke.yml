@@ -36,6 +36,8 @@ env:
   PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA }}
   PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_GENERATION_WORKER_RELEASE_SHA }}
   SMOKE_ARTIFACT_PATH: smoke.json
+  # The revision this run certifies, declared explicitly rather than inherited.
+  SMOKE_RUNNER_SHA: ${{ github.sha }}
 
 jobs:
   smoke:

@@ -110,3 +110,173 @@ def test_inspect_is_not_a_mutating_phase() -> None:
     assert "inspect" not in MUTATING_PHASES
     assert MUTATING_PHASES[0] == "clone_witness"
     assert MUTATING_PHASES[-1] == "complete"
+
+
+# --------------------------------------------------------------------------- #
+# Инспекция и свидетель: оригинал не запускается и не изменяется
+# --------------------------------------------------------------------------- #
+
+
+class _Recorder:
+    """Двойник docker: записывает каждый вызов и отвечает заранее заданным."""
+
+    def __init__(self, answers: dict[str, object] | None = None) -> None:
+        self.calls: list[list[str]] = []
+        self.answers = answers or {}
+
+    def run(self, args, *, timeout: float = 600.0):  # type: ignore[no-untyped-def]
+        from omnia_orchestrator.services.restoration_recovery import CommandResult
+
+        self.calls.append(list(args))
+        key = " ".join(args[:2])
+        answer = self.answers.get(key)
+        if isinstance(answer, CommandResult):
+            return answer
+        if key == "volume inspect":
+            return CommandResult(0, '{"Name": "x"}')
+        return CommandResult(0, "")
+
+
+def _registry(intent) -> dict[str, object]:  # type: ignore[no-untyped-def]
+    return {
+        "workspace_id": str(intent.workspace_id),
+        "active_code_volume": intent.active_code_volume,
+        "active_database_volume": intent.active_database_volume,
+    }
+
+
+def test_inspection_never_starts_postgres_or_writes_original_volume() -> None:
+    from omnia_orchestrator.services.restoration_recovery import inspect_recovery
+
+    intent = _intent()
+    recorder = _Recorder()
+
+    report = inspect_recovery(intent, runner=recorder, registry=_registry(intent))
+
+    assert report.ok is True and report.phase == "inspect"
+    forbidden = ("run", "start", "exec", "rm", "cp", "commit", "volume create", "volume rm")
+    for call in recorder.calls:
+        head = " ".join(call[:2])
+        assert call[0] not in ("run", "start", "exec", "rm", "cp", "commit"), call
+        assert head not in ("volume create", "volume rm"), call
+        # Оригинальный том упоминается только в фильтре чтения, никогда как монтирование.
+        assert not any(
+            part.startswith(f"{intent.active_database_volume}:") for part in call
+        ), call
+    assert forbidden  # список зафиксирован намеренно
+
+
+def test_inspection_refuses_a_registry_that_names_another_volume() -> None:
+    from omnia_orchestrator.services.restoration_recovery import inspect_recovery
+
+    intent = _intent()
+    registry = _registry(intent) | {
+        "active_database_volume": f"omnia-machine-{_HEX32}-app-postgres-data"
+    }
+
+    report = inspect_recovery(intent, runner=_Recorder(), registry=registry)
+
+    assert report.ok is False
+    assert any(f.check == "registry_database_binding" and not f.ok for f in report.findings)
+
+
+def test_inspection_stops_when_something_still_holds_the_database() -> None:
+    from omnia_orchestrator.services.restoration_recovery import CommandResult, inspect_recovery
+
+    intent = _intent()
+    recorder = _Recorder({"ps --filter": CommandResult(0, "abc123\n")})
+
+    report = inspect_recovery(intent, runner=recorder, registry=_registry(intent))
+
+    assert report.ok is False
+    assert any(f.check == "database_volume_detached" and not f.ok for f in report.findings)
+
+
+def test_the_witness_mounts_the_original_read_only_and_starts_only_the_clone() -> None:
+    from omnia_orchestrator.services.restoration_recovery import (
+        SCRATCH_PREFIX,
+        CommandResult,
+        clone_witness,
+    )
+
+    intent = _intent()
+    recorder = _Recorder({"exec --env": CommandResult(0, "1")})
+
+    report = clone_witness(
+        intent,
+        runner=recorder,
+        postgres_image="postgres@sha256:" + "a" * 64,
+        helper_image="helper@sha256:" + "b" * 64,
+        witness_sql=["select count(*) from qa_clients"],
+    )
+
+    assert report.ok is True and report.witness_digest is not None
+    mounts = [part for call in recorder.calls for part in call if ":" in part and "/" in part]
+    original = [m for m in mounts if m.startswith(intent.active_database_volume)]
+    assert original and all(m.endswith(":ro") for m in original), original
+    # Запускается только копия, и только под именем этого прогона.
+    started = [call for call in recorder.calls if call[:2] == ["run", "--detach"]]
+    assert len(started) == 1
+    assert started[0][started[0].index("--name") + 1].startswith(SCRATCH_PREFIX)
+    assert not any(
+        part.startswith(f"{intent.active_database_volume}:{'/var'}") for part in started[0]
+    )
+
+
+def test_the_witness_removes_only_its_own_resources_even_on_failure() -> None:
+    from omnia_orchestrator.services.restoration_recovery import (
+        SCRATCH_PREFIX,
+        CommandResult,
+        clone_witness,
+    )
+
+    intent = _intent()
+    recorder = _Recorder({"run --rm": CommandResult(1, "", "copy failed")})
+
+    report = clone_witness(
+        intent,
+        runner=recorder,
+        postgres_image="postgres@sha256:" + "a" * 64,
+        helper_image="helper@sha256:" + "b" * 64,
+        witness_sql=["select 1"],
+    )
+
+    assert report.ok is False
+    removals = [
+        call for call in recorder.calls if call[0] == "rm" or call[:2] == ["volume", "rm"]
+    ]
+    assert removals, "scratch resources must be released"
+    for call in removals:
+        assert any(part.startswith(SCRATCH_PREFIX) for part in call), call
+        assert intent.active_database_volume not in call
+        assert intent.active_code_volume not in call
+
+
+def test_a_read_only_sql_failure_is_reported_not_swallowed() -> None:
+    from omnia_orchestrator.services.restoration_recovery import CommandResult, clone_witness
+
+    intent = _intent()
+    recorder = _Recorder({"exec --env": CommandResult(1, "", "relation does not exist")})
+
+    report = clone_witness(
+        intent,
+        runner=recorder,
+        postgres_image="postgres@sha256:" + "a" * 64,
+        helper_image="helper@sha256:" + "b" * 64,
+        witness_sql=["select count(*) from qa_clients"],
+    )
+
+    assert report.ok is False and report.witness_digest is None
+    assert any(f.check == "sql_witness" and not f.ok for f in report.findings)
+    # Текст ошибки базы наружу не выносится.
+    assert all("relation does not exist" not in f.detail for f in report.findings)
+
+
+def test_refusing_to_touch_a_resource_outside_this_recovery() -> None:
+    from omnia_orchestrator.services.restoration_recovery import ScratchPool
+
+    pool = ScratchPool(_Recorder())
+    pool.volumes.append("omnia-machine-891ed2449b00458babf49f23f194aaab-db-x")
+
+    with pytest.raises(ValueError, match="outside this recovery"):
+        pool.release()

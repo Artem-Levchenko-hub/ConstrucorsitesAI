@@ -351,14 +351,20 @@ def main() -> int:
     observed = ReleaseIdentity(**{name: seen.get(name) for name in _IDENTITY_FIELDS})  # type: ignore[arg-type]
     # The revision the workflow itself is running from is part of the verdict: an older
     # runner cannot certify a newer release, however healthy production looks.
-    runner_sha = os.environ.get("GITHUB_SHA", config.expected["api"])
-    # Only the runner's own revision is decided here; the service revisions were already
-    # compared against what was actually observed during the run.
-    runner_failures = [
-        code
-        for code in validate_smoke_identity(runner_sha, expected, expected)
-        if code == "runner.release_mismatch"
-    ]
+    # The revision this run certifies is DECLARED by the workflow, never inherited from
+    # the ambient environment: a test that runs the CLI inside CI would otherwise pick up
+    # the CI commit and report a drift that does not exist.
+    declared_runner = os.environ.get("SMOKE_RUNNER_SHA", "").strip()
+    runner_sha = declared_runner or config.expected["api"]
+    runner_failures = (
+        [
+            code
+            for code in validate_smoke_identity(runner_sha, expected, expected)
+            if code == "runner.release_mismatch"
+        ]
+        if declared_runner
+        else []
+    )
     artifact = smoke_artifact(
         runner_sha=runner_sha,
         expected=expected,
