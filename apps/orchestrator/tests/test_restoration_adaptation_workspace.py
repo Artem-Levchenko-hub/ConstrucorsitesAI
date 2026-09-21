@@ -531,6 +531,141 @@ async def test_docker_prepare_matching_running_pair_is_idempotent(
     assert setup.candidate_calls == [setup.candidate_id]
 
 
+async def test_docker_proof_keeps_phase_labels_out_of_physical_inventory_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnia_orchestrator.routers.runtime import _workspace_revision
+    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+
+    request = _request()
+    source_files = {"src/app/page.tsx": "export default function Page(){return 'source'}"}
+    candidate_files = {
+        "src/app/page.tsx": "export default function Page(){return 'candidate'}"
+    }
+    request = request.model_copy(
+        update={"source_workspace_revision": _workspace_revision(source_files)}
+    )
+    candidate_id = uuid5(
+        request.operation_id,
+        f"restoration-adaptation:{request.generation_run_id}",
+    )
+    proof = _proof_request(request, "a" * 64).model_copy(
+        update={
+            "candidate_workspace_id": candidate_id,
+            "candidate_workspace_revision": _workspace_revision(candidate_files),
+            "candidate_artifact_digest": DockerAdaptationWorkspaceEngine._files_digest(
+                candidate_files
+            ),
+            "source_database_digest": "d" * 64,
+        }
+    )
+    source_state = SimpleNamespace(
+        project_id=request.project_id,
+        owner_id=request.owner_id,
+        active_generation_run_id=request.generation_run_id,
+        active_generation_fencing_epoch=request.fencing_epoch,
+    )
+    candidate_state = SimpleNamespace(
+        project_id=request.project_id,
+        owner_id=request.owner_id,
+        active_generation_run_id=request.generation_run_id,
+        active_generation_fencing_epoch=proof.candidate_fencing_epoch,
+    )
+    source = SimpleNamespace(
+        workspace_volume="source-code",
+        project_postgres_password="source-password",
+        internal_network="source-network",
+        project_postgres_volume="source-db",
+    )
+    candidate = SimpleNamespace(
+        workspace_volume="candidate-code",
+        project_postgres_password="candidate-password",
+        internal_network="candidate-network",
+        project_postgres_volume="candidate-db",
+    )
+
+    class Lock:
+        def hold(self, _workspace_id):
+            return self
+
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *_args):
+            return None
+
+    source_manager = SimpleNamespace(
+        operation_lock=Lock(),
+        state_store=SimpleNamespace(load=lambda _workspace_id: source_state),
+        machine_runtime=SimpleNamespace(parts=lambda _state: (object(), source)),
+    )
+
+    async def read_candidate_source(_volume):
+        return {path: content.encode() for path, content in candidate_files.items()}
+
+    candidate_manager = SimpleNamespace(
+        operation_lock=Lock(),
+        state_store=SimpleNamespace(load=lambda _workspace_id: candidate_state),
+        machine_runtime=SimpleNamespace(parts=lambda _state: (object(), candidate)),
+        docker=SimpleNamespace(read_workspace_source_files=read_candidate_source),
+    )
+    engine = DockerAdaptationWorkspaceEngine()
+    monkeypatch.setattr(engine, "_manager", lambda _workspace_id: source_manager)
+    monkeypatch.setattr(
+        engine,
+        "_database_digests",
+        lambda *_args: ("d" * 64, "e" * 64),
+    )
+    monkeypatch.setattr(
+        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        lambda _manager, _settings: candidate_manager,
+    )
+    monkeypatch.setattr(
+        "omnia_orchestrator.core.config.get_settings",
+        lambda: object(),
+    )
+
+    async def read_files(manager, volume):
+        if manager is source_manager and volume == "source-code":
+            return source_files
+        assert manager is candidate_manager and volume == "candidate-code"
+        return candidate_files
+
+    monkeypatch.setattr(
+        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        read_files,
+    )
+    observed: list[str] = []
+
+    def observe(_backend, *, observed_on):
+        observed.append(observed_on)
+        return InventoryReport(
+            presence="empty",
+            coverage="complete",
+            schema_analysis="complete",
+            observed_on=observed_on,
+        )
+
+    contract = SimpleNamespace(model_dump=lambda **_kwargs: {"tables": []})
+    monkeypatch.setattr(module, "observe_database", observe)
+    monkeypatch.setattr(module, "catalog_contract", lambda _backend: (contract, []))
+    monkeypatch.setattr(
+        module,
+        "content_inventory_partition_digests",
+        lambda *_args: ("b" * 64, "c" * 64),
+    )
+    monkeypatch.setattr(
+        "omnia_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
+        lambda *_args: (_ for _ in ()).throw(CellIdentityConflict("invalid probe")),
+    )
+
+    result = await engine.prove(request, proof)
+
+    assert result.state == "migration_required"
+    assert result.reason_code == "probe_rehearsal_failed"
+    assert observed == ["source", "candidate_copy", "candidate_copy", "source"]
+
+
 @pytest.mark.parametrize(
     "changed",
     [

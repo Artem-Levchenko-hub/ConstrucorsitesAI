@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -77,6 +78,7 @@ def restoration_request_digest(
 CONTROLLER_WAIT_STATES = frozenset({"preparing", "checking", "applying", "reconciling"})
 _RECONCILE_DELAYS_SECONDS = (3, 5, 10, 20, 30)
 AUTOMATIC_EXECUTION_POLICY = "automatic_when_safe"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def reconcile_delay_seconds(attempts: int) -> int:
@@ -376,6 +378,10 @@ def _adaptation_proof_intent(
     }:
         raise ApiError("conflict", "Restoration adaptation proof request is invalid", 409)
     raw_workspace = raw_request.get("workspace")
+    candidate_fencing_epoch = raw_request.get("candidate_fencing_epoch")
+    candidate_revision = raw_request.get("candidate_workspace_revision")
+    candidate_proof_key = raw_request.get("candidate_proof_key")
+    proof_attempt = raw_request.get("proof_attempt")
     if not isinstance(raw_workspace, dict):
         raise ApiError("conflict", "Restoration adaptation proof workspace is invalid", 409)
     try:
@@ -393,23 +399,28 @@ def _adaptation_proof_intent(
             for path, content in candidate_files.items()
         )
         or not isinstance(artifact_digest, str)
+        or _SHA256_RE.fullmatch(artifact_digest) is None
         or artifact_digest != canonical_files_digest(candidate_files)
         or raw_request.get("candidate_artifact_digest") != artifact_digest
         or raw_request.get("candidate_workspace_id") != str(workspace.candidate_workspace_id)
-        or raw_request.get("candidate_fencing_epoch") != workspace.candidate_fencing_epoch
-        or not isinstance(raw_request.get("candidate_workspace_revision"), str)
-        or not isinstance(raw_request.get("candidate_proof_key"), str)
-        or type(raw_request.get("proof_attempt")) is not int
-        or cast(int, raw_request["proof_attempt"]) < 1
+        or type(candidate_fencing_epoch) is not int
+        or candidate_fencing_epoch < 1
+        or candidate_fencing_epoch != workspace.candidate_fencing_epoch
+        or type(candidate_revision) is not str
+        or _SHA256_RE.fullmatch(candidate_revision) is None
+        or type(candidate_proof_key) is not str
+        or _SHA256_RE.fullmatch(candidate_proof_key) is None
+        or type(proof_attempt) is not int
+        or proof_attempt < 1
     ):
         raise ApiError("conflict", "Restoration adaptation proof binding changed", 409)
     return (
         workspace,
         cast(dict[str, str], candidate_files),
         artifact_digest,
-        cast(str, raw_request["candidate_workspace_revision"]),
-        cast(str, raw_request["candidate_proof_key"]),
-        cast(int, raw_request["proof_attempt"]),
+        candidate_revision,
+        candidate_proof_key,
+        proof_attempt,
     )
 
 
@@ -1106,6 +1117,167 @@ async def adaptation_activation_holds_generation_lease(
             (isinstance(proof, dict) and proof.get("state") == "proof_ready")
             or (isinstance(attempt, dict) and attempt.get("status") == "issued")
         )
+
+
+async def adaptation_activation_handoff_pending(
+    factory: async_sessionmaker[AsyncSession], generation_run_id: UUID
+) -> bool:
+    """Recognize only a complete controller-owned adaptation outbox.
+
+    The generation executor must never replay an already-started model turn. Once
+    finalization has durably handed a proof or activation command to the
+    restoration reconciler, it also must not misclassify that intentional handoff
+    as a crashed executor. Invalid or incomplete journals remain ordinary orphans.
+    """
+
+    async with factory() as session:
+        run_hint = await session.get(GenerationRun, generation_run_id)
+        if run_hint is None or run_hint.status != "running":
+            return False
+        root_hint = run_hint.agent_state if isinstance(run_hint.agent_state, dict) else {}
+        raw_binding = root_hint.get("restoration_adaptation")
+        if not isinstance(raw_binding, dict):
+            return False
+        try:
+            operation_id = UUID(str(raw_binding["operation_id"]))
+            _, operation = await _owned_operation(
+                session,
+                run_hint.project_id,
+                run_hint.user_id,
+                operation_id,
+            )
+        except (ApiError, KeyError, TypeError, ValueError):
+            await session.rollback()
+            return False
+        run = await session.get(GenerationRun, generation_run_id, with_for_update=True)
+        if run is None or run.status != "running":
+            await session.commit()
+            return False
+        root = run.agent_state if isinstance(run.agent_state, dict) else {}
+        binding = root.get("restoration_adaptation")
+        raw_finalization = root.get("max_finalization")
+        finalization = raw_finalization if isinstance(raw_finalization, dict) else {}
+        raw_command = operation.activation_request
+        try:
+            raw_command_digest = _digest(raw_command) if isinstance(raw_command, dict) else None
+        except (TypeError, ValueError):
+            raw_command_digest = None
+        if (
+            not isinstance(binding, dict)
+            or binding.get("operation_id") != str(operation.id)
+            or binding.get("adaptation_run_id") != str(run.id)
+            or operation.selected_branch != "adaptive"
+            or operation.adaptation_run_id != run.id
+            or operation.project_id != run.project_id
+            or operation.owner_id != run.user_id
+            or operation.state not in {"applying", "reconciling"}
+            or not isinstance(operation.phase, str)
+            or not operation.phase.startswith("activation_")
+            or not isinstance(raw_command, dict)
+            or operation.activation_request_digest != raw_command_digest
+        ):
+            await session.commit()
+            return False
+        if "proof_request" in raw_command:
+            try:
+                (
+                    workspace,
+                    _files,
+                    artifact_digest,
+                    candidate_revision,
+                    candidate_proof_key,
+                    proof_attempt,
+                ) = _adaptation_proof_intent(raw_command)
+            except ApiError:
+                await session.commit()
+                return False
+            raw_attempt = finalization.get("restoration_adaptation_proof_attempt")
+            attempt = raw_attempt if isinstance(raw_attempt, dict) else {}
+            attempt_number = attempt.get("number")
+            attempt_fencing_epoch = attempt.get("candidate_fencing_epoch")
+            valid = bool(
+                operation.phase == "activation_proof_intent"
+                and not operation.activation_effects_admitted
+                and workspace.source_workspace_id == operation.workspace_id
+                and workspace.operation_id == operation.id
+                and workspace.project_id == run.project_id
+                and workspace.owner_id == run.user_id
+                and workspace.generation_run_id == run.id
+                and attempt.get("status") == "issued"
+                and type(attempt_number) is int
+                and attempt_number > 0
+                and attempt_number == proof_attempt
+                and attempt.get("candidate_workspace_id")
+                == str(workspace.candidate_workspace_id)
+                and type(attempt_fencing_epoch) is int
+                and attempt_fencing_epoch > 0
+                and attempt_fencing_epoch == workspace.candidate_fencing_epoch
+                and attempt.get("candidate_workspace_revision") == candidate_revision
+                and attempt.get("candidate_proof_key") == candidate_proof_key
+                and attempt.get("candidate_artifact_digest") == artifact_digest
+            )
+            await session.commit()
+            return valid
+
+        raw_proof = finalization.get("restoration_adaptation_proof")
+        proof = raw_proof if isinstance(raw_proof, dict) else {}
+        if proof.get("state") != "proof_ready":
+            await session.commit()
+            return False
+        if "offer_request" in raw_command:
+            raw_offer_request = raw_command.get("offer_request")
+            candidate_files = raw_command.get("candidate_files")
+            offer_artifact_digest = raw_command.get("candidate_artifact_digest")
+            try:
+                offer_request = RestorationAdaptationActivationOfferRequest.model_validate_json(
+                    json.dumps(raw_offer_request), strict=True
+                )
+                expected_offer_request = _activation_offer_request(
+                    operation=operation, run=run, proof=proof
+                )
+            except (ApiError, TypeError, ValueError):
+                await session.commit()
+                return False
+            valid = bool(
+                operation.phase
+                in {"activation_offer_intent", "activation_offer", "activation_cancel"}
+                and isinstance(candidate_files, dict)
+                and all(
+                    isinstance(path, str) and isinstance(content, str)
+                    for path, content in candidate_files.items()
+                )
+                and isinstance(offer_artifact_digest, str)
+                and offer_artifact_digest
+                == canonical_files_digest(cast(dict[str, str], candidate_files))
+                and offer_request == expected_offer_request
+            )
+            await session.commit()
+            return valid
+        try:
+            command = RestorationAdaptationActivationCommand.model_validate_json(
+                json.dumps(raw_command), strict=True
+            )
+        except (TypeError, ValueError):
+            await session.commit()
+            return False
+        valid = bool(
+            operation.phase
+            in {
+                "activation_intent",
+                "activation_status",
+                "activation_cancel",
+            }
+            and operation.activation_id == command.offer.activation_id
+            and operation.adaptation_planned_commit_sha == command.planned_commit_sha
+            and operation.activation_request_digest == command.digest()
+            and command.offer.operation_id == operation.id
+            and command.offer.project_id == run.project_id
+            and command.offer.owner_id == run.user_id
+            and command.offer.generation_run_id == run.id
+            and command.offer.proof_digest == proof.get("proof_digest")
+        )
+        await session.commit()
+        return valid
 
 
 async def _resume_restoration_adaptation_activation(

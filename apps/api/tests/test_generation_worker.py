@@ -117,6 +117,70 @@ async def _bind_adaptation(session: AsyncSession, run: GenerationRun) -> Restora
     return operation
 
 
+async def _bind_adaptation_proof_handoff(
+    session: AsyncSession,
+    run: GenerationRun,
+) -> Restoration:
+    from omnia_api.services import restorations
+    from omnia_api.services.promotion_permit import canonical_files_digest
+
+    operation = await _bind_adaptation(session, run)
+    workspace = await session.get(ProjectCellWorkspace, operation.workspace_id)
+    assert workspace is not None
+    candidate_workspace_id = uuid4()
+    files = {"src/app/page.tsx": "export default function Page(){return 'adapted'}"}
+    artifact_digest = canonical_files_digest(files)
+    proof_request = {
+        "workspace": {
+            "source_workspace_id": str(workspace.id),
+            "candidate_workspace_id": str(candidate_workspace_id),
+            "operation_id": str(operation.id),
+            "project_id": str(run.project_id),
+            "owner_id": str(run.user_id),
+            "generation_run_id": str(run.id),
+            "candidate_fencing_epoch": 2,
+            "source_database_digest": "1" * 64,
+            "proof_digest": "2" * 64,
+            "capabilities": {
+                "portable_machine": True,
+                "database_admin": "isolated_copy",
+                "restoration_adaptation_database_copy_v1": True,
+            },
+        },
+        "candidate_workspace_id": str(candidate_workspace_id),
+        "candidate_fencing_epoch": 2,
+        "candidate_workspace_revision": "3" * 64,
+        "candidate_proof_key": "4" * 64,
+        "candidate_artifact_digest": artifact_digest,
+        "proof_attempt": 1,
+    }
+    intent = {
+        "proof_request": proof_request,
+        "candidate_files": files,
+        "candidate_artifact_digest": artifact_digest,
+    }
+    operation.state = "applying"
+    operation.phase = "activation_proof_intent"
+    operation.activation_request = intent
+    operation.activation_request_digest = restorations._digest(intent)
+    run.agent_state = {
+        **run.agent_state,
+        "max_finalization": {
+            "restoration_adaptation_proof_attempt": {
+                "number": 1,
+                "status": "issued",
+                "candidate_workspace_id": str(candidate_workspace_id),
+                "candidate_fencing_epoch": 2,
+                "candidate_workspace_revision": "3" * 64,
+                "candidate_proof_key": "4" * 64,
+                "candidate_artifact_digest": artifact_digest,
+            }
+        },
+    }
+    await session.flush()
+    return operation
+
+
 async def test_adaptive_pre_offer_cancel_terminalizes_run_and_sets_tombstone(
     db_session,
 ) -> None:
@@ -566,6 +630,208 @@ async def test_claimed_orphan_terminalizes_bound_adaptation(
     assert len(callbacks) == 4
     assert callbacks[-1]["operation_id"] == operation.id
     assert callbacks[-1]["state"] == "terminal"
+
+
+async def test_claimed_adaptation_proof_handoff_waits_for_reconciliation(
+    db_session, test_engine, monkeypatch
+):
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    run.execution_started_at = datetime.now(UTC)
+    run.status = "running"
+    operation = await _bind_adaptation_proof_handoff(db_session, run)
+    await db_session.commit()
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+    executions: list[object] = []
+
+    async def must_not_replay(**kwargs):
+        executions.append(kwargs)
+
+    monkeypatch.setattr(lifecycle, "_process_prompt", must_not_replay)
+
+    assert not await generation.execute_dispatch(run.id)
+
+    await db_session.refresh(run)
+    await db_session.refresh(operation)
+    assert executions == []
+    assert run.status == "running"
+    assert run.error is None
+    assert operation.state == "applying"
+    assert operation.phase == "activation_proof_intent"
+    assert operation.activation_request is not None
+
+
+async def test_claimed_proof_ready_offer_handoff_waits_for_reconciliation(
+    db_session, test_engine, monkeypatch
+):
+    from omnia_api.services import restorations
+
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    run.execution_started_at = datetime.now(UTC)
+    run.status = "running"
+    operation = await _bind_adaptation_proof_handoff(db_session, run)
+    proof_intent = operation.activation_request
+    assert isinstance(proof_intent, dict)
+    proof_request = proof_intent["proof_request"]
+    assert isinstance(proof_request, dict)
+    proof = {
+        "state": "proof_ready",
+        "candidate_workspace_id": proof_request["candidate_workspace_id"],
+        "candidate_fencing_epoch": proof_request["candidate_fencing_epoch"],
+        "candidate_workspace_revision": proof_request["candidate_workspace_revision"],
+        "proof_attempt": proof_request["proof_attempt"],
+        "proof_digest": "5" * 64,
+    }
+    state = dict(run.agent_state)
+    finalization = dict(state["max_finalization"])
+    finalization["restoration_adaptation_proof_attempt"] = {
+        **finalization["restoration_adaptation_proof_attempt"],
+        "status": "completed",
+    }
+    finalization["restoration_adaptation_proof"] = proof
+    state["max_finalization"] = finalization
+    run.agent_state = state
+    offer_request = restorations._activation_offer_request(
+        operation=operation,
+        run=run,
+        proof=proof,
+    )
+    offer_intent = {
+        "offer_request": offer_request.model_dump(mode="json"),
+        "candidate_files": proof_intent["candidate_files"],
+        "candidate_artifact_digest": proof_intent["candidate_artifact_digest"],
+    }
+    operation.phase = "activation_offer_intent"
+    operation.activation_request = offer_intent
+    operation.activation_request_digest = restorations._digest(offer_intent)
+    await db_session.commit()
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+
+    assert not await generation.execute_dispatch(run.id)
+
+    await db_session.refresh(run)
+    await db_session.refresh(operation)
+    assert run.status == "running"
+    assert run.error is None
+    assert operation.state == "applying"
+    assert operation.phase == "activation_offer_intent"
+
+
+async def test_claimed_adaptation_mismatched_proof_outbox_fails_closed(
+    db_session, test_engine, monkeypatch
+):
+    from omnia_api.services import restorations
+
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    run.execution_started_at = datetime.now(UTC)
+    run.status = "running"
+    operation = await _bind_adaptation_proof_handoff(db_session, run)
+    raw = dict(operation.activation_request or {})
+    request = dict(raw["proof_request"])
+    request["candidate_proof_key"] = "f" * 64
+    raw["proof_request"] = request
+    operation.activation_request = raw
+    operation.activation_request_digest = restorations._digest(raw)
+    await db_session.commit()
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+
+    assert not await generation.execute_dispatch(run.id)
+
+    await db_session.refresh(run)
+    await db_session.refresh(operation)
+    assert run.status == "failed"
+    assert "unknown effects were not replayed" in run.error
+    assert operation.state == "applying"
+    assert operation.phase == "activation_proof_intent"
+
+
+@pytest.mark.parametrize(
+    ("field", "malformed"),
+    [
+        ("candidate_workspace_revision", "not-a-sha256"),
+        ("candidate_proof_key", "G" * 64),
+    ],
+)
+async def test_claimed_adaptation_matching_malformed_proof_outbox_is_orphaned(
+    db_session, test_engine, monkeypatch, field, malformed
+):
+    from omnia_api.services import restorations
+
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    run.execution_started_at = datetime.now(UTC)
+    run.status = "running"
+    operation = await _bind_adaptation_proof_handoff(db_session, run)
+    raw = dict(operation.activation_request or {})
+    request = dict(raw["proof_request"])
+    request[field] = malformed
+    raw["proof_request"] = request
+    operation.activation_request = raw
+    operation.activation_request_digest = restorations._digest(raw)
+    state = dict(run.agent_state)
+    finalization = dict(state["max_finalization"])
+    attempt = dict(finalization["restoration_adaptation_proof_attempt"])
+    attempt[field] = malformed
+    finalization["restoration_adaptation_proof_attempt"] = attempt
+    state["max_finalization"] = finalization
+    run.agent_state = state
+    await db_session.commit()
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+
+    assert not await generation.execute_dispatch(run.id)
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert "unknown effects were not replayed" in run.error
+
+
+async def test_claimed_adaptation_rejected_proof_becomes_real_orphan(
+    db_session, test_engine, monkeypatch
+):
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    run.execution_started_at = datetime.now(UTC)
+    run.status = "running"
+    operation = await _bind_adaptation_proof_handoff(db_session, run)
+    await db_session.commit()
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+
+    assert not await generation.execute_dispatch(run.id)
+
+    state = dict(run.agent_state)
+    finalization = dict(state["max_finalization"])
+    finalization["restoration_adaptation_proof_attempt"] = {
+        **finalization["restoration_adaptation_proof_attempt"],
+        "status": "completed",
+    }
+    finalization["restoration_adaptation_proof"] = {
+        "state": "migration_required",
+        "reason_code": "candidate_schema_changed",
+    }
+    state["max_finalization"] = finalization
+    run.agent_state = state
+    operation.state = "adapting"
+    operation.phase = "generation"
+    operation.activation_request = None
+    operation.activation_request_digest = None
+    await db_session.commit()
+
+    assert not await generation.execute_dispatch(run.id)
+
+    await db_session.refresh(run)
+    await db_session.refresh(operation)
+    assert run.status == "failed"
+    assert "unknown effects were not replayed" in run.error
+    assert run.agent_state["restoration_adaptation_owner_status"] == "terminal_pending"
+    assert operation.state == "adapting"
+    assert operation.phase == "generation"
 
 
 @pytest.mark.parametrize("effects_admitted", [False, True])

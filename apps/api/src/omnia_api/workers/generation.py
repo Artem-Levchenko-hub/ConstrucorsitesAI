@@ -158,6 +158,12 @@ async def execute_dispatch(run_id: UUID) -> bool:
                     run.execution_started_at = datetime.now(UTC)
                 await session.commit()
             if orphan:
+                from omnia_api.services.restorations import (
+                    adaptation_activation_handoff_pending,
+                )
+
+                if await adaptation_activation_handoff_pending(factory, run_id):
+                    return False
                 await _fail_orphan(
                     run_id,
                     "Generation executor stopped before completion; "

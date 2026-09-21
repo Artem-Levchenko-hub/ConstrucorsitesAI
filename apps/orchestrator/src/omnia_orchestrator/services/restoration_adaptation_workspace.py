@@ -1470,7 +1470,13 @@ class DockerAdaptationWorkspaceEngine:
         async def observe(
             backend: Any,
             *,
-            observed_on: str,
+            observed_on: Literal["source", "candidate_copy"],
+            evidence_label: Literal[
+                "source_proof_before",
+                "candidate_result",
+                "candidate_rehearsal_after",
+                "source_proof_after",
+            ],
         ) -> tuple[str, str, str, str]:
             contract, blockers = await machine_effect(catalog_contract, backend)
             inventory = await machine_effect(
@@ -1480,7 +1486,7 @@ class DockerAdaptationWorkspaceEngine:
             )
             if blockers or inventory.coverage != "complete":
                 raise CellResourceError(
-                    f"restoration adaptation {observed_on} evidence is incomplete"
+                    f"restoration adaptation {evidence_label} evidence is incomplete"
                 )
             business, technical = await machine_effect(
                 content_inventory_partition_digests,
@@ -1504,7 +1510,11 @@ class DockerAdaptationWorkspaceEngine:
             _source_machine, source = manager.machine_runtime.parts(source_state)
             source_files = await _read_agent_workspace_files(manager, source.workspace_volume)
             source_revision = _workspace_revision(source_files)
-            source_first = await observe(source, observed_on="source_proof_before")
+            source_first = await observe(
+                source,
+                observed_on="source",
+                evidence_label="source_proof_before",
+            )
 
         async with candidate_manager.operation_lock.hold(proof.candidate_workspace_id):
             candidate_state = candidate_manager.state_store.load(proof.candidate_workspace_id)
@@ -1543,7 +1553,11 @@ class DockerAdaptationWorkspaceEngine:
                 or candidate_artifact != proof.candidate_artifact_digest
             ):
                 raise CellIdentityConflict("restoration adaptation candidate source changed")
-            candidate_observed = await observe(candidate, observed_on="candidate_result")
+            candidate_observed = await observe(
+                candidate,
+                observed_on="candidate_copy",
+                evidence_label="candidate_result",
+            )
             candidate_contract, candidate_blockers = await machine_effect(
                 catalog_contract, candidate
             )
@@ -1597,7 +1611,9 @@ class DockerAdaptationWorkspaceEngine:
                 except CellResourceError:
                     rehearsal_failed = True
             candidate_after_rehearsal = await observe(
-                candidate, observed_on="candidate_rehearsal_after"
+                candidate,
+                observed_on="candidate_copy",
+                evidence_label="candidate_rehearsal_after",
             )
             if candidate_after_rehearsal != candidate_observed:
                 rehearsal_failed = True
@@ -1618,7 +1634,11 @@ class DockerAdaptationWorkspaceEngine:
                 latest_source.workspace_volume,
             )
             latest_revision = _workspace_revision(latest_files)
-            source_latest = await observe(latest_source, observed_on="source_proof_after")
+            source_latest = await observe(
+                latest_source,
+                observed_on="source",
+                evidence_label="source_proof_after",
+            )
 
         source_database, source_schema, source_business, source_technical = source_latest
         (
