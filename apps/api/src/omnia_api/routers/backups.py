@@ -8,6 +8,7 @@ key are never mounted into a public container.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +32,11 @@ class OffhostBackupStatus(BaseModel):
     created_at: datetime
     size_bytes: int
     sha256: str
+    # When a restore of a backup was last PROVEN (restore-test-omnia.sh). A copy
+    # nobody has restored is a hope, not a backup; the scheduled off-host job
+    # raises the alarm when this is missing, failed or stale.
+    restore_test_ok: bool | None = None
+    restore_tested_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -98,14 +104,33 @@ def _latest_export(root: Path) -> BackupExport:
     )
 
 
+def _restore_verdict(root: Path) -> tuple[bool | None, datetime | None]:
+    """The verdict file is written by the restore test; anything odd reads as unknown."""
+    verdict = root / "RESTORE_TEST.json"
+    try:
+        if verdict.is_symlink() or not verdict.is_file() or verdict.stat().st_size > 4096:
+            return None, None
+        data = json.loads(verdict.read_text(encoding="utf-8"))
+        ok, tested_at = data["ok"], datetime.fromisoformat(data["tested_at"].replace("Z", "+00:00"))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None, None
+    if not isinstance(ok, bool) or tested_at.tzinfo is None:
+        return None, None
+    return ok, tested_at
+
+
 @router.get("/status", response_model=OffhostBackupStatus)
 async def offhost_backup_status() -> OffhostBackupStatus:
-    export = _latest_export(Path(get_settings().backup_export_root))
+    root = Path(get_settings().backup_export_root)
+    export = _latest_export(root)
+    restore_ok, restore_at = _restore_verdict(root)
     return OffhostBackupStatus(
         status="ok",
         created_at=export.created_at,
         size_bytes=export.size_bytes,
         sha256=export.sha256,
+        restore_test_ok=restore_ok,
+        restore_tested_at=restore_at,
     )
 
 

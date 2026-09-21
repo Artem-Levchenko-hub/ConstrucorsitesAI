@@ -124,3 +124,56 @@ async def test_latest_export_uses_absolute_mtime_not_timezone_affected_name(
 
     assert Path(response.path) == actual_latest
     assert response.headers["x-backup-created-at"] == "2026-07-31T10:45:00+00:00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict, expected",
+    [
+        (
+            '{"ok": true, "tested_at": "2026-09-21T05:20:00Z", "source": "20260921-051517"}',
+            (True, "2026-09-21T05:20:00+00:00"),
+        ),
+        (
+            '{"ok": false, "tested_at": "2026-09-21T05:20:00Z", "source": "x"}',
+            (False, "2026-09-21T05:20:00+00:00"),
+        ),
+        (None, (None, None)),
+        ("not json", (None, None)),
+        ('{"ok": "yes", "tested_at": "2026-09-21T05:20:00Z"}', (None, None)),
+        ('{"ok": true, "tested_at": "2026-09-21T05:20:00"}', (None, None)),
+        ('{"ok": true}', (None, None)),
+    ],
+)
+async def test_status_reports_when_a_restore_was_last_proven(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: str | None, expected
+) -> None:
+    _write_export(tmp_path, "20260731-031500")
+    if verdict is not None:
+        (tmp_path / "RESTORE_TEST.json").write_text(verdict, encoding="utf-8")
+    monkeypatch.setattr(
+        backups, "get_settings", lambda: SimpleNamespace(backup_export_root=str(tmp_path))
+    )
+
+    status = await backups.offhost_backup_status()
+
+    tested_at = status.restore_tested_at.isoformat() if status.restore_tested_at else None
+    assert (status.restore_test_ok, tested_at) == expected
+    assert status.status == "ok", "an unknown restore verdict never hides the copy itself"
+
+
+@pytest.mark.asyncio
+async def test_restore_verdict_never_follows_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_export(tmp_path, "20260731-031500")
+    secret = tmp_path / "elsewhere.json"
+    secret.write_text('{"ok": true, "tested_at": "2026-09-21T05:20:00Z"}', encoding="utf-8")
+    (tmp_path / "RESTORE_TEST.json").symlink_to(secret)
+    monkeypatch.setattr(
+        backups, "get_settings", lambda: SimpleNamespace(backup_export_root=str(tmp_path))
+    )
+
+    status = await backups.offhost_backup_status()
+
+    assert (status.restore_test_ok, status.restore_tested_at) == (None, None)

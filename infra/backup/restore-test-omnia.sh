@@ -43,12 +43,19 @@ done
 echo "[restore-test] source: $latest"
 echo "[restore-test] scratch DBs: $PLATFORM_SCRATCH_DB, $USERS_SCRATCH_DB (live DBs untouched)"
 
+# The verdict is left next to the backups so the off-host status endpoint (and the
+# scheduled workflow that raises the alarm) can see WHEN a restore was last proven.
+verdict=false
 cleanup(){
   docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres \
     -c "DROP DATABASE IF EXISTS \"$PLATFORM_SCRATCH_DB\";" >/dev/null 2>&1 || true
   docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
     -c "DROP DATABASE IF EXISTS \"$USERS_SCRATCH_DB\";" >/dev/null 2>&1 || true
   rm -rf "$extract_dir"
+  printf '{"ok": %s, "tested_at": "%s", "source": "%s"}\n' \
+    "$verdict" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(basename "$latest")" \
+    > "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" 2>/dev/null \
+    && mv -f "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" "${BACKUP_ROOT}/RESTORE_TEST.json" || true
 }
 trap cleanup EXIT
 
@@ -88,13 +95,28 @@ users_tables=$(docker exec "$USERS_CTR" psql -U "$USERS_USER" -d "$USERS_SCRATCH
   "SELECT count(*) FROM information_schema.tables
    WHERE table_schema NOT IN ('pg_catalog', 'information_schema');" | tr -d '[:space:]')
 
-echo "[restore-test] platform tables: ${platform_tables:-0}"
-echo "[restore-test] project-schema tables: ${users_tables:-0}"
+# The restored databases are compared with the LIVE ones instead of a fixed floor:
+# the legacy per-project database is legitimately empty since MAX apps moved into
+# Project Cells, and "at least one table" made every restore test fail.
+live_platform_tables=$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" -tAc \
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" | tr -d '[:space:]')
+live_users_tables=$(docker exec "$USERS_CTR" psql -U "$USERS_USER" -d "$USERS_DB" -tAc \
+  "SELECT count(*) FROM information_schema.tables
+   WHERE table_schema NOT IN ('pg_catalog', 'information_schema');" | tr -d '[:space:]')
+
+echo "[restore-test] platform tables: ${platform_tables:-0} (live ${live_platform_tables:-?})"
+echo "[restore-test] project-schema tables: ${users_tables:-0} (live ${live_users_tables:-?})"
 echo "[restore-test] extracted files: ${source_files:-0}"
 [ "${platform_tables:-0}" -ge 1 ] || {
   echo "[restore-test] FAIL — platform dump restored 0 tables"; exit 1;
 }
-[ "${users_tables:-0}" -ge 1 ] || {
-  echo "[restore-test] FAIL — project DB dump restored 0 tables"; exit 1;
+# A table created or dropped between the dump and this test is possible, a large
+# gap is not: the restore must reproduce (almost) everything the live DB has.
+[ "${platform_tables:-0}" -ge "$(( ${live_platform_tables:-0} - 2 ))" ] || {
+  echo "[restore-test] FAIL — platform dump restored ${platform_tables} of ${live_platform_tables} live tables"; exit 1;
 }
+[ "${users_tables:-0}" -ge "$(( ${live_users_tables:-0} - 2 ))" ] || {
+  echo "[restore-test] FAIL — project DB dump restored ${users_tables} of ${live_users_tables} live tables"; exit 1;
+}
+verdict=true
 echo "[restore-test] OK — databases, runtime config, project sources and MinIO objects are restorable."
