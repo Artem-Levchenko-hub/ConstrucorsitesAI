@@ -43,6 +43,11 @@ ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 # images the orchestrator uses, which are declared in that env file.
 CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.py}"
 STATE_ROOT="${STATE_ROOT:-/opt/omnia-runtime/state}"
+# The host python is 3.11 and the script needs 3.12+; the orchestrator's own
+# interpreter is the one that matches its code. Never run the script through a
+# mode bit: a checkout without +x would silently skip the cell backup.
+CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
+[ -x "$CELLS_PYTHON" ] || CELLS_PYTHON="$(command -v python3 || true)"
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
@@ -112,7 +117,8 @@ docker run --rm \
 # 5b. Project Cell databases and the orchestrator state journal. A single busy or
 #     halted cell must not cost the whole nightly backup, so a partial result
 #     (exit 2) is reported and kept; only a hard failure aborts.
-if [ -x "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
+if [ -f "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
+  [ -n "$CELLS_PYTHON" ] || fail "no python to run ${CELLS_SCRIPT}"
   for name in CELL_POSTGRES_IMAGE CELL_BACKUP_IMAGE; do
     if [ -z "${!name:-}" ] && [ -r "$ORCHESTRATOR_ENV" ]; then
       # Read only these two lines: the file holds production secrets.
@@ -122,7 +128,8 @@ if [ -x "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
   done
   log "backing up Project Cell databases..."
   cells_status=0
-  "$CELLS_SCRIPT" backup --state-root "$STATE_ROOT" --out "${dir}/cells" || cells_status=$?
+  "$CELLS_PYTHON" "$CELLS_SCRIPT" backup --state-root "$STATE_ROOT" --out "${dir}/cells" \
+    || cells_status=$?
   case "$cells_status" in
     0) : ;;
     2) log "WARNING: Project Cell backup is partial — see cells/MANIFEST.json" ;;
@@ -134,6 +141,7 @@ if [ -x "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
   chmod 600 "${dir}/cells.tgz"
   cells_archive=1
 else
+  # Not a silent skip: this is a real gap in the night's backup.
   log "WARNING: Project Cell backup skipped (no ${CELLS_SCRIPT} or ${STATE_ROOT})"
 fi
 

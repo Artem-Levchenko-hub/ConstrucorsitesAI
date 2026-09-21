@@ -7,6 +7,8 @@ set -euo pipefail
 
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/omnia-runtime/backups}"
 CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.py}"
+CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
+[ -x "$CELLS_PYTHON" ] || CELLS_PYTHON="$(command -v python3 || true)"
 ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
@@ -131,7 +133,7 @@ if [ -f "${latest}/cells.tgz" ]; then
   [ -f "${cells_dir}/MANIFEST.json" ] || {
     echo "[restore-test] FAIL — Project Cell archive holds no manifest"; exit 1;
   }
-  if [ -x "$CELLS_SCRIPT" ]; then
+  if [ -f "$CELLS_SCRIPT" ] && [ -n "$CELLS_PYTHON" ]; then
     for name in CELL_POSTGRES_IMAGE CELL_BACKUP_IMAGE; do
       if [ -z "${!name:-}" ] && [ -r "$ORCHESTRATOR_ENV" ]; then
         value="$(sed -n "s/^${name}=//p" "$ORCHESTRATOR_ENV" | tail -1)"
@@ -139,7 +141,7 @@ if [ -f "${latest}/cells.tgz" ]; then
       fi
     done
     cells_status=0
-    "$CELLS_SCRIPT" verify --backup "$cells_dir" || cells_status=$?
+    "$CELLS_PYTHON" "$CELLS_SCRIPT" verify --backup "$cells_dir" || cells_status=$?
     case "$cells_status" in
       0) cells_note="restored" ;;
       2) cells_note="restored, partial source backup" ;;
