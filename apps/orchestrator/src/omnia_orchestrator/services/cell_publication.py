@@ -1559,11 +1559,11 @@ class CellPublicationService:
             saved["recovery_required"] = False
             saved["data_seeded"] = True
             self._write(project_id, saved)
+            # The cluster release is live already: what follows is housekeeping
+            # (logged, never a reason to roll it back).
             if old is not None and not KubernetesPlacement.placed(old):
                 # The app moved from this host into the cluster: its Docker serving
                 # compute is retired now (data volumes retained), the vhost released.
-                # The cluster release is live already; leftovers here are logged,
-                # never a reason to roll it back.
                 try:
                     await nginx_writer.unpublish(nginx_writer.prod_host(request.slug))
                     with machine_budget(120):
@@ -1576,19 +1576,19 @@ class CellPublicationService:
                         project_id=str(project_id),
                         error_type=type(error).__name__,
                     )
-            elif old is not None:
-                try:
-                    await machine_effect(
-                        runtime.prune_release_volumes, project_id, release["release_id"]
-                    )
-                except Exception as error:  # the release is live; leftovers are not a failure
-                    import structlog
+            # Code claims of retired releases — and of interrupted earlier attempts.
+            try:
+                await machine_effect(
+                    runtime.prune_release_volumes, project_id, release["release_id"]
+                )
+            except Exception as error:
+                import structlog
 
-                    structlog.get_logger("cell_publication").warning(
-                        "k8s_release_volumes_not_pruned",
-                        project_id=str(project_id),
-                        error_type=type(error).__name__,
-                    )
+                structlog.get_logger("cell_publication").warning(
+                    "k8s_release_volumes_not_pruned",
+                    project_id=str(project_id),
+                    error_type=type(error).__name__,
+                )
         except BaseException as error:
             recovery_required = str(error) == "publication startup changed database schema"
             failed = self._read(project_id)

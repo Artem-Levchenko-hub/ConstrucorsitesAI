@@ -538,7 +538,8 @@ async def test_activation_places_the_release_verifies_schema_and_probes_public_u
     assert saved["active_release"]["release_id"] == run_id
     assert saved["data_seeded"] is True
     assert saved["activation_pending"] is None and saved["prepared_release"] is None
-    assert runtime.pruned == []  # first release: nothing to prune
+    # even a first release prunes: an interrupted earlier attempt may have left claims
+    assert runtime.pruned == [(PROJECT, run_id)]
 
 
 @pytest.mark.asyncio
@@ -669,7 +670,7 @@ async def test_second_release_prunes_the_previous_code_claims(
         PublicationTrace(),
     )
 
-    assert runtime.pruned == [(PROJECT, second)]
+    assert runtime.pruned == [(PROJECT, first), (PROJECT, second)]
     assert service._read(PROJECT)["active_release"]["release_id"] == second
 
 
