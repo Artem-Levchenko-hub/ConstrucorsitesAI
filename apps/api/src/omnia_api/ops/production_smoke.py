@@ -312,7 +312,11 @@ def run_smoke(
     mvp = probe("mvp", config.platform_url + "/mvp")
     if mvp is not None:
         require("Путь до полностью рабочего MVP".encode() in mvp, "mvp.text_missing")
-    canary = health("max_health", config.canary_url + "/api/health")
+    # У опубликованного MAX-приложения охрана пропускает без сессии ровно
+    # несколько платформенных путей, и health среди них — `/api/omnia/health`.
+    # Маршрут `/api/health` из шаблона закрыт намеренно, как любой маршрут
+    # приложения: снаружи он отвечает 401, и здоровье по нему не проверить.
+    canary = health("max_health", config.canary_url + "/api/omnia/health")
     if canary is not None:
         require(canary.get("status") == "ok", "max_health.status")
         require(canary.get("platform") == "max-miniapp", "max_health.platform")

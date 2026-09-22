@@ -49,7 +49,10 @@ def responses():
             },
         },
         "/mvp": "Путь до полностью рабочего MVP",
-        "canary/api/health": {"status": "ok", "platform": "max-miniapp"},
+        # Опубликованное MAX-приложение отдаёт здоровье по платформенному пути;
+        # `/api/health` из шаблона закрыт охраной, как любой маршрут приложения.
+        "canary/api/omnia/health": {"status": "ok", "platform": "max-miniapp"},
+        "canary/api/health": Reply(401, b"MAX authentication required"),
         "canary/api/max/webhook": Reply(401, b""),
     }
 
@@ -127,8 +130,8 @@ def test_every_readiness_check_is_required(check):
         ("/web-health", "service", "api", "web.service"),
         ("/api/health", "service", "web", "api.service"),
         ("/api/health", "status", "degraded", "api.status"),
-        ("canary/api/health", "platform", "other", "max_health.platform"),
-        ("canary/api/health", "status", "failed", "max_health.status"),
+        ("canary/api/omnia/health", "platform", "other", "max_health.platform"),
+        ("canary/api/omnia/health", "status", "failed", "max_health.status"),
     ],
 )
 def test_health_contracts_are_not_reduced_to_http200(path, field, value, expected):
@@ -139,7 +142,7 @@ def test_health_contracts_are_not_reduced_to_http200(path, field, value, expecte
 
 def test_max502_remains_red_and_webhook_is_still_checked_without_leaking_body():
     data = responses()
-    data["canary/api/health"] = Reply(502, b"secret backend body")
+    data["canary/api/omnia/health"] = Reply(502, b"secret backend body")
     data["canary/api/max/webhook"] = Reply(200, b"private token")
     http = HTTPDouble(data)
     assert run_smoke(Configuration.from_env(environment()), http, sleep=lambda _: None) == [
@@ -182,10 +185,14 @@ def test_stdlib_cli_uses_local_http_and_does_not_import_api_dependencies(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            key = "canary/api/health" if self.path == "/canary/api/health" else self.path
+            key = (
+                "canary/api/omnia/health"
+                if self.path == "/canary/api/omnia/health"
+                else self.path
+            )
             value = data[key]
             body = (value if isinstance(value, str) else json.dumps(value)).encode("utf-8")
-            self.send_response(max_status if key == "canary/api/health" else 200)
+            self.send_response(max_status if key == "canary/api/omnia/health" else 200)
             self.end_headers()
             self.wfile.write(body)
 
@@ -355,3 +362,33 @@ def test_release_mismatch_reports_only_a_safe_actual_revision(actual, reported):
     failures = run_smoke(Configuration.from_env(environment()), HTTPDouble(data))
 
     assert failures == [f"web.release_mismatch expected={'a' * 40} actual={reported}"]
+
+
+def test_canary_health_is_probed_where_the_guard_actually_allows_it():
+    """22.09: канарейка живая и здоровая, а проверка стучалась в закрытую дверь.
+
+    У опубликованного MAX-приложения охрана пропускает без сессии ровно четыре
+    пути, и health среди них — `/api/omnia/health`. Маршрут `/api/health` из
+    шаблона закрыт намеренно, как любой маршрут приложения, поэтому снаружи он
+    отвечает 401 и здоровье по нему проверить нельзя в принципе.
+
+    Требования к ответу при этом не ослаблены: та же схема, тот же `status: ok`
+    и та же платформа.
+    """
+    http = HTTPDouble(responses())
+
+    assert run_smoke(Configuration.from_env(environment()), http, sleep=lambda _: None) == []
+    probed = [url for _, url, _ in http.calls]
+    assert "https://canary.invalid/api/omnia/health" in probed
+    assert "https://canary.invalid/api/health" not in probed
+
+
+def test_a_guarded_canary_health_is_still_a_failure():
+    """Ослабления нет: 401 по проверяемому пути остаётся красным."""
+    data = responses()
+    data["canary/api/omnia/health"] = Reply(401, b"MAX authentication required")
+    http = HTTPDouble(data)
+
+    failures = run_smoke(Configuration.from_env(environment()), http, sleep=lambda _: None)
+
+    assert "max_health.http_401" in failures
