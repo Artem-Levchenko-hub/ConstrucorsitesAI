@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PLATFORM_URL: https://constructor.lead-generator.ru
+  PLATFORM_URL: https://yleum.ru
   MAX_CANARY_URL: ${{ vars.PRODUCTION_MAX_CANARY_URL }}
   PRODUCTION_EXPECTED_WEB_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WEB_RELEASE_SHA }}
   PRODUCTION_EXPECTED_API_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_API_RELEASE_SHA }}

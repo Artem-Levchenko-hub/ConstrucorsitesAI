@@ -13,16 +13,47 @@ set -euo pipefail
 ADMIN_USER=$1 DOMAIN=$2 ACME_EMAIL=$3
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 
-echo "== k3s: servicelb off (освобождаем 80/443)"
+echo "== k3s: servicelb off (освобождаем 80/443), traefik → ClusterIP"
 if ! grep -q "^disable:" /etc/rancher/k3s/config.yaml; then
   printf 'disable:\n  - servicelb\n' >> /etc/rancher/k3s/config.yaml
   systemctl restart k3s
   for i in $(seq 1 30); do k3s kubectl get node >/dev/null 2>&1 && break; sleep 3; done
 fi
+# Одного servicelb-off мало: у сервиса traefik остаётся LoadBalancer-статус с публичным IP, и kube-proxy
+# DNAT-ит ВЕСЬ трафик на <public ip>:80/443 (в т.ч. из docker-контейнеров платформы) в Traefik с его
+# самоподписанным сертификатом. Переводим сервис в ClusterIP через HelmChartConfig (переживает апгрейды).
+cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml <<'EOF'
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    service:
+      type: ClusterIP
+EOF
+k3s kubectl -n kube-system patch svc traefik -p '{"spec":{"type":"ClusterIP"}}' >/dev/null 2>&1 || true
 # klipper-lb поды исчезают сами после рестарта; подчистим, если остались
 k3s kubectl -n kube-system delete pod -l svccontroller.k3s.cattle.io/svcname=traefik --ignore-not-found >/dev/null 2>&1 || true
 for i in $(seq 1 20); do ss -tlnH | awk '{print $4}' | grep -qE ':(80|443)$' || break; sleep 3; done
 ss -tlnH | awk '{print $4}' | grep -E ':(80|443)$' && { echo "порты 80/443 всё ещё заняты"; exit 1; } || echo "  80/443 свободны"
+for i in $(seq 1 20); do [ "$(iptables-save | grep -c "$(dig +short A "$DOMAIN" @1.1.1.1 | head -1)")" = "0" ] && break; sleep 3; done
+
+echo "== публичный IP на lo (Serverum: 1:1 NAT, hairpin к самому себе не работает)"
+PUBLIC_IP=$(dig +short A "$DOMAIN" @1.1.1.1 | head -1)
+cat > /etc/netplan/60-public-ip-hairpin.yaml <<EOF
+# Публичный IP у Serverum — 1:1 NAT и на интерфейсе его нет. Вешаем его на lo, чтобы платформа
+# (api в Docker) могла ходить на свои же публичные имена (*.apps.$DOMAIN, $DOMAIN) локально.
+network:
+  version: 2
+  ethernets:
+    lo:
+      match: {name: lo}
+      addresses: [$PUBLIC_IP/32]
+EOF
+chmod 600 /etc/netplan/60-public-ip-hairpin.yaml
+ip addr show lo | grep -q "$PUBLIC_IP/32" || ip addr add "$PUBLIC_IP/32" dev lo
 
 echo "== docker ce"
 if ! command -v docker >/dev/null; then
@@ -71,6 +102,7 @@ echo "== ufw: контейнеры → хост (оркестратор :8003, r
 ufw allow from 172.16.0.0/12 to any port 8003 proto tcp comment 'docker → orchestrator' >/dev/null
 ufw allow from 10.253.0.0/16 to any port 8003 proto tcp comment 'cells → orchestrator' >/dev/null
 ufw allow from 172.16.0.0/12 to any port 80,443 proto tcp comment 'docker → nginx (preview gate)' >/dev/null
+ufw allow from 10.253.0.0/16 to any port 80,443 proto tcp comment 'cells → nginx (hairpin)' >/dev/null
 ufw reload >/dev/null
 
 echo "== nginx: базовые конфиги (catch-all, runtime include, upgrade map)"

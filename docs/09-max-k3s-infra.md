@@ -17,13 +17,18 @@
 - kubectl с Mac: `infra/max-k3s/kube-tunnel.sh up` → `KUBECONFIG=~/.kube/max-studio.yaml`, контексты `max-core` / `max-runtime` / `max-commerce`.
 - Весь провижининг — код: `infra/max-k3s/provision.sh <фаза|all>`, идемпотентно.
 
-## Чего здесь пока НЕТ
+## Где платформа (Фаза 2a, 22.09.2026)
 
-Сама платформа (api / worker / web / gateway / orchestrator) **по-прежнему работает на старом
-сервере** 170.168.72.200 (docker-compose, см. [`08-vps-setup.md`](08-vps-setup.md)). Переезд на
-кластер core, биллинг в commerce и деплой приложений через `infra/max-app-chart` в runtime — Фаза 2
-вектора V9, отдельная работа с переносом данных. До неё правило доставки из `CLAUDE.md`
-(деплой на 170.168.72.200) остаётся в силе.
+Платформа (api / worker / generation-worker / web / gateway / orchestrator) **работает на core** под
+https://yleum.ru — той же связкой, что раньше на 170.168.72.200: compose-стек `omnia-prod-*` +
+оркестратор как хост-сервис с Docker + nginx на хосте (80/443). Приложения клиентов (ячейки) тоже на
+core; их превью и публикации — `*.apps.yleum.ru` (сертификат на каждое имя через acme.sh). K3s на
+core держит только мониторинг. Как деплоить — правило доставки в `CLAUDE.md`; как это переезжало и
+почему не в K3s — [`infra/max-k3s/migrate/README.md`](../infra/max-k3s/migrate/README.md).
+Старый сервер 170.168.72.200 — запасной, чужие проекты на нём живут дальше.
+
+**Ещё не сделано (Фаза 3):** api/web/gateway в кластере core, ячейки клиентов в runtime через
+`infra/max-app-chart`, биллинг в commerce.
 
 ## Особенности Serverum (важно при любых работах на этих серверах)
 

@@ -56,6 +56,16 @@ Studio на нём остаётся запасным вариантом, пок�
 5. **Каталог локов должен быть `0700`** (`services/cell_lock.py`), иначе `workspace_lock_unavailable` → ячейки не создаются.
 6. **api/worker бесконечно дёргали оркестратор** за workspace старых ячеек («workspace state missing») — после восстановления базы workspaces помечаются `deleted`.
 7. Docker-мосты за NAT провайдера — `mtu 1400`, как на старом сервере.
+8. **`*.apps.yleum.ru` указывал на runtime (.99)**, а ячейки живут на core → HTTP-01 для превью
+   получал 404 → «draft preview TLS provisioning failed». Запись переведена на .98 (владелец, reg.ru).
+9. **kube-proxy перехватывал публичный IP.** После отключения servicelb у сервиса `traefik` остался
+   LoadBalancer-статус с 2.153.248.98, и правила `KUBE-SERVICES … loadbalancer IP` DNAT-или весь
+   трафик контейнеров на `<public ip>:443` в Traefik с самоподписанным сертификатом → api получал
+   `ConnectError` на проверке data-plane приложения. Лечится `service.type: ClusterIP` через
+   HelmChartConfig (`/var/lib/rancher/k3s/server/manifests/traefik-config.yaml`).
+10. **Публичный IP — NAT, сервер сам себя по нему не видит.** Адрес повешен на `lo`
+    (`/etc/netplan/60-public-ip-hairpin.yaml`), чтобы api из Docker ходил на `*.apps.yleum.ru`
+    и `yleum.ru` локально; ufw пускает docker-подсети и сеть ячеек (10.253/16) на 80/443.
 
 ## Как деплоить на новый прод
 
