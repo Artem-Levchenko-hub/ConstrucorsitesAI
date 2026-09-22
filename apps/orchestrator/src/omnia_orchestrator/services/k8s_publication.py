@@ -50,6 +50,8 @@ _PUBLIC_CORE_COMMAND = (
 # Alpine postgres images run the server as uid 70; the seed init container restores
 # the warm data directory as root and hands it over before postgres starts.
 _POSTGRES_UID = 70
+# cert-manager's HTTP-01 solver pods listen here.
+ACME_SOLVER_PORT = 8089
 # Official redis image: its entrypoint switches to this user via gosu when started as
 # root, which needs capabilities the pod drops; starting as the user skips that.
 _REDIS_UID = 999
@@ -940,6 +942,23 @@ def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, An
                 "labels": _labels(spec, "namespace"),
             },
             "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]},
+        },
+        {
+            # cert-manager runs its HTTP-01 solver pod in this namespace; under
+            # default-deny Traefik could not reach it (502 on the self-check) and no
+            # certificate was ever issued — seen live. Ingress only, solver port only.
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "metadata": {
+                "name": "acme-solver",
+                "namespace": ns,
+                "labels": _labels(spec, "namespace"),
+            },
+            "spec": {
+                "podSelector": {"matchLabels": {"acme.cert-manager.io/http01-solver": "true"}},
+                "policyTypes": ["Ingress"],
+                "ingress": [{"ports": [{"port": ACME_SOLVER_PORT}]}],
+            },
         },
         policy(
             "boundary",

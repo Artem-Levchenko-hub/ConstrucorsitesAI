@@ -282,6 +282,14 @@ def test_network_is_default_deny_with_explicit_paths() -> None:
     assert app_targets == ["project-postgres"]
     core_egress = policies["core"]["spec"]["egress"]
     assert any("ipBlock" in e["to"][0] and e["ports"] == [{"port": 443}] for e in core_egress)
+    # the ACME solver pod must stay reachable for Traefik, or no certificate is issued
+    solver = policies["acme-solver"]["spec"]
+    assert solver["podSelector"] == {"matchLabels": {"acme.cert-manager.io/http01-solver": "true"}}
+    assert solver["policyTypes"] == ["Ingress"]
+    assert solver["ingress"] == [{"ports": [{"port": 8089}]}]
+    # seeding init containers reach the orchestrator's artifact links, nothing else outside
+    app_egress = policies["app"]["spec"]["egress"]
+    assert {"to": [{"ipBlock": {"cidr": "10.10.0.1/32"}}], "ports": [{"port": 8003}]} in app_egress
 
 
 class FakeApi:
