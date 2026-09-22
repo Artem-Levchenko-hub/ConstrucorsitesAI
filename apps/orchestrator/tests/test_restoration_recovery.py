@@ -447,3 +447,139 @@ def test_the_result_is_checked_again_after_the_write() -> None:
     assert any(
         f.check == "inventory_equals_snapshot_after_write" and not f.ok for f in report.findings
     )
+
+
+# --------------------------------------------------------------------------- #
+# RC4: запуск только после доказанных фаз и только на удержанной базе
+# --------------------------------------------------------------------------- #
+
+
+def _start_recorder():  # type: ignore[no-untyped-def]
+    from omnia_orchestrator.services.restoration_recovery import CommandResult
+
+    calls: list[str] = []
+
+    def start(volume: str) -> CommandResult:
+        calls.append(volume)
+        return CommandResult(0)
+
+    return start, calls
+
+
+def _volumes_runner(intent):  # type: ignore[no-untyped-def]
+    from omnia_orchestrator.services.restoration_recovery import CommandResult
+
+    return _Recorder(
+        {
+            "volume ls": CommandResult(
+                0, f"{intent.active_database_volume}\n{intent.active_code_volume}\n"
+            )
+        }
+    )
+
+
+def test_start_current_reuses_the_bound_database_and_creates_nothing() -> None:
+    from omnia_orchestrator.services.restoration_recovery import start_current
+
+    intent = _intent()
+    runner = _volumes_runner(intent)
+    start, started = _start_recorder()
+
+    report = start_current(
+        intent,
+        runner=runner,
+        witness_digest="d" * 64,
+        source_sync_ok=True,
+        witness_migrations=["0000_init", "0001_qa_clients"],
+        snapshot_migrations=["0000_init", "0001_qa_clients"],
+        start=start,
+    )
+
+    assert report.ok is True
+    assert started == [intent.active_database_volume]
+    for call in runner.calls:
+        assert call[:2] != ["volume", "create"], call
+        assert call[:2] != ["volume", "rm"], call
+
+
+def test_start_current_refuses_without_a_sql_witness() -> None:
+    from omnia_orchestrator.services.restoration_recovery import start_current
+
+    intent = _intent()
+    start, started = _start_recorder()
+
+    report = start_current(
+        intent,
+        runner=_volumes_runner(intent),
+        witness_digest="",
+        source_sync_ok=True,
+        witness_migrations=["0000_init"],
+        snapshot_migrations=["0000_init"],
+        start=start,
+    )
+
+    assert report.ok is False and started == []
+    assert any(f.check == "witness_recorded" and not f.ok for f in report.findings)
+
+
+def test_start_current_refuses_before_the_source_is_reconciled() -> None:
+    from omnia_orchestrator.services.restoration_recovery import start_current
+
+    intent = _intent()
+    start, started = _start_recorder()
+
+    report = start_current(
+        intent,
+        runner=_volumes_runner(intent),
+        witness_digest="d" * 64,
+        source_sync_ok=False,
+        witness_migrations=["0000_init"],
+        snapshot_migrations=["0000_init"],
+        start=start,
+    )
+
+    assert report.ok is False and started == []
+    assert any(f.check == "source_sync_recorded" and not f.ok for f in report.findings)
+
+
+def test_a_migration_the_live_schema_never_saw_is_a_blocking_finding() -> None:
+    from omnia_orchestrator.services.restoration_recovery import start_current
+
+    intent = _intent()
+    start, started = _start_recorder()
+
+    report = start_current(
+        intent,
+        runner=_volumes_runner(intent),
+        witness_digest="d" * 64,
+        source_sync_ok=True,
+        # Живая база знает только QA-миграцию; снимок хочет доиграть служебные.
+        witness_migrations=["0001_qa_clients"],
+        snapshot_migrations=["0000_max_core", "0001_qa_clients"],
+        start=start,
+    )
+
+    assert report.ok is False and started == [], "a replay must never be attempted"
+    finding = next(f for f in report.findings if f.check == "migration_chain_compatible")
+    assert finding.ok is False and "replayed" in finding.detail
+
+
+def test_a_missing_retained_volume_stops_before_start() -> None:
+    from omnia_orchestrator.services.restoration_recovery import CommandResult, start_current
+
+    intent = _intent()
+    runner = _Recorder({"volume ls": CommandResult(0, "some-other-volume\n")})
+    start, started = _start_recorder()
+
+    report = start_current(
+        intent,
+        runner=runner,
+        witness_digest="d" * 64,
+        source_sync_ok=True,
+        witness_migrations=["0000_init"],
+        snapshot_migrations=["0000_init"],
+        start=start,
+    )
+
+    assert report.ok is False and started == []
+    assert any(f.check == "retained_database_present" and not f.ok for f in report.findings)

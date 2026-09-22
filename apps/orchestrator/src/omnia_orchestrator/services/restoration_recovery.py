@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -360,6 +360,75 @@ def source_sync(
     return _report("source_sync", findings)
 
 
+def start_current(
+    intent: RestorationRecoveryIntent,
+    *,
+    runner: DockerRunner,
+    witness_digest: str,
+    source_sync_ok: bool,
+    witness_migrations: Sequence[str],
+    snapshot_migrations: Sequence[str],
+    start: Callable[[str], CommandResult],
+) -> RecoveryReport:
+    """Запустить текущую версию на той же удержанной базе — и ни на чём другом.
+
+    Запуск разрешён только после доказанных предыдущих фаз: без SQL-свидетеля и без
+    успешной сверки исходника стартовать нечего. База переиспользуется ровно та,
+    что названа в намерении: ни создания нового тома, ни переинициализации.
+
+    Отдельно проверяется цепочка миграций. Если снимок хочет применить миграции,
+    которых нет в журнале живой базы, это блокирующая находка, а не разрешение
+    «подогнать» схему: именно так теряют колонку с данными владельца.
+    """
+    findings: list[RecoveryFinding] = []
+
+    findings.append(
+        _finding(
+            "witness_recorded",
+            bool(re.fullmatch(r"[0-9a-f]{64}", witness_digest or "")),
+            "" if witness_digest else "no SQL witness from the clone",
+        )
+    )
+    findings.append(
+        _finding(
+            "source_sync_recorded",
+            source_sync_ok,
+            "" if source_sync_ok else "source not reconciled",
+        )
+    )
+    # Снимок не должен доигрывать историю в уже изменённую схему.
+    replay = [name for name in snapshot_migrations if name not in set(witness_migrations)]
+    findings.append(
+        _finding(
+            "migration_chain_compatible",
+            not replay,
+            f"{len(replay)} migrations would be replayed into the live schema" if replay else "",
+        )
+    )
+    if not all(item.ok for item in findings):
+        return _report("start_current", findings)
+
+    volumes = runner.run(["volume", "ls", "--quiet"], timeout=60)
+    known = set(volumes.stdout.split())
+    findings.append(
+        _finding(
+            "retained_database_present",
+            intent.active_database_volume in known or not volumes.ok,
+            "the bound database volume is gone"
+            if volumes.ok and intent.active_database_volume not in known
+            else "",
+        )
+    )
+    if not all(item.ok for item in findings):
+        return _report("start_current", findings)
+
+    started = start(intent.active_database_volume)
+    findings.append(
+        _finding("current_started", started.ok, "" if started.ok else "start refused")
+    )
+    return _report("start_current", findings)
+
+
 __all__ = [
     "SCRATCH_PREFIX",
     "CommandResult",
@@ -369,4 +438,5 @@ __all__ = [
     "clone_witness",
     "inspect_recovery",
     "source_sync",
+    "start_current",
 ]
