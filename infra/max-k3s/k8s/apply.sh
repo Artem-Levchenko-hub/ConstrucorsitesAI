@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Уровень Kubernetes (запускать с Mac; туннели поднимаются сами, kubeconfig ~/.kube/max-studio.yaml):
+#   ./apply.sh coredns          # <домен> внутри кластеров резолвится с авторитетных NS reg.ru (все три)
 #   ./apply.sh cert-manager     # cert-manager + ClusterIssuer'ы Let's Encrypt (все три кластера)
 #   ./apply.sh registry         # приватный Docker registry на runtime: https://registry.<домен>
 #   ./apply.sh registries-yaml  # креды registry во все K3s (/etc/rancher/k3s/registries.yaml)
 #   ./apply.sh monitoring       # kube-prometheus-stack на core: https://grafana.<домен>, node-exporter всех VPS
+#   ./apply.sh placeholder      # заглушка с сертификатом на https://<домен> и www до переезда платформы
 #   ./apply.sh all
 # Секреты (пароли registry/grafana) живут только на хостах: /etc/max-studio/*.env (root, 0600).
 set -euo pipefail
@@ -216,11 +218,99 @@ EOF
   kubectl --context max-core -n monitoring get pods --no-headers | sed 's/^/  /'
 }
 
+phase_coredns() {
+  # Наш домен внутри кластеров резолвится напрямую с авторитетных NS reg.ru: провайдерские
+  # резолверы (Yandex DNS) кэшируют «нет такого имени» до 3 часов, и cert-manager после смены
+  # DNS столько же не может пройти self-check HTTP-01. k3s подхватывает ConfigMap coredns-custom.
+  # у forward-плагина CoreDNS лимит 15 upstream'ов, у reg.ru их 16 — берём по два от каждого NS
+  local ns_ips; ns_ips=$( (dig +short A ns1.reg.ru | sort | head -2; dig +short A ns2.reg.ru | sort | head -2) | tr '\n' ' ')
+  [ -n "$ns_ips" ] || { echo "coredns: не смог узнать IP ns1/ns2.reg.ru" >&2; return 1; }
+  for h in $HOSTS; do
+    log "coredns → max-$h: $DOMAIN → авторитетные NS reg.ru ($ns_ips)"
+    kubectl --context "max-$h" apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: coredns-custom, namespace: kube-system}
+data:
+  $DOMAIN.server: |
+    $DOMAIN:53 {
+        errors
+        cache 30
+        forward . $ns_ips
+    }
+EOF
+    kubectl --context "max-$h" -n kube-system rollout restart deploy/coredns >/dev/null
+    kubectl --context "max-$h" -n kube-system rollout status deploy/coredns --timeout=2m | tail -1 | sed 's/^/  /'
+  done
+}
+
+phase_placeholder() {
+  # Заглушка на корне домена (yleum.ru + www) с настоящим сертификатом — чтобы до переезда
+  # платформы браузер не показывал предупреждение. При переезде: kubectl delete ns landing.
+  log "placeholder → max-core (https://$DOMAIN, https://www.$DOMAIN)"
+  kubectl --context max-core apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata: {name: landing}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: landing-html, namespace: landing}
+data:
+  index.html: |
+    <!doctype html><html lang="ru"><head><meta charset="utf-8"><title>MAX Studio</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+    <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#e8eaf0;font:16px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+    main{text-align:center;padding:2rem}h1{font-size:2.2rem;margin:0 0 .5rem;letter-spacing:.02em}p{margin:0;color:#9aa3b5}</style></head>
+    <body><main><h1>MAX Studio</h1><p>Платформа переезжает на новую инфраструктуру. Скоро.</p></main></body></html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: landing, namespace: landing}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: landing}}
+  template:
+    metadata: {labels: {app: landing}}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports: [{containerPort: 80, name: http}]
+          volumeMounts: [{name: html, mountPath: /usr/share/nginx/html, readOnly: true}]
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {memory: 64Mi}}
+      volumes: [{name: html, configMap: {name: landing-html}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: landing, namespace: landing}
+spec: {selector: {app: landing}, ports: [{port: 80, targetPort: http}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: landing
+  namespace: landing
+  annotations: {cert-manager.io/cluster-issuer: letsencrypt-prod}
+spec:
+  ingressClassName: traefik
+  tls: [{hosts: [$DOMAIN, www.$DOMAIN], secretName: landing-tls}]
+  rules:
+    - host: $DOMAIN
+      http: {paths: [{path: /, pathType: Prefix, backend: {service: {name: landing, port: {number: 80}}}}]}
+    - host: www.$DOMAIN
+      http: {paths: [{path: /, pathType: Prefix, backend: {service: {name: landing, port: {number: 80}}}}]}
+EOF
+  kubectl --context max-core -n landing rollout status deploy/landing --timeout=2m | tail -1 | sed 's/^/  /'
+}
+
 case "${1:-}" in
+  coredns) phase_coredns ;;
+  placeholder) phase_placeholder ;;
   cert-manager) phase_cert_manager ;;
   registry) phase_registry ;;
   registries-yaml) phase_registries_yaml ;;
   monitoring) phase_monitoring ;;
-  all) phase_cert_manager; phase_registry; phase_registries_yaml; phase_monitoring ;;
-  *) sed -n 2,8p "$0"; exit 1 ;;
+  all) phase_coredns; phase_cert_manager; phase_registry; phase_registries_yaml; phase_monitoring; phase_placeholder ;;
+  *) sed -n 2,9p "$0"; exit 1 ;;
 esac

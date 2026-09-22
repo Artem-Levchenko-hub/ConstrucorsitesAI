@@ -55,21 +55,22 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   (admin, пароль в `/etc/max-studio/grafana.env` на core). Собирает метрики кластера core и
   node-exporter всех трёх VPS. Метрики кластеров runtime/commerce — следующий шаг (см. ниже).
 
-## DNS, который должен завести владелец (reg.ru → yleum.ru)
+## DNS (reg.ru → yleum.ru) — заведено владельцем 22.09.2026
 
 | Имя | Тип | Значение | Зачем |
 |---|---|---|---|
-| `core.yleum.ru` | A | 2.153.248.98 | имя сервера, SAN в сертификате K3s |
-| `runtime.yleum.ru` | A | 2.153.248.99 | то же |
-| `commerce.yleum.ru` | A | 2.153.248.100 | то же |
-| `grafana.yleum.ru` | A | 2.153.248.98 | мониторинг (сертификат выпустится сам после появления записи) |
-| `registry.yleum.ru` | A | 2.153.248.99 | реестр образов (то же) |
-| `*.apps.yleum.ru` | A | 2.153.248.99 | будущие приложения клиентов на runtime |
-| `api.yleum.ru`, `app.yleum.ru` | A | 2.153.248.98 | платформа (Фаза 2 — переезд api/web/gateway) |
+| `@`, `www` | A | 2.153.248.98 | корень домена → core (сейчас заглушка `k8s/apply.sh placeholder`, при переезде платформы — `kubectl delete ns landing`) |
+| `core` / `runtime` / `commerce` | A | .98 / .99 / .100 | имена серверов, SAN в сертификате K3s |
+| `grafana` | A | 2.153.248.98 | мониторинг |
+| `registry` | A | 2.153.248.99 | реестр образов |
+| `*.apps` | A | 2.153.248.99 | будущие приложения клиентов на runtime |
+| `api`, `app` | A | 2.153.248.98 | платформа (Фаза 2 — переезд api/web/gateway) |
 
-Пока записей нет, Traefik отдаёт самоподписанный сертификат; cert-manager держит заказы в очереди и
-выпустит Let's Encrypt автоматически, как только имя начнёт резолвиться (проверить:
-`kubectl --context max-core get certificate -A`).
+Сертификаты Let's Encrypt выпущены для `yleum.ru`, `www`, `grafana`, `registry` (до 21.12.2026,
+обновляются сами). Две ловушки, встреченные при этом: провайдерские резолверы (Yandex DNS)
+кэшируют «имени нет» до 3 часов — поэтому `k8s/apply.sh coredns` заставляет кластеры резолвить
+`yleum.ru` напрямую с NS reg.ru; и у forward-плагина CoreDNS лимит 15 upstream'ов, а у reg.ru
+16 NS-адресов — берём по два от каждого NS.
 
 ## Как этим пользоваться с Mac
 
@@ -97,17 +98,19 @@ backup-sync → k8s → status). Любую фазу можно запускат
 - Registry: `/v2/` без пароля → 401, с паролем → 200. Grafana `/api/health` → ok (13.2.2).
 - Prometheus: 15 целей up, в т.ч. `node-exporter` 10.10.0.1/2/3.
 - Бэкап: прогон вручную на всех трёх, копии легли на соседей (6.2–6.6 MB каждая).
+- После DNS: `https://yleum.ru`, `https://www.yleum.ru`, `https://grafana.yleum.ru/api/health`,
+  `https://registry.yleum.ru/v2/` — настоящие сертификаты Let's Encrypt, `curl` без `-k` проходит;
+  внутри кластера `yleum.ru` резолвится через coredns-custom, `kubernetes.default` — по-прежнему.
 
 ## Что дальше (не сделано сознательно)
 
-1. **DNS-записи** выше — только владелец (доступ в reg.ru); после них — сертификаты сами.
-2. **Wildcard `*.apps.yleum.ru`** для приложений клиентов: HTTP-01 даёт по сертификату на имя
+1. **Wildcard `*.apps.yleum.ru`** для приложений клиентов: HTTP-01 даёт по сертификату на имя
    (лимит Let's Encrypt 50/неделю на домен); для wildcard нужен DNS-01 через API reg.ru —
    владелец включает API-доступ, ключ кладём в Secret cert-manager.
-3. **Переезд платформы** (Фаза 2 по вектору V9): api/worker/web/gateway/orchestrator с
+2. **Переезд платформы** (Фаза 2 по вектору V9): api/worker/web/gateway/orchestrator с
    docker-compose на 170.168.72.200 → Helm-чарт в кластере core, Redis/MinIO в кластере,
    миграция базы в `max_core`; биллинг → commerce; деплой MAX-приложений через
    `infra/max-app-chart` в runtime. Отдельная работа с переносом данных.
-4. Метрики кластеров runtime/commerce в общий Prometheus (агент с remote_write по WireGuard),
+3. Метрики кластеров runtime/commerce в общий Prometheus (агент с remote_write по WireGuard),
    Loki для логов, `postgres_exporter`, алерты в Telegram.
-5. Второе off-host место для бэкапов вне Serverum (сейчас копии только между этими же VPS).
+4. Второе off-host место для бэкапов вне Serverum (сейчас копии только между этими же VPS).
