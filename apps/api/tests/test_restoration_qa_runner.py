@@ -288,3 +288,85 @@ def test_forbidden_keys_never_appear_in_fixture_output() -> None:
     assert FORBIDDEN_OUTPUT_KEYS
     for key in FORBIDDEN_OUTPUT_KEYS:
         assert key not in rendered, key
+
+
+def test_polling_uses_a_monotonic_deadline_not_wall_clock() -> None:
+    """Срок опроса не должен зависеть от перевода часов.
+
+    Стенные часы могут прыгнуть назад — тогда прогон, считающий по ним, будет
+    ждать дольше отпущенного и займёт песочницу, которая уже истекла.
+    """
+    from omnia_api.ops.restoration_qa.runner import PollBudget
+
+    # Первый тик — момент создания бюджета: ждать начинают тогда, когда его завели.
+    ticks = iter([100.0, 101.0, 130.0, 161.0])
+    budget = PollBudget(seconds=60.0, clock=lambda: next(ticks))
+
+    assert budget.remaining() == 59.0
+    assert budget.remaining() == 30.0
+    assert budget.expired() is True
+
+
+def test_a_poll_never_sleeps_past_its_own_deadline() -> None:
+    from omnia_api.ops.restoration_qa.runner import PollBudget
+
+    ticks = iter([0.0, 55.0, 55.0])
+    budget = PollBudget(seconds=60.0, clock=lambda: next(ticks))
+
+    assert budget.next_sleep(interval=10.0) == 5.0, "последний сон не выходит за срок"
+
+
+def test_a_resume_marker_survives_and_identifies_its_own_attempt() -> None:
+    """Возобновление продолжает ТО ЖЕ, а не начинает похожее."""
+    from omnia_api.ops.restoration_qa.runner import ResumeMarker
+
+    marker = ResumeMarker(
+        operation_id=uuid4(), idempotency_key="qa-adapt-once-0001", terminal=False
+    )
+    same = ResumeMarker(
+        operation_id=marker.operation_id, idempotency_key=marker.idempotency_key, terminal=False
+    )
+
+    assert marker.resumes(same) is True
+    assert marker.resumes(ResumeMarker(uuid4(), marker.idempotency_key, False)) is False
+    assert marker.resumes(ResumeMarker(marker.operation_id, "qa-adapt-once-0002", False)) is False
+
+
+def test_a_terminal_failure_is_never_resumed_under_the_old_identity() -> None:
+    """Новый провал — новая попытка, иначе двa прогона сольются в один отчёт."""
+    from omnia_api.ops.restoration_qa.runner import ResumeMarker
+
+    finished = ResumeMarker(uuid4(), "qa-adapt-once-0001", terminal=True)
+    retry = ResumeMarker(finished.operation_id, finished.idempotency_key, terminal=False)
+
+    assert finished.resumes(retry) is False
+
+
+def test_incompatibility_is_recorded_before_any_adaptive_prompt() -> None:
+    """Порядок доказательства: сначала зафиксировали несовместимость, потом чинили.
+
+    Если адаптацию запустить раньше, чем записан `needs_changes`, нечем будет
+    показать, что она вообще требовалась.
+    """
+    from omnia_api.ops.restoration_qa.contracts import QaScopeRefused
+    from omnia_api.ops.restoration_qa.runner import assert_adaptive_order
+
+    assert_adaptive_order(needs_changes_recorded=True, automatic_policy_started_generation=False)
+
+    with pytest.raises(QaScopeRefused) as caught:
+        assert_adaptive_order(
+            needs_changes_recorded=False, automatic_policy_started_generation=False
+        )
+    assert caught.value.reason_code == "missing_needs_changes"
+
+
+def test_automatic_policy_must_not_have_started_a_generation() -> None:
+    from omnia_api.ops.restoration_qa.contracts import QaScopeRefused
+    from omnia_api.ops.restoration_qa.runner import assert_adaptive_order
+
+    with pytest.raises(QaScopeRefused) as caught:
+        assert_adaptive_order(
+            needs_changes_recorded=True, automatic_policy_started_generation=True
+        )
+
+    assert caught.value.reason_code == "automatic_generation_started"
