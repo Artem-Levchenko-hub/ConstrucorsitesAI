@@ -113,6 +113,27 @@ def _write_activation_journal(path: Path, payload: dict[str, Any]) -> None:
         os.close(fd)
 
 
+_MIGRATION_RUNNER_PATH = "scripts/apply-migrations.mjs"
+# Нормализованные отпечатки ВСЕХ версий исполнителя миграций, когда-либо
+# существовавших в шаблоне (три: 712df4e8, 7c925f89, 5f694772). Файлы приходят
+# из исторического снимка проекта, а снимок может быть старше запрета на правку
+# служебных файлов — значит, доверять одному лишь имени нельзя: это исполнение
+# произвольного кода из снимка, а не восстановление. Список закрыт содержимым,
+# а не именем, и покрывает все законные старые версии, чтобы привязка не сломала
+# восстановление июльских проектов.
+_MIGRATION_RUNNERS = frozenset(
+    {
+        "f8fa7703fd732f9d7e341c3f2262ba03e90a7d3ed828cf9a611ca64be1ad42c8",
+        "1c22beb5d3dceda8fc106f1dc6e73dcd4cfd3a82b660aa018845629d6dfcc192",
+        "be180e28bd6904102a6f6cd533750fa193d9e00d6af68206ae6392b04c7678cd",
+    }
+)
+
+
+def _normalized_digest(text: str) -> str:
+    return hashlib.sha256(text.replace("\r\n", "\n").strip().encode()).hexdigest()
+
+
 _DRIZZLE_CONFIGS = {
     '''import type { Config } from "drizzle-kit";
 
@@ -300,8 +321,12 @@ def structural_materialization_matches(
 
 def empty_database_materializer(files: dict[str, str]) -> list[str] | None:
     """Select a bounded historical-schema recipe for a new isolated empty DB."""
-    if "scripts/apply-migrations.mjs" in files:
-        return ["node", "scripts/apply-migrations.mjs"]
+    if _MIGRATION_RUNNER_PATH in files:
+        # Привязка по содержимому, а не по имени: подменённый исполнитель не
+        # исполняется и не уступает место другому рецепту — отказ здесь и сейчас.
+        if _normalized_digest(files[_MIGRATION_RUNNER_PATH]) not in _MIGRATION_RUNNERS:
+            return None
+        return ["node", _MIGRATION_RUNNER_PATH]
     required = {
         "package.json",
         "pnpm-lock.yaml",

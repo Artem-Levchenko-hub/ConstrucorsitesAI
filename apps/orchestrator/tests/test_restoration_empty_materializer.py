@@ -16,6 +16,20 @@ export default {
 '''
 
 
+_TEMPLATE_RUNNER_COMMITS = ("5f694772", "7c925f89", "712df4e8")
+_RUNNER_PATH = "apps/orchestrator/templates/max-miniapp-nextjs/scripts/apply-migrations.mjs"
+
+
+def _historical_runner(commit: str) -> str:
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    return subprocess.run(
+        ["git", "show", f"{commit}:{_RUNNER_PATH}"],
+        capture_output=True, text=True, check=True, cwd=root,
+    ).stdout
+
 def drizzle_files(**changes: str) -> dict[str, str]:
     files = {
         "package.json": json.dumps(
@@ -66,8 +80,10 @@ def test_legacy_materializer_remains_supported_without_drizzle_metadata():
         empty_database_materializer,
     )
 
+    # Настоящее содержимое исторического исполнителя: доверие привязано к нему,
+    # а не к имени файла, поэтому заглушка здесь больше не подходит.
     assert empty_database_materializer(
-        {"scripts/apply-migrations.mjs": "// historical trusted runner"}
+        {"scripts/apply-migrations.mjs": _historical_runner("7c925f89")}
     ) == ["node", "scripts/apply-migrations.mjs"]
 
 
@@ -658,7 +674,7 @@ async def test_legacy_empty_prepare_still_uses_historical_runner(tmp_path, monke
         monkeypatch,
         {
             "package.json": json.dumps({"scripts": {}}),
-            "scripts/apply-migrations.mjs": "// historical trusted runner",
+            "scripts/apply-migrations.mjs": _historical_runner("7c925f89"),
         },
     )
 
@@ -681,3 +697,71 @@ async def test_missing_empty_schema_recipe_fails_before_candidate_with_empty_sta
         "В выбранной версии нет поддерживаемого описания исторической схемы."
     ]
     assert "candidate-provisioned" not in events
+
+
+
+
+def test_unchanged_config_hash_binds_candidate() -> None:
+    """Каждая настоящая историческая версия исполнителя миграций принимается.
+
+    Привязка по содержимому не имеет права сломать восстановление законных старых
+    версий: в истории шаблона их три, и все три обязаны работать.
+    """
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_database_materializer,
+    )
+
+    for commit in _TEMPLATE_RUNNER_COMMITS:
+        files = {"scripts/apply-migrations.mjs": _historical_runner(commit)}
+
+        assert empty_database_materializer(files) == [
+            "node", "scripts/apply-migrations.mjs",
+        ], commit
+
+
+def test_a_rewritten_historical_runner_is_never_executed() -> None:
+    """Исполнялось по одному факту наличия файла — содержимое не проверялось.
+
+    Файлы приходят из исторического снимка проекта, и этот снимок может быть
+    старше запрета на правку служебных файлов. Запускать `node` по произвольному
+    содержимому из снимка нельзя: это исполнение чужого кода, а не восстановление.
+    """
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_database_materializer,
+    )
+
+    for content in (
+        "// historical trusted runner",
+        _historical_runner("5f694772") + "\nawait import('node:child_process');",
+        "",
+    ):
+        assert empty_database_materializer({"scripts/apply-migrations.mjs": content}) is None
+
+
+def test_a_rewritten_runner_does_not_fall_through_to_the_schema_recipe() -> None:
+    # Непринятый исполнитель не должен молча уступать место другому рецепту:
+    # иначе подменённый файл просто игнорируется, а восстановление идёт дальше.
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_database_materializer,
+    )
+
+    files = drizzle_files(**{"scripts/apply-migrations.mjs": "// подменено"})
+
+    assert empty_database_materializer(files) is None
+
+
+def test_allowlisted_config_restores_empty_target_without_ai() -> None:
+    """LIVE-14/16: разрешённая конфигурация принимается по нормализованному хешу."""
+    import hashlib
+
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_database_materializer,
+    )
+
+    normalized = DRIZZLE_CONFIG.replace("\r\n", "\n").strip()
+    digest = hashlib.sha256(normalized.encode()).hexdigest()
+
+    assert len(digest) == 64
+    assert empty_database_materializer(drizzle_files()) is not None
+    wrong = drizzle_files(**{"drizzle.config.ts": "export default {}"})
+    assert empty_database_materializer(wrong) is None
