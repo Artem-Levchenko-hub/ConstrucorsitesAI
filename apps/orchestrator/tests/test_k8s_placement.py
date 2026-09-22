@@ -604,6 +604,46 @@ async def test_failed_update_rolls_the_cluster_back_to_the_live_release(
 
 
 @pytest.mark.asyncio
+async def test_moving_a_docker_release_into_the_cluster_retires_the_host_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = FakeRuntime()
+    service = _service(tmp_path, runtime)
+    request = _request()
+    docker_release = {"release_id": "docker-1", "prod_url": "https://old.apps.yleum.ru"}
+    _journal(service, request, active_release=docker_release, data_seeded=True)
+    run_id = str(uuid4())
+    release = await _prepared(service, request, tmp_path, run_id, monkeypatch=monkeypatch)
+    # a Docker release never counts as seeded in the cluster: the seed is cold
+    assert kp.PROJECT_POSTGRES_DATA in {s["mount_path"] for s in release["placement"]["seeds"]}
+    unpublished: list[str] = []
+    retired: list[Any] = []
+
+    async def unpublish(host: str) -> None:
+        unpublished.append(host)
+
+    async def retire(project_id: UUID, saved: dict[str, Any], old: Any) -> None:
+        retired.append(old)
+        raise RuntimeError("profile changed")  # host-side trouble must not undo the move
+
+    async def probe(url: str, *, timeout_seconds: float) -> None:
+        return None
+
+    from omnia_orchestrator.services import nginx_writer
+
+    monkeypatch.setattr(nginx_writer, "unpublish", unpublish)
+    monkeypatch.setattr(nginx_writer, "prod_host", lambda slug: f"{slug}.apps.yleum.ru")
+    monkeypatch.setattr(service, "_retire_docker_production", retire)
+    monkeypatch.setattr(service, "_probe_public", probe)
+    await service._activate_kubernetes(request, release, PublicationTrace())
+
+    assert unpublished == ["kanareika-c31c55.apps.yleum.ru"]
+    assert retired == [None]  # identity-only backend: no release layout / profile check
+    assert service._read(PROJECT)["active_release"]["release_id"] == run_id
+    assert runtime.destroyed == [] and len(runtime.published) == 1
+
+
+@pytest.mark.asyncio
 async def test_second_release_prunes_the_previous_code_claims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

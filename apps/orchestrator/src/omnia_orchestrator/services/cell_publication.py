@@ -1562,9 +1562,20 @@ class CellPublicationService:
             if old is not None and not KubernetesPlacement.placed(old):
                 # The app moved from this host into the cluster: its Docker serving
                 # compute is retired now (data volumes retained), the vhost released.
-                await nginx_writer.unpublish(nginx_writer.prod_host(request.slug))
-                with machine_budget(120):
-                    await self._retire_docker_production(project_id, saved, old)
+                # The cluster release is live already; leftovers here are logged,
+                # never a reason to roll it back.
+                try:
+                    await nginx_writer.unpublish(nginx_writer.prod_host(request.slug))
+                    with machine_budget(120):
+                        await self._retire_docker_production(project_id, saved, None)
+                except Exception as error:
+                    import structlog
+
+                    structlog.get_logger("cell_publication").warning(
+                        "docker_release_not_retired_after_move",
+                        project_id=str(project_id),
+                        error_type=type(error).__name__,
+                    )
             elif old is not None:
                 try:
                     await machine_effect(
