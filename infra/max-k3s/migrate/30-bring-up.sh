@@ -75,15 +75,22 @@ if [ "$(docker exec omnia-prod-postgres psql -U omnia -d omnia -tAc "select coun
   echo "   восстанавливаю базу платформы"
   docker exec -i omnia-prod-postgres pg_restore -U omnia -d omnia --no-owner --no-privileges < "$IN/omnia.dump"
   docker exec omnia-prod-postgres psql -U omnia -d omnia -tAc "select 'users='||count(*) from users"
-  # Ячейки старого сервера сюда не переехали: помечаем их удалёнными, иначе api/worker бесконечно
-  # дёргают оркестратор за несуществующими workspace ("workspace state missing").
-  docker exec omnia-prod-postgres psql -U omnia -d omnia -tAc "update project_cell_workspaces set state='deleted', deleted_at=coalesce(deleted_at, now()), updated_at=now() where state<>'deleted'" | sed 's/^/   старые ячейки: /'
+  # Ячейки старого сервера сюда не переехали: их записи УДАЛЯЕМ (каскадом уходят доказательства,
+  # операции, лизы старых ячеек). Помечать state='deleted' нельзя — тогда api считает, что проект
+  # «удаляется», и блокирует запуск среды; без записи платформа создаёт ячейку заново по запросу.
+  docker exec omnia-prod-postgres psql -U omnia -d omnia -tAc "delete from project_cell_workspaces" | sed 's/^/   записи старых ячеек: /'
 fi
-if [ "$(docker run --rm -v full_minio-data:/data alpine sh -c 'ls /data | grep -vc "^\.minio.sys$"')" = "0" ]; then
-  echo "   восстанавливаю MinIO"
-  docker compose stop minio >/dev/null 2>&1
-  docker run --rm -v full_minio-data:/data -v "$IN":/in alpine sh -c 'cd /data && tar xzf /in/minio-data.tgz'
-  docker compose up -d minio minio-init >/dev/null 2>&1
+MINIO_USER=$(sed -n 's/^MINIO_ROOT_USER=//p' "$FULL/.env"); MINIO_PASS=$(sed -n 's/^MINIO_ROOT_PASSWORD=//p' "$FULL/.env")
+if [ -f "$IN/minio-export.tgz" ]; then
+  # Копия «сырых» файлов тома НЕ работает (MinIO вычищает чужие xl.meta) — только через S3-API.
+  echo "   заливаю объекты MinIO через mc (повтор безопасен — объекты перезаписываются)"
+  rm -rf /tmp/minio-export; tar -C /tmp -xzf "$IN/minio-export.tgz"
+  docker run --rm --network full_omnia-prod -v /tmp/minio-export:/in --entrypoint sh minio/mc:latest -c \
+    "mc alias set m http://minio:9000 \"$MINIO_USER\" \"$MINIO_PASS\" >/dev/null && for b in projects previews omnia-photos task-board omnia-images omnia-videos; do [ -d /in/\$b ] && mc cp -r /in/\$b/ m/\$b/ >/dev/null 2>&1; done"
+  rm -rf /tmp/minio-export
+  for b in projects previews omnia-photos; do
+    printf '   %-14s %s objects\n' "$b" "$(docker run --rm --network full_omnia-prod --entrypoint sh minio/mc:latest -c "mc alias set m http://minio:9000 \"$MINIO_USER\" \"$MINIO_PASS\" >/dev/null && mc ls -r m/$b" 2>/dev/null | wc -l | tr -d ' ')"
+  done
 fi
 GW=$(docker network inspect full_omnia-prod -f '{{(index .IPAM.Config 0).Gateway}}')
 upsert "$FULL/.env" ORCHESTRATOR_URL "http://$GW:8003"

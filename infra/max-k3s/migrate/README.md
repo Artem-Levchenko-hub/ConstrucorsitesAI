@@ -104,6 +104,24 @@ curl -s https://yleum.ru/api/health
 Не гонять несколько смоков параллельно. Удаление смок-проекта раньше падало 500 (FK на
 `project_cell_proofs`) — исправлено в 2261f4fc.
 
+## Как вернуть проект со старого сервера (без переноса ячеек)
+
+Git-архив в MinIO (`projects/repos/<id>.tar.gz`) содержит только начальный коммит шаблона —
+рабочий код версий живёт в томе ячейки `omnia-cell-<workspace>-workspace` на старом сервере.
+Оркестратор при создании ячейки засевает её из `/opt/omnia-runtime/projects/<project_id>/`, если
+каталог существует (`_ensure_seed_workspace_files`, «seeded_from_project»). Рецепт:
+
+```bash
+# старый сервер: дерево без зависимостей/сборки/.git (только tar в stdout!)
+docker run --rm -v omnia-cell-<ws>-workspace:/w:ro alpine sh -c \
+  'cd /w && tar czf - --exclude=node_modules --exclude=.next --exclude=.git --exclude=.turbo --exclude=dist .' > /tmp/<project_id>.tgz
+# core: каталог засева + удалить запись старой ячейки, затем обычная сборка (prompt) от владельца
+install -d -o zeuszcz -g zeuszcz /opt/omnia-runtime/projects/<project_id> && tar -C … -xzf …
+```
+
+`state='deleted'` у workspace ставить нельзя (api отвечает «Проект удаляется») — запись удаляется.
+MinIO переносится только через `mc` (S3-API): «сырые» файлы тома новый MinIO вычищает.
+
 ## Что дальше
 
 - Перевести `infra/backup` (offhost workflow, restore-test) и GitHub-переменные release-identity

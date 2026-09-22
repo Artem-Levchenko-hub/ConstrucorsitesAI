@@ -26,8 +26,16 @@ echo "== 3/7 дампы баз (платформа + базы пользоват
 docker exec omnia-prod-postgres pg_dump -U omnia -Fc omnia | ssh -i "$SSH_KEY" "$CORE" "cat > $IN/omnia.dump"
 docker exec omnia-postgres-users pg_dumpall -U omnia_root  | ssh -i "$SSH_KEY" "$CORE" "cat > $IN/omnia_users.sql"
 
-echo "== 4/7 MinIO (превью, снапшоты, фото)"
-docker run --rm -v full_minio-data:/data alpine tar czf - -C /data . | ssh -i "$SSH_KEY" "$CORE" "cat > $IN/minio-data.tgz"
+echo "== 4/7 MinIO (git-архивы проектов, превью, фото) — ТОЛЬКО через S3-API"
+# Копия «сырых» файлов тома (tar) НЕ работает: новый MinIO не признаёт чужие xl.meta и вычищает их
+# (потеряли repos/ при первом переезде). Выгружаем объекты через mc, заливаем на core тоже через mc.
+MINIO_USER=$(sudo sed -n 's/^MINIO_ROOT_USER=//p' /opt/omnia/apps/llm-gateway/deploy/full/.env)
+MINIO_PASS=$(sudo sed -n 's/^MINIO_ROOT_PASSWORD=//p' /opt/omnia/apps/llm-gateway/deploy/full/.env)
+rm -rf /tmp/minio-export; mkdir -p /tmp/minio-export
+docker run --rm --network full_omnia-prod -v /tmp/minio-export:/out --entrypoint sh minio/mc:latest -c \
+  "mc alias set m http://minio:9000 \"$MINIO_USER\" \"$MINIO_PASS\" >/dev/null && for b in projects previews omnia-photos task-board omnia-images omnia-videos; do mkdir -p /out/\$b; mc cp -r m/\$b/ /out/\$b/ >/dev/null 2>&1 || true; done"
+tar -C /tmp -czf - minio-export | ssh -i "$SSH_KEY" "$CORE" "cat > $IN/minio-export.tgz"
+rm -rf /tmp/minio-export
 
 echo "== 5/7 runtime-каталоги платформы (бэкапы, аккаунт acme, история восстановлений)"
 # Состояние ячеек старого сервера (state/project-machines — 194 ГБ чекпойнтов, резервации, локи,
