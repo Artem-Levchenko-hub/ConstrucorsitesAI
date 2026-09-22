@@ -68,7 +68,12 @@ _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
 _HTTP_TIMEOUT_S = 300.0
-_CALL_RETRIES = 3  # bounded transport retry inside one turn; never restart a whole run
+# Bounded transport retry inside one turn; never restart a whole run. The budget is
+# two-sided on purpose: enough attempts to ride out a flake window (see
+# _CALL_RETRY_WINDOW_S), and a wall-clock ceiling so a provider that accepts the
+# connection and then hangs cannot eat the whole generation deadline on one step.
+_CALL_RETRIES = 7
+_CALL_RETRY_WINDOW_S = 210.0
 # The first verified MAX production loop completed a five-screen product inside
 # one 40-turn transcript. Keep that headroom so callers do not need a second
 # provider pass with a fresh context merely because the old 30-turn clamp fired.
@@ -771,6 +776,8 @@ async def _call_messages(
     if user_id:
         payload["user"] = user_id
     last: Exception | None = None
+    loop = asyncio.get_running_loop()
+    started_at = loop.time()
     for attempt in range(_CALL_RETRIES):
         request_headers = dict(headers) if headers is not None else None
         metadata: dict[str, Any] = {
@@ -797,6 +804,9 @@ async def _call_messages(
         # Every provider attempt is attributable. The gateway persists these
         # fields with the provider usage row, including a successful retry.
         payload["metadata"] = metadata
+        # Exponential with a cap: back off harder from a provider that is already
+        # struggling, but never spend a whole minute inside one pause.
+        delay = min(45.0, 4.0 * (2**attempt))
         try:
             r = await client.post(
                 url,
@@ -818,21 +828,24 @@ async def _call_messages(
                     "пополни ключ и повтори промпт"
                 )
             if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
-                await asyncio.sleep(6.0 * (attempt + 1))
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
-                continue
-            r.raise_for_status()
-            body = r.json()
-            if not isinstance(body, dict):
-                raise RuntimeError("messages API returned a non-object payload")
-            return body
+                delay = 6.0 * (attempt + 1)
+            else:
+                r.raise_for_status()
+                body = r.json()
+                if not isinstance(body, dict):
+                    raise RuntimeError("messages API returned a non-object payload")
+                return body
         except httpx.HTTPError as exc:
-            # oneprovider flakes in SUSTAINED bursts (observed live: series of
-            # 502s + 504s over several minutes killed builds mid-run). Linear
-            # 3-15s backoff only covered ~30s; exponential-with-cap rides out a
-            # multi-minute flake window (~3.5 min total) before giving up.
+            # The provider flakes in SUSTAINED bursts. Live on 2026-09-22 a plain
+            # 502 window of 51 s was enough to fail a user's whole build, because
+            # three attempts only covered ~28 s of backoff while the comment here
+            # claimed minutes. The budget now really spans the window it promises.
             last = exc
-            await asyncio.sleep(min(45.0, 4.0 * (2**attempt)))
+        # A pause is only worth taking if another attempt follows it.
+        if attempt + 1 >= _CALL_RETRIES or loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
+            break
+        await asyncio.sleep(delay)
     raise last or RuntimeError("messages call failed")
 
 
