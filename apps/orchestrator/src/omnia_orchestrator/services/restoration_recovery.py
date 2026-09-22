@@ -204,7 +204,8 @@ def clone_witness(
         created = runner.run(["volume", "create", clone], timeout=60)
         if not created.ok:
             return _report(
-                "clone_witness", [_finding("scratch_volume", False, "scratch volume not created")]
+                "clone_witness",
+                [_finding("scratch_volume", False, "scratch volume not created")],
             )
 
         copied = runner.run(
@@ -488,14 +489,89 @@ def verify_owner_boundary(observation: OwnerBoundaryObservation) -> RecoveryRepo
     return _report("verify", findings)
 
 
+@dataclass(frozen=True, slots=True)
+class CompletionObservation:
+    """Итоговое состояние проекта после восстановления."""
+
+    current_version_number: int
+    current_snapshot_id: str
+    failed_version_numbers: Sequence[int]
+    # Считается до восстановления и после: восстановление не создаёт версий.
+    version_count_before: int
+    version_count_after: int
+    settlements_during_recovery: int
+    generation_runs_during_recovery: int
+    serving_commit_sha: str
+    editable_inventory_digest: str
+    snapshot_inventory_digest: str
+    open_leases: int
+
+
+def complete_recovery(
+    intent: RestorationRecoveryIntent,
+    observation: CompletionObservation,
+) -> RecoveryReport:
+    """Шестая фаза: восстановление закончено только если ничего лишнего не появилось.
+
+    Восстановление — это возврат к уже существующей версии, а не новая работа.
+    Поэтому оно не имеет права породить новую версию, списание или запуск генерации:
+    появление любого из них означает, что чинили не тем способом. Упавшая версия
+    остаётся упавшей — переписывать историю нельзя.
+    """
+    findings = [
+        _finding(
+            "current_is_the_restored_snapshot",
+            observation.current_snapshot_id == str(intent.current_snapshot_id),
+            "the project points at a different snapshot",
+        ),
+        _finding(
+            "failed_version_stays_failed",
+            bool(observation.failed_version_numbers)
+            and observation.current_version_number not in observation.failed_version_numbers,
+            "the failed attempt was rewritten or became current",
+        ),
+        _finding(
+            "no_new_version",
+            observation.version_count_after == observation.version_count_before,
+            f"versions went {observation.version_count_before} -> "
+            f"{observation.version_count_after}",
+        ),
+        _finding(
+            "recovery_spent_nothing",
+            observation.settlements_during_recovery == 0
+            and observation.generation_runs_during_recovery == 0,
+            f"{observation.settlements_during_recovery} settlements, "
+            f"{observation.generation_runs_during_recovery} runs during recovery",
+        ),
+        _finding(
+            "serving_matches_the_snapshot",
+            observation.serving_commit_sha == intent.current_commit_sha,
+            "the running code is not the restored commit",
+        ),
+        _finding(
+            "editable_tree_equals_snapshot",
+            observation.editable_inventory_digest == observation.snapshot_inventory_digest,
+            "the editable tree still differs from the snapshot",
+        ),
+        _finding(
+            "no_lease_left_open",
+            observation.open_leases == 0,
+            f"{observation.open_leases} leases still open",
+        ),
+    ]
+    return _report("complete", findings)
+
+
 __all__ = [
     "SCRATCH_PREFIX",
     "CommandResult",
+    "CompletionObservation",
     "DockerRunner",
     "OwnerBoundaryObservation",
     "ScratchPool",
     "SourceGateway",
     "clone_witness",
+    "complete_recovery",
     "inspect_recovery",
     "source_sync",
     "start_current",

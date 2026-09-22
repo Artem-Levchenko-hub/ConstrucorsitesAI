@@ -659,3 +659,92 @@ def test_an_empty_owner_read_is_not_a_pass() -> None:
 
     assert report.ok is False
     assert any(f.check == "owner_reads_own_row" and not f.ok for f in report.findings)
+
+
+# --------------------------------------------------------------------------- #
+# RC6: восстановление завершено, только если ничего лишнего не появилось
+# --------------------------------------------------------------------------- #
+
+
+def _completion(**overrides):  # type: ignore[no-untyped-def]
+    from omnia_orchestrator.services.restoration_recovery import CompletionObservation
+
+    payload = {
+        "current_version_number": 7,
+        "current_snapshot_id": "4d1089a5-ef13-5dcd-b313-7f0cf4b88c04",
+        "failed_version_numbers": (8,),
+        "version_count_before": 8,
+        "version_count_after": 8,
+        "settlements_during_recovery": 0,
+        "generation_runs_during_recovery": 0,
+        "serving_commit_sha": "6371b71b9b3ca83ba31119bbc5b4bfc996cc4c94",
+        "editable_inventory_digest": "d" * 64,
+        "snapshot_inventory_digest": "d" * 64,
+        "open_leases": 0,
+    }
+    payload.update(overrides)
+    return CompletionObservation(**payload)  # type: ignore[arg-type]
+
+
+def test_a_clean_recovery_completes() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    report = complete_recovery(_intent(), _completion())
+
+    assert report.ok is True and report.phase == "complete"
+
+
+def test_recovery_that_created_a_version_is_not_a_recovery() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    report = complete_recovery(_intent(), _completion(version_count_after=9))
+
+    assert report.ok is False
+    finding = next(f for f in report.findings if f.check == "no_new_version")
+    assert not finding.ok and "8 -> 9" in finding.detail
+
+
+def test_recovery_must_not_spend_quota_or_settle() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    for field in ("settlements_during_recovery", "generation_runs_during_recovery"):
+        report = complete_recovery(_intent(), _completion(**{field: 1}))
+        assert report.ok is False, field
+        assert any(f.check == "recovery_spent_nothing" and not f.ok for f in report.findings)
+
+
+def test_the_failed_attempt_stays_failed() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    # Упавшая версия стала текущей — историю переписали.
+    report = complete_recovery(_intent(), _completion(current_version_number=8))
+
+    assert report.ok is False
+    assert any(f.check == "failed_version_stays_failed" and not f.ok for f in report.findings)
+
+
+def test_serving_code_must_be_the_restored_commit() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    report = complete_recovery(_intent(), _completion(serving_commit_sha="0" * 40))
+
+    assert report.ok is False
+    assert any(f.check == "serving_matches_the_snapshot" and not f.ok for f in report.findings)
+
+
+def test_an_editable_tree_that_still_differs_blocks_completion() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    report = complete_recovery(_intent(), _completion(editable_inventory_digest="e" * 64))
+
+    assert report.ok is False
+    assert any(f.check == "editable_tree_equals_snapshot" and not f.ok for f in report.findings)
+
+
+def test_an_open_lease_blocks_completion() -> None:
+    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+
+    report = complete_recovery(_intent(), _completion(open_leases=1))
+
+    assert report.ok is False
+    assert any(f.check == "no_lease_left_open" and not f.ok for f in report.findings)
