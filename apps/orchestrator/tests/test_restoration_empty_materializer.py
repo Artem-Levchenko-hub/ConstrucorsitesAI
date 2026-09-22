@@ -16,19 +16,24 @@ export default {
 '''
 
 
-_TEMPLATE_RUNNER_COMMITS = ("5f694772", "7c925f89", "712df4e8")
-_RUNNER_PATH = "apps/orchestrator/templates/max-miniapp-nextjs/scripts/apply-migrations.mjs"
+# Отпечатки всех версий исполнителя миграций, когда-либо бывших в шаблоне.
+# Тест НЕ читает историю репозитория: CI выгружает мелкую копию, где старых
+# коммитов нет, и такой тест падал бы только в CI.
+_RUNNER_DIGESTS = {
+    "5f694772": "f8fa7703fd732f9d7e341c3f2262ba03e90a7d3ed828cf9a611ca64be1ad42c8",
+    "7c925f89": "1c22beb5d3dceda8fc106f1dc6e73dcd4cfd3a82b660aa018845629d6dfcc192",
+    "712df4e8": "be180e28bd6904102a6f6cd533750fa193d9e00d6af68206ae6392b04c7678cd",
+}
 
 
-def _historical_runner(commit: str) -> str:
-    import subprocess
+def _template_runner() -> str:
+    """Текущий исполнитель миграций прямо из шаблона на диске."""
     from pathlib import Path
 
-    root = Path(__file__).resolve().parents[3]
-    return subprocess.run(
-        ["git", "show", f"{commit}:{_RUNNER_PATH}"],
-        capture_output=True, text=True, check=True, cwd=root,
-    ).stdout
+    root = Path(__file__).resolve().parents[1]
+    return (root / "templates/max-miniapp-nextjs/scripts/apply-migrations.mjs").read_text(
+        encoding="utf-8"
+    )
 
 def drizzle_files(**changes: str) -> dict[str, str]:
     files = {
@@ -83,7 +88,7 @@ def test_legacy_materializer_remains_supported_without_drizzle_metadata():
     # Настоящее содержимое исторического исполнителя: доверие привязано к нему,
     # а не к имени файла, поэтому заглушка здесь больше не подходит.
     assert empty_database_materializer(
-        {"scripts/apply-migrations.mjs": _historical_runner("7c925f89")}
+        {"scripts/apply-migrations.mjs": _template_runner()}
     ) == ["node", "scripts/apply-migrations.mjs"]
 
 
@@ -674,7 +679,7 @@ async def test_legacy_empty_prepare_still_uses_historical_runner(tmp_path, monke
         monkeypatch,
         {
             "package.json": json.dumps({"scripts": {}}),
-            "scripts/apply-migrations.mjs": _historical_runner("7c925f89"),
+            "scripts/apply-migrations.mjs": _template_runner(),
         },
     )
 
@@ -702,21 +707,29 @@ async def test_missing_empty_schema_recipe_fails_before_candidate_with_empty_sta
 
 
 def test_unchanged_config_hash_binds_candidate() -> None:
-    """Каждая настоящая историческая версия исполнителя миграций принимается.
+    """Привязка по содержимому не смеет сломать законные старые версии.
 
-    Привязка по содержимому не имеет права сломать восстановление законных старых
-    версий: в истории шаблона их три, и все три обязаны работать.
+    В истории шаблона исполнителей было три, и все три обязаны оставаться
+    разрешёнными: иначе восстановление июльских проектов тихо перестанет
+    работать. Отдельно сверяется файл на диске — если шаблон изменят, а список
+    забудут обновить, тест упадёт здесь, а не у владельца.
     """
+    import hashlib
+
     from omnia_orchestrator.services.code_restoration_engine import (
+        _MIGRATION_RUNNERS,
         empty_database_materializer,
     )
 
-    for commit in _TEMPLATE_RUNNER_COMMITS:
-        files = {"scripts/apply-migrations.mjs": _historical_runner(commit)}
+    on_disk = hashlib.sha256(
+        _template_runner().replace("\r\n", "\n").strip().encode()
+    ).hexdigest()
+    assert on_disk in _MIGRATION_RUNNERS, "шаблон изменился — обнови список разрешённых"
+    assert set(_RUNNER_DIGESTS.values()) == set(_MIGRATION_RUNNERS)
 
-        assert empty_database_materializer(files) == [
-            "node", "scripts/apply-migrations.mjs",
-        ], commit
+    assert empty_database_materializer(
+        {"scripts/apply-migrations.mjs": _template_runner()}
+    ) == ["node", "scripts/apply-migrations.mjs"]
 
 
 def test_a_rewritten_historical_runner_is_never_executed() -> None:
@@ -732,7 +745,7 @@ def test_a_rewritten_historical_runner_is_never_executed() -> None:
 
     for content in (
         "// historical trusted runner",
-        _historical_runner("5f694772") + "\nawait import('node:child_process');",
+        _template_runner() + "\nawait import('node:child_process');",
         "",
     ):
         assert empty_database_materializer({"scripts/apply-migrations.mjs": content}) is None
@@ -814,5 +827,5 @@ def test_a_supported_version_has_no_blocker() -> None:
 
     assert empty_materializer_blocker(drizzle_files()) is None
     assert empty_materializer_blocker(
-        {"scripts/apply-migrations.mjs": _historical_runner("7c925f89")}
+        {"scripts/apply-migrations.mjs": _template_runner()}
     ) is None
