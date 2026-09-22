@@ -379,6 +379,51 @@ def empty_database_materializer(files: dict[str, str]) -> list[str] | None:
     ]
 
 
+def empty_materializer_blocker(files: dict[str, str]) -> str | None:
+    """Назвать владельцу, ЧЕГО не хватает для восстановления исторической схемы.
+
+    Одна общая фраза «нет поддерживаемого описания схемы» не даёт действовать:
+    по ней не отличить изменённый служебный файл от пропавшей настройки и от
+    неподдерживаемых версий библиотек, а это три разных разговора с поддержкой.
+    Содержимое файлов проекта в текст не попадает — только названия и причина.
+    """
+    if empty_database_materializer(files) is not None:
+        return None
+    if _MIGRATION_RUNNER_PATH in files:
+        return (
+            "Служебный файл применения миграций в выбранной версии отличается от "
+            "известных — восстановление по нему не выполняется."
+        )
+    missing = [
+        name
+        for name, human in (
+            ("drizzle.config.ts", "настройка"),
+            ("src/lib/db/schema.ts", "описание схемы"),
+            ("package.json", "описание пакета"),
+            ("pnpm-lock.yaml", "список зависимостей"),
+        )
+        if name not in files or not files[name].strip()
+    ]
+    if missing:
+        human = {
+            "drizzle.config.ts": "настройка базы (drizzle.config.ts)",
+            "src/lib/db/schema.ts": "описание схемы (src/lib/db/schema.ts)",
+            "package.json": "описание пакета (package.json)",
+            "pnpm-lock.yaml": "список зависимостей (pnpm-lock.yaml)",
+        }
+        listed = ", ".join(human[name] for name in missing)
+        return f"В выбранной версии не хватает файлов: {listed}."
+    if files["drizzle.config.ts"].replace("\r\n", "\n").strip() not in _DRIZZLE_CONFIGS:
+        return (
+            "Настройка базы (drizzle.config.ts) в выбранной версии не совпадает ни с "
+            "одной известной, поэтому схему нельзя восстановить без изменений."
+        )
+    return (
+        "В выбранной версии версии библиотек работы с базой не поддерживаются "
+        "восстановлением без изменений."
+    )
+
+
 def verify_source_inventory(actual: dict[str, bytes], expected: list[dict[str, Any]]) -> None:
     """Unknown persistent files must be classified before replacing a code volume."""
     from omnia_orchestrator.services.docker_py_cell_backend import (
@@ -1376,7 +1421,8 @@ class CodeRestorationEngine:
                             "candidate_id": None,
                             "report": preparation_report(
                                 blockers=[
-                                    "В выбранной версии нет поддерживаемого описания "
+                                    empty_materializer_blocker(files)
+                                    or "В выбранной версии нет поддерживаемого описания "
                                     "исторической схемы."
                                 ],
                                 observed_database_state=observed_database_state,

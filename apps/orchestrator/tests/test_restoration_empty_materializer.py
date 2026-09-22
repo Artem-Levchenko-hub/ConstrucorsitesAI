@@ -693,9 +693,9 @@ async def test_missing_empty_schema_recipe_fails_before_candidate_with_empty_sta
 
     assert result["state"] == "needs_changes"
     assert result["report"]["database_state"] == "empty"
-    assert result["report"]["blockers"] == [
-        "В выбранной версии нет поддерживаемого описания исторической схемы."
-    ]
+    # Причина обязана называть недостающее, иначе владельцу не с чем идти дальше.
+    blocker = result["report"]["blockers"][0]
+    assert "drizzle.config.ts" in blocker and "pnpm-lock.yaml" in blocker
     assert "candidate-provisioned" not in events
 
 
@@ -765,3 +765,54 @@ def test_allowlisted_config_restores_empty_target_without_ai() -> None:
     assert empty_database_materializer(drizzle_files()) is not None
     wrong = drizzle_files(**{"drizzle.config.ts": "export default {}"})
     assert empty_database_materializer(wrong) is None
+
+
+def test_missing_historical_materializer_is_actionable_without_candidate() -> None:
+    """Владельцу должно быть видно, ЧЕГО не хватает, а не «что-то не поддерживается».
+
+    Раньше любой недостающий артефакт давал одну и ту же фразу про отсутствие
+    поддерживаемого описания схемы. По ней нельзя понять, изменён ли служебный
+    файл, пропала ли настройка или дело в версиях библиотек, — а это три разных
+    разговора с поддержкой.
+    """
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_materializer_blocker,
+    )
+
+    cases = {
+        "drizzle.config.ts": "настрой",
+        "src/lib/db/schema.ts": "схем",
+        "pnpm-lock.yaml": "зависим",
+    }
+    for path, marker in cases.items():
+        files = drizzle_files()
+        files.pop(path)
+
+        blocker = empty_materializer_blocker(files)
+
+        assert blocker is not None, path
+        assert marker in blocker.lower(), (path, blocker)
+
+
+def test_a_changed_service_runner_says_so_plainly() -> None:
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_materializer_blocker,
+    )
+
+    blocker = empty_materializer_blocker({"scripts/apply-migrations.mjs": "// подменено"})
+
+    assert blocker is not None
+    assert "миграц" in blocker.lower()
+    # Содержимое чужого файла в текст для владельца не попадает.
+    assert "подменено" not in blocker
+
+
+def test_a_supported_version_has_no_blocker() -> None:
+    from omnia_orchestrator.services.code_restoration_engine import (
+        empty_materializer_blocker,
+    )
+
+    assert empty_materializer_blocker(drizzle_files()) is None
+    assert empty_materializer_blocker(
+        {"scripts/apply-migrations.mjs": _historical_runner("7c925f89")}
+    ) is None
