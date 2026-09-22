@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, status
 from fastapi.responses import StreamingResponse
 from slugify import slugify
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.config import get_settings
@@ -26,6 +26,11 @@ from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
+from omnia_api.models.project_cell import (
+    ProjectCellCandidate,
+    ProjectCellProof,
+    ProjectCellWorkspace,
+)
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.usage import Usage
 from omnia_api.models.wallet_charge import WalletCharge
@@ -416,6 +421,43 @@ async def delete_project(
         GenerationRun.project_id == project.id
     )
     project_message_ids = select(Message.id).where(Message.project_id == project.id)
+    # Cell release evidence (proofs, their results, candidates) references the
+    # project's generation runs with ON DELETE RESTRICT on purpose: evidence must
+    # never vanish because a run was dropped. Deleting the whole project is the
+    # one legitimate case where the evidence goes too, so remove it explicitly
+    # here — otherwise PostgreSQL may cascade projects → generation_runs before
+    # the workspace cascade has reached the proofs and refuse the delete
+    # (seen live 2026-09-22: DELETE /api/projects/{id} → 500 IntegrityError).
+    project_workspace_ids = select(ProjectCellWorkspace.id).where(
+        ProjectCellWorkspace.project_id == project.id
+    )
+    evidence_scope = or_(
+        ProjectCellCandidate.generation_run_id.in_(project_run_ids),
+        ProjectCellCandidate.workspace_id.in_(project_workspace_ids),
+    )
+    # Candidates may point at each other (expected_accepted_candidate_id, also
+    # RESTRICT); break those links before removing the rows.
+    await session.execute(
+        update(ProjectCellCandidate)
+        .where(evidence_scope)
+        .values(expected_accepted_candidate_id=None)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(ProjectCellCandidate)
+        .where(evidence_scope)
+        .execution_options(synchronize_session=False)
+    )
+    await session.execute(
+        delete(ProjectCellProof)
+        .where(
+            or_(
+                ProjectCellProof.generation_run_id.in_(project_run_ids),
+                ProjectCellProof.workspace_id.in_(project_workspace_ids),
+            )
+        )
+        .execution_options(synchronize_session=False)
+    )
     await session.execute(
         update(WalletCharge)
         .where(WalletCharge.message_id.in_(project_message_ids))

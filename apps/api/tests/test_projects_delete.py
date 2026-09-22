@@ -569,3 +569,115 @@ async def test_delete_cancels_undispatched_owner_wake_without_allocating_cpu(
     response = await client.delete(f"/api/projects/{project.id}")
     assert response.status_code == 204, response.text
     assert calls == ["destroy"]
+
+
+async def test_delete_removes_cell_release_evidence_before_runs(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    as_user,
+    fake_teardown,
+    monkeypatch,
+) -> None:
+    """Proofs and candidates reference generation runs with ON DELETE RESTRICT
+    (evidence must not vanish behind a dropped run). Deleting the whole project
+    is the one case where the evidence legitimately goes too — the handler has
+    to remove it explicitly, otherwise PostgreSQL cascades projects →
+    generation_runs before the workspace cascade reaches the proofs and the
+    DELETE fails with an IntegrityError (live on 2026-09-22)."""
+    from omnia_api.models.project_cell import (
+        ProjectCellCandidate,
+        ProjectCellProof,
+        ProjectCellProofResult,
+    )
+    from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+
+    async def destroy(_self, request):
+        return _destroyed_cell(request)
+
+    monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", destroy)
+
+    owner, project, workspace = await _cell_project(db_session)
+    run = GenerationRun(
+        project_id=project.id,
+        user_id=owner.id,
+        idempotency_key=str(uuid.uuid4()),
+        prompt_hash="prompt-hash",
+        status="failed",
+        response_mode="build",
+        agent_state={},
+    )
+    db_session.add(run)
+    await db_session.flush()
+    proof = ProjectCellProof(
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        fencing_epoch=3,
+        proof_key="a" * 64,
+        workspace_revision="b" * 64,
+        dependency_digest="c" * 64,
+        schema_data_digest="d" * 64,
+        cell_manifest_digest="e" * 64,
+        base_image_digest="f" * 64,
+        toolchain_digest="1" * 64,
+        resource_profile_version="docker-owner-cell-resources-v2",
+        build_config_digest="2" * 64,
+    )
+    db_session.add(proof)
+    await db_session.flush()
+    result = ProjectCellProofResult(
+        proof_id=proof.id,
+        workspace_id=workspace.id,
+        dimension="runtime",
+        dimension_key="9" * 64,
+        outcome="red",
+        operation_id=uuid.uuid4(),
+        detail_digest="8" * 64,
+        redacted_detail="MAX data-plane request failed: ConnectError",
+    )
+    accepted = ProjectCellCandidate(
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        fencing_epoch=3,
+        source_revision="b" * 64,
+        migration_digest="d" * 64,
+        database_backup_ref="database-backup/sha256/" + "3" * 64,
+        build_ref="build/sha256/" + "4" * 64,
+        verification_ref="verification/sha256/" + "5" * 64,
+        status="accepted",
+        cancelled=False,
+    )
+    db_session.add_all([result, accepted])
+    await db_session.flush()
+    follow_up = ProjectCellCandidate(
+        workspace_id=workspace.id,
+        generation_run_id=run.id,
+        fencing_epoch=3,
+        source_revision="c" * 64,
+        migration_digest="d" * 64,
+        database_backup_ref="database-backup/sha256/" + "6" * 64,
+        build_ref="build/sha256/" + "7" * 64,
+        verification_ref="verification/sha256/" + "8" * 64,
+        expected_accepted_candidate_id=accepted.id,
+        status="prepared",
+        cancelled=False,
+    )
+    db_session.add(follow_up)
+    await db_session.commit()
+    ids = {
+        "run": run.id, "proof": proof.id, "result": result.id,
+        "accepted": accepted.id, "follow_up": follow_up.id, "workspace": workspace.id,
+    }
+    db_session.expunge_all()
+
+    as_user(owner)
+    response = await client.delete(f"/api/projects/{project.id}")
+
+    assert response.status_code == 204, response.text
+    db_session.expire_all()
+    assert await db_session.get(Project, project.id) is None
+    assert await db_session.get(GenerationRun, ids["run"]) is None
+    assert await db_session.get(ProjectCellProof, ids["proof"]) is None
+    assert await db_session.get(ProjectCellProofResult, ids["result"]) is None
+    assert await db_session.get(ProjectCellCandidate, ids["accepted"]) is None
+    assert await db_session.get(ProjectCellCandidate, ids["follow_up"]) is None
+    assert await db_session.get(ProjectCellWorkspace, ids["workspace"]) is None
