@@ -115,14 +115,28 @@ def validate_smoke_identity(
     runner_sha: str,
     expected: ReleaseIdentity,
     observed: ReleaseIdentity,
+    *,
+    runner_contains_release: bool | None = None,
 ) -> list[str]:
     """Return the identity failures of this run; never adopt what was observed.
 
     The runner's own revision is part of the verdict: a workflow checked out at an
-    older commit cannot certify a newer release, however healthy production looks.
+    older commit cannot certify a newer release, however healthy production looks —
+    its criteria predate the release it would be judging.
+
+    Being AHEAD is a different thing from being wrong. A runner whose revision
+    already contains the deployed one knows everything about it and then some, so
+    it may certify it. That distinction is not a nicety: without it every commit
+    to the default branch, documentation included, turns monitoring red until the
+    expected variables are bumped — and monitoring that is red by routine teaches
+    people to stop looking.
+
+    Ancestry is an observation the caller supplies, not something this module can
+    compute: it has no repository. Unknown ancestry is refused rather than
+    assumed, otherwise omitting the evidence would be enough to pass.
     """
     failures: list[str] = []
-    if runner_sha != expected.api:
+    if runner_sha != expected.api and not runner_contains_release:
         failures.append("runner.release_mismatch")
     expected_map, observed_map = expected.as_map(), observed.as_map()
     for component in sorted(expected_map):
@@ -360,10 +374,16 @@ def main() -> int:
     # the CI commit and report a drift that does not exist.
     declared_runner = os.environ.get("SMOKE_RUNNER_SHA", "").strip()
     runner_sha = declared_runner or config.expected["api"]
+    # Whether this revision already contains the deployed one is a fact about the
+    # repository, which this module cannot read. The workflow states it; anything
+    # other than an explicit "true" counts as unknown, and unknown is refused.
+    contains_release = os.environ.get("SMOKE_RUNNER_CONTAINS_RELEASE", "").strip().lower() == "true"
     runner_failures = (
         [
             code
-            for code in validate_smoke_identity(runner_sha, expected, expected)
+            for code in validate_smoke_identity(
+                runner_sha, expected, expected, runner_contains_release=contains_release
+            )
             if code == "runner.release_mismatch"
         ]
         if declared_runner

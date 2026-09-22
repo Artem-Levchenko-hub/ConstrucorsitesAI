@@ -132,3 +132,51 @@ def test_a_clean_run_is_the_only_passing_artifact() -> None:
     )
 
     assert artifact["status"] == "passed" and artifact["failures"] == []
+
+
+def test_a_runner_that_already_contains_the_release_may_certify_it() -> None:
+    """Быть впереди — не то же самое, что быть не тем.
+
+    22.09: после коммита с одной лишь документацией мониторинг покраснел, хотя на
+    проде ничего не менялось. Правило сравнивало ревизии посимвольно, а защищать
+    оно должно от другого — от прогона со СТАРОГО кода, чьи критерии не знают о
+    новой поставке. Прогон, содержащий выкаченный код, знает о нём всё.
+
+    Цена лишней строгости не теоретическая: мониторинг, краснеющий после каждого
+    push, приучает не смотреть на красное.
+    """
+    failures = validate_smoke_identity(
+        _SHA_B, _identity(), _identity(), runner_contains_release=True
+    )
+
+    assert failures == []
+
+
+def test_a_runner_that_does_not_contain_the_release_still_cannot_certify_it() -> None:
+    failures = validate_smoke_identity(
+        _SHA_B, _identity(), _identity(), runner_contains_release=False
+    )
+
+    assert failures == ["runner.release_mismatch"]
+
+
+def test_unknown_ancestry_is_refused_not_assumed() -> None:
+    """Неизвестно — значит нет: иначе достаточно не передать признак."""
+    failures = validate_smoke_identity(
+        _SHA_B, _identity(), _identity(), runner_contains_release=None
+    )
+
+    assert failures == ["runner.release_mismatch"]
+
+
+def test_an_exact_runner_needs_no_ancestry_evidence() -> None:
+    assert validate_smoke_identity(_SHA_A, _identity(), _identity()) == []
+
+
+def test_containing_the_release_never_excuses_a_drifted_service() -> None:
+    # Послабление касается только ревизии прогона; сервисы сверяются как прежде.
+    failures = validate_smoke_identity(
+        _SHA_B, _identity(), _identity(web=_SHA_B), runner_contains_release=True
+    )
+
+    assert failures == ["web.release_mismatch"]

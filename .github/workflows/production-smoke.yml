@@ -45,6 +45,10 @@ jobs:
     timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Ancestry needs history: a shallow clone cannot tell whether this
+          # revision already contains the deployed one.
+          fetch-depth: 0
 
       - name: Refuse a runner that cannot certify the requested release
         if: inputs.release_sha != ''
@@ -57,6 +61,23 @@ jobs:
             echo "runner.checkout_mismatch requested=${requested} checked_out=${checked_out}"
             exit 1
           fi
+
+      - name: State whether this revision already contains the deployed release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          deployed="${PRODUCTION_EXPECTED_API_RELEASE_SHA}"
+          contains=false
+          # An older runner judges a newer release by criteria that predate it,
+          # so it is refused. A runner that already contains the deployed commit
+          # knows everything about it and may certify it.
+          if [ -n "${deployed}" ] && git cat-file -e "${deployed}^{commit}" 2>/dev/null; then
+            if git merge-base --is-ancestor "${deployed}" HEAD 2>/dev/null; then
+              contains=true
+            fi
+          fi
+          echo "SMOKE_RUNNER_CONTAINS_RELEASE=${contains}" >> "$GITHUB_ENV"
+          echo "runner contains deployed release: ${contains}"
 
       - name: Probe platform and MAX canary
         id: smoke
