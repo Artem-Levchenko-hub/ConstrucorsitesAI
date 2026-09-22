@@ -180,12 +180,12 @@ phase_monitoring() {
 fullnameOverride: monitoring
 grafana:
   adminPassword: "$gpw"
+  # На core порты 80/443 держит хостовый nginx (Фаза 2a: платформа в Docker), Traefik — только ClusterIP.
+  # TLS для grafana.$DOMAIN выпускает certbot в nginx, ingress здесь — HTTP без cert-manager.
   ingress:
     enabled: true
     ingressClassName: traefik
-    annotations: {cert-manager.io/cluster-issuer: letsencrypt-prod}
     hosts: [grafana.$DOMAIN]
-    tls: [{secretName: grafana-tls, hosts: [grafana.$DOMAIN]}]
   grafana.ini:
     server: {root_url: "https://grafana.$DOMAIN"}
     analytics: {reporting_enabled: false, check_for_updates: false}
