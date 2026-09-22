@@ -429,14 +429,75 @@ def start_current(
     return _report("start_current", findings)
 
 
+@dataclass(frozen=True, slots=True)
+class OwnerBoundaryObservation:
+    """Что увидели три участника: владелец строки, второй владелец и аноним."""
+
+    owner_status: int
+    owner_rows: int
+    stranger_status: int
+    stranger_rows: int
+    anonymous_status: int
+    baseline_digest_before: str
+    baseline_digest_after: str
+    temporary_row_lifecycle: Sequence[int] = ()
+
+
+def verify_owner_boundary(observation: OwnerBoundaryObservation) -> RecoveryReport:
+    """Пятая фаза: доказать, что данные видит только их владелец.
+
+    Проверяется не «страница открылась», а граница: владелец читает свою строку,
+    второй владелец не получает её ни в каком виде, аноним получает отказ. Отдельно
+    временная строка проходит полный цикл создания, изменения, перечитывания и
+    удаления — и при этом исходная строка обязана остаться нетронутой, что
+    подтверждается одинаковым отпечатком до и после.
+    """
+    findings = [
+        _finding(
+            "owner_reads_own_row",
+            observation.owner_status == 200 and observation.owner_rows == 1,
+            f"owner saw {observation.owner_rows} rows (HTTP {observation.owner_status})"
+            if observation.owner_status != 200 or observation.owner_rows != 1
+            else "",
+        ),
+        _finding(
+            "stranger_is_denied",
+            observation.stranger_status in {403, 404} and observation.stranger_rows == 0,
+            "a second signed identity reached the row"
+            if observation.stranger_rows
+            else f"unexpected status {observation.stranger_status}",
+        ),
+        _finding(
+            "anonymous_is_denied",
+            observation.anonymous_status == 401,
+            f"anonymous got HTTP {observation.anonymous_status}",
+        ),
+        _finding(
+            "baseline_row_untouched",
+            observation.baseline_digest_before == observation.baseline_digest_after,
+            "the baseline row changed during the check"
+            if observation.baseline_digest_before != observation.baseline_digest_after
+            else "",
+        ),
+        _finding(
+            "temporary_row_full_lifecycle",
+            list(observation.temporary_row_lifecycle) == [201, 200, 200, 204],
+            "create/update/reload/delete did not all succeed",
+        ),
+    ]
+    return _report("verify", findings)
+
+
 __all__ = [
     "SCRATCH_PREFIX",
     "CommandResult",
     "DockerRunner",
+    "OwnerBoundaryObservation",
     "ScratchPool",
     "SourceGateway",
     "clone_witness",
     "inspect_recovery",
     "source_sync",
     "start_current",
+    "verify_owner_boundary",
 ]

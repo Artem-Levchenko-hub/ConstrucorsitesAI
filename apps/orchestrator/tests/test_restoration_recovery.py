@@ -583,3 +583,79 @@ def test_a_missing_retained_volume_stops_before_start() -> None:
 
     assert report.ok is False and started == []
     assert any(f.check == "retained_database_present" and not f.ok for f in report.findings)
+
+
+# --------------------------------------------------------------------------- #
+# RC5: данные видит только их владелец, исходная строка не меняется
+# --------------------------------------------------------------------------- #
+
+
+def _observation(**overrides):  # type: ignore[no-untyped-def]
+    from omnia_orchestrator.services.restoration_recovery import OwnerBoundaryObservation
+
+    payload = {
+        "owner_status": 200,
+        "owner_rows": 1,
+        "stranger_status": 404,
+        "stranger_rows": 0,
+        "anonymous_status": 401,
+        "baseline_digest_before": "f" * 64,
+        "baseline_digest_after": "f" * 64,
+        "temporary_row_lifecycle": (201, 200, 200, 204),
+    }
+    payload.update(overrides)
+    return OwnerBoundaryObservation(**payload)  # type: ignore[arg-type]
+
+
+def test_the_owner_boundary_passes_only_when_every_part_holds() -> None:
+    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+
+    report = verify_owner_boundary(_observation())
+
+    assert report.ok is True and report.phase == "verify"
+
+
+def test_a_second_signed_identity_that_sees_the_row_fails_the_phase() -> None:
+    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+
+    report = verify_owner_boundary(_observation(stranger_status=200, stranger_rows=1))
+
+    assert report.ok is False
+    assert any(f.check == "stranger_is_denied" and not f.ok for f in report.findings)
+
+
+def test_an_anonymous_read_that_succeeds_fails_the_phase() -> None:
+    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+
+    report = verify_owner_boundary(_observation(anonymous_status=200))
+
+    assert report.ok is False
+    assert any(f.check == "anonymous_is_denied" and not f.ok for f in report.findings)
+
+
+def test_a_changed_baseline_row_fails_even_if_everything_else_is_green() -> None:
+    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+
+    report = verify_owner_boundary(_observation(baseline_digest_after="e" * 64))
+
+    assert report.ok is False
+    assert any(f.check == "baseline_row_untouched" and not f.ok for f in report.findings)
+
+
+def test_reading_the_row_is_not_enough_without_the_full_temporary_lifecycle() -> None:
+    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+
+    # Создали и изменили, но удаление не прошло — приложение не доказано рабочим.
+    report = verify_owner_boundary(_observation(temporary_row_lifecycle=(201, 200, 200, 500)))
+
+    assert report.ok is False
+    assert any(f.check == "temporary_row_full_lifecycle" and not f.ok for f in report.findings)
+
+
+def test_an_empty_owner_read_is_not_a_pass() -> None:
+    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+
+    report = verify_owner_boundary(_observation(owner_rows=0))
+
+    assert report.ok is False
+    assert any(f.check == "owner_reads_own_row" and not f.ok for f in report.findings)
