@@ -1,0 +1,5 @@
+{
+ "drizzle/0002_qa_clients.sql": "CREATE TABLE IF NOT EXISTS \"qa_clients\" (\n  \"id\" uuid PRIMARY KEY NOT NULL,\n  \"owner_id\" uuid NOT NULL,\n  \"client_name\" text NOT NULL,\n  \"note\" text\n);\n",
+ "src/app/api/qa-clients/route.ts": "import { db } from \"@/lib/db\";\nexport async function GET() {\n  const rows = await db.query(\"select id, client_name, note from qa_clients\");\n  return Response.json(rows);\n}\n",
+ "src/app/page.tsx": "export default function Page() {\n  return <main><h1>Клиенты</h1><p>Заметка клиента отображается в карточке.</p></main>;\n}\n"
+}

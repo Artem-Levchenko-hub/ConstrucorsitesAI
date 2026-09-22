@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "profile": "incompatible",
+ "tables": [
+  "qa_clients",
+  "qa_client_history"
+ ],
+ "row_ids": [
+  "0471b10e-5f2a-4c38-9d61-7a1e2b4c8d90",
+  "2ddb3d27-1a44-4f0b-8c93-5e6f7a8b9c01",
+  "bf9c5228-6b55-4a1c-9d02-3e4f5a6b7c12",
+  "c1a7e3f9-8d66-4b2d-ae13-4f5a6b7c8d23"
+ ],
+ "fixture_digest": "cab928d44914ca64c611c2318e6109eb2a8255ccbb354ba9a2fd8e995dac29e1",
+ "forbidden_output_keys": [
+  "password",
+  "secret",
+  "token",
+  "api_key",
+  "dsn",
+  "postgresql://"
+ ]
+}

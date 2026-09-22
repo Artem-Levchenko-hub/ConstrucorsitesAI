@@ -203,3 +203,88 @@ def test_a_not_run_check_is_never_mistaken_for_a_pass() -> None:
 
         assert result.status != "PASS"
         assert result.reason_code
+
+
+def test_the_fixture_sql_touches_only_its_own_tables() -> None:
+    """Синтетика не смеет дотянуться до чужих таблиц.
+
+    Свидетель ценен тем, что его состояние известно целиком. Любая строчка SQL,
+    трогающая что-то помимо таблиц фикстуры, разрушает это: мы перестаём знать,
+    что именно изменилось и чьё оно.
+    """
+    from omnia_api.ops.restoration_qa.fixtures import load_fixture
+
+    bundle = load_fixture("incompatible")
+
+    assert bundle.tables, "фикстура обязана объявлять свои таблицы"
+    for statement in (bundle.schema_sql, bundle.seed_sql):
+        for name in _referenced_tables(statement):
+            assert name in bundle.tables, f"фикстура трогает чужую таблицу: {name}"
+
+
+def _referenced_tables(sql: str) -> set[str]:
+    import re
+
+    pattern = re.compile(
+        r'\b(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INSERT\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE)\s+"?([a-z_][a-z0-9_]*)"?',
+        re.IGNORECASE,
+    )
+    return {match.group(1).lower() for match in pattern.finditer(sql)}
+
+
+def test_the_fixture_rows_have_stable_identifiers() -> None:
+    """Идентификаторы строк закреплены: свидетель должен быть сравним с собой."""
+    from omnia_api.ops.restoration_qa.fixtures import load_fixture
+
+    first = load_fixture("incompatible")
+    second = load_fixture("incompatible")
+
+    assert first.digest == second.digest
+    assert first.row_ids == second.row_ids
+    assert all(len(row_id) == 36 for row_id in first.row_ids)
+
+
+def test_a_tampered_fixture_is_refused_not_used() -> None:
+    """Отпечаток сверяется с объявленным: подменённая фикстура — отказ."""
+    from omnia_api.ops.restoration_qa.fixtures import fixture_digest_mismatch
+
+    assert fixture_digest_mismatch(declared="a" * 64, observed="a" * 64) is None
+    assert fixture_digest_mismatch(declared="a" * 64, observed="b" * 64) == "fixture_tampered"
+
+
+def test_the_two_versions_differ_where_the_profile_promises() -> None:
+    """Профиль «несовместимо» обязан быть несовместимым на самом деле.
+
+    Если версии отличаются только косметикой, вся цепочка доказательств
+    проверяет не то: адаптация не понадобится, и «completed» ничего не скажет.
+    """
+    from omnia_api.ops.restoration_qa.fixtures import load_fixture
+
+    bundle = load_fixture("incompatible")
+
+    assert bundle.historical_files != bundle.current_files
+    changed = {
+        path
+        for path in set(bundle.historical_files) | set(bundle.current_files)
+        if bundle.historical_files.get(path) != bundle.current_files.get(path)
+    }
+    assert changed, "версии обязаны отличаться"
+    # Отличие должно затрагивать работу с данными, а не только разметку.
+    assert any(path.endswith((".sql", ".ts", ".tsx")) for path in changed)
+
+
+def test_forbidden_keys_never_appear_in_fixture_output() -> None:
+    """В отчёт не должны утечь секреты — даже из синтетики."""
+    from omnia_api.ops.restoration_qa.fixtures import FORBIDDEN_OUTPUT_KEYS, load_fixture
+
+    bundle = load_fixture("incompatible")
+    rendered = (
+        bundle.schema_sql
+        + bundle.seed_sql
+        + "".join(bundle.historical_files.values())
+        + "".join(bundle.current_files.values())
+    ).lower()
+
+    assert FORBIDDEN_OUTPUT_KEYS
+    for key in FORBIDDEN_OUTPUT_KEYS:
+        assert key not in rendered, key
