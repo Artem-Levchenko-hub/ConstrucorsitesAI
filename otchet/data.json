@@ -1,250 +1,39 @@
 {
  "meta": {
   "updated": "2026-09-22",
-  "version": 139,
+  "version": 140,
   "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
  },
  "latest": {
-  "title": "Project Cell получил отдельный PostgreSQL с полными правами",
-  "subtitle": "Агент управляет своей БД как суперпользователь, но не видит служебную БД MAX и другие проекты. Production подтвердил сохранение данных после halt/recreate, snapshot/restore и безопасное восстановление после ошибочного restore-check.",
+  "title": "Собственная площадка MAX Studio на трёх VPS Serverum готова",
+  "subtitle": "Core / Runtime / Commerce — три изолированных K3s-кластера, зашифрованная сеть между ними, свои базы, реестр образов, мониторинг и перекрёстные бэкапы. Всё поднимается одной командой из репозитория; от владельца остались только DNS-записи.",
   "items": [
    {
     "s": "worked",
-    "t": "Статистика стала короче на 14 строк без изменения расчётов",
-    "d": "Убран повтор начальных значений стадий. Восемь контрольных сценариев прошли до и после: шесть JSON-ответов и два отказа 404/409. Полный прогон API: 3272 теста прошли. Новый API опубликован и проверен на сервере, остальные сервисы сохранили свои версии и состояние."
+    "t": "Доступ и защита: ключи вместо паролей, firewall, fail2ban",
+    "d": "На все три сервера вход только по ключу (пароль выключен, root закрыт), снаружи открыты лишь 22/80/443, fail2ban уже банит перебор. Панель Serverum каждые 5 минут обнуляет ~/.ssh/authorized_keys — ключ перенесён в системный файл, поэтому смена паролей владельцем ничего не сломает."
    },
    {
     "s": "worked",
-    "t": "Код чата стал короче на32 строки при прежнем поведении",
-    "d": "GPT-6 Astra завершил web-поставку c2da4f71. 502 теста, types/lint, браузер до/после, независимое ревью и CI web/image прошли. Сервер подтвердил новую версию web, шесть здоровых API-проверок и сохранность остальных сервисов. Прежние неудачные попытки сохранены в истории."
+    "t": "Сеть и кластеры: WireGuard-mesh + три K3s v1.36.4",
+    "d": "Межсерверный трафик и доступ к базам идут только по WireGuard 10.10.0.0/24 (6 из 6 направлений OK). На каждом сервере свой одно-нодовый K3s с Traefik, cert-manager и шифрованием секретов; API снаружи закрыт, kubectl с Mac — через SSH-туннели. Найдена и обойдена NAT-особенность Serverum (advertise-address по WG)."
    },
    {
     "s": "worked",
-    "t": "Рефакторинг убрал три копии библиотеки: минус 52 КБ рабочего кода",
-    "d": "Пакет 50565efd доставлен в API и два воркера. 163 теста до/после, полный CI с 3264 API-тестами, wheel/image и независимое Astra review прошли. Прежние файлы проектов, экспорт и откат сохранены; точные runtime-версии, шесть health-проверок и публичные байты библиотеки подтверждены."
+    "t": "Данные: PostgreSQL 16 на каждом сервере и бэкапы на соседа",
+    "d": "Своя база и роль у каждого кластера, вход проверен с WG-адреса и из пода. Каждую ночь дампы всех баз и state K3s складываются локально (14 дней) и уезжают по WireGuard на соседний сервер под ограниченным пользователем без шелла — потеря одной VPS не теряет данные."
    },
    {
     "s": "worked",
-    "t": "Управление запуском предпросмотра выделено из большого компонента",
-    "d": "GPT-6 Astra доставил Task11 preview runtime: web2ae98520, точные image/release/health подтверждены. 496 тестов Node20, Linux web/image CI, проверки типов, линтер, браузер1440/390 и независимое ревью прошли. Остальные сервисы и пользовательские данные сохранены; весь рефакторинг ещё не завершён."
-   },
-   {
-    "s": "partial",
-    "t": "Системная очистка освободила 3,50 ГиБ без удаления проектов",
-    "d": "GPT-6 Astra удалил скачанные пакеты APT и 78 архивных журналов старше 14 дней. Все 65 контейнеров и 281 том сохранены, сервисы не перезапускались, health-проверки прошли. Диск всё ещё заполнен на 95%; основная Docker-очистка не выполнена до закрытия требований восстановления и адресного списка удаления."
+    "t": "Реестр образов и мониторинг",
+    "d": "registry.yleum.ru на runtime (basic-auth, 250 GB, креды прописаны во все кластеры). На core — Prometheus/Alertmanager/Grafana 13: 15 целей, включая node-exporter всех трёх VPS."
    },
    {
     "s": "open",
-    "t": "Сохранены полный план рефакторинга и точка передачи следующему агенту",
-    "d": "По просьбе владельца GPT-6 Astra остановил новые изменения и подготовил документы в docs/plans: полный план, handoff и доказательства P01. Цель качества 10/10 раскрыта через десять критериев понятного, проверяемого кода для следующих агентов, а не через число удалённых строк. P01 доставлен; Task 5 ещё не начат, весь рефакторинг не объявлен завершённым."
-   },
-   {
-    "s": "testing",
-    "t": "Подготовка PostgreSQL проверяет наличие данных без чтения всей БД",
-    "d": "Пакет P01 доставлен на production: 1248 локальных тестов и девять реальных Docker-сценариев прошли, полный CI зелёный. Вместо чтения содержимого БД проверка получает 13 байт служебного результата; том 129 MiB проверен без изменения файлов. На малом томе ускорения по времени нет; полная генерация ещё не измерялась."
-   },
-   {
-    "s": "worked",
-    "t": "Полные права PostgreSQL теперь ограничены одним проектом",
-    "d": "Каждая portable Project Cell получает отдельный PostgreSQL-контейнер, пароль и диск. Живой production-canary подтвердил SUPERUSER, блокировку сети к managed MAX PostgreSQL, сохранение SQL-маркера после halt/recreate и fail-closed восстановление snapshot."
-   },
-   {
-    "s": "worked",
-    "t": "Публикация выровняла URL, доступ, статусы и юридическую кнопку",
-    "d": "Адрес и выбор «Кто сможет открыть» начинаются на одной высоте даже при дополнительной подписи URL. До шкалы статусов сохранён устойчивый отступ, длинный адрес переносится, а § не перекрывает футер живого превью."
-   },
-   {
-    "s": "worked",
-    "t": "Free ведёт прямо к тестовой ссылке; CJM получил светлую тему",
-    "d": "После выбора Free владелец сразу видит готовый тестовый URL для друзей или команды. Оплата, политики, MAX Partner, bot token и production URL остаются в платном запуске. В нижний dock добавлен постоянный переключатель светлой и тёмной темы; обе темы сохраняются после обновления и сброса демонстрации."
-   },
-   {
-    "s": "worked",
-    "t": "CJM больше не ломает контраст и трёхпанельную публикацию",
-    "d": "Исправлены подтверждение заказа, активация тарифа, публикация, финальный запуск, карточки следующего шага и текущего тарифа. Центральная колонка MAX Studio теперь может сжиматься, длинный URL переносится, preview скрывается до того, как начинает обрезать интерфейс, а тёмные карточки не получают старый белый фон."
-   },
-   {
-    "s": "worked",
-    "t": "Production golden path дошёл от нового аккаунта до отмены продления",
-    "d": "Изолированный новый аккаунт создал business billing-account, атомарно активировал Pro и получил ровно одну ledger-проводку +500 ₽. Реальный агент собрал MAX Mini App, safe preview открыл подписанную сессию, PostgreSQL health ответил 200, тестовая запись создалась с 201, exact commit прошёл release proof и развернулся по HTTPS. Публичный API отмены выключил auto_renew, поставил cancel_at_period_end и очистил next_charge_at."
-   },
-   {
-    "s": "worked",
-    "t": "Golden path поймал и устранил рассинхронизацию internal token",
-    "d": "Первая генерация честно упала на 401 между API и orchestrator: ротация обновляла устаревшее зеркало env, а systemd читал другой файл. Production-конфиг синхронизирован, новая генерация завершилась; rotation и disaster-recovery теперь используют реальный EnvironmentFile, а post-rotation validation вызывает защищённый endpoint и больше не может принять ложный green health."
-   },
-   {
-    "s": "worked",
-    "t": "Ротация секретов не потеряла пользовательские интеграции",
-    "d": "Семь Omnia-owned ключей заменены за одну контролируемую операцию. Два GitHub-токена, три SSH-секрета, два MAX bot token и два webhook secret сначала расшифрованы старым ключом, транзакционно перешифрованы новым и повторно проверены после restart. API, Web, worker, обе БД, MinIO, orchestrator, MAX-canary и webhook boundary остались зелёными."
-   },
-   {
-    "s": "worked",
-    "t": "Полный backup переживает потерю production VPS",
-    "d": "Ночной сценарий сохраняет platform DB, все 983 таблицы проектных схем, актуальный runtime-конфиг, исходники и MinIO, проверяет SHA-256 и создаёт CMS-конверт AES-256/RSA. GitHub Actions хранит только ciphertext вне сервера 7 дней; скачанный artifact сверяется с digest, расшифровывается офлайн-ключом и проходит scratch-restore."
-   },
-   {
-    "s": "worked",
-    "t": "Мониторинг действительно работает вне production VPS",
-    "d": "Scheduled GitHub workflow проверяет web, API, Postgres, Redis, worker heartbeat, orchestrator, preview storage, /mvp, живой MAX-canary и ответ 401 webhook без секрета. Первый run 30623623645 завершился success; при сбое создаётся один incident issue, после recovery он закрывается автоматически."
-   },
-   {
-    "s": "worked",
-    "t": "Release gate стал блокирующим и fail-closed",
-    "d": "Каждая финальная container-сборка, включая MAX, получает proof после реального typecheck, runtime probe и transport-security проверки. Production сверяет digest и commit; отсутствие записи, повреждение payload или недоступность proof-store блокируют deploy."
-   },
-   {
-    "s": "worked",
-    "t": "Сервисы получили внешне проверяемую готовность",
-    "d": "Публичный /web-health проверяет процесс Next.js, а /api/health — API, Postgres, Redis и TTL-heartbeat фонового worker. На production оба отвечают status=ok; независимый GitHub-планировщик каждые пять минут проверяет их извне и автоматически ведёт incident."
-   },
-   {
-    "s": "worked",
-    "t": "Автопродление нельзя включить скрыто",
-    "d": "Checkout требует отдельную галочку и актуальную версию согласия. Omnia не получает данные карты: после успешной оплаты сохраняется только provider payment_method_id, причём лишь когда ЮKassa вернула saved=true."
-   },
-   {
-    "s": "worked",
-    "t": "Продление переживает сбой и рестарт",
-    "d": "Фоновый lifecycle каждые 60 секунд ищет истёкшие периоды. Повторное списание имеет устойчивый idempotency key и guard одного pending renewal; ошибка включает past_due, повтор через 12 часов и трёхдневный grace."
-   },
-   {
-    "s": "worked",
-    "t": "Downgrade не удаляет данные и не оставляет платные права",
-    "d": "После grace платная подписка завершается, создаётся Free, проекты сохраняются, а keep-alive сверх доступных слотов снимается и в Postgres, и в orchestrator. Business может держать ровно один always-on runtime."
-   },
-   {
-    "s": "worked",
-    "t": "Подпиской можно управлять из кабинета",
-    "d": "Экран показывает следующую дату, past_due и конец grace, позволяет отменить списание в конце периода и восстановить его с новым согласием. На 390 px нет горизонтального overflow, новые кнопки имеют высоту 44 px."
-   },
-   {
-    "s": "worked",
-    "t": "Оплата и активация больше не расходятся",
-    "d": "Pending-подписка не выдаёт активный тариф. После подтверждения провайдера старая подписка завершается, новая активируется и subscription_credit попадает в ledger одной транзакцией."
-   },
-   {
-    "s": "worked",
-    "t": "Повтор и параллельная покупка защищены",
-    "d": "Один idempotency key возвращает исходный платёж, повтор webhook не начисляет кредит второй раз, а partial unique index не допускает два одновременно ожидающих subscription checkout одного business-account."
-   },
-   {
-    "s": "worked",
-    "t": "Кабинет показывает реальные версии тарифов",
-    "d": "Экран тарифа читает Free, Pro и Business из API, показывает текущую подписку, цену, лимиты и включённый кредит. Автопродление включается отдельным согласием, а живая покупка заблокирована до подключения магазина ЮKassa."
-   },
-   {
-    "s": "worked",
-    "t": "Один бизнес получил один финансовый контур",
-    "d": "MAX-onboarding переводит тот же personal billing-account в business scope без смены его ID. Баланс, 207 ledger-записей и 96 подписок сохранили владельца; участник бизнеса разрешает общий account раньше личного."
-   },
-   {
-    "s": "worked",
-    "t": "Путь до MVP теперь виден на отдельной странице",
-    "d": "Публичная /mvp делит финиш на 26 проверяемых пунктов по входу, билдеру, деньгам, MAX-публикации и эксплуатации. Сейчас закрыто 18 пунктов; внешние зависимости MAX и платёжного провайдера отделены от задач в коде."
-   },
-   {
-    "s": "worked",
-    "t": "Кошелёк больше не разделён на две истории",
-    "d": "Списания моделей, разовые пополнения, платежи и возвраты используют wallet_charges с типом операции, внешней ссылкой и обязательным балансом после операции. Старая wallet_ledger_entries переносится и удаляется миграцией."
-   },
-   {
-    "s": "worked",
-    "t": "Тарифы и подписки имеют устойчивую основу",
-    "d": "Free, Pro и Business хранятся как неизменяемые версии условий. Ограничение БД не допускает две живые подписки одного account; способ оплаты хранит только токен провайдера и версию явного согласия, renewal работает через отдельный lifecycle."
-   },
-   {
-    "s": "worked",
-    "t": "Planner работает по real model path",
-    "d": "На dev подтверждены USE_HERO_MEDIA_MVP=true, HERO_MEDIA_STUB_MODE=false и MOCK_LLM=false. Мультимодальный planner получил реальный WebP-источник, вернул структурированный план и потребовал подтверждение до render."
-   },
-   {
-    "s": "worked",
-   "t": "Seedance собрала настоящий 5-секундный hero-клип",
-   "d": "Один запланированный video render завершился через seedance-2.0-fast: внешний MP4 отвечает HTTP 200, имеет video/mp4 и размер 832 296 байт. В крупном preview видео достигло readyState=4 и воспроизводилось; узкий режим показал poster fallback."
-   },
-   {
-    "s": "worked",
-    "t": "Media metadata и cleanup больше не теряют object key",
-    "d": "Parser теперь извлекает storage key как из прямого MinIO URL, так и из nginx-prefixed /minio/<bucket>/… URL. Одноразовый E2E-проект очищен полностью: source WebP и video MP4 удалены из MinIO, project/assets/renders равны нулю, тестовый аккаунт отозван."
-   },
-   {
-    "s": "worked",
-    "t": "Фото → задача → план → preview → apply стали отдельными шагами",
-    "d": "Панель показывает шаг 1–5 с aria-current, раздельные экраны фото и брифа, явное подтверждение варианта, preview и Apply. Race «поставить согласие и сразу выбрать файл» устранён: upload передаёт снимок подтверждения, а не запаздывающий React-state."
-   },
-   {
-    "s": "worked",
-    "t": "Retry больше не меняет согласованный формат",
-    "d": "Controlled failure обнаружил две гонки: UI не обновлял cache-key активного render, а pipeline перечитывал mutable brief и мог превратить motion retry в новый video-вызов. Исправление фиксирует render.media_plan, сбрасывает старый terminal state и обновляет точный query cache. Повторная проверка завершилась plan=motion; video_model=none, без Apply и без нового snapshot."
-   },
-   {
-    "s": "worked",
-    "t": "Визуальный аудит подтверждён живыми взаимодействиями",
-    "d": "Для Hero сохранены реальные screenshots загрузки, брифа, applied video, controlled failure и retry. В панели нет page/panel overflow, при редактировании скрыт старый render, видимые кнопки не меньше 44 px. Общий MAX-аудит дополнительно покрывает 1440/768/390 px."
-   },
-   {
-    "s": "worked",
-    "t": "Превью показывает реальный MAX dev-контейнер",
-    "d": "Orchestrator выдаёт короткоживущий HMAC-signed bootstrap URL только для уже запущенного MAX-проекта. Шаблон создаёт отдельную preview-сессию, а iframe больше не подменяет закрытое приложение публичной страницей."
-   },
-   {
-    "s": "worked",
-    "t": "Публикация стала пошаговым мастером",
-    "d": "Завершённые, текущий и следующие шаги различаются визуально и для screen reader. Текущий шаг показывает конкретное действие, прогресс основан на серверной readiness, а при открытии кабинета MAX ссылка приложения копируется автоматически."
-   },
-   {
-    "s": "worked",
-    "t": "Настройки используют максимум уже доступных возможностей",
-    "d": "В интерфейс выведены продукт, сценарий, функции, визуальный стиль, цвета, каталог, CTA и видимость каждого элемента, оператор, контакты и SLA поддержки, возрастная маркировка, политики данных и подтверждение URL в MAX."
-   },
-   {
-    "s": "worked",
-    "t": "Responsive-путь проверен реальными взаимодействиями",
-    "d": "Browser QA прошёл на 1440, 768 и 390 px: редактор, real preview, публикация, настройки, интеграции и post-launch не имеют page-level горизонтального overflow; видимые touch targets не меньше 44 px."
-   },
-   {
-    "s": "worked",
-    "t": "Права больше не зависят только от строки email",
-    "d": "Роль администратора хранится в аккаунте, а серверная allowlist остаётся только аварийным способом входа. Один и тот же guard защищает управление пользователями, модерацию организаций и платёжные операции."
-   },
-   {
-    "s": "worked",
-    "t": "Админ-центр закрывает полный ежедневный сценарий",
-    "d": "В одном интерфейсе доступны аккаунты, роли, подтверждение email и бизнеса, приостановка доступа, очередь организаций и журнал изменений. Сам маршрут проверяет права на сервере до показа данных."
-   },
-   {
-    "s": "worked",
-    "t": "Критичные действия оставляют след",
-    "d": "Выдача роли, подтверждение и блокировка записываются в отдельный журнал с инициатором, целевым аккаунтом и состоянием до/после. Администратор не может случайно приостановить себя или снять собственные права."
-   },
-   {
-    "s": "worked",
-    "t": "Страница реквизитов готова для ЮKassa",
-    "d": "Публичный раздел /requisites показывает статус самозанятого, ИНН 220504676540, услуги, порядок получения и контакты. Точные цены, оферта и возвраты доступны без входа."
-   },
-   {
-    "s": "worked",
-    "t": "История работы агента сохраняется после F5",
-    "d": "Сохранённые шаги восстанавливаются сразу после загрузки панели и не конфликтуют с активной работой агента. В длинных диалогах показываются последние сообщения, а не начало истории."
-   },
-   {
-    "s": "worked",
-    "t": "Платёжный контур готов к получению данных магазина",
-    "d": "Создание платежа, подтверждение статуса, уведомления и возврат уже реализованы. Приём денег безопасно выключен до получения shopId, секретного ключа и подтверждённого имени исполнителя."
-   },
-   {
-    "s": "worked",
-    "t": "Окно MAX-бота больше не размывается",
-    "d": "Pop-up теперь расположен выше затемняющего слоя: окно остаётся чётким, а blur применяется только к фону. Галочка бота обновляется сразу, а активация недоступна до появления HTTPS."
-   },
-   {
-    "s": "testing",
-    "t": "MAX-only frontend доставлен от лендинга до управления",
-    "d": "Релиз 21bd589a включён на проде: проекты, пошаговое создание, вход, данные, запуск, управление и шесть разделов аккаунта. 346 тестов, TypeScript, ESLint и production-сборка прошли; health подтвердил точную ревизию. Обновлён только web, API и службы генерации не перезапускались. Живая read-only проверка пройдена; приём платежей остаётся выключенным до подключения магазина ЮKassa."
+    "t": "Ждёт владельца: DNS в reg.ru и wildcard для приложений",
+    "d": "Сертификаты Let's Encrypt выпустятся сами после A-записей grafana/registry/core/runtime/commerce.yleum.ru. Wildcard *.apps.yleum.ru для клиентских приложений требует DNS-01 через API reg.ru. Переезд самой платформы со старого сервера — следующая, отдельная работа (Фаза 2 вектора V9)."
    }
-  ],
-  "progress_note": "Golden-path rehearsal завершён 31.07: real generation completed, safe preview HTTP 200, app PostgreSQL health 200, booking HTTP 201, exact commit 3adcea33 получил valid release proof и production deploy done, HTTPS root/health 200, unauthenticated booking 401, cancel renewal HTTP 200. Проверка также выявила, что production SMTP и ЮKassa не настроены; email delivery переведён из ложной галочки в внешний blocker. Поэтому /mvp честно показывает 21/26 = 81%: четыре внешние зависимости и финальный end-to-end в работе. Canonical-env backup 20260731-120309 восстановил 33 platform-таблицы, 993 project-schema таблицы и 19 639 файлов. Off-host run 30629470542 завершился success с первой попытки; artifact 8792771083 размером 404 449 857 байт хранится до 7 августа. Release gate доставлен revision cfb67a26, off-host monitoring — revisions 92d57302, 5aa3bb33, 231321ed и 52593609, encrypted DR — revisions 2b2c98d4, 139e39d1, c1075999, 8fcf7623 и ddb60578, internal rotation — revisions 9d5863b1 и 8ee45d00."
+  ]
  },
  "owner_actions": [
   {
@@ -616,6 +405,11 @@
    "date": "19.09",
    "what": "Прислал следующий план работ — аудит версионирования и откатов MAX Studio (docs/operations/2026-09-19-max-studio-versioning-fresh-e2e-audit.md) — с указанием взяться за него после завершения текущего отделения.",
    "impact": "Очерёдность зафиксирована: сначала доводится до прода отделение конструктора сайтов (этапы 3б и 4а доставлены 19.09), затем исправления по аудиту в порядке пакетов A → E. Аудит затрагивает ту же область кода (жизненный цикл сборки, восстановление версий), поэтому работа пойдёт уже по уменьшенному дереву."
+  },
+  {
+   "date": "22.09",
+   "what": "Купил три VPS у Serverum под решение от 18.09 (core / runtime / commerce, 8 vCPU · 31 GB каждый), передал доступы и домен yleum.ru, поручил развернуть инфраструктуру по плану для трёх VPS; пароли меняет сам после настройки входа по ключу.",
+   "impact": "Разблокирована Фаза 1 вектора V9: за один заход собрана вся базовая площадка (H202). Дальше от владельца нужны только DNS-записи в reg.ru — список в infra/max-k3s/README.md."
   }
  ],
  "hero_sub": "67 дней, 1372 коммита, три перерождения архитектуры, автономные ночные рутины и честная цена «зелёных» отчётов. Полная история разработки: что пробовали, что сработало, что нет — и почему. Прод: <a href=\"https://constructor.lead-generator.ru\">constructor.lead-generator.ru</a>",
@@ -2380,14 +2174,14 @@
   {
    "id": "H112",
    "title": "MAX сам доводит генерацию до рабочего состояния без платного ручного «Продолжить»",
-  "status": "failed",
-  "score": 2,
-  "category": "MAX / Gemini / recovery / надёжность",
+   "status": "failed",
+   "score": 2,
+   "category": "MAX / Gemini / recovery / надёжность",
    "period": "01.08",
    "description": "Устранить повторные обрывы полного MAX-build: внутренний предел одного агентного контекста должен запускать автономный ремонтный проход, а любая неустранимая красная версия должна атомарно заменяться рабочей основой, а не оставлять проект без страницы.",
    "evidence": "Production-диагностика двух последовательных GenerationRun проекта fitnessstat-a00c0b (a62e593b и 7a6bece3) показала одинаковый финал build finished without a committed snapshot. В первом проходе агент создал несовместимый вызов requestOmniaAI({prompt})/.text, прямые DB-маршруты и импорт отсутствующего lucide-react; во втором — отсутствующий getActionHistory и те же недостающие пакеты. Оба дошли до внутреннего предела native-agent, после чего финальный typecheck дополнительно падал на устаревшем .next/types/app/page.ts. Главная скрытая причина: служебный snapshot без содержательного prompt ошибочно считался ранее сгенерированным продуктом, поэтому безопасный first-build recovery не запускался; ручное «продолжи» вдобавок заменяло исходный бриф одним словом. Исправлены единый критерий продуктового snapshot/readiness, восстановление последнего содержательного брифа из истории, MAX kit 12 с закреплёнными UI/Tailwind-зависимостями и совместимым managed client, запрет прямого DB/API bypass до выполнения записи, очистка только устаревших Next route validators, локальное добирание deterministic proof, до трёх автономных bounded-сегментов в одном запуске и зелёный starter fallback вместо незавершённой публикации. Зелёные 33 целевых API-теста, 11 orchestrator-тестов, strict mypy по 219 API-модулям и MAX TypeScript typecheck; production Linux Docker build установил все 97 пакетов, собрал Next, проверил типы и сгенерировал 15/15 страниц. Runtime подтвердил kit 12, hard limit 30, native/agentic=true и gemini-3.1-pro-preview-customtools; production browser-canary оставлен пользователю.",
-  "impact": "Живой прогон опроверг гипотезу: три сегмента не доделали продукт, а повторили несовместимые с MAX проверки. Рабочая сборка была откачена к пустой основе, а UI ошибочно показал «Изменения готовы».",
-  "next_vector": "V8"
+   "impact": "Живой прогон опроверг гипотезу: три сегмента не доделали продукт, а повторили несовместимые с MAX проверки. Рабочая сборка была откачена к пустой основе, а UI ошибочно показал «Изменения готовы».",
+   "next_vector": "V8"
   },
   {
    "id": "H113",
@@ -2565,8 +2359,8 @@
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "31.08",
    "description": "Если агентный цикл перенести из центрального API в постоянную Project Cell с полным shell, durable checkpoint и обязательной Kata-изоляцией, агент сможет собирать сложные полноценные продукты без доступа к хосту и чужим проектам.",
-    "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s; архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и получил APPROVE от независимых architecture и security/operations gate. Phase 1 исполнялся без удаления данных: штатно остановлены восемь idle dev-preview, MemAvailable вырос с 3 121 152 до 8 702 464 KiB. Cold-wake canary сохранил container ID 762882940dc9, достиг HTTP 200 и снова остановился; после proof доступны 8 500 264 KiB, все четыре production health endpoint вернули 200. Для Phase 2 добавлены план и read-only validation scaffolding в infra/project-cell. Первый TDD RED: contract test завершился exit 1 на отсутствующем phase2ctl.py. Security RED воспроизвели forged/failed/noncanonical receipt и unsafe early dependency execution. Финальный zero-dependency RED показал, что rollback, dead-man arm и smoke apply обращались к PATH до отказа; после hard-disable полный Git Bash suite завершился сообщением phase2 contract tests passed (all). Read-only server audit на ebb7bcc3 подтвердил containerd 2.2.1, runc 1.3.4, KVM/VMX/cgroup v2, около 7,7 GiB доступной RAM, no swap, 55% диска, 12% inode и HTTP 200 API/gateway/orchestrator/web; K3s, kubectl и Kata отсутствуют. Изменения apps/orchestrator полностью удалены. Живые install, dead-man, rollback, Kubernetes hello и soak не выполнялись и недоступны через эти entrypoints.",
-    "impact": "Phase 2 дал локально проверяемые read-only контракты evidence, подписей, pinned config и trusted-hello manifest, но не открыл путь к production mutation. Финальное упрощение полностью удалило изменения apps/orchestrator. Install apply, rollback, dead-man arm/disarm и Kubernetes apply останавливаются первым shell-действием; PATH/PYTHONPATH sentinels подтверждают ноль dependency calls и ноль state writes. Preflight не открывает lock; CNI включён в restore contract, неизвестные systemd/sysctl/modules запрещены. Статус остаётся testing, score=null и шаг V4=false: любая live mutation требует нового review и внешних доказательств; Kata остаётся следующей обязательной фазой перед model-visible shell.",
+   "evidence": "На ревизии d0433aba проведён аудит текущего API-loop, одноразового MAX sandbox, legacy live-runtime shell, Stop/restart и snapshot path. Сервер подтвердил /dev/kvm, hardware virtualization, cgroup v2 и отдельные свободные CIDR для K3s; архитектурный контракт записан в docs/superpowers/specs/2026-08-31-enterprise-project-cell-agent-runtime-design.md и получил APPROVE от независимых architecture и security/operations gate. Phase 1 исполнялся без удаления данных: штатно остановлены восемь idle dev-preview, MemAvailable вырос с 3 121 152 до 8 702 464 KiB. Cold-wake canary сохранил container ID 762882940dc9, достиг HTTP 200 и снова остановился; после proof доступны 8 500 264 KiB, все четыре production health endpoint вернули 200. Для Phase 2 добавлены план и read-only validation scaffolding в infra/project-cell. Первый TDD RED: contract test завершился exit 1 на отсутствующем phase2ctl.py. Security RED воспроизвели forged/failed/noncanonical receipt и unsafe early dependency execution. Финальный zero-dependency RED показал, что rollback, dead-man arm и smoke apply обращались к PATH до отказа; после hard-disable полный Git Bash suite завершился сообщением phase2 contract tests passed (all). Read-only server audit на ebb7bcc3 подтвердил containerd 2.2.1, runc 1.3.4, KVM/VMX/cgroup v2, около 7,7 GiB доступной RAM, no swap, 55% диска, 12% inode и HTTP 200 API/gateway/orchestrator/web; K3s, kubectl и Kata отсутствуют. Изменения apps/orchestrator полностью удалены. Живые install, dead-man, rollback, Kubernetes hello и soak не выполнялись и недоступны через эти entrypoints.",
+   "impact": "Phase 2 дал локально проверяемые read-only контракты evidence, подписей, pinned config и trusted-hello manifest, но не открыл путь к production mutation. Финальное упрощение полностью удалило изменения apps/orchestrator. Install apply, rollback, dead-man arm/disarm и Kubernetes apply останавливаются первым shell-действием; PATH/PYTHONPATH sentinels подтверждают ноль dependency calls и ноль state writes. Preflight не открывает lock; CNI включён в restore contract, неизвестные systemd/sysctl/modules запрещены. Статус остаётся testing, score=null и шаг V4=false: любая live mutation требует нового review и внешних доказательств; Kata остаётся следующей обязательной фазой перед model-visible shell.",
    "next_vector": "V4"
   },
   {
@@ -2577,7 +2371,7 @@
    "category": "автономность / инфра / безопасность / MAX / LLMGW",
    "period": "01.09",
    "description": "Если подключить постоянный Docker Project Cell только подтверждённому владельцу через заменяемый WorkspaceProvider, Claude Sonnet сможет уже сейчас собирать реальные full-stack MAX-приложения, а последующий переход на Kata заменит только исполнительную среду.",
-    "evidence": "Tasks 1–6 собрали тёмный Control Foundation: fail-closed owner policy; durable workspace/operation модели и миграция 0052; безопасные конкурентные reservation/idempotency/transition операции; заменяемый WorkspaceProvider; внутренний authenticated capability GET; side-effect-free API readiness coordinator. Проверки по этапам: Task 1 — 7 focused; Task 2 — 25 focused плюс Alembic upgrade/downgrade/upgrade и live PostgreSQL catalog parity; Task 3 — 43 focused/GenerationRun regressions; Task 4 — 15 provider/router и 31 compatibility; Task 5 — 21 focused и 3 отдельные client regressions; Task 6 — AST mutation RED→GREEN для function-local imports/calls, 98 API focused и 48 orchestrator focused. Полный orchestrator suite: 532 passed, 15 xfailed; полный API suite остановлен на воспроизводимом чужом regression test_async_onboarding.py::test_run_async_onboarding_streams_and_stashes (SurveyQuestion ошибочно используется как dict), при этом весь foundation focused suite зелёный. API full Ruff и mypy чисты; orchestrator scoped Ruff и full mypy чисты, full Ruff сохраняет только прежние unrelated нарушения. Контрольная ревизия Tasks 1–4 и миграция 0052 развёрнуты на production SHA 1b8a86e контролируемым rollout: API, worker, web и orchestrator показывают одну ревизию, все compose-сервисы healthy, внешний web-health и api/health вернули HTTP 200. Маршрутизация Project Cell по умолчанию отключена; публичный prompt path ничего из control foundation не импортирует и не вызывает. Реальный Docker, shell, browser, LLMGW-runner и model-visible cell ещё не подключены. Control Foundation 0c669813 подтверждён здоровым на production; отдельные исполнимые планы Fencing Hardening (5 задач) и Cell Resources (7 задач) написаны и получили PASS независимой ревизии после четырёх раундов исправлений, при этом runtime, флаги и canary не менялись и остаются отключены.",
+   "evidence": "Tasks 1–6 собрали тёмный Control Foundation: fail-closed owner policy; durable workspace/operation модели и миграция 0052; безопасные конкурентные reservation/idempotency/transition операции; заменяемый WorkspaceProvider; внутренний authenticated capability GET; side-effect-free API readiness coordinator. Проверки по этапам: Task 1 — 7 focused; Task 2 — 25 focused плюс Alembic upgrade/downgrade/upgrade и live PostgreSQL catalog parity; Task 3 — 43 focused/GenerationRun regressions; Task 4 — 15 provider/router и 31 compatibility; Task 5 — 21 focused и 3 отдельные client regressions; Task 6 — AST mutation RED→GREEN для function-local imports/calls, 98 API focused и 48 orchestrator focused. Полный orchestrator suite: 532 passed, 15 xfailed; полный API suite остановлен на воспроизводимом чужом regression test_async_onboarding.py::test_run_async_onboarding_streams_and_stashes (SurveyQuestion ошибочно используется как dict), при этом весь foundation focused suite зелёный. API full Ruff и mypy чисты; orchestrator scoped Ruff и full mypy чисты, full Ruff сохраняет только прежние unrelated нарушения. Контрольная ревизия Tasks 1–4 и миграция 0052 развёрнуты на production SHA 1b8a86e контролируемым rollout: API, worker, web и orchestrator показывают одну ревизию, все compose-сервисы healthy, внешний web-health и api/health вернули HTTP 200. Маршрутизация Project Cell по умолчанию отключена; публичный prompt path ничего из control foundation не импортирует и не вызывает. Реальный Docker, shell, browser, LLMGW-runner и model-visible cell ещё не подключены. Control Foundation 0c669813 подтверждён здоровым на production; отдельные исполнимые планы Fencing Hardening (5 задач) и Cell Resources (7 задач) написаны и получили PASS независимой ревизии после четырёх раундов исправлений, при этом runtime, флаги и canary не менялись и остаются отключены.",
    "impact": "Появился проверяемый управляющий фундамент без риска случайно запустить контейнер из пользовательского запроса: система решает допуск owner-canary, надёжно хранит будущий lifecycle и строго fail-closed проверяет готовность провайдера, но пока физически ничего не создаёт. H128 остаётся testing, score остаётся null, default routing disabled, а шаг V4 Owner-only Docker Project Cell остаётся false до живой full-stack MAX-генерации, stop/resume, восстановления базы и isolation-проверок.",
    "next_vector": "V4"
   },
@@ -3456,6 +3250,18 @@
    "evidence": "Коммит 56179c2e. Дефект сперва воспроизведён, а не предположен: тест показал, что сборка с миграцией, встающей раньше уже применённой, проходит со статусом «ok». Починка стоит ровно на границе эффекта — договор проверяется перед отправкой команды сборки, и при нарушении команда не уходит вовсе; тесты проверяют именно число отправленных команд, а не косвенные признаки. В тексте отказа называются файл и правило, но не содержимое миграции, иначе данные владельца утекали бы в сообщение об ошибке. Пять тестов, включая два на отсутствие ложных срабатываний. Снятие проверки роняет три теста. Полная сюита API: 2911 прошли.",
    "impact": "Закрыт самый неприятный вид отказа — тот, который не виден: упавший запуск больше не может изменить схему базы приложения. Остаётся прогон на настоящей одноразовой базе и ветка «эффект уже допущен», где состояние обязано остаться сверяющимся, а не откатываться с текстом «данные не изменены».",
    "next_vector": "V10"
+  },
+  {
+   "id": "H202",
+   "title": "Три VPS Serverum превращены в готовую площадку MAX Studio: Core / Runtime / Commerce на K3s",
+   "description": "Владелец купил три сервера у Serverum под решение от 18.09 (ядро платформы — у себя, приложения клиентов позже — в Яндексе). Гипотеза: за один рабочий заход из трёх «голых» Ubuntu 24.04 можно собрать воспроизводимую площадку по целевой схеме — по одному изолированному K3s-кластеру на сервер, защищённая сеть между ними, своя база у каждого кластера, реестр образов, мониторинг и бэкапы, — и всё это кодом в репозитории, чтобы повторить или починить без ручных действий.",
+   "status": "worked",
+   "score": 8,
+   "category": "инфра",
+   "period": "22.09",
+   "evidence": "Папка infra/max-k3s (provision.sh + remote/*.sh + k8s/apply.sh, идемпотентные фазы). Серверы 2.153.248.98/.99/.100 (8 vCPU · 31 GB · 500/500/200 GB). Проверено вживую: ssh по ключу на все три при выключенном пароле; WireGuard 10.10.0.0/24 — 6 из 6 направлений ping OK; K3s v1.36.4 — три ноды Ready, все системные поды Running, Traefik отвечает 404 на публичных IP; PostgreSQL 16.15 — вход по DSN с WG-адреса и из пода (max_core@10.10.0.1); registry.yleum.ru — 401 без пароля / 200 с паролем; Grafana 13.2.2 /api/health ok; Prometheus — 15 целей up, включая node-exporter трёх VPS; ночной бэкап прогнан вручную, копии легли на соседние серверы (6.2–6.6 MB). Две найденные и обойдённые особенности Serverum: публичный IP — это NAT (без advertise-address по WG поды шли к API через шлюз провайдера и упирались в firewall — 75 блокировок), и панель каждые 5 минут через qemu-guest-agent переставляет пароль и обнуляет ~/.ssh/authorized_keys (ключ перенесён в /etc/ssh/authorized_keys.d).",
+   "impact": "У MAX Studio впервые есть собственная площадка по целевой архитектуре, а не один сервер с docker-compose: три изолированных кластера, зашифрованная сеть между ними, отдельные базы, реестр, мониторинг и перекрёстные бэкапы. Всё поднимается одной командой из репозитория, секреты живут только на серверах. Оценка 8, а не выше: сертификаты и публичные имена ждут DNS-записей от владельца, wildcard для приложений клиентов требует DNS-01 через API reg.ru, а сама платформа (api/web/gateway/оркестратор) пока остаётся на старом сервере — переезд это следующая, отдельная работа.",
+   "next_vector": "V9 — Фаза 2: DNS-записи → сертификаты; Helm-чарт платформы в core, биллинг в commerce, деплой MAX-приложений через infra/max-app-chart в runtime; метрики двух остальных кластеров и логи в общий мониторинг."
   }
  ],
  "vectors": [
@@ -3631,43 +3437,43 @@
      "Enterprise Project Cell: утверждён контракт K3s + Kata, durable runner, draft и атомарная публикация (31.08)",
      true
     ],
-      [
-       "Project Cell Phase 1: без удаления данных освобождено >8 GiB RAM, cold wake/stop того же container ID доказан на production (31.08)",
-       true
-      ],
-      [
-       "Project Cell Phase 2: pinned K3s automation локально прошла RED→GREEN; live install/hello/rollback proof ожидается (01.09)",
-       false
-      ],
-      [
-       "Owner-only Docker Project Cell: полноценный Claude Sonnet full-stack MAX canary через LLMGW без доступа к хосту",
-       false
-      ],
-      [
-       "Поднять Project Cell на текущем сервере и пройти MAX end-to-end canary с restart/cancel/isolation-проверками",
-       false
-      ],
-      [
-       "Capacity-based Project Cell: без числового лимита, с durable-очередью, атомарным admission и hibernate/wake; 3+ проекта подряд проходят production e2e",
-       false
-      ],
-      [
-       "Выделенный PostgreSQL Project Cell: SUPERUSER, отдельный volume, изоляция от MAX core, halt/recreate и fail-closed restore доказаны на production (03.09)",
-       true
-      ],
-      [
-       "Проверка наличия PostgreSQL без чтения содержимого БД: изолированный Docker gate и production-доставка P01",
-       true
-      ],
-      [
-       "Безопасная дедупликация static-template ресурсов: Task 5 по сохранённому плану, golden init/export и проверка автономности",
-       false
-      ],
-      [
-       "Системная очистка APT и архивных журналов: освобождено 3,50 ГиБ без удаления контейнеров и томов (09.09)",
-       true
-      ],
-      [
+    [
+     "Project Cell Phase 1: без удаления данных освобождено >8 GiB RAM, cold wake/stop того же container ID доказан на production (31.08)",
+     true
+    ],
+    [
+     "Project Cell Phase 2: pinned K3s automation локально прошла RED→GREEN; live install/hello/rollback proof ожидается (01.09)",
+     false
+    ],
+    [
+     "Owner-only Docker Project Cell: полноценный Claude Sonnet full-stack MAX canary через LLMGW без доступа к хосту",
+     false
+    ],
+    [
+     "Поднять Project Cell на текущем сервере и пройти MAX end-to-end canary с restart/cancel/isolation-проверками",
+     false
+    ],
+    [
+     "Capacity-based Project Cell: без числового лимита, с durable-очередью, атомарным admission и hibernate/wake; 3+ проекта подряд проходят production e2e",
+     false
+    ],
+    [
+     "Выделенный PostgreSQL Project Cell: SUPERUSER, отдельный volume, изоляция от MAX core, halt/recreate и fail-closed restore доказаны на production (03.09)",
+     true
+    ],
+    [
+     "Проверка наличия PostgreSQL без чтения содержимого БД: изолированный Docker gate и production-доставка P01",
+     true
+    ],
+    [
+     "Безопасная дедупликация static-template ресурсов: Task 5 по сохранённому плану, golden init/export и проверка автономности",
+     false
+    ],
+    [
+     "Системная очистка APT и архивных журналов: освобождено 3,50 ГиБ без удаления контейнеров и томов (09.09)",
+     true
+    ],
+    [
      "Адресная Docker-очистка после подтверждённого восстановления, проверки ссылок и maintenance gate",
      false
     ],
@@ -3686,7 +3492,7 @@
     [
      "Task3 usage buckets: одно определение начальных значений, прежний JSON и API-only delivery (09.09)",
      true
-      ],
+    ],
     [
      "T22: диагностируемые production-проверки — покомпонентные ожидания версий, стадии и коды причин, артефакт с result JSON, expected/actual в smoke (код готов и покрыт тестами, живая приёмка ждёт доступа к серверу)",
      false
@@ -3703,10 +3509,10 @@
     "H78",
     "H79",
     "H87",
-     "H127",
-     "H128",
-     "H129",
-     "H130",
+    "H127",
+    "H128",
+    "H129",
+    "H130",
     "H137",
     "H146",
     "H147",
@@ -3870,14 +3676,14 @@
     "H71",
     "H72",
     "H73",
-      "H79",
-      "H83",
-      "H84",
-      "H85",
-      "H98",
-      "H197",
-      "H198"
-    ]
+    "H79",
+    "H83",
+    "H84",
+    "H85",
+    "H98",
+    "H197",
+    "H198"
+   ]
   },
   {
    "id": "V7",
@@ -4136,15 +3942,15 @@
     "H88",
     "H89",
     "H90",
-     "H92",
-     "H97",
-     "H100",
-     "H104",
-     "H105",
-     "H106",
-     "H107",
-     "H110",
-     "H111",
+    "H92",
+    "H97",
+    "H100",
+    "H104",
+    "H105",
+    "H106",
+    "H107",
+    "H110",
+    "H111",
     "H112",
     "H113",
     "H114",
@@ -4171,7 +3977,7 @@
   {
    "id": "V9",
    "name": "Переезд на целевую инфраструктуру (MVP · 13 VPS)",
-   "status": "новый — старт 18.09, Фаза 0 в работе",
+   "status": "в работе — Фаза 1 стартовала 22.09 (площадка на 3 VPS готова, ждёт DNS)",
    "goal": "Разнести MAX Studio по схеме целевой архитектуры: отдельные K3s-кластеры Core / Commerce / Runtime, изолированные build-воркеры, свои registry, секреты и мониторинг, чтобы чужой код клиентов больше не собирался и не работал на одном сервере с платформой.",
    "steps": [
     [
@@ -4184,6 +3990,10 @@
     ],
     [
      "Фаза 0: web-образ без вшитого домена (адрес API задаётся при запуске)",
+     true
+    ],
+    [
+     "Фаза 1: три VPS Serverum подготовлены кодом — ОС и защита, WireGuard, K3s ×3, Postgres ×3, registry, мониторинг, перекрёстные бэкапы",
      true
     ],
     [
@@ -4216,7 +4026,8 @@
     ]
    ],
    "hyp_ids": [
-    "H158"
+    "H158",
+    "H202"
    ]
   },
   {
@@ -4250,7 +4061,14 @@
      false
     ]
    ],
-   "hyp_ids": ["H159", "H160", "H161", "H162", "H163", "H201"]
+   "hyp_ids": [
+    "H159",
+    "H160",
+    "H161",
+    "H162",
+    "H163",
+    "H201"
+   ]
   },
   {
    "id": "V11",
@@ -4281,12 +4099,12 @@
    ],
    "hyp_ids": [
     "H164",
-   "H165",
-   "H166",
-   "H167",
-   "H168",
-   "H169",
-   "H170"
+    "H165",
+    "H166",
+    "H167",
+    "H168",
+    "H169",
+    "H170"
    ]
   },
   {
