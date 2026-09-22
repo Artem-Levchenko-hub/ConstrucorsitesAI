@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from omnia_orchestrator.schemas.restoration_recovery import (
+    MUTATING_PHASES,
     RecoveryFinding,
     RecoveryPhase,
     RecoveryReport,
@@ -562,17 +563,122 @@ def complete_recovery(
     return _report("complete", findings)
 
 
+class RecoveryConflict(RuntimeError):
+    """Продолжают не то восстановление — или не с той фазы.
+
+    Это не внутренняя ошибка, а отказ: у проекта уже идёт восстановление по другому
+    намерению, ограда сменилась, либо фазу пытаются перескочить. Во всех трёх
+    случаях правильный ответ — остановиться и разобраться, а не «дочинить».
+    """
+
+    status_code = 409
+
+
+@dataclass(frozen=True, slots=True)
+class JournalEntry:
+    """Одна пройденная фаза: чьё намерение, какая ограда, чем кончилось."""
+
+    project_id: str
+    intent_digest: str
+    fencing_epoch: int
+    phase: RecoveryPhase
+    ok: bool
+    witness_digest: str | None = None
+
+
+class RecoveryJournal(Protocol):
+    """Долговечная дозапись; порядок записей — порядок пройденных фаз."""
+
+    def entries(self, project_id: str) -> Sequence[JournalEntry]: ...
+
+    def append(self, entry: JournalEntry) -> None: ...
+
+
+def intent_digest(intent: RestorationRecoveryIntent) -> str:
+    """Отпечаток намерения целиком: меняется от любого поля."""
+    return hashlib.sha256(
+        intent.model_dump_json(exclude_none=False).encode("utf-8")
+    ).hexdigest()
+
+
+def advance_recovery(
+    intent: RestorationRecoveryIntent,
+    phase: RecoveryPhase,
+    *,
+    journal: RecoveryJournal,
+    perform: Callable[[], RecoveryReport],
+    already_done: Callable[[], bool] | None = None,
+) -> RecoveryReport:
+    """Пройти одну фазу так, чтобы повтор после обрыва ничего не сделал дважды.
+
+    Порядок проверок важен. Сначала отсекаются чужие: другое намерение или другая
+    ограда для того же проекта — отказ, а не продолжение. Потом порядок: запуск до
+    свидетеля и сверки исходника невозможен. И только затем решается, выполнять ли
+    фазу вообще.
+
+    Две причины не выполнять. Первая — фаза уже записана успешной: возвращается
+    записанный вердикт, ``perform`` не вызывается. Вторая тоньше: процесс мог
+    умереть МЕЖДУ эффектом и записью в журнал. Тогда эффект уже на месте, а записи
+    нет; ``already_done`` отвечает на вопрос «сделано ли», и его ответ проверяется
+    ДО выполнения — иначе на фазе запуска повтор поднимет второй контейнер на той
+    же базе.
+    """
+    if phase not in MUTATING_PHASES:
+        raise ValueError(f"only a mutating phase can be journalled, got {phase!r}")
+
+    project_id = str(intent.project_id)
+    digest = intent_digest(intent)
+    history = list(journal.entries(project_id))
+
+    for entry in history:
+        if entry.intent_digest != digest or entry.fencing_epoch != intent.expected_fencing_epoch:
+            raise RecoveryConflict(
+                f"project {project_id} is already being recovered under another intent"
+            )
+
+    passed = {entry.phase for entry in history if entry.ok}
+    if phase in passed:
+        return _report(phase, [_finding("replayed", True, "already recorded as passed")])
+
+    position = MUTATING_PHASES.index(phase)
+    unmet = [name for name in MUTATING_PHASES[:position] if name not in passed]
+    if unmet:
+        raise RecoveryConflict(f"phase {phase!r} cannot start before {', '.join(unmet)}")
+
+    if already_done is not None and already_done():
+        report = _report(phase, [_finding("resumed", True, "the effect was already in place")])
+    else:
+        report = perform()
+
+    journal.append(
+        JournalEntry(
+            project_id=project_id,
+            intent_digest=digest,
+            fencing_epoch=intent.expected_fencing_epoch,
+            phase=phase,
+            ok=report.ok,
+            witness_digest=report.witness_digest,
+        )
+    )
+    return report
+
+
 __all__ = [
     "SCRATCH_PREFIX",
     "CommandResult",
     "CompletionObservation",
     "DockerRunner",
+    "JournalEntry",
     "OwnerBoundaryObservation",
+    "RecoveryConflict",
+    "RecoveryJournal",
     "ScratchPool",
     "SourceGateway",
+    "advance_recovery",
     "clone_witness",
     "complete_recovery",
     "inspect_recovery",
+    "intent_digest",
     "source_sync",
     "start_current",
     "verify_owner_boundary",
