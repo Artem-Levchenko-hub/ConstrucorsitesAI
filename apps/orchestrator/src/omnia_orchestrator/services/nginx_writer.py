@@ -25,6 +25,7 @@ import asyncio
 import ipaddress
 import os
 import re
+import ssl
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -396,6 +397,82 @@ async def _reload() -> CmdResult:
     )
 
 
+# `systemctl reload nginx` returns as soon as the master got SIGHUP. For a few
+# hundred ms the OLD workers — still running the config from before our vhost —
+# keep accepting connections and answer with the catch-all: a closed socket on
+# :80 (444) or the default self-signed cert on :443. A caller that probes the
+# host right after `publish` therefore sees ConnectError / CERTIFICATE_VERIFY_FAILED
+# (live on core, 2026-09-22: the MAX finalization probe fired 170 ms before the
+# https block went live and failed the whole run). We block until the NEW
+# workers answer for the host; this is bounded and fail-soft.
+_LIVE_WAIT_SECONDS = 5.0
+_LIVE_POLL_SECONDS = 0.05
+_LIVE_PROBE_TIMEOUT_SECONDS = 2.0
+
+
+async def _probe_live(host: str, *, tls: bool) -> bool:
+    """One liveness check against local nginx for `host`.
+
+    :443 — the served leaf cert must validate for `host` (system trust store,
+    hostname check), i.e. exactly what an https client will demand.
+    :80 — the vhost must answer an HTTP status line at all; any status (even a
+    502 from a cold upstream) proves our block, the catch-all closes the socket.
+    No listener at all means there is nothing to wait for (dev boxes, tests).
+    """
+    try:
+        if tls:
+            ctx = ssl.create_default_context()
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    "127.0.0.1", 443, ssl=ctx, server_hostname=host,
+                ),
+                _LIVE_PROBE_TIMEOUT_SECONDS,
+            )
+            writer.close()
+            with suppress(Exception):
+                await writer.wait_closed()
+            return True
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", 80), _LIVE_PROBE_TIMEOUT_SECONDS,
+        )
+        try:
+            writer.write(
+                f"GET / HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode()
+            )
+            await writer.drain()
+            try:
+                line = await asyncio.wait_for(reader.readline(), 1.0)
+            except TimeoutError:
+                return True  # accepted and proxying (cold upstream) — ours
+            return line.startswith(b"HTTP/")
+        finally:
+            writer.close()
+            with suppress(Exception):
+                await writer.wait_closed()
+    except ssl.SSLError:
+        return False  # old workers: catch-all's self-signed cert
+    except ConnectionRefusedError:
+        return True  # no nginx here at all — nothing to wait for
+    except (TimeoutError, OSError):
+        return False
+
+
+async def _wait_live(host: str, *, tls: bool) -> bool:
+    """Poll `_probe_live` until the reloaded config answers for `host`.
+
+    Returns True when live, False on timeout (logged; callers proceed — a slow
+    reload must not turn a successful publish into a failure).
+    """
+    deadline = time.monotonic() + _LIVE_WAIT_SECONDS
+    while True:
+        if await _probe_live(host, tls=tls):
+            return True
+        if time.monotonic() >= deadline:
+            log.warning("nginx.live_wait_timeout", host=host, tls=tls)
+            return False
+        await asyncio.sleep(_LIVE_POLL_SECONDS)
+
+
 async def _issue_cert(host: str) -> bool:
     """Issue + install a Let's Encrypt cert for `host` via acme.sh (webroot
     http-01). We use acme.sh, NOT the system certbot (2.1.0 is broken on this
@@ -513,6 +590,7 @@ async def publish_http(
             message=f"nginx rejected site for {host}: {res.stderr[-300:]}",
             status_code=500,
         )
+    await _wait_live(host, tls="listen 443" in desired)
     log.info("nginx.published_http", host=host, port=port)
 
 
@@ -544,6 +622,7 @@ async def ensure_tls(
     res = await _reload()
     if res.ok:
         _tls_confirmations[path] = (desired, path.stat().st_mtime_ns, time.monotonic())
+        await _wait_live(host, tls=True)
         log.info("nginx.published_https", host=host, port=port)
         return True
     # Never downgrade a previously working HTTPS site on a failed refresh.

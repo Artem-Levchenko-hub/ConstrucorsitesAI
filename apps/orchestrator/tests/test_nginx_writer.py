@@ -672,3 +672,99 @@ def test_tls_confirmation_outlives_the_reconcile_sweep_period() -> None:
     # The reconcile loop revisits every publication about every 5 minutes; an
     # unchanged vhost must not cost a nginx reload on each visit (C13/C15).
     assert nginx_writer._TLS_CONFIRMATION_SECONDS >= 3600
+
+
+# --- reload liveness: the reload must not "succeed" before the new workers answer -----------
+
+
+async def test_wait_live_polls_until_new_workers_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Old nginx workers still answer for ~200 ms after `systemctl reload`; the
+    publish must block until a probe against the host succeeds."""
+    import omnia_orchestrator.services.nginx_writer as nw
+
+    answers = iter([False, False, True])
+    seen: list[tuple[str, bool]] = []
+
+    async def _probe(host: str, *, tls: bool) -> bool:
+        seen.append((host, tls))
+        return next(answers)
+
+    monkeypatch.setattr(nw, "_probe_live", _probe)
+    monkeypatch.setattr(nw, "_LIVE_POLL_SECONDS", 0.001)
+
+    assert await nw._wait_live("a-dev.apps.example.ru", tls=True) is True
+    assert seen == [("a-dev.apps.example.ru", True)] * 3
+
+
+async def test_wait_live_gives_up_after_deadline_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stuck reload is logged and tolerated — never turned into a failed publish."""
+    import omnia_orchestrator.services.nginx_writer as nw
+
+    async def _never(host: str, *, tls: bool) -> bool:
+        return False
+
+    monkeypatch.setattr(nw, "_probe_live", _never)
+    monkeypatch.setattr(nw, "_LIVE_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(nw, "_LIVE_POLL_SECONDS", 0.001)
+
+    assert await nw._wait_live("a-dev.apps.example.ru", tls=False) is False
+
+
+async def test_probe_live_treats_missing_listener_as_nothing_to_wait_for() -> None:
+    """No nginx on this box (tests, dev) → the wait is a no-op, not a 5 s stall."""
+    import socket
+
+    import omnia_orchestrator.services.nginx_writer as nw
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen(1)
+        free_port = s.getsockname()[1]
+    # Nothing listens on free_port; make the probe target it instead of :80/:443.
+    orig = nw.asyncio.open_connection
+
+    async def _redirect(host: str, port: int, **kw: object):  # type: ignore[no-untyped-def]
+        return await orig(host, free_port, **kw)
+
+    nw.asyncio.open_connection = _redirect  # type: ignore[assignment]
+    try:
+        assert await nw._probe_live("x-dev.apps.example.ru", tls=False) is True
+        assert await nw._probe_live("x-dev.apps.example.ru", tls=True) is True
+    finally:
+        nw.asyncio.open_connection = orig  # type: ignore[assignment]
+
+
+async def test_ensure_tls_waits_for_https_liveness_before_reporting_live(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ensure_tls` returns True only after the https vhost answers, so an api
+    probe issued on return cannot race the old workers' self-signed cert."""
+    import omnia_orchestrator.services.nginx_writer as nw
+    from omnia_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("ENABLE_TLS", "true")
+    from omnia_orchestrator.core.config import get_settings
+
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+    order: list[str] = []
+
+    async def _ok() -> CmdResult:
+        order.append("reload")
+        return CmdResult(rc=0, stdout="", stderr="")
+
+    async def _issued(host: str) -> bool:
+        return True
+
+    async def _live(host: str, *, tls: bool) -> bool:
+        order.append(f"live:{tls}")
+        return True
+
+    monkeypatch.setattr(nw, "_reload", _ok)
+    monkeypatch.setattr(nw, "_issue_cert", _issued)
+    monkeypatch.setattr(nw, "_wait_live", _live)
+
+    assert await nw.ensure_tls("b-dev.apps.example.ru", 3000) is True
+    assert order == ["reload", "live:True"]
