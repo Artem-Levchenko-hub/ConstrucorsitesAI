@@ -206,6 +206,26 @@ class Settings(BaseSettings):
     # Where acme.sh installs issued certs (orchestrator-owned; nginx reads).
     acme_certs_dir: str = Field(default="/opt/omnia-runtime/certs")
 
+    # Phase 3 / stage A: where a *published* app runs. "docker" = the machine
+    # bundle on this host behind nginx (today); "kubernetes" = objects in the
+    # runtime cluster behind its Traefik + cert-manager (services/k8s_publication).
+    publication_backend: Literal["docker", "kubernetes"] = Field(default="docker")
+    # Cluster access for the kubernetes backend: a kubeconfig the orchestrator
+    # user can read (server reachable over WireGuard), optional context name.
+    k8s_kubeconfig_path: str = Field(default="/etc/max-studio/runtime-kubeconfig.yaml")
+    k8s_context: str = Field(default="")
+    # Private registry the cluster pulls from; the orchestrator pushes release,
+    # core and guard images there (`docker push` with these credentials).
+    image_registry: str = Field(default="registry.yleum.ru")
+    image_registry_username: str = Field(default="")
+    image_registry_password: SecretStr = Field(default=SecretStr(""))
+    # Public hostname suffix for kubernetes publications (`<slug>.<suffix>`); the
+    # Docker path keeps `runtime_host_suffix` for both previews and publications.
+    public_host_suffix: str = Field(default="")
+    # Where seeding init containers fetch warm artifacts from (this orchestrator
+    # over WireGuard). Capability links are single-use and expire.
+    artifact_base_url: str = Field(default="http://10.10.0.1:8003")
+
     # Dev container port pool. 3001-3199 reserved for V1 + other tenants.
     port_range_min: int = Field(default=3200)
     port_range_max: int = Field(default=3999)

@@ -29,6 +29,7 @@ from omnia_orchestrator.routers import (
     code_restorations,
     health,
     ingress,
+    publication_artifacts,
     runtime,
     workspace,
 )
@@ -144,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(byo.router)
     app.include_router(workspace.router)
     app.include_router(cell_publication.router)
+    app.include_router(publication_artifacts.router)
     app.include_router(code_restorations.router)
 
     return app

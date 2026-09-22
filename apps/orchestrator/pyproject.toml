@@ -20,6 +20,7 @@ dependencies = [
     "sentry-sdk[fastapi]>=2.18,<3.0",
     "redis>=5.0,<6.0",
     "asyncssh>=2.21,<3.0",
+    "kubernetes>=31,<34",
 ]
 
 [dependency-groups]
@@ -61,3 +62,8 @@ ignore = [
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# The official Kubernetes client ships no type stubs (used only behind KubernetesApi).
+module = ["kubernetes", "kubernetes.*"]
+ignore_missing_imports = true
