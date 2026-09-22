@@ -33,6 +33,7 @@ STAGES = (
     "verify_artifacts",
     "resume_source",
     "prepare_target",
+    "push_image",
     "seed_data",
     "activate",
     "start_app",

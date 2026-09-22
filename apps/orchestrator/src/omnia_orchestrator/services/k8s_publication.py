@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 from uuid import UUID
 
 import structlog
@@ -61,11 +62,20 @@ class PublicationPlacementError(OrchestratorError):
 
 @dataclass(frozen=True)
 class SeedVolume:
-    """One warm artifact to restore into a mount path before the app starts."""
+    """One volume of the app machine and, optionally, the warm artifact that
+    fills it before the app starts.
+
+    * durable (business data: project Postgres, declared data mounts) — one PVC per
+      project, seeded once and never re-seeded while data is present;
+    * not durable (workspace, home, package stores) — one PVC per release, seeded
+      when the release first starts, kept across pod restarts, pruned after the
+      next release is live.
+    `artifact_url=None` mounts an existing volume without seeding.
+    """
 
     mount_path: str
-    artifact_url: str
-    durable: bool  # business data → PVC, never re-seeded once present
+    artifact_url: str | None
+    durable: bool
     size_bytes: int
 
 
@@ -98,6 +108,10 @@ class PublicationSpec:
     core_postgres_storage: str = "2Gi"
     ingress_class: str = "traefik"
     cluster_issuer: str = "letsencrypt-prod"
+    # Where seeding init containers fetch archives from (the orchestrator over
+    # WireGuard); the only egress the app and project-postgres pods get besides DNS.
+    artifact_source_cidr: str = "10.10.0.1/32"
+    artifact_port: int = 8003
 
     @property
     def namespace(self) -> str:
@@ -161,33 +175,73 @@ def _service(spec: PublicationSpec, component: str, port: int) -> dict[str, Any]
     }
 
 
+SEED_MARKER = ".omnia-seeded"
+SEED_LINKS_SECRET = "seed-links"
+
+
 def _seed_init_container(
-    name: str, mount_name: str, mount_path: str, url: str, *, durable: bool, chown: str | None
+    name: str, mount_name: str, link_key: str, *, chown: str | None
 ) -> dict[str, Any]:
-    guard = (
-        "[ -n \"$(ls -A /seed 2>/dev/null)\" ] && { echo 'seed: data present, keeping'; exit 0; }; "
-        if durable
-        else ""
-    )
+    """Restore one archive into a volume exactly once.
+
+    A half-extracted archive (pod killed mid-seed) must not pass as "data present":
+    the marker is written only after a complete extraction, and its absence with
+    stale content clears the volume before the archive is fetched again. The link
+    itself comes from the `seed-links` Secret so a re-issued link never changes the
+    pod template (no rollout of a healthy app on configuration refresh).
+    """
     own = f" && chown -R {chown} /seed" if chown else ""
     script = (
-        f"{guard}"
-        'set -e; wget -q -O /tmp/seed.tar "$SEED_URL" && tar -xf /tmp/seed.tar -C /seed'
-        f"{own} && rm -f /tmp/seed.tar && echo 'seed: restored'"
+        f'[ -f /seed/{SEED_MARKER} ] && {{ echo "seed: data present, keeping"; exit 0; }}; '
+        "set -e; find /seed -mindepth 1 -delete; "
+        'wget -q -O /tmp/seed.tar "$SEED_URL" && tar -xf /tmp/seed.tar -C /seed'
+        f"{own} && rm -f /tmp/seed.tar && touch /seed/{SEED_MARKER}{own} && echo 'seed: restored'"
     )
     return {
         "name": name,
         "image": "alpine:3.20",
         "command": ["sh", "-c", script],
-        "env": [{"name": "SEED_URL", "value": url}],
+        "env": [
+            {
+                "name": "SEED_URL",
+                "valueFrom": {"secretKeyRef": {"name": SEED_LINKS_SECRET, "key": link_key}},
+            }
+        ],
         "volumeMounts": [{"name": mount_name, "mountPath": "/seed"}],
         "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}},
     }
 
 
-def _volume_name(index: int, mount_path: str) -> str:
-    digest = hashlib.sha256(mount_path.encode()).hexdigest()[:8]
-    return f"seed-{index}-{digest}"
+def _volume_name(spec: PublicationSpec, seed: SeedVolume) -> str:
+    """Durable data keeps one claim per project; code claims carry the release."""
+    digest = hashlib.sha256(seed.mount_path.encode()).hexdigest()[:8]
+    if seed.durable:
+        return f"data-{digest}"
+    return f"code-{spec.release_id[:8]}-{digest}"
+
+
+def _link_key(seed: SeedVolume) -> str:
+    return "seed-" + hashlib.sha256(seed.mount_path.encode()).hexdigest()[:12]
+
+
+def _claim(spec: PublicationSpec, name: str, seed: SeedVolume) -> dict[str, Any]:
+    storage = max(seed.size_bytes * 3, 1024**3)
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": name,
+            "namespace": spec.namespace,
+            "labels": {
+                **_labels(spec, "app"),
+                "omnia.volume-kind": "data" if seed.durable else "code",
+            },
+        },
+        "spec": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": _bytes(storage)}},
+        },
+    }
 
 
 def _supervisor_source() -> str:
@@ -305,7 +359,9 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
             "stringData": {
                 "omnia-business-config.json": json.dumps(spec.business_config, ensure_ascii=True),
                 "AUTH_SECRET": spec.boundary_secret,
-                "DATABASE_URL": f"postgresql://postgres:{spec.core_postgres_password}@core-postgres:5432/postgres",
+                "DATABASE_URL": "postgresql://postgres:"
+                + quote(spec.core_postgres_password, safe="")
+                + "@core-postgres:5432/postgres",
                 "POSTGRES_PASSWORD": spec.core_postgres_password,
             },
         },
@@ -315,28 +371,43 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
             "metadata": {"name": "app-config", "namespace": ns, "labels": _labels(spec, "app")},
             "type": "Opaque",
             "stringData": {
-                "DATABASE_URL": (
-                    f"postgresql://postgres:{spec.project_postgres_password}@project-postgres:5432/postgres"
-                ),
+                "DATABASE_URL": "postgresql://postgres:"
+                + quote(spec.project_postgres_password, safe="")
+                + "@project-postgres:5432/postgres",
                 "POSTGRES_PASSWORD": spec.project_postgres_password,
             },
         },
     ]
 
+    # --- seed links: single-use capability URLs, never part of a pod template ---
+    seeds = sorted(spec.seed_volumes, key=lambda seed: seed.mount_path)
+    links = {_link_key(seed): seed.artifact_url for seed in seeds if seed.artifact_url is not None}
+    objects.append(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": SEED_LINKS_SECRET,
+                "namespace": ns,
+                "labels": _labels(spec, "app"),
+            },
+            "type": "Opaque",
+            "stringData": links,
+        }
+    )
+
     # --- project postgres (business data, seeded once from the warm artifact) ---
-    pg_seed = next((v for v in spec.seed_volumes if v.mount_path == PROJECT_POSTGRES_DATA), None)
+    pg_seed = next((v for v in seeds if v.mount_path == PROJECT_POSTGRES_DATA), None)
     pg_init = (
         [
             _seed_init_container(
                 "seed-data",
                 "data",
-                "/seed",
-                pg_seed.artifact_url,
-                durable=True,
+                _link_key(pg_seed),
                 chown=f"{_POSTGRES_UID}:{_POSTGRES_UID}",
             )
         ]
-        if pg_seed
+        if pg_seed is not None and pg_seed.artifact_url is not None
         else []
     )
     objects.append(
@@ -410,7 +481,9 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                     "metadata": {
                         "labels": _labels(spec, "core"),
                         "annotations": {
-                            "omnia.config-digest": _digest(spec.business_config, spec.runtime_env)
+                            "omnia.config-digest": _digest(
+                                spec.business_config, spec.runtime_env, spec.boundary_secret
+                            )
                         },
                     },
                     "spec": {
@@ -501,31 +574,34 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         {"name": "tmp", "mountPath": "/tmp"},
     ]
     app_init: list[dict[str, Any]] = []
-    for index, seed in enumerate(
-        v for v in spec.seed_volumes if v.mount_path != PROJECT_POSTGRES_DATA
-    ):
-        name = _volume_name(index, seed.mount_path)
-        app_volumes.append(
-            {
-                "name": name,
-                "emptyDir": {"sizeLimit": _bytes(max(seed.size_bytes * 3, 256 * 1024**2))},
-            }
-        )
+    for index, seed in enumerate(v for v in seeds if v.mount_path != PROJECT_POSTGRES_DATA):
+        name = _volume_name(spec, seed)
+        objects.append(_claim(spec, name, seed))
+        app_volumes.append({"name": name, "persistentVolumeClaim": {"claimName": name}})
+        # Parents before children: mounts are applied in list order.
         app_mounts.append({"name": name, "mountPath": seed.mount_path})
-        app_init.append(
-            _seed_init_container(
-                f"seed-{index}", name, seed.mount_path, seed.artifact_url, durable=False, chown=None
+        if seed.artifact_url is not None:
+            app_init.append(
+                _seed_init_container(f"seed-{index}", name, _link_key(seed), chown=None)
             )
-        )
+    # Next's build cache is disposable and release-local, like the Docker layout.
+    app_volumes.append({"name": "next-cache", "emptyDir": {}})
+    app_mounts.append({"name": "next-cache", "mountPath": "/workspace/.next/cache"})
+    app_mounts.sort(key=lambda mount: (mount["mountPath"].count("/"), mount["mountPath"]))
     app_env = {
         "HOME": "/root",
         "CI": "1",
         "PYTHONUNBUFFERED": "1",
         "NODE_ENV": "production",
         "NEXT_TELEMETRY_DISABLED": "1",
+        "COREPACK_HOME": "/root/.cache/node/corepack",
         "PORT": str(app_port),
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PUBLIC_APP_ORIGIN": spec.public_origin,
+        "PGHOST": "project-postgres",
+        "PGPORT": "5432",
+        "PGUSER": "postgres",
+        "PGDATABASE": "postgres",
         **spec.app_env,
     }
     readiness = (
@@ -570,6 +646,15 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                             "secretKeyRef": {
                                                 "name": "app-config",
                                                 "key": "DATABASE_URL",
+                                            }
+                                        },
+                                    },
+                                    {
+                                        "name": "PGPASSWORD",
+                                        "valueFrom": {
+                                            "secretKeyRef": {
+                                                "name": "app-config",
+                                                "key": "POSTGRES_PASSWORD",
                                             }
                                         },
                                     },
@@ -819,6 +904,11 @@ def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, An
     def from_peer(component: str) -> dict[str, Any]:
         return {"podSelector": {"matchLabels": _selector(spec, component)}}
 
+    artifacts = {
+        "to": [{"ipBlock": {"cidr": spec.artifact_source_cidr}}],
+        "ports": [{"port": spec.artifact_port}],
+    }
+
     return [
         {
             "apiVersion": "networking.k8s.io/v1",
@@ -856,7 +946,7 @@ def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, An
             {
                 "policyTypes": ["Ingress", "Egress"],
                 "ingress": [{"from": [from_peer("boundary")], "ports": [{"port": app_port}]}],
-                "egress": [peer("project-postgres", 5432), dns],
+                "egress": [peer("project-postgres", 5432), dns, artifacts],
             },
         ),
         policy(
@@ -889,7 +979,7 @@ def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, An
             {
                 "policyTypes": ["Ingress", "Egress"],
                 "ingress": [{"from": [from_peer("app")], "ports": [{"port": 5432}]}],
-                "egress": [dns],
+                "egress": [dns, artifacts],
             },
         ),
         policy(
@@ -944,6 +1034,9 @@ class KubernetesApi(Protocol):
     def get(
         self, api_version: str, kind: str, name: str, namespace: str | None
     ) -> dict[str, Any] | None: ...
+    def list_objects(
+        self, api_version: str, kind: str, namespace: str | None, label_selector: str
+    ) -> list[dict[str, Any]]: ...
 
 
 class KubernetesClusterApi:
@@ -990,6 +1083,14 @@ class KubernetesClusterApi:
         except NotFoundError:
             return None
         return dict(found.to_dict())
+
+    def list_objects(
+        self, api_version: str, kind: str, namespace: str | None, label_selector: str
+    ) -> list[dict[str, Any]]:
+        found = self._resource(api_version, kind).get(
+            namespace=namespace, label_selector=label_selector
+        )
+        return [dict(item.to_dict()) for item in (found.items or [])]
 
     def wait_ready(self, kind: str, name: str, namespace: str, timeout_seconds: float) -> None:
         deadline = time.monotonic() + timeout_seconds
@@ -1118,6 +1219,39 @@ def artifact_capabilities() -> ArtifactCapabilityStore:
 # ---------------------------------------------------------------- registry
 
 
+def ensure_release_image(
+    docker_client: Any, image_id: str, archive: Path, *, provenance: dict[str, str]
+) -> None:
+    """The captured environment image must be local before it can be pushed.
+
+    Mirrors `PublishedMachineBackend.adopt_source_image`: load from the sealed
+    archive when the daemon no longer has it, and refuse an image whose identity,
+    provenance labels or baked-in runtime configuration differ from the capture.
+    """
+    from docker.errors import ImageNotFound  # type: ignore[import-untyped]
+
+    try:
+        image = docker_client.images.get(image_id)
+    except ImageNotFound:
+        with archive.open("rb") as handle:
+            images = docker_client.images.load(handle)
+        if len(images) != 1 or images[0].id != image_id:
+            raise PublicationPlacementError(
+                "publication image digest mismatch", status_code=409
+            ) from None
+        image = images[0]
+    if image.id != image_id:
+        raise PublicationPlacementError("publication image digest mismatch", status_code=409)
+    config = image.attrs.get("Config") or {}
+    if config.get("Env") or config.get("Entrypoint") or config.get("Cmd"):
+        raise PublicationPlacementError(
+            "publication image contains runtime configuration", status_code=409
+        )
+    labels = config.get("Labels") or {}
+    if any(labels.get(key) != value for key, value in provenance.items()):
+        raise PublicationPlacementError("publication image provenance mismatch", status_code=409)
+
+
 def push_image(
     docker_client: Any, image_id: str, repository: str, tag: str, *, auth: dict[str, str] | None
 ) -> str:
@@ -1227,9 +1361,44 @@ class KubernetesPublishedRuntime:
             )
         log.info("k8s_publication.retired", namespace=ns)
 
+    def prune_release_volumes(self, project_id: UUID, keep_release_id: str) -> list[str]:
+        """Drop code claims of retired releases; data claims are never touched."""
+        ns = f"app-{project_id}"
+        removed: list[str] = []
+        for claim in self.api.list_objects(
+            "v1", "PersistentVolumeClaim", ns, "omnia.volume-kind=code"
+        ):
+            metadata = claim.get("metadata") or {}
+            labels = metadata.get("labels") or {}
+            if labels.get("omnia.release-id") == keep_release_id:
+                continue
+            self.api.delete("v1", "PersistentVolumeClaim", metadata["name"], ns)
+            removed.append(metadata["name"])
+        return removed
+
+    def destroy(self, project_id: UUID) -> None:
+        """Retire and drop every claim, data included. Only for an app that never
+        went live (a failed or interrupted first publication): its seeded data is
+        a copy of the source cell and must not shadow the next attempt's seed.
+        The namespace itself stays (retired): the orchestrator's cluster role
+        deliberately cannot delete namespaces."""
+        ns = f"app-{project_id}"
+        self.retire(project_id)
+        for claim in self.api.list_objects(
+            "v1", "PersistentVolumeClaim", ns, "app.kubernetes.io/managed-by=omnia-orchestrator"
+        ):
+            self.api.delete("v1", "PersistentVolumeClaim", claim["metadata"]["name"], ns)
+        log.info("k8s_publication.destroyed", namespace=ns)
+
     def status(self, project_id: UUID) -> dict[str, Any]:
         ns = f"app-{project_id}"
-        result: dict[str, Any] = {"namespace": ns, "present": False, "ready": {}}
+        result: dict[str, Any] = {
+            "namespace": ns,
+            "present": False,
+            "ready": {},
+            "app_image": None,
+            "release_id": None,
+        }
         if self.api.get("v1", "Namespace", ns, None) is None:
             return result
         result["present"] = True
@@ -1242,10 +1411,18 @@ class KubernetesPublishedRuntime:
             current = self.api.get("apps/v1", kind, name, ns) or {}
             status = current.get("status") or {}
             result["ready"][name] = int(status.get("readyReplicas") or 0) >= 1
+            if name == "app":
+                template = ((current.get("spec") or {}).get("template") or {}).get("spec") or {}
+                containers = template.get("containers") or []
+                result["app_image"] = containers[0].get("image") if containers else None
+                labels = (current.get("metadata") or {}).get("labels") or {}
+                result["release_id"] = labels.get("omnia.release-id")
         return result
 
 
 __all__ = [
+    "SEED_LINKS_SECRET",
+    "SEED_MARKER",
     "ArtifactCapabilityStore",
     "KubernetesApi",
     "KubernetesClusterApi",
@@ -1256,5 +1433,6 @@ __all__ = [
     "SeedVolume",
     "artifact_capabilities",
     "build_objects",
+    "ensure_release_image",
     "push_image",
 ]

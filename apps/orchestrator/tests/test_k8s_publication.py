@@ -168,27 +168,63 @@ def test_app_machine_is_seeded_from_warm_artifacts_and_supervised() -> None:
 
     assert container["command"] == ["python3", "/omnia/supervisor.py"]
     assert container["readinessProbe"]["httpGet"] == {"path": "/api/omnia/health", "port": 3000}
-    assert {m["mountPath"] for m in container["volumeMounts"]} >= {
-        "/workspace",
-        "/root",
-        "/omnia",
-        "/run/omnia-logs",
-    }
-    assert [c["env"][0]["value"] for c in inits] == [
+    mounts = [m["mountPath"] for m in container["volumeMounts"]]
+    assert set(mounts) >= {"/workspace", "/root", "/omnia", "/run/omnia-logs"}
+    # parents mount before children (the disposable Next cache lives inside /workspace)
+    assert mounts.index("/workspace") < mounts.index("/workspace/.next/cache")
+    # every seed link is read from the seed-links Secret, never inlined in the template
+    links = _by(objects, "Secret", "seed-links")["stringData"]
+    assert sorted(links.values()) == [
+        "http://10.10.0.1:8003/internal/publication-artifacts/t1",
         "http://10.10.0.1:8003/internal/publication-artifacts/t2",
         "http://10.10.0.1:8003/internal/publication-artifacts/t3",
     ]
-    # code/home caches are re-seeded on every release: no "keep existing data" guard
-    assert all("data present" not in c["command"][2] for c in inits)
+    assert [c["env"][0]["valueFrom"]["secretKeyRef"]["name"] for c in inits] == [
+        "seed-links",
+        "seed-links",
+    ]
+    assert all(c["env"][0]["valueFrom"]["secretKeyRef"]["key"] in links for c in inits)
+    # a seed is applied once per claim and survives pod restarts; a torn seed is redone
+    assert all(kp.SEED_MARKER in c["command"][2] and "find /seed" in c["command"][2] for c in inits)
     env = {item["name"]: item for item in container["env"]}
     assert env["DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
         "name": "app-config",
         "key": "DATABASE_URL",
     }
     assert env["PORT"]["value"] == "3000"
+    assert env["PGHOST"]["value"] == "project-postgres"
     manifest_map = _by(objects, "ConfigMap", "app-manifest")["data"]
     assert json.loads(manifest_map["order.json"]) == ["web"]
     assert "supervisor.py" in manifest_map and "manifest.json" in manifest_map
+
+
+def test_code_claims_carry_the_release_and_data_claims_do_not() -> None:
+    spec = _spec(
+        seed_volumes=(
+            kp.SeedVolume("/workspace", "http://10.10.0.1:8003/x/1", False, 2048),
+            kp.SeedVolume("/data/uploads", None, True, 1),
+        )
+    )
+    objects = kp.build_objects(spec)
+    claims = {o["metadata"]["name"]: o for o in objects if o["kind"] == "PersistentVolumeClaim"}
+
+    assert sorted(claims) == sorted(
+        [
+            "code-11111111-" + hashlib.sha256(b"/workspace").hexdigest()[:8],
+            "data-" + hashlib.sha256(b"/data/uploads").hexdigest()[:8],
+        ]
+    )
+    kinds = {name: c["metadata"]["labels"]["omnia.volume-kind"] for name, c in claims.items()}
+    assert set(kinds.values()) == {"code", "data"}
+    app = _by(objects, "Deployment", "app")
+    volumes = {v["name"]: v for v in app["spec"]["template"]["spec"]["volumes"]}
+    assert all(name in volumes and "persistentVolumeClaim" in volumes[name] for name in claims)
+    # an existing data claim is mounted without any seeding step
+    inits = app["spec"]["template"]["spec"]["initContainers"]
+    assert len(inits) == 1 and inits[0]["volumeMounts"][0]["name"].startswith("code-")
+    assert _by(objects, "Secret", "seed-links")["stringData"] == {
+        "seed-" + hashlib.sha256(b"/workspace").hexdigest()[:12]: "http://10.10.0.1:8003/x/1"
+    }
 
 
 def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
@@ -198,16 +234,22 @@ def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
 
     assert len(init) == 1
     script = init[0]["command"][2]
-    assert "data present" in script  # durable: never re-seed live business data
+    assert kp.SEED_MARKER in script  # durable: never re-seed live business data
     assert "chown -R 70:70 /seed" in script
-    assert init[0]["env"] == [
-        {"name": "SEED_URL", "value": "http://10.10.0.1:8003/internal/publication-artifacts/t1"}
-    ]
+    assert init[0]["env"][0]["valueFrom"]["secretKeyRef"]["name"] == "seed-links"
     assert (
         pg["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"] == "5Gi"
     )
     core_pg = _by(objects, "StatefulSet", "core-postgres")
     assert core_pg["spec"]["template"]["spec"]["initContainers"] == []
+    # warm update: no postgres artifact → no seeding step, data stays
+    warm = kp.build_objects(
+        _spec(seed_volumes=(kp.SeedVolume("/workspace", "http://10.10.0.1:8003/x", False, 1),))
+    )
+    assert (
+        _by(warm, "StatefulSet", "project-postgres")["spec"]["template"]["spec"]["initContainers"]
+        == []
+    )
 
 
 def test_network_is_default_deny_with_explicit_paths() -> None:
@@ -284,6 +326,18 @@ class FakeApi:
     ) -> dict[str, Any] | None:
         return self.objects.get((kind, name, namespace))
 
+    def list_objects(
+        self, api_version: str, kind: str, namespace: str | None, label_selector: str
+    ) -> list[dict[str, Any]]:
+        key, _, value = label_selector.partition("=")
+        return [
+            obj
+            for (obj_kind, _, obj_ns), obj in self.objects.items()
+            if obj_kind == kind
+            and obj_ns == namespace
+            and (obj["metadata"].get("labels") or {}).get(key) == value
+        ]
+
 
 def test_publish_applies_everything_then_waits_data_before_app_before_probing() -> None:
     api = FakeApi()
@@ -335,6 +389,69 @@ def test_retire_removes_ingress_and_workloads_but_keeps_volumes() -> None:
     assert not any(kind == "PersistentVolumeClaim" for _, kind, _, _ in api.deleted)
     assert not any(kind == "Namespace" for _, kind, _, _ in api.deleted)
     assert api.applied[-1]["metadata"]["labels"] == {"omnia.retired": "true"}
+
+
+def test_prune_release_volumes_drops_only_other_releases_code_claims() -> None:
+    api = FakeApi()
+    for obj in kp.build_objects(_spec(release_id="11111111-aaaa-4111-8111-111111111111")):
+        api.apply(obj)
+    for obj in kp.build_objects(_spec(release_id="22222222-bbbb-4222-8222-222222222222")):
+        api.apply(obj)
+    api.apply(
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": "data-deadbeef",
+                "namespace": f"app-{PROJECT}",
+                "labels": {"omnia.volume-kind": "data", "omnia.release-id": "11111111-aaaa"},
+            },
+        }
+    )
+    removed = kp.KubernetesPublishedRuntime(api).prune_release_volumes(
+        PROJECT, "22222222-bbbb-4222-8222-222222222222"
+    )
+
+    assert sorted(removed) == sorted(n for n in removed if n.startswith("code-11111111-"))
+    assert len(removed) == 2  # /workspace and /root of the retired release
+    assert not any(name.startswith("data-") for name in removed)
+
+
+def test_destroy_drops_data_claims_too_but_never_the_namespace() -> None:
+    api = FakeApi()
+    for obj in kp.build_objects(_spec()):
+        api.apply(obj)
+    api.apply(  # what the StatefulSet's claim template materialises
+        {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+                "name": "data-project-postgres-0",
+                "namespace": f"app-{PROJECT}",
+                "labels": {"app.kubernetes.io/managed-by": "omnia-orchestrator"},
+            },
+        }
+    )
+    kp.KubernetesPublishedRuntime(api).destroy(PROJECT)
+
+    claims = sorted(name for _, kind, name, _ in api.deleted if kind == "PersistentVolumeClaim")
+    assert "data-project-postgres-0" in claims and any(n.startswith("code-") for n in claims)
+    assert not any(kind == "Namespace" for _, kind, _, _ in api.deleted)
+    assert ("Ingress", "public") in {(kind, name) for _, kind, name, _ in api.deleted}
+
+
+def test_status_reports_the_serving_app_image_and_release() -> None:
+    api = FakeApi()
+    for obj in kp.build_objects(_spec()):
+        api.apply(obj)
+    app = api.objects[("Deployment", "app", f"app-{PROJECT}")]
+    app["status"] = {"readyReplicas": 1}
+    status = kp.KubernetesPublishedRuntime(api).status(PROJECT)
+
+    assert status["present"] and status["ready"]["app"] and not status["ready"]["core"]
+    assert status["app_image"] == "registry.yleum.ru/apps/6cd1e70b:3"
+    assert status["release_id"] == "11111111-1111-4111-8111-111111111111"
+    assert kp.KubernetesPublishedRuntime(FakeApi()).status(PROJECT)["present"] is False
 
 
 def test_capability_links_are_single_use_and_expire(tmp_path: Path) -> None:

@@ -222,6 +222,9 @@ class Settings(BaseSettings):
     # Public hostname suffix for kubernetes publications (`<slug>.<suffix>`); the
     # Docker path keeps `runtime_host_suffix` for both previews and publications.
     public_host_suffix: str = Field(default="")
+    # Per-app limits in the runtime cluster (requests are half of these).
+    k8s_app_cpu_cores: float = Field(default=1.0, ge=0.25)
+    k8s_app_memory_bytes: int = Field(default=1024**3, ge=256 * 1024**2)
     # Where seeding init containers fetch warm artifacts from (this orchestrator
     # over WireGuard). Capability links are single-use and expire.
     artifact_base_url: str = Field(default="http://10.10.0.1:8003")
