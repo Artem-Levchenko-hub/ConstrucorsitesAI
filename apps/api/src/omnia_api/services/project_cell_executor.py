@@ -28,6 +28,7 @@ from omnia_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     promote_generation_after_admission,
 )
+from omnia_api.services.max_data_evolution import max_migration_contract_errors
 from omnia_api.services.orchestrator_client import (
     HttpProjectCellOrchestratorClient,
     OrchestratorBadRequest,
@@ -1207,6 +1208,19 @@ async def maybe_create_project_cell_executor(
                     "detail": f"patched {path}",
                 }
             if action.name == "build":
+                # Сборка применяет миграции к ЖИВОЙ базе ячейки, поэтому договор
+                # миграций проверяется здесь, до отправки команды, а не после
+                # работы агента. Иначе недопустимая миграция успевает примениться,
+                # запуск падает позже, версия не публикуется — и остаётся
+                # незаверсионированный след в схеме, который находят последним.
+                _contract = max_migration_contract_errors(baseline_files, workspace_files)
+                if _contract:
+                    return {
+                        "ok": False,
+                        # Имена файлов и правило — да; содержимое миграций — нет.
+                        "detail": "MAX migration contract: " + "; ".join(_contract[:5]),
+                        "environment_mutated": False,
+                    }
                 portable = _is_portable()
                 if portable and get_settings().use_max_finalization_coordinator:
                     observation = await _run_role(ProjectCellCommandRole.FAST_CHECK, uuid4())
