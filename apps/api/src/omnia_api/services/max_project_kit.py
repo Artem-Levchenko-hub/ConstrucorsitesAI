@@ -464,6 +464,13 @@ def render_max_starter_files(
         "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
         "tests/starter.test.mjs": _template_file("tests/starter.test.mjs"),
         "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
+        # The migrations that create the platform tables. They already exist in
+        # the materialized workspace, but until they were seeded here the file
+        # set the platform reasons about did not contain them at all — so losing
+        # them could not be noticed until a signed request hit a table that had
+        # never been created (LIVE-04).
+        "drizzle/0000_max_core.sql": _template_file("drizzle/0000_max_core.sql"),
+        "drizzle/0001_business_core.sql": _template_file("drizzle/0001_business_core.sql"),
         **render_max_managed_files(config, project_id),
         "src/app/globals.css": _template_file("src/app/globals.css"),
     }
