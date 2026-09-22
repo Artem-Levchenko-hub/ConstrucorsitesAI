@@ -50,6 +50,9 @@ _PUBLIC_CORE_COMMAND = (
 # Alpine postgres images run the server as uid 70; the seed init container restores
 # the warm data directory as root and hands it over before postgres starts.
 _POSTGRES_UID = 70
+# Official redis image: its entrypoint switches to this user via gosu when started as
+# root, which needs capabilities the pod drops; starting as the user skips that.
+_REDIS_UID = 999
 
 
 class PublicationPlacementError(OrchestratorError):
@@ -444,6 +447,8 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                     "limits": {"memory": "128Mi"},
                                 },
                                 "securityContext": {
+                                    "runAsUser": _REDIS_UID,
+                                    "runAsGroup": _REDIS_UID,
                                     "allowPrivilegeEscalation": False,
                                     "capabilities": {"drop": ["ALL"]},
                                 },
@@ -807,6 +812,12 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
 def _postgres_statefulset(
     spec: PublicationSpec, name: str, storage: str, secret: str, init: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    # The seeded project database is the claim's root (the archive is the data
+    # directory itself). The core database initialises itself on first start; the
+    # official entrypoint needs an empty directory it owns, so it gets a subdirectory.
+    pgdata = (
+        PROJECT_POSTGRES_DATA if name == "project-postgres" else PROJECT_POSTGRES_DATA + "/pgdata"
+    )
     return {
         "apiVersion": "apps/v1",
         "kind": "StatefulSet",
@@ -823,15 +834,12 @@ def _postgres_statefulset(
                         {
                             "name": "postgres",
                             "image": spec.postgres_image,
-                            "command": [
-                                "postgres",
-                                "-D",
-                                PROJECT_POSTGRES_DATA,
-                                "-c",
-                                "listen_addresses=*",
-                            ],
+                            # The image entrypoint runs initdb when the directory is
+                            # empty and just starts the server when it is seeded; as a
+                            # non-root user it never tries to chown or switch users.
+                            "args": ["postgres", "-c", "listen_addresses=*"],
                             "env": [
-                                {"name": "PGDATA", "value": PROJECT_POSTGRES_DATA},
+                                {"name": "PGDATA", "value": pgdata},
                                 {
                                     "name": "POSTGRES_PASSWORD",
                                     "valueFrom": {
@@ -850,6 +858,7 @@ def _postgres_statefulset(
                                     "command": ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
                                 },
                                 "periodSeconds": 5,
+                                "timeoutSeconds": 5,
                             },
                             "resources": {
                                 "requests": {"cpu": "50m", "memory": "128Mi"},

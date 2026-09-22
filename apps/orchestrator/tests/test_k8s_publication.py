@@ -242,6 +242,16 @@ def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
     )
     core_pg = _by(objects, "StatefulSet", "core-postgres")
     assert core_pg["spec"]["template"]["spec"]["initContainers"] == []
+    # both databases start through the image entrypoint (initdb only when empty);
+    # the self-initialising core database owns a subdirectory of its claim
+    pg_env = {e["name"]: e.get("value") for e in _container(pg, "postgres")["env"]}
+    core_env = {e["name"]: e.get("value") for e in _container(core_pg, "postgres")["env"]}
+    assert pg_env["PGDATA"] == kp.PROJECT_POSTGRES_DATA
+    assert core_env["PGDATA"] == kp.PROJECT_POSTGRES_DATA + "/pgdata"
+    assert "command" not in _container(pg, "postgres")
+    assert _container(pg, "postgres")["args"] == ["postgres", "-c", "listen_addresses=*"]
+    redis = _container(_by(objects, "Deployment", "redis"), "redis")
+    assert redis["securityContext"]["runAsUser"] == 999  # no gosu, no capabilities needed
     # warm update: no postgres artifact → no seeding step, data stays
     warm = kp.build_objects(
         _spec(seed_volumes=(kp.SeedVolume("/workspace", "http://10.10.0.1:8003/x", False, 1),))
