@@ -50,6 +50,14 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
 - **Private registry** на runtime — `https://registry.yleum.ru` (`k8s/apply.sh registry`): basic-auth
   (пользователь `max`, пароль в `/etc/max-studio/registry.env` на runtime), диск 250 GB (local-path).
   Креды прописаны во все три K3s (`/etc/rancher/k3s/registries.yaml`), поды тянут образы напрямую.
+- **Доступ оркестратора к runtime** (Фаза 3, этап A) — `k8s/apply.sh orchestrator-access`:
+  ServiceAccount `omnia-orchestrator` в namespace `max-system` с ClusterRole ровно под объекты одного
+  приложения (namespace создать/пометить — можно, удалить — нельзя); kubeconfig с токеном кладётся
+  на core в `/etc/max-studio/runtime-kubeconfig.yaml` (root:zeuszcz, 0640), API — по WireGuard
+  `10.10.0.2:6443`. `k8s/apply.sh publication-env` дописывает в `.env` оркестратора реестр,
+  kubeconfig и `ARTIFACT_BASE_URL` (откуда init-контейнеры качают тёплые артефакты; ufw на core
+  открывает 8003 для `10.10.0.0/24` и pod-сети runtime `10.44.0.0/16`). Сам флаг
+  `PUBLICATION_BACKEND` эти фазы не включают.
 - **Мониторинг** на core — kube-prometheus-stack 91.4.1 (`k8s/apply.sh monitoring`):
   Prometheus (15 дней / 50 GB), Alertmanager, Grafana 13 на `https://grafana.yleum.ru`
   (admin, пароль в `/etc/max-studio/grafana.env` на core). Собирает метрики кластера core и
@@ -63,7 +71,8 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
 | `core` / `runtime` / `commerce` | A | .98 / .99 / .100 | имена серверов, SAN в сертификате K3s |
 | `grafana` | A | 2.153.248.98 | мониторинг |
 | `registry` | A | 2.153.248.99 | реестр образов |
-| `*.apps` | A | **2.153.248.98** | превью и опубликованные приложения клиентов — пока ячейки живут на core (Фаза 2a); при переносе ячеек на runtime (Фаза 3) вернуть на .99 |
+| `*.apps` | A | **2.153.248.98** → **2.153.248.99** | опубликованные приложения клиентов. Пока — core (Фаза 2a, nginx + acme.sh); с Фазой 3 / этапом A (публикации в кластере runtime, `PUBLICATION_BACKEND=kubernetes`) запись переводится на .99 (Traefik + cert-manager). Переключает владелец |
+| `*.dev` | A | 2.153.248.98 | dev-превью ячеек агента (остаются на core; `RUNTIME_HOST_SUFFIX=dev.yleum.ru`). Завести перед переключением `*.apps` |
 | `api`, `app` | A | 2.153.248.98 | платформа |
 
 Сертификаты Let's Encrypt выпущены для `yleum.ru`, `www`, `grafana`, `registry` (до 21.12.2026,

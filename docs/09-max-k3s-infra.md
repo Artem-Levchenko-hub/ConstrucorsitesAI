@@ -27,8 +27,11 @@ core держит только мониторинг. Как деплоить —
 почему не в K3s — [`infra/max-k3s/migrate/README.md`](../infra/max-k3s/migrate/README.md).
 Старый сервер 170.168.72.200 — запасной, чужие проекты на нём живут дальше.
 
-**Ещё не сделано (Фаза 3):** api/web/gateway в кластере core, ячейки клиентов в runtime через
-`infra/max-app-chart`, биллинг в commerce.
+**Фаза 3, этап A (в работе с 23.09):** опубликованные приложения размещаются в кластере runtime
+(`PUBLICATION_BACKEND=kubernetes`, код — `apps/orchestrator/.../k8s_publication.py` +
+`k8s_placement.py`, план — `docs/plans/2026-09-23-k8s-publication-stage-a.md`). Ячейки агента
+(генерация, dev-превью) пока остаются на core. **Ещё не сделано:** ячейки в runtime (этап B),
+api/web/gateway в кластере core (этап C), биллинг в commerce.
 
 ## Особенности Serverum (важно при любых работах на этих серверах)
 
