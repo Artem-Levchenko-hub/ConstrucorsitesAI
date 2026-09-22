@@ -401,6 +401,53 @@ def test_retire_removes_ingress_and_workloads_but_keeps_volumes() -> None:
     assert api.applied[-1]["metadata"]["labels"] == {"omnia.retired": "true"}
 
 
+def test_next_release_never_touches_immutable_claim_specs() -> None:
+    """A StatefulSet's claim template and a data claim must be byte-identical across
+    releases: the API refuses any other StatefulSet update (HTTP 422) — seen live."""
+    first = kp.build_objects(
+        _spec(
+            release_id="11111111-aaaa-4111-8111-111111111111",
+            epoch=3,
+            seed_volumes=(
+                kp.SeedVolume(kp.PROJECT_POSTGRES_DATA, "http://a/pg", True, 5_000_000),
+                kp.SeedVolume("/data/uploads", "http://a/up", True, 900_000_000),
+                kp.SeedVolume("/workspace", "http://a/ws", False, 1),
+            ),
+        )
+    )
+    second = kp.build_objects(
+        _spec(
+            release_id="22222222-bbbb-4222-8222-222222222222",
+            epoch=4,
+            seed_volumes=(
+                kp.SeedVolume("/data/uploads", None, True, 0),  # warm: mounted, not seeded
+                kp.SeedVolume("/workspace", "http://b/ws", False, 1),
+            ),
+        )
+    )
+    for name in ("project-postgres", "core-postgres"):
+        assert (
+            _by(first, "StatefulSet", name)["spec"]["volumeClaimTemplates"]
+            == _by(second, "StatefulSet", name)["spec"]["volumeClaimTemplates"]
+        )
+        assert (
+            _by(first, "StatefulSet", name)["spec"]["selector"]
+            == _by(second, "StatefulSet", name)["spec"]["selector"]
+        )
+    data_name = "data-" + hashlib.sha256(b"/data/uploads").hexdigest()[:8]
+    assert _by(first, "PersistentVolumeClaim", data_name) == _by(
+        second, "PersistentVolumeClaim", data_name
+    )
+    assert _by(first, "PersistentVolumeClaim", data_name)["spec"]["resources"] == {
+        "requests": {"storage": "10Gi"}
+    }
+    for kind, name in (("Deployment", "app"), ("Deployment", "core"), ("Deployment", "boundary")):
+        assert (
+            _by(first, kind, name)["spec"]["selector"]
+            == _by(second, kind, name)["spec"]["selector"]
+        )
+
+
 def test_prune_release_volumes_drops_only_other_releases_code_claims() -> None:
     api = FakeApi()
     for obj in kp.build_objects(_spec(release_id="11111111-aaaa-4111-8111-111111111111")):

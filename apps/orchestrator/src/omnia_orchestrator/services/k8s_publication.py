@@ -109,6 +109,7 @@ class PublicationSpec:
     core_memory_bytes: int = 768 * 1024**2
     project_postgres_storage: str = "5Gi"
     core_postgres_storage: str = "2Gi"
+    project_data_storage: str = "10Gi"  # declared data mounts (uploads etc.), one claim each
     ingress_class: str = "traefik"
     cluster_issuer: str = "letsencrypt-prod"
     # Where seeding init containers fetch archives from (the orchestrator over
@@ -142,6 +143,17 @@ def _labels(spec: PublicationSpec, component: str) -> dict[str, str]:
 
 def _selector(spec: PublicationSpec, component: str) -> dict[str, str]:
     return {"omnia.project-id": str(spec.project_id), "app.kubernetes.io/component": component}
+
+
+def _stable_labels(spec: PublicationSpec, component: str) -> dict[str, str]:
+    """Labels for objects whose spec is immutable across releases (claims and the
+    StatefulSets' claim templates): no release id or epoch, or the next release's
+    apply is rejected as a forbidden StatefulSet/claim update."""
+    return {
+        key: value
+        for key, value in _labels(spec, component).items()
+        if key not in ("omnia.release-id", "omnia.epoch")
+    }
 
 
 def _bytes(value: int) -> str:
@@ -228,21 +240,21 @@ def _link_key(seed: SeedVolume) -> str:
 
 
 def _claim(spec: PublicationSpec, name: str, seed: SeedVolume) -> dict[str, Any]:
-    storage = max(seed.size_bytes * 3, 1024**3)
+    # A claim's request is immutable (may only grow): data claims take a fixed size
+    # so a later warm release (no archive, size 0) re-applies the identical object.
+    if seed.durable:
+        storage = spec.project_data_storage
+        labels = {**_stable_labels(spec, "app"), "omnia.volume-kind": "data"}
+    else:
+        storage = _bytes(max(seed.size_bytes * 3, 1024**3))
+        labels = {**_labels(spec, "app"), "omnia.volume-kind": "code"}
     return {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
-        "metadata": {
-            "name": name,
-            "namespace": spec.namespace,
-            "labels": {
-                **_labels(spec, "app"),
-                "omnia.volume-kind": "data" if seed.durable else "code",
-            },
-        },
+        "metadata": {"name": name, "namespace": spec.namespace, "labels": labels},
         "spec": {
             "accessModes": ["ReadWriteOnce"],
-            "resources": {"requests": {"storage": _bytes(storage)}},
+            "resources": {"requests": {"storage": storage}},
         },
     }
 
@@ -877,7 +889,7 @@ def _postgres_statefulset(
             },
             "volumeClaimTemplates": [
                 {
-                    "metadata": {"name": "data", "labels": _labels(spec, name)},
+                    "metadata": {"name": "data", "labels": _stable_labels(spec, name)},
                     "spec": {
                         "accessModes": ["ReadWriteOnce"],
                         "resources": {"requests": {"storage": storage}},
