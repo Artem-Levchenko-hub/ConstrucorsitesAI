@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from omnia_api.core.crypto import encrypt_strong
-from omnia_api.models.app_integration import BusinessIntegration, ProjectIntegrationBinding
+from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from tests.test_integration_runtime_contracts import connect, headers, upstream
 
 
@@ -58,7 +58,7 @@ async def test_iiko_malformed_auth_responses_are_safe_502(
 
 async def _connect_iiko(client, db_session, monkeypatch):
     project = await connect(client, db_session, monkeypatch)
-    connection = (await db_session.execute(select(BusinessIntegration))).scalar_one()
+    connection = (await db_session.execute(select(AccountIntegration))).scalar_one()
     binding = (await db_session.execute(select(ProjectIntegrationBinding))).scalar_one()
     connection.provider = "iiko"
     connection.credentials_enc = encrypt_strong(json.dumps({"api_login": "synthetic-api-login"}))
