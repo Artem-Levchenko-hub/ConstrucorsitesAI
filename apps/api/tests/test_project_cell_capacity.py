@@ -103,6 +103,41 @@ async def test_capacity_turn_is_fifo_by_created_at_then_id(db_session: AsyncSess
     ]
 
 
+async def test_capacity_queue_and_hibernation_victims_are_per_orchestrator_host(
+    db_session: AsyncSession,
+) -> None:
+    """Phase 3 / stage B: a run only queues behind runs on ITS host, and only a
+    cell on the same host is worth pausing for it."""
+    owner = User(email=f"{uuid4().hex}@example.com", password_hash="x", name="owner")
+    db_session.add(owner)
+    await db_session.flush()
+    now = datetime.now(UTC)
+    _, on_core_first, cell_core_first = await _project_run(
+        db_session, owner, created_at=now - timedelta(seconds=3), label="a"
+    )
+    _, on_commerce, cell_commerce = await _project_run(
+        db_session, owner, created_at=now - timedelta(seconds=2), label="b"
+    )
+    _, on_core_second, _ = await _project_run(db_session, owner, created_at=now, label="c")
+    cell_commerce.orchestrator = "commerce"
+    await db_session.flush()
+
+    turns = {
+        run.id: await claim_capacity_turn(db_session, run.id)
+        for run in (on_core_first, on_commerce, on_core_second)
+    }
+    assert (turns[on_core_first.id].is_head, turns[on_core_first.id].position) == (True, 1)
+    # the commerce run is the head of its own queue although it was created later
+    assert (turns[on_commerce.id].is_head, turns[on_commerce.id].position) == (True, 1)
+    assert (turns[on_core_second.id].is_head, turns[on_core_second.id].position) == (False, 2)
+
+    # a requester on core gets the idle core cell, never the commerce one
+    victim = await claim_idle_hibernation_victim(db_session, requesting_run_id=on_core_second.id)
+    assert victim is not None and victim.id == cell_core_first.id
+    # on commerce the only cell belongs to the requester itself: nothing to pause
+    assert await claim_idle_hibernation_victim(db_session, requesting_run_id=on_commerce.id) is None
+
+
 async def test_hibernation_victim_excludes_active_generation_and_requester(
     db_session: AsyncSession,
 ) -> None:

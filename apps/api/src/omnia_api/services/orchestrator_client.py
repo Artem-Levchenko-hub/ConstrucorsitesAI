@@ -609,10 +609,7 @@ class RestorationAdaptationProof:
             )
             or any(
                 value is not None
-                and (
-                    type(value) is not str
-                    or _REQUEST_DIGEST_RE.fullmatch(value) is None
-                )
+                and (type(value) is not str or _REQUEST_DIGEST_RE.fullmatch(value) is None)
                 for value in (
                     payload.get("probe_rehearsal_digest"),
                     payload.get("probe_rehearsal_database_digest"),
@@ -658,9 +655,7 @@ class RestorationAdaptationProof:
                         "proof_digest",
                     )
                 },
-                probe_rehearsal_digest=cast(
-                    str | None, payload["probe_rehearsal_digest"]
-                ),
+                probe_rehearsal_digest=cast(str | None, payload["probe_rehearsal_digest"]),
                 probe_rehearsal_database_digest=cast(
                     str | None, payload["probe_rehearsal_database_digest"]
                 ),
@@ -994,11 +989,15 @@ def _validate_project_cell_preview_session(session: ProjectCellPreviewSession) -
     preview = urlsplit(session.preview_url)
     bootstrap = urlsplit(session.bootstrap_url)
     query = parse_qsl(bootstrap.query, keep_blank_values=True)
-    suffix = get_settings().project_cell_preview_host_suffix
-    expected_host = f"cell-{session.workspace_id.hex[:12]}-dev.{suffix}"
+    from omnia_api.services.orchestrator_hosts import registry
+
+    expected_hosts = {
+        f"cell-{session.workspace_id.hex[:12]}-dev.{suffix}"
+        for suffix in registry().preview_suffixes()
+    }
     if (
         preview.scheme != "https"
-        or preview.hostname != expected_host
+        or preview.hostname not in expected_hosts
         or preview.username is not None
         or preview.password is not None
         or preview.port is not None
@@ -1143,6 +1142,8 @@ class HttpProjectCellOrchestratorClient:
         self,
         request: EnsureProjectCellResourcesRequest,
     ) -> ProjectCellResourceResponse:
+        from omnia_api.services.orchestrator_hosts import host_for_workspace
+
         try:
             payload = await _request(
                 "POST",
@@ -1152,6 +1153,7 @@ class HttpProjectCellOrchestratorClient:
                 # Match control release; the outer capacity deadline and worker
                 # cancellation still bound the wait independently.
                 timeout=930.0,
+                host=await host_for_workspace(request.workspace_id),
             )
         except OrchestratorBadRequest as exc:
             if exc.status_code != 429:
@@ -1183,8 +1185,11 @@ class HttpProjectCellOrchestratorClient:
     ) -> ProjectCellResourceResponse:
         # Portable release halts/checkpoints the guest just like pause.
         timeout = (
-            930.0 if request.kind in {"pause", "stop", "destroy", "restore", "release"}
-            else 300.0 if request.kind == "wake" else 30.0
+            930.0
+            if request.kind in {"pause", "stop", "destroy", "restore", "release"}
+            else 300.0
+            if request.kind == "wake"
+            else 30.0
         )
         payload = await _request(
             "POST",
@@ -1213,6 +1218,23 @@ class HttpProjectCellOrchestratorClient:
         return await project_cell_agent_operation_status(workspace_id, operation_id)
 
 
+async def _base_url(path: str, host: str | None) -> str:
+    """The orchestrator that owns this call: an explicit host, else the host bound
+    to the workspace/project named in the path, else the default (single-host
+    deployments never look anything up)."""
+    from omnia_api.services.orchestrator_hosts import (
+        OrchestratorHostError,
+        host_for_path,
+        registry,
+    )
+
+    try:
+        name = host if host is not None else await host_for_path(path)
+        return registry().get(name).url
+    except OrchestratorHostError as exc:
+        raise OrchestratorUnavailable(str(exc)) from exc
+
+
 async def _request_raw(
     method: str,
     path: str,
@@ -1220,6 +1242,7 @@ async def _request_raw(
     json: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
     timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
+    host: str | None = None,
 ) -> Any:
     """Internal call to orchestrator. Returns parsed JSON body or raises ApiError.
 
@@ -1243,7 +1266,7 @@ async def _request_raw(
             "Orchestrator token is not configured (set ORCHESTRATOR_INTERNAL_TOKEN)."
         )
 
-    url = f"{settings.orchestrator_url.rstrip('/')}{path}"
+    url = f"{await _base_url(path, host)}{path}"
     headers = {"X-Internal-Token": token, "Content-Type": "application/json"}
 
     try:
@@ -1298,8 +1321,9 @@ async def _request(
     json: dict[str, Any] | None = None,
     params: dict[str, Any] | None = None,
     timeout: float = 30.0,  # noqa: ASYNC109 - outbound request deadline
+    host: str | None = None,
 ) -> dict[str, Any]:
-    payload = await _request_raw(method, path, json=json, params=params, timeout=timeout)
+    payload = await _request_raw(method, path, json=json, params=params, timeout=timeout, host=host)
     if not isinstance(payload, dict):
         raise OrchestratorUnavailable("Orchestrator returned an invalid object")
     return payload
@@ -1362,8 +1386,7 @@ async def project_cell_prepare_restoration_adaptation(
     _validate_request_digest(adaptation_bundle_digest)
     payload = await _request(
         "POST",
-        f"/internal/workspaces/{workspace_id}/restoration-adaptations/"
-        f"{generation_run_id}/prepare",
+        f"/internal/workspaces/{workspace_id}/restoration-adaptations/{generation_run_id}/prepare",
         json={
             "workspace_id": str(workspace_id),
             "operation_id": str(operation_id),
@@ -1783,18 +1806,30 @@ async def project_cell_start_owner_preview(
 
 
 async def project_cell_apply_business_config(
-    workspace_id: UUID, *, project_id: UUID, owner_id: UUID,
-    version: int, config: dict[str, Any],
+    workspace_id: UUID,
+    *,
+    project_id: UUID,
+    owner_id: UUID,
+    version: int,
+    config: dict[str, Any],
 ) -> bool:
     payload = await _request(
-        "PUT", f"/internal/workspaces/{workspace_id}/owner-business-config",
-        json={"project_id": str(project_id), "owner_id": str(owner_id),
-              "version": version, "config": config},
+        "PUT",
+        f"/internal/workspaces/{workspace_id}/owner-business-config",
+        json={
+            "project_id": str(project_id),
+            "owner_id": str(owner_id),
+            "version": version,
+            "config": config,
+        },
         timeout=300.0,
     )
     applied = payload.get("applied")
-    if (payload.get("workspace_id") != str(workspace_id)
-            or payload.get("version") != version or not isinstance(applied, bool)):
+    if (
+        payload.get("workspace_id") != str(workspace_id)
+        or payload.get("version") != version
+        or not isinstance(applied, bool)
+    ):
         raise OrchestratorUnavailable("Orchestrator returned invalid MAX configuration status")
     return applied
 
@@ -1948,15 +1983,20 @@ async def publish_custom_domain(payload: dict[str, Any]) -> dict[str, Any]:
 async def publish_project_cell(project_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
     """Submit durable public release; private payload is never logged."""
     return await _request(
-        "POST", f"/internal/projects/{project_id}/cell-deploy", json=payload, timeout=30.0,
+        "POST",
+        f"/internal/projects/{project_id}/cell-deploy",
+        json=payload,
+        timeout=30.0,
     )
 
 
 async def configure_published_cell(project_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
     """Update only controller-owned public MAX configuration, not generated code."""
     return await _request(
-        "PUT", f"/internal/projects/{project_id}/cell-deploy/config",
-        json=payload, timeout=120.0,
+        "PUT",
+        f"/internal/projects/{project_id}/cell-deploy/config",
+        json=payload,
+        timeout=120.0,
     )
 
 

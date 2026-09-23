@@ -75,11 +75,10 @@ async def _redis_and_worker() -> tuple[bool, bool, str]:
         return False, False, "unknown"
 
 
-async def _deploy_control_plane_ok() -> tuple[bool, str]:
+async def _probe_orchestrator(base_url: str) -> tuple[bool, str]:
     try:
-        settings = get_settings()
         async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_SECONDS) as client:
-            response = await client.get(f"{settings.orchestrator_url.rstrip('/')}/health")
+            response = await client.get(f"{base_url.rstrip('/')}/health")
         payload = response.json()
         healthy = (
             response.status_code == 200
@@ -93,13 +92,34 @@ async def _deploy_control_plane_ok() -> tuple[bool, str]:
         return False, "unknown"
 
 
+async def _orchestrator_hosts_ok() -> dict[str, tuple[bool, str]]:
+    """Every enabled orchestrator host by name (Phase 3 / stage B: cells on
+    several hosts). Failing the registry itself counts as a failed default host."""
+    from omnia_api.services.orchestrator_hosts import OrchestratorHostError, registry
+
+    try:
+        hosts = registry().enabled()
+    except OrchestratorHostError:
+        return {get_settings().default_orchestrator: (False, "unknown")}
+    results = await asyncio.gather(*(_probe_orchestrator(host.url) for host in hosts))
+    return {host.name: result for host, result in zip(hosts, results, strict=True)}
+
+
+async def _deploy_control_plane_ok() -> tuple[bool, str]:
+    """All hosts healthy; one common release, or "mixed" while a rollout is in flight."""
+    hosts = await _orchestrator_hosts_ok()
+    healthy = all(ok for ok, _ in hosts.values())
+    releases = {sha for _, sha in hosts.values()}
+    return healthy, (releases.pop() if len(releases) == 1 else "mixed")
+
+
 async def _preview_storage_ok() -> bool:
     def _probe() -> bool:
         settings = get_settings()
         client = get_minio_client()
-        return client.bucket_exists(
-            settings.minio_bucket_projects
-        ) and client.bucket_exists(settings.minio_bucket_previews)
+        return client.bucket_exists(settings.minio_bucket_projects) and client.bucket_exists(
+            settings.minio_bucket_previews
+        )
 
     try:
         async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
@@ -131,8 +151,11 @@ async def probe_readiness() -> ReadinessReport:
             generation_ok = False
     return ReadinessReport(
         checks={
-            **({"generation_worker": "ok" if generation_ok else "failed"}
-               if get_settings().use_generation_worker else {}),
+            **(
+                {"generation_worker": "ok" if generation_ok else "failed"}
+                if get_settings().use_generation_worker
+                else {}
+            ),
             "database": "ok" if database_ok else "failed",
             "redis": "ok" if redis_ok else "failed",
             "worker": "ok" if worker_ok else "failed",
@@ -140,8 +163,11 @@ async def probe_readiness() -> ReadinessReport:
             "preview_storage": "ok" if preview_ok else "failed",
         },
         dependencies={
-            **({"generation_worker_release_sha": generation_release}
-               if get_settings().use_generation_worker else {}),
+            **(
+                {"generation_worker_release_sha": generation_release}
+                if get_settings().use_generation_worker
+                else {}
+            ),
             "worker_release_sha": worker_release_sha,
             "orchestrator_release_sha": orchestrator_release_sha,
         },

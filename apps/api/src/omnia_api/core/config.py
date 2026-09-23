@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     # /opt/omnia/apps/orchestrator/.env file.
     orchestrator_url: str = Field(default="http://localhost:8003")
     orchestrator_internal_token: SecretStr | None = Field(default=None)
+    # Phase 3 / stage B: agent cells on several hosts, one orchestrator each (same
+    # internal token). JSON list of {name, url, preview_host_suffix,
+    # preview_resolver_rules?, enabled?, weight?}; empty = the single host above,
+    # named `default_orchestrator`. See services/orchestrator_hosts.py.
+    orchestrator_hosts: str = Field(default="")
+    default_orchestrator: str = Field(default="core", pattern=r"^[a-z][a-z0-9-]{0,31}$")
 
     # GitHub OAuth — "Push to GitHub": user authorizes once, we store a per-user
     # access token (Fernet-encrypted at rest, key derived from jwt_secret) and push

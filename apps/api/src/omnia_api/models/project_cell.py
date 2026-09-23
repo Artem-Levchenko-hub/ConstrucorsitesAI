@@ -39,6 +39,11 @@ class ProjectCellWorkspace(Base):
     )
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     provider_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Which orchestrator host the cell lives on (services/orchestrator_hosts);
+    # decided at creation, never moves.
+    orchestrator: Mapped[str] = mapped_column(
+        Text, nullable=False, default="core", server_default="core"
+    )
     state: Mapped[str] = mapped_column(Text, nullable=False)
     generation_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -106,9 +111,7 @@ class ProjectCellOperation(Base):
     )
     # Owner of the coroutine dispatching this operation; it may act on another
     # generation's cell during capacity reclamation.
-    execution_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    execution_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
     request_digest: Mapped[str] = mapped_column(Text, nullable=False)
     fencing_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -394,9 +397,7 @@ class ProjectCellCandidate(Base):
             "source_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'",
             name="source_revision_hex",
         ),
-        CheckConstraint(
-            "migration_digest ~ '^[0-9a-f]{64}$'", name="migration_digest_hex"
-        ),
+        CheckConstraint("migration_digest ~ '^[0-9a-f]{64}$'", name="migration_digest_hex"),
         CheckConstraint(
             "database_backup_ref ~ '^database-backup/sha256/[0-9a-f]{64}$'",
             name="database_backup_ref_content_addressed",
@@ -409,9 +410,7 @@ class ProjectCellCandidate(Base):
             "verification_ref ~ '^verification/sha256/[0-9a-f]{64}$'",
             name="verification_ref_content_addressed",
         ),
-        CheckConstraint(
-            "(status = 'cancelled') = cancelled", name="cancelled_status_consistent"
-        ),
+        CheckConstraint("(status = 'cancelled') = cancelled", name="cancelled_status_consistent"),
         Index(
             "uq_project_cell_candidates_one_accepted",
             "workspace_id",

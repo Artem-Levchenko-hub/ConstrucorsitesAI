@@ -320,15 +320,20 @@ async def get_or_create_workspace(
             raise ProjectCellStateConflict("workspace deletion has started")
         return existing, False
 
+    from omnia_api.services.orchestrator_hosts import remember_workspace_host
+    from omnia_api.services.orchestrator_placement import choose_orchestrator
+
     workspace = ProjectCellWorkspace(
         project_id=project.id,
         owner_id=user.id,
         provider="docker_owner_canary",
+        orchestrator=await choose_orchestrator(session),
         state="provisioning",
         generation_run_id=run.id,
     )
     session.add(workspace)
     await session.flush()
+    remember_workspace_host(workspace.id, project.id, workspace.orchestrator)
     return workspace, True
 
 

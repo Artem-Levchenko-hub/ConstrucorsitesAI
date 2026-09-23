@@ -200,18 +200,15 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_restoration_adaptation_activation_is_the_only_head() -> None:
+def test_project_cell_orchestrator_binding_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0067_restoration_adaptation_activation"]
-    assert chain["0067_restoration_adaptation_activation"] == (
-        "0066_restoration_adapting_state"
-    )
-    assert chain["0066_restoration_adapting_state"] == (
-        "0065_restoration_execution_policy"
-    )
+    assert heads == ["0068_project_cell_orchestrator"]
+    assert chain["0068_project_cell_orchestrator"] == "0067_restoration_adaptation_activation"
+    assert chain["0067_restoration_adaptation_activation"] == ("0066_restoration_adapting_state")
+    assert chain["0066_restoration_adapting_state"] == ("0065_restoration_execution_policy")
     assert chain["0065_restoration_execution_policy"] == "0064_restoration_binding"
     assert chain["0064_restoration_binding"] == "0063_restoration_reconcile"
     assert chain["0063_restoration_reconcile"] == "0062_project_cell_rollout"
@@ -233,18 +230,24 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
         "0067_restoration_adaptation_activation"
     )
-    assert database.fetchval(
-        "SELECT count(*) FROM information_schema.columns "
-        "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
-    ) == 1
+    assert (
+        database.fetchval(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
+        )
+        == 1
+    )
     command.downgrade(database.config, "0065_restoration_execution_policy")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
         "0065_restoration_execution_policy"
     )
-    assert database.fetchval(
-        "SELECT count(*) FROM information_schema.columns "
-        "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
-    ) == 0
+    assert (
+        database.fetchval(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
+        )
+        == 0
+    )
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
         "0067_restoration_adaptation_activation"

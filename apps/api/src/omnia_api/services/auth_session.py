@@ -42,9 +42,11 @@ def preview_resolver_args() -> list[str]:
     app sees its canonical AUTH_URL origin and secure cookies work. Empty setting →
     no arg (authenticated path off; renders use the URL as-is). Import-cycle-free:
     a lazy get_settings read, no module-level config import."""
-    from omnia_api.core.config import get_settings
+    from omnia_api.services.orchestrator_hosts import registry
 
-    rules = (get_settings().gate_preview_resolver_rules or "").strip()
+    # Every cell host's wildcard at once: a gate browser may be pointed at a
+    # preview on any of them (Phase 3 / stage B).
+    rules = registry().resolver_rules()
     return [f"--host-resolver-rules={rules}"] if rules else []
 
 
@@ -76,9 +78,7 @@ async def establish_session(
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True, args=preview_resolver_args()
-            )
+            browser = await p.chromium.launch(headless=True, args=preview_resolver_args())
             try:
                 context = await browser.new_context()
                 try:
@@ -91,9 +91,7 @@ async def establish_session(
                     # credentials callback via an in-page fetch (same-origin → carries
                     # the csrf cookie the navigation set).
                     # 1) CSRF token (NextAuth requires it on the callback)
-                    csrf_resp = await page.goto(
-                        f"{base}/api/auth/csrf", timeout=timeout_ms
-                    )
+                    csrf_resp = await page.goto(f"{base}/api/auth/csrf", timeout=timeout_ms)
                     csrf = (await csrf_resp.json()).get("csrfToken") if csrf_resp else None
                     if not csrf:
                         log.warning("auth_session: no csrfToken (abstain)")

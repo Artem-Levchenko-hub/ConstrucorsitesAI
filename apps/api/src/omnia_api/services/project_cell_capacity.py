@@ -66,15 +66,37 @@ class CapacityTurn:
     retry_after_seconds: int
 
 
-async def _scheduler_lock(session: AsyncSession) -> None:
+async def _scheduler_lock(session: AsyncSession, host: str) -> None:
+    # One scheduler per orchestrator host: capacity on host A is independent of
+    # host B, so their queues and hibernation decisions never wait on each other.
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-        {"key": _SCHEDULER_LOCK_KEY},
+        {"key": f"{_SCHEDULER_LOCK_KEY}:{host}"},
     )
 
 
+async def _workspace_host(session: AsyncSession, workspace_id: UUID) -> str:
+    from omnia_api.services.orchestrator_hosts import registry
+
+    host = await session.scalar(
+        select(ProjectCellWorkspace.orchestrator).where(ProjectCellWorkspace.id == workspace_id)
+    )
+    return str(host) if host else registry().default
+
+
+async def _run_host(session: AsyncSession, run: GenerationRun) -> str:
+    """The orchestrator host of the cell this run works in (its project's cell)."""
+    from omnia_api.services.orchestrator_hosts import registry
+
+    host = await session.scalar(
+        select(ProjectCellWorkspace.orchestrator).where(
+            ProjectCellWorkspace.project_id == run.project_id
+        )
+    )
+    return str(host) if host else registry().default
+
+
 async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTurn:
-    await _scheduler_lock(session)
     run = await session.get(GenerationRun, run_id)
     if run is None or run.status != "queued_for_capacity":
         return CapacityTurn(
@@ -84,11 +106,30 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
             reason=None,
             retry_after_seconds=1,
         )
+    host = await _run_host(session, run)
+    await _scheduler_lock(session, host)
+    await session.refresh(run)
+    if run.status != "queued_for_capacity":
+        return CapacityTurn(
+            run_id=run_id,
+            is_head=False,
+            position=0,
+            reason=None,
+            retry_after_seconds=1,
+        )
+    # Only runs waiting for THIS host's capacity form its queue.
     queued = list(
         (
             await session.execute(
                 select(GenerationRun)
-                .where(GenerationRun.status == "queued_for_capacity")
+                .join(
+                    ProjectCellWorkspace,
+                    ProjectCellWorkspace.project_id == GenerationRun.project_id,
+                )
+                .where(
+                    GenerationRun.status == "queued_for_capacity",
+                    ProjectCellWorkspace.orchestrator == host,
+                )
                 .order_by(GenerationRun.created_at, GenerationRun.id)
             )
         )
@@ -123,10 +164,12 @@ async def claim_idle_hibernation_victim(
     requesting_run_id: UUID,
     expected_workspace_id: UUID | None = None,
 ) -> ProjectCellWorkspace | None:
-    await _scheduler_lock(session)
     requesting_run = await session.get(GenerationRun, requesting_run_id)
     if requesting_run is None:
         return None
+    # A victim only helps when it sits on the same host as the requester.
+    host = await _run_host(session, requesting_run)
+    await _scheduler_lock(session, host)
     return cast(
         ProjectCellWorkspace | None,
         await session.scalar(
@@ -137,6 +180,7 @@ async def claim_idle_hibernation_victim(
                     if expected_workspace_id is None
                     else ProjectCellWorkspace.id == expected_workspace_id
                 ),
+                ProjectCellWorkspace.orchestrator == host,
                 ProjectCellWorkspace.state == "ready",
                 ProjectCellWorkspace.generation_run_id.is_(None),
                 ProjectCellWorkspace.deleted_at.is_(None),
@@ -185,10 +229,11 @@ async def claim_stale_generation_lease(
 ) -> tuple[ProjectCellWorkspace, UUID] | None:
     """Claim terminal work, including ensure-complete/agent-bootstrap-incomplete cells."""
 
-    await _scheduler_lock(session)
     requesting_run = await session.get(GenerationRun, requesting_run_id)
     if requesting_run is None:
         return None
+    host = await _run_host(session, requesting_run)
+    await _scheduler_lock(session, host)
     row = (
         await session.execute(
             select(ProjectCellWorkspace, GenerationRun.id)
@@ -202,6 +247,7 @@ async def claim_stale_generation_lease(
                     if workspace_id is None
                     else ProjectCellWorkspace.id == workspace_id
                 ),
+                ProjectCellWorkspace.orchestrator == host,
                 or_(
                     ProjectCellWorkspace.state == "ready",
                     and_(
@@ -580,7 +626,7 @@ async def release_one_stale_generation_lease(
                     await retry_session.commit()
         return False
     async with session_factory() as session:
-        await _scheduler_lock(session)
+        await _scheduler_lock(session, await _workspace_host(session, workspace_id))
         locked_workspace = await session.scalar(
             select(ProjectCellWorkspace)
             .where(ProjectCellWorkspace.id == workspace_id)
@@ -715,7 +761,7 @@ async def hibernate_one_idle_workspace(
     ):
         return False
     async with session_factory() as session:
-        await _scheduler_lock(session)
+        await _scheduler_lock(session, await _workspace_host(session, victim_id))
         workspace = await session.scalar(
             select(ProjectCellWorkspace)
             .where(ProjectCellWorkspace.id == victim_id)
@@ -798,10 +844,12 @@ async def _hibernate_victim_still_idle(
             await session.flush()
             active_activity = None
         active_restoration = await session.scalar(
-            select(Restoration.id).where(
+            select(Restoration.id)
+            .where(
                 Restoration.workspace_id == workspace_id,
                 Restoration.state.in_(ACTIVE_RESTORATION_STATES),
-            ).limit(1)
+            )
+            .limit(1)
         )
         other_operation = await session.scalar(
             select(ProjectCellOperation.id)
