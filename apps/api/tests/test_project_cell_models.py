@@ -116,6 +116,7 @@ async def test_project_cell_models_expose_exact_public_columns() -> None:
         "owner_id",
         "provider",
         "provider_ref",
+        "orchestrator",
         "state",
         "generation_run_id",
         "provider_metadata",
@@ -580,9 +581,7 @@ async def test_deleting_workspace_cascades_operations(
     operation_id = operation.id
 
     await db_session.execute(
-        delete(ProjectCellWorkspace).where(
-            ProjectCellWorkspace.id == project_cell_workspace.id
-        )
+        delete(ProjectCellWorkspace).where(ProjectCellWorkspace.id == project_cell_workspace.id)
     )
     await db_session.flush()
 

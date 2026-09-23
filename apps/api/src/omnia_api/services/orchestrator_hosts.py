@@ -24,7 +24,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.core.config import get_settings
+from omnia_api.core import config as _config
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _SUFFIX = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
@@ -130,25 +130,24 @@ _registry_cache: tuple[tuple[str, str, str, str, str], OrchestratorRegistry] | N
 def registry() -> OrchestratorRegistry:
     """The current host registry (parsed once per distinct settings value)."""
     global _registry_cache
-    settings = get_settings()
-    key = (
-        settings.orchestrator_hosts,
-        settings.default_orchestrator,
-        settings.orchestrator_url,
-        settings.project_cell_preview_host_suffix,
-        settings.gate_preview_resolver_rules,
-    )
+    # Read through the config module (not an imported name) and tolerate partial
+    # settings objects: tests stub `get_settings` with only the fields they need.
+    settings = _config.get_settings()
+    hosts = str(getattr(settings, "orchestrator_hosts", "") or "")
+    default = str(getattr(settings, "default_orchestrator", "core") or "core")
+    url = str(getattr(settings, "orchestrator_url", "http://localhost:8003") or "")
+    suffix = str(getattr(settings, "project_cell_preview_host_suffix", "") or "")
+    rules = str(getattr(settings, "gate_preview_resolver_rules", "") or "").strip()
+    key = (hosts, default, url, suffix, rules)
     if _registry_cache is not None and _registry_cache[0] == key:
         return _registry_cache[1]
     fallback = OrchestratorHost(
-        name=settings.default_orchestrator,
-        url=settings.orchestrator_url.rstrip("/"),
-        preview_host_suffix=settings.project_cell_preview_host_suffix,
-        preview_resolver_rules=(settings.gate_preview_resolver_rules or "").strip(),
+        name=default,
+        url=url.rstrip("/"),
+        preview_host_suffix=suffix,
+        preview_resolver_rules=rules,
     )
-    parsed = _parse(
-        settings.orchestrator_hosts, default=settings.default_orchestrator, fallback=fallback
-    )
+    parsed = _parse(hosts, default=default, fallback=fallback)
     _registry_cache = (key, parsed)
     return parsed
 

@@ -61,7 +61,9 @@ def _configure(monkeypatch: pytest.MonkeyPatch, hosts: str, default: str = "core
         gate_preview_resolver_rules="MAP *.dev.yleum.ru 172.19.0.1",
         orchestrator_internal_token=SecretStr("t"),
     )
-    for module in (orchestrator_hosts, orchestrator_client, readiness):
+    from omnia_api.core import config
+
+    for module in (config, orchestrator_client, readiness):
         monkeypatch.setattr(module, "get_settings", lambda settings=settings: settings)
     orchestrator_hosts._registry_cache = None
     return settings
