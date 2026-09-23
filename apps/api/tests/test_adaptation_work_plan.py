@@ -224,6 +224,42 @@ async def test_an_adaptation_does_not_get_the_point_edit_prompt(
     assert plan.steps == 40
 
 
+async def test_the_versions_own_tests_are_part_of_what_must_be_adapted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Живой отказ 23.09: старые тесты утверждали про базу то, чего в ней нет.
+
+    Вместе со старой версией возвращаются её проверки. Одна из них требовала,
+    чтобы база запрещала пустую заметку, — а текущая база этого уже не
+    запрещает, и вернуть запрет нельзя: additive-правило не даёт менять
+    существующие колонки. Адаптация объявила себя неудачной, хотя код
+    переписала верно. Владелец выбрал: приводить к текущей базе и сами тесты.
+    """
+    plan = await _prompt(monkeypatch, restoration_context="\n\nHISTORICAL SOURCE")
+
+    assert "тесты, приехавшие со старой версией" in plan.user
+    assert "перенеси это требование в само приложение" in plan.user
+
+
+async def test_adapting_the_tests_must_not_become_deleting_the_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Самый вероятный способ «починить» тест — ослабить его. Это потеря смысла
+    # старой версии, и инструкция обязана запрещать такой путь прямо.
+    plan = await _prompt(monkeypatch, restoration_context="\n\nHISTORICAL SOURCE")
+
+    assert "НЕ выбрасывай" in plan.user
+    assert "схему под него НЕ переделывай" in plan.user
+
+
+async def test_an_ordinary_edit_never_hears_about_historical_tests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = await _prompt(monkeypatch, restoration_context="")
+
+    assert "тесты, приехавшие со старой версией" not in plan.user
+
+
 async def test_an_ordinary_edit_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     plan = await _prompt(monkeypatch, restoration_context="")
 
