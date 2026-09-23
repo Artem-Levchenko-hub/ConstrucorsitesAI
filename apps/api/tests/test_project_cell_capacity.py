@@ -108,7 +108,7 @@ async def test_capacity_queue_and_hibernation_victims_are_per_orchestrator_host(
 ) -> None:
     """Phase 3 / stage B: a run only queues behind runs on ITS host, and only a
     cell on the same host is worth pausing for it."""
-    owner = User(email=f"{uuid4().hex}@example.com", password_hash="x", name="owner")
+    owner = User(email=f"hosts-{uuid4().hex}@example.test", password_hash="x")
     db_session.add(owner)
     await db_session.flush()
     now = datetime.now(UTC)
