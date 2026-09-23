@@ -6,7 +6,9 @@
 URL. This module turns such a release into objects in the *runtime* cluster — one
 namespace per project holding the app machine, the trusted boundary, the managed
 MAX core with its own Postgres and Redis, the project Postgres seeded from the warm
-artifact, default-deny NetworkPolicies and an Ingress with a Let's Encrypt cert.
+artifact, default-deny NetworkPolicies and an Ingress whose TLS comes either from
+a per-host cert-manager Certificate or from the edge wildcard Traefik serves by
+default (`PublicationSpec.tls_mode`, see infra/max-k3s/edge).
 
 Design (docs/plans/2026-09-23-k8s-publication-stage-a.md):
 
@@ -27,7 +29,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import quote
 from uuid import UUID
 
@@ -114,6 +116,15 @@ class PublicationSpec:
     project_data_storage: str = "10Gi"  # declared data mounts (uploads etc.), one claim each
     ingress_class: str = "traefik"
     cluster_issuer: str = "letsencrypt-prod"
+    # "cert-manager": the Ingress asks for its own Certificate (HTTP-01 per host);
+    # "wildcard": no Certificate — Traefik terminates TLS with the edge wildcard
+    # installed as its default certificate (Secret `wildcard_secret` in
+    # `wildcard_secret_namespace` behind TLSStore `default`), so a fresh host has
+    # TLS the moment the Ingress exists. `publish` refuses wildcard mode while
+    # that Secret is absent rather than serving Traefik's self-signed default.
+    tls_mode: Literal["cert-manager", "wildcard"] = "cert-manager"
+    wildcard_secret: str = "wildcard-yleum"
+    wildcard_secret_namespace: str = "kube-system"
     # Where seeding init containers fetch archives from (the orchestrator over
     # WireGuard); the only egress the app and project-postgres pods get besides DNS.
     artifact_source_cidr: str = "10.10.0.1/32"
@@ -784,19 +795,27 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         }
     )
     objects.append(_service(spec, "boundary", BOUNDARY_PORT))
+    ingress_metadata: dict[str, Any] = {
+        "name": "public",
+        "namespace": ns,
+        "labels": _labels(spec, "boundary"),
+    }
+    if spec.tls_mode == "cert-manager":
+        ingress_metadata["annotations"] = {"cert-manager.io/cluster-issuer": spec.cluster_issuer}
+        tls: list[dict[str, Any]] = [{"hosts": [spec.public_host], "secretName": "public-tls"}]
+    else:
+        # No secret to load: Traefik falls back to the store's default certificate
+        # (the wildcard). Server-side apply drops the annotation and secretName an
+        # earlier cert-manager publish set, so the host moves to the wildcard too.
+        tls = [{"hosts": [spec.public_host]}]
     objects.append(
         {
             "apiVersion": "networking.k8s.io/v1",
             "kind": "Ingress",
-            "metadata": {
-                "name": "public",
-                "namespace": ns,
-                "labels": _labels(spec, "boundary"),
-                "annotations": {"cert-manager.io/cluster-issuer": spec.cluster_issuer},
-            },
+            "metadata": ingress_metadata,
             "spec": {
                 "ingressClassName": spec.ingress_class,
-                "tls": [{"hosts": [spec.public_host], "secretName": "public-tls"}],
+                "tls": tls,
                 "rules": [
                     {
                         "host": spec.public_host,
@@ -947,6 +966,8 @@ def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, An
             # cert-manager runs its HTTP-01 solver pod in this namespace; under
             # default-deny Traefik could not reach it (502 on the self-check) and no
             # certificate was ever issued — seen live. Ingress only, solver port only.
+            # Kept in wildcard mode too: Certificates issued before the switch keep
+            # renewing, and a rollback to cert-manager must not wait for a publish.
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",
             "metadata": {
@@ -1328,6 +1349,8 @@ class KubernetesPublishedRuntime:
         self.ready_timeout = ready_timeout_seconds
 
     def publish(self, spec: PublicationSpec) -> PlacementResult:
+        if spec.tls_mode == "wildcard":
+            self._require_wildcard_certificate(spec)
         for obj in build_objects(spec):
             self.api.apply(obj)
         ns = spec.namespace
@@ -1348,6 +1371,18 @@ class KubernetesPublishedRuntime:
             raise PublicationPlacementError(f"public bootstrap readiness failed (HTTP {status})")
         log.info("k8s_publication.published", namespace=ns, host=spec.public_host, epoch=spec.epoch)
         return PlacementResult(ns, spec.public_host, spec.epoch)
+
+    def _require_wildcard_certificate(self, spec: PublicationSpec) -> None:
+        """Wildcard mode publishes an Ingress without a certificate of its own, so
+        the cluster must already hold the edge wildcard Traefik serves by default;
+        otherwise the app would go live behind Traefik's self-signed certificate."""
+        where = f"{spec.wildcard_secret_namespace}/{spec.wildcard_secret}"
+        secret = self.api.get("v1", "Secret", spec.wildcard_secret, spec.wildcard_secret_namespace)
+        if secret is None or "tls.crt" not in (secret.get("data") or {}):
+            raise PublicationPlacementError(
+                f"edge wildcard certificate {where} is not installed in the cluster; "
+                "distribute it (infra/max-k3s/edge) or set K8S_TLS_MODE=cert-manager"
+            )
 
     def schema_digest(self, namespace: str, password: str) -> str:
         pod = self.api.pod_name(namespace, {"app.kubernetes.io/component": "project-postgres"})

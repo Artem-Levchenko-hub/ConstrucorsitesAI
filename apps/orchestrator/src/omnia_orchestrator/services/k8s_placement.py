@@ -279,6 +279,7 @@ class KubernetesPlacement:
             app_cpu_cores=float(self.settings.k8s_app_cpu_cores),
             app_memory_bytes=int(self.settings.k8s_app_memory_bytes),
             core_memory_bytes=int(self.settings.cell_public_core_memory_bytes),
+            tls_mode=self.settings.k8s_tls_mode,
             artifact_source_cidr=f"{artifacts.hostname}/32",
             artifact_port=artifacts.port or (443 if artifacts.scheme == "https" else 80),
         )
