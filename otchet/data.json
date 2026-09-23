@@ -1,7 +1,7 @@
 {
   "meta": {
-    "updated": "2026-09-23",
-    "version": 166,
+    "updated": "2026-09-24",
+    "version": 167,
     "note": "Живой реестр гипотез. Обновляется через otchet/data.json в репо + деплой."
   },
   "latest": {
@@ -3463,13 +3463,13 @@
       "id": "H217",
       "title": "Edge: один wildcard-сертификат на все три хоста вместо выпуска «по имени» на каждом (Фаза 1, код готов)",
       "description": "Сейчас каждый хост выпускает сертификаты сам и по одному на имя: acme.sh по HTTP-01 для превью на core/commerce, cert-manager для опубликованных приложений в runtime, certbot для платформы. Первая публикация ждёт выпуска, любая неполадка HTTP-01 оставляет приложение без TLS (уже ловили: default-deny, кэш DNS провайдера, DNS не на тот хост), новое имя никогда не покрыто заранее. Гипотеза: один wildcard-сертификат Let's Encrypt (yleum.ru, *.yleum.ru, *.apps, *.dev, *.dev2), выпущенный на core через DNS-01 у reg.ru и разъезжающийся по WireGuard на все хосты, убирает ожидание выпуска из горячего пути публикации и превью и делает TLS независимым от HTTP-01.",
-      "status": "testing",
-      "score": null,
+      "status": "worked",
+      "score": 8,
       "category": "инфра",
       "period": "23.09",
-      "evidence": "Код в ветке агента: infra/max-k3s/edge/ — edge.sh (драйвер с Mac: install/creds/authorize/issue/distribute/orchestrator-env/k8s-mode/status/rollback/all), 10-wildcard-issue.sh (acme.sh + dns_regru, отдельный acme-home под root, хранение /etc/max-studio/edge 0600, проверка SAN и ключа через openssl, таймер продления max-edge-renew.timer, --reloadcmd → раздача), 20-wildcard-distribute.sh (push по WireGuard пользователю maxedge с forced command «receive <роль>»; runtime: Secret kube-system/wildcard-yleum + Traefik TLSStore default; core/commerce: раскладка OMNIA_WILDCARD_CERT_ROOT для оркестратора; core: платформенные vhost'ы на wildcard, certbot оставлен запасным с installer=None; rollback на каждую роль). Оркестратор: флаг K8S_TLS_MODE=cert-manager|wildcard (core/config.py, k8s_placement.py, k8s_publication.py — в режиме wildcard Ingress без аннотации cert-manager и без secretName, публикация отказывает, если секрета в кластере нет; политика acme-solver сохранена). Проверено локально: bash -n трёх скриптов, ruff, mypy, pytest test_k8s_publication.py + test_k8s_placement.py (40 тестов зелёные, 3 новых). Живого прогона нет: нужен доступ к API reg.ru (владелец). Выкачено на core вечером 23.09 в составе fc178fe1 (compose-сервисы + оба оркестратора одной ревизией, production-smoke 35872393372 зелёный). Режим wildcard в оркестраторе выключен (K8S_TLS_MODE=cert-manager) до доступа к API reg.ru от владельца.",
-      "impact": "Пока только ожидаемый эффект: публикация в runtime и открытие превью перестают ждать выпуска сертификата (сегодня — десятки секунд-минуты на HTTP-01) и перестают зависеть от проходимости HTTP-01; любое новое имя под *.apps/*.dev/*.dev2 получает валидный TLS в момент появления Ingress'а или vhost'а. Оценка — после первого живого выпуска и публикации в режиме wildcard.",
-      "next_vector": "V9"
+      "evidence": "Код в ветке агента: infra/max-k3s/edge/ — edge.sh (драйвер с Mac: install/creds/authorize/issue/distribute/orchestrator-env/k8s-mode/status/rollback/all), 10-wildcard-issue.sh (acme.sh + dns_regru, отдельный acme-home под root, хранение /etc/max-studio/edge 0600, проверка SAN и ключа через openssl, таймер продления max-edge-renew.timer, --reloadcmd → раздача), 20-wildcard-distribute.sh (push по WireGuard пользователю maxedge с forced command «receive <роль>»; runtime: Secret kube-system/wildcard-yleum + Traefik TLSStore default; core/commerce: раскладка OMNIA_WILDCARD_CERT_ROOT для оркестратора; core: платформенные vhost'ы на wildcard, certbot оставлен запасным с installer=None; rollback на каждую роль). Оркестратор: флаг K8S_TLS_MODE=cert-manager|wildcard (core/config.py, k8s_placement.py, k8s_publication.py — в режиме wildcard Ingress без аннотации cert-manager и без secretName, публикация отказывает, если секрета в кластере нет; политика acme-solver сохранена). Проверено локально: bash -n трёх скриптов, ruff, mypy, pytest test_k8s_publication.py + test_k8s_placement.py (40 тестов зелёные, 3 новых). Живого прогона нет: нужен доступ к API reg.ru (владелец). Выкачено на core вечером 23.09 в составе fc178fe1 (compose-сервисы + оба оркестратора одной ревизией, production-smoke 35872393372 зелёный). Режим wildcard в оркестраторе выключен (K8S_TLS_MODE=cert-manager) до доступа к API reg.ru от владельца. Живой запуск 23.09 вечером, БЕЗ API reg.ru (решение владельца): на core поднят свой acme-dns (05-acme-dns.sh; порт 53 на публичном и NAT-адресах — провайдер транслирует публичный IP на 10.16.0.108, первая привязка только на публичный адрес снаружи не отвечала), владелец добавил в панели reg.ru шесть записей (A ns-acme, NS acme, четыре CNAME _acme-challenge на одну запись acme-dns). Так как acme-dns хранит два последних TXT на записи, выпущено четыре сертификата по группам (root = yleum.ru + *.yleum.ru, apps, dev, dev2; все до 22.12.2026), раздача по WireGuard: runtime — Secret + Traefik TLSStore default, commerce и core — раскладка для превью, платформенные vhost'ы yleum.ru/www/grafana переведены с certbot на wildcard. Проверено с другого сервера: yleum.ru, www, grafana и любые *.apps.yleum.ru отдают wildcard, канарейка сохранила свой сертификат cert-manager; последняя раздача ok [runtime commerce core]. Ошибки первого прогона (ловушка EXIT под set -u, копии копий vhost'ов) исправлены 9865a6fa. Оркестраторы перезапущены 23.09 21:15 с OMNIA_WILDCARD_CERT_ROOT (превью *.dev/*.dev2 без acme.sh) и K8S_TLS_MODE=wildcard (публикации без ожидания cert-manager), /api/health без «mixed». Проверка на живом превью: канарейка владельца разбужена, cell-a5a60aa72a27-dev.dev.yleum.ru отдаёт *.dev.yleum.ru (Let's Encrypt), ссылка preview-session открывается (307 на корень превью).",
+      "impact": "Один слой TLS на все три сервера: сертификат для любого нового имени под *.apps/*.dev/*.dev2 уже лежит на месте, публикация и превью перестают ждать выпуска и не зависят от проходимости HTTP-01; продление раз в два месяца — само (таймер 04:40, acme.sh). Доступ к панели или API регистратора для этого больше не нужен.",
+      "next_vector": "V9: срок сертификатов в smoke отдельным шагом; при отказе Let's Encrypt — резерв certbot на core остаётся"
     },
     {
       "id": "H216",
@@ -4319,8 +4319,8 @@
           true
         ],
         [
-          "Фаза 1: K3s-кластеры и edge (ingress + wildcard-сертификат)",
-          false
+          "Фаза 1: K3s-кластеры и edge (ingress + wildcard-сертификат) — wildcard через свой acme-dns на всех трёх хостах с 23.09 (H217)",
+          true
         ],
         [
           "Фаза 3A: DNS *.apps → runtime и *.dev → core (владелец, 23.09), канарейка на apps.yleum.ru, kubernetes — цель по умолчанию",

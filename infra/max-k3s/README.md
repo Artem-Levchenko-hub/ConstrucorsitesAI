@@ -152,7 +152,7 @@ backup-sync → k8s → status). Любую фазу можно запускат
   `https://registry.yleum.ru/v2/` — настоящие сертификаты Let's Encrypt, `curl` без `-k` проходит;
   внутри кластера `yleum.ru` резолвится через coredns-custom, `kubernetes.default` — по-прежнему.
 
-## Edge: единый wildcard-сертификат для всех трёх хостов (код готов 23.09.2026, ждёт доступа к API reg.ru)
+## Edge: единый wildcard-сертификат для всех трёх хостов (живёт с 23.09.2026, без API reg.ru)
 
 **Обновление 24.09.2026 — без API reg.ru.** Владелец решил не подключать API reg.ru. DNS-01 теперь идёт
 через **свой acme-dns на core** (`infra/max-k3s/edge/05-acme-dns.sh`: контейнер `omnia-acme-dns`, порт 53
@@ -166,10 +166,14 @@ dev.yleum.ru,dev2.yleum.ru}` → `<аккаунт>.acme.yleum.ru` (`max-edge-acm
 yleum.ru + *.yleum.ru, `apps`, `dev`, `dev2` — файлы `/etc/max-studio/edge/certs/<группа>/`; раздача
 (`20-wildcard-distribute.sh`) везёт каталог `certs/` целиком, runtime берёт `apps`, core — `dev` (+ `root`
 для платформенных vhost'ов), commerce — `dev2`. Режим reg.ru остаётся доступен через `EDGE_DNS_HOOK=dns_regru`.
+**Включено 23.09.2026 вечером:** записи добавлены владельцем, четыре сертификата выпущены (до 22.12.2026)
+и разложены (`max-edge-distribute status` → `ok:[runtime commerce core]`), оркестраторы перезапущены с
+`OMNIA_WILDCARD_CERT_ROOT` и `K8S_TLS_MODE=wildcard`; превью пишутся сразу с wildcard-блоком (проверено на
+канарейке: vhost `cell-…-dev.dev.yleum.ru` ссылается на `wildcard/dev.yleum.ru/`, снаружи отдаётся `*.dev.yleum.ru`).
 
 ### Зачем
 
-Сейчас сертификаты выпускаются на каждом хосте отдельно и по одному на имя: nginx + acme.sh (HTTP-01)
+До 23.09.2026 сертификаты выпускались на каждом хосте отдельно и по одному на имя: nginx + acme.sh (HTTP-01)
 для превью `*.dev`/`*.dev2` на core и commerce, cert-manager (HTTP-01 через Traefik) для опубликованных
 приложений `*.apps` в runtime, certbot для `yleum.ru`/`www`/`grafana`. Три последствия, все уже
 проявлялись: первая публикация ждёт выпуска (десятки секунд — минуты), любая неполадка HTTP-01
@@ -184,30 +188,35 @@ wildcard невозможен по правилам Let's Encrypt).
 | Скрипт | Где | Что |
 |---|---|---|
 | `edge.sh` | Mac | драйвер: `install` (скрипты на хосты как `/usr/local/sbin/max-edge-*`, `edge.env`, таймер), `creds`, `authorize`, `issue`, `distribute`, `orchestrator-env on\|off`, `k8s-mode wildcard\|cert-manager`, `status`, `rollback`, `all` |
-| `10-wildcard-issue.sh` (`max-edge-issue`) | core, root | `issue`: acme.sh (`/usr/local/lib/max-edge/acme.sh`, home `/etc/max-studio/edge/acme-home`, отдельный от acme.sh оператора — реквизиты reg.ru не видны пользователю оркестратора) выпускает сертификат по DNS-01, `--install-cert` кладёт `wildcard.key` / `wildcard.fullchain.pem` / `wildcard.cert.pem` / `wildcard.ca.pem` в `/etc/max-studio/edge/` (0600 root) и запоминает `--reloadcmd max-edge-distribute push`; проверка `openssl x509`: SAN = список имён, ключ соответствует сертификату. Повторный запуск при действующем сертификате ничего не выпускает. `renew`: `acme.sh --cron` (продление за 30 дней до конца, затем reloadcmd → раздача), запускается таймером `max-edge-renew.timer` ежедневно 04:40. `status`: срок, SAN, дни; код 1 при < 20 дней |
-| `20-wildcard-distribute.sh` (`max-edge-distribute`) | все три, root | `push` (core): tar с четырьмя файлами → по WireGuard `ssh maxedge@10.10.0.2/.3` (ключ `/etc/max-studio/edge/id_ed25519`, на пирах — forced command `sudo -n max-edge-distribute receive <роль>` + sudoers ровно на эту команду, `restrict`; вход `maxedge` разрешён drop-in'ом `sshd_config.d/06-max-edge.conf`, потому что bootstrap ограничивает `AllowUsers`), затем `apply core` локально. Приёмник проверяет сертификат (читается, ключ от него, не истёк, SAN покрывает имена роли) и только потом устанавливает и применяет. **runtime**: `Secret tls kube-system/wildcard-yleum` + `TLSStore default` (Traefik, группа `traefik.io` определяется по CRD) → сертификат по умолчанию для всех Ingress без своего `secretName`; проверка `openssl s_client -servername edge-probe.apps.yleum.ru`. **core**: раскладка `/etc/max-studio/edge/wildcard/dev.yleum.ru/{fullchain.pem,privkey.pem}` для оркестратора; платформенные vhost'ы (`sites-available/yleum.ru`, `grafana.yleum.ru`) с certbot-строк на wildcard (бэкап `*.max-edge.orig`, `nginx -t` до reload, при ошибке — возврат); в `/etc/letsencrypt/renewal/yleum.ru.conf` `installer = None` — certbot продолжает продлевать свой сертификат как запасной, но больше не переписывает vhost. **commerce**: раскладка `…/wildcard/dev2.yleum.ru/`. `rollback <роль>` — обратно (см. ниже) |
+| `10-wildcard-issue.sh` (`max-edge-issue`) | core, root | `issue`: acme.sh (`/usr/local/lib/max-edge/acme.sh`, home `/etc/max-studio/edge/acme-home`, отдельный от acme.sh оператора — реквизиты DNS-хука не видны пользователю оркестратора) выпускает по DNS-01 (`EDGE_DNS_HOOK=dns_acmedns`, реквизиты из `acme-dns.env`; запасной — `dns_regru`) **по группам** `EDGE_GROUPS` (`root` = yleum.ru + *.yleum.ru, `apps`, `dev`, `dev2`: acme-dns хранит два TXT на запись, поэтому не одним сертификатом), `--install-cert` кладёт `privkey.pem` / `fullchain.pem` / `cert.pem` / `ca.pem` в `/etc/max-studio/edge/certs/<группа>/` (0600 root) и запоминает `--reloadcmd max-edge-distribute push`; проверка `openssl x509`: SAN = имена группы, ключ соответствует сертификату. Группа с действующим сертификатом пропускается (`EDGE_FORCE=1` — перевыпустить). `renew`: `acme.sh --cron` (продление за 30 дней до конца, затем reloadcmd → раздача), таймер `max-edge-renew.timer` ежедневно 04:40. `status`: срок, SAN, дни по каждой группе; код 1 при < 20 дней |
+| `20-wildcard-distribute.sh` (`max-edge-distribute`) | все три, root | `push` (core): tar каталога `certs/` (все группы) → по WireGuard `ssh maxedge@10.10.0.2/.3` (ключ `/etc/max-studio/edge/id_ed25519`, на пирах — forced command `sudo -n max-edge-distribute receive <роль>` + sudoers ровно на эту команду, `restrict`; вход `maxedge` разрешён drop-in'ом `sshd_config.d/06-max-edge.conf`, потому что bootstrap ограничивает `AllowUsers`), затем `apply core` локально. Приёмник проверяет сертификат (читается, ключ от него, не истёк, SAN покрывает имена роли) и только потом устанавливает и применяет. **runtime** (группа `apps`): `Secret tls kube-system/wildcard-yleum` + `TLSStore default` (Traefik, группа `traefik.io` определяется по CRD) → сертификат по умолчанию для всех Ingress без своего `secretName`; проверка `openssl s_client -servername edge-probe.apps.yleum.ru`. **core**: раскладка `/etc/max-studio/edge/wildcard/dev.yleum.ru/{fullchain.pem,privkey.pem}` (ссылки на `certs/dev/`) для оркестратора; платформенные vhost'ы (`sites-available/yleum.ru`, `grafana.yleum.ru`) с certbot-строк на группу `root` (бэкап `*.max-edge.orig` — только с первого переключения, повторные проходы копии не трогают; `nginx -t` до reload, при ошибке — возврат); в `/etc/letsencrypt/renewal/yleum.ru.conf` `installer = None` — certbot продолжает продлевать свой сертификат как запасной, но больше не переписывает vhost. **commerce**: раскладка `…/wildcard/dev2.yleum.ru/` (ссылки на `certs/dev2/`). `rollback <роль>` — обратно (см. ниже) |
 
-Секреты: `/etc/max-studio/edge/regru.env` (root, 0600) с `REGRU_API_Username` / `REGRU_API_Password`
-— только на core, пишется через stdin (`edge.sh creds`), в argv/логи/репозиторий не попадает; acme.sh
-дублирует их в свой `account.conf` (тот же каталог, 0600) для продлений.
+Секреты: `/etc/max-studio/edge/acme-dns.env` (root, 0600; единственный аккаунт acme-dns, создаётся
+`05-acme-dns.sh install`) — рабочий режим; `/etc/max-studio/edge/regru.env` (`REGRU_API_Username` /
+`REGRU_API_Password`, пишется через stdin `edge.sh creds`) — только для запасного режима `dns_regru`.
+Оба только на core, в argv/логи/репозиторий не попадают; acme.sh дублирует реквизиты хука в свой
+`account.conf` (тот же каталог, 0600) для продлений.
 
 ### Что нужно от владельца
 
-1. Личный кабинет reg.ru → «Настройки API»: включить доступ к API; задать **отдельный пароль для API**
-   (не пароль аккаунта); в «Разрешённые IP» добавить публичный IP core **2.153.248.98** (вызовы идут с
-   него; при переезде выпуска на другой хост — поменять). Домен `yleum.ru` должен обслуживаться DNS
-   reg.ru (так и есть).
-2. На Mac: `REGRU_API_Username=<логин> REGRU_API_Password=<api-пароль> infra/max-k3s/edge/edge.sh all`.
-   Без переменных `edge.sh creds` спросит их в терминале (пароль не печатается).
+Ничего — сделано 23.09.2026: в зоне yleum.ru добавлены `ns-acme.yleum.ru A 2.153.248.98`,
+`acme.yleum.ru NS ns-acme.yleum.ru` и четыре CNAME `_acme-challenge.*` → аккаунт acme-dns (в панели
+reg.ru поле «Subdomain» — часть имени до yleum.ru, например `_acme-challenge.dev`; приоритет для
+NS/A/CNAME не важен). **Эти записи не удалять** — по ним идёт продление. Запасной режим reg.ru (только
+если acme-dns решат убрать): «Настройки API» → отдельный пароль API + белый список IP core
+2.153.248.98, затем `edge.sh creds`, `EDGE_DNS_HOOK=dns_regru` в `/etc/max-studio/edge/edge.env`,
+`edge.sh issue` с `EDGE_FORCE=1`.
 
 ### Порядок включения (что делает `edge.sh all`, можно по шагам)
 
 1. `install` — скрипты, `edge.env` (домен, пиры `runtime:10.10.0.2 commerce:10.10.0.3`, email), таймер.
-2. `creds` — реквизиты reg.ru на core.
+2. `acme-dns` — свой acme-dns на core (`05-acme-dns.sh install`: контейнер, единственный аккаунт,
+   печать записей для DNS-панели; `check` — делегирование уже видно снаружи). `creds` — только для
+   запасного режима reg.ru.
 3. `authorize` — ключ раздачи core → пользователь `maxedge` на runtime и commerce.
-4. `issue` — выпуск (первый раз 1–5 минут: acme.sh ждёт, пока TXT-записи появятся на NS reg.ru; если
-   валидация падает по времени — `EDGE_DNS_SLEEP=180` в `/etc/max-studio/edge/edge.env`), установка,
-   раздача на все хосты. С этого момента **runtime** отдаёт wildcard для любого `*.apps.yleum.ru`
+4. `issue` — выпуск четырёх сертификатов по группам (около минуты на группу; `EDGE_DNS_SLEEP=30` в
+   `/etc/max-studio/edge/edge.env` — acme.sh не опрашивает публичные резолверы, TXT отдаёт наш
+   acme-dns напрямую валидаторам Let's Encrypt), установка в `certs/<группа>/`, раздача на все хосты. С этого момента **runtime** отдаёт wildcard для любого `*.apps.yleum.ru`
    (в т.ч. ещё не опубликованного) вместо самоподписанного «TRAEFIK DEFAULT CERT»; существующие
    приложения с cert-manager продолжают отдавать свои сертификаты (Traefik выбирает по SNI из секретов
    Ingress'ов, wildcard — запасной по умолчанию).

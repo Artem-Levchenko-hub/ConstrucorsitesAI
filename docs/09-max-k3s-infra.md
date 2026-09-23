@@ -51,7 +51,7 @@ core; аудит биллинга, что нужно от владельца (к
 api/web/gateway в кластере core (этап C); K3s на commerce уживается с ячейками (порты 80/443 у
 хостового nginx превью).
 
-## Edge: один wildcard-сертификат на все три хоста (Фаза 1, код готов 23.09.2026)
+## Edge: один wildcard-сертификат на все три хоста (Фаза 1, живёт с 23.09.2026)
 
 **Обновление 24.09.2026 — без API reg.ru.** Владелец решил не подключать API reg.ru. DNS-01 теперь идёт
 через **свой acme-dns на core** (`infra/max-k3s/edge/05-acme-dns.sh`: контейнер `omnia-acme-dns`, порт 53
@@ -65,8 +65,11 @@ dev.yleum.ru,dev2.yleum.ru}` → `<аккаунт>.acme.yleum.ru` (`max-edge-acm
 yleum.ru + *.yleum.ru, `apps`, `dev`, `dev2` — файлы `/etc/max-studio/edge/certs/<группа>/`; раздача
 (`20-wildcard-distribute.sh`) везёт каталог `certs/` целиком, runtime берёт `apps`, core — `dev` (+ `root`
 для платформенных vhost'ов), commerce — `dev2`. Режим reg.ru остаётся доступен через `EDGE_DNS_HOOK=dns_regru`.
+**Включено 23.09.2026 вечером:** записи добавлены владельцем, четыре сертификата выпущены (до 22.12.2026)
+и разложены на все три хоста, оркестраторы перезапущены с `OMNIA_WILDCARD_CERT_ROOT` и `K8S_TLS_MODE=wildcard`;
+превью пишутся сразу с wildcard-блоком (проверено на канарейке `cell-…-dev.dev.yleum.ru`).
 
-Сегодня каждый хост выпускает сертификаты сам и по одному на имя (HTTP-01: nginx+acme.sh на core и
+До 23.09.2026 каждый хост выпускал сертификаты сам и по одному на имя (HTTP-01: nginx+acme.sh на core и
 commerce для превью, cert-manager в runtime для опубликованных приложений). Это медленно (первая
 публикация ждёт выпуска), ломается, когда HTTP-01 не проходит (default-deny, DNS-кэш провайдера — оба
 случая уже ловили вживую), и никогда не покрывает новое имя заранее. Слой edge заменяет это одним
@@ -81,9 +84,11 @@ vhost'ы `yleum.ru`/`www`/`grafana` тоже на wildcard). Код: `infra/max-
 `K8S_TLS_MODE=cert-manager|wildcard` (`k8s_publication.py`: в режиме wildcard Ingress без аннотации
 cert-manager и без `secretName`, публикация отказывает, если секрета в кластере нет).
 
-**Что нужно от владельца, чтобы включить:** в личном кабинете reg.ru → «Настройки API» включить доступ
-к API, задать отдельный пароль для API (не пароль аккаунта) и внести в белый список IP core
-`2.153.248.98`; затем на Mac `REGRU_API_Username=… REGRU_API_Password=… infra/max-k3s/edge/edge.sh all`.
+**Эксплуатация:** проверка — `infra/max-k3s/edge/edge.sh status` (срок по группам на core, применение
+на каждом хосте, SAN на публичных :443); продление — само, таймер `max-edge-renew.timer` (04:40) →
+раздача; откат — `edge.sh rollback` / `max-edge-distribute rollback <роль>` (certbot-сертификат
+платформы и cert-manager в runtime продолжают продлеваться как запасные). DNS-записи `ns-acme` /
+`acme` / `_acme-challenge.*` в зоне yleum.ru не удалять — без них продление не пройдёт.
 Порядок включения, проверка (`openssl s_client -servername …`), откат и принятые допущения — раздел
 «Edge» в [`infra/max-k3s/README.md`](../infra/max-k3s/README.md).
 

@@ -10,7 +10,7 @@
 | runtime с gVisor | **Живёт.** RuntimeClass `gvisor` на узле runtime, поды app/boundary/core канарейки в песочнице (ядро 4.19.0-gvisor), оркестраторы с `K8S_APP_RUNTIME_CLASS=gvisor` | `infra/max-k3s/remote/70-gvisor.sh`, `k8s_publication.py` (H211) |
 | отдельная БД на приложение | **Живёт с этапа A:** в каждом namespace приложения свои `core-postgres` и `project-postgres` | `k8s_publication.py` |
 | изолированные build-воркеры (rootless BuildKit) | **Живёт с 23.09:** `omnia-buildkitd` на commerce и core (sandbox=1, caps minimal, AppArmor-профиль), оркестраторы на `BUILD_BACKEND=buildkit`, проверочная сборка через модуль оркестратора прошла на обоих хостах (H222) | `infra/max-k3s/cells/50-buildkit-rootless.sh`, `services/buildkit.py` |
-| edge: ingress + wildcard-сертификат | **acme-dns поднят на core 23.09 (порт 53 виден снаружи), скрипты и раздача установлены на все три хоста**; ждём DNS-записи владельца (NS/A/4×CNAME), затем `edge.sh issue` — четыре сертификата по группам, раздача, `K8S_TLS_MODE=wildcard` | `infra/max-k3s/edge/05-acme-dns.sh`, `edge.sh` (H217) |
+| edge: ingress + wildcard-сертификат | **Живёт с 23.09 вечера, без API reg.ru:** свой acme-dns на core, владелец один раз добавил 6 DNS-записей (A/NS/4×CNAME), четыре wildcard-сертификата по группам (root/apps/dev/dev2, до 22.12.2026) разложены на все три хоста (runtime — Traefik TLSStore, core/commerce — раскладка для превью, платформенные vhost'ы yleum.ru/www/grafana), оркестраторы на `OMNIA_WILDCARD_CERT_ROOT` + `K8S_TLS_MODE=wildcard`; превью канарейки отдаёт `*.dev.yleum.ru`; продление — таймер 04:40 | `infra/max-k3s/edge/05-acme-dns.sh`, `10-wildcard-issue.sh`, `20-wildcard-distribute.sh`, `edge.sh` (H217) |
 
 ## Фаза 2 — ядро
 
@@ -30,7 +30,7 @@
 
 ## Что нужно от владельца (без этого фазы не закрыть до конца)
 
-1. **DNS для wildcard без API reg.ru (если нужен edge сейчас):** один раз добавить записи `ns-acme.yleum.ru A 2.153.248.98`, `acme.yleum.ru NS ns-acme.yleum.ru` и CNAME `_acme-challenge` для `yleum.ru`, `apps.yleum.ru`, `dev.yleum.ru`, `dev2.yleum.ru` → на `<id>.acme.yleum.ru` (id выдаст acme-dns на core). Альтернатива — API reg.ru (`edge.sh all`). Без того и другого wildcard не выпустить: остаются сертификаты по имени, как сейчас.
+1. ~~**DNS для wildcard без API reg.ru**~~ — **сделано 23.09**: владелец добавил `ns-acme.yleum.ru A 2.153.248.98`, `acme.yleum.ru NS ns-acme.yleum.ru` и четыре CNAME `_acme-challenge.*` на запись acme-dns; сертификаты выпущены и разложены, API reg.ru не понадобился.
 2. **VK ID:** приложение Web для домена yleum.ru, redirect `https://yleum.ru/api/auth/oauth/vk/callback`, право `email` → `VK_ID_CLIENT_ID` (+ `VK_ID_CLIENT_SECRET`).
 3. **Яндекс OAuth:** веб-сервис, redirect `https://yleum.ru/api/auth/oauth/yandex/callback`, право «адрес электронной почты» → `YANDEX_ID_CLIENT_ID`/`YANDEX_ID_CLIENT_SECRET`.
 4. **ЮKassa:** боевой и тестовый магазин (`YOOKASSA_SHOP_ID`/`YOOKASSA_SECRET_KEY`), HTTP-уведомления на `https://yleum.ru/api/payments/yookassa/webhook`, включённые автоплатежи и чеки, СНО.
