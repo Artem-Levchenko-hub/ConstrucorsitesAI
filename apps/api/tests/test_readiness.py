@@ -61,6 +61,14 @@ async def test_readiness_names_independent_control_plane_checks(
     monkeypatch.setattr(readiness, "_redis_and_worker", redis_and_worker)
     monkeypatch.setattr(readiness, "_deploy_control_plane_ok", deploy_control_plane)
     monkeypatch.setattr(readiness, "_preview_storage_ok", yes)
+
+    class _Redis:
+        async def get(self, _key: str) -> bytes:
+            return b"heartbeat"
+
+    # The billing tick is reported through its own heartbeat key; it is never a gate.
+    monkeypatch.setattr(readiness, "get_redis", lambda: _Redis())
+    monkeypatch.setattr(readiness, "parse_worker_heartbeat", lambda _raw: (True, "a7c4fc22"))
     report = await readiness.probe_readiness()
     assert report.checks == {
         "database": "ok",
@@ -72,6 +80,8 @@ async def test_readiness_names_independent_control_plane_checks(
     assert report.dependencies == {
         "worker_release_sha": "a7c4fc22",
         "orchestrator_release_sha": "a7c4fc22",
+        "billing_worker": "ok",
+        "billing_worker_release_sha": "a7c4fc22",
     }
 
 
