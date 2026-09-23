@@ -71,8 +71,8 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
 | `core` / `runtime` / `commerce` | A | .98 / .99 / .100 | имена серверов, SAN в сертификате K3s |
 | `grafana` | A | 2.153.248.98 | мониторинг |
 | `registry` | A | 2.153.248.99 | реестр образов |
-| `*.apps` | A | **2.153.248.98** → **2.153.248.99** | опубликованные приложения клиентов. Пока — core (Фаза 2a, nginx + acme.sh); с Фазой 3 / этапом A (публикации в кластере runtime, `PUBLICATION_BACKEND=kubernetes`) запись переводится на .99 (Traefik + cert-manager). Переключает владелец |
-| `*.dev` | A | 2.153.248.98 | dev-превью ячеек агента (остаются на core; `RUNTIME_HOST_SUFFIX=dev.yleum.ru`). Завести перед переключением `*.apps` |
+| `*.apps` | A | **2.153.248.99** | опубликованные приложения клиентов — в кластере runtime (Traefik + cert-manager, `PUBLICATION_BACKEND=kubernetes`, `PUBLIC_HOST_SUFFIX=apps.yleum.ru`). До 23.09 указывала на core (Фаза 2a); переведена владельцем 23.09 |
+| `*.dev` | A | 2.153.248.98 | dev-превью ячеек агента на core (`RUNTIME_HOST_SUFFIX=dev.yleum.ru`, в API — `PROJECT_CELL_PREVIEW_HOST_SUFFIX` и `GATE_PREVIEW_RESOLVER_RULES`). Заведена владельцем 23.09 |
 | `api`, `app` | A | 2.153.248.98 | платформа |
 
 Сертификаты Let's Encrypt выпущены для `yleum.ru`, `www`, `grafana`, `registry` (до 21.12.2026,
