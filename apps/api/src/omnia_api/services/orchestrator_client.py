@@ -1429,6 +1429,15 @@ async def project_cell_prepare_restoration_adaptation(
         raise OrchestratorUnavailable(
             "Orchestrator returned a foreign restoration adaptation workspace"
         )
+    # Кандидата создал тот оркестратор, которому ушёл этот запрос, и в реестре
+    # ячеек его нет — он внутренняя копия, а не ячейка владельца. Привязка
+    # ставится здесь, в единственном месте, где id кандидата появляется на свет:
+    # любой вызывающий, который сделает это сам, рано или поздно забудет. Живой
+    # отказ 23.09: запрос по кандидату ушёл на хост по умолчанию и получил
+    # «workspace state not found», адаптивный откат умер на первом шаге.
+    from omnia_api.services.orchestrator_hosts import bind_candidate_to_source_host
+
+    await bind_candidate_to_source_host(response.candidate_workspace_id, workspace_id)
     return response
 
 

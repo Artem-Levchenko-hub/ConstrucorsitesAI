@@ -221,6 +221,21 @@ async def host_for_workspace(workspace_id: UUID) -> str:
     return row[2]
 
 
+async def bind_candidate_to_source_host(candidate_id: UUID, source_workspace_id: UUID) -> None:
+    """Внутренняя рабочая область живёт там же, где породившая её ячейка.
+
+    Кандидата адаптации нет в реестре ячеек — он не ячейка владельца, а
+    временная копия для проверки. Поэтому маршрутизация по пути отдавала бы его
+    хосту по умолчанию: на одном хосте это незаметно, а на двух ломает
+    адаптивный откат у каждого проекта, чья ячейка живёт не на дефолтном хосте.
+    Привязку ставим в момент рождения кандидата — позже спросить будет не у кого.
+    """
+    reg = registry()
+    if reg.single:
+        return
+    remember_workspace_host(candidate_id, None, await host_for_workspace(source_workspace_id))
+
+
 async def host_for_project(project_id: UUID) -> str:
     reg = registry()
     if reg.single:
@@ -261,6 +276,7 @@ __all__ = [
     "OrchestratorHost",
     "OrchestratorHostError",
     "OrchestratorRegistry",
+    "bind_candidate_to_source_host",
     "forget_bindings",
     "host_for_path",
     "host_for_project",
