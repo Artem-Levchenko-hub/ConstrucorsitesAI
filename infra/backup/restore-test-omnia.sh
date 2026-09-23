@@ -13,6 +13,14 @@ ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
+# Same switch as backup-omnia.sh: `container` restores the scratch DB inside
+# omnia-prod-postgres; `host` (platform DB on the host PostgreSQL of core) creates
+# the scratch DB on the host as the `postgres` superuser and reads the live DB
+# over PLATFORM_DSN. `auto` follows PLATFORM_DATABASE_URL in the compose .env.
+PLATFORM_DB_MODE="${PLATFORM_DB_MODE:-auto}"
+PLATFORM_CREDS="${PLATFORM_CREDS:-/etc/max-studio/platform-postgres.env}"
+PLATFORM_DSN="${PLATFORM_DSN:-}"
+FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 USERS_CTR="${USERS_CTR:-omnia-postgres-users}"
 USERS_USER="${USERS_USER:-omnia_root}"
 USERS_DB="${USERS_DB:-omnia_users}"
@@ -47,12 +55,43 @@ done
 echo "[restore-test] source: $latest"
 echo "[restore-test] scratch DBs: $PLATFORM_SCRATCH_DB, $USERS_SCRATCH_DB (live DBs untouched)"
 
+if [ "$PLATFORM_DB_MODE" = auto ]; then
+  if [ -z "$PLATFORM_CTR" ] || { [ -r "$FULLSTACK_ENV" ] && grep -q '^PLATFORM_DATABASE_URL=' "$FULLSTACK_ENV"; }; then
+    PLATFORM_DB_MODE=host
+  else
+    PLATFORM_DB_MODE=container
+  fi
+fi
+if [ "$PLATFORM_DB_MODE" = host ]; then
+  if [ -z "$PLATFORM_DSN" ] && [ -r "$PLATFORM_CREDS" ]; then
+    PLATFORM_DSN="$(sed -n 's/^PLATFORM_PG_DSN=//p' "$PLATFORM_CREDS" | tail -1)"
+  fi
+  if [ -z "$PLATFORM_DSN" ] && [ -r "$FULLSTACK_ENV" ]; then
+    PLATFORM_DSN="$(sed -n 's/^PLATFORM_DATABASE_URL=//p' "$FULLSTACK_ENV" | tail -1 | sed 's#^postgresql+asyncpg://#postgresql://#')"
+  fi
+  [ -n "$PLATFORM_DSN" ] || { echo "[restore-test] host mode needs PLATFORM_DSN"; exit 1; }
+fi
+echo "[restore-test] platform DB mode: ${PLATFORM_DB_MODE}"
+# Scratch DB lifecycle needs CREATEDB: the container role has it, on the host it
+# is the local `postgres` superuser. The live DB is only ever READ.
+platform_admin_psql(){
+  if [ "$PLATFORM_DB_MODE" = host ]; then (cd /tmp && sudo -u postgres psql -X -d postgres "$@")
+  else docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres "$@"; fi
+}
+platform_scratch_psql(){
+  if [ "$PLATFORM_DB_MODE" = host ]; then (cd /tmp && sudo -u postgres psql -X -d "$PLATFORM_SCRATCH_DB" "$@")
+  else docker exec -i "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_SCRATCH_DB" "$@"; fi
+}
+platform_live_psql(){
+  if [ "$PLATFORM_DB_MODE" = host ]; then psql "$PLATFORM_DSN" "$@"
+  else docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" "$@"; fi
+}
+
 # The verdict is left next to the backups so the off-host status endpoint (and the
 # scheduled workflow that raises the alarm) can see WHEN a restore was last proven.
 verdict=false
 cleanup(){
-  docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres \
-    -c "DROP DATABASE IF EXISTS \"$PLATFORM_SCRATCH_DB\";" >/dev/null 2>&1 || true
+  platform_admin_psql -c "DROP DATABASE IF EXISTS \"$PLATFORM_SCRATCH_DB\";" >/dev/null 2>&1 || true
   docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
     -c "DROP DATABASE IF EXISTS \"$USERS_SCRATCH_DB\";" >/dev/null 2>&1 || true
   rm -rf "$extract_dir"
@@ -82,12 +121,10 @@ done
 source_files=$(find "$extract_dir" -type f | wc -l | tr -d '[:space:]')
 [ "${source_files:-0}" -ge 1 ] || { echo "[restore-test] archives restored 0 files"; exit 1; }
 
-docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d postgres \
-  -c "CREATE DATABASE \"$PLATFORM_SCRATCH_DB\";" >/dev/null
-gunzip -c "$platform_dump" | docker exec -i "$PLATFORM_CTR" psql \
-  -v ON_ERROR_STOP=1 -U "$PLATFORM_USER" -d "$PLATFORM_SCRATCH_DB" -q \
+platform_admin_psql -c "CREATE DATABASE \"$PLATFORM_SCRATCH_DB\";" >/dev/null
+gunzip -c "$platform_dump" | platform_scratch_psql -v ON_ERROR_STOP=1 -q \
   >/tmp/omnia-platform-restore-test.log 2>&1
-platform_tables=$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_SCRATCH_DB" -tAc \
+platform_tables=$(platform_scratch_psql -tAc \
   "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" | tr -d '[:space:]')
 
 docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
@@ -102,7 +139,7 @@ users_tables=$(docker exec "$USERS_CTR" psql -U "$USERS_USER" -d "$USERS_SCRATCH
 # The restored databases are compared with the LIVE ones instead of a fixed floor:
 # the legacy per-project database is legitimately empty since MAX apps moved into
 # Project Cells, and "at least one table" made every restore test fail.
-live_platform_tables=$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" -tAc \
+live_platform_tables=$(platform_live_psql -tAc \
   "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';" | tr -d '[:space:]')
 live_users_tables=$(docker exec "$USERS_CTR" psql -U "$USERS_USER" -d "$USERS_DB" -tAc \
   "SELECT count(*) FROM information_schema.tables

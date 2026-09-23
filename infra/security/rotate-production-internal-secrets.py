@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,6 +31,11 @@ RUNTIME_ENV = RUNTIME_ROOT / ".env"
 ORCHESTRATOR_ENV = Path("/opt/omnia/apps/orchestrator/.env")
 FULLSTACK_ROOT = Path("/opt/omnia/apps/llm-gateway/deploy/full")
 FULLSTACK_ENV = FULLSTACK_ROOT / ".env"
+# Phase 2 (core): the platform DB may live on the host PostgreSQL instead of the
+# omnia-prod-postgres container. Then the compose .env carries
+# PLATFORM_DATABASE_URL, the role is altered on the host and the backup
+# credentials file below must follow the password (infra/backup reads it).
+PLATFORM_CREDS = Path("/etc/max-studio/platform-postgres.env")
 PROJECT_POSTGRES_COMPOSE = RUNTIME_ROOT / "postgres-compose.yml"
 API_CONTAINER = "omnia-prod-api"
 ROTATE_SCRIPT = "/app/scripts/rotate_encryption_keys.py"
@@ -160,7 +166,58 @@ def alter_role(container: str, user: str, password: str) -> None:
     )
 
 
-def recreate_services() -> None:
+def platform_on_host(full: dict[str, str]) -> bool:
+    return bool(full.get("PLATFORM_DATABASE_URL"))
+
+
+def url_credentials(url: str) -> tuple[str, str]:
+    parts = urllib.parse.urlsplit(url)
+    if not parts.username or parts.password is None:
+        raise RuntimeError("PLATFORM_DATABASE_URL does not carry a user and a password")
+    return urllib.parse.unquote(parts.username), urllib.parse.unquote(parts.password)
+
+
+def replace_url_password(url: str, old: str, new: str) -> str:
+    marker = f":{urllib.parse.quote(old, safe='')}@"
+    if marker not in url:
+        marker = f":{old}@"
+    if marker not in url:
+        raise RuntimeError("PLATFORM_DATABASE_URL does not contain the current password")
+    return url.replace(marker, f":{urllib.parse.quote(new, safe='')}@", 1)
+
+
+def alter_host_platform_role(user: str, password: str) -> None:
+    escaped = password.replace("'", "''")
+    sql = f'ALTER ROLE "{user}" WITH PASSWORD \'{escaped}\';\n'
+    run(
+        ["sudo", "-u", "postgres", "psql", "-X", "-v", "ON_ERROR_STOP=1", "-d", "postgres", "-q"],
+        cwd=Path("/tmp"),
+        stdin=sql,
+    )
+
+
+def read_root_file(path: Path) -> str:
+    return run(["sudo", "cat", str(path)], capture_output=True).stdout
+
+
+def write_root_file(path: Path, content: str) -> None:
+    run(["sudo", "tee", str(path)], stdin=content, capture_output=True)
+    run(["sudo", "chmod", "600", str(path)])
+
+
+def platform_creds_with_password(content: str, old: str, new: str) -> str:
+    lines: list[str] = []
+    for raw in content.splitlines():
+        if raw.startswith("PLATFORM_PG_PASSWORD="):
+            lines.append(f"PLATFORM_PG_PASSWORD={new}")
+        elif raw.startswith("PLATFORM_PG_DSN="):
+            lines.append("PLATFORM_PG_DSN=" + replace_url_password(raw.split("=", 1)[1], old, new))
+        else:
+            lines.append(raw)
+    return "\n".join(lines) + "\n"
+
+
+def recreate_services(*, host_db: bool = False) -> None:
     run(
         [
             "docker",
@@ -174,32 +231,28 @@ def recreate_services() -> None:
         cwd=RUNTIME_ROOT,
     )
     run(["sudo", "systemctl", "restart", "omnia-orchestrator.service"])
+    # In host-db mode the compose `postgres` service sits in an inactive profile
+    # (docker-compose.hostdb.yml) and must not be named, or compose refuses.
+    services = ["minio", "minio-init", "gateway", "api", "worker", "web"]
+    if not host_db:
+        services.insert(0, "postgres")
     run(
-        [
-            "docker",
-            "compose",
-            "up",
-            "-d",
-            "--force-recreate",
-            "postgres",
-            "minio",
-            "minio-init",
-            "gateway",
-            "api",
-            "worker",
-            "web",
-        ],
+        ["docker", "compose", "up", "-d", "--force-recreate", *services],
         cwd=FULLSTACK_ROOT,
         timeout=900,
     )
 
 
-def wait_for_validation(orchestrator_token: str) -> dict[str, object]:
+def wait_for_validation(
+    orchestrator_token: str,
+    *,
+    public_origin: str = "https://yleum.ru",
+) -> dict[str, object]:
     last_error = ""
     for _ in range(36):
         try:
             with urllib.request.urlopen(
-                "https://constructor.lead-generator.ru/api/health", timeout=10
+                f"{public_origin.rstrip('/')}/api/health", timeout=10
             ) as response:
                 payload = json.loads(response.read())
             checks = payload.get("checks", {})
@@ -314,12 +367,19 @@ def main() -> None:
         if not runtime.get("POSTGRES_USERS_PASSWORD"):
             raise RuntimeError("POSTGRES_USERS_PASSWORD is missing")
 
+        host_db = platform_on_host(full)
+        if host_db:
+            platform_role, platform_password = url_credentials(full["PLATFORM_DATABASE_URL"])
+            platform_creds_before = read_root_file(PLATFORM_CREDS)
+        else:
+            platform_role, platform_password = full["POSTGRES_USER"], full["POSTGRES_PASSWORD"]
+            platform_creds_before = ""
         old = {
             "JWT_SECRET": full["JWT_SECRET"],
             "NEXTAUTH_SECRET": full["NEXTAUTH_SECRET"],
             "SECRETS_ENCRYPTION_KEY": full["SECRETS_ENCRYPTION_KEY"],
             "ORCHESTRATOR_INTERNAL_TOKEN": full["ORCHESTRATOR_INTERNAL_TOKEN"],
-            "POSTGRES_PASSWORD": full["POSTGRES_PASSWORD"],
+            "POSTGRES_PASSWORD": platform_password,
             "POSTGRES_USERS_PASSWORD": runtime["POSTGRES_USERS_PASSWORD"],
             "MINIO_ROOT_PASSWORD": full["MINIO_ROOT_PASSWORD"],
         }
@@ -341,7 +401,10 @@ def main() -> None:
             rotate_stored_tokens(old, new)
             tokens_rotated = True
 
-            alter_role("omnia-prod-postgres", full["POSTGRES_USER"], new["POSTGRES_PASSWORD"])
+            if host_db:
+                alter_host_platform_role(platform_role, new["POSTGRES_PASSWORD"])
+            else:
+                alter_role("omnia-prod-postgres", platform_role, new["POSTGRES_PASSWORD"])
             platform_role_rotated = True
             alter_role(
                 "omnia-postgres-users",
@@ -360,17 +423,29 @@ def main() -> None:
                 1,
             )
             env_updates_started = True
-            update_env(
-                FULLSTACK_ENV,
-                {
-                    "JWT_SECRET": new["JWT_SECRET"],
-                    "NEXTAUTH_SECRET": new["NEXTAUTH_SECRET"],
-                    "SECRETS_ENCRYPTION_KEY": new["SECRETS_ENCRYPTION_KEY"],
-                    "ORCHESTRATOR_INTERNAL_TOKEN": new["ORCHESTRATOR_INTERNAL_TOKEN"],
-                    "POSTGRES_PASSWORD": new["POSTGRES_PASSWORD"],
-                    "MINIO_ROOT_PASSWORD": new["MINIO_ROOT_PASSWORD"],
-                },
-            )
+            fullstack_updates = {
+                "JWT_SECRET": new["JWT_SECRET"],
+                "NEXTAUTH_SECRET": new["NEXTAUTH_SECRET"],
+                "SECRETS_ENCRYPTION_KEY": new["SECRETS_ENCRYPTION_KEY"],
+                "ORCHESTRATOR_INTERNAL_TOKEN": new["ORCHESTRATOR_INTERNAL_TOKEN"],
+                "MINIO_ROOT_PASSWORD": new["MINIO_ROOT_PASSWORD"],
+            }
+            if host_db:
+                # The container role keeps its password (POSTGRES_PASSWORD stays
+                # valid for a rollback to the container); the live role is the
+                # host one, referenced by the URL and the backup credentials.
+                fullstack_updates["PLATFORM_DATABASE_URL"] = replace_url_password(
+                    full["PLATFORM_DATABASE_URL"], platform_password, new["POSTGRES_PASSWORD"]
+                )
+                write_root_file(
+                    PLATFORM_CREDS,
+                    platform_creds_with_password(
+                        platform_creds_before, platform_password, new["POSTGRES_PASSWORD"]
+                    ),
+                )
+            else:
+                fullstack_updates["POSTGRES_PASSWORD"] = new["POSTGRES_PASSWORD"]
+            update_env(FULLSTACK_ENV, fullstack_updates)
             update_env(
                 RUNTIME_ENV,
                 {"POSTGRES_USERS_PASSWORD": new["POSTGRES_USERS_PASSWORD"]},
@@ -382,24 +457,37 @@ def main() -> None:
                     "DATABASE_URL": new_orchestrator_url,
                 },
             )
-            recreate_services()
-            evidence = wait_for_validation(new["ORCHESTRATOR_INTERNAL_TOKEN"])
+            recreate_services(host_db=host_db)
+            evidence = wait_for_validation(
+                new["ORCHESTRATOR_INTERNAL_TOKEN"],
+                public_origin=full.get("PUBLIC_ORIGIN") or "https://yleum.ru",
+            )
         except Exception:
             print("rotation failed; starting automatic rollback", flush=True)
             if tokens_rotated:
-                new_database_url = (
-                    f"postgresql+asyncpg://{full['POSTGRES_USER']}:"
-                    f"{new['POSTGRES_PASSWORD']}@postgres:5432/{full['POSTGRES_DB']}"
-                    if platform_role_rotated
-                    else None
-                )
+                if not platform_role_rotated:
+                    new_database_url = None
+                elif host_db:
+                    new_database_url = replace_url_password(
+                        full["PLATFORM_DATABASE_URL"], platform_password, new["POSTGRES_PASSWORD"]
+                    )
+                else:
+                    new_database_url = (
+                        f"postgresql+asyncpg://{full['POSTGRES_USER']}:"
+                        f"{new['POSTGRES_PASSWORD']}@postgres:5432/{full['POSTGRES_DB']}"
+                    )
                 rotate_stored_tokens(new, old, database_url=new_database_url)
             if platform_role_rotated:
-                alter_role(
-                    "omnia-prod-postgres",
-                    full["POSTGRES_USER"],
-                    old["POSTGRES_PASSWORD"],
-                )
+                if host_db:
+                    alter_host_platform_role(platform_role, old["POSTGRES_PASSWORD"])
+                    if env_updates_started:
+                        write_root_file(PLATFORM_CREDS, platform_creds_before)
+                else:
+                    alter_role(
+                        "omnia-prod-postgres",
+                        platform_role,
+                        old["POSTGRES_PASSWORD"],
+                    )
             if users_role_rotated:
                 alter_role(
                     "omnia-postgres-users",
@@ -416,7 +504,7 @@ def main() -> None:
                 or users_role_rotated
                 or env_updates_started
             ):
-                recreate_services()
+                recreate_services(host_db=host_db)
             raise
         else:
             shutil.rmtree(backup_dir)

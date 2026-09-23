@@ -46,6 +46,7 @@ Studio на нём остаётся запасным вариантом, пок�
 | `20-copy-from-old.sh` | на старом сервере от `i48ptgvnis` (`scp` → `nohup bash …`) | всё из таблицы выше; ключ старого сервера — в `/etc/ssh/authorized_keys.d/zeuszcz` на core |
 | `30-bring-up.sh` | `ssh max-core sudo bash -s -- zeuszcz yleum.ru < …` | env под домен, чистое runtime-состояние, registry + postgres-users, compose-стек, восстановление баз/MinIO, оркестратор (systemd, `NoNewPrivileges=false`), nginx-vhost'ы, certbot |
 | `40-smoke.sh` | с Mac: `./40-smoke.sh https://yleum.ru 25` | здоровье публичных точек + регистрация → проект → генерация → превью по https |
+| `50-platform-db-to-host.sh` | `ssh max-core sudo bash /opt/omnia/infra/max-k3s/migrate/50-platform-db-to-host.sh <шаг>` | Фаза 2б: база платформы из контейнера на хостовый PostgreSQL (см. раздел ниже) |
 
 ## Грабли, на которые наступили (и что теперь делает runbook)
 
@@ -121,6 +122,81 @@ install -d -o zeuszcz -g zeuszcz /opt/omnia-runtime/projects/<project_id> && tar
 
 `state='deleted'` у workspace ставить нельзя (api отвечает «Проект удаляется») — запись удаляется.
 MinIO переносится только через `mc` (S3-API): «сырые» файлы тома новый MinIO вычищает.
+
+## Фаза 2б — база платформы на хостовом PostgreSQL core (подготовлено 23.09, НЕ выполнено)
+
+**Что меняется.** База платформы `omnia` (пользователи, проекты, кошельки, подписки, журналы —
+≈23 МБ) переезжает из compose-контейнера `omnia-prod-postgres` на хостовый PostgreSQL 16 сервера
+core (тот, что поставил `remote/40-postgres.sh`: слушает `127.0.0.1` и WG-адрес `10.10.0.1`, ночной
+`max-backup.timer` снимает `pg_dump` всех его баз и уносит копию на commerce). Имена остаются теми
+же — база `omnia`, роль `omnia` — чтобы бэкапы и документация не переучивались; пароль роли новый,
+лежит в `/etc/max-studio/platform-postgres.env` (root, 0600). Контейнеры compose ходят на
+`10.10.0.1:5432` через docker-мост: `pg_hba` пускает только подсеть `full_omnia-prod` и только в базу
+`omnia` под ролью `omnia`, `ufw` открывает 5432 с этой подсети. Оркестратор платформенную базу не
+использует (его `DATABASE_URL` — `omnia_users` на `postgres-users:5433`), так что затронуты только
+`api`, `worker`, `generation-worker`, `gateway`.
+
+**Как compose переключается.** Второй файл `apps/llm-gateway/deploy/full/docker-compose.hostdb.yml`
+(теги `!override`, Compose ≥ 2.24) переписывает `DATABASE_URL` четырёх сервисов на
+`PLATFORM_DATABASE_URL`, убирает у них зависимость от `postgres` и уводит сам сервис `postgres` в
+неактивный профиль. Подключается он строками `COMPOSE_FILE=docker-compose.yml:docker-compose.hostdb.yml`
+и `PLATFORM_DATABASE_URL=…` в `.env` — их пишет и снимает скрипт, руками не править. Обычная команда
+доставки из `CLAUDE.md` (`docker compose up -d --build api …`) после этого работает без изменений.
+Том `full_postgres-data` не удаляется до отдельного решения — это путь отката.
+
+**Скрипт:** `50-platform-db-to-host.sh` — на core от root: `sudo bash infra/max-k3s/migrate/50-platform-db-to-host.sh <шаг>`.
+
+| Шаг | Что делает | Прод |
+|---|---|---|
+| `precheck` | версии (compose ≥ 2.24, PG 16 с обеих сторон), место, подсеть docker-сети, режим `.env` | не трогает |
+| `prepare` | роль/база на хосте, креды в `/etc/max-studio/platform-postgres.env`, строка `pg_hba` + `systemctl reload postgresql`, правило `ufw`; проверяет вход и с хоста, и из контейнера в сети `full_omnia-prod` | не трогает |
+| `freeze` | `docker compose stop api worker generation-worker gateway`; убеждается, что к базе в контейнере никто не подключён | **окно недоступности** (web отдаёт 502) |
+| `transfer` | `pg_dump -Fc` из контейнера → `/opt/omnia-runtime/migrate-in/platform-db/` → `pg_restore --role=omnia --exit-on-error` в пустую хостовую базу (`--force` пересоздаёт её) | окно продолжается |
+| `verify` | сверка `count(*)` каждой таблицы `public` и `alembic_version` контейнер ↔ хост; любое расхождение — стоп | окно продолжается |
+| `switch` | `.env` → host-режим, `docker compose config` доказывает, что override применён (у api нет зависимости от `postgres`, `DATABASE_URL` смотрит на хост), поднимает четыре сервиса, ждёт `/health` api и gateway, проверяет подключения контейнеров в `pg_stat_activity` хоста, останавливает контейнер `omnia-prod-postgres` | **конец окна** |
+| `status` | режим, кто к какой базе подключён, `alembic_version` с обеих сторон | не трогает |
+| `rollback` | `.env` без host-строк, `docker compose up -d postgres` + четыре сервиса; `rollback --with-data` сначала переносит хостовую базу обратно в контейнер (dump/restore, окно) | окно только с `--with-data` |
+| `retire` | через несколько дней: `docker rm omnia-prod-postgres`; том оставляет и печатает команду удаления | не трогает |
+
+**Порядок выката (окно ≈ 3–5 минут для 23 МБ):**
+
+1. Заранее, без окна: `git fetch && git merge --ff-only origin/main` на core (нужны
+   `docker-compose.hostdb.yml` и скрипты), `precheck`, `prepare`. Убедиться, что ночной бэкап
+   прошлой ночи зелёный (`tail /opt/omnia-runtime/logs/backup.log`) — это точка возврата.
+2. Выбрать тихое время, проверить `bash infra/release/check-active-generations.sh` (пусто) и
+   `docker exec omnia-prod-postgres psql -U omnia -d omnia -Atc "select count(*) from
+   generation_runs where finished_at is null"` = 0. Публикации в очереди (`journalctl -u
+   omnia-orchestrator`) дождаться — они пишут в API через `api`, который будет остановлен.
+3. `freeze` → `transfer` → `verify` → `switch`. Между `freeze` и `switch` ничего не пишется ни в
+   одну из баз: писатели остановлены, поэтому копия точная. Если `verify` или `switch` падают —
+   `rollback` возвращает всё на контейнер без потери данных (в хост ничего не писалось).
+4. После `switch`: `curl https://yleum.ru/api/health`, вход в кабинет, `GET /api/billing/usage`,
+   `production-smoke.yml`; `status` показывает подключения контейнеров к хосту.
+5. Бэкап переключается сам: `infra/backup/backup-omnia.sh` и `restore-test-omnia.sh` в режиме
+   `auto` видят `PLATFORM_DATABASE_URL` в `.env` и снимают дамп хостовым `pg_dump` по DSN из
+   `/etc/max-studio/platform-postgres.env` (явно: `PLATFORM_DB_MODE=host|container`, пустой
+   `PLATFORM_CTR=` тоже означает host). Прогнать `backup-omnia.sh` и `restore-test-omnia.sh` вручную
+   в тот же день. Дополнительно хостовая база теперь попадает и в `max-backup.timer` (все базы хоста)
+   с копией на commerce. `infra/release/check-active-generations.sh` и ротация секретов
+   (`infra/security/rotate-production-internal-secrets.py`: `ALTER ROLE` на хосте, обновление
+   `PLATFORM_DATABASE_URL` и файла кредов) тоже понимают host-режим.
+6. Через 3–7 дней спокойной работы — `retire`; том `full_postgres-data` удалить отдельной командой
+   после успешного `restore-test` из хостового дампа.
+
+**Откат.** До `switch` — просто `rollback` (контейнер не менялся). После `switch`, пока на хост
+писали живые данные — `rollback --with-data`: писатели останавливаются, хостовая база `pg_dump`-ится и
+восстанавливается в контейнер (`dropdb`/`createdb`), `.env` возвращается на контейнерный режим, стек
+поднимается — снова окно 3–5 минут, данные не теряются.
+
+**Риски и допущения.** (1) Compose должен читать `COMPOSE_FILE` из `.env` каталога — `switch`
+это проверяет через `docker compose config`; если плагин старый, экспортировать `COMPOSE_FILE` в
+оболочке или задать `-f` дважды. (2) Расширения `citext`/`uuid-ossp` и `plpgsql`-функции восстанавливает
+суперпользователь `postgres` с `--role=omnia`, поэтому права роли не важны. (3) Хостовый PG слушает
+только `127.0.0.1` и WG-адрес: контейнеры ходят на `10.10.0.1`, и правило `ufw` обязательно —
+`prepare` проверяет вход из контейнера. (4) `rotate-production-internal-secrets.py` в host-режиме
+не трогает `POSTGRES_PASSWORD` контейнера, чтобы откат на контейнер остался возможным.
+(5) `30-bring-up.sh` (Фаза 2а) по-прежнему поднимает контейнерный Postgres — это его исторический
+сценарий, для нового сервера после 2б его надо дополнить шагом `prepare`/`transfer`.
 
 ## Что дальше
 

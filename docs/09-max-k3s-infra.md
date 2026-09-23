@@ -27,6 +27,15 @@ core держит только мониторинг. Как деплоить —
 почему не в K3s — [`infra/max-k3s/migrate/README.md`](../infra/max-k3s/migrate/README.md).
 Старый сервер 170.168.72.200 — запасной, чужие проекты на нём живут дальше.
 
+**Фаза 2б (подготовлено 23.09, ждёт выката):** база платформы `omnia` переезжает из контейнера
+`omnia-prod-postgres` на хостовый PostgreSQL core (`10.10.0.1:5432`, та же база/роль `omnia`,
+пароль в `/etc/max-studio/platform-postgres.env`). Compose переключается вторым файлом
+`docker-compose.hostdb.yml` через `.env` (`COMPOSE_FILE`, `PLATFORM_DATABASE_URL`); бэкапы,
+restore-test, проверка релиза и ротация секретов понимают host-режим. Скрипт и порядок выката с
+окном недоступности — [`infra/max-k3s/migrate/README.md`](../infra/max-k3s/migrate/README.md),
+раздел «Фаза 2б». Журнал расхода и лимиты тарифа на сервере — `GET /api/billing/usage`
+(`docs/01-api-contract.md`).
+
 **Фаза 3, этап A (в работе с 23.09):** опубликованные приложения размещаются в кластере runtime
 (`PUBLICATION_BACKEND=kubernetes`, код — `apps/orchestrator/.../k8s_publication.py` +
 `k8s_placement.py`, план — `docs/plans/2026-09-23-k8s-publication-stage-a.md`). **Этап B (23.09):**

@@ -2,7 +2,9 @@
 # Omnia nightly backup — the existential-risk mitigation (everything on one VPS).
 #
 # Captures everything a disk failure would erase:
-#   1. Platform DB      — omnia-prod-postgres / db `omnia` (users, projects, wallets, snapshots meta)
+#   1. Platform DB      — db `omnia` (users, projects, wallets, snapshots meta): in the
+#                         omnia-prod-postgres container, or on the host PostgreSQL of
+#                         core after the Phase 2 move (PLATFORM_DB_MODE below)
 #   2. Per-project DBs  — omnia-postgres-users / db `omnia_users` (ALL generated-app schemas, one dump)
 #   3. Project sources  — /opt/omnia-runtime/projects (generated source + snapshots)
 #   4. MinIO objects    — photos, generated media, uploads and preview artefacts
@@ -53,6 +55,17 @@ FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
+# Where the platform DB lives (Phase 2 of the core infrastructure):
+#   container — inside omnia-prod-postgres, dumped through `docker exec` (the
+#               layout before infra/max-k3s/migrate/50-platform-db-to-host.sh);
+#   host      — on the host PostgreSQL of core, dumped by the host `pg_dump`
+#               over PLATFORM_DSN (read from /etc/max-studio/platform-postgres.env
+#               or derived from PLATFORM_DATABASE_URL in the compose .env);
+#   auto      — host when the compose .env carries PLATFORM_DATABASE_URL, or
+#               when PLATFORM_CTR is set to an empty string; container otherwise.
+PLATFORM_DB_MODE="${PLATFORM_DB_MODE:-auto}"
+PLATFORM_CREDS="${PLATFORM_CREDS:-/etc/max-studio/platform-postgres.env}"
+PLATFORM_DSN="${PLATFORM_DSN:-}"
 USERS_CTR="${USERS_CTR:-omnia-postgres-users}"
 USERS_USER="${USERS_USER:-omnia_root}"
 USERS_DB="${USERS_DB:-omnia_users}"
@@ -73,9 +86,44 @@ command -v docker >/dev/null || fail "docker not found"
 command -v openssl >/dev/null || fail "openssl not found"
 [ -r "$PUBLIC_CERT" ] || fail "public encryption certificate not readable: ${PUBLIC_CERT}"
 
+# Resolve the platform DB mode once; every platform query below goes through
+# these two helpers, so a host/container mix-up cannot creep into one step.
+if [ "$PLATFORM_DB_MODE" = auto ]; then
+  if [ -z "$PLATFORM_CTR" ] || { [ -r "$FULLSTACK_ENV" ] && grep -q '^PLATFORM_DATABASE_URL=' "$FULLSTACK_ENV"; }; then
+    PLATFORM_DB_MODE=host
+  else
+    PLATFORM_DB_MODE=container
+  fi
+fi
+case "$PLATFORM_DB_MODE" in
+  host)
+    command -v pg_dump >/dev/null || fail "host pg_dump not found (postgresql-client)"
+    if [ -z "$PLATFORM_DSN" ] && [ -r "$PLATFORM_CREDS" ]; then
+      PLATFORM_DSN="$(sed -n 's/^PLATFORM_PG_DSN=//p' "$PLATFORM_CREDS" | tail -1)"
+    fi
+    if [ -z "$PLATFORM_DSN" ] && [ -r "$FULLSTACK_ENV" ]; then
+      PLATFORM_DSN="$(sed -n 's/^PLATFORM_DATABASE_URL=//p' "$FULLSTACK_ENV" | tail -1 | sed 's#^postgresql+asyncpg://#postgresql://#')"
+    fi
+    [ -n "$PLATFORM_DSN" ] || fail "host mode needs PLATFORM_DSN (or ${PLATFORM_CREDS} / PLATFORM_DATABASE_URL in ${FULLSTACK_ENV})"
+    log "platform DB mode: host ($(printf '%s' "$PLATFORM_DSN" | sed 's#//.*@#//***@#'))"
+    ;;
+  container)
+    log "platform DB mode: container (${PLATFORM_CTR})"
+    ;;
+  *) fail "unknown PLATFORM_DB_MODE: ${PLATFORM_DB_MODE}" ;;
+esac
+platform_pg_dump(){
+  if [ "$PLATFORM_DB_MODE" = host ]; then pg_dump "$PLATFORM_DSN" "$@"
+  else docker exec "$PLATFORM_CTR" pg_dump -U "$PLATFORM_USER" -d "$PLATFORM_DB" "$@"; fi
+}
+platform_psql(){
+  if [ "$PLATFORM_DB_MODE" = host ]; then psql "$PLATFORM_DSN" "$@"
+  else docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" "$@"; fi
+}
+
 # 1. Platform DB — pipe pg_dump | gzip; the dump must be non-trivially sized.
 log "dumping platform DB ${PLATFORM_DB}..."
-docker exec "$PLATFORM_CTR" pg_dump -U "$PLATFORM_USER" -d "$PLATFORM_DB" --no-owner --clean --if-exists \
+platform_pg_dump --no-owner --clean --if-exists \
   | gzip > "${dir}/platform-${PLATFORM_DB}.sql.gz" || fail "platform pg_dump failed"
 
 # 2. Per-project DB host — one dump captures every project schema.
@@ -169,8 +217,7 @@ log "verifying that the bundle actually holds the platform..."
 # (apps/api/tests/test_backup_bundle_verification.py). Она различает «данных
 # нет» (код 3) и «архив нечитаем» (код 4): оператору это говорит
 # противоположное — снять копию заново или не восстанавливаться из этой.
-live_projects="$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" -Atc \
-  'SELECT count(*) FROM projects' 2>/dev/null || echo unknown)"
+live_projects="$(platform_psql -Atc 'SELECT count(*) FROM projects' 2>/dev/null || echo unknown)"
 verify_out=""
 if ! verify_out="$(PLATFORM_DUMP="${dir}/platform-${PLATFORM_DB}.sql.gz" \
     MINIO_ARCHIVE="${dir}/minio-data.tgz" \
