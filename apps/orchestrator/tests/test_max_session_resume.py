@@ -16,8 +16,9 @@ class NextResponse extends Response {
  constructor(body,options){super(body,options);this.cookies={set:(name,value)=>{cookie=value;cookieSets++;}};}
  static json(body,options){return new NextResponse(JSON.stringify(body),options);}
 }
+// Drizzle's insert chain: values() returns a builder; onConflictDoNothing() runs it.
 const db={query:{maxUsers:{findFirst:async()=>null}},
- insert:()=>({values:async()=>{writes++;}})};
+ insert:()=>({values:()=>({onConflictDoNothing:async()=>{writes++;}})})};
 function load(file){
  if(cache[file])return cache[file];
  const ctx={exports:{},Buffer,URLSearchParams,Date,console:{warn(){},error(){}},
