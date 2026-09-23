@@ -23,6 +23,47 @@
 
 `citext` — case-insensitive (через `CREATE EXTENSION citext`).
 
+С миграции `0070` `password_hash` может быть NULL: аккаунт, созданный входом через
+VK ID / Яндекс ID, пароля не имеет (задать его можно через «забыли пароль»).
+
+### `user_identities` (миграция `0070`)
+
+Связка аккаунта с провайдером входа. Хранится ровно то, что нужно, чтобы узнать
+человека при следующем входе: идентификатор у провайдера и снимок email. Имя,
+телефон, аватар и токены провайдера на платформу не попадают (аккаунт без реквизитов).
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `user_id` | uuid | FK → `users(id)` ON DELETE CASCADE, индекс |
+| `provider` | text | `vk` \| `yandex` |
+| `provider_user_id` | text | UNIQUE вместе с `provider` (`uq_user_identities_provider_subject`) |
+| `email` | text | Email, который провайдер сообщил при последнем входе; NULL допустим |
+| `created_at` | timestamptz | NOT NULL DEFAULT now() |
+
+### `oauth_login_states` (миграция `0070`)
+
+Серверное состояние одного рукопожатия. До callback-а — `state_hash` и PKCE
+`code_verifier` (VK ID), после — одноразовый билет (`ticket_hash`) на экран
+подтверждения документов вместе с `pending_email` / `pending_provider_user_id`.
+`used_at` закрывает state, `completed_at` — билет; отработавшие строки старше суток
+удаляются при следующем старте входа.
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `provider` | text | NOT NULL |
+| `state_hash` | text | UNIQUE NOT NULL (sha256 от `state`) |
+| `code_verifier` | text | NULL для Яндекса |
+| `next_path` | text | Same-origin путь возврата в web |
+| `expires_at` | timestamptz | NOT NULL, индекс; state живёт 10 минут |
+| `used_at` | timestamptz | NULL, пока callback не пришёл |
+| `ticket_hash` | text | UNIQUE, NULL до callback-а нового пользователя |
+| `ticket_expires_at` | timestamptz | Билет живёт 15 минут |
+| `pending_provider_user_id`, `pending_email` | text | Что подтверждается на экране согласий |
+| `completed_at` | timestamptz | NULL, пока аккаунт не создан |
+| `created_at` | timestamptz | NOT NULL DEFAULT now() |
+
 ### `projects`
 | Поле | Тип | Constraints |
 |---|---|---|
@@ -404,6 +445,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0038` | версия согласия на renewal, guard одного ожидающего продления и канонический keep-alive проекта | Codex |
 | `0046` | `project_memory_revisions` + точная связь generation run с user message | Codex |
 | `0069` | бизнес-профили, участники и их квоты удалены; `app_integrations.user_id` вместо `business_id`, `billing_accounts` только личные, ФНС-проверки нет | Claude |
+| `0070` | вход через VK ID и Яндекс ID: `user_identities` (только id у провайдера + email) и `oauth_login_states` (state, PKCE, билет подтверждения документов с TTL) | Claude |
 
 ## Trigger для `updated_at`
 

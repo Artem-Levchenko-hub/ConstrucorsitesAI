@@ -24,6 +24,39 @@
 
 **Валидация регистрации:** email формат, password ≥ 8 символов и хотя бы 1 цифра. Хэш — bcrypt (12 rounds).
 
+#### Вход через VK ID и Яндекс ID (`routers/auth_oauth.py`, миграция `0070`)
+
+Аккаунт остаётся «email + пароль»: от провайдера платформа берёт только его идентификатор
+пользователя и email (таблица `user_identities`), токены провайдера не сохраняются.
+Рукопожатие серверное: `state` и PKCE-verifier лежат в `oauth_login_states` с TTL
+(state — 10 минут, билет подтверждения — 15 минут), браузер получает только ссылку.
+
+| Метод | Path | Тело / query | Ответ | Статус |
+|---|---|---|---|---|
+| `GET` | `/api/auth/oauth/providers` | — | `{providers: [{provider: "vk"\|"yandex", label}], legal_document_version}` — только настроенные | 200 |
+| `GET` | `/api/auth/oauth/:provider/start` | `?next=/max/…` (same-origin путь, иначе `/max`) | `{authorization_url}` | 200 / 404 `oauth_provider_unavailable` |
+| `GET` | `/api/auth/oauth/:provider/callback` | `?code&state` (+ `device_id` у VK; `error` при отказе) | 303-редирект в web (см. ниже) | 303 |
+| `GET` | `/api/auth/oauth/pending` | `?ticket=` | `{provider, label, email, next, legal_document_version}` | 200 / 400 `oauth_ticket_invalid` |
+| `POST` | `/api/auth/oauth/complete` | `{ticket, terms_accepted, privacy_accepted, personal_data_accepted, marketing_accepted?, document_version}` | `User` + Set-Cookie | 201 / 422 `legal_acceptance_required` / 409 `legal_version_outdated` / 400 `oauth_ticket_invalid` / 403 `account_unavailable` |
+
+Куда уходит callback (`WEB_BASE_URL` + путь):
+
+- аккаунт найден по связке провайдера или по его email → `Set-Cookie: omnia_session` (та же
+  сессия, что при входе по паролю) + `303 → <next>` (по умолчанию `/max`); найденный по email
+  аккаунт получает связку и `email_verified_at`;
+- аккаунта нет → `303 → /oauth/complete?ticket=<одноразовый>`; аккаунт **не** создаётся до
+  `POST /complete` с теми же согласиями, что и у `register` (`product=max`); новый аккаунт —
+  без пароля, с `email_verified_at`, личным платёжным счётом, кошельком и Free-подпиской;
+- отказ/сбой → `303 → /login?oauth_error=<код>[&next=…]`, коды: `oauth_cancelled`,
+  `oauth_state_invalid`, `oauth_exchange_failed`, `oauth_email_required`,
+  `oauth_provider_unavailable`, `account_unavailable`.
+
+VK ID — OAuth 2.1 с PKCE (`code_challenge_method=s256`, scope `email`), обмен кода без client
+secret, но с `device_id` из callback-а. Яндекс ID — OAuth 2.0 с client id + secret, scope
+`login:email`. Redirect URI провайдера: `<OAUTH_LOGIN_REDIRECT_BASE_URL|WEB_BASE_URL>/api/auth/oauth/<vk|yandex>/callback`
+(runbook — `docs/plans/2026-09-23-oauth-login.md`). Rate limit — как у `login`/`register`.
+Выгрузка аккаунта (`GET /api/account/export`) отдаёт связки в поле `identities`.
+
 `User.role` принимает `user | admin`. Роль хранится в PostgreSQL; `ADMIN_EMAILS`
 используется только как bootstrap-доступ. Все admin endpoints дополнительно
 проверяют активную сессию и effective admin role.
