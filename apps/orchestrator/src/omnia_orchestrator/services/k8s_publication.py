@@ -114,6 +114,8 @@ class PublicationSpec:
     project_data_storage: str = "10Gi"  # declared data mounts (uploads etc.), one claim each
     ingress_class: str = "traefik"
     cluster_issuer: str = "letsencrypt-prod"
+    # RuntimeClass for user-code pods (app, boundary, core); "" = node default.
+    runtime_class: str = ""
     # Where seeding init containers fetch archives from (the orchestrator over
     # WireGuard); the only egress the app and project-postgres pods get besides DNS.
     artifact_source_cidr: str = "10.10.0.1/32"
@@ -168,6 +170,11 @@ def _millicores(value: float) -> str:
 
 def _env(values: dict[str, str]) -> list[dict[str, str]]:
     return [{"name": key, "value": str(value)} for key, value in sorted(values.items())]
+
+
+def _sandbox(spec: PublicationSpec) -> dict[str, str]:
+    """Pod-level runtime class for user code: gVisor when the cluster offers it."""
+    return {"runtimeClassName": spec.runtime_class} if spec.runtime_class else {}
 
 
 def _service(spec: PublicationSpec, component: str, port: int) -> dict[str, Any]:
@@ -506,6 +513,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                         },
                     },
                     "spec": {
+                        **_sandbox(spec),
                         "securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000},
                         "containers": [
                             {
@@ -650,6 +658,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                 "template": {
                     "metadata": {"labels": _labels(spec, "app")},
                     "spec": {
+                        **_sandbox(spec),
                         "initContainers": app_init,
                         "containers": [
                             {
@@ -724,6 +733,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                         },
                     },
                     "spec": {
+                        **_sandbox(spec),
                         "containers": [
                             {
                                 "name": "boundary",

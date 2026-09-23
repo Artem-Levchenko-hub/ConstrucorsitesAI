@@ -60,7 +60,13 @@
    ```bash
    ssh max-core 'cd /opt/omnia && git fetch origin && git merge --ff-only origin/main && cd apps/llm-gateway/deploy/full && docker compose up -d --build <изменённые сервисы>'
    ```
-   Сервисы: `api generation-worker worker` (бэкенд), `web` (фронт), `gateway` (LLM-шлюз). Оркестратор — хост-сервис из исходников: `ssh max-core 'cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen && sudo systemctl restart omnia-orchestrator'`. Затем health-check (`curl https://yleum.ru/api/health`, `ssh max-core curl -s 127.0.0.1:8003/health`) — подтвердить 200.
+   Сервисы: `api generation-worker worker` (бэкенд), `web` (фронт), `gateway` (LLM-шлюз). Оркестратор — хост-сервис из исходников, и с 23.09.2026 **их ДВА** (ячейки живут на core и на commerce, см. `ORCHESTRATOR_HOSTS`): обновлять оба, одной ревизией, **после** пересборки API:
+   ```bash
+   ssh max-core 'cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen && sudo systemctl restart omnia-orchestrator'
+   # commerce не тянет git сам — его чекаут это копия core (rsync по WireGuard), затем тот же рестарт:
+   ssh max-core 'rsync -a --delete --exclude .venv --exclude .env --exclude node_modules --exclude .next --exclude __pycache__ --exclude "*.tsbuildinfo" /opt/omnia/ commerce:/opt/omnia/ && ssh commerce "cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen && sudo systemctl restart omnia-orchestrator"'
+   ```
+   `OMNIA_RELEASE_SHA` в `apps/orchestrator/.env` на обоих хостах должен совпадать с `PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA`, иначе `/api/health` отдаёт `orchestrator_release_sha: "mixed"` и smoke краснеет. Затем health-check (`curl https://yleum.ru/api/health`, `ssh max-core curl -s 127.0.0.1:8003/health`, `ssh max-commerce curl -s 127.0.0.1:8003/health`) — подтвердить 200 и одинаковый release_sha.
 
    **Шаблоны стеков (`apps/orchestrator/templates/`) вшиты в образ `api`** (volume больше нет): правка шаблона → пересобрать `api generation-worker worker`, иначе агент продолжит видеть старые промпты/skills.
 

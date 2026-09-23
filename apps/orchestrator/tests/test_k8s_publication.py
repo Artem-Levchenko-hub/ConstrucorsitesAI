@@ -605,3 +605,27 @@ def test_artifact_link_serves_the_archive_once_then_404(
     assert served.headers["content-type"].startswith("application/x-tar")
     assert client.get(f"/internal/publication-artifacts/{token}").status_code == 404
     assert client.get("/internal/publication-artifacts/does-not-exist").status_code == 404
+
+
+def _pod_specs(objects: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        f"{item['kind']}/{item['metadata']['name']}": item["spec"]["template"]["spec"]
+        for item in objects
+        if item["kind"] in {"Deployment", "StatefulSet"}
+    }
+
+
+def test_runtime_class_sandboxes_user_code_but_not_the_databases() -> None:
+    sandboxed = _pod_specs(kp.build_objects(_spec(runtime_class="gvisor")))
+    assert {
+        name for name, pod in sandboxed.items() if pod.get("runtimeClassName") == "gvisor"
+    } == {"Deployment/app", "Deployment/boundary", "Deployment/core"}
+    assert all(
+        "runtimeClassName" not in pod
+        for name, pod in sandboxed.items()
+        if name.startswith("StatefulSet/") or name == "Deployment/redis"
+    )
+    # The default keeps every pod on the node runtime — nothing changes for
+    # clusters without gVisor.
+    default_pods = _pod_specs(kp.build_objects(_spec())).values()
+    assert all("runtimeClassName" not in pod for pod in default_pods)

@@ -46,6 +46,7 @@ def _settings(tmp_path: Path, **overrides: Any) -> SimpleNamespace:
         cell_public_core_memory_bytes=768 * 1024**2,
         k8s_app_cpu_cores=1.0,
         k8s_app_memory_bytes=1024**3,
+        k8s_app_runtime_class="",
     )
     values.update(overrides)
     return SimpleNamespace(**values)

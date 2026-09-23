@@ -225,6 +225,11 @@ class Settings(BaseSettings):
     # Per-app limits in the runtime cluster (requests are half of these).
     k8s_app_cpu_cores: float = Field(default=1.0, ge=0.25)
     k8s_app_memory_bytes: int = Field(default=1024**3, ge=256 * 1024**2)
+    # RuntimeClass for the containers that run user code in the cluster (app,
+    # boundary, managed core): "gvisor" sandboxes them with runsc (installed on
+    # the node by infra/max-k3s/remote/70-gvisor.sh). Empty = the node default.
+    # Postgres and Redis stay on the default runtime.
+    k8s_app_runtime_class: str = Field(default="")
     # Where seeding init containers fetch warm artifacts from (this orchestrator
     # over WireGuard). Capability links are single-use and expire.
     artifact_base_url: str = Field(default="http://10.10.0.1:8003")
