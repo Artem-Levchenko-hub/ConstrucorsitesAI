@@ -10,14 +10,7 @@ const PREVIEW_SESSION_MAX_AGE_SECONDS = 15 * 60;
 // syncs an existing app. The env fallback keeps the starter template usable
 // before that first managed-kit sync.
 const MANAGED_PROJECT_ID: string = "__OMNIA_PROJECT_ID__";
-const PREVIEW_USER: MaxSessionUser = {
-  id: "preview",
-  firstName: "Preview",
-  lastName: "MAX",
-  username: "preview",
-  languageCode: null,
-  photoUrl: null,
-};
+const PREVIEW_USER: MaxSessionUser = { id: "preview" };
 
 function unavailable(): NextResponse {
   return new NextResponse(null, { status: 404 });
@@ -63,25 +56,8 @@ export async function GET(request: Request) {
   try {
     await db
       .insert(schema.maxUsers)
-      .values({
-        maxUserId: PREVIEW_USER.id,
-        firstName: PREVIEW_USER.firstName,
-        lastName: PREVIEW_USER.lastName,
-        username: PREVIEW_USER.username,
-        languageCode: PREVIEW_USER.languageCode,
-        photoUrl: PREVIEW_USER.photoUrl,
-      })
-      .onConflictDoUpdate({
-        target: schema.maxUsers.maxUserId,
-        set: {
-          firstName: PREVIEW_USER.firstName,
-          lastName: PREVIEW_USER.lastName,
-          username: PREVIEW_USER.username,
-          languageCode: PREVIEW_USER.languageCode,
-          photoUrl: PREVIEW_USER.photoUrl,
-          updatedAt: new Date(),
-        },
-      });
+      .values({ maxUserId: PREVIEW_USER.id, firstName: "" })
+      .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
     const session = createMaxSession(PREVIEW_USER, {
       maxAge: PREVIEW_SESSION_MAX_AGE_SECONDS,
     });

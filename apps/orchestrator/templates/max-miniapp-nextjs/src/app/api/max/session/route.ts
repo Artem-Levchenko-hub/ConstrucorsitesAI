@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { db, schema } from "@/lib/db";
@@ -61,40 +60,15 @@ export async function POST(request: Request) {
       { status: 401 },
     );
   }
-  const user: MaxSessionUser = {
-    id: launch.user.id,
-    firstName: launch.user.first_name,
-    lastName: launch.user.last_name || null,
-    username: launch.user.username || null,
-    languageCode: launch.user.language_code || null,
-    photoUrl: launch.user.photo_url || null,
-  };
+  const user: MaxSessionUser = { id: launch.user.id };
   try {
-    const existing = await db.query.maxUsers.findFirst({
-      where: eq(schema.maxUsers.maxUserId, user.id),
-    });
-    if (existing) {
-      await db
-        .update(schema.maxUsers)
-        .set({
-          firstName: user.firstName,
-          lastName: user.lastName,
-          username: user.username,
-          languageCode: user.languageCode,
-          photoUrl: user.photoUrl,
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.maxUsers.maxUserId, user.id));
-    } else {
-      await db.insert(schema.maxUsers).values({
-        maxUserId: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        username: user.username,
-        languageCode: user.languageCode,
-        photoUrl: user.photoUrl,
-      });
-    }
+    // Materialise the FK parent only. The profile MAX sends with the launch is
+    // never stored; `first_name` stays empty because the starter schema still
+    // declares the column NOT NULL for apps created before this rule.
+    await db
+      .insert(schema.maxUsers)
+      .values({ maxUserId: user.id, firstName: "" })
+      .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
     const session = createMaxSession(user);
     const response = NextResponse.json({ user, startParam: launch.startParam });
     response.cookies.set(MAX_SESSION_COOKIE, session.value, {

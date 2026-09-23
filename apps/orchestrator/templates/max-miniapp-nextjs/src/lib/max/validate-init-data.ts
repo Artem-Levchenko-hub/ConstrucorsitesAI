@@ -1,12 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+// Only the MAX user id leaves validation. MAX also sends first_name, last_name,
+// username, language_code and photo_url; the platform never reads or stores
+// them (152-ФЗ, ст. 5: no data beyond the purpose). Ask a visitor for a name
+// or contact in the product itself, with consent, when a feature needs it.
 export type MaxLaunchUser = {
   id: string;
-  first_name: string;
-  last_name?: string | null;
-  username?: string | null;
-  language_code?: string | null;
-  photo_url?: string | null;
 };
 
 export type ValidatedMaxInitData = {
@@ -119,19 +118,8 @@ export function validateMaxInitData(
       : typeof value.id === "string" && /^\d+$/.test(value.id)
         ? value.id
         : "";
-  const firstName = typeof value.first_name === "string" ? value.first_name.trim() : "";
-  if (!id || !firstName) fail("user", "invalid MAX user");
-
-  const optionalString = (field: string): string | null =>
-    typeof value[field] === "string" && value[field] ? value[field] : null;
-  const user: MaxLaunchUser = {
-    id,
-    first_name: firstName,
-    last_name: optionalString("last_name"),
-    username: optionalString("username"),
-    language_code: optionalString("language_code"),
-    photo_url: optionalString("photo_url"),
-  };
+  if (!id) fail("user", "invalid MAX user");
+  const user: MaxLaunchUser = { id };
   return {
     queryId: values.get("query_id") || null,
     authDate,

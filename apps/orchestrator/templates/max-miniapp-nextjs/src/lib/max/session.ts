@@ -7,13 +7,10 @@ export const MAX_SESSION_COOKIE = "__Host-max_session";
 const MAX_INIT_DATA_HEADER = "x-omnia-max-init-data";
 const SESSION_AGE_SECONDS = 24 * 60 * 60;
 
+// A session carries the MAX user id and nothing else: no profile fields are
+// read from MAX, kept in the cookie or written to the database.
 export type MaxSessionUser = {
   id: string;
-  firstName: string;
-  lastName: string | null;
-  username: string | null;
-  languageCode: string | null;
-  photoUrl: string | null;
 };
 
 type SessionPayload = MaxSessionUser & { expiresAt: number };
@@ -79,14 +76,7 @@ export async function getMaxUser(): Promise<MaxSessionUser | null> {
   if (!token || !initData) return null;
   try {
     const launch = validateMaxInitData(initData, token);
-    return {
-      id: launch.user.id,
-      firstName: launch.user.first_name,
-      lastName: launch.user.last_name || null,
-      username: launch.user.username || null,
-      languageCode: launch.user.language_code || null,
-      photoUrl: launch.user.photo_url || null,
-    };
+    return { id: launch.user.id };
   } catch {
     return null;
   }

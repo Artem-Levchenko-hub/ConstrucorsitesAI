@@ -97,14 +97,7 @@ export async function POST(request: Request) {
     // the same signed-session contract without inventing an external login.
     const createdUsers = await tx
       .insert(schema.maxUsers)
-      .values({
-        maxUserId: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        username: user.username,
-        languageCode: user.languageCode,
-        photoUrl: user.photoUrl,
-      })
+      .values({ maxUserId: user.id, firstName: "" })
       .onConflictDoNothing({ target: schema.maxUsers.maxUserId })
       .returning({ maxUserId: schema.maxUsers.maxUserId });
     const [created] = await tx

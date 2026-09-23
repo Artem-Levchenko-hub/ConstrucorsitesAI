@@ -15,11 +15,13 @@ from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 21
+MAX_MANAGED_KIT_VERSION = 22
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
 # platform-owned paths. v20 materializes trusted gateway subjects in the
 # isolated product DB before business tables can enforce max_users FKs. v21
 # adds owner-scoped item CRUD used by fail-closed activation health checks.
+# v22 stops reading and storing the MAX visitor profile: sessions carry the
+# MAX user id only (152-ФЗ ст. 5 — no data beyond the purpose).
 MAX_RETIRED_MANAGED_FILES = frozenset(
     {
         "src/app/api/omnia/data/[...path]/route.ts",
@@ -424,10 +426,7 @@ def render_portable_max_session(project_id: UUID | str) -> str:
     .insert(schema.maxUsers)
     .values({ maxUserId: id, firstName: "" })
     .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
-  return {
-    id, firstName: "", lastName: null, username: null,
-    languageCode: null, photoUrl: null,
-  };
+  return { id };
 }
 
 """.replace("__PROJECT_ID__", json.dumps(str(project_id)))

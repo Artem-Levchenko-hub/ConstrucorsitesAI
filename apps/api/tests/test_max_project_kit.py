@@ -64,11 +64,23 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
-def test_kit_v21_retires_encrypted_crud_and_materializes_portable_users() -> None:
+def test_kit_v22_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 21
+    assert MAX_MANAGED_KIT_VERSION == 22
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
+    # v22: no managed server file reads or persists the MAX visitor profile.
+    for path in (
+        "src/lib/max/validate-init-data.ts",
+        "src/lib/max/session.ts",
+        "src/app/api/max/session/route.ts",
+        "src/app/api/omnia/preview-session/route.ts",
+        "src/app/api/omnia/actions/route.ts",
+    ):
+        source = managed[path]
+        assert "photoUrl" not in source and "lastName" not in source, path
+        assert "languageCode" not in source and "username:" not in source, path
+    assert "export type MaxSessionUser = {\n  id: string;\n};" in managed["src/lib/max/session.ts"]
     assert MAX_RETIRED_MANAGED_FILES == {
         "src/app/api/omnia/data/[...path]/route.ts",
         "src/lib/secure-data/crypto.ts",

@@ -54,6 +54,10 @@
   in `package.json`; Omnia syncs them with lifecycle scripts disabled.
 - Persist explicit consent through `/api/omnia/consents` before marketing
   notifications, contacts, payments or other optional personal-data use.
+- The MAX session exposes only `user.id` (`max_user_id`). Never read, display or
+  store the visitor's name, username, language or photo from MAX; if a feature
+  truly needs a name or contact, ask for it in the product with explicit consent
+  and a stated purpose, and keep it only as long as that purpose exists.
 - Track key funnel events through `/api/omnia/events`; do not send personal data
   to third-party analytics by default.
 - Support loading, empty, error, retry and success states for every async flow.

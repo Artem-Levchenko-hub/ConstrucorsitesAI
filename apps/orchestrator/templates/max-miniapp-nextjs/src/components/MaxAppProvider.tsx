@@ -67,14 +67,7 @@ function installAuthenticatedFetch(initData: string) {
   }) as typeof window.fetch;
 }
 
-const previewUser: MaxSessionUser = {
-  id: "preview",
-  firstName: "Пользователь",
-  lastName: "MAX",
-  username: "preview",
-  languageCode: "ru",
-  photoUrl: null,
-};
+const previewUser: MaxSessionUser = { id: "preview" };
 
 export function useMaxApp() {
   return useContext(MaxContext);
