@@ -17,7 +17,7 @@
 | Пункт | Состояние | Где |
 |---|---|---|
 | журнал расхода и Entitlements | **Живёт:** миграция 0070, `GET /api/billing/usage`, серверные лимиты тарифа (проекты, слоты публикации, интеграции), Free v2 без лимитов по решению владельца | `services/entitlements.py`, `services/billing_usage.py` (H216) |
-| разделение Core PostgreSQL | **Скрипты и runbook готовы**, перенос базы платформы на хостовый PostgreSQL core не выполнен (окно 3–5 минут без записи) | `infra/max-k3s/migrate/50-platform-db-to-host.sh`, `migrate/README.md` |
+| разделение Core PostgreSQL | **Живёт с 23.09 18:17:** база платформы на хостовом PostgreSQL core (окно ≈ 1 мин, сверка 47 таблиц, smoke и restore-test зелёные); контейнер остановлен, `retire` через 3–7 дней | `infra/max-k3s/migrate/50-platform-db-to-host.sh`, `migrate/README.md` |
 | вход через VK ID и Яндекс ID | **Живёт как код:** миграция 0071, эндпоинты `/api/auth/oauth/*`, кнопки и экран согласий. **Нужны приложения VK ID и Яндекс OAuth** (client id/secret) | `routers/auth_oauth.py`, `docs/plans/2026-09-23-oauth-login.md` (H218) |
 
 ## Фаза 3 — коммерция
@@ -35,4 +35,4 @@
 3. **Яндекс OAuth:** веб-сервис, redirect `https://yleum.ru/api/auth/oauth/yandex/callback`, право «адрес электронной почты» → `YANDEX_ID_CLIENT_ID`/`YANDEX_ID_CLIENT_SECRET`.
 4. **ЮKassa:** боевой и тестовый магазин (`YOOKASSA_SHOP_ID`/`YOOKASSA_SECRET_KEY`), HTTP-уведомления на `https://yleum.ru/api/payments/yookassa/webhook`, включённые автоплатежи и чеки, СНО.
 5. **Serverum:** токен API и подтверждение у поддержки, что API заказа VPS существует (публичной документации нет).
-6. **Решения:** окно для переноса базы платформы на хостовый PostgreSQL; поднимать ли версию юридических документов.
+6. **Решение:** поднимать ли версию юридических документов после смены текстов.

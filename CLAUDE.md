@@ -70,6 +70,8 @@
 
    **Шаблоны стеков (`apps/orchestrator/templates/`) вшиты в образ `api`** (volume больше нет): правка шаблона → пересобрать `api generation-worker worker`, иначе агент продолжит видеть старые промпты/skills.
 
+   **База платформы с 23.09.2026 — на ХОСТОВОМ PostgreSQL core** (`10.10.0.1:5432`, роль/база `omnia`, креды `/etc/max-studio/platform-postgres.env`): в compose `.env` стоят `COMPOSE_FILE=docker-compose.yml:docker-compose.hostdb.yml` и `PLATFORM_DATABASE_URL`, контейнер `omnia-prod-postgres` остановлен (неактивный профиль, том оставлен для отката). SQL на проде: `ssh max-core sudo -u postgres psql -d omnia`, НЕ `docker compose exec postgres`. Скрипт/откат: `infra/max-k3s/migrate/50-platform-db-to-host.sh` (`status`, `rollback --with-data`, `retire`).
+
    **⚠️ Прод-compose — это проект `full` в `apps/llm-gateway/deploy/full/` (контейнеры `omnia-prod-*`), НЕ `infra/`.** `infra/docker-compose.yml` — отдельный dev-стек (имена `omnia-*` без `-prod`), и `docker compose up` в нём поднимет ВТОРОЙ постгрес/редис, столкнётся на host-портах и насоздаёт висяков — НЕ деплоить через него. `git pull` на проде не использовать → только `git fetch && git merge --ff-only origin/main`. На core порты 80/443 держит хостовый nginx (vhost `/etc/nginx/sites-available/yleum.ru`), K3s там — только мониторинг (`grafana.yleum.ru`).
 
 **Карвут:** чистые docs / `secondbrain` / memory-правки → только commit+push (деплоить нечего, runtime не затронут). Всё, что влияет на работающее приложение → полный цикл с деплоем.
