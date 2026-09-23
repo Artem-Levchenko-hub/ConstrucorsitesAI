@@ -165,7 +165,10 @@ fi
 # nightly job on the host reported success without ever touching the platform).
 log "verifying that the bundle actually holds the platform..."
 for table in users projects snapshots; do
-  zcat "${dir}/platform-${PLATFORM_DB}.sql.gz" | grep -q "^CREATE TABLE public\.${table} " \
+  # grep -c reads the whole stream: with `pipefail` a `grep -q` that quits early
+  # would turn zcat's SIGPIPE into a false failure.
+  hits="$(zcat "${dir}/platform-${PLATFORM_DB}.sql.gz" | grep -c "^CREATE TABLE public\.${table} " || true)"
+  [ "${hits:-0}" -ge 1 ] \
     || fail "platform dump has no ${table} table — this is not the platform database"
 done
 live_projects="$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" -Atc \
