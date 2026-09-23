@@ -258,7 +258,9 @@ async def finish_login(
     provider: str,
     request: Request,
     session: SessionDep,
-    state: str = Query(min_length=20, max_length=256),
+    # Любой непустой state ищем в базе: чужой или обрезанный провайдером — это
+    # редирект на /login с понятным кодом, а не 422 в лицо пользователю.
+    state: str = Query(min_length=1, max_length=256),
     code: str | None = Query(default=None, max_length=4096),
     device_id: str | None = Query(default=None, max_length=512),
     error: str | None = Query(default=None, max_length=256),
