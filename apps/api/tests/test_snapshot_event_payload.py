@@ -124,6 +124,8 @@ def _assert_announced(events: AsyncMock, project_id: UUID, row: Snapshot) -> Non
 
 async def test_created_project_announces_its_first_snapshot(events, monkeypatch):
     monkeypatch.setattr(projects.repo_svc, "init_repo", Mock(return_value="a" * 40))
+    # Plan limits read the billing tables; this test owns a stub session.
+    monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())
     session = Session()
 
     project = await projects.create_project(

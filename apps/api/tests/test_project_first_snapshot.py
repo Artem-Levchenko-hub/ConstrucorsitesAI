@@ -109,6 +109,8 @@ def world(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(projects, "enqueue_preview", enqueue)
     monkeypatch.setattr(projects, "publish_event", publish)
     monkeypatch.setattr(projects.repo_svc, "init_repo", Mock(return_value="a" * 40))
+    # Plan limits read the billing tables; these tests own a stub session.
+    monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())
     return state
 
 

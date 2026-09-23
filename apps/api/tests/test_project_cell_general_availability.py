@@ -143,6 +143,8 @@ async def test_normal_create_persists_server_decision_without_provisioning(monke
     monkeypatch.setattr(projects.repo_svc, "init_repo", lambda *_: "a" * 40)
     monkeypatch.setattr(projects, "enqueue_preview", lambda _: None)
     monkeypatch.setattr(projects, "publish_event", AsyncMock())
+    # Plan limits read the billing tables; this test owns a stub session.
+    monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())
     created = await projects.create_project(
         ProjectCreate.model_validate(
             {"name": "Test", "template": "max_miniapp", "project_cell_enabled": True}

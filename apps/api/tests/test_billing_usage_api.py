@@ -17,6 +17,8 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
+
+from tests.test_projects_delete import fake_teardown  # noqa: F401 — fixture
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -521,7 +523,7 @@ async def test_publication_without_a_billing_account_is_not_blocked_or_journaled
 
 
 async def test_deleting_a_project_frees_its_publish_slot_but_keeps_the_history(
-    client: httpx.AsyncClient, db_session: AsyncSession, git: None
+    client: httpx.AsyncClient, db_session: AsyncSession, git: None, fake_teardown: dict[str, list]
 ) -> None:
     user = await _register(client, db_session, "slot-release@example.com")
     project_id = (await _create_project(client, "Опубликованное")).json()["id"]
