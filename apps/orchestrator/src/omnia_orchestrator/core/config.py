@@ -46,6 +46,15 @@ class Settings(BaseSettings):
             raise ValueError("cell draft port range must not overlap the prod port range")
         return self
 
+    @model_validator(mode="after")
+    def validate_build_backend(self) -> Self:
+        if self.build_backend == "buildkit":
+            if not self.buildkit_socket.strip():
+                raise ValueError("build_backend=buildkit requires buildkit_socket")
+            if not self.buildctl_binary.strip():
+                raise ValueError("build_backend=buildkit requires buildctl_binary")
+        return self
+
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
     omnia_release_sha: str = Field(default="unknown")
@@ -68,6 +77,23 @@ class Settings(BaseSettings):
     # `$DOCKER_CONFIG`. The hardened systemd unit mounts the user's home
     # read-only, so builds must use an orchestrator-owned writable directory.
     docker_cli_config_dir: str = Field(default="/opt/omnia-runtime/docker-cli")
+
+    # ── Isolated image builds (Phase 1 infra: rootless BuildKit) ────────────
+    # The production image of a user project is built from an UNTRUSTED
+    # Dockerfile + context (the agent writes both). "docker" = `docker build`
+    # through the host's root daemon (today's path, kept as the default so a
+    # deploy of this code changes nothing until the operator flips the flag).
+    # "buildkit" = `buildctl` against a rootless buildkitd that has no Docker
+    # socket and runs every RUN step inside its own user namespace
+    # (infra/max-k3s/cells/50-buildkit-rootless.sh). The result contract is the
+    # same: the built image lands in the local daemon and the immutable image
+    # id is returned. Rollback = BUILD_BACKEND=docker + restart.
+    build_backend: Literal["docker", "buildkit"] = Field(default="docker")
+    # Unix socket of the rootless buildkitd the orchestrator user may connect to.
+    buildkit_socket: str = Field(default="/run/omnia-buildkit/buildkitd.sock")
+    # `buildctl` client (same release as the daemon; the cell-host script
+    # extracts it from the buildkit image into /usr/local/bin).
+    buildctl_binary: str = Field(default="buildctl")
 
     # ── Sandbox hardening (Phase 1, security) ───────────────────────────────
     # The agent (USE_AGENTIC_BUILDER) runs ARBITRARY code + bash inside dev

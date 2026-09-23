@@ -54,3 +54,71 @@ K3s там остаётся, порты 80/443 у хостового nginx пр�
 `/api/health` показывает `orchestrator_release_sha: "mixed"`, пока ревизии расходятся, и smoke краснеет —
 это правильно. Изоляция опубликованных приложений: узел runtime получил gVisor (`remote/70-gvisor.sh`,
 RuntimeClass `gvisor`), оркестратор включает его через `K8S_APP_RUNTIME_CLASS=gvisor`.
+
+## Изолированные сборки (Фаза 1: rootless BuildKit, 23.09.2026)
+
+**Что было.** Production-образ приложения пользователя (кнопка «Опубликовать» → `builder.py`)
+собирался командой `docker build` через root-демон Docker хоста. Dockerfile и контекст пишет агент,
+то есть это недоверенный код, а каждый его `RUN`-шаг исполнялся настоящим root'ом за одной границей
+ядра — единственное, что отделяло Dockerfile пользователя от хоста, был сам runc.
+
+**Что сделано.** Сборку можно переключить на **rootless BuildKit** — отдельный сборочный демон без
+root'а и без доступа к docker.sock. Код: `apps/orchestrator/.../services/buildkit.py` (бэкенд),
+`services/builder.py::_build_prod_image` (выбор бэкенда), настройки `BUILD_BACKEND` /
+`BUILDKIT_SOCKET` / `BUILDCTL_BINARY`. Хост готовит `infra/max-k3s/cells/50-buildkit-rootless.sh`
+(идемпотентно, для core и commerce):
+
+- контейнер `omnia-buildkitd` из образа `moby/buildkit:rootless` — внутри uid 1000, capabilities
+  сброшены до `SETUID`/`SETGID` (нужны `newuidmap` для вложенного user namespace), `seccomp=unconfined`
+  и свой AppArmor-профиль `omnia-buildkit` (как unconfined, но с правом `userns` — Ubuntu 24.04
+  иначе запрещает user namespace процессам без профиля; если профиль не грузится, скрипт сам
+  откатывается на `sysctl kernel.apparmor_restrict_unprivileged_userns=0`);
+- каждый `RUN`-шаг идёт во вложенном user namespace и в своём PID namespace (режим «process
+  sandbox», требует `--security-opt systempaths=unconfined`); если ядро/Docker его не дают — скрипт
+  переключается на `--oci-worker-no-process-sandbox` и говорит об этом в выводе. Итого между
+  Dockerfile пользователя и хостом две границы (вложенный userns → контейнер buildkitd → хост)
+  вместо одной, и ни на одной из них нет root'а;
+- лимиты cgroup: `BUILDKIT_CPUS=3`, `BUILDKIT_MEMORY=6g`, `BUILDKIT_PIDS=4096` (прежний путь через
+  dockerd ограничений не имел); кэш слоёв — том `omnia-buildkit-cache`, демон чистит его сам при
+  `gckeepstorage=20000` МБ (`/opt/omnia-runtime/buildkit/buildkitd.toml`);
+- своя bridge-сеть `omnia-buildkit` (mtu 1400), из которой хост закрыт правилом ufw
+  `buildkit → host: deny` — шаги сборки не достают ни до оркестратора (8003), ни до превью (80/443);
+  интернет для `FROM node:22-slim` и `pnpm install` остаётся;
+- оркестратор ходит к демону как обычный пользователь `zeuszcz` через unix-сокет
+  `/run/omnia-buildkit/buildkitd.sock` (каталог — `tmpfiles.d`, доступ группе `omnia-buildkit` по
+  ACL, поэтому переживает reboot и пересоздание сокета). Клиент `/usr/local/bin/buildctl` вынимается
+  из того же образа, так что версии клиента и демона всегда совпадают;
+- контракт для остального конвейера не меняется: `buildctl build --output type=docker` стримит
+  образ прямо в `docker load`, дальше — тот же immutable image id, та же проверка инвентаря,
+  тот же запуск контейнера / перенос на BYO-VPS / prune. Тайм-ауты (840 с на две попытки), одна
+  повторная попытка, убийство процессов при отмене и хвост лога в ошибке — как у `docker build`.
+  Для рантаймов, которые тянут образ из реестра, в модуле есть `build_and_push`
+  (`type=image,push=true` с кредами `IMAGE_REGISTRY_*`), сейчас он никем не вызывается.
+
+**Как включить (по одному хосту ячеек, сначала commerce, потом core):**
+
+```bash
+cd infra/max-k3s && . ./lib.sh
+run_remote commerce cells/50-buildkit-rootless.sh zeuszcz     # ждём BUILDKIT_ROOTLESS_DONE …
+ssh max-commerce 'sudo -u zeuszcz /usr/local/bin/buildctl --addr unix:///run/omnia-buildkit/buildkitd.sock debug workers'
+# .env оркестратора: скрипт уже дописал BUILDKIT_SOCKET / BUILDCTL_BINARY / BUILD_BACKEND=docker
+ssh max-commerce "sudo sed -i 's/^BUILD_BACKEND=.*/BUILD_BACKEND=buildkit/' /opt/omnia/apps/orchestrator/.env \
+  && sudo systemctl restart omnia-orchestrator && curl -s 127.0.0.1:8003/health"   # когда нет активных деплоев
+```
+
+Перезапуск обязателен: членство пользователя в группе `omnia-buildkit` работающий сервис не видит.
+Проверка после включения — публикация любого проекта на этом хосте: в `journalctl -u
+omnia-orchestrator` появляются `deploy.build_backend backend=buildkit` и `buildkit.build_image_done`,
+а `docker top omnia-buildkitd` во время сборки показывает процессы под uid 1000, не root.
+
+**Откат:** `BUILD_BACKEND=docker` в `.env` + `systemctl restart omnia-orchestrator` — снова
+`docker build` через демон; контейнер `omnia-buildkitd` можно оставить (он ничего не делает без
+запросов) или снять `docker rm -f omnia-buildkitd`. Ничего в базе/журналах не зависит от бэкенда.
+
+**Что осталось / риски.** (1) Скрипт написан по документации BuildKit и Ubuntu 24.04, живой прогон
+на core/commerce — часть включения, его результат (какой режим выбран: `mode.env` в
+`/opt/omnia-runtime/buildkit/`) надо записать в отчёт. (2) Docker Hub для `FROM node:22-slim` тянет
+buildkitd анонимно, как раньше dockerd, — кэш в томе снимает лимит после первой сборки. (3) Шаги
+сборки по-прежнему имеют выход в интернет и, через FORWARD, в WireGuard-сеть; allowlist исходящего
+трафика сборок — следующий шаг, как и для ячеек. (4) Образы dev-шаблонов (`Dockerfile.dev`,
+доверенные, из репозитория) по-прежнему собираются через dockerd — это наш код, не пользователя.

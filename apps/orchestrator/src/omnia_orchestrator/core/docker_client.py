@@ -1684,6 +1684,36 @@ async def image_path_inventory(
     return await asyncio.to_thread(_do)
 
 
+def image_id_for_tag(tag: str) -> str:
+    """Blocking: the immutable `sha256:<64 hex>` id the local daemon holds for `tag`.
+
+    Shared by every build backend: whatever produced the image (root `docker
+    build` or a rootless buildkitd + `docker load`), the deploy pipeline pins
+    containers, inventories and pushes to this identity, never to the mutable tag.
+    """
+    try:
+        image_id = str(_get_client().images.get(tag).id)
+    except Exception as exc:
+        raise OrchestratorError(
+            code="container_failure",
+            message=f"prod build image identity unavailable: {exc}",
+            status_code=500,
+        ) from exc
+    prefix, separator, digest = image_id.partition(":")
+    if (
+        prefix != "sha256"
+        or separator != ":"
+        or len(digest) != 64
+        or any(char not in "0123456789abcdef" for char in digest)
+    ):
+        raise OrchestratorError(
+            code="container_failure",
+            message="prod build returned an invalid immutable image id",
+            status_code=500,
+        )
+    return image_id
+
+
 async def build_image(
     context_dir: str,
     dockerfile: str,
@@ -1762,30 +1792,7 @@ async def build_image(
                     raise
                 raise _timeout_error() from exc
             if process.returncode == 0:
-                def _image_id() -> str:
-                    try:
-                        image_id = str(_get_client().images.get(tag).id)
-                    except Exception as exc:
-                        raise OrchestratorError(
-                            code="container_failure",
-                            message=f"prod build image identity unavailable: {exc}",
-                            status_code=500,
-                        ) from exc
-                    prefix, separator, digest = image_id.partition(":")
-                    if (
-                        prefix != "sha256"
-                        or separator != ":"
-                        or len(digest) != 64
-                        or any(char not in "0123456789abcdef" for char in digest)
-                    ):
-                        raise OrchestratorError(
-                            code="container_failure",
-                            message="prod build returned an invalid immutable image id",
-                            status_code=500,
-                        )
-                    return image_id
-
-                return await asyncio.to_thread(_image_id)
+                return await asyncio.to_thread(image_id_for_tag, tag)
             detail = (output or b"").decode("utf-8", errors="replace").strip()
             detail = detail[-_BUILD_ERROR_DETAIL_CHARS:]
             failure = OrchestratorError(
