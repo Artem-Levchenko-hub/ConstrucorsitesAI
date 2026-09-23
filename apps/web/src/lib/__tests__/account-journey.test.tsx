@@ -10,6 +10,24 @@ vi.mock("@/lib/api/wallet", () => ({ getWallet: async () => ({ balance_rub: 1234
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 const payment = { id: "pay-1", purpose: "wallet_topup", subscription_id: null, package_code: "start", amount_rub: "777", credit_rub: "888", status: "pending", confirmation_url: null, created_at: "2026-09-07T00:00:00Z" };
 const plan = { id: "pro-1", code: "pro", version: 1, name: "Pro", price_rub: "999", billing_interval: "month", included_credit_rub: "456", entitlements: { max_projects: 7, team_seats: 3, static_publish_slots: 5, always_on_slots: 2, integrations: false } };
+// Free v2 stores `null` for "no limit" on apps and publications.
+const freePlan = { id: "free-2", code: "free", version: 2, name: "Free", price_rub: "0.00", billing_interval: "month", included_credit_rub: "0", entitlements: { max_projects: null, team_seats: 1, static_publish_slots: null, always_on_slots: 0, integrations: true } };
+const usage = {
+  period: { start: "2026-09-01T00:00:00Z", end: "2026-09-23T12:00:00Z", source: "calendar_month" },
+  plan: freePlan, subscription_status: "active",
+  generations: { calls: 12, cost_rub: "48.5000", tokens_in: 100, tokens_out: 20, total: 5, completed: 4, failed: 1, cancelled: 0, active: 0 },
+  app_ai_answers: { calls: 30, cost_rub: "3.2000", tokens_in: 0, tokens_out: 0 },
+  other_ai: { calls: 0, cost_rub: "0", tokens_in: 0, tokens_out: 0 },
+  publications: { total: 3, projects: 2 },
+  free_generations: { limit: 3, used: 3, left: 0, unlimited: false },
+  wallet: { balance_rub: "100.0000", debited_rub: "51.7000", credited_rub: "50.0000", charges: 7 },
+  entitlements: [
+    { key: "max_projects", label: "Приложений", kind: "limit", limit: null, used: 2, exceeded: false },
+    { key: "static_publish_slots", label: "Опубликованных приложений", kind: "limit", limit: 1, used: 2, exceeded: true },
+    { key: "integrations", label: "Интеграции", kind: "flag", enabled: true, used: 1, exceeded: false },
+  ],
+  total_ai_cost_rub: "51.7000",
+};
 let config: unknown, payments: unknown, post: (body: Record<string, unknown>) => Promise<Response>, requests: Record<string, unknown>[];
 let sessionError = false;
 beforeEach(() => {
@@ -24,7 +42,8 @@ beforeEach(() => {
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
-    if (path === "/api/billing/plans") return Response.json([plan]);
+    if (path === "/api/billing/plans") return Response.json([freePlan, plan]);
+    if (path === "/api/billing/usage") return Response.json(usage);
     if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: { ...plan, code: "free", id: "free", name: "Free" }, status: "active", auto_renew: false, cancel_at_period_end: false });
     if (path === "/api/auth/sessions") return sessionError ? Promise.reject(new Error("Sessions offline")) : Response.json([{ id: "current", current: true, user_agent: "Macintosh", ip_address: "127.0.0.1", created_at: "2026-09-06", last_seen_at: "2026-09-07" }]);
     return new Response(null, { status: 204 });
@@ -145,7 +164,33 @@ it("keeps failed deletion in the dialog and preserves exact-email confirmation",
 });
 it("compares publication capacity and integrations from actual entitlements", async () => {
   const app = await mount("plan");
-  try { await wait(() => expect(button("Выбрать Pro")).toBeDefined()); const entries = [...document.querySelectorAll("article dl > div")].map(row => row.textContent); expect(entries).toContain("Публикаций5"); expect(entries).toContain("Постоянно работающих приложений2"); expect(entries).toContain("ИнтеграцииНет"); } finally { await app.close(); }
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    const entries = [...document.querySelectorAll("article dl > div")].map(row => row.textContent);
+    expect(entries).toContain("Публикаций5"); expect(entries).toContain("Постоянно работающих приложений2"); expect(entries).toContain("ИнтеграцииНет");
+    // Free v2: `null` is "no limit", never "null" or a dash.
+    expect(entries).toContain("ПроектовБез ограничений"); expect(entries).toContain("ПубликацийБез ограничений"); expect(entries).toContain("ИнтеграцииДа");
+    expect(document.body.textContent).not.toContain("null");
+  } finally { await app.close(); }
+});
+
+it("shows the period's spend and the plan's use next to each limit", async () => {
+  const app = await mount("billing");
+  try {
+    const panel = () => document.querySelector('[aria-label="Расход за период"]')!;
+    await wait(() => expect(panel().textContent).toContain("Сборки приложений"));
+    const text = panel().textContent!;
+    expect(text).toContain("текущий месяц");
+    expect(text).toContain("тариф Free");
+    expect(text).toContain("завершено 4, с ошибкой 1");
+    expect(text).toContain("Ответы ИИ посетителям приложений30");
+    expect(text).toContain("приложений опубликовано: 2");
+    expect(text).toContain("осталось 0 из 3");
+    const rows = [...panel().querySelectorAll("li")].map(row => row.textContent);
+    expect(rows).toContain("Приложений2 · без ограничений");
+    expect(rows).toContain("Опубликованных приложений2 из 1сверх тарифа");
+    expect(rows).toContain("Интеграцииподключено: 1");
+  } finally { await app.close(); }
 });
 it("keeps every operation labelled and semantically tabular when mobile rows reflow", async () => {
   payments = [payment];

@@ -4,6 +4,9 @@ import { Button } from "@/components/ui/button";
 import { getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
 import type { PaymentJourney } from "./PaymentCheckout";
 import { date, money, QueryError } from "./account-presentation";
+// A plan stores `null` for "no limit" (Free v2: apps and publications are not
+// capped); a missing key is shown as unknown rather than as a limit.
+const limit = (value: unknown) => value === null ? "Без ограничений" : value === undefined ? "—" : String(value);
 export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
   const client = useQueryClient();
   const plans = useQuery({ queryKey: ["billing-plans"], queryFn: listBillingPlans });
@@ -48,15 +51,15 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
           <dl>
             <div>
               <dt>Проектов</dt>
-              <dd>{String(plan.entitlements.max_projects ?? "—")}</dd>
+              <dd>{limit(plan.entitlements.max_projects)}</dd>
             </div>
             <div>
               <dt>Мест в команде</dt>
-              <dd>{String(plan.entitlements.team_seats ?? "—")}</dd>
+              <dd>{limit(plan.entitlements.team_seats)}</dd>
             </div>
             {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"], ["custom_domains", "Своих доменов"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
               <dt>{label}</dt>
-              <dd>{String(plan.entitlements[key])}</dd>
+              <dd>{limit(plan.entitlements[key])}</dd>
             </div>)}
             {typeof plan.entitlements.integrations === "boolean" && <div>
               <dt>Интеграции</dt>

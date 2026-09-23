@@ -67,6 +67,16 @@
 .account-package { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; border-top: 1px solid var(--color-border-subtle); }
 .account-package strong { font-size: 22px; font-weight: 550; }
 .account-package p { font-size: 12px; color: var(--color-fg-secondary); margin-top: 5px; }
+.account-usage { grid-column: 1 / -1; }
+.account-usage h3 { font-size: 13px; font-weight: 550; margin: 26px 0 10px; }
+.account-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px 24px; margin-top: 18px; }
+.account-usage-grid dt { font-size: 11px; color: var(--color-fg-secondary); }
+.account-usage-grid dd { font-size: 22px; font-weight: 550; margin-top: 6px; }
+.account-usage-grid dd small { display: block; font-size: 11px; font-weight: 400; color: var(--color-fg-secondary); margin-top: 4px; line-height: 1.5; }
+.account-usage-entitlements { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.account-usage-entitlements li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--color-border-subtle); font-size: 13px; }
+.account-usage-entitlements strong { font-weight: 550; white-space: nowrap; }
+.account-usage-entitlements li.exceeded strong, .account-usage-entitlements em { color: #a22f28; font-style: normal; font-size: 11px; }
 .account-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .account-section-heading label { margin: 0; }
 .account-section-heading select { margin-left: 8px; }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-integrations";
+import { describeApiError } from "@/lib/api/errors";
 import { createProject, listProjects } from "@/lib/api/projects";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import { buildMaxProjectPrompt, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
@@ -164,7 +165,7 @@ export function MaxStudio({ email }: { email: string }) {
     },
     onError: (error: unknown) => {
       toast.error("Не удалось создать приложение", {
-        description: error instanceof Error ? error.message : "Попробуйте ещё раз.",
+        description: describeApiError(error, "Попробуйте ещё раз."),
       });
     },
   });

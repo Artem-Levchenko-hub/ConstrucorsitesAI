@@ -60,6 +60,55 @@ export type Subscription = {
   plan: BillingPlan;
 };
 
+/** One kind of AI spend in the period (gateway ledger rows). */
+export type UsageAIBucket = {
+  calls: number;
+  cost_rub: string;
+  tokens_in: number;
+  tokens_out: number;
+};
+
+export type EntitlementUsage = {
+  key: string;
+  label: string;
+  kind: "limit" | "flag";
+  // null = no limit on this plan (kind "limit" only).
+  limit?: number | null;
+  // kind "flag" only: whether the plan includes the feature.
+  enabled?: boolean | null;
+  used: number;
+  exceeded: boolean;
+};
+
+/** GET /api/billing/usage — the account's spend journal for a period. */
+export type BillingUsage = {
+  period: { start: string; end: string; source: "subscription" | "calendar_month" | "custom" };
+  plan: BillingPlan | null;
+  subscription_status: string | null;
+  generations: UsageAIBucket & {
+    total: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    active: number;
+  };
+  app_ai_answers: UsageAIBucket;
+  other_ai: UsageAIBucket;
+  publications: { total: number; projects: number };
+  free_generations: { limit: number; used: number; left: number; unlimited: boolean };
+  wallet: { balance_rub: string; debited_rub: string; credited_rub: string; charges: number };
+  entitlements: EntitlementUsage[];
+  total_ai_cost_rub: string;
+};
+
+export function getBillingUsage(range?: { from?: string; to?: string }): Promise<BillingUsage> {
+  const params = new URLSearchParams();
+  if (range?.from) params.set("from", range.from);
+  if (range?.to) params.set("to", range.to);
+  const query = params.toString();
+  return apiFetch<BillingUsage>(`/api/billing/usage${query ? `?${query}` : ""}`);
+}
+
 export function listSessions(): Promise<AuthSession[]> {
   return apiFetch<AuthSession[]>("/api/auth/sessions");
 }
