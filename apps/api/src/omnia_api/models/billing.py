@@ -23,13 +23,31 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from omnia_api.models.base import Base
 
-FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000001")
+# Free v1 (migration 0035) limited an account to one project, no publications and
+# no integrations. The owner's model of 2026-09-17 is different: Free gives full
+# access to building and publishing MAX apps, the only quotas are generations and
+# the app's own visitor traffic, and a Free app merely sleeps when idle. Plan
+# terms are immutable rows, so migration 0070 ships that model as Free v2 and
+# moves every live Free subscription onto it; v1 stays for history.
+FREE_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000001")
+FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000004")
 PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000002")
 BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000003")
 
+# Entitlement keys the platform enforces. A numeric key set to ``null`` (or
+# missing) means "no limit"; a flag key missing means "allowed".
+ENTITLEMENT_LIMIT_KEYS: Final[tuple[str, ...]] = (
+    "max_projects",
+    "static_publish_slots",
+    "always_on_slots",
+    "team_seats",
+    "custom_domains",
+)
+ENTITLEMENT_FLAG_KEYS: Final[tuple[str, ...]] = ("integrations",)
+
 DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
     {
-        "id": FREE_PLAN_ID,
+        "id": FREE_PLAN_V1_ID,
         "code": "free",
         "version": 1,
         "name": "Free",
@@ -43,6 +61,26 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "team_seats": 1,
             "custom_domains": 0,
             "integrations": False,
+            "preview_idle_minutes": 15,
+        },
+        "sort_order": 0,
+        "is_active": False,
+    },
+    {
+        "id": FREE_PLAN_ID,
+        "code": "free",
+        "version": 2,
+        "name": "Free",
+        "price_rub": Decimal("0.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "max_projects": None,
+            "static_publish_slots": None,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "custom_domains": 0,
+            "integrations": True,
             "preview_idle_minutes": 15,
         },
         "sort_order": 0,

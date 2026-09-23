@@ -22,8 +22,13 @@ async def test_public_plan_catalog_is_versioned_and_ordered(
     assert response.status_code == 200
     plans = response.json()
     assert [plan["code"] for plan in plans] == ["free", "pro", "business"]
-    assert [plan["version"] for plan in plans] == [1, 1, 1]
+    # Free v2 (migration 0070) carries the owner's model: no cap on apps or
+    # publications, integrations included; only v2 is active for `free`.
+    assert [plan["version"] for plan in plans] == [2, 1, 1]
     assert [plan["price_rub"] for plan in plans] == ["0.00", "1490.00", "4990.00"]
+    assert plans[0]["entitlements"]["max_projects"] is None
+    assert plans[0]["entitlements"]["static_publish_slots"] is None
+    assert plans[0]["entitlements"]["integrations"] is True
     assert plans[1]["included_credit_rub"] == "500.0000"
     assert plans[2]["entitlements"]["always_on_slots"] == 1
 
@@ -144,7 +149,7 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     assert exported.status_code == 200
     [exported_subscription] = exported.json()["subscriptions"]
     assert exported_subscription["plan"]["code"] == "free"
-    assert exported_subscription["plan"]["version"] == 1
+    assert exported_subscription["plan"]["version"] == 2
     [exported_entry] = exported.json()["wallet_ledger"]
     assert exported_entry["type"] == "payment"
     assert exported_entry["external_ref"] == f"payment:{payment_id}"

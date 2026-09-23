@@ -142,6 +142,11 @@ class Settings(BaseSettings):
     restoration_reconcile_lease_seconds: int = Field(default=60, ge=10)
     billing_renewal_retry_hours: int = Field(default=12, ge=1)
     billing_grace_days: int = Field(default=3, ge=1)
+    # Server-side plan limits (projects, publish slots, integrations flag). The
+    # usage report always shows what is used against the plan; this switch only
+    # decides whether an action over the limit is refused (402) or merely logged.
+    # Kill switch for an incident, not a product setting: keep it on.
+    enforce_plan_entitlements: bool = Field(default=True)
 
     # OAuth applications for customer-owned business integrations. When a
     # provider pair is absent, Integration Hub keeps the verified credential

@@ -92,6 +92,10 @@ ErrorCode = Literal[
     "subscription_consent_required",
     "subscription_management_unavailable",
     "subscription_entitlement_required",
+    # A numeric plan limit (projects, publish slots, always-on slots) is used up.
+    # `details` carries {entitlement, limit, used, plan_code, plan_version} so
+    # the client can say exactly which limit and by how much.
+    "entitlement_exceeded",
     "refund_unavailable",
     "refund_balance_used",
 ]

@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_retired_business_profiles_is_the_only_head() -> None:
+def test_billing_usage_events_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0069_retire_business_profiles"]
+    assert heads == ["0070_billing_usage_events"]
+    assert chain["0070_billing_usage_events"] == "0069_retire_business_profiles"
     assert chain["0069_retire_business_profiles"] == "0068_project_cell_orchestrator"
     assert chain["0068_project_cell_orchestrator"] == "0067_restoration_adaptation_activation"
     assert chain["0067_restoration_adaptation_activation"] == ("0066_restoration_adapting_state")
@@ -229,7 +230,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0069_retire_business_profiles"
+        "0070_billing_usage_events"
     )
     assert (
         database.fetchval(
@@ -237,6 +238,21 @@ def test_restoration_adaptation_migrations_roundtrip(
             "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
         )
         == 1
+    )
+    # 0070: the usage journal exists and Free v2 is the only active Free
+    assert database.fetchval("SELECT to_regclass('billing_usage_events')") is not None
+    assert [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT version, is_active FROM billing_plans WHERE code = 'free' ORDER BY version"
+        )
+    ] == [(1, False), (2, True)]
+    assert (
+        database.fetchval(
+            "SELECT entitlements->'max_projects' FROM billing_plans "
+            "WHERE code = 'free' AND version = 2"
+        )
+        == "null"
     )
     # 0069: business identity tables are gone; integrations hang off the user
     assert database.fetchval("SELECT to_regclass('business_profiles')") is None
@@ -274,9 +290,17 @@ def test_restoration_adaptation_migrations_roundtrip(
         == 0
     )
     assert database.fetchval("SELECT to_regclass('business_profiles')") is not None
+    # 0070 downgrade: Free v1 is active again and v2 is gone with its journal
+    assert database.fetchval("SELECT to_regclass('billing_usage_events')") is None
+    assert [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT version, is_active FROM billing_plans WHERE code = 'free' ORDER BY version"
+        )
+    ] == [(1, True)]
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0069_retire_business_profiles"
+        "0070_billing_usage_events"
     )
 
 

@@ -48,6 +48,10 @@ class ChatMetadata(BaseModel):
     # Public mini-app calls require confirmed wallet access/debit. Legacy
     # generation requests retain their existing billing failure policy.
     require_billing: bool = False
+    # Optional ledger label for the `usage.stage` column, e.g. `runtime_ai` for
+    # an answer to a published app's visitor. The API's account usage report
+    # groups rows by it; unknown values are stored as-is.
+    stage: str | None = Field(default=None, max_length=80)
 
 
 class ChatCompletionRequest(BaseModel):
@@ -219,6 +223,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 cost_rub=cost_rub,
                 description=f"Completion via {actual_model}",
                 free=meta.free,
+                stage=meta.stage,
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc

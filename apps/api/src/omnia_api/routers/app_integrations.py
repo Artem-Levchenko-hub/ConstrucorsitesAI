@@ -36,6 +36,7 @@ from omnia_api.schemas.app_integration import (
 )
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.services import integration_oauth, integration_providers
+from omnia_api.services.entitlements import assert_integrations_allowed
 from omnia_api.services.integration_credentials import load_credentials
 from omnia_api.services.max_access import require_max_studio_access
 
@@ -376,6 +377,8 @@ async def connect_integration(
 ) -> AppIntegrationPublic:
     await _owned_max_project(session, project_id, current_user.id)
     require_max_studio_access(current_user)
+    # Plan flag `integrations` (402 `subscription_entitlement_required`).
+    await assert_integrations_allowed(session, current_user.id)
     try:
         provider = integration_providers.get_provider(provider_key)
         if not provider.available or not provider.fields:
@@ -438,6 +441,7 @@ async def bind_existing_integration(
             status.HTTP_409_CONFLICT,
         )
     require_max_studio_access(current_user)
+    await assert_integrations_allowed(session, current_user.id)
     connection = await _account_connection(session, current_user.id, provider_key)
     if connection is None:
         raise ApiError(
@@ -462,6 +466,7 @@ async def apply_recommended_pack(
 ) -> IntegrationPackApplyPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
     require_max_studio_access(current_user)
+    await assert_integrations_allowed(session, current_user.id)
     connections = list(
         (
             await session.execute(
@@ -624,6 +629,7 @@ async def start_integration_oauth(
 ) -> IntegrationOAuthStartPublic:
     await _owned_max_project(session, project_id, current_user.id)
     require_max_studio_access(current_user)
+    await assert_integrations_allowed(session, current_user.id)
     provider = integration_providers.get_provider(provider_key)
     if not provider.oauth_supported or not _oauth_available(provider_key):
         raise ApiError(

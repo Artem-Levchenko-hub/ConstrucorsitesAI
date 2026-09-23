@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 from sqlalchemy import select
 
 from omnia_api.core.config import get_settings
@@ -10,10 +11,12 @@ from omnia_api.core.errors import ApiError
 from omnia_api.models.billing import BillingPaymentMethod, BillingPlan, Subscription
 from omnia_api.schemas.billing import (
     BillingPlanPublic,
+    BillingUsagePublic,
     SubscriptionAction,
     SubscriptionPublic,
 )
 from omnia_api.services.billing_accounts import resolve_billing_account
+from omnia_api.services.billing_usage import build_usage_report
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
@@ -76,6 +79,27 @@ async def list_plans(session: SessionDep) -> list[BillingPlan]:
                 .order_by(BillingPlan.sort_order, BillingPlan.code)
             )
         ).scalars()
+    )
+
+
+@router.get("/usage", response_model=BillingUsagePublic)
+async def get_usage(
+    current_user: CurrentUserDep,
+    session: SessionDep,
+    period_start: Annotated[datetime | None, Query(alias="from")] = None,
+    period_end: Annotated[datetime | None, Query(alias="to")] = None,
+) -> BillingUsagePublic:
+    """The account's spend journal: builds, app AI answers, publications, wallet
+    movements and every plan entitlement next to its current use.
+
+    Without `from`/`to` the window is the paid subscription period, or the
+    current calendar month (UTC) on Free.
+    """
+    return await build_usage_report(
+        session,
+        current_user,
+        period_start=period_start,
+        period_end=period_end,
     )
 
 

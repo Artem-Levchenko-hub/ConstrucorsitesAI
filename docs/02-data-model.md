@@ -197,6 +197,17 @@ CHECK требует `scope = 'personal'` и заполненный `personal_us
 старой. Триггер БД разрешает у существующего тарифа изменить только
 `is_active`; попытка переписать цену, лимиты или номер версии отклоняется.
 
+Семантика `entitlements` (читает `services/entitlements.py`): числовой ключ
+(`max_projects`, `static_publish_slots`, `always_on_slots`, `team_seats`,
+`custom_domains`) со значением `null` или отсутствующий = без ограничений,
+число = не больше N; флаг (`integrations`) отсутствующий = разрешено, `false`
+= не входит в тариф. Free v1 (`…0001`, миграция `0035`: 1 проект, 0
+публикаций, без интеграций) с миграции `0070` неактивен; действующий Free v2
+(`…0004`) несёт модель владельца от 17.09.2026 — `max_projects: null`,
+`static_publish_slots: null`, `integrations: true`, `always_on_slots: 0`.
+Живые Free-подписки переведены на v2 той же миграцией (исключение для «Free
+бесплатен — ничего не куплено»); завершённые остаются на v1 для истории.
+
 ### `subscriptions`
 
 | Поле | Тип | Constraints |
@@ -250,6 +261,38 @@ partial unique index: одновременно может ожидаться т�
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 
 Эту таблицу пишет **LLM Gateway** (агент C) после каждого запроса. Отдельно от `wallet_charges`, потому что usage — аналитика, charges — финансы (могут быть несоответствия и их надо видеть отдельно).
+
+Колонка `stage` (text, NULL) — метка стадии для отчёта: шлюз пишет её из
+`metadata.stage` запроса (`native_agent`, `verification`, …); ответы ИИ
+посетителям опубликованного приложения помечены `runtime_ai`, по ним
+`GET /api/billing/usage` отделяет расход приложений от сборок. Строка с
+`run_id` — расход сборки, остальное без `runtime_ai` — «прочие AI-операции».
+
+### `billing_usage_events` (журнал расхода аккаунта, миграция `0070`)
+
+| Поле | Тип | Constraints |
+|---|---|---|
+| `id` | uuid | PK |
+| `billing_account_id` | uuid | FK → `billing_accounts(id)` ON DELETE RESTRICT |
+| `user_id` | uuid | Актор, FK → `users(id)` ON DELETE CASCADE |
+| `project_id` | uuid | NULL, FK → `projects(id)` ON DELETE SET NULL |
+| `kind` | text | Сейчас только `publication` |
+| `quantity` | integer | NOT NULL DEFAULT 1, `> 0` |
+| `cost_rub` | numeric(12, 4) | NOT NULL DEFAULT 0, `>= 0` |
+| `external_ref` | text | NULL, UNIQUE — идемпотентность, напр. `publication:<project_id>:<idempotency_key>` |
+| `details` | jsonb | `{backend, slug, commit_sha}` |
+| `created_at` | timestamptz | NOT NULL DEFAULT now() |
+
+**Индексы:** `(billing_account_id, kind, created_at)`, `(project_id, kind)`.
+
+Сюда пишутся события расхода, у которых нет другого следа в базе платформы.
+Генерации уже долговечны (`generation_runs` + `usage`), а публикация раньше
+существовала только в журнале оркестратора на хосте — теперь API записывает
+её после того, как контроллер принял релиз (`services/entitlements.py`,
+`record_publication`). `project_id` обнуляется при удалении проекта: слот
+публикации освобождается, но факт публикации в периоде сохраняется. По этой
+таблице считаются `publications` в отчёте и занятость `static_publish_slots`
+(число различных существующих проектов с событием `publication`).
 
 ## V3 расширения (multi-stack + onboarding + linked-repo)
 
@@ -404,6 +447,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0038` | версия согласия на renewal, guard одного ожидающего продления и канонический keep-alive проекта | Codex |
 | `0046` | `project_memory_revisions` + точная связь generation run с user message | Codex |
 | `0069` | бизнес-профили, участники и их квоты удалены; `app_integrations.user_id` вместо `business_id`, `billing_accounts` только личные, ФНС-проверки нет | Claude |
+| `0070` | `billing_usage_events` (журнал публикаций аккаунта); Free v2 по модели владельца (без лимита приложений и публикаций, интеграции включены), живые Free-подписки переведены на v2, v1 неактивен | Claude |
 
 ## Trigger для `updated_at`
 
@@ -444,6 +488,6 @@ users ─┬─< projects ─< snapshots ─┐ (parent_id, само-FK)
        │          ├─ wallets (1:1)
        │          ├─< subscriptions >─ billing_plans
        │          │          └─ billing_payment_methods
-       │          └─< wallet_charges, payments
+       │          └─< wallet_charges, payments, billing_usage_events
        └─< usage
 ```
