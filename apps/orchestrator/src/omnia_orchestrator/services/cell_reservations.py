@@ -15,6 +15,7 @@ from omnia_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
     CellFenceRejected,
     CellResourceProfile,
+    CellVerificationBudgetTooSmall,
     HostCapacitySnapshot,
     LifecycleMutation,
 )
@@ -280,6 +281,16 @@ class CellCapacityReservationStore:
                 ),
             )
             if not decision.allowed:
+                if decision.reason == "verification_budget_too_small":
+                    # С числами: без них оператор видел только «не хватило
+                    # ёмкости» и шёл искать свободные ядра, которых и так было
+                    # вдоволь. Чинится не хостом, а настройкой.
+                    raise CellVerificationBudgetTooSmall(
+                        "настроенный бюджет проверок "
+                        f"{admission_gate.verification_cpu_cores:g} ядра меньше одной "
+                        f"проверочной ячейки ({quantities.cpu_cores:g} ядра); "
+                        "поднимите CELL_VERIFICATION_CPU_CORES"
+                    )
                 raise CellCapacityUnavailable(decision.reason)
         created_at = (now or datetime.now(UTC)).astimezone(UTC)
         reservation = CellCapacityReservation(

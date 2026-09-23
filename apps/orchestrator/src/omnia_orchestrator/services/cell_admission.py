@@ -266,6 +266,12 @@ class CellAdmissionGate:
         # Accurate summation needs no tolerance that could admit real excess.
         cpu_used = reserved_capacity.cpu_cores if cpu_reserved is None else cpu_reserved
         if self.workload == "verification":
+            # Порядок проверок — суть правки. Бюджет меньше одного кандидата
+            # делает «занято» истинным всегда, и временная причина навсегда
+            # закрывала собой постоянную: на проде откат отказывал на пустом
+            # хосте, а отказ читался как «сейчас занято, повторите позже».
+            if required.cpu_cores > self.verification_cpu_cores:
+                return AdmissionDecision(False, "verification_budget_too_small")
             if fsum((cpu_used, required.cpu_cores)) > self.verification_cpu_cores:
                 return AdmissionDecision(False, "insufficient_verification_cpu")
         elif fsum((

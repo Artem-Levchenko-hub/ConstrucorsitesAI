@@ -13,7 +13,12 @@ from uuid import UUID
 
 import structlog
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict, WorkspaceLockTimeout
+from omnia_orchestrator.core.cell_resources import (
+    CellCapacityUnavailable,
+    CellIdentityConflict,
+    CellVerificationBudgetTooSmall,
+    WorkspaceLockTimeout,
+)
 from omnia_orchestrator.schemas.code_restoration import (
     CodeRestorationApply,
     CodeRestorationCancel,
@@ -35,6 +40,31 @@ _REPORT_LISTS = (
     "next_actions",
 )
 _log = structlog.get_logger("code_restorations")
+
+_CAPACITY_SENTENCES = {
+    "insufficient_cpu": "Не хватает свободных ядер на сервере; повторите позже.",
+    "insufficient_memory": "Не хватает свободной памяти на сервере; повторите позже.",
+    "insufficient_disk": "Не хватает свободного места на сервере; повторите позже.",
+    "insufficient_inodes": "Не хватает свободных файловых записей на сервере; повторите позже.",
+    "insufficient_verification_cpu": (
+        "Сейчас идут другие проверки и свободного бюджета нет; повторите позже."
+    ),
+    "daemon_filesystem_unverifiable": "Не удалось проверить состояние дисков сервера.",
+}
+
+
+def _capacity_reason(exc: BaseException) -> str | None:
+    """Причина отказа словами — или ничего, если сказать по существу нечего.
+
+    Ресурсные отказы — единственные, где у владельца есть осмысленное действие
+    («подождать» или «позвать оператора»); остальные исключения переводить в
+    текст нельзя, их содержимое не предназначено для чужих глаз.
+    """
+    if isinstance(exc, CellVerificationBudgetTooSmall):
+        return f"Ошибка настройки сервера: {exc}."
+    if isinstance(exc, CellCapacityUnavailable):
+        return _CAPACITY_SENTENCES.get(exc.reason)
+    return None
 
 
 class RestorationEngine(Protocol):
@@ -504,8 +534,18 @@ class CodeRestorationService:
             # Another controller still owns execution; it owns the outcome too.
             return
         except Exception as exc:
-            _log.warning("operation_requires_attention", error_type=type(exc).__name__)
-            if await self._commit_drive_failure(workspace, operation):
+            # Нехватка ресурсов и неверная настройка — единственные отказы, про
+            # которые владельцу есть что сказать по существу, и ровно они
+            # прятались за общей фразой «не удалось завершить проверку». Живой
+            # случай: откат отказывал безусловно, а в журнале оставалось одно
+            # имя класса исключения — по нему причину было не найти.
+            reason = _capacity_reason(exc)
+            _log.warning(
+                "operation_requires_attention",
+                error_type=type(exc).__name__,
+                reason=reason,
+            )
+            if await self._commit_drive_failure(workspace, operation, reason=reason):
                 self._schedule_cancel(workspace, operation)
 
     async def _cancel_drive(self, workspace: UUID, operation: UUID) -> None:
@@ -544,7 +584,9 @@ class CodeRestorationService:
             saved["revision"] += 1
             self._write(saved)
 
-    async def _commit_drive_failure(self, workspace: UUID, operation: UUID) -> bool:
+    async def _commit_drive_failure(
+        self, workspace: UUID, operation: UUID, *, reason: str | None = None
+    ) -> bool:
         """CAS a drive error without overwriting a terminal cancellation receipt."""
         async with self._lock.hold(workspace):
             saved = self._read(workspace, operation)
@@ -556,13 +598,16 @@ class CodeRestorationService:
                 if cancellation
                 else ("reconciling" if saved["apply"] is not None else "failed")
             )
+            failure = "Не удалось завершить проверку восстановления."
+            if reason is not None:
+                failure = f"{failure} {reason}"
             saved.update(
                 state=state,
                 phase=state,
                 error=(
                     "Не удалось подтвердить остановку и очистку восстановления."
                     if cancellation
-                    else "Не удалось завершить проверку восстановления."
+                    else failure
                 ),
             )
             saved["revision"] += 1

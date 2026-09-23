@@ -78,6 +78,18 @@ class CellCapacityUnavailable(CellResourceError):
         super().__init__(reason)
 
 
+class CellVerificationBudgetTooSmall(CellResourceError):
+    """Бюджет проверок настроен меньше одной проверочной ячейки.
+
+    Это не нехватка ёмкости, а ошибка настройки, и различие принципиально:
+    нехватка проходит сама, когда освободится хост, а бюджет меньше одного
+    кандидата не пройдёт никогда — сколько ни повторяй. Пока обе беды
+    назывались `insufficient_verification_cpu`, откат на проде отказывал
+    безусловно (1.45 ядра запроса против бюджета в 1.0) и выглядел при этом
+    как временная занятость, поэтому никто и не чинил.
+    """
+
+
 class CellIdentityConflict(CellResourceError):
     """A named Docker resource exists with mismatched identity labels."""
 
