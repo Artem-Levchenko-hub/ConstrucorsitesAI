@@ -154,8 +154,9 @@ export function MaxOnboarding({ email }: { email: string }) {
             </div>
             <h2 className="mt-5 text-2xl font-semibold">Email подтверждён</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-fg-secondary">
-              Открываем MAX Studio. Реквизиты бизнеса и секрет бота не нужны для
-              создания проекта, первой генерации и безопасного превью.
+              Открываем MAX Studio. Реквизиты бизнеса не нужны вообще, а секрет
+              бота — только перед публикацией: проект, первая генерация и превью
+              доступны сразу.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
               <Button
