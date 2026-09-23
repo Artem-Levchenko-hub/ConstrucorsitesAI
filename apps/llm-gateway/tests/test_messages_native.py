@@ -8,6 +8,7 @@ import hmac
 import json
 import time
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -750,6 +751,12 @@ def test_project_cell_endpoint_rejects_duplicate_jti_before_provider(
         )
 
     monkeypatch.setattr(messages_native, "_post_llmgw", fake_post)
+    # Замок живёт ровно столько, сколько осталось токену, и это считается от
+    # текущего времени. Пока часы шли сами по себе, между выпуском токена и
+    # проверкой могла тикнуть секунда — и тест падал на 59 вместо 60, роняя
+    # main на ровном месте. Останавливаем часы: проверяем правило, а не удачу.
+    frozen = int(time.time())
+    monkeypatch.setattr(runner_auth, "time", SimpleNamespace(time=lambda: float(frozen)))
     payload = {
         "model": "claude-sonnet-5",
         "metadata": {
@@ -766,12 +773,12 @@ def test_project_cell_endpoint_rejects_duplicate_jti_before_provider(
 
     first = client.post(
         "/v1/project-cell/messages",
-        headers={"Authorization": f"Bearer {_runner_token()}"},
+        headers={"Authorization": f"Bearer {_runner_token(now=frozen)}"},
         json=payload,
     )
     second = client.post(
         "/v1/project-cell/messages",
-        headers={"Authorization": f"Bearer {_runner_token()}"},
+        headers={"Authorization": f"Bearer {_runner_token(now=frozen)}"},
         json=payload,
     )
 
