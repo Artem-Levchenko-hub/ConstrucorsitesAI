@@ -43,9 +43,9 @@ restore-test, проверка релиза и ротация секретов �
 commerce (`infra/max-k3s/cells/*`), какая ячейка где — решает API (`ORCHESTRATOR_HOSTS`).
 **Commerce-кластер (23.09, код готов, не включён):** биллинговый тик (продления, льготный период,
 сверка заказов ЮKassa) умеет работать отдельным воркером в K3s commerce —
-`infra/max-k3s/commerce/10-billing-workloads.sh` + `k8s/commerce/*.yaml`; база платформы для него
-отдаётся с core по WireGuard (`10.10.0.1:15432`, роль `max_billing`). Пока тик живёт в RQ-воркере на
-core; аудит биллинга, что нужно от владельца (креды ЮKassa, реквизиты) и порядок включения —
+`infra/max-k3s/commerce/10-billing-workloads.sh` + `k8s/commerce/*.yaml`; база платформы для него —
+хостовый PostgreSQL core по WireGuard (`10.10.0.1:5432`, роль `max_billing` только с правами на
+биллинговые таблицы). Пока тик живёт в RQ-воркере на core; аудит биллинга, что нужно от владельца (креды ЮKassa, реквизиты) и порядок включения —
 `docs/plans/2026-09-23-phase3-commerce.md`. Дополнительный хост ячеек заказывается у Serverum и
 вводится в строй одним сценарием `infra/max-k3s/cells/60-order-cell-host.sh`. **Ещё не сделано:**
 api/web/gateway в кластере core (этап C); K3s на commerce уживается с ячейками (порты 80/443 у

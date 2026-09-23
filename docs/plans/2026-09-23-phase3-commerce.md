@@ -108,11 +108,12 @@ services/billing_cycle.py, models/billing.py, models/account.py (Payment), worke
   команда `python -m omnia_api.workers.billing`, 1 реплика / Recreate, без root, read-only fs,
   `/health` на :8090 как readiness/liveness (503 — если тик не завершался 3×`poll` или ≥3 провала
   подряд), Service для проверки из кластера, NetworkPolicy (внутрь — только проба; наружу — DNS,
-  платформа по WireGuard: postgres 15432 / redis 6379 / оркестраторы 8003, интернет только
+  платформа по WireGuard: postgres 5432 / redis 6379 / оркестраторы 8003, интернет только
   443/465/587/25 для ЮKassa и SMTP).
-- **База платформы по WireGuard:** на core `postgres-mesh-forward.service` (socat
-  `10.10.0.1:15432 → omnia-prod-postgres:5432`; хостовый Postgres 16 уже занимает `:5432`),
-  ufw открыт только для `10.10.0.3` и pod-сети commerce; роль `max_billing` с правами
+- **База платформы по WireGuard:** с 23.09 база платформы живёт на хостовом PostgreSQL core, который
+  слушает `10.10.0.1:5432` — воркер ходит в него напрямую (socat-форвард к контейнеру, который был в
+  первой версии сценария, убран); в pg_hba строки роли `max_billing` только для `10.10.0.3` и pod-сети
+  commerce, ufw — то же; роль `max_billing` с правами
   SELECT/INSERT/UPDATE ровно на `billing_*`, `subscriptions`, `payments`, `wallets`,
   `wallet_charges`, `projects` (UPDATE — снятие keep-alive) и SELECT на `users` (email).
 - **Секреты:** `/etc/max-studio/billing-worker.env` (root, 0600) собирается на core из `.env`

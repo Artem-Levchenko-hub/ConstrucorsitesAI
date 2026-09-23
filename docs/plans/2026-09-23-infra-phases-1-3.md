@@ -25,7 +25,7 @@
 | Пункт | Состояние | Где |
 |---|---|---|
 | подписки, биллинг, ЮKassa | **Живёт частично:** проверка источника вебхука, чек возврата, сверка зависших платежей, отдельный биллинговый воркер (`billing_worker: ok` в `/api/health`). **Нужны боевые и тестовые ключи ЮKassa** и настройки в кабинете | `services/yookassa.py`, `workers/billing.py`, `docs/plans/2026-09-23-phase3-commerce.md` (H219) |
-| Commerce-кластер | Манифесты и сценарий переноса воркера в K3s commerce готовы (`--dry-run` проходит); включение после кредов ЮKassa | `infra/max-k3s/commerce/*`, `k8s/commerce/*` |
+| Commerce-кластер | **Живёт с 24.09 02:00:** биллинговый воркер платформы работает отдельным подом в K3s commerce (namespace `billing`, без root, NetworkPolicy; база платформы — хостовый PostgreSQL core по WireGuard под ролью `max_billing`), тик на core выключен (handover), `/api/health` видит heartbeat из commerce. Ключи ЮKassa добавятся в Secret воркера одной командой (`secret`). Попутно: 66 файлов чекаута с правами 0600 ломали образ под non-root — исправлено на хостах и в Dockerfile (H226) | `infra/max-k3s/commerce/*`, `k8s/commerce/*`, `apps/api/Dockerfile` (H219, H226) |
 | автозаказ VPS | Клиент API Serverum + сценарий «ещё один хост ячеек» с `--dry-run`. **Нужен токен API Serverum и подтверждение эндпоинтов** | `services/serverum.py`, `cells/60-order-cell-host.sh` |
 
 ## Что нужно от владельца (без этого фазы не закрыть до конца)

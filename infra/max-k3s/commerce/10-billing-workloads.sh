@@ -3,7 +3,7 @@
 # сверка зависших заказов ЮKassa) в K3s-кластере commerce. Запускать с Mac (bash 3.2 ok).
 #
 #   ./10-billing-workloads.sh plan          # что будет сделано + отрисовка манифестов, ничего не меняет
-#   ./10-billing-workloads.sh core-access   # core: роль max_billing, socat 10.10.0.1:15432 → postgres платформы, ufw, env-файл
+#   ./10-billing-workloads.sh core-access   # core: роль max_billing на хостовом PostgreSQL (10.10.0.1:5432), pg_hba/ufw для commerce, env-файл
 #   ./10-billing-workloads.sh host          # commerce: ufw pod-сеть → свой оркестратор :8003
 #   ./10-billing-workloads.sh image         # core: omnia-api:prod → registry.yleum.ru/platform/omnia-api:<sha> (по digest)
 #   ./10-billing-workloads.sh secret        # Secret billing-worker-env из /etc/max-studio/billing-worker.env (core, 0600) — по ssh, файл на Mac не создаётся
@@ -33,7 +33,8 @@ K8S_DIR="$HERE/k8s/commerce"
 REMOTE="$HERE/commerce/remote"
 NS=billing
 CTX=max-commerce
-FORWARD_PORT=${BILLING_PG_FORWARD_PORT:-15432}
+# Порт хостового PostgreSQL core на WG-адресе (база платформы там с 23.09.2026, socat-форвард не нужен).
+PG_PORT=${BILLING_PG_PORT:-5432}
 REGISTRY_REPO=platform/omnia-api
 FULL=/opt/omnia/apps/llm-gateway/deploy/full
 export KUBECONFIG="$HOME/.kube/max-studio.yaml"
@@ -70,8 +71,8 @@ render() { # render <image> <sha> → манифесты воркера на std
 phase_plan() {
   log "plan: биллинговый воркер → кластер commerce ($(inv commerce public), K3s ctx $CTX, namespace $NS)"
   cat <<EOF
-  1. core-access  ssh $(inv core alias): postgres-mesh-forward (socat $(inv core wg):$FORWARD_PORT → omnia-prod-postgres:5432),
-                  ufw $FORWARD_PORT ← $(inv commerce wg) и $(inv commerce cluster_cidr), роль max_billing (права только на биллинговые
+  1. core-access  ssh $(inv core alias): хостовый PostgreSQL слушает $(inv core wg):$PG_PORT (pg_hba + ufw для
+                  $(inv commerce wg) и $(inv commerce cluster_cidr)), роль max_billing (права только на биллинговые
                   таблицы), /etc/max-studio/billing-worker.env из .env платформы
   2. host         ssh $(inv commerce alias): ufw $(inv commerce cluster_cidr) → :8003 (поды → свой оркестратор)
   3. image        ssh $(inv core alias): docker tag omnia-api:prod registry.$DOMAIN/$REGISTRY_REPO:<sha> && docker push
@@ -101,8 +102,8 @@ for d in docs: print("  ok:", d["kind"], d["metadata"]["name"])'
 }
 
 phase_core_access() {
-  log "core-access → $(inv core alias): форвард postgres, ufw, роль max_billing, env-файл воркера"
-  remote core "$REMOTE/10-core-billing-access.sh" "$ADMIN_USER" "$(inv core wg)" "$(inv commerce wg)" "$(inv commerce cluster_cidr)" "$FORWARD_PORT"
+  log "core-access → $(inv core alias): хостовый postgres (pg_hba, ufw), роль max_billing, env-файл воркера"
+  remote core "$REMOTE/10-core-billing-access.sh" "$ADMIN_USER" "$(inv core wg)" "$(inv commerce wg)" "$(inv commerce cluster_cidr)" "$PG_PORT"
 }
 
 phase_host() {

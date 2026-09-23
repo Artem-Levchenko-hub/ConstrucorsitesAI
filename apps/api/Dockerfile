@@ -70,6 +70,15 @@ COPY --from=templates \
      --exclude=**/*.tsbuildinfo --exclude=**/__pycache__ \
      . /orchestrator/templates/
 
+# Образ работает не только под root: биллинговый воркер в K3s commerce запускается от uid 10001
+# (Pod Security «restricted»). COPY переносит права файлов из контекста сборки как есть, и файл,
+# созданный на хосте под umask 077, остаётся 0600 → «Permission denied» при импорте (23.09.2026,
+# core/redis.py). Нормализуем чтение для всех только там, где его нет; .venv не трогаем, чтобы
+# не копировать слой браузера.
+RUN find /app /orchestrator/templates -path /app/.venv -prune -o \
+      \( -type d ! -perm -o=rx -exec chmod a+rx {} + \) -o \
+      \( -type f ! -perm -o=r -exec chmod a+r {} + \)
+
 ENV PATH="/app/.venv/bin:${PATH}"
 
 EXPOSE 8000

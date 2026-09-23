@@ -8,8 +8,8 @@
 # (root, 0600), не сохраняя файл на Mac. Плейсхолдеры __IMAGE__ / __RELEASE_SHA__
 # подставляет скрипт.
 #
-# База платформы — по WireGuard 10.10.0.1:15432 (socat → контейнер omnia-prod-postgres,
-# роль max_billing с правами только на биллинговые таблицы), Redis — 10.10.0.1:6379,
+# База платформы — хостовый PostgreSQL core по WireGuard 10.10.0.1:5432 (роль max_billing
+# с правами только на биллинговые таблицы), Redis — 10.10.0.1:6379,
 # оркестраторы — 10.10.0.1:8003 (core) и 10.10.0.3:8003 (commerce).
 apiVersion: apps/v1
 kind: Deployment
