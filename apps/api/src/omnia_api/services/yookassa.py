@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 
 import httpx
 
 from omnia_api.core.config import get_settings
+
+# Networks YooKassa sends HTTP notifications from (developer docs, "HTTP-уведомления",
+# checked 2026-09-23). Production sets YOOKASSA_WEBHOOK_ALLOWED_CIDRS to this list;
+# the constant exists so operators copy it instead of retyping it.
+YOOKASSA_NOTIFICATION_NETWORKS: tuple[str, ...] = (
+    "185.71.76.0/27",
+    "185.71.77.0/27",
+    "77.75.153.0/25",
+    "77.75.156.11/32",
+    "77.75.156.35/32",
+    "77.75.154.128/25",
+    "2a02:5180::/32",
+)
 
 
 class YooKassaUnavailable(RuntimeError):
@@ -21,6 +35,36 @@ def _credentials() -> tuple[str, str]:
     if not settings.yookassa_shop_id or not settings.yookassa_secret_key:
         raise YooKassaUnavailable("YooKassa credentials are not configured")
     return settings.yookassa_shop_id, settings.yookassa_secret_key.get_secret_value()
+
+
+def _networks(raw: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if item:
+            networks.append(ipaddress.ip_network(item, strict=False))
+    return networks
+
+
+def notification_source_allowed(source_ip: str | None, *, allowed_cidrs: str | None = None) -> bool:
+    """Whether a webhook caller address is inside the configured YooKassa networks.
+
+    An empty allow-list disables the filter (development, tests). A malformed or
+    missing address never passes once the filter is on: notifications are only
+    ever accepted from the provider, and every accepted one is still confirmed
+    by re-reading the payment from the API.
+    """
+    raw = get_settings().yookassa_webhook_allowed_cidrs if allowed_cidrs is None else allowed_cidrs
+    networks = _networks(raw)
+    if not networks:
+        return True
+    if not source_ip:
+        return False
+    try:
+        address = ipaddress.ip_address(source_ip.strip())
+    except ValueError:
+        return False
+    return any(address in network for network in networks)
 
 
 async def _request(
@@ -127,13 +171,23 @@ async def create_refund(
     provider_payment_id: str,
     amount: str,
     idempotency_key: str,
+    customer_email: str | None = None,
+    description: str | None = None,
 ) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/refunds",
-        idempotency_key=idempotency_key,
-        json={
-            "payment_id": provider_payment_id,
-            "amount": {"value": amount, "currency": "RUB"},
-        },
-    )
+    """Refund a payment in full or in part.
+
+    With YooKassa's own 54-ФЗ solution the refund needs its own fiscal receipt
+    («чек возврата»), passed in the same request; it mirrors the sale line of the
+    original payment. Callers without a customer email (legacy admin tooling)
+    get the bare refund, which the provider accepts only for shops that fiscalise
+    elsewhere.
+    """
+    body: dict[str, object] = {
+        "payment_id": provider_payment_id,
+        "amount": {"value": amount, "currency": "RUB"},
+    }
+    if customer_email:
+        body["receipt"] = _receipt(
+            customer_email, description or "Возврат платежа MAX Studio", amount
+        )
+    return await _request("POST", "/refunds", idempotency_key=idempotency_key, json=body)

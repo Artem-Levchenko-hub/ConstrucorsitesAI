@@ -83,6 +83,21 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   и `BUILD_BACKEND=docker`; **включение** — `BUILD_BACKEND=buildkit` + `systemctl restart
   omnia-orchestrator`, **откат** — `BUILD_BACKEND=docker` + restart. Подробно —
   `docs/09-max-k3s-infra.md`, раздел «Изолированные сборки».
+- **Биллинговый воркер в commerce** (Фаза 3, «Commerce-кластер», код готов 23.09, не включён —
+  ждёт кредов ЮKassa) — `commerce/10-billing-workloads.sh` (`plan` / `all` / `handover` /
+  `rollback`, всё с `--dry-run`) + манифесты `k8s/commerce/*.yaml`: Deployment `billing/billing-worker`
+  (`python -m omnia_api.workers.billing`, образ api из реестра по digest, `/health` на :8090),
+  NetworkPolicy, Secret из `/etc/max-studio/billing-worker.env` на core по ssh-потоку. База
+  платформы — по WireGuard через `postgres-mesh-forward.service` на core (socat
+  `10.10.0.1:15432 → omnia-prod-postgres`, роль `max_billing` только с правами на биллинговые
+  таблицы, ufw только для commerce). Пока тик живёт потоком RQ-воркера на core
+  (`BILLING_LIFECYCLE_ENABLED=true`); план и порядок включения — `docs/plans/2026-09-23-phase3-commerce.md`.
+- **Ещё один хост ячеек по запросу** — `cells/60-order-cell-host.sh --name cells3` (`--dry-run`
+  печатает весь план): заказ VPS у Serverum через `apps/orchestrator` (`serverum_cli`, эндпоинты
+  панели — уточнить у поддержки, токен `SERVERUM_API_TOKEN`), строка в `inventory.env`, bootstrap,
+  WireGuard на всех хостах, Postgres, подготовка хоста ячеек без K3s, rsync кода с core,
+  оркестратор, ufw redis на core, ночная копия, запись в `ORCHESTRATOR_HOSTS` с `enabled=false`;
+  после DNS `*.dev3` владельца — `--enable`.
 - **Мониторинг** на core — kube-prometheus-stack 91.4.1 (`k8s/apply.sh monitoring`):
   Prometheus (15 дней / 50 GB), Alertmanager, Grafana 13 на `https://grafana.yleum.ru`
   (admin, пароль в `/etc/max-studio/grafana.env` на core). Собирает метрики кластера core и

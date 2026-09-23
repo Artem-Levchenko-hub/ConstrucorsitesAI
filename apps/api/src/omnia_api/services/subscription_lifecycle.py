@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from calendar import monthrange
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -9,7 +8,7 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
@@ -593,29 +592,12 @@ async def process_subscription_cycle(
 
 
 async def run_subscription_lifecycle_forever() -> None:
-    from omnia_api.services.readiness import write_worker_heartbeat
-
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    heartbeat_ttl = max(settings.billing_lifecycle_poll_seconds * 3, 30)
-    log.info(
-        "subscription.lifecycle_started",
-        poll_seconds=settings.billing_lifecycle_poll_seconds,
-        retry_hours=settings.billing_renewal_retry_hours,
-        grace_days=settings.billing_grace_days,
+    """The billing tick (subscriptions + open-order reconciliation) as a
+    long-running loop. Kept for the RQ worker; the loop itself lives in
+    `services/billing_cycle.py` so the standalone billing worker shares it."""
+    from omnia_api.services.billing_cycle import (
+        BILLING_HEARTBEAT_KEY,
+        run_billing_cycles_forever,
     )
-    try:
-        while True:
-            try:
-                await write_worker_heartbeat(heartbeat_ttl)
-                async with factory() as session:
-                    processed = await process_subscription_cycle(session)
-                await write_worker_heartbeat(heartbeat_ttl)
-                if processed:
-                    log.info("subscription.lifecycle_cycle", processed=processed)
-            except Exception:
-                log.exception("subscription.lifecycle_cycle_failed")
-            await asyncio.sleep(settings.billing_lifecycle_poll_seconds)
-    finally:
-        await engine.dispose()
+
+    await run_billing_cycles_forever(heartbeat_key=BILLING_HEARTBEAT_KEY)

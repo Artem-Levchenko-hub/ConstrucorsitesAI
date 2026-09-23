@@ -37,19 +37,49 @@ def parse_worker_heartbeat(raw: bytes | str | None) -> tuple[bool, str]:
     return True, normalize_release_sha(release_sha if isinstance(release_sha, str) else None)
 
 
-async def write_worker_heartbeat(ttl_seconds: int) -> None:
-    payload = json.dumps(
+def heartbeat_payload() -> str:
+    return json.dumps(
         {
             "at": datetime.now(UTC).isoformat(),
             "release_sha": normalize_release_sha(get_settings().omnia_release_sha),
         },
         separators=(",", ":"),
     )
-    await get_redis().set(
-        WORKER_HEARTBEAT_KEY,
-        payload,
-        ex=max(ttl_seconds, 30),
-    )
+
+
+async def write_worker_heartbeat(ttl_seconds: int, *, key: str = WORKER_HEARTBEAT_KEY) -> None:
+    await get_redis().set(key, heartbeat_payload(), ex=max(ttl_seconds, 30))
+
+
+async def run_worker_heartbeat_forever(
+    *,
+    key: str = WORKER_HEARTBEAT_KEY,
+    interval_seconds: int | None = None,
+) -> None:
+    """Keep one heartbeat key alive from a dedicated thread/loop.
+
+    Owns its Redis connection: the shared client is bound to whichever event
+    loop first used it, and the RQ worker runs several loops in threads.
+    """
+    from collections.abc import Callable
+    from typing import cast
+
+    import redis.asyncio as aioredis
+
+    settings = get_settings()
+    interval = interval_seconds or max(settings.billing_lifecycle_poll_seconds // 2, 10)
+    ttl = max(interval * 3, 30)
+    from_url = cast(Callable[..., aioredis.Redis], aioredis.from_url)
+    client = from_url(settings.redis_url, decode_responses=True)
+    try:
+        while True:
+            try:
+                await client.set(key, heartbeat_payload(), ex=ttl)
+            except Exception:  # a missed beat is retried on the next pass, never fatal
+                pass
+            await asyncio.sleep(interval)
+    finally:
+        await client.aclose()
 
 
 async def _database_ok() -> bool:
@@ -149,6 +179,18 @@ async def probe_readiness() -> ReadinessReport:
                 )
         except Exception:
             generation_ok = False
+    # The billing tick (renewals, open-order reconciliation) beats under its own
+    # key wherever it runs — the RQ worker thread or the commerce cluster. It is
+    # reported, not gated: a paused lifecycle delays renewals, it does not break
+    # the API, and the standalone worker has its own probe for that.
+    billing_ok, billing_release = False, "unknown"
+    try:
+        async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
+            billing_ok, billing_release = parse_worker_heartbeat(
+                await get_redis().get("omnia:health:billing-worker")
+            )
+    except Exception:
+        billing_ok = False
     return ReadinessReport(
         checks={
             **(
@@ -170,5 +212,7 @@ async def probe_readiness() -> ReadinessReport:
             ),
             "worker_release_sha": worker_release_sha,
             "orchestrator_release_sha": orchestrator_release_sha,
+            "billing_worker": "ok" if billing_ok else "missing",
+            "billing_worker_release_sha": billing_release,
         },
     )

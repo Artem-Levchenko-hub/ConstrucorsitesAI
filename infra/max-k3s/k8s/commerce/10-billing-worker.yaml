@@ -1,0 +1,118 @@
+# Фаза 3 / commerce: биллинговый воркер платформы — `python -m omnia_api.workers.billing`
+# (apps/api/src/omnia_api/workers/billing.py): продления подписок, льготный период,
+# перевод на Free, сверка зависших заказов ЮKassa, heartbeat omnia:health:billing-worker.
+#
+# Тот же образ, что у api/worker на core (omnia-api:prod), опубликованный в реестр
+# как registry.yleum.ru/platform/omnia-api:<sha>; секреты — из Secret billing-worker-env,
+# который 10-billing-workloads.sh собирает из /etc/max-studio/billing-worker.env на core
+# (root, 0600), не сохраняя файл на Mac. Плейсхолдеры __IMAGE__ / __RELEASE_SHA__
+# подставляет скрипт.
+#
+# База платформы — по WireGuard 10.10.0.1:15432 (socat → контейнер omnia-prod-postgres,
+# роль max_billing с правами только на биллинговые таблицы), Redis — 10.10.0.1:6379,
+# оркестраторы — 10.10.0.1:8003 (core) и 10.10.0.3:8003 (commerce).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-worker
+  namespace: billing
+  labels:
+    app: billing-worker
+    app.kubernetes.io/name: billing-worker
+    app.kubernetes.io/part-of: max-studio
+spec:
+  # Ровно один цикл: второй экземпляр безопасен (row-locks, уникальное pending-продление),
+  # но не нужен — Recreate вместо RollingUpdate.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: billing-worker
+  template:
+    metadata:
+      labels:
+        app: billing-worker
+      annotations:
+        omnia.release_sha: "__RELEASE_SHA__"
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "__IMAGE__"
+          imagePullPolicy: IfNotPresent
+          command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.billing"]
+          envFrom:
+            - secretRef:
+                name: billing-worker-env
+          env:
+            - name: BILLING_LIFECYCLE_ENABLED
+              value: "true"
+            - name: BILLING_WORKER_HEALTH_PORT
+              value: "8090"
+            - name: HOME
+              value: /tmp
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          ports:
+            - name: health
+              containerPort: 8090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-worker
+  namespace: billing
+  labels:
+    app: billing-worker
+spec:
+  type: ClusterIP
+  selector:
+    app: billing-worker
+  ports:
+    - name: health
+      port: 8090
+      targetPort: health
+      protocol: TCP

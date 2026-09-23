@@ -301,6 +301,15 @@ services:
       BILLING_LIFECYCLE_POLL_SECONDS: ${BILLING_LIFECYCLE_POLL_SECONDS:-60}
       BILLING_RENEWAL_RETRY_HOURS: ${BILLING_RENEWAL_RETRY_HOURS:-12}
       BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
+      # Phase 3 / commerce: the billing tick runs in this RQ worker until the
+      # standalone billing worker (commerce cluster) takes over — then set
+      # BILLING_LIFECYCLE_ENABLED=false here. Open orders older than the
+      # reconcile window are re-read from YooKassa (lost-webhook safety net).
+      BILLING_LIFECYCLE_ENABLED: ${BILLING_LIFECYCLE_ENABLED:-true}
+      BILLING_PAYMENT_RECONCILE_AFTER_MINUTES: ${BILLING_PAYMENT_RECONCILE_AFTER_MINUTES:-10}
+      BILLING_PAYMENT_ABANDON_AFTER_HOURS: ${BILLING_PAYMENT_ABANDON_AFTER_HOURS:-24}
+      # Production: the official YooKassa notification networks (services/yookassa.py).
+      YOOKASSA_WEBHOOK_ALLOWED_CIDRS: ${YOOKASSA_WEBHOOK_ALLOWED_CIDRS:-}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
       # Per-role model orchestration overrides. Empty = code ROLE_MODEL_MAP
@@ -519,6 +528,15 @@ services:
       BILLING_LIFECYCLE_POLL_SECONDS: ${BILLING_LIFECYCLE_POLL_SECONDS:-60}
       BILLING_RENEWAL_RETRY_HOURS: ${BILLING_RENEWAL_RETRY_HOURS:-12}
       BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-3}
+      # Phase 3 / commerce: the billing tick runs in this RQ worker until the
+      # standalone billing worker (commerce cluster) takes over — then set
+      # BILLING_LIFECYCLE_ENABLED=false here. Open orders older than the
+      # reconcile window are re-read from YooKassa (lost-webhook safety net).
+      BILLING_LIFECYCLE_ENABLED: ${BILLING_LIFECYCLE_ENABLED:-true}
+      BILLING_PAYMENT_RECONCILE_AFTER_MINUTES: ${BILLING_PAYMENT_RECONCILE_AFTER_MINUTES:-10}
+      BILLING_PAYMENT_ABANDON_AFTER_HOURS: ${BILLING_PAYMENT_ABANDON_AFTER_HOURS:-24}
+      # Production: the official YooKassa notification networks (services/yookassa.py).
+      YOOKASSA_WEBHOOK_ALLOWED_CIDRS: ${YOOKASSA_WEBHOOK_ALLOWED_CIDRS:-}
       USE_SECTION_CATALOG: ${USE_SECTION_CATALOG:-false}
       USE_DIRECTOR_POLISH: ${USE_DIRECTOR_POLISH:-false}
       # Per-role model orchestration overrides (empty = code ROLE_MODEL_MAP).

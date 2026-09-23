@@ -1,0 +1,12 @@
+# Фаза 3 / commerce: namespace биллинговых рабочих нагрузок в K3s-кластере commerce.
+# Применяется через infra/max-k3s/commerce/10-billing-workloads.sh (apply).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: billing
+  labels:
+    app.kubernetes.io/part-of: max-studio
+    omnia.cluster: commerce
+    # Pod Security Admission: воркер запускается без root и без capabilities.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
