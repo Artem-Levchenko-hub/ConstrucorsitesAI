@@ -132,3 +132,31 @@ async def test_refund_and_lookup_requests(sent):
         },
         {"method": "GET", "path": "/payments/provider-payment"},
     ]
+
+
+async def test_refund_with_payer_email_carries_its_own_fiscal_receipt(sent):
+    """54-ФЗ: a refund through YooKassa's receipts needs a «чек возврата» of its own."""
+    await yookassa.create_refund(
+        provider_payment_id="provider-payment",
+        amount="1490.00",
+        idempotency_key="key-4",
+        customer_email="owner@example.test",
+        description="Возврат платежа MAX Studio (subscription:pro:v1)",
+    )
+
+    assert sent == [
+        {
+            "method": "POST",
+            "path": "/refunds",
+            "idempotency_key": "key-4",
+            "json": {
+                "payment_id": "provider-payment",
+                "amount": {"value": "1490.00", "currency": "RUB"},
+                "receipt": receipt(
+                    "Возврат платежа MAX Studio (subscription:pro:v1)",
+                    "1490.00",
+                    "owner@example.test",
+                ),
+            },
+        }
+    ]

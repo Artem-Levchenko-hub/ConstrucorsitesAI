@@ -142,6 +142,26 @@ class Settings(BaseSettings):
     restoration_reconcile_lease_seconds: int = Field(default=60, ge=10)
     billing_renewal_retry_hours: int = Field(default=12, ge=1)
     billing_grace_days: int = Field(default=3, ge=1)
+    # Phase 3 / commerce: the subscription lifecycle (renewals, grace, downgrade,
+    # reconciliation of pending payments) may run either as a thread inside the
+    # RQ worker (`workers/run.py`, today) or as the standalone billing worker
+    # (`workers/billing.py`, the commerce cluster). Exactly one of them should be
+    # on; set BILLING_LIFECYCLE_ENABLED=false in the RQ worker once the standalone
+    # worker is live. Running both is safe (row locks + unique pending renewal),
+    # only noisier.
+    billing_lifecycle_enabled: bool = Field(default=True)
+    billing_worker_health_port: int = Field(default=8090, ge=1, le=65535)
+    # A payment left `pending`/`waiting_for_capture` this long is re-read from the
+    # provider (a lost webhook must not leave a paid order unfulfilled); one with
+    # no provider id at all (creation failed midway) is closed as failed after
+    # `abandon` hours. YooKassa itself cancels unpaid orders within an hour.
+    billing_payment_reconcile_after_minutes: int = Field(default=10, ge=1)
+    billing_payment_abandon_after_hours: int = Field(default=24, ge=1)
+    # Comma-separated networks allowed to POST /api/payments/yookassa/webhook.
+    # Empty = no source filter (dev/tests); production sets the official YooKassa
+    # list (see services/yookassa.YOOKASSA_NOTIFICATION_NETWORKS). Every
+    # notification is still confirmed by re-reading the payment from the API.
+    yookassa_webhook_allowed_cidrs: str = Field(default="")
 
     # OAuth applications for customer-owned business integrations. When a
     # provider pair is absent, Integration Hub keeps the verified credential

@@ -10,9 +10,14 @@ from rq import Connection, Worker
 
 from omnia_api.core.config import get_settings
 from omnia_api.services.queue import QUEUE_NAME
+from omnia_api.services.readiness import run_worker_heartbeat_forever
 from omnia_api.services.restoration_reconciliation import run_restoration_reconciliation_forever
 from omnia_api.services.subscription_lifecycle import run_subscription_lifecycle_forever
 from omnia_api.services.task_board_attachment_cleanup import run_attachment_cleanup_forever
+
+
+def _run_worker_heartbeat() -> None:
+    asyncio.run(run_worker_heartbeat_forever())
 
 
 def _run_billing_lifecycle() -> None:
@@ -28,11 +33,21 @@ def _run_restoration_reconciliation() -> None:
 
 
 def main() -> None:
+    # The worker heartbeat (`/api/health` → checks.worker) no longer depends on
+    # the billing thread: the billing tick may live in the commerce cluster
+    # instead (BILLING_LIFECYCLE_ENABLED=false here), and the RQ worker must
+    # still report itself alive.
     threading.Thread(
-        target=_run_billing_lifecycle,
-        name="subscription-lifecycle",
+        target=_run_worker_heartbeat,
+        name="worker-heartbeat",
         daemon=True,
     ).start()
+    if get_settings().billing_lifecycle_enabled:
+        threading.Thread(
+            target=_run_billing_lifecycle,
+            name="subscription-lifecycle",
+            daemon=True,
+        ).start()
     threading.Thread(
         target=_run_attachment_cleanup,
         name="task-board-attachment-cleanup",

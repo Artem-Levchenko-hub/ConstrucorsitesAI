@@ -12,6 +12,7 @@ from omnia_api.core.admin import is_admin_user
 from omnia_api.core.config import get_settings
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
+from omnia_api.core.ratelimit import _client_ip
 from omnia_api.models.account import Payment
 from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.user import User
@@ -25,7 +26,13 @@ from omnia_api.schemas.payments import (
 )
 from omnia_api.services import yookassa
 from omnia_api.services.billing_accounts import resolve_billing_account
-from omnia_api.services.subscription_lifecycle import apply_subscription_provider_state
+from omnia_api.services.payment_state import (
+    apply_provider_state as _apply_provider_state,
+)
+from omnia_api.services.payment_state import (
+    cancel_pending_subscription as _cancel_pending_subscription,
+)
+from omnia_api.services.subscription_lifecycle import provider_status as _provider_status
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
@@ -34,15 +41,6 @@ PACKAGES: dict[str, tuple[Decimal, Decimal, str]] = {
     "business": (Decimal("1490.00"), Decimal("1600.00"), "Бизнес-пакет MAX Studio"),
     "pro": (Decimal("3990.00"), Decimal("4500.00"), "Профессиональный пакет MAX Studio"),
 }
-
-
-def _provider_status(value: object) -> str:
-    status_value = str(value or "pending")
-    if status_value in {"canceled", "cancelled"}:
-        return "cancelled"
-    if status_value in {"pending", "waiting_for_capture", "succeeded"}:
-        return status_value
-    return "failed"
 
 
 def _configured() -> bool:
@@ -56,19 +54,21 @@ def _is_admin(user: User) -> bool:
     return is_admin_user(user)
 
 
-async def _cancel_pending_subscription(
-    session: SessionDep,
-    payment: Payment,
-) -> None:
-    if payment.purpose != "subscription_initial" or payment.subscription_id is None:
-        return
-    subscription = await session.get(Subscription, payment.subscription_id)
-    if subscription is None or subscription.status != "pending_payment":
-        return
-    now = datetime.now(UTC)
-    subscription.status = "canceled"
-    subscription.canceled_at = now
-    subscription.ended_at = now
+def webhook_object_id(body: object) -> str:
+    """The payment a notification is about.
+
+    Payment events carry the payment itself; a refund event carries the refund,
+    whose `payment_id` names the payment we track. Anything else is empty and
+    the caller answers 400.
+    """
+    if not isinstance(body, dict):
+        return ""
+    obj = body.get("object")
+    if not isinstance(obj, dict):
+        return ""
+    event = str(body.get("event") or "")
+    key = "payment_id" if event.startswith("refund.") else "id"
+    return str(obj.get(key) or "")
 
 
 async def _send_to_provider(
@@ -354,67 +354,15 @@ async def create_subscription_checkout(
     )
 
 
-async def _apply_provider_state(
-    session: SessionDep,
-    payment: Payment,
-    provider: dict[str, object],
-) -> None:
-    if payment.purpose in {"subscription_initial", "subscription_renewal"}:
-        provider_status = await apply_subscription_provider_state(
-            session,
-            payment,
-            provider,
-        )
-        if provider_status in {"cancelled", "failed"}:
-            await _cancel_pending_subscription(session, payment)
-        return
-    provider_status = _provider_status(provider.get("status"))
-    amount = provider.get("amount")
-    if not isinstance(amount, dict):
-        raise ApiError("invalid_webhook", "invalid payment amount", status.HTTP_400_BAD_REQUEST)
-    if amount.get("currency") != "RUB" or Decimal(str(amount.get("value"))) != payment.amount_rub:
-        raise ApiError("invalid_webhook", "payment amount mismatch", status.HTTP_400_BAD_REQUEST)
-
-    payment.provider_payload = provider
-    if provider_status == "succeeded" and payment.status != "succeeded":
-        if payment.purpose == "wallet_topup":
-            wallet = (
-                await session.execute(
-                    select(Wallet)
-                    .where(Wallet.billing_account_id == payment.billing_account_id)
-                    .with_for_update()
-                )
-            ).scalar_one()
-            wallet.balance_rub += payment.credit_rub
-            session.add(
-                WalletCharge(
-                    billing_account_id=payment.billing_account_id,
-                    user_id=payment.user_id,
-                    entry_type="payment",
-                    amount_rub=payment.credit_rub,
-                    balance_after_rub=wallet.balance_rub,
-                    external_ref=f"payment:{payment.id}",
-                    description=f"Пополнение через ЮKassa ({payment.package_code})",
-                )
-            )
-        payment.status = "succeeded"
-        payment.paid_at = datetime.now(UTC)
-    elif provider_status == "cancelled" and payment.status not in {"succeeded", "refunded"}:
-        payment.status = "cancelled"
-        payment.cancelled_at = datetime.now(UTC)
-        await _cancel_pending_subscription(session, payment)
-    elif provider_status == "waiting_for_capture":
-        payment.status = "waiting_for_capture"
-    elif provider_status == "failed" and payment.status not in {"succeeded", "refunded"}:
-        payment.status = "failed"
-        await _cancel_pending_subscription(session, payment)
-
-
 @router.post("/yookassa/webhook", status_code=status.HTTP_204_NO_CONTENT)
 async def yookassa_webhook(request: Request, session: SessionDep) -> None:
+    # YooKassa signs nothing: the source network filter (production only) plus
+    # re-reading the payment from the API are the two checks the provider
+    # documents. A rejected source gets 403 and no state change.
+    if not yookassa.notification_source_allowed(_client_ip(request)):
+        raise ApiError("forbidden", "notification source is not YooKassa", 403)
     body = await request.json()
-    obj = body.get("object") if isinstance(body, dict) else None
-    provider_id = str(obj.get("id") or "") if isinstance(obj, dict) else ""
+    provider_id = webhook_object_id(body)
     if not provider_id:
         raise ApiError("invalid_webhook", "payment id missing", status.HTTP_400_BAD_REQUEST)
     payment = (
@@ -499,11 +447,16 @@ async def refund_payment(
             "Зачисленные средства уже использованы",
             status.HTTP_409_CONFLICT,
         )
+    # The refund carries its own fiscal receipt («чек возврата», 54-ФЗ) for the
+    # payer of the original order, not for the admin who triggers it.
+    payer_email = await session.scalar(select(User.email).where(User.id == payment.user_id))
     try:
         await yookassa.create_refund(
             provider_payment_id=payment.provider_payment_id,
             amount=f"{payment.amount_rub:.2f}",
             idempotency_key=f"refund-{payment.id}",
+            customer_email=str(payer_email) if payer_email else None,
+            description=f"Возврат платежа MAX Studio ({payment.package_code})",
         )
     except yookassa.YooKassaUnavailable as exc:
         raise ApiError(
