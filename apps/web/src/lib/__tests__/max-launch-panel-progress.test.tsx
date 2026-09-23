@@ -15,7 +15,7 @@ vi.mock("@/lib/max-launch-runner", async (original) => ({ ...await original<obje
 const project = { id: "project-progress", name: "Прогресс", template: "max_miniapp" } as Project;
 const base: DeployStatus = { phase: "building", run_id: "run-1", started_at: "2026-09-18T15:15:03Z", finished_at: null, prod_url: null, image_tag: null, error: null, detail: null, target_label: "Omnia", target_id: null, can_cancel: false, logs: [] };
 function readiness(): MaxReadiness {
-  return { ready_to_launch: true, progress: 67, items: ["build", "business", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: !["publish", "max_url"].includes(id), blocking: true, action: null })) };
+  return { ready_to_launch: true, progress: 67, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: !["publish", "max_url"].includes(id), blocking: true, action: null })) };
 }
 let root: Root;
 let container: HTMLDivElement;
@@ -48,9 +48,9 @@ it("shows the current substage, server elapsed and transferred bytes without inv
   expect(text).toContain("26 с");
   expect(text).toContain("передано 1,2 ГБ");
   expect(text).not.toContain("%");
-  // Readiness ("4 из 4") stays a separate statement about prerequisites.
+  // Readiness ("3 из 3") stays a separate statement about prerequisites.
   expect(container.querySelector('[data-testid="max-launch-progress"]')).not.toBeNull();
-  expect(container.textContent).toContain("Готово 4 из 4");
+  expect(container.textContent).toContain("Готово 3 из 3");
   expect(api.launch).not.toHaveBeenCalled();
 });
 

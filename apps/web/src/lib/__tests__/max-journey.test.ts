@@ -13,7 +13,6 @@ const item = (id: string, done: boolean) => ({
 describe("getMaxJourney", () => {
   it("groups server readiness into one six-stage user journey", () => {
     const journey = getMaxJourney("project-1", [
-      item("business", true),
       item("legal", true),
       item("build", true),
       item("bot", false),
@@ -34,7 +33,6 @@ describe("getMaxJourney", () => {
 
   it("uses the dashboard as the final destination when every stage is complete", () => {
     const journey = getMaxJourney("project-1", [
-      item("business", true),
       item("legal", true),
       item("build", true),
       item("bot", true),
@@ -50,7 +48,6 @@ describe("getMaxJourney", () => {
 
   it("requires the bot token for secure initData but not webhook", () => {
     const journey = getMaxJourney("project-1", [
-      item("business", true),
       item("legal", true),
       item("build", true),
       item("publish", true),
@@ -65,7 +62,6 @@ describe("getMaxJourney", () => {
 
   it("stops at secure MAX access when the token is missing", () => {
     const journey = getMaxJourney("project-1", [
-      item("business", true),
       item("legal", true),
       item("build", true),
       item("bot", false),
@@ -83,7 +79,6 @@ describe("getMaxJourneyItemHref", () => {
     expect(getMaxJourneyItemHref("project-1", "legal")).toBe(
       "/max/project-1?data=policies",
     );
-    expect(getMaxJourneyItemHref("project-1", "business")).toBe("/max/project-1?data=owner");
     expect(getMaxJourneyItemHref("project-1", "publish")).toBe(
       "/max/project-1?panel=publish",
     );
@@ -94,6 +89,6 @@ describe("getMaxJourneyItemHref", () => {
 });
 
 it("asks only for publication information, not another product questionnaire", () => {
-  const journey = getMaxJourney("p", [item("build", true), item("business", true), item("legal", false)]);
-  expect(journey.currentStage).toMatchObject({ id: "app", label: "Владелец и документы", href: "/max/p?data=policies" });
+  const journey = getMaxJourney("p", [item("build", true), item("legal", false)]);
+  expect(journey.currentStage).toMatchObject({ id: "app", label: "Документы приложения", href: "/max/p?data=policies" });
 });

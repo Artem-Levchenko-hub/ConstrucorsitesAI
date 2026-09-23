@@ -17,7 +17,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
     queryFn: () => getMaxReadiness(projectId),
     retry: false,
   });
-  const required = new Set(["business", "legal", "build", "bot"]);
+  const required = new Set(["legal", "build", "bot"]);
   const blockers = (readiness.data?.items ?? []).filter(
     (item) => required.has(item.id) && !item.done,
   );

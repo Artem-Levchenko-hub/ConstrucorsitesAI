@@ -49,7 +49,7 @@ beforeEach(() => {
     let response: unknown;
     if (path.endsWith("/max/readiness")) {
       if (pendingReadiness) return pendingReadiness;
-      response = { ready_to_launch: false, progress: 67, items: ["business", "legal", "build", "bot", "publish", "max_url"].map(id => ({ id, done: !["publish", "max_url"].includes(id), blocking: true, label: id, action: null })) };
+      response = { ready_to_launch: false, progress: 67, items: ["legal", "build", "bot", "publish", "max_url"].map(id => ({ id, done: !["publish", "max_url"].includes(id), blocking: true, label: id, action: null })) };
     } else if (path.endsWith("/restorations")) {
       response = { enabled: true, items: restoring ? [{ state: "applying" }] : [] };
     } else if (path.endsWith("/snapshots")) {

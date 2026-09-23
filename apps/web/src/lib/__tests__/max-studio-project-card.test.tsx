@@ -35,7 +35,7 @@ const baseProject: Project = {
 };
 
 function readiness(doneIds: string[]): MaxReadiness {
-  const ids = ["build", "business", "legal", "bot", "publish", "max_url"];
+  const ids = ["build", "legal", "bot", "publish", "max_url"];
   return {
     ready_to_launch: doneIds.length === ids.length,
     progress: Math.round((doneIds.length / ids.length) * 100),
@@ -104,7 +104,7 @@ describe("MAX Studio project card", () => {
     }> = [
       { id: "setup", result: readiness([]), kind: "setup", color: "rgb(29, 78, 216)", icon: "lucide-wrench" },
       { id: "input", result: readiness(["build"]), kind: "needs-input", color: "rgb(117, 96, 0)", icon: "lucide-circle-alert" },
-      { id: "ready", result: readiness(["build", "business", "legal", "bot", "publish", "max_url"]), kind: "ready", color: "rgb(24, 116, 67)", icon: "lucide-circle-check" },
+      { id: "ready", result: readiness(["build", "legal", "bot", "publish", "max_url"]), kind: "ready", color: "rgb(24, 116, 67)", icon: "lucide-circle-check" },
       { id: "failed", result: new Error("offline"), kind: "failed", color: "rgb(180, 35, 24)", icon: "lucide-triangle-alert" },
       { id: "pending", result: new Promise<never>(() => {}), kind: "pending", color: "rgb(82, 96, 121)", icon: "lucide-clock3" },
     ];

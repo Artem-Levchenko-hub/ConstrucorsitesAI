@@ -26,7 +26,6 @@ from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.restoration import RestoreReport, RuntimeRestoration
 from omnia_api.services import orchestrator_client, project_cell_runtime
-from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.project_cell_proofs import (
     ProofDimension,
     proof_identity_from_model,
@@ -402,19 +401,18 @@ async def submit_publication(
     ):
         raise ApiError("conflict", "Сначала подключите и проверьте MAX-бота", 409)
     record = await session.get(MaxProjectConfig, project.id)
-    if record is None or record.owner_id != project.owner_id:
-        raise ApiError(
-            "conflict",
-            "Укажите владельца, контакт поддержки и подтвердите документы",
-            409,
-        )
-    config = MaxProjectConfigPayload.model_validate(record.config)
-    if not (has_launch_owner_and_support(config) and config.legal.terms_accepted):
-        raise ApiError(
-            "conflict",
-            "Укажите владельца, контакт поддержки и подтвердите документы",
-            409,
-        )
+    if record is not None and record.owner_id != project.owner_id:
+        raise ApiError("conflict", "Настройки приложения принадлежат другому владельцу", 409)
+    # A project that was never configured publishes with its defaults; the only
+    # thing an owner must do first is confirm the app's own documents. No
+    # requisites (ИНН, ОГРН, ФИО, phone) are ever required.
+    config = (
+        MaxProjectConfigPayload.model_validate(record.config)
+        if record is not None
+        else MaxProjectConfigPayload.default_for(project.name)
+    )
+    if not config.legal.terms_accepted:
+        raise ApiError("conflict", "Подтвердите документы приложения перед публикацией", 409)
     return await orchestrator_client.publish_project_cell(
         project.id,
         {
@@ -422,7 +420,7 @@ async def submit_publication(
             "idempotency_key": idempotency_key or uuid4().hex,
             "runtime_env": integration_runtime_env(integration),
             "business_config": config.model_dump(mode="json", exclude={"max_url_attached"}),
-            "business_config_version": record.config_version,
+            "business_config_version": record.config_version if record is not None else 0,
         },
     )
 

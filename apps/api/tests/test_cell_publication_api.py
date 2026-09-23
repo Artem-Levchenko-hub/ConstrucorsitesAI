@@ -19,8 +19,12 @@ async def seed(session):
     value = evidence()
     project, run = value["project"], value["run"]
     user = User(
-        id=project.owner_id, email="publish-owner@example.com", password_hash="test",
-        email_verified_at=datetime.now(UTC), status="active", is_anon=False,
+        id=project.owner_id,
+        email="publish-owner@example.com",
+        password_hash="test",
+        email_verified_at=datetime.now(UTC),
+        status="active",
+        is_anon=False,
     )
     session.add(user)
     await session.flush()
@@ -39,20 +43,30 @@ async def seed(session):
     await session.flush()
     session.add_all(value["results"])
     integration = MaxIntegration(
-        project_id=project.id, owner_id=user.id, status="verified",
+        project_id=project.id,
+        owner_id=user.id,
+        status="verified",
         bot_token_enc=encrypt_strong("disposable-test-bot"),
         webhook_secret_enc=encrypt_strong("disposable-test-webhook"),
         verified_at=datetime.now(UTC),
     )
     session.add(integration)
-    session.add(MaxProjectConfig(
-        project_id=project.id, owner_id=user.id, config_version=2,
-        config={
-            "app_name": "Warehouse", "app_type": "custom", "summary": "Stock records",
-            "primary_action": "Add stock", "operator": {"legal_name": "QA owner"},
-            "support": {"email": "qa@example.com"}, "legal": {"terms_accepted": True},
-        },
-    ))
+    session.add(
+        MaxProjectConfig(
+            project_id=project.id,
+            owner_id=user.id,
+            config_version=2,
+            config={
+                "app_name": "Warehouse",
+                "app_type": "custom",
+                "summary": "Stock records",
+                "primary_action": "Add stock",
+                "operator": {"legal_name": "QA owner"},
+                "support": {"email": "qa@example.com"},
+                "legal": {"terms_accepted": True},
+            },
+        )
+    )
     await session.commit()
     app.dependency_overrides[get_current_user] = lambda: user
     return value, integration
@@ -63,11 +77,16 @@ async def test_publish_submits_only_the_current_accepted_cell(client, db_session
     project = value["project"]
     submit = AsyncMock(return_value={"phase": "queued", "run_id": "public-one"})
     monkeypatch.setattr(orchestrator_client, "publish_project_cell", submit)
-    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", AsyncMock(
-        return_value=SimpleNamespace(state="resources_ready"),
-    ))
+    monkeypatch.setattr(
+        project_cell_runtime,
+        "_get_cell_resources",
+        AsyncMock(
+            return_value=SimpleNamespace(state="resources_ready"),
+        ),
+    )
     response = await client.post(
-        f"/api/projects/{project.id}/deploy", json={"idempotency_key": "publish-once"},
+        f"/api/projects/{project.id}/deploy",
+        json={"idempotency_key": "publish-once"},
     )
     assert response.status_code == 200, response.text
     assert response.json()["run_id"] == "public-one"
@@ -82,7 +101,10 @@ async def test_publish_submits_only_the_current_accepted_cell(client, db_session
 
 @pytest.mark.parametrize("interrupted", [False, True])
 async def test_publish_wakes_or_replays_idle_source_then_checks_fresh_fence(
-    client, db_session, monkeypatch, interrupted,
+    client,
+    db_session,
+    monkeypatch,
+    interrupted,
 ):
     value, _ = await seed(db_session)
     workspace = value["workspace"]
@@ -90,7 +112,9 @@ async def test_publish_wakes_or_replays_idle_source_then_checks_fresh_fence(
     await db_session.commit()
     pending = SimpleNamespace(id=uuid4()) if interrupted else None
     monkeypatch.setattr(
-        project_cell_runtime, "_unfinished_owner_wake", AsyncMock(return_value=pending),
+        project_cell_runtime,
+        "_unfinished_owner_wake",
+        AsyncMock(return_value=pending),
     )
     ready = interrupted
 
@@ -109,7 +133,7 @@ async def test_publish_wakes_or_replays_idle_source_then_checks_fresh_fence(
     monkeypatch.setattr(project_cell_runtime, "_wake_owner_workspace", wake_mock)
     submit = AsyncMock(return_value={"phase": "queued", "run_id": "after-wake"})
     monkeypatch.setattr(orchestrator_client, "publish_project_cell", submit)
-    response = await client.post(f'/api/projects/{value["project"].id}/deploy', json={})
+    response = await client.post(f"/api/projects/{value['project'].id}/deploy", json={})
     assert response.status_code == 200, response.text
     wake_mock.assert_awaited_once()
     payload = submit.await_args.args[1]
@@ -120,7 +144,10 @@ async def test_publish_wakes_or_replays_idle_source_then_checks_fresh_fence(
 
 @pytest.mark.parametrize("reason", ["proof", "generation", "other_owner"])
 async def test_publish_rejects_unproven_busy_or_other_owner(
-    client, db_session, monkeypatch, reason,
+    client,
+    db_session,
+    monkeypatch,
+    reason,
 ):
     value, _ = await seed(db_session)
     if reason == "proof":
@@ -132,24 +159,28 @@ async def test_publish_rejects_unproven_busy_or_other_owner(
     await db_session.commit()
     submit = AsyncMock()
     monkeypatch.setattr(orchestrator_client, "publish_project_cell", submit)
-    response = await client.post(f'/api/projects/{value["project"].id}/deploy', json={})
+    response = await client.post(f"/api/projects/{value['project'].id}/deploy", json={})
     assert response.status_code == (404 if reason == "other_owner" else 409), response.text
     submit.assert_not_awaited()
 
 
 @pytest.mark.parametrize("exact", [False, True])
 async def test_readiness_requires_published_snapshot_not_just_later_timestamp(
-    client, db_session, monkeypatch, exact,
+    client,
+    db_session,
+    monkeypatch,
+    exact,
 ):
     value, _ = await seed(db_session)
     deployment = {
-        "phase": "done", "prod_url": "https://qa.example.test",
+        "phase": "done",
+        "prod_url": "https://qa.example.test",
         "finished_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "snapshot_id": str(value["snapshot"].id if exact else uuid4()),
         "commit_sha": value["snapshot"].commit_sha,
     }
     monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value=deployment))
-    response = await client.get(f'/api/projects/{value["project"].id}/max/readiness')
+    response = await client.get(f"/api/projects/{value['project'].id}/max/readiness")
     assert response.status_code == 200, response.text
     statuses = {item["id"]: item["done"] for item in response.json()["items"]}
     assert statuses["build"] is True
@@ -158,7 +189,10 @@ async def test_readiness_requires_published_snapshot_not_just_later_timestamp(
 
 @pytest.mark.parametrize("explicit_empty_brief", [False, True])
 async def test_launch_ready_without_optional_app_brief(
-    client, db_session, monkeypatch, explicit_empty_brief,
+    client,
+    db_session,
+    monkeypatch,
+    explicit_empty_brief,
 ):
     value, _ = await seed(db_session)
     project = value["project"]
@@ -176,11 +210,18 @@ async def test_launch_ready_without_optional_app_brief(
         config.update(audience="", primary_action="", features=[], content=[], style="brand")
     record.config = config
     await db_session.commit()
-    monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value={
-        "phase": "done", "prod_url": "https://qa.example.test",
-        "snapshot_id": str(value["snapshot"].id),
-        "commit_sha": value["snapshot"].commit_sha,
-    }))
+    monkeypatch.setattr(
+        orchestrator_client,
+        "get_deploy",
+        AsyncMock(
+            return_value={
+                "phase": "done",
+                "prod_url": "https://qa.example.test",
+                "snapshot_id": str(value["snapshot"].id),
+                "commit_sha": value["snapshot"].commit_sha,
+            }
+        ),
+    )
 
     readiness = await client.get(f"/api/projects/{project.id}/max/readiness")
 
@@ -189,44 +230,121 @@ async def test_launch_ready_without_optional_app_brief(
     assert result["ready_to_launch"] is True
     assert result["progress"] == 100
     assert {item["id"]: item["done"] for item in result["items"]} == {
-        "business": True, "legal": True, "build": True,
-        "bot": True, "publish": True, "max_url": True,
+        "legal": True,
+        "build": True,
+        "bot": True,
+        "publish": True,
+        "max_url": True,
     }
 
-    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", AsyncMock(
-        return_value=SimpleNamespace(state="resources_ready"),
-    ))
-    monkeypatch.setattr(orchestrator_client, "publish_project_cell", AsyncMock(return_value={
-        "phase": "queued", "run_id": "without-app-brief",
-    }))
+    monkeypatch.setattr(
+        project_cell_runtime,
+        "_get_cell_resources",
+        AsyncMock(
+            return_value=SimpleNamespace(state="resources_ready"),
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator_client,
+        "publish_project_cell",
+        AsyncMock(
+            return_value={
+                "phase": "queued",
+                "run_id": "without-app-brief",
+            }
+        ),
+    )
     publication = await client.post(f"/api/projects/{project.id}/deploy", json={})
     assert publication.status_code == 200, publication.text
     assert publication.json()["run_id"] == "without-app-brief"
 
 
 @pytest.mark.parametrize(
+    "override",
+    [
+        {"operator": {"legal_name": ""}},
+        {"operator": {"legal_name": " \t\n "}},
+        {"support": {"email": None}},
+    ],
+)
+async def test_launch_never_asks_for_owner_requisites(
+    client,
+    db_session,
+    monkeypatch,
+    override,
+):
+    """An account is an email and a password; the business behind a bot is
+    verified by MAX. Empty owner/support fields block nothing."""
+    value, _ = await seed(db_session)
+    project = value["project"]
+    record = await db_session.get(MaxProjectConfig, project.id)
+    record.config = {**record.config, "max_url_attached": True, **override}
+    await db_session.commit()
+    monkeypatch.setattr(
+        orchestrator_client,
+        "get_deploy",
+        AsyncMock(
+            return_value={
+                "phase": "done",
+                "prod_url": "https://qa.example.test",
+                "snapshot_id": str(value["snapshot"].id),
+                "commit_sha": value["snapshot"].commit_sha,
+            }
+        ),
+    )
+
+    readiness = await client.get(f"/api/projects/{project.id}/max/readiness")
+    assert readiness.status_code == 200, readiness.text
+    result = readiness.json()
+    assert result["ready_to_launch"] is True
+    assert "business" not in {item["id"] for item in result["items"]}
+
+    monkeypatch.setattr(
+        project_cell_runtime,
+        "_get_cell_resources",
+        AsyncMock(
+            return_value=SimpleNamespace(state="resources_ready"),
+        ),
+    )
+    submit = AsyncMock(return_value={"phase": "queued", "run_id": "no-requisites"})
+    monkeypatch.setattr(orchestrator_client, "publish_project_cell", submit)
+    publication = await client.post(f"/api/projects/{project.id}/deploy", json={})
+    assert publication.status_code == 200, publication.text
+    submit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
     ("override", "blocked_item"),
     [
-        ({"operator": {"legal_name": ""}}, "business"),
-        ({"operator": {"legal_name": " \t\n "}}, "business"),
-        ({"support": {"email": None}}, "business"),
         ({"legal": {"terms_accepted": False}}, "legal"),
     ],
 )
 @pytest.mark.parametrize("check", ["readiness", "publication"])
-async def test_launch_requires_owner_support_and_explicit_document_acceptance(
-    client, db_session, monkeypatch, override, blocked_item, check,
+async def test_launch_requires_explicit_document_acceptance(
+    client,
+    db_session,
+    monkeypatch,
+    override,
+    blocked_item,
+    check,
 ):
     value, _ = await seed(db_session)
     project = value["project"]
     record = await db_session.get(MaxProjectConfig, project.id)
     record.config = {**record.config, "max_url_attached": True, **override}
     await db_session.commit()
-    monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value={
-        "phase": "done", "prod_url": "https://qa.example.test",
-        "snapshot_id": str(value["snapshot"].id),
-        "commit_sha": value["snapshot"].commit_sha,
-    }))
+    monkeypatch.setattr(
+        orchestrator_client,
+        "get_deploy",
+        AsyncMock(
+            return_value={
+                "phase": "done",
+                "prod_url": "https://qa.example.test",
+                "snapshot_id": str(value["snapshot"].id),
+                "commit_sha": value["snapshot"].commit_sha,
+            }
+        ),
+    )
 
     if check == "readiness":
         readiness = await client.get(f"/api/projects/{project.id}/max/readiness")
@@ -236,9 +354,13 @@ async def test_launch_requires_owner_support_and_explicit_document_acceptance(
         assert [item["id"] for item in result["items"] if not item["done"]] == [blocked_item]
         return
 
-    monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", AsyncMock(
-        return_value=SimpleNamespace(state="resources_ready"),
-    ))
+    monkeypatch.setattr(
+        project_cell_runtime,
+        "_get_cell_resources",
+        AsyncMock(
+            return_value=SimpleNamespace(state="resources_ready"),
+        ),
+    )
     submit = AsyncMock(return_value={"phase": "queued", "run_id": "must-not-publish"})
     monkeypatch.setattr(orchestrator_client, "publish_project_cell", submit)
     publication = await client.post(f"/api/projects/{project.id}/deploy", json={})
@@ -249,7 +371,10 @@ async def test_launch_requires_owner_support_and_explicit_document_acceptance(
 
 @pytest.mark.parametrize("failure", [False, True])
 async def test_disconnect_revokes_public_credentials_before_deleting_integration(
-    client, db_session, monkeypatch, failure,
+    client,
+    db_session,
+    monkeypatch,
+    failure,
 ):
     value, integration = await seed(db_session)
     calls = []
@@ -262,7 +387,7 @@ async def test_disconnect_revokes_public_credentials_before_deleting_integration
         return {"applied": True}
 
     monkeypatch.setattr(orchestrator_client, "configure_published_cell", configure)
-    response = await client.delete(f'/api/projects/{value["project"].id}/integrations/max')
+    response = await client.delete(f"/api/projects/{value['project'].id}/integrations/max")
     assert response.status_code == (503 if failure else 204), response.text
     assert calls == [{"owner_id": str(value["project"].owner_id), "runtime_env": {}}]
     assert (await db_session.get(MaxIntegration, integration.id) is not None) is failure

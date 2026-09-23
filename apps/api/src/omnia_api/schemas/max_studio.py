@@ -55,6 +55,17 @@ class MaxProjectConfigPayload(BaseModel):
     legal: MaxLegal = Field(default_factory=MaxLegal)
     max_url_attached: bool = False
 
+    @classmethod
+    def default_for(cls, app_name: str) -> "MaxProjectConfigPayload":
+        """What a project has before its owner saved anything: a name and a
+        neutral summary. Publishing needs no requisites — only the owner's
+        confirmation of the app's documents (`legal.terms_accepted`)."""
+        return cls(
+            app_name=app_name,
+            app_type="custom",
+            summary="Мини-приложение для пользователей MAX",
+        )
+
     @field_validator("features")
     @classmethod
     def unique_features(cls, value: list[str]) -> list[str]:

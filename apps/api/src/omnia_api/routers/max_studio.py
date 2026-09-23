@@ -21,15 +21,12 @@ from omnia_api.models.project import Project
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.models.usage import Usage
 from omnia_api.schemas.max_studio import (
-    MaxLegal,
-    MaxOperator,
     MaxPreviewSessionPublic,
     MaxPreviewSessionUpstream,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
     MaxReadinessItem,
     MaxReadinessPublic,
-    MaxSupport,
     MaxUrlAttachedPayload,
     MaxUsagePublic,
     MaxUsageStagePublic,
@@ -38,7 +35,6 @@ from omnia_api.services import orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.deploy_attestation import ensure_current_release_proof
 from omnia_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
-from omnia_api.services.max_launch_readiness import has_launch_owner_and_support
 from omnia_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     render_max_managed_files,
@@ -72,14 +68,7 @@ async def _owned_max_project(
 
 
 def _default_config(project: Project) -> MaxProjectConfigPayload:
-    return MaxProjectConfigPayload(
-        app_name=project.name,
-        app_type="custom",
-        summary="Мини-приложение для пользователей MAX",
-        operator=MaxOperator(),
-        support=MaxSupport(),
-        legal=MaxLegal(),
-    )
+    return MaxProjectConfigPayload.default_for(project.name)
 
 
 def _public(project: Project, record: MaxProjectConfig | None) -> MaxProjectConfigPublic:
@@ -167,7 +156,9 @@ async def get_max_config(
     record = await session.get(MaxProjectConfig, project_id)
     result = _public(project, record)
     selection = await project_cell_runtime.resolve_project_cell_public_selection(
-        session, project, owner=current_user,
+        session,
+        project,
+        owner=current_user,
     )
     if selection.selected:
         result.application_mode = "runtime"
@@ -270,7 +261,11 @@ async def put_max_config(
             ):
                 raise ApiError("conflict", "Project Cell workspace identity mismatch", 409)
         return await _save_cell_business_config(
-            project, payload, session, current_user, cell_selection,
+            project,
+            payload,
+            session,
+            current_user,
+            cell_selection,
         )
     active_generation = (
         await session.execute(
@@ -381,8 +376,11 @@ async def _save_cell_business_config(
         raise ApiError("conflict", "MAX configuration ownership mismatch", 409)
     if record is None:
         record = MaxProjectConfig(
-            project_id=project.id, owner_id=current_user.id, config=config_data,
-            config_version=1, managed_kit_version=MAX_MANAGED_KIT_VERSION,
+            project_id=project.id,
+            owner_id=current_user.id,
+            config=config_data,
+            config_version=1,
+            managed_kit_version=MAX_MANAGED_KIT_VERSION,
         )
         session.add(record)
     elif record.config != config_data:
@@ -397,11 +395,16 @@ async def _save_cell_business_config(
     await session.refresh(record)
     if selection.workspace is not None and project.current_snapshot_id is not None:
         try:
-            await orchestrator_client.configure_published_cell(project.id, {
-                "owner_id": str(current_user.id),
-                "business_config": payload.model_dump(mode="json", exclude={"max_url_attached"}),
-                "business_config_version": version,
-            })
+            await orchestrator_client.configure_published_cell(
+                project.id,
+                {
+                    "owner_id": str(current_user.id),
+                    "business_config": payload.model_dump(
+                        mode="json", exclude={"max_url_attached"}
+                    ),
+                    "business_config_version": version,
+                },
+            )
             await project_cell_runtime._try_preview_project_lock(session, project.id)
             await session.refresh(record)
             if record.config_version != version or record.config != config_data:
@@ -409,7 +412,9 @@ async def _save_cell_business_config(
             if await project_cell_runtime._active_generation(session, project.id) is not None:
                 raise ApiError("conflict", "Данные сохранены. Примените их после сборки", 409)
             applied = await orchestrator_client.project_cell_apply_business_config(
-                selection.workspace.id, project_id=project.id, owner_id=current_user.id,
+                selection.workspace.id,
+                project_id=project.id,
+                owner_id=current_user.id,
                 version=version,
                 config=payload.model_dump(mode="json", exclude={"max_url_attached"}),
             )
@@ -417,7 +422,9 @@ async def _save_cell_business_config(
             if isinstance(exc, ApiError) and exc.status_code < 500:
                 raise
             log.warning(
-                "max_config_cell_sync_failed", project_id=str(project.id), version=version,
+                "max_config_cell_sync_failed",
+                project_id=str(project.id),
+                version=version,
                 error_type=type(exc).__name__,
             )
             raise ApiError(
@@ -512,7 +519,9 @@ async def get_max_readiness(
     )
     build_ready = generated_count > 0
     selection = await project_cell_runtime.resolve_project_cell_public_selection(
-        session, project, owner=current_user,
+        session,
+        project,
+        owner=current_user,
     )
     if selection.selected:
         from omnia_api.services.cell_publication import load_publication_evidence
@@ -532,13 +541,9 @@ async def get_max_readiness(
             and deployment.get("snapshot_id") == str(current_snapshot.id)
             and deployment.get("commit_sha") == current_snapshot.commit_sha
         )
+    # No owner requisites are asked for anywhere: a Yleum account is an email and
+    # a way to sign in; the business behind a bot is verified by MAX itself.
     items = [
-        MaxReadinessItem(
-            id="business",
-            label="Владелец и поддержка",
-            done=has_launch_owner_and_support(config),
-            action="Указать владельца и контакт поддержки",
-        ),
         MaxReadinessItem(
             id="legal",
             label="Документы для пользователей",
