@@ -265,7 +265,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     )
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0067_restoration_adaptation_activation"
+        "0068_project_cell_orchestrator"
     )
 
 
