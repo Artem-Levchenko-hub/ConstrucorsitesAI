@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import SecretStr
 
-from omnia_api.core.config import get_settings
 from omnia_api.services import orchestrator_client, orchestrator_hosts, readiness
 from omnia_api.services.orchestrator_hosts import (
     OrchestratorHostError,
@@ -49,14 +50,21 @@ def _reset_bindings() -> Any:
     orchestrator_hosts._registry_cache = None
 
 
-def _configure(monkeypatch: pytest.MonkeyPatch, hosts: str, default: str = "core") -> None:
-    settings = get_settings()
-    monkeypatch.setattr(settings, "orchestrator_hosts", hosts)
-    monkeypatch.setattr(settings, "default_orchestrator", default)
-    monkeypatch.setattr(settings, "orchestrator_url", "http://localhost:8003")
-    monkeypatch.setattr(settings, "project_cell_preview_host_suffix", "dev.yleum.ru")
-    monkeypatch.setattr(settings, "gate_preview_resolver_rules", "MAP *.dev.yleum.ru 172.19.0.1")
+def _configure(monkeypatch: pytest.MonkeyPatch, hosts: str, default: str = "core") -> Any:
+    """Hermetic settings: the registry, the transport and readiness read the same
+    fake object, so no environment (DATABASE_URL, JWT_SECRET) is needed."""
+    settings = SimpleNamespace(
+        orchestrator_hosts=hosts,
+        default_orchestrator=default,
+        orchestrator_url="http://localhost:8003",
+        project_cell_preview_host_suffix="dev.yleum.ru",
+        gate_preview_resolver_rules="MAP *.dev.yleum.ru 172.19.0.1",
+        orchestrator_internal_token=SecretStr("t"),
+    )
+    for module in (orchestrator_hosts, orchestrator_client, readiness):
+        monkeypatch.setattr(module, "get_settings", lambda settings=settings: settings)
     orchestrator_hosts._registry_cache = None
+    return settings
 
 
 # ------------------------------------------------------------------ registry
@@ -208,9 +216,7 @@ async def test_calls_follow_the_workspace_and_publications_follow_the_project(
 
 @pytest.mark.asyncio
 async def test_transport_targets_the_bound_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    _configure(monkeypatch, TWO_HOSTS)
-    settings = get_settings()
-    monkeypatch.setattr(settings, "orchestrator_internal_token", None)
+    settings = _configure(monkeypatch, TWO_HOSTS)
     workspace = uuid4()
     remember_workspace_host(workspace, None, "commerce")
     seen: list[str] = []
@@ -235,9 +241,7 @@ async def test_transport_targets_the_bound_host(monkeypatch: pytest.MonkeyPatch)
             seen.append(url)
             return FakeResponse()
 
-    from pydantic import SecretStr
-
-    monkeypatch.setattr(settings, "orchestrator_internal_token", SecretStr("t"))
+    settings.orchestrator_internal_token = SecretStr("t")
     monkeypatch.setattr(orchestrator_client.httpx, "AsyncClient", FakeClient)
 
     await orchestrator_client._request("GET", f"/internal/workspaces/{workspace}/resources")
