@@ -112,6 +112,23 @@ class Settings(BaseSettings):
     github_oauth_scope: str = Field(default="repo")
     web_base_url: str = Field(default="http://localhost:3000")
 
+    # Вход через VK ID (OAuth 2.1 + PKCE) и Яндекс ID (OAuth 2.0) —
+    # routers/auth_oauth.py + services/oauth_login.py. Кнопка провайдера
+    # появляется на страницах входа/регистрации только когда задан его client id
+    # (для Яндекса — ещё и secret: без него код не обменять; у VK ID обмен идёт по
+    # PKCE, «защищённый ключ» хранится на будущее и не обязателен). От провайдера
+    # берём ТОЛЬКО идентификатор пользователя и email — аккаунт без реквизитов
+    # (docs/plans/2026-09-23-account-data-minimisation.md). Redirect URI, который
+    # надо указать в кабинете провайдера:
+    #   <oauth_login_redirect_base_url или web_base_url>/api/auth/oauth/<vk|yandex>/callback
+    # В проде /api проксируется nginx-ом на api, поэтому база = адрес сайта; в
+    # split-origin dev (web :3000, api :8000) задайте http://localhost:8000.
+    vk_id_client_id: str | None = Field(default=None)
+    vk_id_client_secret: SecretStr | None = Field(default=None)
+    yandex_id_client_id: str | None = Field(default=None)
+    yandex_id_client_secret: SecretStr | None = Field(default=None)
+    oauth_login_redirect_base_url: str = Field(default="")
+
     # Transactional email for MAX account verification and password recovery.
     # No credentials means fail closed: tokens are still created, but the API
     # reports that delivery is not configured instead of leaking a link.

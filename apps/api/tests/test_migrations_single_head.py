@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_billing_usage_events_is_the_only_head() -> None:
+def test_oauth_login_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0070_billing_usage_events"]
+    assert heads == ["0071_oauth_login"]
+    assert chain["0071_oauth_login"] == "0070_billing_usage_events"
     assert chain["0070_billing_usage_events"] == "0069_retire_business_profiles"
     assert chain["0069_retire_business_profiles"] == "0068_project_cell_orchestrator"
     assert chain["0068_project_cell_orchestrator"] == "0067_restoration_adaptation_activation"
@@ -229,9 +230,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database = project_cell_migration_database
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0070_billing_usage_events"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == "0071_oauth_login"
     assert (
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
@@ -253,6 +252,30 @@ def test_restoration_adaptation_migrations_roundtrip(
             "WHERE code = 'free' AND version = 2"
         )
         == "null"
+    )
+    # 0071: provider identities (id + email only) and the server-side handshake
+    assert database.fetchval("SELECT to_regclass('user_identities')") is not None
+    assert database.fetchval("SELECT to_regclass('oauth_login_states')") is not None
+    assert {
+        str(row["column_name"])
+        for row in database.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'user_identities'"
+        )
+    } == {"id", "user_id", "provider", "provider_user_id", "email", "created_at"}
+    assert (
+        database.fetchval(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conname = 'uq_user_identities_provider_subject'"
+        )
+        == "UNIQUE (provider, provider_user_id)"
+    )
+    assert (
+        database.fetchval(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+            "WHERE conrelid = 'user_identities'::regclass AND contype = 'f'"
+        )
+        == "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
     )
     # 0069: business identity tables are gone; integrations hang off the user
     assert database.fetchval("SELECT to_regclass('business_profiles')") is None
@@ -298,10 +321,10 @@ def test_restoration_adaptation_migrations_roundtrip(
             "SELECT version, is_active FROM billing_plans WHERE code = 'free' ORDER BY version"
         )
     ] == [(1, True)]
+    assert database.fetchval("SELECT to_regclass('user_identities')") is None
+    assert database.fetchval("SELECT to_regclass('oauth_login_states')") is None
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0070_billing_usage_events"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == "0071_oauth_login"
 
 
 def test_project_cell_candidates_migration_upgrade_and_rollback(

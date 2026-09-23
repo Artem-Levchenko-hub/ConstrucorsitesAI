@@ -4,7 +4,6 @@ import hashlib
 import secrets
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -13,24 +12,12 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from omnia_api.core.config import get_settings
-from omnia_api.core.deps import (
-    CurrentUserDep,
-    SessionDep,
-    extract_access_claims,
-    set_session_cookie,
-)
+from omnia_api.core.deps import CurrentUserDep, SessionDep, extract_access_claims
 from omnia_api.core.errors import ApiError
 from omnia_api.core.ratelimit import rate_limit_auth, rate_limit_email
-from omnia_api.core.security import (
-    consume_dummy_verify,
-    create_access_token,
-    hash_password,
-    verify_password,
-)
-from omnia_api.models.account import AuthSession, AuthToken, LegalAcceptance
-from omnia_api.models.billing import FREE_PLAN_ID, BillingAccount, Subscription
+from omnia_api.core.security import consume_dummy_verify, hash_password, verify_password
+from omnia_api.models.account import AuthSession, AuthToken
 from omnia_api.models.user import User
-from omnia_api.models.wallet import Wallet
 from omnia_api.schemas.user import (
     EmailTokenConsume,
     EmailTokenRequest,
@@ -40,6 +27,13 @@ from omnia_api.schemas.user import (
     UserLogin,
     UserPublic,
 )
+from omnia_api.services.account_sessions import (
+    attach_session_cookie,
+    open_session,
+    request_ip,
+    request_user_agent,
+)
+from omnia_api.services.accounts import LegalConsent, create_account
 from omnia_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
@@ -49,39 +43,8 @@ from omnia_api.services.transactional_email import (
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-def _request_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:128]
-    return request.client.host[:128] if request.client else None
-
-
 def _token_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
-
-
-async def _new_session(session: SessionDep, user: User, request: Request) -> AuthSession:
-    settings = get_settings()
-    auth_session = AuthSession(
-        user_id=user.id,
-        user_agent=request.headers.get("user-agent", "")[:1000] or None,
-        ip_address=_request_ip(request),
-        expires_at=datetime.now(UTC) + timedelta(days=settings.jwt_ttl_days),
-    )
-    session.add(auth_session)
-    await session.flush()
-    return auth_session
-
-
-def _set_user_cookie(response: Response, user: User, auth_session: AuthSession) -> None:
-    set_session_cookie(
-        response,
-        create_access_token(
-            user.id,
-            session_id=auth_session.id,
-            session_version=user.session_version,
-        ),
-    )
 
 
 async def _issue_email_token(
@@ -198,59 +161,29 @@ async def register(
             )
 
     pwd_hash = await hash_password(payload.password)
-    user = User(
-        email=payload.email,
-        password_hash=pwd_hash,
-        signup_source=payload.source,
-        referrer_project_id=payload.referrer_project_id,
-        # General constructor keeps its existing frictionless behaviour. MAX
-        # accounts must prove control of the address before creating a project.
-        email_verified_at=datetime.now(UTC) if payload.product == "general" else None,
+    consent = (
+        LegalConsent(
+            document_version=settings.legal_document_version,
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+            marketing_accepted=payload.marketing_accepted,
+        )
+        if payload.product == "max"
+        else None
     )
-    session.add(user)
     try:
-        await session.flush()
-        billing_account = BillingAccount(
-            scope="personal",
-            personal_user_id=user.id,
-            created_by_user_id=user.id,
+        user = await create_account(
+            session,
+            email=payload.email,
+            password_hash=pwd_hash,
+            # General constructor keeps its existing frictionless behaviour. MAX
+            # accounts must prove control of the address before creating a project.
+            email_verified_at=datetime.now(UTC) if payload.product == "general" else None,
+            consent=consent,
+            signup_source=payload.source,
+            referrer_project_id=payload.referrer_project_id,
         )
-        session.add(billing_account)
-        await session.flush()
-        user.wallet = Wallet(
-            billing_account_id=billing_account.id,
-            balance_rub=Decimal(str(settings.initial_wallet_balance_rub)),
-        )
-        session.add(
-            Subscription(
-                billing_account_id=billing_account.id,
-                user_id=user.id,
-                plan_id=FREE_PLAN_ID,
-                status="active",
-            )
-        )
-        if payload.product == "max":
-            for document_type in ("terms", "privacy", "personal_data"):
-                session.add(
-                    LegalAcceptance(
-                        user_id=user.id,
-                        document_type=document_type,
-                        document_version=settings.legal_document_version,
-                        ip_address=_request_ip(request),
-                        user_agent=request.headers.get("user-agent", "")[:1000] or None,
-                    )
-                )
-            if payload.marketing_accepted:
-                session.add(
-                    LegalAcceptance(
-                        user_id=user.id,
-                        document_type="marketing",
-                        document_version=settings.legal_document_version,
-                        ip_address=_request_ip(request),
-                        user_agent=request.headers.get("user-agent", "")[:1000] or None,
-                    )
-                )
-        auth_session = await _new_session(session, user, request)
+        auth_session = await open_session(session, user, request)
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -260,7 +193,7 @@ async def register(
             status.HTTP_409_CONFLICT,
         ) from exc
     await session.refresh(user)
-    _set_user_cookie(response, user, auth_session)
+    attach_session_cookie(response, user, auth_session)
 
     if payload.product == "max":
         raw_token = await _issue_email_token(session, user, "verify_email", ttl=timedelta(hours=24))
@@ -290,10 +223,10 @@ async def login(
     if user.status != "active":
         raise ApiError("account_unavailable", "account is not active", status.HTTP_403_FORBIDDEN)
     user.last_login_at = datetime.now(UTC)
-    auth_session = await _new_session(session, user, request)
+    auth_session = await open_session(session, user, request)
     await session.commit()
     await session.refresh(user)
-    _set_user_cookie(response, user, auth_session)
+    attach_session_cookie(response, user, auth_session)
     return user
 
 

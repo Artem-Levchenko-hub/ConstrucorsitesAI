@@ -2,16 +2,19 @@ import Link from "next/link";
 import { Check, MailCheck, ShieldCheck } from "lucide-react";
 import { redirect } from "next/navigation";
 
+import { OAuthButtons } from "@/components/auth/OAuthButtons";
 import { BrandMark } from "@/components/marketing/BrandMark";
 import { MaxRegisterForm } from "@/components/max/MaxRegisterForm";
 import { MarketingEvents } from "@/components/marketing/MarketingEvents";
 import { getSession } from "@/lib/auth-mock";
+import { listOAuthProviders } from "@/lib/oauth-login-server";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 
 export default async function MaxRegisterPage() {
   const session = await getSession();
   if (session && !session.isAnon) redirect("/max/onboarding");
+  const providers = await listOAuthProviders();
 
   return (
     <main data-max-studio className="max-auth-shell">
@@ -56,6 +59,9 @@ export default async function MaxRegisterPage() {
             зависит от тарифа. Условия доступны в аккаунте до оплаты.
           </p>
           <MaxRegisterForm />
+          <div className="mt-6">
+            <OAuthButtons providers={providers} next="/max" />
+          </div>
         </section>
       </div>
     </main>
