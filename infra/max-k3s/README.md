@@ -73,6 +73,16 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   `cells/40-runtime-apps-backup.sh` — на runtime дамп баз каждого опубликованного приложения
   (`app-*` namespace, project-postgres и core-postgres) в `…/<день>/apps/`. Оба — `ExecStartPre`
   хостового `max-backup.service`, дальше `max-backup-push.sh` уносит всё на соседний хост.
+- **Изолированные сборки образов приложений** (Фаза 1) — `cells/50-buildkit-rootless.sh` на хосте
+  ячеек поднимает rootless BuildKit: контейнер `omnia-buildkitd` (`moby/buildkit:rootless`, uid 1000,
+  без docker.sock, `RUN`-шаги во вложенном user namespace + своём PID namespace, лимиты 3 CPU / 6 GB /
+  4096 pids, кэш в томе `omnia-buildkit-cache`, своя сеть `omnia-buildkit` с ufw-запретом на хост),
+  сокет `/run/omnia-buildkit/buildkitd.sock` для пользователя оркестратора (группа `omnia-buildkit`,
+  ACL через tmpfiles), клиент `/usr/local/bin/buildctl` из того же образа, проверка `buildctl debug
+  workers` + smoke-сборка. Скрипт дописывает в `.env` оркестратора `BUILDKIT_SOCKET`/`BUILDCTL_BINARY`
+  и `BUILD_BACKEND=docker`; **включение** — `BUILD_BACKEND=buildkit` + `systemctl restart
+  omnia-orchestrator`, **откат** — `BUILD_BACKEND=docker` + restart. Подробно —
+  `docs/09-max-k3s-infra.md`, раздел «Изолированные сборки».
 - **Мониторинг** на core — kube-prometheus-stack 91.4.1 (`k8s/apply.sh monitoring`):
   Prometheus (15 дней / 50 GB), Alertmanager, Grafana 13 на `https://grafana.yleum.ru`
   (admin, пароль в `/etc/max-studio/grafana.env` на core). Собирает метрики кластера core и
