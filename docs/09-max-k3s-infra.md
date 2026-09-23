@@ -35,6 +35,29 @@ commerce (`infra/max-k3s/cells/*`), какая ячейка где — реша�
 сделано:** api/web/gateway в кластере core (этап C), биллинг в commerce (уживается с ячейками:
 K3s там остаётся, порты 80/443 у хостового nginx превью).
 
+## Edge: один wildcard-сертификат на все три хоста (Фаза 1, код готов 23.09.2026)
+
+Сегодня каждый хост выпускает сертификаты сам и по одному на имя (HTTP-01: nginx+acme.sh на core и
+commerce для превью, cert-manager в runtime для опубликованных приложений). Это медленно (первая
+публикация ждёт выпуска), ломается, когда HTTP-01 не проходит (default-deny, DNS-кэш провайдера — оба
+случая уже ловили вживую), и никогда не покрывает новое имя заранее. Слой edge заменяет это одним
+wildcard-сертификатом Let's Encrypt с SAN `yleum.ru`, `*.yleum.ru`, `*.apps.yleum.ru`, `*.dev.yleum.ru`,
+`*.dev2.yleum.ru`, который выпускается на core через DNS-01 у reg.ru (acme.sh, плагин `dns_regru`),
+хранится в `/etc/max-studio/edge/` (root, 0600), продлевается таймером и после каждого продления сам
+разъезжается по WireGuard на runtime (Secret `kube-system/wildcard-yleum` + Traefik `TLSStore default`
+— сертификат по умолчанию для любого Ingress без своего секрета) и на commerce/core (раскладка для
+оркестратора `OMNIA_WILDCARD_CERT_ROOT` — превью получают https-блок сразу, без acme; платформенные
+vhost'ы `yleum.ru`/`www`/`grafana` тоже на wildcard). Код: `infra/max-k3s/edge/` (`edge.sh` —
+драйвер с Mac, `10-wildcard-issue.sh`, `20-wildcard-distribute.sh`); в оркестраторе — флаг
+`K8S_TLS_MODE=cert-manager|wildcard` (`k8s_publication.py`: в режиме wildcard Ingress без аннотации
+cert-manager и без `secretName`, публикация отказывает, если секрета в кластере нет).
+
+**Что нужно от владельца, чтобы включить:** в личном кабинете reg.ru → «Настройки API» включить доступ
+к API, задать отдельный пароль для API (не пароль аккаунта) и внести в белый список IP core
+`2.153.248.98`; затем на Mac `REGRU_API_Username=… REGRU_API_Password=… infra/max-k3s/edge/edge.sh all`.
+Порядок включения, проверка (`openssl s_client -servername …`), откат и принятые допущения — раздел
+«Edge» в [`infra/max-k3s/README.md`](../infra/max-k3s/README.md).
+
 ## Особенности Serverum (важно при любых работах на этих серверах)
 
 1. Публичный IP — 1:1 NAT, на интерфейсе его нет; всё, что «анонсирует» адрес наружу (K3s
