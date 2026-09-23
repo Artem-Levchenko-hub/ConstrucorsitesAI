@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 from omnia_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
+    CellRestoreFailed,
     CellTerminalOperationFailed,
 )
 from omnia_orchestrator.core.config import get_settings
@@ -2201,3 +2202,74 @@ def test_workspace_router_registers_capability_and_resource_routes() -> None:
     assert by_path["/internal/workspaces/{workspace_id}/agent/exec"] == {"POST"}
     assert by_path["/internal/workspaces/{workspace_id}/draft/apply"] == {"POST"}
     assert by_path["/internal/workspaces/{workspace_id}/draft/preview-session"] == {"POST"}
+
+
+async def test_wake_out_of_capacity_is_a_wait_not_a_container_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Живой случай 22–23.09: приложение вечно «разворачивается».
+
+    Нехватка ёмкости — ожидаемое состояние, а не сбой. На создании ячейки она уже
+    так и трактуется: 429 с временем повтора. На пробуждении тот же отказ попадал
+    в общий перехват ресурсных ошибок и уходил как 500 «сбой контейнера»: API
+    видел внутреннюю ошибку, прятал её за хеш и повторял сотни раз молча, а
+    владелец смотрел на «разворачивается» без объяснения.
+    """
+
+    class CapacityProvider(_RecordingProvider):
+        async def execute_control(self, workspace_id, action, mutation):
+            raise CellCapacityUnavailable("insufficient_cpu")
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: CapacityProvider())
+    payload = {
+        "workspace_id": "00000000-0000-0000-0000-000000000071",
+        "kind": "wake",
+        "operation_id": "00000000-0000-0000-0000-000000000072",
+        "fencing_epoch": 9,
+        "request_digest": "e" * 64,
+    }
+
+    async with _client() as client:
+        response = await client.post(
+            "/internal/workspaces/00000000-0000-0000-0000-000000000071/control",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=payload,
+        )
+
+    assert response.status_code == 429
+    body = response.json()["error"]
+    assert body["code"] == "capacity_wait"
+    assert body["message"] == "insufficient_cpu"
+    assert body["details"]["effect_applied"] is False
+    assert body["details"]["reason"] == "insufficient_cpu"
+    assert body["details"]["retry_after_seconds"] == 2
+    assert body["details"]["operation_id"] == payload["operation_id"]
+
+
+async def test_wake_still_reports_a_real_container_failure_as_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Послабление касается только ёмкости: настоящий сбой остаётся сбоем."""
+
+    class BrokenProvider(_RecordingProvider):
+        async def execute_control(self, workspace_id, action, mutation):
+            raise CellRestoreFailed("checkpoint is corrupt")
+
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _settings: BrokenProvider())
+    payload = {
+        "workspace_id": "00000000-0000-0000-0000-000000000073",
+        "kind": "wake",
+        "operation_id": "00000000-0000-0000-0000-000000000074",
+        "fencing_epoch": 9,
+        "request_digest": "f" * 64,
+    }
+
+    async with _client() as client:
+        response = await client.post(
+            "/internal/workspaces/00000000-0000-0000-0000-000000000073/control",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json=payload,
+        )
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "container_failure"

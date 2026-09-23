@@ -1137,6 +1137,37 @@ class ProjectCellOrchestratorClient(Protocol):
     ) -> ProjectCellAgentOperationStatus: ...
 
 
+def _raise_capacity_wait_if_any(exc: OrchestratorBadRequest, request: Any) -> None:
+    """Превратить ответ «подожди ёмкости» в ожидание, а не в отказ.
+
+    Разбор общий для создания ячейки и для её пробуждения намеренно: пока он был
+    только у создания, пробуждение считало тот же ответ отказом операции. Ответ
+    про чужую операцию не принимается за свой — иначе ожиданием можно было бы
+    подменить результат другого запроса.
+    """
+    if exc.status_code != 429:
+        return
+    if exc.upstream_code != "capacity_wait":
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid capacity-wait response"
+        ) from exc
+    try:
+        rejection = ProjectCellCapacityRejection.from_json(exc.details)
+    except (TypeError, ValueError) as parse_error:
+        raise OrchestratorUnavailable(
+            "Orchestrator returned an invalid capacity-wait response"
+        ) from parse_error
+    if (
+        rejection.operation_id != request.operation_id
+        or rejection.fencing_epoch != request.fencing_epoch
+        or rejection.request_digest != request.request_digest
+    ):
+        raise OrchestratorUnavailable(
+            "Orchestrator returned a mismatched capacity-wait response"
+        ) from exc
+    raise ProjectCellCapacityWait(rejection) from exc
+
+
 class HttpProjectCellOrchestratorClient:
     async def ensure(
         self,
@@ -1156,27 +1187,8 @@ class HttpProjectCellOrchestratorClient:
                 host=await host_for_workspace(request.workspace_id),
             )
         except OrchestratorBadRequest as exc:
-            if exc.status_code != 429:
-                raise
-            if exc.upstream_code != "capacity_wait":
-                raise OrchestratorUnavailable(
-                    "Orchestrator returned an invalid capacity-wait response"
-                ) from exc
-            try:
-                rejection = ProjectCellCapacityRejection.from_json(exc.details)
-            except (TypeError, ValueError) as parse_error:
-                raise OrchestratorUnavailable(
-                    "Orchestrator returned an invalid capacity-wait response"
-                ) from parse_error
-            if (
-                rejection.operation_id != request.operation_id
-                or rejection.fencing_epoch != request.fencing_epoch
-                or rejection.request_digest != request.request_digest
-            ):
-                raise OrchestratorUnavailable(
-                    "Orchestrator returned a mismatched capacity-wait response"
-                ) from exc
-            raise ProjectCellCapacityWait(rejection) from exc
+            _raise_capacity_wait_if_any(exc, request)
+            raise
         return ProjectCellResourceResponse.from_json(payload)
 
     async def control(
@@ -1191,12 +1203,16 @@ class HttpProjectCellOrchestratorClient:
             if request.kind == "wake"
             else 30.0
         )
-        payload = await _request(
-            "POST",
-            f"/internal/workspaces/{request.workspace_id}/control",
-            json=request.to_wire_json(),
-            timeout=timeout,
-        )
+        try:
+            payload = await _request(
+                "POST",
+                f"/internal/workspaces/{request.workspace_id}/control",
+                json=request.to_wire_json(),
+                timeout=timeout,
+            )
+        except OrchestratorBadRequest as exc:
+            _raise_capacity_wait_if_any(exc, request)
+            raise
         return ProjectCellResourceResponse.from_json(payload)
 
     async def observe_resources(

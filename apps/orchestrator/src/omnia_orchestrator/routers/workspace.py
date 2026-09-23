@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, NoReturn
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Response
@@ -157,20 +157,7 @@ async def ensure_workspace(
             mutation,
         )
     except CellCapacityUnavailable as exc:
-        settings = get_settings()
-        raise OrchestratorError(
-            code="capacity_wait",
-            message=exc.reason,
-            status_code=429,
-            details={
-                "operation_id": str(mutation.operation_id),
-                "fencing_epoch": mutation.fencing_epoch,
-                "request_digest": mutation.request_digest,
-                "effect_applied": False,
-                "reason": exc.reason,
-                "retry_after_seconds": settings.cell_capacity_retry_after_seconds,
-            },
-        ) from exc
+        _raise_capacity_wait(exc, mutation)
     except (CellFenceRejected, CellIdentityConflict, CellIndeterminateOperation) as exc:
         _raise_pre_effect_conflict(str(exc), mutation)
     except (WorkspaceProviderUnavailable, WorkspaceLockTimeout, WorkspaceLockUnavailable) as exc:
@@ -199,6 +186,29 @@ async def ensure_workspace(
         has_postgres=True,
         has_redis=True,
     )
+
+
+def _raise_capacity_wait(exc: CellCapacityUnavailable, mutation: LifecycleMutation) -> NoReturn:
+    """Нехватка ёмкости — ожидаемое ожидание, а не сбой.
+
+    Один ответ на всех путях намеренно: пока создание ячейки отвечало «подожди», а
+    пробуждение той же ячейки — «сбой контейнера», вызывающая сторона видела на
+    втором пути внутреннюю ошибку, прятала причину за хеш и повторяла молча.
+    Владелец при этом смотрел на бесконечное «разворачивается».
+    """
+    raise OrchestratorError(
+        code="capacity_wait",
+        message=exc.reason,
+        status_code=429,
+        details={
+            "operation_id": str(mutation.operation_id),
+            "fencing_epoch": mutation.fencing_epoch,
+            "request_digest": mutation.request_digest,
+            "effect_applied": False,
+            "reason": exc.reason,
+            "retry_after_seconds": get_settings().cell_capacity_retry_after_seconds,
+        },
+    ) from exc
 
 
 @router.post(
@@ -237,6 +247,9 @@ async def control_workspace(
             message=str(exc),
             status_code=503,
         ) from exc
+    except CellCapacityUnavailable as exc:
+        # Раньше этот отказ попадал в общий перехват ниже и уходил как 500.
+        _raise_capacity_wait(exc, mutation)
     except (CellRestoreFailed, CellResourceError) as exc:
         raise OrchestratorError(
             code="container_failure",

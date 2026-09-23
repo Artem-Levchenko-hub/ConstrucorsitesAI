@@ -935,3 +935,80 @@ async def test_capacity_retries_pause_after_confirmed_terminal_failure(
         assert retry is not None
         assert retry.idempotency_key.endswith(":2")
         assert retry.status == "completed"
+
+
+async def test_wake_capacity_wait_is_recognised_like_ensure(monkeypatch) -> None:
+    """Пробуждение обязано понимать «ожидание ёмкости» так же, как создание.
+
+    Иначе получается несовместимость между половинами: оркестратор отвечает 429
+    «подожди», а клиент считает это отказом и роняет операцию. Именно так и было
+    до правки — только с той стороны отказ приходил как 500, и владелец видел
+    вечное «разворачивается».
+    """
+    from uuid import uuid4
+
+    from omnia_api.services import orchestrator_client as oc
+
+    request = oc.ControlProjectCellResourcesRequest(
+        workspace_id=uuid4(),
+        kind="wake",
+        checkpoint_ref=None,
+        operation_id=uuid4(),
+        fencing_epoch=9,
+        request_digest="e" * 64,
+    )
+    details = {
+        "operation_id": str(request.operation_id),
+        "fencing_epoch": request.fencing_epoch,
+        "request_digest": request.request_digest,
+        "effect_applied": False,
+        "reason": "insufficient_cpu",
+        "retry_after_seconds": 2,
+    }
+
+    async def refusing(*args, **kwargs):
+        raise oc.OrchestratorBadRequest(
+            "capacity", status_code=429, upstream_code="capacity_wait", details=details
+        )
+
+    monkeypatch.setattr(oc, "_request", refusing)
+
+    with pytest.raises(oc.ProjectCellCapacityWait) as caught:
+        await oc.HttpProjectCellOrchestratorClient().control(request)
+
+    assert caught.value.rejection.reason == "insufficient_cpu"
+    assert caught.value.rejection.retry_after_seconds == 2
+
+
+async def test_wake_rejects_a_mismatched_capacity_answer(monkeypatch) -> None:
+    """Ответ про чужую операцию не принимается за свой."""
+    from uuid import uuid4
+
+    from omnia_api.services import orchestrator_client as oc
+
+    request = oc.ControlProjectCellResourcesRequest(
+        workspace_id=uuid4(),
+        kind="wake",
+        checkpoint_ref=None,
+        operation_id=uuid4(),
+        fencing_epoch=9,
+        request_digest="e" * 64,
+    )
+    details = {
+        "operation_id": str(uuid4()),
+        "fencing_epoch": 9,
+        "request_digest": "e" * 64,
+        "effect_applied": False,
+        "reason": "insufficient_cpu",
+        "retry_after_seconds": 2,
+    }
+
+    async def refusing(*args, **kwargs):
+        raise oc.OrchestratorBadRequest(
+            "capacity", status_code=429, upstream_code="capacity_wait", details=details
+        )
+
+    monkeypatch.setattr(oc, "_request", refusing)
+
+    with pytest.raises(oc.OrchestratorUnavailable):
+        await oc.HttpProjectCellOrchestratorClient().control(request)
