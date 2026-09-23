@@ -155,6 +155,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         return asyncio.run(_run(args, client, settings))
+    except OSError as exc:  # e.g. a missing --ssh-key-file
+        print(f"serverum: {exc}", file=sys.stderr)
+        return 2
     except ServerumTimeout as exc:
         print(f"serverum: {exc}", file=sys.stderr)
         return 4

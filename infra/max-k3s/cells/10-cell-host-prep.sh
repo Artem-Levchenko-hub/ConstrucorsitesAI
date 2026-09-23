@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Фаза 3, этап B: второй хост ячеек агента (генерация + dev-превью) с тем же Docker-стеком, что на core.
-# Запускается от root: ssh <host> sudo bash -s -- ADMIN_USER DOMAIN PREVIEW_SUFFIX ACME_EMAIL < этот файл
+# Запускается от root: ssh <host> sudo bash -s -- ADMIN_USER DOMAIN PREVIEW_SUFFIX ACME_EMAIL [PUBLIC_IP] < этот файл
+#   PUBLIC_IP — необязателен: нужен для только что заказанного хоста (cells/60-order-cell-host.sh),
+#   у которого ещё нет DNS-имени, по которому его можно было бы узнать.
 #
 # Что делает (идемпотентно), по образцу migrate/10-core-host-prep.sh без платформенных частей:
-#   - K3s: servicelb off, Traefik → ClusterIP (80/443 нужны хостовому nginx под превью ячеек)
+#   - K3s (если установлен): servicelb off, Traefik → ClusterIP (80/443 нужны хостовому nginx под превью ячеек)
 #   - публичный IP на lo (Serverum: 1:1 NAT, hairpin к себе не работает)
 #   - Docker CE (mtu 1400), оператор в группе docker
 #   - nginx (catch-all + include vhost-ов оркестратора) + acme.sh под оператором (сертификат на каждое превью)
@@ -11,16 +13,17 @@
 #
 # Чего НЕ делает: не ставит платформу (api/web/gateway живут на core), не выпускает сертификат домена.
 set -euo pipefail
-ADMIN_USER=$1 DOMAIN=$2 PREVIEW_SUFFIX=$3 ACME_EMAIL=$4
+ADMIN_USER=$1 DOMAIN=$2 PREVIEW_SUFFIX=$3 ACME_EMAIL=$4 PUBLIC_IP=${5:-}
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 
 echo "== k3s: servicelb off (освобождаем 80/443), traefik → ClusterIP"
-if ! grep -q "^disable:" /etc/rancher/k3s/config.yaml; then
-  printf 'disable:\n  - servicelb\n' >> /etc/rancher/k3s/config.yaml
-  systemctl restart k3s
-  for i in $(seq 1 30); do k3s kubectl get node >/dev/null 2>&1 && break; sleep 3; done
-fi
-cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml <<'EOF'
+if [ -f /etc/rancher/k3s/config.yaml ]; then
+  if ! grep -q "^disable:" /etc/rancher/k3s/config.yaml; then
+    printf 'disable:\n  - servicelb\n' >> /etc/rancher/k3s/config.yaml
+    systemctl restart k3s
+    for i in $(seq 1 30); do k3s kubectl get node >/dev/null 2>&1 && break; sleep 3; done
+  fi
+  cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml <<'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -31,13 +34,18 @@ spec:
     service:
       type: ClusterIP
 EOF
-k3s kubectl -n kube-system patch svc traefik -p '{"spec":{"type":"ClusterIP"}}' >/dev/null 2>&1 || true
-k3s kubectl -n kube-system delete pod -l svccontroller.k3s.cattle.io/svcname=traefik --ignore-not-found >/dev/null 2>&1 || true
-for i in $(seq 1 20); do ss -tlnH | awk '{print $4}' | grep -qE ':(80|443)$' || break; sleep 3; done
+  k3s kubectl -n kube-system patch svc traefik -p '{"spec":{"type":"ClusterIP"}}' >/dev/null 2>&1 || true
+  k3s kubectl -n kube-system delete pod -l svccontroller.k3s.cattle.io/svcname=traefik --ignore-not-found >/dev/null 2>&1 || true
+  for i in $(seq 1 20); do ss -tlnH | awk '{print $4}' | grep -qE ':(80|443)$' || break; sleep 3; done
+else
+  # Хост, заказанный только под ячейки (cells/60-order-cell-host.sh): K3s на нём не ставится,
+  # 80/443 с самого начала свободны для хостового nginx.
+  echo "  k3s не установлен — хост только под Docker-ячейки, пропускаем"
+fi
 ss -tlnH | awk '{print $4}' | grep -E ':(80|443)$' && { echo "порты 80/443 всё ещё заняты"; exit 1; } || echo "  80/443 свободны"
 
 echo "== публичный IP на lo"
-PUBLIC_IP=$(dig +short A "probe.$PREVIEW_SUFFIX" @1.1.1.1 | head -1)
+[ -n "$PUBLIC_IP" ] || PUBLIC_IP=$(dig +short A "probe.$PREVIEW_SUFFIX" @1.1.1.1 | head -1)
 if [ -z "$PUBLIC_IP" ]; then
   # запись *.<PREVIEW_SUFFIX> ещё не заведена — берём адрес по имени хоста (core/runtime/commerce.<домен>)
   PUBLIC_IP=$(dig +short A "$(hostname).$DOMAIN" @1.1.1.1 | head -1)
