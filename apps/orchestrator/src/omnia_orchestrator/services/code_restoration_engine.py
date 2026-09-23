@@ -635,6 +635,29 @@ def verify_post_dump_catalog(
         raise CellIdentityConflict("restoration database schema changed during export")
 
 
+# `timeout` сообщает об убийстве по времени именно этим кодом.
+_TIMEOUT_EXIT_CODE = 124
+# Абсолютный предохранитель: кандидат не должен занимать проверочный слот
+# бесконечно. Выше собственных лимитов проекта, потому что ограничивать ими
+# и так нечего — они уже выбраны под этот проект.
+_STAGE_CEILING_SECONDS = 1800
+
+
+def stage_timeout_seconds(task_timeout_seconds: int) -> int:
+    """Сколько времени дать исторической сборке в проверочной ячейке.
+
+    Прежде здесь стояло `min(..., 420)`, то есть МЕНЬШЕ, чем собственный лимит
+    сборки проекта (600 с), и при этом кандидат работает на вдвое меньшем числе
+    ядер. Такая сборка обязана быть медленнее обычной, а времени ей давали
+    меньше — 23.09 живой откат на этом и умер: `next build` успешно
+    скомпилировался, сгенерировал все страницы и был убит на последнем шаге, а
+    владельцу написали «историческому коду нужна совместимая правка».
+
+    Правило простое: не меньше, чем проект отводит себе сам.
+    """
+    return min(max(int(task_timeout_seconds), 1), _STAGE_CEILING_SECONDS)
+
+
 class CodeRestorationEngine:
     def __init__(self, settings: Any = None, *, manager_factory: Any = None) -> None:
         if settings is None:
@@ -1648,7 +1671,7 @@ class CodeRestorationEngine:
                         request,
                         candidate,
                         task.argv,
-                        min(task.timeout_seconds, 420),
+                        stage_timeout_seconds(task.timeout_seconds),
                         task.cwd,
                         stage=f"build:{index}",
                     )
@@ -2010,8 +2033,17 @@ class CodeRestorationEngine:
         result = container.exec_run(["timeout", str(timeout), *argv], workdir="/workspace/" + cwd)
         if result.exit_code != 0:
             log = Path(backend.root) / str(backend.workspace_id) / "restoration-check.log"
-            log.write_bytes(result.output[-24000:])
+            # Код выхода — в файл вместе с выводом: иначе оператор видит «ELIFECYCLE
+            # Command failed» без единой ошибки и не может отличить убитую по
+            # времени сборку от сломанной.
+            header = f"[stage] exit_code={result.exit_code} timeout={timeout}s\n".encode()
+            log.write_bytes(header + result.output[-24000:])
             log.chmod(0o600)
+            if result.exit_code == _TIMEOUT_EXIT_CODE:
+                raise PreparationNeedsChanges(
+                    f"Проверка исторического кода не уложилась в {timeout} с. "
+                    "Это ограничение платформы, а не ошибка в коде версии."
+                )
             raise PreparationNeedsChanges(
                 "Проверка исторического кода не прошла; нужна совместимая правка."
             )
