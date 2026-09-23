@@ -1,8 +1,10 @@
+import { Children, isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import PricingPage from "@/app/pricing/page";
 import RegisterPage from "@/app/(auth)/register/page";
+import { OAuthButtons } from "@/components/auth/OAuthButtons";
 import { RegisterForm } from "@/components/auth/RegisterForm";
 
 const { getSessionMock } = vi.hoisted(() => ({
@@ -10,6 +12,9 @@ const { getSessionMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth-mock", () => ({ getSession: getSessionMock }));
+vi.mock("@/lib/oauth-login-server", () => ({
+  listOAuthProviders: async () => [{ provider: "vk", label: "VK ID" }],
+}));
 
 vi.mock("next-intl/server", () => ({
   getTranslations: vi.fn(async () => (key: string) => key),
@@ -50,13 +55,23 @@ describe("public MAX routing", () => {
     const page = await RegisterPage({
       searchParams: Promise.resolve({ next: "/projects/shared", source: "share", ref: "project-42" }),
     });
-    const form = page.props.children as React.ReactElement<React.ComponentProps<typeof RegisterForm>>;
+    const children = Children.toArray(page.props.children).filter(isValidElement);
+    const form = children.find((child) => child.type === RegisterForm) as
+      | React.ReactElement<React.ComponentProps<typeof RegisterForm>>
+      | undefined;
 
-    expect(form.type).toBe(RegisterForm);
-    expect(form.props).toMatchObject({
+    expect(form?.props).toMatchObject({
       next: "/projects/shared",
       source: "share",
       referrerProjectId: "project-42",
+    });
+    // Вход через провайдера ведёт на ту же страницу, что и обычная регистрация.
+    const oauth = children.find((child) => child.type === OAuthButtons) as
+      | React.ReactElement<React.ComponentProps<typeof OAuthButtons>>
+      | undefined;
+    expect(oauth?.props).toMatchObject({
+      next: "/projects/shared",
+      providers: [{ provider: "vk", label: "VK ID" }],
     });
   });
 });

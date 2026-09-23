@@ -2,7 +2,9 @@ import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { redirect } from "next/navigation";
 import { AuthCard } from "@/components/auth/AuthCard";
+import { OAuthButtons } from "@/components/auth/OAuthButtons";
 import { RegisterForm } from "@/components/auth/RegisterForm";
+import { listOAuthProviders } from "@/lib/oauth-login-server";
 
 export default async function RegisterPage({
   searchParams,
@@ -14,7 +16,7 @@ export default async function RegisterPage({
 
   const loginHref = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
 
-  const t = await getTranslations("auth");
+  const [t, providers] = await Promise.all([getTranslations("auth"), listOAuthProviders()]);
 
   return (
     <AuthCard
@@ -33,6 +35,7 @@ export default async function RegisterPage({
       }
     >
       <RegisterForm next={next} source={source} referrerProjectId={ref} />
+      <OAuthButtons providers={providers} next={next} />
     </AuthCard>
   );
 }

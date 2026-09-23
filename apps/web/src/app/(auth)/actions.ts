@@ -70,10 +70,8 @@ function safeNext(raw: FormDataEntryValue | null): string | null {
  * browser actually receives it.
  */
 async function callAuth(
-  endpoint: "login" | "register",
-  email: string,
-  password: string,
-  extra?: Record<string, unknown>,
+  endpoint: "login" | "register" | "oauth/complete",
+  body: Record<string, unknown>,
 ): Promise<string | null> {
   const url = `${apiBaseUrl()}/api/auth/${endpoint}`;
   let response: Response;
@@ -81,7 +79,7 @@ async function callAuth(
     response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, ...extra }),
+      body: JSON.stringify(body),
       cache: "no-store",
     });
   } catch (e) {
@@ -160,7 +158,7 @@ export async function loginAction(
   const validationError = validateCredentials(email, password);
   if (validationError) return { error: validationError };
 
-  const error = await callAuth("login", email, password);
+  const error = await callAuth("login", { email, password });
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);
 }
@@ -189,12 +187,7 @@ export async function registerAction(
   if (source) provenance.source = source;
   if (referrerProjectId) provenance.referrer_project_id = referrerProjectId;
 
-  const error = await callAuth(
-    "register",
-    email,
-    password,
-    Object.keys(provenance).length > 0 ? provenance : undefined,
-  );
+  const error = await callAuth("register", { email, password, ...provenance });
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);
 }
@@ -217,7 +210,9 @@ export async function maxRegisterAction(
     return { error: "Подтвердите обязательные условия" };
   }
 
-  const error = await callAuth("register", email, password, {
+  const error = await callAuth("register", {
+    email,
+    password,
     product: "max",
     terms_accepted: true,
     privacy_accepted: true,
@@ -228,6 +223,41 @@ export async function maxRegisterAction(
   });
   if (error) return { error };
   redirect("/max/onboarding");
+}
+
+/**
+ * Вход через VK ID / Яндекс ID для нового человека: callback api выдал
+ * одноразовый билет, аккаунт создаётся только здесь — после тех же трёх
+ * согласий, что и при обычной регистрации MAX Studio. Cookie-сессия
+ * переносится в браузер так же, как при входе по паролю.
+ */
+export async function oauthCompleteAction(
+  _prev: FormState,
+  formData: FormData,
+): Promise<FormState> {
+  const ticket = String(formData.get("ticket") ?? "").trim();
+  if (!ticket) {
+    return { error: "Ссылка на подтверждение устарела. Войдите через провайдера ещё раз" };
+  }
+  if (
+    formData.get("terms_accepted") !== "on" ||
+    formData.get("privacy_accepted") !== "on" ||
+    formData.get("personal_data_accepted") !== "on"
+  ) {
+    return { error: "Подтвердите обязательные условия" };
+  }
+  const documentVersion = String(formData.get("document_version") ?? "").trim();
+  const error = await callAuth("oauth/complete", {
+    ticket,
+    terms_accepted: true,
+    privacy_accepted: true,
+    personal_data_accepted: true,
+    marketing_accepted: formData.get("marketing_accepted") === "on",
+    document_version:
+      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-07-30",
+  });
+  if (error) return { error };
+  redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);
 }
 
 export async function logoutAction() {
