@@ -105,7 +105,9 @@ orchestrator_layout() { # orchestrator_layout SUFFIX GROUP
 }
 # ------------------------------------------------------------------ core: платформенные vhost'ы
 platform_vhost_files() {
-  grep -lsE "^\s*ssl_certificate(_key)?\s+(/etc/letsencrypt/live/$EDGE_LETSENCRYPT_LINEAGE/|$CERTS_DIR/root/)" /etc/nginx/sites-available/* 2>/dev/null || true
+  # Только настоящие vhost'ы (без наших резервных копий *.max-edge.orig и редакторских хвостов).
+  grep -lsE "^\s*ssl_certificate(_key)?\s+(/etc/letsencrypt/live/$EDGE_LETSENCRYPT_LINEAGE/|$CERTS_DIR/root/)" /etc/nginx/sites-available/* 2>/dev/null \
+    | grep -vE '\.(max-edge\.orig|bak|orig|swp|dpkg-[a-z]+)$' || true
 }
 platform_vhost_switch() {
   # Только если группа root выпущена и покрывает корень домена и *.domain (www, grafana).
@@ -273,14 +275,15 @@ do_authorize() {
   log "authorize: ключ core может только «$SELF receive $role» (пользователь maxedge)"
 }
 do_receive() {
-  local role=$1 tmp
+  local role=$1
   need_root
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
-  tar -xf - -C "$tmp"
-  verify_files "$tmp" "$role"
+  # Не local: ловушка EXIT выполняется уже вне функции (set -u).
+  RECEIVE_TMP=$(mktemp -d)
+  trap 'rm -rf "${RECEIVE_TMP:-}"' EXIT
+  tar -xf - -C "$RECEIVE_TMP"
+  verify_files "$RECEIVE_TMP" "$role"
   install -d -m 700 "$EDGE_DIR"
-  rm -rf "$CERTS_DIR.new"; cp -a "$tmp/certs" "$CERTS_DIR.new"; chmod -R go-rwx "$CERTS_DIR.new"; chown -R root:root "$CERTS_DIR.new"
+  rm -rf "$CERTS_DIR.new"; cp -a "$RECEIVE_TMP/certs" "$CERTS_DIR.new"; chmod -R go-rwx "$CERTS_DIR.new"; chown -R root:root "$CERTS_DIR.new"
   rm -rf "$CERTS_DIR.old"; [ -d "$CERTS_DIR" ] && mv "$CERTS_DIR" "$CERTS_DIR.old"
   mv "$CERTS_DIR.new" "$CERTS_DIR"; rm -rf "$CERTS_DIR.old"
   log "receive $role: сертификаты установлены в $CERTS_DIR"
