@@ -2,15 +2,17 @@
 # Edge (Фаза 1): единый wildcard-сертификат для всех трёх хостов. Драйвер, запускается с Mac (bash 3.2 ok):
 #
 #   ./edge.sh install            скрипты на хосты (/usr/local/sbin/max-edge-*), edge.env, таймер продления на core
-#   ./edge.sh creds              REGRU_API_Username / REGRU_API_Password из окружения Mac → core:/etc/max-studio/edge/regru.env
+#   ./edge.sh acme-dns install|check|records|test   свой acme-dns на core (DNS-01 без API reg.ru; см. 05-acme-dns.sh)
+#   ./edge.sh creds              (только для EDGE_DNS_HOOK=dns_regru) REGRU_API_Username / REGRU_API_Password → core
 #   ./edge.sh authorize          ключ раздачи core → runtime и commerce (пользователь maxedge, только «receive <роль>»)
-#   ./edge.sh issue              выпуск через DNS-01 reg.ru на core + установка + раздача на все хосты
+#   ./edge.sh issue              выпуск сертификатов по группам через DNS-01 (acme-dns или reg.ru) на core + установка + раздача
 #   ./edge.sh distribute         повторная раздача текущего сертификата (idempotent)
 #   ./edge.sh orchestrator-env on|off   OMNIA_WILDCARD_CERT_ROOT в .env оркестратора на core и commerce
 #   ./edge.sh k8s-mode wildcard|cert-manager   K8S_TLS_MODE в .env оркестратора на core (с проверкой секрета в runtime)
 #   ./edge.sh status             срок действия на core + что отдают публичные адреса (openssl s_client с Mac)
 #   ./edge.sh rollback           все хосты обратно: certbot/самоподписанный/без TLSStore (см. README, раздел Edge)
-#   ./edge.sh all                install → creds → authorize → issue → orchestrator-env on → status
+#   ./edge.sh all                install → authorize → issue → orchestrator-env on → status (acme-dns должен быть
+#                                поднят и делегирован заранее: ./edge.sh acme-dns install → записи в DNS → acme-dns check)
 #
 # Секреты reg.ru нигде не печатаются и не попадают в argv: только stdin → файл 0600 на core.
 set -euo pipefail
@@ -50,6 +52,7 @@ EDGE_ACME_EMAIL=$ACME_EMAIL
 EOF"
   done
   upload core "$E/10-wildcard-issue.sh" /usr/local/sbin/max-edge-issue
+  upload core "$E/05-acme-dns.sh" /usr/local/sbin/max-edge-acme-dns
   sh_remote core "/usr/local/sbin/max-edge-issue timer"
 }
 
@@ -79,7 +82,8 @@ phase_authorize() {
   done
 }
 
-phase_issue() { log "issue → core (DNS-01 reg.ru)"; sh_remote core "/usr/local/sbin/max-edge-issue issue"; }
+phase_issue() { log "issue → core (DNS-01)"; sh_remote core "/usr/local/sbin/max-edge-issue issue"; }
+phase_acme_dns() { local step=${1:-status}; log "acme-dns $step → core"; sh_remote core "/usr/local/sbin/max-edge-acme-dns $step"; }
 phase_distribute() { log "distribute → core push"; sh_remote core "/usr/local/sbin/max-edge-distribute push"; }
 
 phase_orchestrator_env() {
@@ -143,7 +147,8 @@ phase_rollback() {
 case "${1:-}" in
   install|creds|authorize|issue|distribute|status|rollback) "phase_$1" ;;
   orchestrator-env) phase_orchestrator_env "${2:-on}" ;;
+  acme-dns) phase_acme_dns "${2:-status}" ;;
   k8s-mode) phase_k8s_mode "${2:-}" ;;
-  all) phase_install; phase_creds; phase_authorize; phase_issue; phase_orchestrator_env on; phase_status ;;
+  all) phase_install; phase_authorize; phase_issue; phase_orchestrator_env on; phase_status ;;
   *) sed -n '2,14p' "$0"; exit 1 ;;
 esac

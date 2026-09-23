@@ -10,7 +10,7 @@
 | runtime с gVisor | **Живёт.** RuntimeClass `gvisor` на узле runtime, поды app/boundary/core канарейки в песочнице (ядро 4.19.0-gvisor), оркестраторы с `K8S_APP_RUNTIME_CLASS=gvisor` | `infra/max-k3s/remote/70-gvisor.sh`, `k8s_publication.py` (H211) |
 | отдельная БД на приложение | **Живёт с этапа A:** в каждом namespace приложения свои `core-postgres` и `project-postgres` | `k8s_publication.py` |
 | изолированные build-воркеры (rootless BuildKit) | **Живёт с 23.09:** `omnia-buildkitd` на commerce и core (sandbox=1, caps minimal, AppArmor-профиль), оркестраторы на `BUILD_BACKEND=buildkit`, проверочная сборка через модуль оркестратора прошла на обоих хостах (H222) | `infra/max-k3s/cells/50-buildkit-rootless.sh`, `services/buildkit.py` |
-| edge: ingress + wildcard-сертификат | **Код в main** (выпуск через DNS-01, раздача по WireGuard на runtime/commerce/core, режим `K8S_TLS_MODE=wildcard`). Владелец: API reg.ru **для начала не нужен** — тогда путь без API: делегирование `_acme-challenge` на наш acme-dns на core (владелец один раз добавляет NS/A/CNAME-записи, дальше выпуск и продление автоматические) либо оставить нынешние сертификаты «по имени» (HTTP-01, работают) | `infra/max-k3s/edge/*` (H217) |
+| edge: ingress + wildcard-сертификат | **acme-dns поднят на core 23.09 (порт 53 виден снаружи), скрипты и раздача установлены на все три хоста**; ждём DNS-записи владельца (NS/A/4×CNAME), затем `edge.sh issue` — четыре сертификата по группам, раздача, `K8S_TLS_MODE=wildcard` | `infra/max-k3s/edge/05-acme-dns.sh`, `edge.sh` (H217) |
 
 ## Фаза 2 — ядро
 

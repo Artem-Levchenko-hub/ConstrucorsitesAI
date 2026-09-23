@@ -53,6 +53,19 @@ api/web/gateway в кластере core (этап C); K3s на commerce ужи�
 
 ## Edge: один wildcard-сертификат на все три хоста (Фаза 1, код готов 23.09.2026)
 
+**Обновление 24.09.2026 — без API reg.ru.** Владелец решил не подключать API reg.ru. DNS-01 теперь идёт
+через **свой acme-dns на core** (`infra/max-k3s/edge/05-acme-dns.sh`: контейнер `omnia-acme-dns`, порт 53
+на публичном 2.153.248.98 и на NAT-адресе 10.16.0.108 — провайдер транслирует публичный IP именно туда;
+HTTP API только на 127.0.0.1:8053, регистрация закрыта после единственного аккаунта, креды
+`/etc/max-studio/edge/acme-dns.env`). Владелец один раз добавляет в зону yleum.ru: `ns-acme.yleum.ru A
+2.153.248.98`, `acme.yleum.ru NS ns-acme.yleum.ru` и CNAME `_acme-challenge.{yleum.ru,apps.yleum.ru,
+dev.yleum.ru,dev2.yleum.ru}` → `<аккаунт>.acme.yleum.ru` (`max-edge-acme-dns records`; проверка
+делегирования — `max-edge-acme-dns check`). Так как acme-dns хранит только два последних TXT на записи,
+сертификаты выпускаются **группами по очереди** (`10-wildcard-issue.sh`, hook `dns_acmedns`): `root` =
+yleum.ru + *.yleum.ru, `apps`, `dev`, `dev2` — файлы `/etc/max-studio/edge/certs/<группа>/`; раздача
+(`20-wildcard-distribute.sh`) везёт каталог `certs/` целиком, runtime берёт `apps`, core — `dev` (+ `root`
+для платформенных vhost'ов), commerce — `dev2`. Режим reg.ru остаётся доступен через `EDGE_DNS_HOOK=dns_regru`.
+
 Сегодня каждый хост выпускает сертификаты сам и по одному на имя (HTTP-01: nginx+acme.sh на core и
 commerce для превью, cert-manager в runtime для опубликованных приложений). Это медленно (первая
 публикация ждёт выпуска), ломается, когда HTTP-01 не проходит (default-deny, DNS-кэш провайдера — оба
