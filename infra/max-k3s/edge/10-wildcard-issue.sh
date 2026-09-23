@@ -124,7 +124,10 @@ do_issue() {
 }
 
 do_renew() {
-  need_root; load_creds; ensure_acme
+  need_root
+  # Таймер ставится вместе со скриптами (edge.sh install) — до первого выпуска ему нечего делать.
+  [ -s "$FULLCHAIN" ] || { log "сертификат ещё не выпущен — продлевать нечего (max-edge-issue issue)"; exit 0; }
+  load_creds; ensure_acme
   # Продлевает только то, что подошло по сроку (60 дней с выпуска); после успеха acme.sh сам зовёт reloadcmd.
   acme --cron >/dev/null || die "acme.sh --cron завершился с ошибкой"
   do_status
