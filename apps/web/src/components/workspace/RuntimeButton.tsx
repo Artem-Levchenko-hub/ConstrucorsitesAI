@@ -43,6 +43,7 @@ import {
   stopRuntime,
 } from "@/lib/api/runtime";
 import type { RuntimeState } from "@/lib/api/types";
+import { describeApiError } from "@/lib/api/errors";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -221,8 +222,9 @@ export function RuntimeButton({
       });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : "не удалось задеплоить";
-      toast.error("Деплой не удался", { description: msg });
+      toast.error("Деплой не удался", {
+        description: describeApiError(err, "не удалось задеплоить"),
+      });
     },
   });
   const cancelMut = useMutation({

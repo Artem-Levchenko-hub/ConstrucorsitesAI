@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, NoReturn
 from uuid import UUID, uuid4
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,11 +26,13 @@ from omnia_api.models.restoration import Restoration
 from omnia_api.models.snapshot import Snapshot
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.schemas.restoration import RestoreReport, RuntimeRestoration
-from omnia_api.services import orchestrator_client, project_cell_runtime
+from omnia_api.services import entitlements, orchestrator_client, project_cell_runtime
 from omnia_api.services.project_cell_proofs import (
     ProofDimension,
     proof_identity_from_model,
 )
+
+log = structlog.get_logger(__name__)
 
 
 def _unproven(reason: str) -> NoReturn:
@@ -413,16 +416,37 @@ async def submit_publication(
     )
     if not config.legal.terms_accepted:
         raise ApiError("conflict", "Подтвердите документы приложения перед публикацией", 409)
-    return await orchestrator_client.publish_project_cell(
+    # Plan publish slots: checked after every evidence gate so an app that is
+    # not ready never "spends" a refusal on the plan, and before the controller
+    # is asked so nothing public changes when the plan is full.
+    await entitlements.assert_can_publish(session, project)
+    publication_key = idempotency_key or uuid4().hex
+    payload = await orchestrator_client.publish_project_cell(
         project.id,
         {
             **evidence,
-            "idempotency_key": idempotency_key or uuid4().hex,
+            "idempotency_key": publication_key,
             "runtime_env": integration_runtime_env(integration),
             "business_config": config.model_dump(mode="json", exclude={"max_url_attached"}),
             "business_config_version": record.config_version if record is not None else 0,
         },
     )
+    # The controller accepted the release: journal it for the usage report and
+    # the publish-slot count. The journal never blocks a publication that is
+    # already under way.
+    try:
+        await entitlements.record_publication(
+            session,
+            project,
+            idempotency_key=publication_key,
+            backend="project_cell",
+            commit_sha=str(evidence.get("commit_sha") or "") or None,
+        )
+        await session.commit()
+    except Exception:
+        log.exception("cell_publication.journal_failed", project_id=str(project.id))
+        await session.rollback()
+    return payload
 
 
 async def update_public_credentials(

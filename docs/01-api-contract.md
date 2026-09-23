@@ -90,17 +90,35 @@ Stop — серверная операция: `/generation/cancel` записы�
 | `GET` | `/api/billing/plans` | — | Активные версии тарифов `Free`, `Pro`, `Business` |
 | `GET` | `/api/billing/subscription` | — | Текущая подписка платёжного аккаунта вместе с зафиксированной версией тарифа |
 | `PATCH` | `/api/billing/subscription` | `{action: "cancel" \| "restore", consent_version?}` | Отмена в конце периода или восстановление автопродления с актуальным согласием |
+| `GET` | `/api/billing/usage` | query `from?`, `to?` (ISO-даты) | Журнал расхода аккаунта за период: `period` (по умолчанию — оплаченный период подписки, на Free — текущий календарный месяц UTC), `plan`, `generations` (сборки из `generation_runs` + их расход по `usage`), `app_ai_answers` (ответы ИИ посетителям приложений — строки `usage` со `stage = runtime_ai`), `other_ai`, `publications` (журнал `billing_usage_events`), `free_generations` (`limit/used/left`), `wallet` (`balance_rub`, `debited_rub`, `credited_rub` за период), `entitlements[]` — каждый лимит тарифа рядом с текущим использованием (`limit: null` = без ограничений, `exceeded`) |
 | `GET` | `/api/wallet` | — | `{balance_rub, recent_charges}`; каждая операция содержит `entry_type`, `balance_after_rub`, `external_ref` |
 | `POST` | `/api/wallet/topup` | `{amount_rub}` | `{balance_rub}`; тестовый маршрут закрыт по умолчанию |
 | `GET` | `/api/payments` | — | Последние платежи текущего платёжного аккаунта |
 | `POST` | `/api/payments` | `{package_code, idempotency_key}` | Разовое пополнение через ЮKassa; недоступно без реквизитов магазина |
 | `POST` | `/api/payments/subscription` | `{plan_code: "pro" \| "business", idempotency_key, auto_renew, consent_version?}` | Создаёт pending-подписку и redirect-платёж первой покупки; способ оплаты сохраняется только при явном согласии |
 
-Регистрация создаёт личный платёжный аккаунт и одну активную Free-подписку.
-При создании MAX-бизнеса тот же аккаунт меняет область на бизнес: баланс,
-журнал и подписка сохраняют идентичность и становятся общими для участников.
+Регистрация создаёт личный платёжный аккаунт и одну активную Free-подписку
+(с миграции `0069` аккаунт всегда личный: бизнес-контура нет).
 Каталог тарифов версионируется: существующая подписка продолжает ссылаться на
 купленную ревизию, а изменение цены или лимитов создаёт новую строку тарифа.
+Действующий Free — версия 2 (миграция `0070`, модель владельца от 17.09.2026):
+число приложений и публикаций не ограничено, интеграции включены, постоянно
+работающих приложений нет (Free-приложение засыпает при простое).
+
+**Лимиты тарифа проверяются на сервере** (`services/entitlements.py`), а не
+только показываются: `POST /api/projects` считает приложения против
+`max_projects`; `POST /api/projects/:id/deploy` — опубликованные приложения
+против `static_publish_slots` (слот занимает каждое существующее приложение,
+которое хоть раз отправлялось в публичный рантайм; повторная публикация того
+же приложения слот не тратит; удаление приложения слот освобождает);
+подключение интеграций (`PUT/POST …/app-integrations/…`, OAuth-старт, пакет)
+— флаг `integrations`; keep-alive рантайма — `always_on_slots` (как раньше).
+Значение `null` у числового лимита = без ограничений. Отказ — `402` с кодом
+`entitlement_exceeded` (числовой лимит исчерпан) или
+`subscription_entitlement_required` (возможность не входит в тариф); в
+`details` — `{entitlement, limit, used, plan_code, plan_version}`. Выключатель
+на случай инцидента — `ENFORCE_PLAN_ENTITLEMENTS=false` (отказы только
+логируются, отчёт `/usage` при этом показывает `exceeded`).
 Первая покупка создаёт `pending_payment`, а подтверждённый ответ ЮKassa одной
 транзакцией завершает прежнюю подписку, активирует купленную версию на месяц и
 один раз начисляет включённый кредит. Повтор webhook безопасен. Автопродление
@@ -531,6 +549,8 @@ export type ApiError = {
         | "port_exhausted" | "conflict"
         // Причина отказа 409 на POST /prompt (19.09.2026):
         | "generation_active" | "restoration_active" | "idempotency_conflict" | "source_changed"
+        // Лимиты тарифа (402, details = {entitlement, limit, used, plan_code, plan_version}):
+        | "entitlement_exceeded" | "subscription_entitlement_required"
         // V3-добавления:
         | "onboarding_invalid_state" | "stack_not_found" | "preset_not_found"
         | "github_oauth_failed" | "github_repo_inaccessible" | "deploy_link_failed"

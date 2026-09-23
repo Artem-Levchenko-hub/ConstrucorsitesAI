@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 from fastapi import APIRouter, status
@@ -46,7 +46,7 @@ from omnia_api.schemas.runtime import (
     RuntimeStopRequest,
 )
 from omnia_api.services import autoheal as autoheal_svc
-from omnia_api.services import orchestrator_client, project_cell_runtime
+from omnia_api.services import entitlements, orchestrator_client, project_cell_runtime
 from omnia_api.services import repo as repo_svc
 from omnia_api.services.billing_accounts import resolve_billing_account
 from omnia_api.services.deploy_attestation import blocking_required, resolve_deploy_proof
@@ -525,14 +525,29 @@ async def trigger_deploy(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     details={"reason": "proof_unavailable"},
                 ) from exc
+    # Same plan publish-slot rule as the Project Cell path (402 when full).
+    await entitlements.assert_can_publish(session, project)
+    publication_key = idempotency_key or uuid4().hex
     payload = await orchestrator_client.deploy(
         project_id,
         commit_sha=sha,
         target=target,
         domains=domains,
         runtime_env=runtime_env,
-        idempotency_key=idempotency_key,
+        idempotency_key=publication_key,
     )
+    try:
+        await entitlements.record_publication(
+            session,
+            project,
+            idempotency_key=publication_key,
+            backend="byo_vps" if target is not None else "legacy_deploy",
+            commit_sha=sha,
+        )
+        await session.commit()
+    except Exception:
+        log.exception("deploy.journal_failed", project_id=str(project_id))
+        await session.rollback()
     return _to_deploy_status(payload)
 
 

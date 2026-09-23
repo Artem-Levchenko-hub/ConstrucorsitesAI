@@ -43,6 +43,7 @@ from omnia_api.schemas.project import (
 from omnia_api.schemas.snapshot import snapshot_event_dict
 from omnia_api.services import max_client, orchestrator_client
 from omnia_api.services import repo as repo_svc
+from omnia_api.services.entitlements import assert_can_create_project
 from omnia_api.services.max_access import require_max_studio_access
 from omnia_api.services.preset_classifier import classify_preset_sync
 from omnia_api.services.project_cell_access import admit_new_project_cell
@@ -105,6 +106,8 @@ async def create_project(
             status.HTTP_403_FORBIDDEN,
         )
     require_max_studio_access(current_user)
+    # Plan limit on the number of apps (402 `entitlement_exceeded` when full).
+    await assert_can_create_project(session, current_user.id)
     owner = current_user
     short_id = uuid4().hex[:6]
     base_slug = slugify(payload.name)[:60] or "project"

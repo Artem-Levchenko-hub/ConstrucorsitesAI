@@ -518,6 +518,10 @@ export type ApiErrorCode =
   | "subscription_consent_required"
   | "subscription_management_unavailable"
   | "subscription_entitlement_required"
+  // A numeric plan limit is used up (projects, publish slots, always-on slots).
+  // `details` = {entitlement, limit, used, plan_code, plan_version}; see
+  // `describeApiError` in lib/api/errors.ts for the user-facing text.
+  | "entitlement_exceeded"
   | "refund_unavailable"
   | "refund_balance_used";
 

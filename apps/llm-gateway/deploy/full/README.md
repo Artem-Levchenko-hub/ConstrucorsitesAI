@@ -28,15 +28,13 @@ location /llm/ {
 1. Confirm there is no active generation:
 
    ```bash
-   docker exec omnia-prod-postgres sh -lc \
-     'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
-     "select status,count(*) from generation_runs
-      where finished_at is null
-      group by status
-      order by status;"'
+   bash /opt/omnia/infra/release/check-active-generations.sh
    ```
 
-   Any output blocks the update. This includes a generation queued for server
+   The script reads the platform DB where it lives: inside
+   `omnia-prod-postgres`, or on the host PostgreSQL of core once `.env`
+   carries `PLATFORM_DATABASE_URL` (see `docker-compose.hostdb.yml`). Any
+   output blocks the update. This includes a generation queued for server
    capacity even though its model work has not started yet.
 
 2. Back up Postgres and the current Compose/nginx configuration.

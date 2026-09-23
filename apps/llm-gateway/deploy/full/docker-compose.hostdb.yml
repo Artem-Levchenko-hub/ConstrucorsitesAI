@@ -1,0 +1,53 @@
+# Платформа на ХОСТОВОМ PostgreSQL core (Фаза 2, разделение Core PostgreSQL).
+#
+# Подключается ВТОРЫМ файлом через .env того же каталога:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.hostdb.yml
+#   PLATFORM_DATABASE_URL=postgresql+asyncpg://omnia:<пароль>@10.10.0.1:5432/omnia
+# После этого обычная команда доставки (`docker compose up -d --build api …`)
+# берёт базу с хоста, а compose-сервис `postgres` уходит в неактивный профиль
+# (контейнер не запускается, том `full_postgres-data` не трогается — это путь
+# отката). Переключает и откатывает всё это скрипт
+# infra/max-k3s/migrate/50-platform-db-to-host.sh; руками .env не править.
+#
+# Требует Docker Compose ≥ 2.24 (теги `!override`). `depends_on` здесь
+# переписывается целиком, потому что merge только добавляет зависимости, а
+# зависимость от `postgres` надо убрать: сервис в неактивном профиле не может
+# быть условием запуска.
+services:
+  postgres:
+    profiles: ["compose-postgres"]
+
+  gateway:
+    depends_on: !override
+      redis:
+        condition: service_healthy
+    environment:
+      # Шлюз сам снимает суффикс `+asyncpg` (core/db.py), поэтому одна и та же
+      # строка подключения годится и ему, и API.
+      DATABASE_URL: ${PLATFORM_DATABASE_URL:?PLATFORM_DATABASE_URL is required in host-db mode}
+
+  api:
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL:?PLATFORM_DATABASE_URL is required in host-db mode}
+
+  generation-worker:
+    # Наследует окружение api через YAML-якорь в базовом файле, но merge
+    # compose-файлов идёт по сервисам — переопределяем явно.
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL:?PLATFORM_DATABASE_URL is required in host-db mode}
+
+  worker:
+    depends_on: !override
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${PLATFORM_DATABASE_URL:?PLATFORM_DATABASE_URL is required in host-db mode}

@@ -48,7 +48,7 @@ import {
   setPlatformAiEnabled,
   verifyAppIntegration,
 } from "@/lib/api/app-integrations";
-import { ApiError } from "@/lib/api/client";
+import { describeApiError } from "@/lib/api/errors";
 import { syncMaxManagedKit } from "@/lib/api/max-studio";
 import { sendPrompt } from "@/lib/api/messages";
 import type { AppIntegration, IntegrationCategory, IntegrationProvider } from "@/lib/api/types";
@@ -98,13 +98,9 @@ const readyForImplementation = (
   ? provider.available && provider.enabled === true
   : connection?.status === "active" && connection.bound_to_project && connection.binding_status === "ready"));
 
-const message = (error: unknown) => {
-  if (error instanceof ApiError) return error.message;
-  if (error instanceof TypeError && /fetch/i.test(error.message)) {
-    return "Сервис временно недоступен. Проверьте соединение и повторите попытку.";
-  }
-  return error instanceof Error ? error.message : "Не удалось выполнить действие";
-};
+// Plan refusals (`entitlement_exceeded`, `subscription_entitlement_required`)
+// are spelled out from their details; other API answers pass through.
+const message = (error: unknown) => describeApiError(error, "Не удалось выполнить действие");
 
 type ImplementationAttempt = { provider: string; prompt: string; key: string; terminal: boolean };
 

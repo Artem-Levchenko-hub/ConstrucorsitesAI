@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getWallet } from "@/lib/api/wallet";
+import { AccountUsage } from "./AccountUsage";
 import type { PaymentJourney } from "./PaymentCheckout";
 import { money, QueryError } from "./account-presentation";
 export function AccountBilling({ journey: j }: { journey: PaymentJourney }) {
@@ -33,5 +34,6 @@ export function AccountBilling({ journey: j }: { journey: PaymentJourney }) {
       {j.config.data && !j.config.data.enabled && <div className="account-notice pending">{j.config.data.reason ?? "Платёжный сервис недоступен"}</div>}
       <p className="account-hint">Разовое пополнение. Оплата на стороне ЮKassa.</p>
     </section>
+    <AccountUsage />
   </div>;
 }

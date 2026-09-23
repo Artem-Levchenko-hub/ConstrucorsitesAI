@@ -274,8 +274,14 @@ async def _request_gateway_ai(
                         {"role": "user", "content": user_message},
                     ],
                     "user": str(owner_id),
+                    # `stage` marks the ledger row as an answer to the app's
+                    # visitor, so the owner's usage report can show it apart
+                    # from the builds (services/billing_usage.py).
                     "metadata": {
-                        "project_id": str(project_id), "free": False, "require_billing": True,
+                        "project_id": str(project_id),
+                        "free": False,
+                        "require_billing": True,
+                        "stage": "runtime_ai",
                     },
                     "stream": False,
                     "max_tokens": 1_600,

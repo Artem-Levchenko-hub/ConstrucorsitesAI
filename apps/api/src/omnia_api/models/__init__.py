@@ -19,6 +19,7 @@ from omnia_api.models.billing import (
     BillingPlan,
     Subscription,
 )
+from omnia_api.models.billing_usage_event import BillingUsageEvent
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
 from omnia_api.models.generation_event import GenerationEvent
@@ -65,6 +66,7 @@ __all__ = [
     "BillingAccount",
     "BillingPaymentMethod",
     "BillingPlan",
+    "BillingUsageEvent",
     "CustomDomain",
     "DeployTarget",
     "GenerationEvent",
