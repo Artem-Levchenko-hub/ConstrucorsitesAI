@@ -27,6 +27,9 @@ set_kv K8S_KUBECONFIG_PATH /etc/max-studio/runtime-kubeconfig.yaml
 set_kv ARTIFACT_BASE_URL "$artifacts"
 grep -q '^PUBLICATION_BACKEND=' "$f" || printf 'PUBLICATION_BACKEND=docker\n' >> "$f"
 grep -q '^PUBLIC_HOST_SUFFIX=' "$f" || printf 'PUBLIC_HOST_SUFFIX=%s\n' "$suffix" >> "$f"
+# TLS Ingress'а приложений: cert-manager (сертификат на имя) или wildcard (edge, infra/max-k3s/edge) —
+# переключается отдельно: edge.sh k8s-mode wildcard, только после раздачи сертификата в runtime.
+grep -q '^K8S_TLS_MODE=' "$f" || printf 'K8S_TLS_MODE=cert-manager\n' >> "$f"
 chown "$owner:$owner" "$f"; chmod 600 "$f"
 grep -E '^(IMAGE_REGISTRY|K8S_|ARTIFACT_BASE_URL|PUBLICATION_BACKEND|PUBLIC_HOST_SUFFIX)' "$f" | sed -E 's/(PASSWORD)=.*/\1=<hidden>/'
 echo "  core: .env дополнен; перезапуск оркестратора — вручную, когда нет активных генераций"

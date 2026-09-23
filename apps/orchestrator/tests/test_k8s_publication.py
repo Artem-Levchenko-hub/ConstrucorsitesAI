@@ -114,6 +114,27 @@ def test_build_objects_places_one_app_per_namespace_behind_the_boundary() -> Non
     ]
 
 
+def test_wildcard_tls_mode_publishes_the_ingress_without_a_certificate_of_its_own() -> None:
+    """Edge wildcard mode: no cert-manager Certificate, no per-host secret — Traefik
+    terminates TLS with its default certificate (the distributed wildcard). The
+    ACME solver policy stays so pre-switch certificates renew and a rollback works."""
+    objects = kp.build_objects(_spec(tls_mode="wildcard"))
+    ingress = _by(objects, "Ingress", "public")
+
+    assert "annotations" not in ingress["metadata"]
+    assert ingress["spec"]["tls"] == [{"hosts": ["kanareika-c31c55.apps.yleum.ru"]}]
+    assert ingress["spec"]["rules"][0]["host"] == "kanareika-c31c55.apps.yleum.ru"
+    assert ingress["spec"]["ingressClassName"] == "traefik"
+    policies = {o["metadata"]["name"] for o in objects if o["kind"] == "NetworkPolicy"}
+    assert "acme-solver" in policies
+    # the default mode is unchanged: per-host Certificate through cert-manager
+    default = _by(kp.build_objects(_spec()), "Ingress", "public")
+    assert default["metadata"]["annotations"] == {
+        "cert-manager.io/cluster-issuer": "letsencrypt-prod"
+    }
+    assert default["spec"]["tls"][0]["secretName"] == "public-tls"
+
+
 def test_boundary_gets_the_same_config_contract_as_docker() -> None:
     objects = kp.build_objects(_spec())
     config = json.loads(_by(objects, "Secret", "boundary-config")["stringData"]["config.json"])
@@ -377,6 +398,31 @@ def test_publish_fails_closed_when_the_boundary_does_not_answer() -> None:
     api = FakeApi(health_status=503)
     with pytest.raises(kp.PublicationPlacementError, match="HTTP 503"):
         kp.KubernetesPublishedRuntime(api).publish(_spec())
+
+
+def test_wildcard_publish_requires_the_edge_certificate_in_the_cluster() -> None:
+    """Without the distributed wildcard the app would go live behind Traefik's
+    self-signed default certificate: refuse before anything is applied."""
+    api = FakeApi()
+    with pytest.raises(kp.PublicationPlacementError, match="kube-system/wildcard-yleum"):
+        kp.KubernetesPublishedRuntime(api).publish(_spec(tls_mode="wildcard"))
+    assert api.applied == []
+
+    api.apply(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "wildcard-yleum", "namespace": "kube-system"},
+            "type": "kubernetes.io/tls",
+            "data": {"tls.crt": "Y2VydA==", "tls.key": "a2V5"},
+        }
+    )
+    result = kp.KubernetesPublishedRuntime(api).publish(_spec(tls_mode="wildcard"))
+    assert result.public_host == "kanareika-c31c55.apps.yleum.ru"
+    ingress = api.objects[("Ingress", "public", f"app-{PROJECT}")]
+    assert "secretName" not in ingress["spec"]["tls"][0]
+    # cert-manager mode never looks for the wildcard
+    kp.KubernetesPublishedRuntime(FakeApi()).publish(_spec())
 
 
 def test_schema_digest_ignores_restriction_keys_and_comments() -> None:

@@ -240,6 +240,14 @@ class Settings(BaseSettings):
     # user can read (server reachable over WireGuard), optional context name.
     k8s_kubeconfig_path: str = Field(default="/etc/max-studio/runtime-kubeconfig.yaml")
     k8s_context: str = Field(default="")
+    # TLS of a published app's Ingress. "cert-manager": one Let's Encrypt
+    # Certificate per host (HTTP-01 through Traefik — minutes on the first
+    # publish, and no certificate at all while the solver is unreachable).
+    # "wildcard": no per-host certificate; Traefik serves the edge wildcard
+    # `*.<public_host_suffix>` installed by infra/max-k3s/edge (Secret
+    # kube-system/wildcard-yleum behind TLSStore `default`). Flip only after
+    # the wildcard is distributed: a publish fails closed when it is missing.
+    k8s_tls_mode: Literal["cert-manager", "wildcard"] = Field(default="cert-manager")
     # Private registry the cluster pulls from; the orchestrator pushes release,
     # core and guard images there (`docker push` with these credentials).
     image_registry: str = Field(default="registry.yleum.ru")

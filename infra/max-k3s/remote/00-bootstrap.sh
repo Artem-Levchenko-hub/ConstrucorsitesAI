@@ -26,7 +26,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 PubkeyAuthentication yes
-AllowUsers $ADMIN_USER backupsync
+AllowUsers $ADMIN_USER backupsync maxedge
 MaxAuthTries 4
 LoginGraceTime 30
 X11Forwarding no

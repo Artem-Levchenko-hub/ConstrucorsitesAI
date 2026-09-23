@@ -47,6 +47,7 @@ def _settings(tmp_path: Path, **overrides: Any) -> SimpleNamespace:
         k8s_app_cpu_cores=1.0,
         k8s_app_memory_bytes=1024**3,
         k8s_app_runtime_class="",
+        k8s_tls_mode="cert-manager",
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -229,6 +230,62 @@ def test_seeds_issue_capability_links_unless_claims_are_already_present(tmp_path
 
     present = placement.seeds(plan, present=True)
     assert [seed.artifact_url for seed in present] == [None, None]
+
+
+# ----------------------------------------------------------------------- spec
+
+
+def test_build_spec_takes_the_ingress_tls_mode_from_settings(tmp_path: Path) -> None:
+    """`K8S_TLS_MODE` decides whether a publish asks cert-manager for a per-host
+    certificate or relies on the edge wildcard Traefik serves by default."""
+    request = CellDeployRequest(
+        workspace_id=WORKSPACE,
+        project_id=PROJECT,
+        owner_id=OWNER,
+        snapshot_id=uuid4(),
+        candidate_id=uuid4(),
+        slug="kanareika-c31c55",
+        commit_sha="a" * 40,
+        source_revision="b" * 64,
+        fencing_epoch=3,
+        proof_key="c" * 64,
+        schema_data_digest="d" * 64,
+        build_ref="build",
+        verification_ref="verify",
+        idempotency_key="publish-kanareika-1",
+    )
+    release = {
+        "release_id": "11111111-1111-4111-8111-111111111111",
+        "epoch": 3,
+        "manifest": _manifest().model_dump(),
+        "placement": {
+            "public_host": "kanareika-c31c55.apps.yleum.ru",
+            "app_image": "registry.yleum.ru/max-app/x:1",
+            "core_image": "registry.yleum.ru/platform/max-public-core:c",
+            "guard_image": "registry.yleum.ru/platform/project-machine-guard:d",
+        },
+    }
+
+    def spec_for(mode: str) -> kp.PublicationSpec:
+        placement = KubernetesPlacement(_settings(tmp_path, k8s_tls_mode=mode), root=tmp_path)
+        return placement.build_spec(
+            request,
+            release,
+            seeds=(),
+            boundary_secret="s3cret",
+            project_postgres_password="pg-app",
+            core_postgres_password="pg-core",
+        )
+
+    assert spec_for("cert-manager").tls_mode == "cert-manager"
+    wildcard = spec_for("wildcard")
+    assert wildcard.tls_mode == "wildcard"
+    assert wildcard.public_host == "kanareika-c31c55.apps.yleum.ru"
+    assert "annotations" not in _ingress(kp.build_objects(wildcard))["metadata"]
+
+
+def _ingress(objects: list[dict[str, Any]]) -> dict[str, Any]:
+    return next(o for o in objects if o["kind"] == "Ingress")
 
 
 # -------------------------------------------------------------------- secrets
