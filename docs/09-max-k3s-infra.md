@@ -29,9 +29,11 @@ core держит только мониторинг. Как деплоить —
 
 **Фаза 3, этап A (в работе с 23.09):** опубликованные приложения размещаются в кластере runtime
 (`PUBLICATION_BACKEND=kubernetes`, код — `apps/orchestrator/.../k8s_publication.py` +
-`k8s_placement.py`, план — `docs/plans/2026-09-23-k8s-publication-stage-a.md`). Ячейки агента
-(генерация, dev-превью) пока остаются на core. **Ещё не сделано:** ячейки в runtime (этап B),
-api/web/gateway в кластере core (этап C), биллинг в commerce.
+`k8s_placement.py`, план — `docs/plans/2026-09-23-k8s-publication-stage-a.md`). **Этап B (23.09):**
+ячейки агента (генерация, dev-превью) размещаются на двух хостах с одинаковым Docker-стеком — core и
+commerce (`infra/max-k3s/cells/*`), какая ячейка где — решает API (`ORCHESTRATOR_HOSTS`). **Ещё не
+сделано:** api/web/gateway в кластере core (этап C), биллинг в commerce (уживается с ячейками:
+K3s там остаётся, порты 80/443 у хостового nginx превью).
 
 ## Особенности Serverum (важно при любых работах на этих серверах)
 

@@ -58,6 +58,16 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   kubeconfig и `ARTIFACT_BASE_URL` (откуда init-контейнеры качают тёплые артефакты; ufw на core
   открывает 8003 для `10.10.0.0/24` и pod-сети runtime `10.44.0.0/16`). Сам флаг
   `PUBLICATION_BACKEND` эти фазы не включают.
+- **Второй хост ячеек агента** (Фаза 3, этап B) — commerce с тем же Docker-стеком, что на core:
+  `cells/10-cell-host-prep.sh` (servicelb off, публичный IP на lo, Docker mtu 1400, nginx-catch-all,
+  acme.sh, uv, каталоги, ufw: контейнеры/ячейки/WG → 8003 и 80/443) и `cells/20-cell-host-orchestrator.sh`
+  (`.env` оркестратора на основе core с переопределениями: суффикс превью `dev2`, адрес артефактов
+  `http://10.10.0.3:8003`, Redis платформы `redis://10.10.0.1:6379` — на core его отдаёт
+  `redis-mesh-forward.service` (socat, ufw только с 10.10.0.3; nginx `stream` на core НЕ использовать —
+  модуля нет, `nginx -t` ломается), образы из реестра по digest; venv + systemd). Код на commerce —
+  `rsync` с core по WireGuard (ключ `~/.ssh/id_ed25519_mesh`, `Host commerce` в ssh-конфиге core).
+  Какая ячейка на каком хосте — решает API (`ORCHESTRATOR_HOSTS`, колонка `orchestrator`); подробности —
+  `docs/plans/2026-09-23-k8s-publication-stage-a.md`, раздел «Этап B».
 - **Мониторинг** на core — kube-prometheus-stack 91.4.1 (`k8s/apply.sh monitoring`):
   Prometheus (15 дней / 50 GB), Alertmanager, Grafana 13 на `https://grafana.yleum.ru`
   (admin, пароль в `/etc/max-studio/grafana.env` на core). Собирает метрики кластера core и
@@ -73,6 +83,7 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
 | `registry` | A | 2.153.248.99 | реестр образов |
 | `*.apps` | A | **2.153.248.99** | опубликованные приложения клиентов — в кластере runtime (Traefik + cert-manager, `PUBLICATION_BACKEND=kubernetes`, `PUBLIC_HOST_SUFFIX=apps.yleum.ru`). До 23.09 указывала на core (Фаза 2a); переведена владельцем 23.09 |
 | `*.dev` | A | 2.153.248.98 | dev-превью ячеек агента на core (`RUNTIME_HOST_SUFFIX=dev.yleum.ru`, в API — `PROJECT_CELL_PREVIEW_HOST_SUFFIX` и `GATE_PREVIEW_RESOLVER_RULES`). Заведена владельцем 23.09 |
+| `*.dev2` | A | 2.153.248.100 | dev-превью ячеек на втором хосте ячеек (commerce, этап B); в API — запись `commerce` в `ORCHESTRATOR_HOSTS` |
 | `api`, `app` | A | 2.153.248.98 | платформа |
 
 Сертификаты Let's Encrypt выпущены для `yleum.ru`, `www`, `grafana`, `registry` (до 21.12.2026,
