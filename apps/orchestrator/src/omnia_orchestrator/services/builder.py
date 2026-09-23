@@ -35,7 +35,7 @@ from omnia_orchestrator.core.errors import OrchestratorError
 from omnia_orchestrator.core.event_publisher import publish_project_event
 from omnia_orchestrator.core.stack_registry import get_stack
 from omnia_orchestrator.core.template_materialization import materialize_template
-from omnia_orchestrator.services import deploy_state, nginx_writer
+from omnia_orchestrator.services import buildkit, deploy_state, nginx_writer
 from omnia_orchestrator.services.build_artifact_inventory import (
     verify_max_image_inventory,
     verify_max_source_context,
@@ -147,6 +147,28 @@ export default nextConfig;
 # Keep background task references alive until completion.
 _bg_tasks: set[asyncio.Task[None]] = set()
 _project_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+async def _build_prod_image(context_dir: str, dockerfile: str, tag: str) -> str:
+    """Build the (untrusted) prod Dockerfile on the configured backend.
+
+    `build_backend=docker` — the host's root daemon (today's path, default).
+    `build_backend=buildkit` — the rootless buildkitd behind `buildkit_socket`
+    (docs/09, «Изолированные сборки»). Both leave the image in the local
+    daemon under `tag` and return its immutable id, so nothing downstream
+    (inventory probe, container start, BYO transfer, prune) knows which one ran.
+    """
+    settings = get_settings()
+    log.info("deploy.build_backend", backend=settings.build_backend, tag=tag)
+    if settings.build_backend == "buildkit":
+        return await buildkit.build_image(
+            context_dir,
+            dockerfile,
+            tag,
+            socket_path=settings.buildkit_socket,
+            buildctl=settings.buildctl_binary,
+        )
+    return await docker_client.build_image(context_dir, dockerfile, tag)
 
 
 async def start_deploy(
@@ -498,9 +520,9 @@ async def _run(
                 status_code=500,
             )
 
-        # 3. Build the prod image.
+        # 3. Build the prod image (backend chosen by `build_backend`).
         tag = f"omnia-app-{slug}:{int(time.time())}"
-        built_image_id = await docker_client.build_image(str(build_dir), dockerfile, tag)
+        built_image_id = await _build_prod_image(str(build_dir), dockerfile, tag)
         if is_max_template:
             assert expected_max_artifacts is not None
             image_artifacts = await docker_client.image_path_inventory(

@@ -232,10 +232,21 @@ async def test_cancellation_keeps_build_context_until_worker_exits(
 async def test_real_production_builder_materializes_before_live_public_overlay(
     name, tmp_path, monkeypatch
 ):
+    from omnia_orchestrator.core.config import get_settings
     from omnia_orchestrator.services import builder
 
     class BuildBoundary(BaseException):
         pass
+
+    # The builder reads Settings before the build (build backend selection), so
+    # the real pipeline needs a valid environment even though the build itself
+    # is cut off at the boundary below.
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
+    )
+    monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
 
     contexts = []
     monkeypatch.setattr(builder, "publish_project_event", AsyncMock())
