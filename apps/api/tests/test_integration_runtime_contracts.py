@@ -242,7 +242,7 @@ async def test_crm_receipt_survives_business_reconnection(client, db_session, mo
     url = f"/api/runtime/projects/{project}/leads"
     assert (await client.post(url, headers=headers(), json=payload)).status_code == 200
     assert (
-        await client.delete(f"/api/projects/{project}/app-integrations/bitrix24/business")
+        await client.delete(f"/api/projects/{project}/app-integrations/bitrix24/connection")
     ).status_code == 204
     assert (
         await client.put(
