@@ -164,24 +164,20 @@ fi
 # is worse than no report (23.09.2026 the MinIO buckets were wiped while the only
 # nightly job on the host reported success without ever touching the platform).
 log "verifying that the bundle actually holds the platform..."
-for table in users projects snapshots; do
-  # grep -c reads the whole stream: with `pipefail` a `grep -q` that quits early
-  # would turn zcat's SIGPIPE into a false failure.
-  hits="$(zcat "${dir}/platform-${PLATFORM_DB}.sql.gz" | grep -c "^CREATE TABLE public\.${table} " || true)"
-  [ "${hits:-0}" -ge 1 ] \
-    || fail "platform dump has no ${table} table — this is not the platform database"
-done
+# Проверка вынесена в отдельный файл, потому что это единственная часть задания,
+# которую можно прогнать на подделанных входных данных — и она покрыта тестами
+# (apps/api/tests/test_backup_bundle_verification.py). Она различает «данных
+# нет» (код 3) и «архив нечитаем» (код 4): оператору это говорит
+# противоположное — снять копию заново или не восстанавливаться из этой.
 live_projects="$(docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" -Atc \
   'SELECT count(*) FROM projects' 2>/dev/null || echo unknown)"
-archived_repos="$(tar -tzf "${dir}/minio-data.tgz" \
-  | grep -c -E '^\./projects/repos/[0-9a-f-]{36}\.tar\.gz/xl\.meta$' || true)"
-case "$live_projects" in
-  ''|unknown) log "WARNING: could not count live projects; MinIO content check skipped" ;;
-  0) : ;;
-  *) [ "$archived_repos" -ge "$live_projects" ] \
-       || fail "MinIO archive holds ${archived_repos} project repos but the platform has ${live_projects} projects" ;;
-esac
-log "content check OK: ${archived_repos} project repos archived for ${live_projects} live projects"
+verify_out=""
+if ! verify_out="$(PLATFORM_DUMP="${dir}/platform-${PLATFORM_DB}.sql.gz" \
+    MINIO_ARCHIVE="${dir}/minio-data.tgz" \
+    bash "$(dirname "$0")/verify-bundle.sh" "$dir" "$live_projects" 2>&1)"; then
+  fail "$verify_out"
+fi
+log "$verify_out"
 (
   cd "$dir"
   sha256sum \
