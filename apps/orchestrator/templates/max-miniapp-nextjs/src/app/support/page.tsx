@@ -10,9 +10,6 @@ export default function SupportPage() {
       {app.support.email && (
         <p><strong>Email:</strong> <a href={`mailto:${app.support.email}`}>{app.support.email}</a></p>
       )}
-      {app.support.phone && (
-        <p><strong>Телефон:</strong> <a href={`tel:${app.support.phone}`}>{app.support.phone}</a></p>
-      )}
       <p>{app.support.response_time}</p>
       <nav style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 28 }}>
         <a href="/legal/privacy">Конфиденциальность</a>

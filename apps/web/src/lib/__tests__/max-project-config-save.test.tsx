@@ -20,10 +20,10 @@ const record: MaxProjectConfig = {
   config: {
     app_name: "QA", app_type: "custom", summary: "QA profile", audience: "",
     primary_action: "", features: [], style: "clean", brand_colors: "", content: [],
-    operator: { legal_name: "QA owner", inn: "", ogrn: "", address: "" },
-    support: { email: null, phone: "", response_time: "One day" },
+    operator: { legal_name: "QA owner" },
+    support: { email: null, response_time: "One day" },
     legal: { age_rating: "0+", has_sales: false, has_user_content: false,
-      marketing_notifications: false, personal_data_consent: true, terms_accepted: false },
+      marketing_notifications: false, personal_data_consent: true, terms_accepted: false, policy_url: "" },
     max_url_attached: false,
   },
 };
@@ -137,15 +137,17 @@ it("keeps owner/support and policy choices distinguishable without changing cons
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
     await act(async () => tabs[2].click());
-    for (const id of ["max-legal-name", "max-support-email"]) {
+    for (const id of ["max-legal-name", "max-policy-url", "max-support-email"]) {
       const field = document.getElementById(id)!;
-      const hint = document.getElementById(field.getAttribute("aria-describedby") ?? "");
-      expect(hint?.textContent).toContain("Обязательно для публикации");
-      // These are publication requirements, not blockers for saving an unfinished draft.
+      // Nothing on this tab is required: requisites are never asked for, the
+      // owner name and support email only shape the app's own documents.
+      expect(field.getAttribute("aria-describedby")).toBeNull();
       expect(field.hasAttribute("required")).toBe(false);
     }
+    expect(document.querySelector("#max-inn")).toBeNull();
+    expect(document.querySelector("#max-support-phone")).toBeNull();
     expect([...document.querySelectorAll('[data-testid="max-settings-footer"] button')].map(button => button.textContent)).not.toContain("Применить к приложению");
-    expect(document.querySelector("#max-legal-name")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Реквизиты владельца");
+    expect(document.querySelector("#max-legal-name")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Владелец в документах");
     expect(document.querySelector("#max-support-email")?.closest("fieldset")?.querySelector("legend")?.textContent).toBe("Связь с поддержкой");
     await act(async () => tabs[3].click());
     const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[role="tabpanel"] input[type="checkbox"]')];
@@ -228,7 +230,7 @@ it.each([false, true])("saves/retries the owner tab and refreshes preview withou
     await act(async () => { container.querySelector<HTMLButtonElement>("button")!.click(); });
     await wait(() => expect(document.querySelector("#max-config-name")).not.toBeNull());
     await act(async () => {
-      [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")].find(b => b.textContent === "Владелец")!.click();
+      [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")].find(b => b.textContent === "Документы")!.click();
     });
     expect((document.querySelector("#max-legal-name") as HTMLInputElement).value).toBe("QA owner");
     if (!pending) {

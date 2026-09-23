@@ -155,38 +155,25 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   if (section === "owner") return <section className="max-setup-section">
-    <Intro title="Кто отвечает за приложение" publication>Здесь обязательны только два поля: имя или наименование владельца и email поддержки. ИНН, ОГРН, адрес, телефон и срок ответа не блокируют публикацию в Studio.</Intro>
-    <p className="max-setup-notice">Сведения будут видны пользователям в документах и поддержке. Их сохранение не запускает ИИ и не расходует баланс.</p>
-    <Group title="Реквизиты владельца" description="Укажите реквизиты, применимые к вашей форме деятельности: физлицо, ИП или организация.">
+    <Intro title="Документы приложения">Studio не запрашивает реквизиты: бизнес за ботом проверяет сам MAX. Здесь только то, что увидят пользователи в документах и поддержке приложения — всё необязательно.</Intro>
+    <p className="max-setup-notice">Сохранение этих полей не запускает ИИ и не расходует баланс.</p>
+    <Group title="Владелец в документах" description="Как назвать владельца в политике и условиях приложения. Если оставить пустым, документы назовут само приложение.">
       <div className="max-setup-field max-setup-wide">
-        <Label htmlFor="max-legal-name">ИП, ООО или ФИО владельца</Label>
-        <Input id="max-legal-name" aria-describedby="max-legal-name-requirement" value={current.operator.legal_name} onChange={event => onChange({ ...current, operator: { ...current.operator, legal_name: event.target.value } })} />
-        <p id="max-legal-name-requirement" className="max-setup-required">Обязательно для публикации</p>
-      </div>
-      <div className="max-setup-field">
-        <Label htmlFor="max-inn">ИНН</Label>
-        <Input id="max-inn" value={current.operator.inn} inputMode="numeric" onChange={event => onChange({ ...current, operator: { ...current.operator, inn: event.target.value } })} />
-      </div>
-      <div className="max-setup-field">
-        <Label htmlFor="max-ogrn">ОГРН / ОГРНИП</Label>
-        <Input id="max-ogrn" value={current.operator.ogrn} inputMode="numeric" onChange={event => onChange({ ...current, operator: { ...current.operator, ogrn: event.target.value } })} />
+        <Label htmlFor="max-legal-name">Название владельца для документов</Label>
+        <Input id="max-legal-name" value={current.operator.legal_name} placeholder={current.app_name} onChange={event => onChange({ ...current, operator: { legal_name: event.target.value } })} />
       </div>
       <div className="max-setup-field max-setup-wide">
-        <Label htmlFor="max-address">Адрес</Label>
-        <Input id="max-address" value={current.operator.address} onChange={event => onChange({ ...current, operator: { ...current.operator, address: event.target.value } })} />
+        <Label htmlFor="max-policy-url">Ссылка на свою политику конфиденциальности</Label>
+        <Input id="max-policy-url" type="url" value={current.legal.policy_url} placeholder="https://example.ru/privacy" inputMode="url"
+          onChange={event => onChange({ ...current, legal: { ...current.legal, policy_url: event.target.value } })} />
+        <p className="max-setup-group-note">Если у компании уже есть политика — укажите её, и страница конфиденциальности приложения будет вести на неё.</p>
       </div>
     </Group>
-    <Group title="Связь с поддержкой" description="Укажите действующие контакты, по которым вы готовы отвечать.">
+    <Group title="Связь с поддержкой" description="Контакт, по которому пользователи приложения смогут задать вопрос.">
       <div className="max-setup-field">
         <Label htmlFor="max-support-email">Email поддержки</Label>
-        <Input id="max-support-email" type="email" aria-describedby="max-support-email-requirement" value={current.support.email ?? ""} placeholder="support@example.ru"
+        <Input id="max-support-email" type="email" value={current.support.email ?? ""} placeholder="support@example.ru"
           onChange={event => onChange({ ...current, support: { ...current.support, email: event.target.value || null } })} />
-        <p id="max-support-email-requirement" className="max-setup-required">Обязательно для публикации</p>
-      </div>
-      <div className="max-setup-field">
-        <Label htmlFor="max-support-phone">Телефон поддержки</Label>
-        <Input id="max-support-phone" type="tel" value={current.support.phone}
-          onChange={event => onChange({ ...current, support: { ...current.support, phone: event.target.value } })} />
       </div>
       <div className="max-setup-field max-setup-wide">
         <Label htmlFor="max-support-response-time">Срок ответа поддержки</Label>
@@ -197,7 +184,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   return <section className="max-setup-section">
-    <Intro title="Правила для пользователей" publication>Для публикации обязательно подтвердите корректность данных владельца ниже. Продажи, контент, рассылки и согласие на обработку данных отмечайте только если они нужны вашему приложению — включать всё не нужно.</Intro>
+    <Intro title="Правила для пользователей" publication>Для публикации обязательно подтвердите документы приложения ниже. Продажи, контент, рассылки и согласие на обработку данных отмечайте только если они нужны вашему приложению — включать всё не нужно.</Intro>
     <Group title="Только если используется" description="Эти настройки добавляют разделы документов, но сами по себе не подключают оплату, модерацию или рассылки.">
       <div className="max-setup-policy-list max-setup-wide">{CHECKS.map(item => {
         const checked = Boolean(current.legal[item.key]);
@@ -218,7 +205,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
     <Group title="Подтверждение и согласия">
       <label className="max-setup-consent max-setup-wide">
         <input type="checkbox" checked={current.legal.terms_accepted} onChange={event => onChange({ ...current, legal: { ...current.legal, terms_accepted: event.target.checked } })} />
-        <span><span>Подтверждаю корректность данных владельца</span><small className="max-setup-required">Обязательно для публикации</small><small>Владелец отвечает за актуальность реквизитов и соответствие документов своей деятельности.</small></span>
+        <span><span>Я проверил политику и условия приложения</span><small className="max-setup-required">Обязательно для публикации</small><small>Документы формируются автоматически из настроек приложения; владелец отвечает за их актуальность.</small></span>
       </label>
       <label className="max-setup-consent max-setup-wide">
         <input type="checkbox" checked={current.legal.personal_data_consent} onChange={event => onChange({ ...current, legal: { ...current.legal, personal_data_consent: event.target.checked } })} />

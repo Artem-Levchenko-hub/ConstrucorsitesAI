@@ -20,7 +20,7 @@ describe("MAX launch wizard", () => {
       ["legal", "current"],
       ["bot", "upcoming"],
     ]);
-    expect(wizard.currentStep?.instruction).toContain("документов");
+    expect(wizard.currentStep?.instruction).toContain("подтвердите");
   });
 
   it("has no current step after every readiness check is complete", () => {

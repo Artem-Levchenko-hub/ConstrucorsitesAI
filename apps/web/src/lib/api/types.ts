@@ -631,15 +631,12 @@ export type MaxProjectConfigPayload = {
   style: "brand" | "clean" | "bright";
   brand_colors: string;
   content: MaxContentItem[];
+  // Display name for the app's own documents only — never requisites.
   operator: {
     legal_name: string;
-    inn: string;
-    ogrn: string;
-    address: string;
   };
   support: {
     email: string | null;
-    phone: string;
     response_time: string;
   };
   legal: {
@@ -648,6 +645,8 @@ export type MaxProjectConfigPayload = {
     has_user_content: boolean;
     marketing_notifications: boolean;
     personal_data_consent: boolean;
+    // The owner's own privacy policy (https); the generated page then links to it.
+    policy_url: string;
     terms_accepted: boolean;
   };
   max_url_attached: boolean;

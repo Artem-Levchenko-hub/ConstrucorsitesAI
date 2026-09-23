@@ -18,8 +18,8 @@ export type OmniaMaxConfig = {
   style: "brand" | "clean" | "bright";
   brand_colors: string;
   content: OmniaMaxContentItem[];
-  operator: { legal_name: string; inn: string; ogrn: string; address: string };
-  support: { email: string | null; phone: string; response_time: string };
+  operator: { legal_name: string };
+  support: { email: string | null; response_time: string };
   legal: {
     age_rating: "0+" | "6+" | "12+" | "16+" | "18+";
     has_sales: boolean;
@@ -27,6 +27,7 @@ export type OmniaMaxConfig = {
     marketing_notifications: boolean;
     personal_data_consent: boolean;
     terms_accepted: boolean;
+    policy_url: string;
   };
 };
 
@@ -40,10 +41,9 @@ export const omniaMaxConfig: OmniaMaxConfig = {
   style: "brand",
   brand_colors: "",
   content: [],
-  operator: { legal_name: "", inn: "", ogrn: "", address: "" },
+  operator: { legal_name: "" },
   support: {
     email: null,
-    phone: "",
     response_time: "Ответим в течение 2 рабочих дней",
   },
   legal: {
@@ -53,5 +53,6 @@ export const omniaMaxConfig: OmniaMaxConfig = {
     marketing_notifications: false,
     personal_data_consent: true,
     terms_accepted: false,
+    policy_url: "",
   },
 };

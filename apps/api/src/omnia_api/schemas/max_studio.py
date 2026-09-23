@@ -17,15 +17,16 @@ class MaxContentItem(BaseModel):
 
 
 class MaxOperator(BaseModel):
+    # Only a display name for the app's own documents: a generated policy or
+    # terms page has to say who runs the app. Never requisites — ИНН, ОГРН,
+    # address or phone are not collected anywhere (152-ФЗ, ст. 5). Stored
+    # configurations from before this rule may still carry those keys; they are
+    # ignored on read and dropped on the next save.
     legal_name: str = Field(default="", max_length=200)
-    inn: str = Field(default="", max_length=20)
-    ogrn: str = Field(default="", max_length=20)
-    address: str = Field(default="", max_length=300)
 
 
 class MaxSupport(BaseModel):
     email: EmailStr | None = None
-    phone: str = Field(default="", max_length=40)
     response_time: str = Field(default="Ответим в течение 2 рабочих дней", max_length=120)
 
 
@@ -36,6 +37,18 @@ class MaxLegal(BaseModel):
     marketing_notifications: bool = False
     personal_data_consent: bool = True
     terms_accepted: bool = False
+    # The owner's own privacy policy, when the company already has one: the
+    # generated privacy page then points to it instead of describing the
+    # processing itself, and Studio needs no operator details at all.
+    policy_url: str = Field(default="", max_length=300)
+
+    @field_validator("policy_url")
+    @classmethod
+    def https_policy_url(cls, value: str) -> str:
+        clean = value.strip()
+        if clean and not clean.startswith("https://"):
+            raise ValueError("policy_url must be an https:// address")
+        return clean
 
 
 class MaxProjectConfigPayload(BaseModel):

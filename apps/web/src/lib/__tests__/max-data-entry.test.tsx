@@ -49,8 +49,8 @@ it.each(["details", "owner", "policies"])("opens %s directly over the editor and
   mocks.params = new URLSearchParams(`data=${section}&starter=1`);
   mocks.get.mockResolvedValue({ config_version: 1, application_mode: "runtime", synced_snapshot_id: "s1", config: {
     app_name: "Калькулятор", summary: "Считать калории", app_type: "custom", audience: "", primary_action: "", features: [],
-    style: "clean", brand_colors: "", content: [], operator: { legal_name: "", inn: "", ogrn: "", address: "" },
-    support: { email: null, phone: "", response_time: "" }, legal: { age_rating: "0+", has_sales: false, has_user_content: false, marketing_notifications: false, personal_data_consent: true, terms_accepted: false },
+    style: "clean", brand_colors: "", content: [], operator: { legal_name: "" },
+    support: { email: null, response_time: "" }, legal: { age_rating: "0+", has_sales: false, has_user_content: false, marketing_notifications: false, personal_data_consent: true, terms_accepted: false, policy_url: "" },
   } });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);

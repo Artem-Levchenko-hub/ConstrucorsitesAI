@@ -25,9 +25,9 @@ const config: MaxProjectConfig = {
   project_id: "project-1", config_version: 1, synced_snapshot_id: null, updated_at: null,
   config: {
     app_name: "Приложение", app_type: "custom", summary: "", audience: "", primary_action: "", features: [],
-    style: "clean", brand_colors: "", content: [], operator: { legal_name: "", inn: "", ogrn: "", address: "" },
-    support: { email: null, phone: "", response_time: "" },
-    legal: { age_rating: "0+", has_sales: false, has_user_content: false, marketing_notifications: false, personal_data_consent: false, terms_accepted: false },
+    style: "clean", brand_colors: "", content: [], operator: { legal_name: "" },
+    support: { email: null, response_time: "" },
+    legal: { age_rating: "0+", has_sales: false, has_user_content: false, marketing_notifications: false, personal_data_consent: false, terms_accepted: false, policy_url: "" },
     max_url_attached: false,
   },
 };

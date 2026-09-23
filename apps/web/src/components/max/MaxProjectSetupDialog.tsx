@@ -31,7 +31,7 @@ import { MaxProjectDataApplyDialog } from "./MaxProjectDataApplyDialog";
 const SETUP_SECTIONS: Array<{ id: SetupSection; label: string }> = [
   { id: "details", label: "Основное" },
   { id: "content", label: "Контент" },
-  { id: "owner", label: "Владелец" },
+  { id: "owner", label: "Документы" },
   { id: "policies", label: "Политики" },
 ];
 
@@ -195,8 +195,7 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <DialogDescription className="max-setup-description">
-              Для публикации заполните имя или название владельца, email поддержки и подтвердите данные во вкладке «Политики». Остальное — по необходимости.
-            </DialogDescription>
+              Реквизиты не нужны — их проверяет MAX. Для публикации достаточно подтвердить документы приложения во вкладке «Политики»; название владельца и email поддержки — по желанию.</DialogDescription>
           </DialogHeader>
 
           <div className="max-setup-tabs">

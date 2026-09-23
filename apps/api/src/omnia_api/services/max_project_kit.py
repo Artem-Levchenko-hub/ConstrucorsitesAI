@@ -20,8 +20,9 @@ MAX_MANAGED_KIT_VERSION = 22
 # platform-owned paths. v20 materializes trusted gateway subjects in the
 # isolated product DB before business tables can enforce max_users FKs. v21
 # adds owner-scoped item CRUD used by fail-closed activation health checks.
-# v22 stops reading and storing the MAX visitor profile: sessions carry the
-# MAX user id only (152-ФЗ ст. 5 — no data beyond the purpose).
+# v22 stops reading and storing the MAX visitor profile (sessions carry the MAX
+# user id only) and drops requisites from the app's documents: the operator is a
+# display name, the policy may be the owner's own link (152-ФЗ ст. 5).
 MAX_RETIRED_MANAGED_FILES = frozenset(
     {
         "src/app/api/omnia/data/[...path]/route.ts",
@@ -87,8 +88,8 @@ export type OmniaMaxConfig = {
   style: "brand" | "clean" | "bright";
   brand_colors: string;
   content: OmniaMaxContentItem[];
-  operator: { legal_name: string; inn: string; ogrn: string; address: string };
-  support: { email: string | null; phone: string; response_time: string };
+  operator: { legal_name: string };
+  support: { email: string | null; response_time: string };
   legal: {
     age_rating: "0+" | "6+" | "12+" | "16+" | "18+";
     has_sales: boolean;
@@ -96,6 +97,7 @@ export type OmniaMaxConfig = {
     marketing_notifications: boolean;
     personal_data_consent: boolean;
     terms_accepted: boolean;
+    policy_url: string;
   };
 };
 """
@@ -179,17 +181,29 @@ export const metadata = { title: `Политика конфиденциальн�
 
 export default function PrivacyPage() {
   const operator = app.operator.legal_name || app.app_name;
+  if (app.legal.policy_url) {
+    return (
+      <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
+        <h1>Политика конфиденциальности</h1>
+        <p>
+          Обработка данных в мини-приложении «{app.app_name}» регулируется политикой владельца:{" "}
+          <a href={app.legal.policy_url} rel="noopener noreferrer">{app.legal.policy_url}</a>.
+        </p>
+        <p>Возрастная маркировка: {app.legal.age_rating}.</p>
+      </main>
+    );
+  }
   return (
     <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
       <h1>Политика конфиденциальности</h1>
       <p><strong>Оператор:</strong> {operator}</p>
-      {app.operator.inn && <p><strong>ИНН:</strong> {app.operator.inn}</p>}
-      {app.operator.address && <p><strong>Адрес:</strong> {app.operator.address}</p>}
+      {app.support.email && <p><strong>Контакт по вопросам данных:</strong> {app.support.email}</p>}
       <h2>Какие данные обрабатываются</h2>
       <p>
-        Приложение получает от MAX идентификатор пользователя и доступные данные профиля,
-        необходимые для входа и работы функций приложения. Действия, заказы, записи и
-        обращения сохраняются только в объёме, необходимом для оказания услуги.
+        Приложение получает от MAX только идентификатор пользователя — он нужен, чтобы
+        различать пользователей и хранить их действия, заказы, записи и обращения. Имя,
+        фамилия, имя пользователя, язык и фотография из MAX не запрашиваются и не сохраняются.
+        Другие сведения приложение запрашивает у пользователя явно и только для конкретной функции.
       </p>
       <h2>Цели и срок обработки</h2>
       <p>
@@ -260,7 +274,6 @@ export default function SupportPage() {
       <h1>Поддержка</h1>
       <p>Опишите проблему, ожидаемый результат и время, когда она возникла.</p>
       {app.support.email && <p><strong>Email:</strong> <a href={`mailto:${app.support.email}`}>{app.support.email}</a></p>}
-      {app.support.phone && <p><strong>Телефон:</strong> <a href={`tel:${app.support.phone}`}>{app.support.phone}</a></p>}
       <p>{app.support.response_time}</p>
       <nav style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 28 }}>
         <a href="/legal/privacy">Конфиденциальность</a>

@@ -98,8 +98,8 @@ export function MaxStudio({ email }: { email: string }) {
           style,
           brand_colors: safeBrandColors,
           content: [],
-          operator: { legal_name: "", inn: "", ogrn: "", address: "" },
-          support: { email: null, phone: "", response_time: "Ответим в течение 2 рабочих дней" },
+          operator: { legal_name: "" },
+          support: { email: null, response_time: "Ответим в течение 2 рабочих дней" },
           legal: {
             age_rating: "0+",
             has_sales: appType === "catalog",
@@ -107,6 +107,7 @@ export function MaxStudio({ email }: { email: string }) {
             marketing_notifications: features.includes("Уведомления бота"),
             personal_data_consent: true,
             terms_accepted: false,
+            policy_url: "",
           },
           max_url_attached: false,
         });

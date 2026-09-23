@@ -13,7 +13,7 @@ vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<ob
 const project = { id: "project-surfaces", name: "Проверка", template: "max_miniapp" } as Project;
 const release: DeployStatus = { phase: "done", run_id: "old-release", started_at: null, finished_at: "2026-09-01T10:00:00Z", prod_url: "https://app.example.com", image_tag: "app:v1", error: null, detail: null, target_label: "Omnia", target_id: null, can_cancel: false, logs: [] };
 function readiness(published = false): MaxReadiness {
-  return { ready_to_launch: published, progress: published ? 100 : 67, items: ["build", "business", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: published || !["publish", "max_url"].includes(id), blocking: true, action: null })) };
+  return { ready_to_launch: published, progress: published ? 100 : 67, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: published || !["publish", "max_url"].includes(id), blocking: true, action: null })) };
 }
 let root: Root;
 let container: HTMLDivElement;
@@ -61,8 +61,7 @@ it("shows publication blockers without expanding details and links each unfinish
   const requirements = container.querySelector('[aria-label="Обязательно до публикации"]');
   expect(requirements).not.toBeNull();
   expect(requirements!.closest("details")).toBeNull();
-  expect(requirements!.querySelectorAll('[data-requirement]')).toHaveLength(4);
-  expect(requirements!.querySelector('[data-requirement="business"] a')?.getAttribute("href")).toBe("/max/project-surfaces?data=owner");
+  expect(requirements!.querySelectorAll('[data-requirement]')).toHaveLength(3);
   expect(requirements!.querySelector('[data-requirement="legal"] a')?.getAttribute("href")).toBe("/max/project-surfaces?data=policies");
   expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
   expect(requirements!.querySelector('[data-requirement="max_url"]')).toBeNull();
@@ -80,7 +79,7 @@ it.each(["loading", "error"])("never marks stale requirements complete while rea
   const requirements = container.querySelector('[aria-label="Обязательно до публикации"]');
   expect(requirements).not.toBeNull();
   expect(requirements!.querySelectorAll('[data-state="done"]')).toHaveLength(0);
-  expect(requirements!.querySelectorAll('[data-state="unknown"]')).toHaveLength(4);
+  expect(requirements!.querySelectorAll('[data-state="unknown"]')).toHaveLength(3);
 });
 it("keeps unknown launch readiness distinct from completed preparation", async () => {
   api.readiness.mockImplementation(() => new Promise(() => {}));

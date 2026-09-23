@@ -54,7 +54,7 @@ def _config() -> MaxProjectConfigPayload:
                 action_label="Заказать",
             )
         ],
-        operator={"legal_name": "ООО Кофе", "inn": "1234567890"},
+        operator={"legal_name": "ООО Кофе"},
         support={"email": "help@example.ru"},
         legal={"has_sales": True, "terms_accepted": True},
     )
@@ -81,6 +81,12 @@ def test_kit_v22_retires_encrypted_crud_and_stores_only_the_max_user_id() -> Non
         assert "photoUrl" not in source and "lastName" not in source, path
         assert "languageCode" not in source and "username:" not in source, path
     assert "export type MaxSessionUser = {\n  id: string;\n};" in managed["src/lib/max/session.ts"]
+    # v22: the app's documents name an operator but never carry requisites
+    privacy = managed["src/app/legal/privacy/page.tsx"]
+    assert "ИНН" not in privacy and "operator.inn" not in privacy
+    assert "только идентификатор пользователя" in privacy and "policy_url" in privacy
+    assert "tel:" not in managed["src/app/support/page.tsx"]
+    assert "inn" not in managed["src/lib/omnia/max-config.ts"].split("export const")[0]
     assert MAX_RETIRED_MANAGED_FILES == {
         "src/app/api/omnia/data/[...path]/route.ts",
         "src/lib/secure-data/crypto.ts",

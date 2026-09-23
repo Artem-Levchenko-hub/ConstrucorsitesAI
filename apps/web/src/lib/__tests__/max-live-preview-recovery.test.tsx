@@ -117,13 +117,9 @@ function managedKit(snapshotId: string | null): MaxProjectConfig {
       content: [],
       operator: {
         legal_name: "Owner",
-        inn: "1234567890",
-        ogrn: "1234567890123",
-        address: "Moscow",
       },
       support: {
         email: null,
-        phone: "+79990000000",
         response_time: "24h",
       },
       legal: {
@@ -132,8 +128,7 @@ function managedKit(snapshotId: string | null): MaxProjectConfig {
         has_user_content: false,
         marketing_notifications: false,
         personal_data_consent: true,
-        terms_accepted: true,
-      },
+        terms_accepted: true, policy_url: "" },
       max_url_attached: true,
     },
   };
