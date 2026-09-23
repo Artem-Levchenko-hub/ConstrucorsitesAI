@@ -4,6 +4,57 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+_SECTION = re.compile(r"^\[(?P<name>[a-z][a-z0-9-]*)\]\s*$")
+_TSC_DIAGNOSTIC = re.compile(r"^\S+\(\d+,\d+\):\s*error\s+TS\d+:")
+_TAP_FAILURE = re.compile(r"^\s*not ok \d+\s*-\s*(?P<name>.+?)\s*$")
+_STAGE_NAMES = {
+    "typecheck": "проверка типов",
+    "targeted-test": "тесты приложения",
+    "install": "установка зависимостей",
+    "build": "сборка",
+}
+
+
+def summarize_check_failure(detail: str) -> str:
+    """Одна строка про то, ЧТО сломалось, а не первая строка отчёта.
+
+    Отчёт проверки состоит из разделов: `[typecheck]`, `[targeted-test]` и так
+    далее. Прежний код брал у него первую строку — а это всегда заголовок
+    раздела. Владелец получал «осталась ошибка: [typecheck]», то есть ничего,
+    и вдобавок неправду: в живом прогоне 23.09 проверка типов как раз прошла,
+    а упали тесты приложения. Человек с такой подсказкой пойдёт искать ошибку
+    типов, которой нет.
+
+    Поэтому ищем первую строку, которая действительно про отказ, и называем
+    раздел, в котором она нашлась. Если ничего распознать не удалось, ведём
+    себя как раньше — первая непустая строка: неизвестность лучше выдумки.
+    """
+    section = ""
+    fallback = ""
+    for raw in detail.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        header = _SECTION.match(line.strip())
+        if header is not None:
+            section = header.group("name")
+            continue
+        if not fallback:
+            fallback = line.strip()
+        tap = _TAP_FAILURE.match(line)
+        if tap is not None:
+            return _prefixed(section, f"не прошёл тест «{tap.group('name')}»")
+        if _TSC_DIAGNOSTIC.match(line.strip()):
+            return _prefixed(section, line.strip())
+    # Заголовки в запас не годятся: отчёт из одних заголовков не говорит ничего,
+    # а целиком он в строку чата не поместится и только утопит смысл.
+    return (fallback or "ошибка проверки")[:240]
+
+
+def _prefixed(section: str, message: str) -> str:
+    stage = _STAGE_NAMES.get(section, section.replace("-", " ") if section else "")
+    return (f"{stage}: {message}" if stage else message)[:240]
+
 
 def _failed_build_body(accumulated: str, stream_error: object) -> str:
     """Body to persist on the assistant message when a build stream errors.

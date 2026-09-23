@@ -15,6 +15,7 @@ from omnia_api.services import (
 from omnia_api.services.generation.agent_messages import (
     _agent_result_message,
     _capture_hard_coverage_attestation,
+    summarize_check_failure,
 )
 from omnia_api.services.generation.contracts import (
     AgentOperations,
@@ -337,7 +338,9 @@ async def probe_agent_candidate(
         _typecheck_ok = bool(_tc.get("ok", True))
         if not _typecheck_ok:
             _tc_detail = str(_tc.get("detail") or "").strip()
-            _tc_first = _tc_detail.splitlines()[0][:240] if _tc_detail else "ошибка типизации"
+            _tc_first = (
+                summarize_check_failure(_tc_detail) if _tc_detail else "ошибка типизации"
+            )
             _tc_error = _tc_first
             accumulated += (
                 f"\n\n⚠️ Почти готово, но осталась ошибка: {_tc_first}. "
