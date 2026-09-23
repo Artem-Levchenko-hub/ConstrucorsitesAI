@@ -435,10 +435,26 @@ class ProjectCellExecutorHandle:
     ) = None
 
 
+# Оркестратор отвечает этой фразой из трёх мест (routers/workspace.py), с кодом
+# 409 или 503. Различать по тексту хрупко, и лучше было бы отдельным кодом
+# ответа — но это правка на двух сторонах с жёстким порядком выкатки (см.
+# c39ebf21). Пока признак опознаётся здесь, в одном месте, и закреплён тестом с
+# обеих сторон: если оркестратор изменит фразу, тест упадёт, а не тихо вернёт
+# ложную тревогу владельцу.
+_DRAFT_RUNTIME_ABSENT = "draft runtime is not running"
+
+
+def draft_runtime_absent(exc: OrchestratorBadRequest) -> bool:
+    """Отказ означает «среды нет», а не «не удалось её починить»."""
+    return exc.status_code in (409, 503) and exc.message == _DRAFT_RUNTIME_ABSENT
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellPreviewSyncResult:
     generated_files: dict[str, str]
     failure: str | None
+    # Живой среды не было вовсе: откатывать нечего, и пугать владельца нечем.
+    runtime_absent: bool = False
 
 
 async def _release_generation_lease(
@@ -1087,7 +1103,7 @@ async def maybe_create_project_cell_executor(
                 )
             except OrchestratorBadRequest as exc:
                 # A stopped draft needs the normal fenced apply/recovery path.
-                if exc.status_code != 409 or exc.message != "draft runtime is not running":
+                if not draft_runtime_absent(exc):
                     raise
             else:
                 return ProjectCellPreviewSyncResult(generated_files={}, failure=None)
@@ -1107,6 +1123,7 @@ async def maybe_create_project_cell_executor(
                 return ProjectCellPreviewSyncResult(
                     generated_files={},
                     failure=f"preview reconciliation failed: {exc.message}",
+                    runtime_absent=draft_runtime_absent(exc),
                 )
             preview_synced = True
             return ProjectCellPreviewSyncResult(generated_files={}, failure=None)

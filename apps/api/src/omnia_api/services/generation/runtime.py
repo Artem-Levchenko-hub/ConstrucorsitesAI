@@ -418,7 +418,11 @@ async def _abort_unsafe_max_backend(
                 project_cell_handle=project_cell_handle,
             )
         except Exception as exc:
-            rollback_failed = True
+            # Живой среды может не быть вовсе — ячейки засыпают после каждой
+            # сборки. Тогда откатывать нечего: несуществующая среда не может
+            # показывать небезопасный черновик, и говорить обратное — значит
+            # пугать владельца ровно в том случае, когда бояться нечего.
+            rollback_failed = not getattr(exc, "runtime_absent", False)
             logging.getLogger("omnia_api.routers.messages").warning(
                 "MAX unsafe backend rollback hot_reload failed for project %s",
                 project_id,
@@ -475,6 +479,20 @@ def _split_project_cell_preview_patch(
     return writes, tuple(sorted(set(deletes))), explicit_empty
 
 
+class PreviewSyncFailed(RuntimeError):
+    """Сверка живого превью не удалась — и отдельно: была ли живая среда.
+
+    Без этого различия вызывающий код не отличит «не смогли привести среду в
+    порядок» от «среды нет и приводить нечего», а для владельца разница
+    принципиальная: в первом случае среда может отдавать небезопасный код, во
+    втором отдавать попросту некому.
+    """
+
+    def __init__(self, message: str, *, runtime_absent: bool = False) -> None:
+        super().__init__(message)
+        self.runtime_absent = runtime_absent
+
+
 async def _restore_project_cell_source(
     handle: ProjectCellExecutorHandle,
     baseline: Mapping[str, str],
@@ -485,7 +503,10 @@ async def _restore_project_cell_source(
     await handle.stage_patch(writes, deletes)
     restored = await handle.sync_preview()
     if restored.failure is not None:
-        raise RuntimeError(restored.failure)
+        raise PreviewSyncFailed(
+            restored.failure,
+            runtime_absent=getattr(restored, "runtime_absent", False),
+        )
 
 
 async def _apply_project_cell_preview_files(
@@ -506,7 +527,10 @@ async def _apply_project_cell_preview_files(
         await project_cell_handle.stage_patch(writes, deletes)
         sync_result = await project_cell_handle.sync_preview()
         if sync_result.failure is not None:
-            raise RuntimeError(sync_result.failure)
+            raise PreviewSyncFailed(
+                sync_result.failure,
+                runtime_absent=getattr(sync_result, "runtime_absent", False),
+            )
         return
     payload = dict(writes)
     payload.update({path: "" for path in deletes})
