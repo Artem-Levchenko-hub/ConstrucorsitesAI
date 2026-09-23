@@ -370,7 +370,7 @@ async def test_payment_retry_after_reconnection_does_not_duplicate_lost_response
     assert (await client.post(url, headers=headers(), json=payload)).status_code == 503
     assert len(payments) == 1
     assert (
-        await client.delete(f"/api/projects/{project}/app-integrations/yookassa/business")
+        await client.delete(f"/api/projects/{project}/app-integrations/yookassa/connection")
     ).status_code == 204
     assert (
         await client.put(
