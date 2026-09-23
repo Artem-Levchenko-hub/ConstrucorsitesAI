@@ -22,11 +22,11 @@ it.each(["/account?payment=pay-1", "/billing/plan?payment=pay-1"])("preserves pa
     expect(middleware(new NextRequest("https://example.test/login", { headers: { cookie: "omnia_session=stale" } })).headers.get("location")).toBeNull();
   } finally { vi.unstubAllEnvs(); }
 });
-it("provides six accessible account links on mobile and desktop", async () => {
+it("provides five accessible account links on mobile and desktop", async () => {
   const html = renderToStaticMarkup(await AccountShell({ email: "qa@example.test", active: "billing", children: null }));
   const dom = document.createElement("div"); dom.innerHTML = html;
   const nav = dom.querySelector('nav[aria-label="Разделы аккаунта"]')!;
-  expect(nav).not.toBeNull(); expect(nav.querySelectorAll("a")).toHaveLength(6);
+  expect(nav).not.toBeNull(); expect(nav.querySelectorAll("a")).toHaveLength(5);
   expect(nav.querySelector('[aria-current="page"]')?.getAttribute("href")).toBe("/billing");
   expect(nav.closest(".hidden")).toBeNull();
 });

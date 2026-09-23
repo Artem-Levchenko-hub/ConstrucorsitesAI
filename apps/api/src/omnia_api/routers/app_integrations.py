@@ -1,4 +1,4 @@
-"""Business Integration Hub, OAuth and per-project capability bindings."""
+"""Account-level Integration Hub, OAuth and per-project capability bindings."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from omnia_api.core.crypto import encrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.app_integration import (
-    BusinessIntegration,
+    AccountIntegration,
     IntegrationOAuthState,
     ProjectIntegrationBinding,
 )
@@ -37,7 +37,7 @@ from omnia_api.schemas.app_integration import (
 from omnia_api.schemas.max_studio import MaxProjectConfigPayload
 from omnia_api.services import integration_oauth, integration_providers
 from omnia_api.services.integration_credentials import load_credentials
-from omnia_api.services.max_access import require_max_business
+from omnia_api.services.max_access import require_max_studio_access
 
 router = APIRouter(tags=["app-integrations"])
 
@@ -57,14 +57,15 @@ async def _owned_max_project(
     return project
 
 
-async def _business_connection(
-    session: SessionDep, business_id: UUID, provider: str
-) -> BusinessIntegration | None:
+async def _account_connection(
+    session: SessionDep, user_id: UUID, provider: str
+) -> AccountIntegration | None:
+    """Connections belong to the account and are shared by all of its projects."""
     return (
         await session.execute(
-            select(BusinessIntegration).where(
-                BusinessIntegration.business_id == business_id,
-                BusinessIntegration.provider == provider,
+            select(AccountIntegration).where(
+                AccountIntegration.user_id == user_id,
+                AccountIntegration.provider == provider,
             )
         )
     ).scalar_one_or_none()
@@ -86,7 +87,7 @@ async def _binding(
 async def _bind(
     session: SessionDep,
     project_id: UUID,
-    connection: BusinessIntegration,
+    connection: AccountIntegration,
     *,
     config: dict[str, object] | None = None,
 ) -> ProjectIntegrationBinding:
@@ -185,7 +186,7 @@ def _provider_public(
 
 
 def _connection_public(
-    connection: BusinessIntegration,
+    connection: AccountIntegration,
     binding: ProjectIntegrationBinding | None,
 ) -> AppIntegrationPublic:
     provider = integration_providers.get_provider(connection.provider)
@@ -241,7 +242,7 @@ def _map_provider_error(exc: integration_providers.IntegrationProviderError) -> 
 async def _recommended_pack(
     session: SessionDep,
     project: Project,
-    connections: list[BusinessIntegration],
+    connections: list[AccountIntegration],
     bindings: dict[str, ProjectIntegrationBinding],
 ) -> IntegrationPackPublic:
     record = await session.get(MaxProjectConfig, project.id)
@@ -315,13 +316,13 @@ async def get_integration_catalog(
     current_user: CurrentUserDep,
 ) -> IntegrationCatalogPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    business = await require_max_business(session, current_user)
+    require_max_studio_access(current_user)
     connections = list(
         (
             await session.execute(
-                select(BusinessIntegration)
-                .where(BusinessIntegration.business_id == business.id)
-                .order_by(BusinessIntegration.created_at)
+                select(AccountIntegration)
+                .where(AccountIntegration.user_id == current_user.id)
+                .order_by(AccountIntegration.created_at)
             )
         ).scalars()
     )
@@ -356,7 +357,7 @@ async def set_platform_ai(
     session: SessionDep, current_user: CurrentUserDep,
 ) -> PlatformAIState:
     project = await _owned_max_project(session, project_id, current_user.id)
-    await require_max_business(session, current_user)
+    require_max_studio_access(current_user)
     project.runtime_ai_enabled = payload.enabled
     await session.commit()
     return PlatformAIState(enabled=project.runtime_ai_enabled)
@@ -374,7 +375,7 @@ async def connect_integration(
     current_user: CurrentUserDep,
 ) -> AppIntegrationPublic:
     await _owned_max_project(session, project_id, current_user.id)
-    business = await require_max_business(session, current_user)
+    require_max_studio_access(current_user)
     try:
         provider = integration_providers.get_provider(provider_key)
         if not provider.available or not provider.fields:
@@ -391,10 +392,10 @@ async def connect_integration(
         raise _map_provider_error(exc) from exc
 
     now = datetime.now(UTC)
-    connection = await _business_connection(session, business.id, provider_key)
+    connection = await _account_connection(session, current_user.id, provider_key)
     if connection is None:
-        connection = BusinessIntegration(
-            business_id=business.id,
+        connection = AccountIntegration(
+            user_id=current_user.id,
             created_by_user_id=current_user.id,
             provider=provider_key,
             credentials_enc="",
@@ -436,12 +437,12 @@ async def bind_existing_integration(
             "ai_integration_required", "Включите встроенный ИИ в настройках приложения",
             status.HTTP_409_CONFLICT,
         )
-    business = await require_max_business(session, current_user)
-    connection = await _business_connection(session, business.id, provider_key)
+    require_max_studio_access(current_user)
+    connection = await _account_connection(session, current_user.id, provider_key)
     if connection is None:
         raise ApiError(
             "integration_not_found",
-            "Сначала подключите сервис к бизнесу",
+            "Сначала подключите сервис в аккаунте",
             status.HTTP_404_NOT_FOUND,
         )
     binding = await _bind(session, project_id, connection)
@@ -460,12 +461,12 @@ async def apply_recommended_pack(
     current_user: CurrentUserDep,
 ) -> IntegrationPackApplyPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    business = await require_max_business(session, current_user)
+    require_max_studio_access(current_user)
     connections = list(
         (
             await session.execute(
-                select(BusinessIntegration).where(
-                    BusinessIntegration.business_id == business.id
+                select(AccountIntegration).where(
+                    AccountIntegration.user_id == current_user.id
                 )
             )
         ).scalars()
@@ -514,8 +515,8 @@ async def verify_integration(
             "ai_integration_required", "Включите встроенный ИИ в настройках приложения",
             status.HTTP_409_CONFLICT,
         )
-    business = await require_max_business(session, current_user)
-    connection = await _business_connection(session, business.id, provider_key)
+    require_max_studio_access(current_user)
+    connection = await _account_connection(session, current_user.id, provider_key)
     if connection is None:
         raise ApiError(
             "integration_not_found",
@@ -583,7 +584,7 @@ async def unbind_integration(
     current_user: CurrentUserDep,
 ) -> Response:
     await _owned_max_project(session, project_id, current_user.id)
-    await require_max_business(session, current_user)
+    require_max_studio_access(current_user)
     binding = await _binding(session, project_id, provider_key)
     if binding is not None:
         await session.delete(binding)
@@ -592,18 +593,19 @@ async def unbind_integration(
 
 
 @router.delete(
-    "/api/projects/{project_id}/app-integrations/{provider_key}/business",
+    "/api/projects/{project_id}/app-integrations/{provider_key}/connection",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_business_integration(
+async def delete_account_integration(
     project_id: UUID,
     provider_key: str,
     session: SessionDep,
     current_user: CurrentUserDep,
 ) -> Response:
+    """Remove the account-level connection itself, not only this project's binding."""
     await _owned_max_project(session, project_id, current_user.id)
-    business = await require_max_business(session, current_user)
-    connection = await _business_connection(session, business.id, provider_key)
+    require_max_studio_access(current_user)
+    connection = await _account_connection(session, current_user.id, provider_key)
     if connection is not None:
         await session.delete(connection)
         await session.commit()
@@ -621,7 +623,7 @@ async def start_integration_oauth(
     current_user: CurrentUserDep,
 ) -> IntegrationOAuthStartPublic:
     await _owned_max_project(session, project_id, current_user.id)
-    business = await require_max_business(session, current_user)
+    require_max_studio_access(current_user)
     provider = integration_providers.get_provider(provider_key)
     if not provider.oauth_supported or not _oauth_available(provider_key):
         raise ApiError(
@@ -632,7 +634,6 @@ async def start_integration_oauth(
     raw_state = secrets.token_urlsafe(40)
     state = IntegrationOAuthState(
         state_hash=hashlib.sha256(raw_state.encode()).hexdigest(),
-        business_id=business.id,
         user_id=current_user.id,
         project_id=project_id,
         provider=provider_key,
@@ -697,12 +698,10 @@ async def integration_oauth_callback(
         return _oauth_redirect(record.project_id, "error")
 
     provider = integration_providers.get_provider(provider_key)
-    connection = await _business_connection(
-        session, record.business_id, provider_key
-    )
+    connection = await _account_connection(session, record.user_id, provider_key)
     if connection is None:
-        connection = BusinessIntegration(
-            business_id=record.business_id,
+        connection = AccountIntegration(
+            user_id=record.user_id,
             created_by_user_id=record.user_id,
             provider=provider_key,
             credentials_enc="",

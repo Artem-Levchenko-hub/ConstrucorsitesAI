@@ -4,8 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from omnia_api.schemas.max_account import BusinessProfilePublic
-
 
 class AdminUserPublic(BaseModel):
     id: UUID
@@ -17,14 +15,12 @@ class AdminUserPublic(BaseModel):
     created_at: datetime
     last_login_at: datetime | None
     wallet_balance_rub: str
-    business: BusinessProfilePublic | None = None
 
 
 class AdminUserUpdate(BaseModel):
     role: Literal["user", "admin"] | None = None
     email_verified: bool | None = None
     status: Literal["active", "suspended"] | None = None
-    business_verified: bool | None = None
     note: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
@@ -33,7 +29,6 @@ class AdminUserUpdate(BaseModel):
             self.role is None
             and self.email_verified is None
             and self.status is None
-            and self.business_verified is None
         ):
             raise ValueError("at least one account change is required")
         return self

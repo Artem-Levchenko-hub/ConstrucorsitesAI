@@ -29,7 +29,6 @@ from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong
 from omnia_api.core.deps import CurrentUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.models.account import BusinessMember
 from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
 from omnia_api.models.custom_domain import CustomDomain
 from omnia_api.models.deploy_target import DeployTarget
@@ -101,19 +100,10 @@ async def _billing_account_user_ids(
     session: AsyncSession,
     account: BillingAccount,
 ) -> list[UUID]:
+    del session  # every account is personal; the signature stays for callers
     if account.personal_user_id is not None:
         return [account.personal_user_id]
-    if account.business_id is None:
-        return []
-    return list(
-        (
-            await session.execute(
-                select(BusinessMember.user_id).where(
-                    BusinessMember.business_id == account.business_id
-                )
-            )
-        ).scalars()
-    )
+    return []
 
 
 def _to_runtime_status(payload: dict[str, Any]) -> RuntimeStatus:

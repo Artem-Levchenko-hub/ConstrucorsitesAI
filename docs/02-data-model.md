@@ -126,23 +126,21 @@ snapshot. В prompt попадает ограниченная выжимка; т
 
 ### `billing_accounts`
 
-Канонический владелец кошелька, журнала и подписки. Новый пользователь получает
-личный аккаунт; MAX-онбординг переводит ту же строку в область бизнеса, поэтому
-переезда средств и истории не происходит.
+Канонический владелец кошелька, журнала и подписки. Каждый аккаунт личный:
+пользователь получает его при регистрации, и никакого отдельного бизнес-контура
+нет — с миграции `0069` платформа не собирает реквизиты владельца (аккаунт —
+это email и пароль, бизнес за ботом проверяет сам MAX).
 
 | Поле | Тип | Constraints |
 |---|---|---|
 | `id` | uuid | PK |
-| `scope` | text | `personal` или `business` |
+| `scope` | text | Только `personal` (с `0069`) |
 | `personal_user_id` | uuid | Для `personal`: FK → `users(id)`, UNIQUE |
-| `business_id` | uuid | Для `business`: FK → `business_profiles(id)`, UNIQUE |
 | `created_by_user_id` | uuid | Аудит создателя, FK → `users(id)` ON DELETE SET NULL |
 | `currency` | text | Только `RUB` |
 | `created_at`, `updated_at` | timestamptz | Аудит |
 
-CHECK разрешает ровно одного владельца области: либо пользователя, либо бизнес.
-Участник MAX-бизнеса сначала разрешается в `business_id`; пользователь без
-бизнеса — в `personal_user_id`.
+CHECK требует `scope = 'personal'` и заполненный `personal_user_id`.
 
 ### `wallets`
 | Поле | Тип | Constraints |
@@ -405,6 +403,7 @@ COMMENT ON COLUMN usage.purpose IS
 | `0037` | `pending_payment` и partial unique guard для одной незавершённой покупки тарифа на account | Codex |
 | `0038` | версия согласия на renewal, guard одного ожидающего продления и канонический keep-alive проекта | Codex |
 | `0046` | `project_memory_revisions` + точная связь generation run с user message | Codex |
+| `0069` | бизнес-профили, участники и их квоты удалены; `app_integrations.user_id` вместо `business_id`, `billing_accounts` только личные, ФНС-проверки нет | Claude |
 
 ## Trigger для `updated_at`
 
@@ -441,7 +440,7 @@ users ─┬─< projects ─< snapshots ─┐ (parent_id, само-FK)
        ├─< messages ──────────────┘
        ├─< generation_runs ───────┘ (assistant_message_id)
        │
-       ├─ billing_accounts >─ business_profiles
+       ├─ billing_accounts
        │          ├─ wallets (1:1)
        │          ├─< subscriptions >─ billing_plans
        │          │          └─ billing_payment_methods

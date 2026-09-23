@@ -40,10 +40,10 @@ export const mvpChecklist: MvpChecklistSection[] = [
       },
       {
         id: "business-profile",
-        title: "MAX Partner и данные приложения",
-        detail: "Бизнес-проверка проходит в MAX Partner; в Omnia до production собираются только сведения, которые увидит пользователь приложения.",
+        title: "Аккаунт без реквизитов",
+        detail: "Аккаунт — это email и пароль. Бизнес-проверка проходит в MAX Partner; ИНН, ОГРН, ФИО и телефон Yleum не собирает и не хранит.",
         status: "done",
-        completedAt: "26 августа 2026",
+        completedAt: "23 сентября 2026",
       },
       {
         id: "legal-consents",
@@ -119,10 +119,10 @@ export const mvpChecklist: MvpChecklistSection[] = [
       },
       {
         id: "business-account",
-        title: "Единый платёжный аккаунт бизнеса",
-        detail: "Кошелёк, журнал и подписка переводятся с пользователя на общий бизнес-контур без потери истории.",
+        title: "Единый платёжный аккаунт",
+        detail: "Кошелёк, журнал и подписка привязаны к одному аккаунту пользователя; отдельного бизнес-контура нет.",
         status: "done",
-        completedAt: "31 июля 2026",
+        completedAt: "23 сентября 2026",
       },
       {
         id: "subscription-purchase",

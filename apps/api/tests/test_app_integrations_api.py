@@ -15,11 +15,10 @@ from sqlalchemy import select
 from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.models.app_integration import (
-    BusinessIntegration,
+    AccountIntegration,
     ProjectIntegrationBinding,
 )
 from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import projects as projects_router
 from omnia_api.services import integration_oauth, integration_providers
 from omnia_api.services import repo as repo_svc
@@ -35,11 +34,7 @@ async def _register_and_create(
     async def fake_publish(*_args, **_kwargs) -> None:
         return None
 
-    async def verified_npd(_inn: str) -> tuple[str, str | None, dict[str, object]]:
-        return "verified", "НПД подтверждён", {"status": True}
-
     monkeypatch.setattr(projects_router, "publish_event", fake_publish)
-    monkeypatch.setattr(max_accounts_router, "_verify_self_employed", verified_npd)
     registered = await client.post(
         "/api/auth/register",
         json={"email": "integrations@example.com", "password": "secret123"},
@@ -53,15 +48,7 @@ async def _register_and_create(
     assert session_cookie
     client.cookies.clear()
     client.cookies.set(cookie_name, session_cookie)
-    business = await client.put(
-        "/api/max/account/business",
-        json={
-            "kind": "self_employed",
-            "inn": "500100732259",
-            "legal_name": "Тестовый владелец",
-        },
-    )
-    assert business.status_code == 200
+    # An account is an email and a password: no requisites before integrations.
     created = await client.post(
         "/api/projects",
         json={"name": "MAX storefront", "template": "max_miniapp"},
@@ -112,7 +99,7 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
     assert connected.status_code == 200
     body = connected.json()
     assert body["status"] == "active"
-    assert body["business_scoped"] is True
+    assert body["account_scoped"] is True
     assert body["bound_to_project"] is True
     assert body["account_label"] == "Магазин 123456"
     assert body["public_config"] == {"shop_id": "123456"}
@@ -121,8 +108,8 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
 
     stored = (
         await db_session.execute(
-            select(BusinessIntegration).where(
-                BusinessIntegration.provider == "yookassa"
+            select(AccountIntegration).where(
+                AccountIntegration.provider == "yookassa"
             )
         )
     ).scalar_one()
@@ -219,7 +206,7 @@ async def test_verify_marks_broken_connection_without_exposing_credentials(
     assert still_saved.json()["connections"][0]["bound_to_project"] is False
 
     removed = await client.delete(
-        f"/api/projects/{project_id}/app-integrations/yandex_metrica/business"
+        f"/api/projects/{project_id}/app-integrations/yandex_metrica/connection"
     )
     assert removed.status_code == 204
     empty = await client.get(f"/api/projects/{project_id}/app-integrations")
@@ -328,8 +315,8 @@ async def test_bound_integration_is_available_to_signed_max_runtime(
             project_id=project_id,
             owner_id=(
                 await db_session.execute(
-                    select(BusinessIntegration.created_by_user_id).where(
-                        BusinessIntegration.provider == "yookassa"
+                    select(AccountIntegration.created_by_user_id).where(
+                        AccountIntegration.provider == "yookassa"
                     )
                 )
             ).scalar_one(),

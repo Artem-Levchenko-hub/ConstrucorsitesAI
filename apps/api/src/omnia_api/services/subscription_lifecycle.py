@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.errors import ApiError
-from omnia_api.models.account import BusinessMember, Payment
+from omnia_api.models.account import Payment
 from omnia_api.models.billing import (
     FREE_PLAN_ID,
     BillingAccount,
@@ -317,19 +317,10 @@ async def apply_subscription_provider_state(
 
 
 async def _account_user_ids(session: AsyncSession, account: BillingAccount) -> list[UUID]:
+    del session  # every account is personal; the signature stays for callers
     if account.scope == "personal" and account.personal_user_id is not None:
         return [account.personal_user_id]
-    if account.business_id is None:
-        return []
-    return list(
-        (
-            await session.execute(
-                select(BusinessMember.user_id).where(
-                    BusinessMember.business_id == account.business_id
-                )
-            )
-        ).scalars()
-    )
+    return []
 
 
 async def enforce_keep_alive_entitlement(

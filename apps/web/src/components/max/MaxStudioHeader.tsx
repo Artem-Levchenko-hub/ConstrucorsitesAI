@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Building2, ChevronDown, CircleHelp, CreditCard, LogOut, Receipt, Shield, User, WalletCards } from "lucide-react";
+import { ChevronDown, CircleHelp, CreditCard, LogOut, Receipt, Shield, User, WalletCards } from "lucide-react";
 
 import { logoutAction } from "@/app/(auth)/actions";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -20,7 +20,6 @@ import "./max-studio.css";
 
 const accountLinks = [
   ["/account", User, "Профиль"],
-  ["/account/organization", Building2, "Организация"],
   ["/account/security", Shield, "Безопасность"],
   ["/billing", WalletCards, "Баланс"],
   ["/billing/transactions", Receipt, "Операции"],

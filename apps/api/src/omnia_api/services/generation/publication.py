@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.account import BusinessEntitlement
 from omnia_api.models.message import Message
 from omnia_api.models.user import User
 from omnia_api.schemas.snapshot import snapshot_event_dict
@@ -37,20 +35,11 @@ async def _finalize_message(
 
 
 async def consume_free_generation(
-    session: AsyncSession, *, is_free: bool, free_business_id: UUID | None, user_id: UUID
+    session: AsyncSession, *, is_free: bool, user_id: UUID
 ) -> None:
+    """Every free build is spent from the owner's personal allowance."""
     if not is_free:
         return
-    if free_business_id is not None:
-        entitlement = await session.get(
-            BusinessEntitlement,
-            free_business_id,
-            with_for_update=True,
-        )
-        if entitlement is not None:
-            entitlement.free_generations_used += 1
-            entitlement.updated_at = datetime.now(UTC)
-            return
     user_row = await session.get(User, user_id)
     if user_row is not None:
         user_row.free_generations_used = (user_row.free_generations_used or 0) + 1

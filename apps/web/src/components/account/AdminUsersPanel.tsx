@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BadgeCheck, Ban, ChevronDown, KeyRound, Loader2, RotateCcw, ShieldCheck, ShieldOff } from "lucide-react";
+import { BadgeCheck, Ban, ChevronDown, Loader2, RotateCcw, ShieldCheck, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -31,19 +31,18 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
   });
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
-    return (users.data ?? []).filter(user => !needle || user.email.toLocaleLowerCase("ru-RU").includes(needle)
-      || user.business?.legal_name.toLocaleLowerCase("ru-RU").includes(needle) || user.business?.inn.includes(needle));
+    return (users.data ?? []).filter(user => !needle || user.email.toLocaleLowerCase("ru-RU").includes(needle));
   }, [search, users.data]);
   if (users.isLoading) return <AdminState loading title="Загружаем аккаунты" />;
   if (users.isError) return <AdminState error title="Аккаунты не загрузились" description={users.error instanceof Error ? users.error.message : "Повторите попытку"} retry={() => void users.refetch()} />;
 
   return <div className="admin-panel">
     <div className="admin-toolbar">
-      <AdminSearch label="Поиск аккаунтов" placeholder="Email, организация или ИНН" value={search} onChange={setSearch} />
+      <AdminSearch label="Поиск аккаунтов" placeholder="Email" value={search} onChange={setSearch} />
       <p className="admin-count"><strong>{visible.length}</strong> из {users.data?.length ?? 0} загруженных</p>
     </div>
     {update.isError && <p className="admin-inline-error" role="alert">Изменение не сохранено. {update.error instanceof Error ? update.error.message : "Повторите попытку."}</p>}
-    {visible.length === 0 ? <AdminState title={search.trim() ? "Ничего не найдено" : "Аккаунтов пока нет"} description={search.trim() ? "Попробуйте другой email, название организации или ИНН." : undefined} /> :
+    {visible.length === 0 ? <AdminState title={search.trim() ? "Ничего не найдено" : "Аккаунтов пока нет"} description={search.trim() ? "Попробуйте другой email." : undefined} /> :
       <div className="admin-table-wrap"><table role="table" className="admin-table admin-users-table" aria-label="Аккаунты">
         <thead><tr>{[["identity", "Аккаунт"], ["role", "Роль"], ["status", "Статус"], ["balance", "Баланс"], ["actions", ""]].map(([id, label]) =>
           <th key={id} scope="col" id={`admin-users-${id}`}>{label || <span className="sr-only">Действия</span>}</th>)}</tr></thead>
@@ -54,7 +53,6 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
             <td role="cell" headers="admin-users-identity"><AdminCellLabel>Аккаунт</AdminCellLabel>
               <div className="admin-identity"><strong>{user.email}</strong>{isSelf && <span className="admin-self">Вы</span>}</div>
               <small className={user.email_verified_at ? "" : "admin-attention"}>{user.email_verified_at ? "Email подтверждён" : "Email не подтверждён"}</small>
-              {user.business && <small>{user.business.legal_name} · ИНН {user.business.inn}</small>}
               <small className="admin-date">Создан {adminDate(user.created_at)} · {user.last_login_at ? `Вход ${adminDate(user.last_login_at)}` : "Ещё не входил"}</small>
             </td>
             <td role="cell" headers="admin-users-role"><AdminCellLabel>Роль</AdminCellLabel><span className={user.is_admin ? "admin-role" : "admin-muted"}>{user.is_admin && <ShieldCheck aria-hidden="true" />} {user.is_admin ? "Администратор" : "Пользователь"}</span></td>
@@ -66,7 +64,6 @@ export function AdminUsersPanel({ currentEmail }: { currentEmail: string }) {
                 <DropdownMenuContent data-max-studio className="admin-action-menu" align="end">
                   <DropdownMenuLabel className="admin-menu-label">{user.email}</DropdownMenuLabel>
                   {!user.email_verified_at && <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { email_verified: true } })}><BadgeCheck />Подтвердить email</DropdownMenuItem>}
-                  {user.business && user.business.status !== "verified" && <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { business_verified: true, note: "Реквизиты проверены администратором" } })}><KeyRound />Подтвердить бизнес</DropdownMenuItem>}
                   {user.role === "admin"
                     ? <DropdownMenuItem disabled={pending || isSelf} onSelect={() => update.mutate({ user, change: { role: "user" } })}><ShieldOff />Снять права</DropdownMenuItem>
                     : <DropdownMenuItem disabled={pending} onSelect={() => update.mutate({ user, change: { role: "admin" } })}><ShieldCheck />Сделать админом</DropdownMenuItem>}

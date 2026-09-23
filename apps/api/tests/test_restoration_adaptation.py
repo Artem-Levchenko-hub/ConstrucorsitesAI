@@ -1305,7 +1305,6 @@ async def test_disposable_db_worker_reads_private_accepted_bundle(
             model_id="fixture",
             force_model=None,
             is_free=False,
-            free_business_id=None,
             orchestrate=False,
             selected_elements=[],
         ),

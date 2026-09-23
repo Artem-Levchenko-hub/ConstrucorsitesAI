@@ -182,7 +182,6 @@ async def execute_dispatch(run_id: UUID) -> bool:
                 model_id=dispatch.model_id,
                 force_model=dispatch.force_model,
                 is_free=dispatch.is_free,
-                free_business_id=dispatch.free_business_id,
                 orchestrate=dispatch.orchestrate,
                 selected_elements=dispatch.selected_elements,
             )

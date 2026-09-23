@@ -1,16 +1,13 @@
 from omnia_api.models.account import (
     AuthSession,
     AuthToken,
-    BusinessEntitlement,
-    BusinessMember,
-    BusinessProfile,
     LegalAcceptance,
     Payment,
 )
 from omnia_api.models.admin_audit import AdminAuditEvent
 from omnia_api.models.app_integration import (
+    AccountIntegration,
     AppIntegration,
-    BusinessIntegration,
     IntegrationOAuthState,
     ProjectIntegrationBinding,
 )
@@ -58,6 +55,7 @@ from omnia_api.models.wallet import Wallet
 from omnia_api.models.wallet_charge import WalletCharge
 
 __all__ = [
+    "AccountIntegration",
     "AdminAuditEvent",
     "AppIntegration",
     "Attestation",
@@ -67,10 +65,6 @@ __all__ = [
     "BillingAccount",
     "BillingPaymentMethod",
     "BillingPlan",
-    "BusinessEntitlement",
-    "BusinessIntegration",
-    "BusinessMember",
-    "BusinessProfile",
     "CustomDomain",
     "DeployTarget",
     "GenerationEvent",

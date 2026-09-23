@@ -17,7 +17,6 @@ from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.services.billing_accounts import resolve_billing_account
-from omnia_api.services.max_access import get_user_business
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 legal_router = APIRouter(prefix="/api/legal", tags=["legal"])
@@ -46,7 +45,6 @@ async def export_account_data(
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> dict[str, object]:
-    business = await get_user_business(session, current_user.id)
     billing_account = await resolve_billing_account(session, current_user.id)
     projects = list(
         (
@@ -107,19 +105,6 @@ async def export_account_data(
             "created_at": current_user.created_at.isoformat(),
             "status": current_user.status,
         },
-        "business": (
-            {
-                "id": str(business.id),
-                "kind": business.kind,
-                "inn": business.inn,
-                "ogrn": business.ogrn,
-                "legal_name": business.legal_name,
-                "status": business.status,
-                "verified_at": business.verified_at.isoformat() if business.verified_at else None,
-            }
-            if business
-            else None
-        ),
         "projects": [
             {
                 "id": str(project.id),

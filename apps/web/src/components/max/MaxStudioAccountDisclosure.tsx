@@ -2,7 +2,6 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import {
-  Building2,
   ChevronDown,
   CreditCard,
   Receipt,
@@ -15,7 +14,6 @@ import { useId, useRef, useState } from "react";
 
 const accountLinks = [
   ["/account", UserRound, "Профиль"],
-  ["/account/organization", Building2, "Организация"],
   ["/account/security", Shield, "Безопасность"],
   ["/billing", WalletCards, "Баланс"],
   ["/billing/transactions", Receipt, "Операции"],

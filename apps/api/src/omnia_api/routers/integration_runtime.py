@@ -23,7 +23,7 @@ from omnia_api.core.deps import SessionDep
 from omnia_api.core.errors import ApiError
 from omnia_api.core.redis import get_redis
 from omnia_api.models.app_integration import (
-    BusinessIntegration,
+    AccountIntegration,
     ProjectIntegrationBinding,
 )
 from omnia_api.models.max_integration import MaxIntegration
@@ -136,19 +136,19 @@ async def _runtime_context(
 
 async def _connections(
     session: SessionDep, project_id: UUID
-) -> dict[str, BusinessIntegration]:
+) -> dict[str, AccountIntegration]:
     rows = (
         await session.execute(
-            select(BusinessIntegration)
+            select(AccountIntegration)
             .join(
                 ProjectIntegrationBinding,
-                ProjectIntegrationBinding.integration_id == BusinessIntegration.id,
+                ProjectIntegrationBinding.integration_id == AccountIntegration.id,
             )
             .where(
                 ProjectIntegrationBinding.project_id == project_id,
                 ProjectIntegrationBinding.enabled.is_(True),
                 ProjectIntegrationBinding.status == "ready",
-                BusinessIntegration.status == "active",
+                AccountIntegration.status == "active",
             )
         )
     ).scalars()
@@ -156,7 +156,7 @@ async def _connections(
 
 
 async def _secrets(
-    session: SessionDep, connection: BusinessIntegration
+    session: SessionDep, connection: AccountIntegration
 ) -> dict[str, str]:
     from omnia_api.services.integration_credentials import load_credentials
 
@@ -546,7 +546,7 @@ async def create_runtime_lead(
 
 
 async def _send_runtime_lead(
-    connection: BusinessIntegration, credentials: dict[str, str],
+    connection: AccountIntegration, credentials: dict[str, str],
     context: RuntimeContext, payload: RuntimeLeadRequest,
 ) -> RuntimeLeadPublic:
     try:

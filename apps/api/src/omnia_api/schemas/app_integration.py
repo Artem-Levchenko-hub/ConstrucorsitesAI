@@ -1,4 +1,4 @@
-"""Public contracts for the business Integration Hub."""
+"""Public contracts for the account-level Integration Hub."""
 
 from datetime import datetime
 from typing import Any
@@ -37,7 +37,7 @@ class AppIntegrationPublic(BaseModel):
     provider: str
     status: str
     auth_mode: str = "credentials"
-    business_scoped: bool = True
+    account_scoped: bool = True
     bound_to_project: bool = False
     binding_status: str | None = None
     binding_config: dict[str, Any] = Field(default_factory=dict)

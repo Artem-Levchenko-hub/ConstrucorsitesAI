@@ -20,7 +20,7 @@ const provider: IntegrationProvider = {
   available: true, recommended: true, requirement: null, docs_url: "https://example.com", oauth_supported: false, oauth_available: false, connection_mode: "credentials",
 };
 const connection: AppIntegration = {
-  id: "connection", provider: "yookassa", status: "active", auth_mode: "credentials", business_scoped: true,
+  id: "connection", provider: "yookassa", status: "active", auth_mode: "credentials", account_scoped: true,
   bound_to_project: true, binding_status: "ready", binding_config: { private: "binding-value-must-not-leak" }, account_label: "account-must-not-leak", public_config: { shop_id: "shop-value-must-not-leak" },
   capabilities: ["untrusted-capability-must-not-leak"], configured_fields: ["secret_key"], last_error: null,
   verified_at: null, last_checked_at: null, created_at: "2026-09-06", updated_at: "2026-09-06",

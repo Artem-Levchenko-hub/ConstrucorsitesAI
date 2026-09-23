@@ -27,7 +27,7 @@ const provider: IntegrationProvider = {
   oauth_available: false, connection_mode: "credentials",
 };
 const connection: AppIntegration = {
-  id: "connection", provider: "yookassa", status: "active", auth_mode: "credentials", business_scoped: true,
+  id: "connection", provider: "yookassa", status: "active", auth_mode: "credentials", account_scoped: true,
   bound_to_project: true, binding_status: "ready", binding_config: { private: "binding-must-not-leak" },
   account_label: "account-must-not-leak", public_config: { shop_id: "shop-must-not-leak" },
   capabilities: ["payments"], configured_fields: ["secret_key"], last_error: null, verified_at: null,

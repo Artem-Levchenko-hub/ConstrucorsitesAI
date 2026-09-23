@@ -9,8 +9,7 @@ from sqlalchemy import select
 
 from omnia_api.core.config import get_settings
 from omnia_api.core.crypto import encrypt_strong
-from omnia_api.models.account import BusinessProfile
-from omnia_api.models.app_integration import BusinessIntegration, ProjectIntegrationBinding
+from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.project import Project
 from omnia_api.routers import integration_runtime
@@ -31,7 +30,7 @@ async def fixture(client, db_session, monkeypatch):
         )
     )
     await db_session.commit()
-    assert await db_session.scalar(select(BusinessIntegration.id)) is None
+    assert await db_session.scalar(select(AccountIntegration.id)) is None
     assert await db_session.scalar(select(ProjectIntegrationBinding.id)) is None
     return project
 
@@ -210,8 +209,8 @@ async def test_disabled_ai_cannot_spend_even_with_legacy_aitunnel_binding(
 
 
 async def legacy_aitunnel(db_session, project):
-    connection = BusinessIntegration(
-        business_id=await db_session.scalar(select(BusinessProfile.id)),
+    connection = AccountIntegration(
+        user_id=project.owner_id,
         created_by_user_id=project.owner_id,
         provider="aitunnel",
         credentials_enc="must-not-be-loaded",

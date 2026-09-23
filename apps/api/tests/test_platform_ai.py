@@ -2,8 +2,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
-from omnia_api.models.account import BusinessProfile
-from omnia_api.models.app_integration import BusinessIntegration, ProjectIntegrationBinding
+from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from omnia_api.models.project import Project
 from omnia_api.services.integration_generation import generation_context
 from tests.test_app_integrations_api import _register_and_create
@@ -32,7 +31,7 @@ async def test_platform_ai_requires_explicit_owner_enable_without_credentials(
         context = await generation_context(db_session, UUID(project_id))
         assert ("requestOmniaAI" in context) is enabled
         assert "aitunnel" not in context.lower()
-    assert await db_session.scalar(select(BusinessIntegration.id)) is None
+    assert await db_session.scalar(select(AccountIntegration.id)) is None
     assert await db_session.scalar(select(ProjectIntegrationBinding.id)) is None
 
 
@@ -60,9 +59,8 @@ async def test_legacy_aitunnel_is_preserved_but_never_reactivated_or_advertised(
 ):
     project_id = await _register_and_create(client, monkeypatch)
     project = await db_session.get(Project, UUID(project_id))
-    business = await db_session.scalar(select(BusinessProfile))
-    legacy = BusinessIntegration(
-        business_id=business.id,
+    legacy = AccountIntegration(
+        user_id=project.owner_id,
         created_by_user_id=project.owner_id,
         provider="aitunnel",
         credentials_enc="legacy-untouched",

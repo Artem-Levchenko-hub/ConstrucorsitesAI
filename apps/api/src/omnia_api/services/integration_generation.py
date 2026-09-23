@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.app_integration import BusinessIntegration, ProjectIntegrationBinding
+from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from omnia_api.models.project import Project
 
 _METHODS = {
@@ -46,18 +46,18 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
     providers = list(
         (
             await session.scalars(
-                select(BusinessIntegration.provider)
+                select(AccountIntegration.provider)
                 .join(
                     ProjectIntegrationBinding,
-                    ProjectIntegrationBinding.integration_id == BusinessIntegration.id,
+                    ProjectIntegrationBinding.integration_id == AccountIntegration.id,
                 )
                 .where(
                     ProjectIntegrationBinding.project_id == project_id,
                     ProjectIntegrationBinding.enabled.is_(True),
                     ProjectIntegrationBinding.status == "ready",
-                    BusinessIntegration.status == "active",
+                    AccountIntegration.status == "active",
                 )
-                .order_by(BusinessIntegration.provider)
+                .order_by(AccountIntegration.provider)
             )
         ).all()
     )

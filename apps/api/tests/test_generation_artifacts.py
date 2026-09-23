@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from omnia_api.core.config import get_settings
-from omnia_api.models.account import BusinessEntitlement
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -109,7 +108,7 @@ class OfflineSession:
                 row
                 for row in self.rows
                 if isinstance(row, model)
-                and getattr(row, "id", getattr(row, "business_id", None)) == key
+                and getattr(row, "id", None) == key
             ),
             None,
         )
@@ -164,7 +163,6 @@ def context(rows, factory, trace, monkeypatch, **overrides):
         _promotion_permit=None,
         template="blank",
         is_free=True,
-        free_business_id=None,
     )
     env.update(overrides)
     return env, calls, original
@@ -205,7 +203,6 @@ async def execute(path, env):
             _consume_free_generation=partial(
                 consume_free_generation,
                 is_free=env["is_free"],
-                free_business_id=env["free_business_id"],
                 user_id=owner.id,
             ),
             accumulated=env["accumulated"],
@@ -329,26 +326,6 @@ async def test_caller_reexecution_preserves_existing_non_idempotent_semantics(pa
     assert first.parent_id == second.parent_id == env["current_snapshot_id"]
     assert rows[0].free_generations_used == 5
     assert len([row for row in session.durable if isinstance(row, Snapshot)]) == 3
-
-
-@pytest.mark.parametrize("path", ["agent"])
-@pytest.mark.parametrize("is_free", [False, True])
-async def test_caller_free_business_counter_precedes_user(path, is_free, monkeypatch):
-    rows, trace = records(), []
-    business = BusinessEntitlement(business_id=uuid4(), free_generations_used=8)
-    session = OfflineSession(rows, trace)
-    env, _calls, _original = context(
-        rows,
-        lambda: session,
-        trace,
-        monkeypatch,
-        is_free=is_free,
-        free_business_id=business.business_id,
-    )
-    rows.append(business)
-    await execute(path, env)
-    assert rows[0].free_generations_used == 3
-    assert business.free_generations_used == (9 if is_free else 8)
 
 
 @pytest.mark.parametrize("path", ["agent"])
@@ -733,18 +710,6 @@ def test_promotion_permit_rejects_missing_behavior_receipt() -> None:
         )
 
     assert raised.value.code == "PROMOTION_EVIDENCE_MISSING"
-
-
-@pytest.mark.parametrize("path", ["agent"])
-async def test_missing_business_entitlement_falls_back_to_user(path, monkeypatch):
-    rows, trace = records(), []
-    session = OfflineSession(rows, trace)
-    env, _calls, _original = context(
-        rows, lambda: session, trace, monkeypatch, free_business_id=uuid4()
-    )
-    await execute(path, env)
-    assert rows[0].free_generations_used == 4
-    assert trace.index("get:BusinessEntitlement") < trace.index("get:User")
 
 
 @pytest.mark.parametrize("path", ["agent"])

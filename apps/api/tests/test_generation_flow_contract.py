@@ -808,7 +808,6 @@ async def test_actual_worker_cancels_real_agent_build_without_replay(flow_factor
                 model_id="fixture-model",
                 force_model=None,
                 is_free=True,
-                free_business_id=None,
                 orchestrate=True,
                 selected_elements=[],
             ),

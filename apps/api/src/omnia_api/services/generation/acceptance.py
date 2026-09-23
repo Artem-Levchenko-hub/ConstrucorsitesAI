@@ -18,7 +18,6 @@ from omnia_api.core.config import (
 )
 from omnia_api.core.errors import ApiError
 from omnia_api.core.redis import get_redis
-from omnia_api.models.account import BusinessEntitlement, BusinessMember
 from omnia_api.models.generation_run import GenerationRun
 from omnia_api.models.message import Message
 from omnia_api.models.project import Project
@@ -105,7 +104,6 @@ class PromptAcceptance:
     is_first_build: bool
     explain_failed_build: bool
     failed_build_reply: str | None
-    free_business_id: UUID | None
     is_free: bool
     selected_dump: list[dict[str, Any]] | None
     run_intent: bool
@@ -317,38 +315,12 @@ class PromptAcceptance:
             else None
         )
 
-        # Free-tier gate: regular projects keep the historical per-user allowance.
-        # MAX projects spend the allowance attached to the verified business instead,
-        # so creating another user account cannot mint another set of free builds for
-        # the same INN. Legacy MAX projects without a business profile keep the old
-        # counter and remain editable.
+        # Free-tier gate: every project spends the owner's personal allowance.
         # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
         # free → skips this wallet-floor check AND the gateway debit (metadata.free).
-        self.free_business_id: UUID | None = None
-        if self.project.template == "max_miniapp":
-            self.free_business_id = (
-                await self.session.execute(
-                    select(BusinessMember.business_id).where(
-                        BusinessMember.user_id == self.current_user.id
-                    )
-                )
-            ).scalar_one_or_none()
-        if self.free_business_id is not None:
-            entitlement = await self.session.get(BusinessEntitlement, self.free_business_id)
-            if entitlement is None:
-                entitlement = BusinessEntitlement(
-                    business_id=self.free_business_id,
-                    free_generation_limit=FREE_GENERATION_LIMIT,
-                )
-                self.session.add(entitlement)
-                await self.session.flush()
-            self.is_free = get_settings().unlimited_generations or (
-                entitlement.free_generations_used < entitlement.free_generation_limit
-            )
-        else:
-            self.is_free = get_settings().unlimited_generations or (
-                (self.current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
-            )
+        self.is_free = get_settings().unlimited_generations or (
+            (self.current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
+        )
         if not self.is_free and not self.credential_redirect and not self.explain_failed_build:
             account = await resolve_billing_account(self.session, self.current_user.id)
             wallet = (
@@ -953,7 +925,6 @@ class PromptAcceptance:
                     model_id=self.routing_model,
                     force_model=self.force_model,
                     is_free=self.is_free,
-                    free_business_id=self.free_business_id,
                     orchestrate=self.orchestrate,
                     selected_elements=self.selected_dump,
                 ),
@@ -977,7 +948,6 @@ class PromptAcceptance:
                     model_id=self.routing_model,
                     force_model=self.force_model,
                     is_free=self.is_free,
-                    free_business_id=self.free_business_id,
                     orchestrate=self.orchestrate,
                     selected_elements=self.selected_dump,
                 )

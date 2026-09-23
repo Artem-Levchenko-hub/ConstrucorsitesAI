@@ -761,7 +761,6 @@ async def _complete_restoration_adaptation_activation(
         await consume_free_generation(
             session,
             is_free=dispatch.is_free,
-            free_business_id=dispatch.free_business_id,
             user_id=run.user_id,
         )
         operation.activation_settled_at = datetime.now(UTC)

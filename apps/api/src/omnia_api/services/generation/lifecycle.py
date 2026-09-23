@@ -61,7 +61,6 @@ async def _process_prompt(
     model_id: str,
     force_model: str | None = None,
     is_free: bool = False,
-    free_business_id: UUID | None = None,
     orchestrate: bool = True,
     selected_elements: list[dict[str, Any]] | None = None,
     capacity_dispatch_token: UUID | None = None,
@@ -80,9 +79,7 @@ async def _process_prompt(
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
 
-    _consume_free_generation = partial(
-        consume_free_generation, is_free=is_free, free_business_id=free_business_id, user_id=user_id
-    )
+    _consume_free_generation = partial(consume_free_generation, is_free=is_free, user_id=user_id)
 
     # Persisted agentic transcript: every `agent.step` payload published this turn
     # is appended and saved immediately so reload restores completed work while

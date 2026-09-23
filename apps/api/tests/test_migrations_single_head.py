@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_project_cell_orchestrator_binding_is_the_only_head() -> None:
+def test_retired_business_profiles_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0068_project_cell_orchestrator"]
+    assert heads == ["0069_retire_business_profiles"]
+    assert chain["0069_retire_business_profiles"] == "0068_project_cell_orchestrator"
     assert chain["0068_project_cell_orchestrator"] == "0067_restoration_adaptation_activation"
     assert chain["0067_restoration_adaptation_activation"] == ("0066_restoration_adapting_state")
     assert chain["0066_restoration_adapting_state"] == ("0065_restoration_execution_policy")
@@ -228,12 +229,21 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0068_project_cell_orchestrator"
+        "0069_retire_business_profiles"
     )
     assert (
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
             "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
+        )
+        == 1
+    )
+    # 0069: business identity tables are gone; integrations hang off the user
+    assert database.fetchval("SELECT to_regclass('business_profiles')") is None
+    assert (
+        database.fetchval(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'app_integrations' AND column_name = 'user_id'"
         )
         == 1
     )
@@ -263,9 +273,10 @@ def test_restoration_adaptation_migrations_roundtrip(
         )
         == 0
     )
+    assert database.fetchval("SELECT to_regclass('business_profiles')") is not None
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0068_project_cell_orchestrator"
+        "0069_retire_business_profiles"
     )
 
 

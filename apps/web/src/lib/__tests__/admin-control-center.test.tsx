@@ -4,26 +4,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AdminControlCenter } from "@/components/account/AdminControlCenter";
 import type { AdminUser, AdminAuditEvent } from "@/lib/api/admin";
-import type { BusinessReview } from "@/lib/api/max-account";
 
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
-const org: BusinessReview = { id: "org", kind: "legal_entity", inn: "7707083893", ogrn: "1027700132195", legal_name: "Test company", status: "pending", verification_source: null, verification_note: null, verified_at: null, created_at: "2026-09-07T00:00:00Z", owner_email: "owner@example.test" };
-const person: AdminUser = { id: "person", email: "person@example.test", role: "user", is_admin: false, status: "suspended", email_verified_at: null, created_at: "2026-09-07T00:00:00Z", last_login_at: null, wallet_balance_rub: "1250", business: org };
-const self: AdminUser = { ...person, id: "self", email: "admin@example.test", role: "admin", is_admin: true, status: "active", email_verified_at: "2026-09-07", business: null };
+const person: AdminUser = { id: "person", email: "person@example.test", role: "user", is_admin: false, status: "suspended", email_verified_at: null, created_at: "2026-09-07T00:00:00Z", last_login_at: null, wallet_balance_rub: "1250" };
+const self: AdminUser = { ...person, id: "self", email: "admin@example.test", role: "admin", is_admin: true, status: "active", email_verified_at: "2026-09-07" };
 const event: AdminAuditEvent = { id: "event", actor_email: self.email, target_email: person.email, action: "admin.user.update", details: { before: { role: "user", status: "active" }, after: { role: "admin", status: "suspended" }, note: "Manual review" }, created_at: "2026-09-07T12:00:00Z" };
-let people: AdminUser[], reviews: BusinessReview[], auditEvents: AdminAuditEvent[], requests: { path: string; method: string; body: unknown }[], auditError: boolean;
+let people: AdminUser[], auditEvents: AdminAuditEvent[], requests: { path: string; method: string; body: unknown }[], auditError: boolean;
 let respondMutation: (path: string, body: Record<string, unknown>) => Promise<Response>;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  people = [self, person]; reviews = [org, { ...org, id: "verified", inn: "1234567890", legal_name: "Verified company", status: "verified" }]; requests = []; auditError = false;
+  people = [self, person]; requests = []; auditError = false;
   auditEvents = [event];
   respondMutation = async (path, body) => {
-    if (path.startsWith("/api/admin/users/")) {
-      const updated = { ...person, ...body } as AdminUser;
-      people = people.map(user => user.id === person.id ? updated : user);
-      return Response.json(updated);
-    }
-    return Response.json({ ...org, status: body.approved ? "verified" : "rejected" });
+    if (!path.startsWith("/api/admin/users/")) throw new Error(`Unexpected mutation ${path}`);
+    const updated = { ...person, ...body } as AdminUser;
+    people = people.map(user => user.id === person.id ? updated : user);
+    return Response.json(updated);
   };
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
@@ -32,7 +28,6 @@ beforeEach(() => {
       const body = JSON.parse(String(init.body)); requests.push({ path, method: init.method, body }); return respondMutation(path, body);
     }
     if (path === "/api/admin/users") return Response.json(people);
-    if (path === "/api/max/account/admin/businesses") return Response.json(reviews);
     if (path === "/api/admin/audit") return auditError ? Promise.reject(new Error("Audit unavailable")) : Response.json(auditEvents);
     throw new Error(`Unexpected endpoint ${path}`);
   }));
@@ -67,7 +62,7 @@ it("keeps account identity, roles, statuses and balance in labelled table cells 
     const row = [...document.querySelectorAll("tbody tr")].find(item => item.textContent?.includes(person.email))!;
     expect(row.querySelector('[headers="admin-users-status"]')?.textContent).toContain("Приостановлен");
     expect(row.querySelector('[headers="admin-users-balance"]')?.textContent).toMatch(/1\s250/);
-    await fill('[aria-label="Поиск аккаунтов"]', org.inn);
+    await fill('[aria-label="Поиск аккаунтов"]', person.email);
     expect(document.querySelectorAll("tbody tr")).toHaveLength(1);
     await fill('[aria-label="Поиск аккаунтов"]', "no-such-user");
     expect(document.body.textContent).toContain("Ничего не найдено");
@@ -95,7 +90,6 @@ it("labels the actual server deletion_pending status without treating it as acti
 
 it.each([
   ["Подтвердить email", { email_verified: true }],
-  ["Подтвердить бизнес", { business_verified: true, note: "Реквизиты проверены администратором" }],
   ["Восстановить", { status: "active" }],
 ] as const)("keeps the existing %s mutation contract", async (label, body) => {
   const close = await mount();
@@ -116,30 +110,6 @@ it("submits only the selected account action and prevents duplicate changes whil
     expect(requests).toEqual([{ path: "/api/admin/users/person", method: "PATCH", body: { role: "admin" } }]);
     expect(document.querySelector<HTMLButtonElement>(`button[aria-label="Действия с аккаунтом ${person.email}"]`)!.disabled).toBe(true);
     await act(async () => finish(Response.json({ ...person, role: "admin", is_admin: true })));
-  } finally { await close(); }
-});
-
-it("reveals organization review without changing it and preserves the explicit rejection payload", async () => {
-  const close = await mount();
-  try {
-    await click("Организации");
-    await wait(() => expect(document.querySelector('table[aria-label="Организации"]')).not.toBeNull());
-    expect(document.querySelectorAll("tbody tr")).toHaveLength(1);
-    await click("Рассмотреть"); expect(requests).toEqual([]);
-    await fill('[aria-label="Комментарий к решению"]', "  Уточните реквизиты  ");
-    await click("Отклонить");
-    await wait(() => expect(requests).toHaveLength(1));
-    expect(requests[0]).toEqual({ path: "/api/max/account/business/7707083893/decision", method: "POST", body: { approved: false, note: "Уточните реквизиты" } });
-  } finally { await close(); }
-});
-
-it("distinguishes an empty organization search from an empty review queue", async () => {
-  const close = await mount();
-  try {
-    await click("Организации"); await wait(() => expect(document.body.textContent).toContain(org.legal_name));
-    await fill('[aria-label="Поиск организаций"]', "missing"); expect(document.body.textContent).toContain("Ничего не найдено");
-    await fill('[aria-label="Поиск организаций"]', ""); await click("Все заявки");
-    expect(document.querySelectorAll("tbody tr")).toHaveLength(2); expect(requests).toEqual([]);
   } finally { await close(); }
 });
 
@@ -181,7 +151,7 @@ it("supports keyboard tab navigation with one selected tab and its labelled pane
     const first = document.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]'); expect(first).not.toBeNull();
     await act(async () => { first!.focus(); first!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
     const selected = document.querySelector('[role="tab"][aria-selected="true"]')!;
-    expect(selected.textContent).toBe("Организации"); expect(document.activeElement).toBe(selected);
+    expect(selected.textContent).toBe("Журнал"); expect(document.activeElement).toBe(selected);
     expect(document.querySelector('[role="tabpanel"]')!.getAttribute("aria-labelledby")).toBe(selected.id);
   } finally { await close(); }
 });

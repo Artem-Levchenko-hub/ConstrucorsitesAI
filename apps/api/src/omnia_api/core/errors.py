@@ -77,13 +77,6 @@ ErrorCode = Literal[
     # MAX Studio account, legal and payment lifecycle.
     "max_registration_required",
     "email_verification_required",
-    "business_profile_required",
-    "business_verification_required",
-    "business_locked",
-    "business_already_registered",
-    "inn_invalid",
-    "inn_kind_mismatch",
-    "ogrn_invalid",
     "legal_acceptance_required",
     "legal_version_outdated",
     "account_unavailable",

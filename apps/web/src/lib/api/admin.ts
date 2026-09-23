@@ -1,4 +1,3 @@
-import type { BusinessProfile } from "./max-account";
 import { apiFetch } from "./client";
 
 export type AdminUser = {
@@ -11,14 +10,12 @@ export type AdminUser = {
   created_at: string;
   last_login_at: string | null;
   wallet_balance_rub: string;
-  business: BusinessProfile | null;
 };
 
 export type AdminUserUpdate = {
   role?: "user" | "admin";
   email_verified?: boolean;
   status?: "active" | "suspended";
-  business_verified?: boolean;
   note?: string;
 };
 

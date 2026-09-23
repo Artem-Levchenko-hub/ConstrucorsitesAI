@@ -8,7 +8,6 @@ from sqlalchemy.orm import aliased
 from omnia_api.core.admin import is_admin_user
 from omnia_api.core.deps import AdminUserDep, SessionDep
 from omnia_api.core.errors import ApiError
-from omnia_api.models.account import BusinessMember, BusinessProfile
 from omnia_api.models.admin_audit import AdminAuditEvent
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
@@ -17,16 +16,11 @@ from omnia_api.schemas.admin import (
     AdminUserPublic,
     AdminUserUpdate,
 )
-from omnia_api.schemas.max_account import BusinessProfilePublic
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-def _public_user(
-    user: User,
-    wallet: Wallet | None,
-    business: BusinessProfile | None,
-) -> AdminUserPublic:
+def _public_user(user: User, wallet: Wallet | None) -> AdminUserPublic:
     return AdminUserPublic(
         id=user.id,
         email=str(user.email),
@@ -37,33 +31,23 @@ def _public_user(
         created_at=user.created_at,
         last_login_at=user.last_login_at,
         wallet_balance_rub=str(wallet.balance_rub if wallet else 0),
-        business=(
-            BusinessProfilePublic.model_validate(business)
-            if business is not None
-            else None
-        ),
     )
 
 
 async def _user_row(
     session: SessionDep,
     user_id: UUID,
-) -> tuple[User, Wallet | None, BusinessProfile | None]:
+) -> tuple[User, Wallet | None]:
     row = (
         await session.execute(
-            select(User, Wallet, BusinessProfile)
+            select(User, Wallet)
             .outerjoin(Wallet, Wallet.user_id == User.id)
-            .outerjoin(BusinessMember, BusinessMember.user_id == User.id)
-            .outerjoin(
-                BusinessProfile,
-                BusinessProfile.id == BusinessMember.business_id,
-            )
             .where(User.id == user_id)
         )
     ).one_or_none()
     if row is None or row[0].is_anon or row[0].email is None:
         raise ApiError("not_found", "account not found", status.HTTP_404_NOT_FOUND)
-    return row[0], row[1], row[2]
+    return row[0], row[1]
 
 
 @router.get("/access")
@@ -84,13 +68,8 @@ async def list_users(
 ) -> list[AdminUserPublic]:
     del admin_user
     statement = (
-        select(User, Wallet, BusinessProfile)
+        select(User, Wallet)
         .outerjoin(Wallet, Wallet.user_id == User.id)
-        .outerjoin(BusinessMember, BusinessMember.user_id == User.id)
-        .outerjoin(
-            BusinessProfile,
-            BusinessProfile.id == BusinessMember.business_id,
-        )
         .where(User.is_anon.is_(False), User.email.is_not(None))
         .order_by(User.role.desc(), User.created_at.desc())
         .limit(limit)
@@ -98,7 +77,7 @@ async def list_users(
     if query.strip():
         statement = statement.where(User.email.ilike(f"%{query.strip()}%"))
     rows = (await session.execute(statement)).all()
-    return [_public_user(user, wallet, business) for user, wallet, business in rows]
+    return [_public_user(user, wallet) for user, wallet in rows]
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserPublic)
@@ -108,12 +87,11 @@ async def update_user(
     admin_user: AdminUserDep,
     session: SessionDep,
 ) -> AdminUserPublic:
-    target, wallet, business = await _user_row(session, user_id)
+    target, wallet = await _user_row(session, user_id)
     before = {
         "role": target.role,
         "status": target.status,
         "email_verified": target.email_verified_at is not None,
-        "business_status": business.status if business else None,
     }
     now = datetime.now(UTC)
 
@@ -151,27 +129,10 @@ async def update_user(
         target.status = payload.status
         target.session_version += 1
 
-    if payload.business_verified is not None:
-        if business is None:
-            raise ApiError(
-                "business_profile_required",
-                "account has no business profile",
-                status.HTTP_409_CONFLICT,
-            )
-        business.status = "verified" if payload.business_verified else "pending"
-        business.verified_at = now if payload.business_verified else None
-        business.verification_source = "admin"
-        business.verification_note = payload.note or (
-            "Подтверждено администратором"
-            if payload.business_verified
-            else "Возвращено на проверку администратором"
-        )
-
     after = {
         "role": target.role,
         "status": target.status,
         "email_verified": target.email_verified_at is not None,
-        "business_status": business.status if business else None,
     }
     session.add(
         AdminAuditEvent(
@@ -187,9 +148,7 @@ async def update_user(
     )
     await session.commit()
     await session.refresh(target)
-    if business is not None:
-        await session.refresh(business)
-    return _public_user(target, wallet, business)
+    return _public_user(target, wallet)
 
 
 @router.get("/audit", response_model=list[AdminAuditEventPublic])

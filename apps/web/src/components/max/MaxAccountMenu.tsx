@@ -2,7 +2,6 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  Building2,
   CreditCard,
   LogOut,
   Receipt,
@@ -19,7 +18,6 @@ import { popIn, springSnappy, tapSubtle } from "@/lib/motion";
 
 const accountLinks = [
   ["/account", UserRound, "Профиль"],
-  ["/account/organization", Building2, "Организация"],
   ["/account/security", Shield, "Безопасность"],
   ["/billing", WalletCards, "Баланс"],
   ["/billing/transactions", Receipt, "Операции"],

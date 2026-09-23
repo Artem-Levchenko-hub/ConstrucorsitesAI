@@ -1,4 +1,4 @@
-"""Load encrypted business credentials and serialize rotating OAuth refreshes."""
+"""Load encrypted account credentials and serialize rotating OAuth refreshes."""
 
 from __future__ import annotations
 
@@ -12,23 +12,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.core.errors import ApiError
-from omnia_api.models.app_integration import BusinessIntegration
+from omnia_api.models.app_integration import AccountIntegration
 from omnia_api.services import integration_oauth, integration_providers
 
 
 async def load_credentials(
-    session: AsyncSession, connection: BusinessIntegration
+    session: AsyncSession, connection: AccountIntegration
 ) -> dict[str, str]:
     """Return current credentials, committing any rotation before releasing its lock.
 
-    Connections are business-shared, so process-local locks cannot protect a
+    Connections are shared by every project of the account, so process-local locks cannot protect a
     rotating refresh token. Refresh the identity map *after* acquiring the row
     lock: another request may already have committed a replacement token.
     """
     current = (
         await session.execute(
-            select(BusinessIntegration)
-            .where(BusinessIntegration.id == connection.id)
+            select(AccountIntegration)
+            .where(AccountIntegration.id == connection.id)
             .with_for_update()
             .execution_options(populate_existing=True)
         )

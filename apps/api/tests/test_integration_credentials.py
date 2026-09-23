@@ -13,8 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from omnia_api.core.crypto import decrypt_strong, encrypt_strong
 from omnia_api.core.errors import ApiError
-from omnia_api.models.account import BusinessProfile
-from omnia_api.models.app_integration import BusinessIntegration, ProjectIntegrationBinding
+from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from omnia_api.models.user import User
 from omnia_api.services import integration_oauth
 from omnia_api.services.integration_credentials import load_credentials
@@ -25,11 +24,10 @@ _HTTP_CLIENT = httpx.AsyncClient
 
 async def _connection(session):
     user = User(email="oauth-fixture@example.test")
-    business = BusinessProfile(kind="self_employed", inn="500100732259", legal_name="Fixture")
-    session.add_all([user, business])
+    session.add(user)
     await session.flush()
-    connection = BusinessIntegration(
-        business_id=business.id,
+    connection = AccountIntegration(
+        user_id=user.id,
         created_by_user_id=user.id,
         provider="yookassa",
         auth_mode="oauth",
@@ -89,8 +87,8 @@ async def test_shared_rotating_token_refreshed_once_with_stale_identity_map(
 
     _http(monkeypatch, provider)
     async with factory() as first, factory() as second:
-        stale_first = await first.get(BusinessIntegration, connection.id)
-        stale_second = await second.get(BusinessIntegration, connection.id)
+        stale_first = await first.get(AccountIntegration, connection.id)
+        stale_second = await second.get(AccountIntegration, connection.id)
         # Both sessions have preloaded the expired token before either refreshes it.
         task_one = asyncio.create_task(load_credentials(first, stale_first))
         await asyncio.wait_for(first_entered.wait(), 3)
@@ -183,7 +181,7 @@ async def test_verify_transient_failure_keeps_binding_ready(
     checked = await client.post(f"/api/projects/{project_id}/app-integrations/yookassa/verify")
     assert checked.status_code == 503
     assert "synthetic-key" not in checked.text
-    stored = (await db_session.execute(select(BusinessIntegration))).scalar_one()
+    stored = (await db_session.execute(select(AccountIntegration))).scalar_one()
     binding = (await db_session.execute(select(ProjectIntegrationBinding))).scalar_one()
     assert stored.status == "active"
     assert stored.last_error is None
@@ -201,7 +199,7 @@ async def test_verify_refreshes_expired_oauth_before_profile_request(
         json={"values": {"shop_id": "123", "secret_key": "synthetic-key"}},
     )
     assert connected.status_code == 200
-    stored = (await db_session.execute(select(BusinessIntegration))).scalar_one()
+    stored = (await db_session.execute(select(AccountIntegration))).scalar_one()
     stored.auth_mode = "oauth"
     stored.credentials_enc = encrypt_strong(
         json.dumps(

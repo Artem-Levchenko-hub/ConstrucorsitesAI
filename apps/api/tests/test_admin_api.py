@@ -5,7 +5,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.account import BusinessMember, BusinessProfile
 from omnia_api.models.admin_audit import AdminAuditEvent
 from omnia_api.models.user import User
 
@@ -35,7 +34,7 @@ async def test_regular_user_cannot_open_admin_api(
     assert response.json()["error"]["code"] == "forbidden"
 
 
-async def test_admin_can_manage_account_and_business_with_audit(
+async def test_admin_can_manage_account_with_audit(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
 ) -> None:
@@ -43,23 +42,6 @@ async def test_admin_can_manage_account_and_business_with_audit(
     target = await db_session.get(User, target_data["id"])
     assert target is not None
     target.email_verified_at = None
-    business = BusinessProfile(
-        kind="legal_entity",
-        inn="7816246925",
-        ogrn="1187847020949",
-        legal_name='ООО "КОРТЭЛ"',
-        status="pending",
-        verification_source="manual",
-    )
-    db_session.add(business)
-    await db_session.flush()
-    db_session.add(
-        BusinessMember(
-            business_id=business.id,
-            user_id=target.id,
-            role="owner",
-        )
-    )
     await db_session.commit()
 
     admin_data = await _register(client, "admin@example.com")
@@ -75,7 +57,8 @@ async def test_admin_can_manage_account_and_business_with_audit(
     )
     assert target_before["is_admin"] is False
     assert target_before["email_verified_at"] is None
-    assert target_before["business"]["status"] == "pending"
+    # An account is an email and a password: the admin view carries no requisites.
+    assert "business" not in target_before
 
     updated = await client.patch(
         f"/api/admin/users/{target.id}",
@@ -83,7 +66,6 @@ async def test_admin_can_manage_account_and_business_with_audit(
             "role": "admin",
             "email_verified": True,
             "status": "active",
-            "business_verified": True,
             "note": "Проверено владельцем",
         },
     )
@@ -91,31 +73,33 @@ async def test_admin_can_manage_account_and_business_with_audit(
     assert updated.json()["role"] == "admin"
     assert updated.json()["is_admin"] is True
     assert updated.json()["email_verified_at"] is not None
-    assert updated.json()["business"]["status"] == "verified"
 
     audit = await client.get("/api/admin/audit")
     assert audit.status_code == 200
     assert audit.json()[0]["actor_email"] == "admin@example.com"
     assert audit.json()[0]["target_email"] == "target@example.com"
     assert audit.json()[0]["details"]["after"]["role"] == "admin"
-    events = list((await db_session.execute(select(AdminAuditEvent))).scalars())
-    assert len(events) == 1
+    assert "business_status" not in audit.json()[0]["details"]["after"]
+
+    stored = (await db_session.execute(select(AdminAuditEvent))).scalars().all()
+    assert len(stored) == 1
 
 
-async def test_admin_cannot_suspend_self(
+async def test_admin_cannot_verify_a_business_that_no_longer_exists(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
 ) -> None:
-    admin_data = await _register(client, "admin@example.com")
+    target_data = await _register(client, "target2@example.com")
+    admin_data = await _register(client, "admin2@example.com")
     admin = await db_session.get(User, admin_data["id"])
     assert admin is not None
     admin.role = "admin"
     await db_session.commit()
 
+    # `business_verified` is not a known change any more, so the request is
+    # rejected as "no account change" instead of touching a retired table.
     response = await client.patch(
-        f"/api/admin/users/{admin.id}",
-        json={"status": "suspended"},
+        f"/api/admin/users/{target_data['id']}",
+        json={"business_verified": True},
     )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "conflict"
+    assert response.status_code == 422

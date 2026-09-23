@@ -503,13 +503,6 @@ export type ApiErrorCode =
   | "integration_connection_failed"
   | "max_registration_required"
   | "email_verification_required"
-  | "business_profile_required"
-  | "business_verification_required"
-  | "business_locked"
-  | "business_already_registered"
-  | "inn_invalid"
-  | "inn_kind_mismatch"
-  | "ogrn_invalid"
   | "legal_acceptance_required"
   | "legal_version_outdated"
   | "account_unavailable"
@@ -584,7 +577,7 @@ export type AppIntegration = {
   provider: string;
   status: "active" | "error";
   auth_mode: "credentials" | "oauth" | "connector";
-  business_scoped: boolean;
+  account_scoped: boolean;
   bound_to_project: boolean;
   binding_status: "ready" | "needs_setup" | "error" | null;
   binding_config: Record<string, unknown>;

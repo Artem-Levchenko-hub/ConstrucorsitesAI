@@ -1,15 +1,13 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import { Building2, History, UsersRound } from "lucide-react";
+import { History, UsersRound } from "lucide-react";
 import { AdminAuditPanel } from "./AdminAuditPanel";
 import { AdminUsersPanel } from "./AdminUsersPanel";
-import { AdminVerificationPanel } from "./AdminVerificationPanel";
 import "./admin.css";
 
 const tabs = [
   ["users", "Аккаунты", UsersRound],
-  ["businesses", "Организации", Building2],
   ["audit", "Журнал", History],
 ] as const;
 
@@ -38,7 +36,6 @@ export function AdminControlCenter({ currentEmail }: { currentEmail: string }) {
       </div>
       <section role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} tabIndex={0}>
         {tab === "users" && <AdminUsersPanel currentEmail={currentEmail} />}
-        {tab === "businesses" && <AdminVerificationPanel />}
         {tab === "audit" && <AdminAuditPanel />}
       </section>
     </div>

@@ -326,7 +326,6 @@ class GenerationDispatch:
     model_id: str
     force_model: str | None
     is_free: bool
-    free_business_id: UUID | None
     orchestrate: bool
     selected_elements: list[dict[str, object]] | None
 
@@ -344,9 +343,6 @@ class GenerationDispatch:
             "model_id": self.model_id,
             "force_model": self.force_model,
             "is_free": self.is_free,
-            "free_business_id": (
-                str(self.free_business_id) if self.free_business_id is not None else None
-            ),
             "orchestrate": self.orchestrate,
             "selected_elements": self.selected_elements,
         }
@@ -369,11 +365,12 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
         "model_id",
         "force_model",
         "is_free",
-        "free_business_id",
         "orchestrate",
         "selected_elements",
     }
-    if set(raw) != expected:
+    # Runs dispatched before business profiles were retired still carry the
+    # `free_business_id` key; it is accepted and ignored.
+    if set(raw) - {"free_business_id"} != expected:
         raise ValueError("generation dispatch must contain exact keys")
     if (
         type(raw.get("schema_version")) is not int
@@ -395,7 +392,6 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
         )
         or (raw.get("force_model") is not None and type(raw["force_model"]) is not str)
         or type(raw.get("is_free")) is not bool
-        or (raw.get("free_business_id") is not None and type(raw["free_business_id"]) is not str)
         or type(raw.get("orchestrate")) is not bool
         or (raw.get("selected_elements") is not None and type(raw["selected_elements"]) is not list)
     ):
@@ -428,11 +424,6 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
             model_id=model_id,
             force_model=(str(raw["force_model"]) if raw.get("force_model") is not None else None),
             is_free=bool(raw["is_free"]),
-            free_business_id=(
-                UUID(str(raw["free_business_id"]))
-                if raw.get("free_business_id") is not None
-                else None
-            ),
             orchestrate=bool(raw["orchestrate"]),
             selected_elements=selected,
         )

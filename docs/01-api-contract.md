@@ -34,7 +34,7 @@
 |---|---|---|---|
 | `GET` | `/api/admin/access` | — | `{is_admin, role, email}` |
 | `GET` | `/api/admin/users` | `?query=&limit=` | `AdminUser[]` |
-| `PATCH` | `/api/admin/users/:id` | `{role?, email_verified?, status?, business_verified?, note?}` | `AdminUser` |
+| `PATCH` | `/api/admin/users/:id` | `{role?, email_verified?, status?, note?}` | `AdminUser` |
 | `GET` | `/api/admin/audit` | `?limit=` | `AdminAuditEvent[]` |
 
 Изменение роли, статуса и верификации записывается в `admin_audit_events` с

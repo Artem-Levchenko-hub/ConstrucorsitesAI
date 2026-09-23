@@ -1,4 +1,4 @@
-"""Business-scoped third-party connections and per-project bindings."""
+"""Account-scoped third-party connections and per-project bindings."""
 
 import uuid
 from datetime import datetime
@@ -20,15 +20,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 from omnia_api.models.base import Base
 
 
-class BusinessIntegration(Base):
+class AccountIntegration(Base):
     __tablename__ = "app_integrations"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    business_id: Mapped[uuid.UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("business_profiles.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
@@ -81,11 +81,11 @@ class BusinessIntegration(Base):
             name="ck_app_integrations_auth_mode_allowed",
         ),
         UniqueConstraint(
-            "business_id",
+            "user_id",
             "provider",
-            name="uq_app_integrations_business_provider",
+            name="uq_app_integrations_user_provider",
         ),
-        Index("ix_app_integrations_business_id", "business_id"),
+        Index("ix_app_integrations_user_id", "user_id"),
         Index("ix_app_integrations_created_by", "created_by_user_id"),
     )
 
@@ -151,11 +151,6 @@ class IntegrationOAuthState(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     state_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    business_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("business_profiles.id", ondelete="CASCADE"),
-        nullable=False,
-    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -179,4 +174,4 @@ class IntegrationOAuthState(Base):
 
 
 # Transitional import compatibility for internal code and third-party extensions.
-AppIntegration = BusinessIntegration
+AppIntegration = AccountIntegration

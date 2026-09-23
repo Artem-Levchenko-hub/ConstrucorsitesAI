@@ -94,9 +94,9 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
 class BillingAccount(Base):
     """Canonical owner of a wallet, ledger and subscription.
 
-    A new user starts with a personal account. MAX onboarding promotes that
-    same account to business scope, so the existing balance and history stay
-    attached while every member of the business resolves one shared account.
+    Every account is personal: one user owns one wallet, one ledger and one
+    subscription. The platform no longer collects business identities, so the
+    former shared business scope is gone.
     """
 
     __tablename__ = "billing_accounts"
@@ -110,11 +110,6 @@ class BillingAccount(Base):
     personal_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="RESTRICT"),
-        nullable=True,
-    )
-    business_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("business_profiles.id", ondelete="RESTRICT"),
         nullable=True,
     )
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -133,10 +128,9 @@ class BillingAccount(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("scope IN ('personal', 'business')", name="ck_billing_accounts_scope"),
+        CheckConstraint("scope = 'personal'", name="ck_billing_accounts_scope"),
         CheckConstraint(
-            "(scope = 'personal' AND personal_user_id IS NOT NULL AND business_id IS NULL) "
-            "OR (scope = 'business' AND personal_user_id IS NULL AND business_id IS NOT NULL)",
+            "scope = 'personal' AND personal_user_id IS NOT NULL",
             name="ck_billing_accounts_owner",
         ),
         CheckConstraint("currency = 'RUB'", name="ck_billing_accounts_currency"),
@@ -145,12 +139,6 @@ class BillingAccount(Base):
             "personal_user_id",
             unique=True,
             postgresql_where=text("personal_user_id IS NOT NULL"),
-        ),
-        Index(
-            "uq_billing_accounts_business",
-            "business_id",
-            unique=True,
-            postgresql_where=text("business_id IS NOT NULL"),
         ),
     )
 

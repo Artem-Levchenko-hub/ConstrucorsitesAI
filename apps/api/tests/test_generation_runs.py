@@ -70,7 +70,6 @@ async def test_generation_dispatch_requires_exact_owned_json_shape(prompt: str) 
         model_id="google/gemini-2.5-pro",
         force_model=None,
         is_free=False,
-        free_business_id=None,
         orchestrate=True,
         selected_elements=[],
     )

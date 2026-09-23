@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from omnia_api.core.crypto import encrypt_strong
-from omnia_api.models.app_integration import BusinessIntegration
+from omnia_api.models.app_integration import AccountIntegration
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.routers import integration_runtime
 from omnia_api.services import integration_providers
@@ -30,7 +30,7 @@ async def connect(client, db_session, monkeypatch, provider="yookassa"):
         f"/api/projects/{project}/app-integrations/{provider}", json={"values": values}
     )
     assert response.status_code == 200
-    owner = await db_session.scalar(select(BusinessIntegration.created_by_user_id))
+    owner = await db_session.scalar(select(AccountIntegration.created_by_user_id))
     db_session.add(
         MaxIntegration(
             project_id=UUID(project),
@@ -271,7 +271,7 @@ async def test_crm_concurrent_submission_and_cancelled_dispatch_never_replay(
     from omnia_api.services.integration_operations import execute_once
 
     project = await connect(client, db_session, monkeypatch, "bitrix24")
-    connection_id = await db_session.scalar(select(BusinessIntegration.id))
+    connection_id = await db_session.scalar(select(AccountIntegration.id))
     entered, release = asyncio.Event(), asyncio.Event()
     dispatched = []
 
@@ -346,7 +346,7 @@ async def test_payment_retry_after_reconnection_does_not_duplicate_lost_response
     client, db_session, monkeypatch
 ):
     project = await connect(client, db_session, monkeypatch)
-    original_connection = await db_session.scalar(select(BusinessIntegration.id))
+    original_connection = await db_session.scalar(select(AccountIntegration.id))
     payments = {}
     lose_first_response = True
 
@@ -378,7 +378,7 @@ async def test_payment_retry_after_reconnection_does_not_duplicate_lost_response
             json={"values": {"shop_id": "123", "secret_key": "synthetic-new-secret"}},
         )
     ).status_code == 200
-    assert await db_session.scalar(select(BusinessIntegration.id)) != original_connection
+    assert await db_session.scalar(select(AccountIntegration.id)) != original_connection
     replay = await client.post(url, headers=headers(), json=payload)
     assert replay.status_code == 200
     assert replay.json()["id"] == "payment-00001"

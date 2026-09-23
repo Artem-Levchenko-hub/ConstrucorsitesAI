@@ -21,16 +21,11 @@ from omnia_gateway.core.errors import WalletEmptyError
 
 log = structlog.get_logger(__name__)
 
+# Every billing account is personal: one user, one wallet (business scope retired).
 _RESOLVED_ACCOUNT = """
     SELECT ba.id
       FROM billing_accounts ba
-      LEFT JOIN business_members bm
-        ON ba.scope = 'business'
-       AND bm.business_id = ba.business_id
-       AND bm.user_id = $1
-     WHERE (ba.scope = 'business' AND bm.user_id IS NOT NULL)
-        OR (ba.scope = 'personal' AND ba.personal_user_id = $1)
-     ORDER BY CASE WHEN ba.scope = 'business' THEN 0 ELSE 1 END
+     WHERE ba.scope = 'personal' AND ba.personal_user_id = $1
      LIMIT 1
 """
 

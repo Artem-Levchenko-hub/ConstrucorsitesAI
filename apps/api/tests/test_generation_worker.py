@@ -66,7 +66,6 @@ async def _queued_dispatch(session: AsyncSession) -> GenerationRun:
             model_id="google/gemini-2.5-pro",
             force_model=None,
             is_free=False,
-            free_business_id=None,
             orchestrate=True,
             selected_elements=[],
         ),

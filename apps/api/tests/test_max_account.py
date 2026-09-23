@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.account import BusinessEntitlement, BusinessMember, BusinessProfile
+from omnia_api.core.config import FREE_GENERATION_LIMIT
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.routers import auth as auth_router
@@ -26,6 +26,16 @@ MAX_REGISTRATION = {
     "personal_data_accepted": True,
     "document_version": "2026-07-30",
 }
+
+
+def _stub_project_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
+    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
+
+    async def no_publish(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(projects_router, "publish_event", no_publish)
 
 
 async def test_max_registration_requires_separate_legal_acceptances(
@@ -72,79 +82,57 @@ async def test_max_project_requires_verified_email_only(
     )
     assert verified.status_code == 200
 
-    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
-
-    async def no_publish(*_args, **_kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(projects_router, "publish_event", no_publish)
+    _stub_project_creation(monkeypatch)
     project = await client.post(
         "/api/projects",
-        json={"name": "No business", "template": "max_miniapp"},
+        json={"name": "No requisites", "template": "max_miniapp"},
     )
     assert project.status_code == 201
 
     access = await client.get("/api/max/account/access")
     assert access.status_code == 200
-    assert access.json()["business"] is None
     assert access.json()["can_create_project"] is True
+    assert access.json()["email_verified"] is True
+    assert "business" not in access.json()
 
 
-async def test_verified_self_employed_owner_can_create_max_project(
+async def test_account_never_accepts_owner_requisites(
     client: httpx.AsyncClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def verified_npd(_inn: str) -> tuple[str, str | None, dict[str, object]]:
-        return "verified", "НПД подтверждён", {"status": True}
-
-    monkeypatch.setattr(max_accounts_router, "_verify_self_employed", verified_npd)
-    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
-
-    async def no_publish(*_args, **_kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(projects_router, "publish_event", no_publish)
     registered = await client.post(
         "/api/auth/register",
-        json={"email": "npd@example.com", "password": "secret123"},
+        json={"email": "no-requisites@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
 
-    business = await client.put(
+    # The old requisites endpoints are gone: nothing on the platform asks for
+    # ИНН, ОГРН or a legal name, and nothing stores them.
+    saved = await client.put(
         "/api/max/account/business",
-        json={
-            "kind": "self_employed",
-            "inn": "500100732259",
-            "legal_name": "Иванов Иван Иванович",
-        },
+        json={"kind": "self_employed", "inn": "500100732259", "legal_name": "Иванов"},
     )
-    assert business.status_code == 200
-    assert business.json()["status"] == "verified"
+    assert saved.status_code in {404, 405}
+    queue = await client.get("/api/max/account/admin/businesses")
+    assert queue.status_code in {403, 404}
 
     access = await client.get("/api/max/account/access")
     assert access.status_code == 200
-    assert access.json()["can_create_project"] is True
+    assert set(access.json()) == {
+        "authenticated",
+        "email_verified",
+        "email_delivery_configured",
+        "can_create_project",
+        "reason",
+        "legal_document_version",
+        "payments_configured",
+    }
 
-    project = await client.post(
-        "/api/projects",
-        json={"name": "NPD MAX", "template": "max_miniapp"},
-    )
-    assert project.status_code == 201
 
-
-async def test_registered_user_can_create_max_project_without_business_profile(
+async def test_registered_user_can_create_max_project_with_email_and_password_only(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
-
-    async def no_publish(*_args, **_kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(projects_router, "publish_event", no_publish)
+    _stub_project_creation(monkeypatch)
     registered = await client.post(
         "/api/auth/register",
         json={"email": "general@example.com", "password": "secret123"},
@@ -157,50 +145,28 @@ async def test_registered_user_can_create_max_project_without_business_profile(
     assert project.status_code == 201
 
 
-async def test_max_free_generation_limit_belongs_to_business(
+async def test_max_free_generation_limit_belongs_to_the_user(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def verified_npd(_inn: str) -> tuple[str, str | None, dict[str, object]]:
-        return "verified", "НПД подтверждён", {"status": True}
-
-    monkeypatch.setattr(max_accounts_router, "_verify_self_employed", verified_npd)
-    monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
-
-    async def no_publish(*_args, **_kwargs) -> None:
-        return None
-
-    monkeypatch.setattr(projects_router, "publish_event", no_publish)
+    _stub_project_creation(monkeypatch)
     registered = await client.post(
         "/api/auth/register",
         json={"email": "quota@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
-    business = await client.put(
-        "/api/max/account/business",
-        json={
-            "kind": "self_employed",
-            "inn": "500100732259",
-            "legal_name": "Иванов Иван Иванович",
-        },
-    )
-    assert business.status_code == 200
     project = await client.post(
         "/api/projects",
         json={"name": "Quota MAX", "template": "max_miniapp"},
     )
     assert project.status_code == 201
 
-    business_id = (await db_session.execute(select(BusinessMember.business_id))).scalar_one()
-    entitlement = await db_session.get(BusinessEntitlement, business_id)
-    assert entitlement is not None
-    entitlement.free_generations_used = entitlement.free_generation_limit
-    user_id = (
-        await db_session.execute(select(User.id).where(User.email == "quota@example.com"))
+    user = (
+        await db_session.execute(select(User).where(User.email == "quota@example.com"))
     ).scalar_one()
-    wallet = await db_session.get(Wallet, user_id)
+    user.free_generations_used = FREE_GENERATION_LIMIT
+    wallet = await db_session.get(Wallet, user.id)
     assert wallet is not None
     wallet.balance_rub = Decimal("0")
     await db_session.commit()
@@ -210,16 +176,15 @@ async def test_max_free_generation_limit_belongs_to_business(
         json={
             "prompt": "Собери приложение",
             "skip_clarify": True,
-            "idempotency_key": "max-business-quota-1",
+            "idempotency_key": "max-user-quota-1",
         },
     )
     assert blocked.status_code == 402
     assert blocked.json()["error"]["code"] == "wallet_empty"
 
 
-async def test_admin_can_list_and_decide_pending_businesses(
+async def test_admin_access_flag_requires_the_admin_role(
     client: httpx.AsyncClient,
-    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -232,40 +197,11 @@ async def test_admin_can_list_and_decide_pending_businesses(
         json={"email": "admin@example.com", "password": "secret123"},
     )
     assert registered.status_code == 201
-    admin = (
-        await db_session.execute(select(User).where(User.email == "admin@example.com"))
-    ).scalar_one()
-    profile = BusinessProfile(
-        kind="legal_entity",
-        inn="7816246925",
-        ogrn="1187847020949",
-        legal_name='ООО "КОРТЭЛ"',
-        status="pending",
-        verification_source="manual",
-        verification_note="Ожидает проверки",
-    )
-    db_session.add(profile)
-    await db_session.flush()
-    db_session.add(
-        BusinessMember(
-            business_id=profile.id,
-            user_id=admin.id,
-            role="owner",
-        )
-    )
-    await db_session.commit()
 
-    queue = await client.get("/api/max/account/admin/businesses")
-    assert queue.status_code == 200
-    assert queue.json()[0]["owner_email"] == "admin@example.com"
-    assert queue.json()[0]["status"] == "pending"
     access = await client.get("/api/max/account/admin/access")
     assert access.status_code == 200
     assert access.json() == {"is_admin": True}
 
-    decision = await client.post(
-        "/api/max/account/business/7816246925/decision",
-        json={"approved": True, "note": "Реквизиты проверены"},
-    )
-    assert decision.status_code == 200
-    assert decision.json()["status"] == "verified"
+    monkeypatch.setattr(max_accounts_router, "_is_admin", lambda user: False)
+    denied = await client.get("/api/max/account/admin/access")
+    assert denied.status_code == 403

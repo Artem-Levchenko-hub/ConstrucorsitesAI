@@ -22,7 +22,6 @@ const studio = readFileSync(
 
 const accountLinks = [
   "/account",
-  "/account/organization",
   "/account/security",
   "/billing",
   "/billing/transactions",

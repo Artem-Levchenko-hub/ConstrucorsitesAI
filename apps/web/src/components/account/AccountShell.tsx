@@ -1,5 +1,4 @@
 import {
-  Building2,
   CreditCard,
   LayoutGrid,
   LogOut,
@@ -20,7 +19,6 @@ import "./account.css";
 
 const navigation = [
   ["profile", "/account", UserRound, "Профиль"],
-  ["organization", "/account/organization", Building2, "Организация"],
   ["security", "/account/security", Shield, "Безопасность"],
   ["billing", "/billing", WalletCards, "Баланс"],
   ["transactions", "/billing/transactions", Receipt, "Операции"],
@@ -28,14 +26,13 @@ const navigation = [
 ] as const;
 
 const copy: Record<AccountView, { eyebrow: string; title: string; lead: string }> = {
-  all: { eyebrow: "10 / Account", title: "Аккаунт", lead: "Профиль, владелец бизнеса, безопасность и биллинг." },
+  all: { eyebrow: "10 / Account", title: "Аккаунт", lead: "Профиль, безопасность и биллинг. Аккаунт — это email и пароль, реквизиты не нужны." },
   profile: { eyebrow: "10 / Account", title: "Профиль", lead: "Основные данные аккаунта, экспорт информации и управление удалением." },
-  organization: { eyebrow: "10 / Account", title: "Организация", lead: "Владелец MAX-приложений и реквизиты, которые используются во всех проектах." },
   security: { eyebrow: "10 / Account", title: "Безопасность", lead: "Активные сессии, устройства и отзыв доступа." },
   billing: { eyebrow: "10 / Billing", title: "Баланс и пополнение", lead: "Пакеты использования и безопасная оплата на стороне ЮKassa." },
   transactions: { eyebrow: "10 / Billing", title: "Операции", lead: "История платежей, начислений и статусов." },
   plan: { eyebrow: "10 / Billing", title: "Управление тарифом", lead: "Режим эксплуатации приложения и доступные лимиты." },
-  admin: { eyebrow: "Admin / Control", title: "Админ-центр", lead: "Аккаунты, роли, подтверждение организаций и журнал административных изменений." },
+  admin: { eyebrow: "Admin / Control", title: "Админ-центр", lead: "Аккаунты, роли и журнал административных изменений." },
 };
 
 export async function AccountShell({
