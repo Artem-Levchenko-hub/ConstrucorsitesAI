@@ -228,7 +228,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0067_restoration_adaptation_activation"
+        "0068_project_cell_orchestrator"
     )
     assert (
         database.fetchval(
@@ -236,6 +236,14 @@ def test_restoration_adaptation_migrations_roundtrip(
             "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
         )
         == 1
+    )
+    # 0068: every existing cell is bound to the first host by default
+    assert (
+        database.fetchval(
+            "SELECT column_default FROM information_schema.columns "
+            "WHERE table_name = 'project_cell_workspaces' AND column_name = 'orchestrator'"
+        )
+        == "'core'::text"
     )
     command.downgrade(database.config, "0065_restoration_execution_policy")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
@@ -245,6 +253,13 @@ def test_restoration_adaptation_migrations_roundtrip(
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
             "WHERE table_name = 'restorations' AND column_name = 'activation_request'"
+        )
+        == 0
+    )
+    assert (
+        database.fetchval(
+            "SELECT count(*) FROM information_schema.columns "
+            "WHERE table_name = 'project_cell_workspaces' AND column_name = 'orchestrator'"
         )
         == 0
     )
