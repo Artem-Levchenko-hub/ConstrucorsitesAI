@@ -14,6 +14,7 @@ from omnia_api.models.account import (
 )
 from omnia_api.models.billing import BillingPlan, Subscription
 from omnia_api.models.max_integration import MaxIntegration
+from omnia_api.models.oauth_login import UserIdentity
 from omnia_api.models.project import Project
 from omnia_api.models.wallet_charge import WalletCharge
 from omnia_api.services.billing_accounts import resolve_billing_account
@@ -61,6 +62,15 @@ async def export_account_data(
                 select(LegalAcceptance)
                 .where(LegalAcceptance.user_id == current_user.id)
                 .order_by(LegalAcceptance.accepted_at)
+            )
+        ).scalars()
+    )
+    identities = list(
+        (
+            await session.execute(
+                select(UserIdentity)
+                .where(UserIdentity.user_id == current_user.id)
+                .order_by(UserIdentity.created_at)
             )
         ).scalars()
     )
@@ -121,6 +131,16 @@ async def export_account_data(
                 "accepted_at": item.accepted_at.isoformat(),
             }
             for item in acceptances
+        ],
+        # Вход через VK ID / Яндекс ID: всё, что платформа хранит о связке.
+        "identities": [
+            {
+                "provider": item.provider,
+                "provider_user_id": item.provider_user_id,
+                "email": item.email,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in identities
         ],
         "payments": [
             {

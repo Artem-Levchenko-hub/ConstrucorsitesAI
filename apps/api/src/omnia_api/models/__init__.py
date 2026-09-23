@@ -31,6 +31,7 @@ from omnia_api.models.lead import Lead
 from omnia_api.models.max_integration import MaxIntegration
 from omnia_api.models.max_project_config import MaxProjectConfig
 from omnia_api.models.message import Message
+from omnia_api.models.oauth_login import OAuthLoginState, UserIdentity
 from omnia_api.models.project import Project
 from omnia_api.models.project_cell import (
     ProjectCellActivityLease,
@@ -79,6 +80,7 @@ __all__ = [
     "MaxIntegration",
     "MaxProjectConfig",
     "Message",
+    "OAuthLoginState",
     "Payment",
     "Project",
     "ProjectCellActivityLease",
@@ -98,6 +100,7 @@ __all__ = [
     "TaskBoardTask",
     "Usage",
     "User",
+    "UserIdentity",
     "Wallet",
     "WalletCharge",
 ]

@@ -94,6 +94,14 @@ ErrorCode = Literal[
     "subscription_entitlement_required",
     "refund_unavailable",
     "refund_balance_used",
+    # Вход через VK ID / Яндекс ID — routers/auth_oauth.py. Ошибки самого
+    # рукопожатия (браузер приходит на callback навигацией, не fetch-ем)
+    # возвращаются редиректом на /login?oauth_error=<код> с теми же кодами.
+    "oauth_provider_unavailable",
+    "oauth_state_invalid",
+    "oauth_exchange_failed",
+    "oauth_email_required",
+    "oauth_ticket_invalid",
 ]
 
 
