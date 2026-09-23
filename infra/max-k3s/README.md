@@ -68,6 +68,11 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   `rsync` с core по WireGuard (ключ `~/.ssh/id_ed25519_mesh`, `Host commerce` в ssh-конфиге core).
   Какая ячейка на каком хосте — решает API (`ORCHESTRATOR_HOSTS`, колонка `orchestrator`); подробности —
   `docs/plans/2026-09-23-k8s-publication-stage-a.md`, раздел «Этап B».
+- **Ночные копии, которых не давал Stage 1:** `cells/30-cell-host-backup.sh` — на хосте ячеек базы
+  ячеек + журнал оркестратора (`backup_cells.py`) в `/var/backups/max-studio/<день>/cells.tgz`;
+  `cells/40-runtime-apps-backup.sh` — на runtime дамп баз каждого опубликованного приложения
+  (`app-*` namespace, project-postgres и core-postgres) в `…/<день>/apps/`. Оба — `ExecStartPre`
+  хостового `max-backup.service`, дальше `max-backup-push.sh` уносит всё на соседний хост.
 - **Мониторинг** на core — kube-prometheus-stack 91.4.1 (`k8s/apply.sh monitoring`):
   Prometheus (15 дней / 50 GB), Alertmanager, Grafana 13 на `https://grafana.yleum.ru`
   (admin, пароль в `/etc/max-studio/grafana.env` на core). Собирает метрики кластера core и
