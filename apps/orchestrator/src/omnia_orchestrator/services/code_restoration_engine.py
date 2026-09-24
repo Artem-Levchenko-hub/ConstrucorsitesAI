@@ -379,6 +379,41 @@ def empty_database_materializer(files: dict[str, str]) -> list[str] | None:
     ]
 
 
+_MIGRATION_DIR_PREFIX = "drizzle/"
+
+
+def historical_sql_migrations(files: dict[str, str]) -> list[tuple[str, str]] | None:
+    """Исторические миграции как есть — самый безопасный рецепт из трёх.
+
+    Два прежних рецепта требуют от приложения либо служебный скрипт применения
+    миграций, либо `drizzle.config.ts`. Современный шаблон MAX не содержит ни
+    того, ни другого: миграции применяет доверенный контейнер из своего образа,
+    а в рабочей области владельца лежат только сами файлы `drizzle/*.sql`.
+    Из-за этого 24.09 откат исправного приложения с пустой базой отказывал с
+    формулировкой «не хватает файлов: настройка базы» — при том, что описание
+    схемы было на месте, просто в другом виде.
+
+    Этот рецепт ничего не исполняет: контроллер сам применяет SQL по порядку
+    имён — ровно так, как их применяет штатный исполнитель. Чужой код при этом
+    не запускается вовсе, то есть риск здесь строго меньше, чем у обоих
+    прежних путей.
+    """
+    migrations = sorted(
+        (path, files[path])
+        for path in files
+        if path.startswith(_MIGRATION_DIR_PREFIX) and path.endswith(".sql")
+    )
+    if not migrations:
+        return None
+    # Пустой файл миграции не создаёт объектов и означает потерю, а не «нечего
+    # делать»: такую версию восстанавливать нельзя.
+    if any(not sql.strip() for _, sql in migrations):
+        return None
+    if not files.get("src/lib/db/schema.ts", "").strip():
+        return None
+    return migrations
+
+
 def empty_materializer_blocker(files: dict[str, str]) -> str | None:
     """Назвать владельцу, ЧЕГО не хватает для восстановления исторической схемы.
 
@@ -388,6 +423,8 @@ def empty_materializer_blocker(files: dict[str, str]) -> str | None:
     Содержимое файлов проекта в текст не попадает — только названия и причина.
     """
     if empty_database_materializer(files) is not None:
+        return None
+    if historical_sql_migrations(files) is not None:
         return None
     if _MIGRATION_RUNNER_PATH in files:
         return (
@@ -1251,6 +1288,7 @@ class CodeRestorationEngine:
             return cast(dict[str, Any], saved)
         observed_database_state: RestorationDatabaseState = "unknown"
         empty_materializer: list[str] | None = None
+        empty_sql_migrations: list[tuple[str, str]] | None = None
         with machine_budget(870):
             async with manager.operation_lock.hold(request.workspace_id):
                 try:
@@ -1439,6 +1477,11 @@ class CodeRestorationEngine:
                     observed_database_state = "empty"
                     empty_materializer = empty_database_materializer(files)
                     if empty_materializer is None:
+                        # Третий рецепт: применить сами файлы миграций. Он не
+                        # исполняет код владельца и потому пробуется последним
+                        # только по историческим причинам — риск у него меньше.
+                        empty_sql_migrations = historical_sql_migrations(files)
+                    if empty_materializer is None and empty_sql_migrations is None:
                         return {
                             "state": "needs_changes",
                             "candidate_id": None,
@@ -1579,14 +1622,19 @@ class CodeRestorationEngine:
                 target_witness = None
                 database_digest = None
                 if empty_witness is not None:
-                    assert empty_materializer is not None
-                    await self._run_stage(
-                        request,
-                        candidate,
-                        empty_materializer,
-                        90,
-                        stage="empty-database-migrations",
-                    )
+                    assert empty_materializer is not None or empty_sql_migrations is not None
+                    if empty_materializer is not None:
+                        await self._run_stage(
+                            request,
+                            candidate,
+                            empty_materializer,
+                            90,
+                            stage="empty-database-migrations",
+                        )
+                    else:
+                        assert empty_sql_migrations is not None
+                        for _name, _sql in empty_sql_migrations:
+                            await machine_effect(admin_sql, candidate, _sql)
                     expected_contract = await machine_effect(candidate_contract, candidate, files)
                     materialized_contract, catalog_blockers, unsupported = await machine_effect(
                         describe_live_catalog, candidate
