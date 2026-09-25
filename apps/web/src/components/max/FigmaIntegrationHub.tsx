@@ -342,7 +342,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       </header>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
         {selected.oauth_available && (
-          <div className="rounded-[10px] border border-[#4f81f7]/30 bg-accent/[.06] p-4">
+          <div className="rounded-[10px] border border-[#0381fa]/30 bg-accent/[.06] p-4">
             <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
             <p className="mt-1 text-xs leading-5 text-fg-secondary">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
             <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>

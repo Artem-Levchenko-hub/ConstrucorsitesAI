@@ -21,7 +21,7 @@ export function PublicPageShell({
     <div data-max-studio className="max-public">
       <header className="max-public-header">
         <div className="max-public-header__inner">
-          <div className="max-public-header__brand"><BrandMark /><span>MAX Studio</span></div>
+          <div className="max-public-header__brand"><BrandMark /></div>
           <div className="max-public-header__actions">
             <Link href="/" className="max-public-link hidden items-center gap-2 sm:inline-flex"><ArrowLeft className="size-4" />На главную</Link>
             <Link href="/max/register" className="max-public-button max-public-button--primary">Создать приложение</Link>
@@ -39,7 +39,7 @@ export function PublicPageShell({
         <div className="max-public-content">{children}</div>
       </main>
       <footer className="max-public-footer">
-        <div><span>© 2026 Omnia · MAX Studio</span><nav><Link href="/requisites">Реквизиты</Link><Link href="/legal/offer">Оферта</Link><Link href="/legal/refunds">Оплата и возвраты</Link><Link href="/legal/privacy">Конфиденциальность</Link><Link href="/security">Безопасность</Link></nav></div>
+        <div><span>© 2026 Yleum</span><nav><Link href="/requisites">Реквизиты</Link><Link href="/legal/offer">Оферта</Link><Link href="/legal/refunds">Оплата и возвраты</Link><Link href="/legal/privacy">Конфиденциальность</Link><Link href="/security">Безопасность</Link></nav></div>
       </footer>
     </div>
   );

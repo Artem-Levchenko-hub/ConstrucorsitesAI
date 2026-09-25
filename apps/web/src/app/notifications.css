@@ -1,5 +1,5 @@
 .max-notifications[data-sonner-toaster] [data-sonner-toast] {
-  --notice-tone: #2563eb;
+  --notice-tone: #0062ee;
   background: #fff;
   color: #192335;
   border: 1px solid #dce2ec;
@@ -18,7 +18,7 @@
 .max-notifications[data-sonner-toaster] [data-description] { color: #526079; overflow-wrap: anywhere; }
 .max-notifications[data-sonner-toaster] [data-close-button] { top: 8px; right: 8px; left: auto; transform: none; width: 28px; height: 28px; border: 0; border-radius: 5px; background: #fff; color: #526079; }
 .max-notifications[data-sonner-toaster] [data-close-button]:hover { background: #eef2f7; color: #192335; }
-.max-notifications[data-sonner-toaster] button:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+.max-notifications[data-sonner-toaster] button:focus-visible { outline: 2px solid #0062ee; outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) {
   .max-notifications[data-sonner-toaster] *, .max-notifications[data-sonner-toaster] *::before, .max-notifications[data-sonner-toaster] *::after { animation: none !important; transition: none !important; }
 }

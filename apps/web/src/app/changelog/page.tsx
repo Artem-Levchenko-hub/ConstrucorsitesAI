@@ -21,7 +21,7 @@ export default function ChangelogPage() {
             <div className="text-[12px] font-medium text-[#828491]">{date}</div>
             <div>
               <h2 className="flex items-center gap-3 text-[18px] font-semibold">
-                <Icon className="h-5 w-5 text-[#4f81f7]" />
+                <Icon className="h-5 w-5 text-[#0381fa]" />
                 {title}
               </h2>
               <p className="mt-3 text-[14px] leading-6 text-[#9fa1b1]">{text}</p>

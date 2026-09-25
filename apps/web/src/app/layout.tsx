@@ -34,7 +34,7 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-const SITE_NAME = "Omnia.AI";
+const SITE_NAME = "Yleum";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("meta");
@@ -49,19 +49,19 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(origin),
     title: {
       default: title,
-      template: "%s · Omnia.AI",
+      template: "%s · Yleum",
     },
     description,
     applicationName: SITE_NAME,
-    authors: [{ name: "Omnia.AI" }],
-    generator: "Omnia.AI",
+    authors: [{ name: "Yleum" }],
+    generator: "Yleum",
     keywords: [
       "MAX Mini App",
       "конструктор MAX",
       "бот MAX",
       "мини-приложение MAX",
       "разработка цифровых продуктов",
-      "MAX Studio",
+      "Yleum",
     ],
     alternates: {
       canonical: "/",
@@ -82,7 +82,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: "/og.png",
           width: 1200,
           height: 630,
-          alt: "Omnia — продуктовая студия для MAX Mini Apps",
+          alt: "Yleum — приложения для бизнеса внутри MAX",
         },
       ],
     },
@@ -110,13 +110,9 @@ export async function generateMetadata(): Promise<Metadata> {
         "yandex-verification": process.env.NEXT_PUBLIC_YANDEX_VERIFICATION ?? "",
       },
     },
-    icons: {
-      icon: [
-        { url: "/favicon.ico", sizes: "any" },
-        { url: "/icon.svg", type: "image/svg+xml" },
-      ],
-      apple: "/apple-icon.png",
-    },
+    // Иконки не перечисляем вручную: Next сам подставит app/icon.svg и
+    // app/apple-icon.tsx. Раньше здесь был жёсткий /favicon.ico, которого нет
+    // в репозитории — каждая страница тянула 404.
     category: "technology",
   };
 }

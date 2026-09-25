@@ -101,7 +101,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
             {step === 2 && <>
               <fieldset><legend className="text-sm font-medium">Функции</legend><div className="mt-3 flex flex-wrap gap-2">{MAX_FEATURES.map(feature => <button key={feature} type="button" aria-pressed={values.features.includes(feature)} className="max-wizard-option text-xs" onClick={() => onChange({ features: values.features.includes(feature) ? values.features.filter(item => item !== feature) : [...values.features, feature] })}>{feature}</button>)}</div></fieldset>
               <fieldset><legend className="text-sm font-medium">Стиль</legend><div className="mt-3 grid gap-2 sm:grid-cols-3">{MAX_STYLES.map(item => <button key={item.id} type="button" aria-pressed={values.style === item.id} className="max-wizard-option text-sm" onClick={() => onChange({ style: item.id })}>{item.label}</button>)}</div></fieldset>
-              <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={values.brandColors} onChange={event => onChange({ brandColors: event.target.value })} placeholder="#2563eb, графит, молочный" /></div>
+              <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={values.brandColors} onChange={event => onChange({ brandColors: event.target.value })} placeholder="#0062ee, графит, молочный" /></div>
             </>}
             {step === 3 && <MaxProjectReview {...values} />}
           </div>

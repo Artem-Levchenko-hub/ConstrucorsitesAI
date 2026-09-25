@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Omnia — MAX Studio",
-    "landingTitle": "Omnia — создание приложений для MAX",
+    "title": "Yleum — приложения для бизнеса внутри MAX",
+    "landingTitle": "Yleum — создание приложений для MAX",
     "description": "Соберите и запустите мини-приложение для MAX: интерфейс, сервер, бот, HTTPS-публикация и webhook в одной рабочей среде.",
     "keywords": "MAX Mini App, конструктор MAX, бот MAX, мини-приложение MAX"
   },

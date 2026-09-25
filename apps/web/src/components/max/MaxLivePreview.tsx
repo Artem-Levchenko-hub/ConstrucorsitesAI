@@ -545,7 +545,7 @@ export function MaxLivePreview({
                       {!previewUrl && preparing && (
                         <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-border-default bg-surface-raised/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-fg-primary">
-                            <Loader2 className="size-3 animate-spin text-[#4f81f7]" />
+                            <Loader2 className="size-3 animate-spin text-[#0381fa]" />
                             {preparationLabel}
                           </p>
                           <p className="mt-1 text-[9px] text-fg-tertiary">
@@ -573,9 +573,9 @@ export function MaxLivePreview({
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
                       {preparing ? (
-                        <Loader2 className="size-7 animate-spin text-[#4f81f7]" />
+                        <Loader2 className="size-7 animate-spin text-[#0381fa]" />
                       ) : (
-                        <Play className="size-7 text-[#4f81f7]" />
+                        <Play className="size-7 text-[#0381fa]" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
                         {showPreviewError

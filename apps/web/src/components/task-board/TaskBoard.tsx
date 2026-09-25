@@ -87,7 +87,7 @@ const STATUSES: Array<{
     id: "in_progress",
     label: "В работе",
     hint: "Задачи в процессе",
-    dotClass: "bg-[#4f81f7]",
+    dotClass: "bg-[#0381fa]",
     icon: Clock3,
   },
   {
@@ -455,7 +455,7 @@ export function TaskBoard({
       <div className="mx-auto flex min-h-dvh w-full max-w-[1780px] flex-col px-4 pb-8 pt-4 sm:px-6 lg:px-8">
         <header className="flex flex-col gap-5 border-b border-[#2a2d34] pb-5 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center gap-4">
-            <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#4f81f7] text-[#111317] shadow-[0_0_32px_rgba(79,129,247,0.25)]">
+            <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#0381fa] text-[#111317] shadow-[0_0_32px_rgba(79,129,247,0.25)]">
               <Check className="size-5 stroke-[2.6]" />
             </div>
             <div>
@@ -497,7 +497,7 @@ export function TaskBoard({
               type="button"
               data-action="new-task"
               onClick={openCreate}
-              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#4f81f7] px-4 text-sm font-semibold text-[#0c152b] transition hover:bg-[#6a95fa]"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#0381fa] px-4 text-sm font-semibold text-[#0c152b] transition hover:bg-[#6a95fa]"
             >
               <Plus className="size-4" />
               Новая задача
@@ -549,7 +549,7 @@ export function TaskBoard({
                 onDrop={(event) => void onDrop(event, status.id)}
                 className={`flex min-h-[260px] min-w-0 flex-col rounded-2xl border p-3 transition-colors sm:p-4 xl:min-h-[540px] ${
                   highlighted
-                    ? "border-[#4f81f7] bg-[#17213a]"
+                    ? "border-[#0381fa] bg-[#17213a]"
                     : "border-[#272a31] bg-[#17191e]"
                 }`}
               >
@@ -571,7 +571,7 @@ export function TaskBoard({
                   {loading ? (
                     <LoadingCards />
                   ) : cards.length === 0 ? (
-                    <div className={`grid min-h-28 flex-1 place-items-center rounded-xl border border-dashed px-5 text-center ${highlighted ? "border-[#4f81f7]/60 bg-[#4f81f7]/5" : "border-[#30333a]"}`}>
+                    <div className={`grid min-h-28 flex-1 place-items-center rounded-xl border border-dashed px-5 text-center ${highlighted ? "border-[#0381fa]/60 bg-[#0381fa]/5" : "border-[#30333a]"}`}>
                       <div>
                         <p className="text-sm font-medium text-[#7e838f]">
                           {highlighted ? "Отпустите карточку" : "Здесь пока пусто"}
@@ -652,7 +652,7 @@ export function TaskBoard({
                   value={draft.title}
                   onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
                   placeholder="Например, проверить новую форму"
-                  className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-4 text-sm text-white outline-none transition placeholder:text-[#666b76] focus:border-[#4f81f7]"
+                  className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-4 text-sm text-white outline-none transition placeholder:text-[#666b76] focus:border-[#0381fa]"
                 />
               </label>
 
@@ -665,14 +665,14 @@ export function TaskBoard({
                   value={draft.description}
                   onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))}
                   placeholder="Добавьте детали, чтобы задачу можно было выполнить без уточнений"
-                  className="mt-2 w-full resize-y rounded-xl border border-[#343842] bg-[#22252b] px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-[#666b76] focus:border-[#4f81f7]"
+                  className="mt-2 w-full resize-y rounded-xl border border-[#343842] bg-[#22252b] px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-[#666b76] focus:border-[#0381fa]"
                 />
               </label>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="block">
                   <span className="text-sm font-medium">Исполнитель</span>
-                  <select name="assignee" value={draft.assignee} onChange={(event) => setDraft((current) => ({ ...current, assignee: event.target.value as TaskBoardAssignee }))} className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-3 text-sm text-white outline-none focus:border-[#4f81f7]">
+                  <select name="assignee" value={draft.assignee} onChange={(event) => setDraft((current) => ({ ...current, assignee: event.target.value as TaskBoardAssignee }))} className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-3 text-sm text-white outline-none focus:border-[#0381fa]">
                     {MEMBERS.map((member) => (
                       <option key={member.id} value={member.id}>{member.name}</option>
                     ))}
@@ -680,7 +680,7 @@ export function TaskBoard({
                 </label>
                 <label className="block">
                   <span className="text-sm font-medium">Приоритет</span>
-                  <select name="priority" value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value as TaskBoardPriority }))} className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-3 text-sm text-white outline-none focus:border-[#4f81f7]">
+                  <select name="priority" value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value as TaskBoardPriority }))} className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-3 text-sm text-white outline-none focus:border-[#0381fa]">
                     {PRIORITIES.map((priority) => (
                       <option key={priority.id} value={priority.id}>{priority.label}</option>
                     ))}
@@ -690,7 +690,7 @@ export function TaskBoard({
 
               <label className="block">
                 <span className="text-sm font-medium">Статус</span>
-                <select name="status" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as TaskBoardStatus }))} className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-3 text-sm text-white outline-none focus:border-[#4f81f7]">
+                <select name="status" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as TaskBoardStatus }))} className="mt-2 min-h-12 w-full rounded-xl border border-[#343842] bg-[#22252b] px-3 text-sm text-white outline-none focus:border-[#0381fa]">
                   {STATUSES.map((status) => (
                     <option key={status.id} value={status.id}>{status.label}</option>
                   ))}
@@ -701,7 +701,7 @@ export function TaskBoard({
                 <button type="button" disabled={saving} onClick={() => setEditor(null)} className="min-h-11 rounded-xl border border-[#343842] px-4 text-sm font-semibold text-[#b3b7c0] transition hover:bg-[#25282f] hover:text-white disabled:opacity-50">
                   Отмена
                 </button>
-                <button type="submit" disabled={saving || !draft.title.trim()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#4f81f7] px-5 text-sm font-semibold text-[#0c152b] transition hover:bg-[#6a95fa] disabled:cursor-not-allowed disabled:opacity-50">
+                <button type="submit" disabled={saving || !draft.title.trim()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#0381fa] px-5 text-sm font-semibold text-[#0c152b] transition hover:bg-[#6a95fa] disabled:cursor-not-allowed disabled:opacity-50">
                   {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
                   {editor.mode === "create" ? "Создать задачу" : "Сохранить"}
                 </button>

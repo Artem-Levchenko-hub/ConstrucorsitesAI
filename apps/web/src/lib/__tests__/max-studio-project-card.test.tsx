@@ -102,7 +102,7 @@ describe("MAX Studio project card", () => {
       color: string;
       icon: string;
     }> = [
-      { id: "setup", result: readiness([]), kind: "setup", color: "rgb(29, 78, 216)", icon: "lucide-wrench" },
+      { id: "setup", result: readiness([]), kind: "setup", color: "rgb(0, 80, 200)", icon: "lucide-wrench" },
       { id: "input", result: readiness(["build"]), kind: "needs-input", color: "rgb(117, 96, 0)", icon: "lucide-circle-alert" },
       { id: "ready", result: readiness(["build", "legal", "bot", "publish", "max_url"]), kind: "ready", color: "rgb(24, 116, 67)", icon: "lucide-circle-check" },
       { id: "failed", result: new Error("offline"), kind: "failed", color: "rgb(180, 35, 24)", icon: "lucide-triangle-alert" },

@@ -81,7 +81,7 @@ describe("dark blue product theme", () => {
     expect(tokens["--color-bg-base"]).toBe("#121519");
     expect(tokens["--color-bg-elevated-1"]).toBe("#191b20");
     expect(tokens["--color-surface-3"]).toBe("#2b2d32");
-    expect(tokens["--color-accent"]).toBe("#4f81f7");
+    expect(tokens["--color-accent"]).toBe("#0381fa");
     expect(tokens["--color-system-indigo"]).toBe("#6366f1");
     expect(tokens["--color-fg-primary"]).toBe("#ffffff");
     expect(tokens["--color-fg-secondary"]).toBe("#9fa1b1");

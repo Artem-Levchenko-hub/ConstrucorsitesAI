@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { Asterisk } from "lucide-react";
+
+import { YleumMark } from "@/components/brand/YleumMark";
 
 export function BrandMark({
   inverse = false,
   href = "/",
-  label = "Omnia",
+  label = "Yleum",
 }: {
   inverse?: boolean;
   href?: string;
@@ -17,12 +18,12 @@ export function BrandMark({
       aria-label={`${label} — главная`}
     >
       <span
-        className={`flex h-8 w-8 items-center justify-center rounded-[8px] bg-accent text-accent-fg ${
-          inverse ? "" : "ring-1 ring-inset ring-white/10"
+        className={`flex h-8 w-8 items-center justify-center rounded-[8px] ${
+          inverse ? "bg-white/10" : "bg-white ring-1 ring-inset ring-black/5"
         }`}
         aria-hidden
       >
-        <Asterisk className="h-[18px] w-[18px]" strokeWidth={2.2} />
+        <YleumMark className="h-[22px] w-[22px]" />
       </span>
       <span className="text-[18px] text-fg-primary">
         {label}

@@ -28,7 +28,7 @@ function cssForDom() {
   return `${accountDropdownCss}\n${studioCss}`
     .replaceAll(":focus-visible", ".is-keyboard-focus")
     .replaceAll("var(--color-surface-3)", "#eef2f7")
-    .replaceAll("var(--color-accent)", "#2563eb");
+    .replaceAll("var(--color-accent)", "#0062ee");
 }
 
 describe("MAX Studio account dropdown", () => {
@@ -89,7 +89,7 @@ describe("MAX Studio account dropdown", () => {
       item.classList.add("is-keyboard-focus");
       const keyboardStyle = getComputedStyle(item);
       expect(keyboardStyle.outlineStyle).toBe("none");
-      expect(keyboardStyle.boxShadow).toBe("inset 0 0 0 2px #2563eb");
+      expect(keyboardStyle.boxShadow).toBe("inset 0 0 0 2px #0062ee");
     }
   });
 });

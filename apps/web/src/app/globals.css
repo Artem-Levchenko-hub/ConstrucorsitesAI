@@ -17,11 +17,12 @@
   --color-label-3: #828491;
   --color-label-4: #828491;
 
-  --color-accent: #4f81f7;
+  --color-accent: #0381fa;
   --color-accent-fg: #121519;
 
+
   --color-system-red: #c63d35;
-  --color-system-blue: #4f81f7;
+  --color-system-blue: #0381fa;
   --color-system-yellow: #e8c547;
   --color-system-green: #248a4b;
   --color-system-teal: #3d7c79;
@@ -63,16 +64,16 @@
   --color-border-subtle: #25272b;
   --color-border-default: #2b2d32;
   --color-border-strong: #828491;
-  --color-border-accent: #4f81f7;
+  --color-border-accent: #0381fa;
   --color-fg-primary: #ffffff;
   --color-fg-secondary: #9fa1b1;
   --color-fg-tertiary: #828491;
   --color-fg-muted: #828491;
   --color-fg-on-accent: #121519;
   --color-fg-on-danger: #ffffff;
-  --color-accent-hover: #6a95fa;
-  --color-accent-subtle: rgb(79 129 247 / 0.12);
-  --color-accent-secondary: #6a95fa;
+  --color-accent-hover: #35a0fc;
+  --color-accent-subtle: rgb(3 129 250 / 0.14);
+  --color-accent-secondary: #55b1fd;
   --color-success: #248a4b;
   --color-success-fg: #4ade80;
   --color-warning: #e8c547;
@@ -86,7 +87,29 @@
   --color-graphite: #121519;
   --color-muted-ink: #9fa1b1;
   --color-warm-border: #2b2d32;
-  --color-publish: #4f81f7;
+  --color-publish: #0381fa;
+}
+
+:root {
+  /* Бренд Yleum — цвета сняты пипеткой с фирменного знака.
+     brand-blue — основной цвет бренда для светлых поверхностей (белый текст на нём 5.27:1);
+     --color-accent в @theme выше — тот же синий, осветлённый до мид-тона знака,
+     чтобы держать контраст 4.8:1 на тёмном интерфейсе кабинета.
+     Живут в обычном :root, а не в @theme: Tailwind v4 выбрасывает из @theme
+     переменные, на которые пока нет ссылок в разметке. */
+  --color-brand-cyan: #25c6fb;
+  --color-brand-blue: #0062ee;
+  --color-brand-indigo: #2441f7;
+  --color-brand-violet: #804ffa;
+  --color-brand-magenta: #c472fa;
+  --gradient-brand: linear-gradient(
+    135deg,
+    #25c6fb 0%,
+    #0062ee 38%,
+    #2441f7 62%,
+    #804ffa 84%,
+    #c472fa 100%
+  );
 }
 
 @layer base {
@@ -131,7 +154,7 @@
     --color-border-subtle: #25272b;
     --color-border-default: #2b2d32;
     --color-border-strong: #828491;
-    --color-border-accent: #4f81f7;
+    --color-border-accent: #0381fa;
     --color-label-1: #ffffff;
     --color-label-2: #9fa1b1;
     --color-label-3: #828491;
@@ -142,11 +165,11 @@
     --color-fg-muted: #828491;
     --color-fg-on-accent: #121519;
     --color-fg-on-danger: #ffffff;
-    --color-accent: #4f81f7;
+    --color-accent: #0381fa;
     --color-accent-fg: #121519;
-    --color-accent-hover: #6a95fa;
-    --color-accent-subtle: rgb(79 129 247 / 0.12);
-    --color-accent-secondary: #6a95fa;
+    --color-accent-hover: #35a0fc;
+    --color-accent-subtle: rgb(3 129 250 / 0.14);
+    --color-accent-secondary: #55b1fd;
     --color-success: #248a4b;
     --color-success-fg: #4ade80;
     --color-warning: #e8c547;
@@ -158,7 +181,7 @@
     --color-ink: #ffffff;
     --color-muted-ink: #9fa1b1;
     --color-warm-border: #2b2d32;
-    --color-publish: #4f81f7;
+    --color-publish: #0381fa;
     color: var(--color-ink);
     background: var(--color-warm-white);
   }
@@ -259,8 +282,8 @@
   }
 
   .omnia-button-primary {
-    border: 1px solid #4f81f7;
-    background: #4f81f7;
+    border: 1px solid #0381fa;
+    background: #0381fa;
     color: #121519;
   }
 
@@ -331,7 +354,7 @@
   }
 
   .studio-glow {
-    background: radial-gradient(circle at 50% 0%, rgb(79 129 247 / 0.12), transparent 42%);
+    background: radial-gradient(circle at 50% 0%, rgb(3 129 250 / 0.12), transparent 42%);
   }
 
   .studio-card {
@@ -371,8 +394,8 @@
   }
   .marketing-button:active { transform: translateY(1px); }
   .marketing-button-primary {
-    border-color: #4f81f7;
-    background: #4f81f7;
+    border-color: #0381fa;
+    background: #0381fa;
     color: #121519;
   }
   .marketing-button-primary:hover { background: #6a95fa; }
@@ -425,14 +448,14 @@
 
   .max-studio-scroll {
     scrollbar-width: thin;
-    scrollbar-color: rgb(79 129 247 / 0.45) transparent;
+    scrollbar-color: rgb(3 129 250 / 0.45) transparent;
   }
   .max-studio-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
   .max-studio-scroll::-webkit-scrollbar-track { background: transparent; }
   .max-studio-scroll::-webkit-scrollbar-thumb {
     border: 2px solid transparent;
     border-radius: 9999px;
-    background: rgb(79 129 247 / 0.38);
+    background: rgb(3 129 250 / 0.38);
     background-clip: padding-box;
   }
 

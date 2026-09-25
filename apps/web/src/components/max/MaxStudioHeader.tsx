@@ -38,7 +38,7 @@ export function MaxStudioHeader({
   return (
     <header data-max-studio className="max-studio-header">
       <div className="flex min-w-0 items-center gap-3">
-        <BrandMark href="/max" label="MAX Studio" />
+        <BrandMark href="/max" />
         {compact && (
           <span className="hidden items-center gap-2 text-xs text-fg-secondary sm:flex">
             <span className="h-4 w-px bg-border-default" />

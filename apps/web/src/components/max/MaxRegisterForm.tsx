@@ -61,7 +61,7 @@ export function MaxRegisterForm() {
             name="terms_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#2563eb]"
+            className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-secondary">
             Принимаю{" "}
@@ -75,7 +75,7 @@ export function MaxRegisterForm() {
             name="privacy_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#2563eb]"
+            className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-secondary">
             Ознакомлен с{" "}
@@ -89,7 +89,7 @@ export function MaxRegisterForm() {
             name="personal_data_accepted"
             type="checkbox"
             required
-            className="mt-1 size-4 accent-[#2563eb]"
+            className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-secondary">
             Даю отдельное{" "}
@@ -105,7 +105,7 @@ export function MaxRegisterForm() {
           <input
             name="marketing_accepted"
             type="checkbox"
-            className="mt-1 size-4 accent-[#2563eb]"
+            className="mt-1 size-4 accent-[#0062ee]"
           />
           <span className="text-fg-tertiary">
             Получать новости продукта — необязательно
