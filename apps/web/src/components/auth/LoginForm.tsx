@@ -26,7 +26,6 @@ export function LoginForm({ next }: { next?: string }) {
           type="email"
           autoComplete="email"
           required
-          placeholder={t("emailPlaceholder")}
         />
       </div>
 
@@ -43,7 +42,6 @@ export function LoginForm({ next }: { next?: string }) {
           type="password"
           autoComplete="current-password"
           required
-          placeholder={t("passwordPlaceholder")}
         />
       </div>
 

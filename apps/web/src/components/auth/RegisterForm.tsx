@@ -41,7 +41,6 @@ export function RegisterForm({
           type="email"
           autoComplete="email"
           required
-          placeholder={t("emailPlaceholder")}
         />
       </div>
 

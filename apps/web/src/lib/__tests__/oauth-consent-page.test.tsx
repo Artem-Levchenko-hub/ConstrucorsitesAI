@@ -47,6 +47,9 @@ describe("/oauth/complete", () => {
     expect(html).toContain('name="next" value="/max/onboarding"');
     expect(html).toContain('name="document_version" value="2026-07-30"');
     expect(html).toContain("Создать аккаунт");
+    // Обещание о минимуме данных проверяется здесь: под кнопками входа его
+    // больше нет, а человек принимает его именно на этом экране.
+    expect(html).toContain("храним только email");
   });
 
   it("explains an expired or used ticket and offers the usual ways in", async () => {

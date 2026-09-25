@@ -94,11 +94,6 @@ export function OAuthButtons({
           {error}
         </p>
       )}
-      {/* Обещание о данных оставлено: это факт, который человек иначе не проверит.
-          Но сказано одной строкой, а не абзацем. */}
-      <p className="text-center text-[11px] leading-4 text-fg-tertiary">
-        От провайдера берём только email
-      </p>
     </div>
   );
 }

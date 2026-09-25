@@ -70,7 +70,9 @@ describe("OAuthButtons", () => {
       expect.stringContaining("Войти через VK ID"),
       expect.stringContaining("Войти через Яндекс ID"),
     ]);
-    expect(container.textContent).toContain("только email");
+    // Обещание «берём только email» переехало на экран согласия — туда, где
+    // человек его принимает; под кнопками оно было лишним текстом.
+    expect(container.textContent).not.toContain("только email");
   });
 
   it("asks the api for the provider link and sends the browser there", async () => {
