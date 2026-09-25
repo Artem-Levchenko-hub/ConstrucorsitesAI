@@ -29,6 +29,7 @@ from yleum_api.services.agent_progress import bounded_redacted_text
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from yleum_api.services.generation_deadline import (
     generation_deadline,
+    is_restoration_adaptation,
     note_proof_sealed,
     note_proof_settled,
     note_repair_stage_started,
@@ -92,6 +93,16 @@ from yleum_api.services.versioning_capabilities import capability_gap
 _MAX_DETAIL_BYTES = 4096
 # A repair is one model turn plus a build; starting it with less time only burns the rest.
 _MIN_REPAIR_SECONDS = 120
+# Сколько раз подряд источнику возвращают замечания. У обычной правки три прохода:
+# больше почти всегда означает, что агент ходит по кругу.
+_ORDINARY_REPAIR_ROUNDS = 3
+# У адаптации правил больше, и агент узнаёт их по одному, каждое — отдельный круг с
+# полной пересборкой. Прогон c32cdde8 (25.09) закончился ровно на том, что второе
+# правило ему назвали и тут же остановили, истратив при этом половину бюджета
+# времени. Настоящая граница у адаптации — окно починки по времени; счётчик поверх
+# него не защищает ни от чего, потому что агент, ничего не изменивший, и так
+# останавливается сразу.
+_ADAPTATION_REPAIR_ROUNDS = 6
 # How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
 _SEALED_RECHECK_SECONDS = 15.0
 _FULL_BUILD_DETAIL_PREFIX = f"[build-contract:{MAX_FULL_BUILD_CONTRACT_VERSION}]"
@@ -542,23 +553,32 @@ class MaxFinalizationCoordinator:
         prompt: str,
         repair: Callable[[str], Awaitable[None]],
     ) -> MaxFinalizationOutcome:
-        """Return source feedback to the same editor, at most twice.
+        """Return source feedback to the same editor a bounded number of times.
 
         Only NEEDS_EDIT is repairable here. Infrastructure/proof failures and
         cancellation stay terminal. Every pass observes the actual workspace;
         unchanged source cannot earn another build or an infinite model loop.
+
+        Обычной правке хватает трёх проходов. Адаптация узнаёт требования к
+        проверочной точке по одному правилу за круг, поэтому проходов у неё
+        больше; ограничивает её при этом окно починки по времени, а не счётчик.
         """
         await self._raise_persisted_infrastructure_failure()
         async with self.session_factory() as session:
             run = await self._locked_run(session)
+            rounds = (
+                _ADAPTATION_REPAIR_ROUNDS
+                if is_restoration_adaptation(run)
+                else _ORDINARY_REPAIR_ROUNDS
+            )
             # The agent's own turn is over: an adaptation's checks and repairs no
             # longer compete with it for one limit.
             note_repair_stage_started(run)
             await session.commit()
         files = await self.executor.snapshot_files()
-        for attempt in range(3):
+        for attempt in range(rounds):
             outcome = await self.finalize(files=files, prompt=prompt)
-            if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT or attempt == 2:
+            if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT or attempt == rounds - 1:
                 return outcome
             async with self.session_factory() as session:
                 run = await self._locked_run(session)
