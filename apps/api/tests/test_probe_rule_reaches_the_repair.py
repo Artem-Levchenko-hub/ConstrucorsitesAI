@@ -23,6 +23,63 @@ from omnia_api.services.orchestrator_client import _PROBE_RULE_NAME
 _RULE = "adaptation business witness value is not text"
 
 
+def test_a_proof_can_still_be_built_without_the_rule() -> None:
+    """Новое поле не должно ломать всех, кто собирает доказательство без него.
+
+    Первая попытка сделала поле обязательным и в середине структуры — и повалила
+    каждый существующий вызов конструктора. Локально это не поймалось: те тесты
+    требуют настоящей базы и здесь не запускаются, красноту нашёл CI. Поэтому
+    проверка стоит отдельно и базы не требует.
+    """
+    from omnia_api.services.orchestrator_client import RestorationAdaptationProof
+
+    proof = RestorationAdaptationProof(
+        **{
+            name: value
+            for name, value in _minimal_proof_fields().items()
+            if name != "reason_detail"
+        }
+    )
+
+    assert proof.reason_detail is None
+
+
+def _minimal_proof_fields() -> dict[str, object]:
+    from uuid import uuid4
+
+    return {
+        "state": "migration_required",
+        "reason_code": "probe_manifest_invalid",
+        "source_workspace_id": uuid4(),
+        "candidate_workspace_id": uuid4(),
+        "operation_id": uuid4(),
+        "project_id": uuid4(),
+        "owner_id": uuid4(),
+        "generation_run_id": uuid4(),
+        "candidate_fencing_epoch": 1,
+        "proof_attempt": 1,
+        "source_workspace_revision": "0" * 64,
+        "candidate_workspace_revision": "1" * 64,
+        "candidate_proof_key": "2" * 64,
+        "candidate_artifact_digest": "3" * 64,
+        "source_database_digest": "4" * 64,
+        "candidate_database_digest": "5" * 64,
+        "source_schema_digest": "6" * 64,
+        "candidate_schema_digest": "7" * 64,
+        "source_business_digest": "8" * 64,
+        "candidate_business_digest": "9" * 64,
+        "source_technical_digest": "a" * 64,
+        "candidate_technical_digest": "b" * 64,
+        "probe_contract_digest": "c" * 64,
+        "probe_rehearsal_digest": None,
+        "probe_rehearsal_database_digest": None,
+        "candidate_source_manifest_digest": "d" * 64,
+        "proof_digest": "e" * 64,
+        "capabilities": {},
+        "reason_detail": None,
+    }
+
+
 def test_the_repair_instruction_names_the_broken_rule() -> None:
     reason = _migration_required_reason(
         SimpleNamespace(reason_code="probe_manifest_invalid", reason_detail=_RULE)

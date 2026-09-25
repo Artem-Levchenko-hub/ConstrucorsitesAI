@@ -494,8 +494,6 @@ class RestorationAdaptationWorkspace:
 class RestorationAdaptationProof:
     state: str
     reason_code: str | None
-    # Нарушенное правило, когда код причины слишком общий (манифест проверки).
-    reason_detail: str | None
     source_workspace_id: UUID
     candidate_workspace_id: UUID
     operation_id: UUID
@@ -522,6 +520,10 @@ class RestorationAdaptationProof:
     candidate_source_manifest_digest: str
     proof_digest: str
     capabilities: dict[str, object]
+    # Нарушенное правило, когда код причины слишком общий (манифест проверки).
+    # Со значением по умолчанию и в конце: ответ без него остаётся годным, и
+    # всё, что собирает доказательство иначе, о поле знать не обязано.
+    reason_detail: str | None = None
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> RestorationAdaptationProof:
