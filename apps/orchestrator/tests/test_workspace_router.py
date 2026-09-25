@@ -1929,7 +1929,7 @@ async def test_portable_owner_start_retries_do_not_restart_healthy_services(
     resumes = []
     publishes = []
 
-    async def resume(state):
+    async def resume(state, *, epoch=None):
         nonlocal running
         resumes.append(state.workspace_id)
         running = True
@@ -2273,3 +2273,57 @@ async def test_wake_still_reports_a_real_container_failure_as_one(
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "container_failure"
+
+
+async def test_portable_owner_start_reattaches_a_machine_left_on_an_older_epoch(
+    monkeypatch, tmp_path,
+):
+    """Ребут хоста: wake поднял эпоху ячейки, запись машины осталась на старой.
+
+    25.09.2026, core: после аварии каждая разбуженная владельцем ячейка отказывала
+    в откате с «restoration source serving machine epoch is detached» — cell
+    fencing_epoch=6, machine.json epoch=5. Владельческий старт обязан вернуть
+    машину на serving-эпоху ячейки, даже если сервисы уже бегут.
+    """
+    workspace_id = uuid4()
+    provider, manager, _, run_id = await _ready_provider(tmp_path, workspace_id)
+    await manager.release_generation(
+        workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+        generation_run_id=run_id,
+    )
+    await manager.wake(workspace_id, workspace.LifecycleMutation(uuid4(), 6, "c" * 64))
+    state = manager.state_store.load(workspace_id)
+    assert state is not None and state.fencing_epoch == 6
+    spec = _default_workspace_spec(workspace_id)
+    machine_state = {"workspace_id": str(workspace_id), "epoch": 5, "ready_epoch": 5,
+                     "cancelled_epoch": 0, "operations": {}}
+    resumes: list[int | None] = []
+
+    async def resume(_state, *, epoch=None):
+        resumes.append(epoch)
+        machine_state["epoch"] = epoch
+        machine_state["ready_epoch"] = epoch
+
+    async def publish(_manager, _current_id):
+        return None
+
+    machine = SimpleNamespace(state=lambda: dict(machine_state))
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+    monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+        preview=lambda _: ("running", "172.30.0.2"), secret=lambda _: "test-secret",
+        resume_preview=resume, parts=lambda _state: (machine, SimpleNamespace()),
+    ))
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
+    monkeypatch.setattr(workspace.nginx_writer, "dev_url", lambda slug: f"https://{slug}.preview.example")
+    async with _client() as client:
+        for _ in range(2):
+            response = await client.post(
+                f"/internal/workspaces/{workspace_id}/draft/owner-start",
+                headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+                json={"project_id": str(spec.project_id), "owner_id": str(spec.owner_id)},
+            )
+            assert response.status_code == 200, response.text
+    # Одна переприкрепляющая пауза — на эпоху ячейки; повтор здоровую машину не трогает.
+    assert resumes == [6]
+    assert machine_state["epoch"] == 6 and machine_state["ready_epoch"] == 6

@@ -62,14 +62,14 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceAgentOperationStatusResponse,
     WorkspaceAgentWriteRequest,
     WorkspaceAgentWriteResponse,
-    WorkspaceDraftFilesResponse,
-    WorkspaceDraftResetRequest,
     WorkspaceCapabilityResponse,
     WorkspaceControlRequest,
     WorkspaceDraftApplyRequest,
     WorkspaceDraftApplyResponse,
+    WorkspaceDraftFilesResponse,
     WorkspaceDraftPreviewSessionRequest,
     WorkspaceDraftPreviewSessionResponse,
+    WorkspaceDraftResetRequest,
     WorkspaceEnsureRequest,
     WorkspaceIdentityDigest,
     WorkspaceObserveRequest,
@@ -1073,8 +1073,10 @@ async def start_workspace_owner_preview(
             # A previous owner-start may have finished after its HTTP caller
             # timed out. Retrying must not replace a healthy gateway/services.
             preview = runtime.preview(state)
-            if preview is None or preview[0] != "running":
-                await runtime.resume_preview(state)
+            serving_epoch, machine_epoch = _owner_resume_epochs(runtime, state)
+            detached = serving_epoch is not None and machine_epoch != serving_epoch
+            if preview is None or preview[0] != "running" or detached:
+                await runtime.resume_preview(state, epoch=serving_epoch)
             response.headers["Cache-Control"] = "no-store"
             return await _draft_preview_session(manager, state)
         draft = await manager.inspect_draft_runtime(workspace_id)
@@ -1194,6 +1196,20 @@ def _maybe_docker_resource_manager(provider: object | None) -> DockerCellResourc
     if isinstance(provider, DockerOwnerCanaryProvider) and provider.resource_manager is not None:
         return provider.resource_manager
     return None
+
+
+def _owner_resume_epochs(runtime: Any, state: CellWorkspaceState) -> tuple[int | None, int | None]:
+    """(serving epoch the cell expects, epoch the retained machine record holds).
+
+    A wake after a host reboot advances the cell's fencing epoch, but nothing
+    re-attaches the retained machine: its record stays on the old epoch and a
+    later restoration refuses the source with «serving machine epoch is
+    detached» (core, 25.09.2026, every cell woken after the outage). The owner
+    start resumes the machine at the serving epoch whenever the two differ.
+    """
+    from omnia_orchestrator.services.machine_adapter import serving_resume_epochs
+
+    return serving_resume_epochs(runtime, state)
 
 
 def _portable_active(manager: DockerCellResourceManager, workspace_id: UUID) -> bool:

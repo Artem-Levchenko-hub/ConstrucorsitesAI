@@ -32,6 +32,7 @@ from omnia_orchestrator.services import nginx_writer
 from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
 from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from omnia_orchestrator.services.k8s_placement import KubernetesPlacement
+from omnia_orchestrator.services.machine_adapter import serving_resume_epochs
 from omnia_orchestrator.services.machine_environment import (
     MachineEnvironmentRef,
     MachineEnvironmentStore,
@@ -540,9 +541,14 @@ class CellPublicationService:
                 await machine_effect(store.validate, reference, manifest_digest=manifest.digest())
             else:
                 preview = adapter.preview(source_state)
-                if preview is None or preview[0] != "running":
+                serving_epoch, machine_epoch = serving_resume_epochs(adapter, source_state)
+                detached = serving_epoch is not None and machine_epoch != serving_epoch
+                if preview is None or preview[0] != "running" or detached:
+                    # Resume at the cell's serving epoch: a machine record left on an
+                    # older epoch (wake after a host reboot) would otherwise stay
+                    # detached and the source pair could not be trusted.
                     trace.stage("source_wake")
-                    await adapter.resume_preview(source_state)
+                    await adapter.resume_preview(source_state, epoch=serving_epoch)
                 trace.stage("source_schema")
                 source_schema = await machine_effect(PublishedMachineBackend.schema_digest, source)
                 await self._preflight_before_capture(
@@ -591,7 +597,9 @@ class CellPublicationService:
             finally:
                 if sealed is None and not adapter.recovery_required(source_state):
                     trace.stage("resume_source")
-                    await adapter.resume_preview(source_state)
+                    await adapter.resume_preview(
+                        source_state, epoch=serving_resume_epochs(adapter, source_state)[0]
+                    )
         if self.placement is not None:
             return await self._prepare_kubernetes(
                 request, run_id, trace, manifest, source, reference, store, source_schema

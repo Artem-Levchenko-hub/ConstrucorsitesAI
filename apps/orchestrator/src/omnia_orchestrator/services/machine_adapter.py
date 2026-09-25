@@ -1153,3 +1153,34 @@ class MachineAdapter:
         completed = dict(saved)
         completed["ready_epoch"] = runtime_epoch
         write_controller_json(machine.path, completed)
+
+
+def serving_resume_epochs(adapter: Any, state: Any) -> tuple[int | None, int | None]:
+    """(serving epoch the cell expects, epoch the retained machine record holds).
+
+    A wake after a host reboot advances the cell's fencing epoch, but nothing
+    re-attaches the retained machine: its record stays on the old epoch and a
+    later restoration refuses the source with «serving machine epoch is
+    detached» (core, 25.09.2026, every cell woken after the outage). Every
+    resume that is not itself driven by an explicit lifecycle mutation must
+    therefore resume at the serving epoch, and re-attach even a running
+    machine whose record lags behind it.
+    """
+    from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+
+    parts = getattr(adapter, "parts", None)
+    if parts is None:
+        return None, None
+    try:
+        machine, _backend = parts(state)
+        machine_state = machine.state()
+        epoch = machine_state.get("epoch")
+        serving = serving_fencing_epoch(state, machine_state=machine_state)
+    except Exception:
+        # A machine or cell state we cannot read is resumed exactly as before
+        # (no explicit epoch); the caller never fails because of this hint.
+        return None, None
+    return (
+        serving if isinstance(serving, int) else None,
+        epoch if isinstance(epoch, int) else None,
+    )

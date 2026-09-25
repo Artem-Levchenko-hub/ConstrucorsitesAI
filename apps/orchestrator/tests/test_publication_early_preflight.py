@@ -60,7 +60,7 @@ class Adapter:
     def preview(self, _state):
         return ("running", None)
 
-    async def resume_preview(self, _state) -> None:
+    async def resume_preview(self, _state, *, epoch=None) -> None:
         self.resumed += 1
 
     def recovery_required(self, _state) -> bool:

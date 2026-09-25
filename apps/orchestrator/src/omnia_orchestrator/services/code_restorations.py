@@ -548,7 +548,7 @@ class CodeRestorationService:
                 error_type=type(exc).__name__,
                 reason=reason,
                 message=str(exc)[:300],
-                operation_id=str(getattr(operation, "id", "")),
+                operation_id=str(operation),
             )
             if await self._commit_drive_failure(workspace, operation, reason=reason):
                 self._schedule_cancel(workspace, operation)
