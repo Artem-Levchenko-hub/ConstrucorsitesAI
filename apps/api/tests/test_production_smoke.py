@@ -392,3 +392,66 @@ def test_a_guarded_canary_health_is_still_a_failure():
     failures = run_smoke(Configuration.from_env(environment()), http, sleep=lambda _: None)
 
     assert "max_health.http_401" in failures
+
+
+class CertDouble:
+    """Days left per host, or an exception to raise."""
+
+    def __init__(self, days):
+        self.days, self.calls = days, []
+
+    def days_left(self, host, *, timeout):
+        self.calls.append((host, timeout))
+        value = self.days[host]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+def test_certificates_are_not_inspected_unless_an_inspector_is_supplied():
+    http = HTTPDouble(responses())
+    assert run_smoke(Configuration.from_env(environment()), http) == []
+
+
+def test_healthy_certificates_on_both_lineages_pass():
+    certs = CertDouble({"platform.invalid": 60.0, "canary.invalid": 45.0})
+    failures = run_smoke(
+        Configuration.from_env(environment()), HTTPDouble(responses()), certificates=certs
+    )
+    assert failures == []
+    assert [host for host, _ in certs.calls] == ["platform.invalid", "canary.invalid"]
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"),
+    [
+        ({"platform.invalid": 12.0, "canary.invalid": 45.0}, ["tls.platform.expires_soon"]),
+        ({"platform.invalid": 60.0, "canary.invalid": 19.9}, ["tls.canary.expires_soon"]),
+        ({"platform.invalid": OSError(), "canary.invalid": 45.0}, ["tls.platform.unavailable"]),
+        ({"platform.invalid": 60.0, "canary.invalid": TimeoutError()}, ["tls.canary.unavailable"]),
+    ],
+)
+def test_a_renewal_that_stopped_is_named_before_the_certificate_expires(days, expected):
+    failures = run_smoke(
+        Configuration.from_env(environment()),
+        HTTPDouble(responses()),
+        certificates=CertDouble(days),
+    )
+    assert failures == expected
+
+
+class PlainHTTPDouble(HTTPDouble):
+    """Serves the same replies to a platform reached over plain http."""
+
+    def request(self, method, url, *, timeout):
+        return super().request(method, url.replace("http://", "https://"), timeout=timeout)
+
+
+def test_certificates_are_skipped_for_plain_http_targets():
+    env = {**environment(), "PLATFORM_URL": "http://platform.invalid"}
+    certs = CertDouble({"canary.invalid": 45.0})
+    failures = run_smoke(
+        Configuration.from_env(env), PlainHTTPDouble(responses()), certificates=certs
+    )
+    assert failures == []
+    assert [host for host, _ in certs.calls] == ["canary.invalid"]

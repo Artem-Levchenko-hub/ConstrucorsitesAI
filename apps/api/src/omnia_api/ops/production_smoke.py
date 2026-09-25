@@ -11,6 +11,8 @@ import json
 import os
 import queue
 import re
+import socket
+import ssl
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -25,6 +27,10 @@ MAX_BODY_BYTES = 2 * 1024 * 1024
 REQUEST_TIMEOUT = 20.0
 TOTAL_DEADLINE = 150.0
 ATTEMPTS = 3
+# The wildcard certificates renew themselves 30 days before expiry (acme.sh timer
+# on core). Fewer days than this means a renewal has been failing for over a week
+# — loud enough to notice long before the browsers do.
+MIN_CERTIFICATE_DAYS = 20.0
 READINESS_CHECKS = (
     "database",
     "redis",
@@ -182,6 +188,24 @@ class Transport(Protocol):
     def request(self, method: str, url: str, *, timeout: float) -> Reply: ...
 
 
+class CertificateInspector(Protocol):
+    def days_left(self, host: str, *, timeout: float) -> float: ...
+
+
+class TLSInspector:
+    """Days until the certificate a host serves for its own name expires."""
+
+    def days_left(self, host: str, *, timeout: float) -> float:
+        context = ssl.create_default_context()
+        with socket.create_connection((host, 443), timeout=timeout) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as secured:
+                certificate = secured.getpeercert()
+        not_after = certificate.get("notAfter") if certificate else None
+        if not isinstance(not_after, str):
+            raise OSError("certificate without an expiry date")
+        return (ssl.cert_time_to_seconds(not_after) - time.time()) / 86400.0
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
         return None
@@ -231,9 +255,33 @@ def run_smoke(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     observed: dict[str, str | None] | None = None,
+    certificates: CertificateInspector | None = None,
 ) -> list[str]:
     deadline = clock() + TOTAL_DEADLINE
     failures: list[str] = []
+
+    def certificate(label: str, url: str) -> None:
+        """Certificate expiry is checked only when an inspector is supplied.
+
+        The CLI always supplies one; tests that exercise HTTP contracts do not, so
+        they keep passing without a network.
+        """
+        if certificates is None:
+            return
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            return
+        remaining = deadline - clock()
+        if remaining <= 0:
+            failures.append(f"tls.{label}.deadline")
+            return
+        try:
+            days = certificates.days_left(parsed.hostname, timeout=min(REQUEST_TIMEOUT, remaining))
+        except (OSError, TimeoutError, ValueError):
+            failures.append(f"tls.{label}.unavailable")
+            return
+        if days < MIN_CERTIFICATE_DAYS:
+            failures.append(f"tls.{label}.expires_soon")
 
     def probe(label: str, url: str, *, method: str = "GET", status: int = 200) -> bytes | None:
         for attempt in range(ATTEMPTS):
@@ -335,6 +383,11 @@ def run_smoke(
         require(canary.get("status") == "ok", "max_health.status")
         require(canary.get("platform") == "max-miniapp", "max_health.platform")
     probe("max_webhook", config.canary_url + "/api/max/webhook", method="POST", status=401)
+    # Two certificate lineages serve production: the platform host (core) and the
+    # published apps (runtime). A renewal that silently stops is invisible to every
+    # HTTP check above until the day the certificate expires.
+    certificate("platform", config.platform_url)
+    certificate("canary", config.canary_url)
     return failures
 
 
@@ -360,7 +413,7 @@ def main() -> int:
     started_at = _now()
     seen: dict[str, str | None] = {}
     try:
-        failures = run_smoke(config, HTTPClient(), observed=seen)
+        failures = run_smoke(config, HTTPClient(), observed=seen, certificates=TLSInspector())
     except Exception:
         print("FAIL smoke.internal_error")
         failures = ["smoke.internal_error"]
