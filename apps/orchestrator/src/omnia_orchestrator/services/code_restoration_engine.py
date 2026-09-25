@@ -92,7 +92,60 @@ from omnia_orchestrator.services.versioning.inventory import observe_inventory
 
 
 class PreparationNeedsChanges(ValueError):
-    pass
+    """The historical version cannot be prepared as is.
+
+    ``details`` (optional) is the machine-readable outcome of the stage that
+    refused — stage name, argv, exit code, timeout, the tail of its output. It
+    goes into the operation's attempt journal so an operator no longer has to
+    find ``restoration-check.log`` on the host to learn WHY (24.09.2026: the
+    platform knew the reason, the journal and the API did not).
+    """
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.details = dict(details) if details else None
+
+
+_OUTPUT_TAIL_CHARS = 1200
+_OWNER_TAIL_LINES = 3
+_OWNER_TAIL_CHARS = 300
+
+
+def stage_output_tail(output: bytes, limit: int = _OUTPUT_TAIL_CHARS) -> str:
+    """The last ``limit`` characters of a stage's output, printable text only."""
+    text = output[-(limit * 4) :].decode("utf-8", errors="replace")
+    cleaned = "".join(ch if ch == "\n" or ch >= " " else " " for ch in text)
+    return cleaned[-limit:].strip()
+
+
+def stage_failure_details(
+    *,
+    stage: str,
+    argv: list[str],
+    cwd: str,
+    exit_code: int,
+    timeout_seconds: int,
+    output: bytes,
+) -> dict[str, Any]:
+    return {
+        "result": "failed",
+        "stage": stage,
+        "argv": list(argv),
+        "cwd": cwd,
+        "exit_code": exit_code,
+        "timeout_seconds": timeout_seconds,
+        "timed_out": exit_code == _TIMEOUT_EXIT_CODE,
+        "output_tail": stage_output_tail(output),
+    }
+
+
+def owner_visible_tail(output_tail: str) -> str:
+    """The last few non-empty lines, short enough for a blocker line in the UI."""
+    lines = [line.strip() for line in output_tail.splitlines() if line.strip()]
+    joined = " | ".join(lines[-_OWNER_TAIL_LINES:])
+    if len(joined) > _OWNER_TAIL_CHARS:
+        joined = "…" + joined[-_OWNER_TAIL_CHARS:]
+    return joined
 
 
 def _write_activation_journal(path: Path, payload: dict[str, Any]) -> None:
@@ -2077,6 +2130,7 @@ class CodeRestorationEngine:
         argv: list[str],
         timeout: int,
         cwd: str = ".",
+        stage: str = "",
     ) -> None:
         result = container.exec_run(["timeout", str(timeout), *argv], workdir="/workspace/" + cwd)
         if result.exit_code != 0:
@@ -2087,13 +2141,30 @@ class CodeRestorationEngine:
             header = f"[stage] exit_code={result.exit_code} timeout={timeout}s\n".encode()
             log.write_bytes(header + result.output[-24000:])
             log.chmod(0o600)
+            details = stage_failure_details(
+                stage=stage,
+                argv=argv,
+                cwd=cwd,
+                exit_code=result.exit_code,
+                timeout_seconds=timeout,
+                output=result.output,
+            )
+            # Владельцу — причина, а не только вердикт: стадия, код выхода и конец
+            # вывода его же сборки. Полный хвост остаётся в журнале операции.
+            where = f" Стадия {stage}" if stage else " Стадия проверки"
+            tail = owner_visible_tail(details["output_tail"])
+            ending = f", конец вывода: «{tail}»." if tail else "."
             if result.exit_code == _TIMEOUT_EXIT_CODE:
                 raise PreparationNeedsChanges(
                     f"Проверка исторического кода не уложилась в {timeout} с. "
                     "Это ограничение платформы, а не ошибка в коде версии."
+                    f"{where}{ending}",
+                    details=details,
                 )
             raise PreparationNeedsChanges(
                 "Проверка исторического кода не прошла; нужна совместимая правка."
+                f"{where}, код выхода {result.exit_code}{ending}",
+                details=details,
             )
 
     async def _run_stage(
@@ -2130,9 +2201,16 @@ class CodeRestorationEngine:
                 argv,
                 command_timeout_seconds,
                 cwd,
+                stage,
             )
-        except PreparationNeedsChanges:
-            journal.finish_attempt(request.operation_id, receipt["attempt_id"])
+        except PreparationNeedsChanges as error:
+            # The refusal's outcome lives with the attempt: stage, exit code,
+            # timeout and the output tail — readable without the host.
+            journal.finish_attempt(
+                request.operation_id,
+                receipt["attempt_id"],
+                outcome=error.details or {"result": "failed", "stage": stage},
+            )
             raise
         except BaseException:
             journal.finish_attempt(
@@ -2142,7 +2220,11 @@ class CodeRestorationEngine:
             )
             raise
         else:
-            journal.finish_attempt(request.operation_id, receipt["attempt_id"])
+            journal.finish_attempt(
+                request.operation_id,
+                receipt["attempt_id"],
+                outcome={"result": "ok", "stage": stage},
+            )
 
     @staticmethod
     def _disable_egress(backend: Any) -> None:

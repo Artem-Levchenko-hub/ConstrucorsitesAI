@@ -259,7 +259,14 @@ class RestorationExecutionJournal:
         attempt_id: str,
         *,
         state: str = "finished",
+        outcome: dict[str, Any] | None = None,
     ) -> None:
+        """Close the attempt; ``outcome`` records what the stage actually did.
+
+        ``{"result": "ok"}`` or ``{"result": "failed", "exit_code": …, "timed_out": …,
+        "output_tail": …}`` — the answer to "why did preparation stop?" that used
+        to exist only in a log file on the host.
+        """
         if state not in {"finished", "stopped", "unknown"}:
             raise ValueError("invalid restoration attempt outcome")
         path = self._directory(operation_id) / "attempt.json"
@@ -271,6 +278,8 @@ class RestorationExecutionJournal:
                 return
             if saved.get("state") == "running":
                 saved["state"] = state
+                if outcome is not None:
+                    saved["outcome"] = dict(outcome)
                 self._write(path, saved)
 
     async def stop_active(
