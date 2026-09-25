@@ -22,7 +22,7 @@ FULL=/opt/omnia/apps/llm-gateway/deploy/full
 PLATFORM_ENV=$FULL/.env
 SECRETS=/etc/max-studio
 [ -f "$PLATFORM_ENV" ] || { echo "нет $PLATFORM_ENV — платформа на этом хосте не развёрнута"; exit 1; }
-install -d -m 700 "$SECRETS"
+install -d -m 711 "$SECRETS"  # 711: the orchestrator (zeuszcz) must traverse to runtime-kubeconfig.yaml
 envval() { sed -n "s/^$1=//p" "$2" | tail -1; }
 # Имя базы — из PLATFORM_DATABASE_URL (хостовый режим), иначе POSTGRES_DB, иначе omnia.
 PG_DB=$(envval PLATFORM_DATABASE_URL "$PLATFORM_ENV" | sed -n 's|.*/\([^/?]*\)\(?.*\)\{0,1\}$|\1|p')
