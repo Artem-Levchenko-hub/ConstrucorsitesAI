@@ -12,6 +12,8 @@
 #                         api/воркеры/оркестраторы/воркер биллинга не пересоздаются (безопасно во
 #                         время живого прогона адаптации), OMNIA_RELEASE_SHA и expected api-переменные не меняются
 #     --legal-version V   версия юридических документов: явно пишется в env воркера биллинга
+#     --gateway           менялся apps/llm-gateway: пересобрать образ omnia-gateway:prod и поднять один контейнер
+#                         шлюза (omnia-prod-gw) с --no-deps, проверить его health на :8101
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -27,12 +29,14 @@ WEB=1
 API=1
 LEGAL=""
 REPAIR=3600
+GW=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
     --web-only) API=0 ;;
     --legal-version) LEGAL="${2:?}"; shift ;;
     --repair-window) REPAIR="${2:?}"; shift ;;
+    --gateway) GW=1 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
   shift
@@ -44,7 +48,7 @@ LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
 say() { echo "== $* ($(date -u +%H:%M:%SZ))"; }
 
-say "выкатка $SHA api=$API web=$WEB legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
+say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
 
@@ -119,6 +123,11 @@ fi
 if [ $WEB = 1 ]; then
   say "core: web"
   ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --no-build --no-deps web 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; docker tag omnia-web:$SHA omnia-web:prod; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' https://yleum.ru/web-health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"web-health 200 с попытки \$i\"; break; }; sleep 3; done"
+fi
+
+if [ $GW = 1 ]; then
+  say "core: шлюз моделей (gateway) — сборка и перезапуск одного контейнера"
+  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose build gateway 2>&1 | grep -E 'Built|ERROR|error' | tail -2; docker compose up -d --no-build --no-deps gateway 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect omnia-prod-gw --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
 fi
 
 say "публичный health"
