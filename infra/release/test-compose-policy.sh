@@ -33,6 +33,10 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     RESTORATION_ADAPTATION_ACTIVATION_SECONDS="2500" \
     PROJECT_CELL_HEARTBEAT_SECONDS="16" \
     PROJECT_CELL_WATCHDOG_GRACE_SECONDS="21" \
+    YANDEX_ID_CLIENT_ID="compose-policy-yandex-id" \
+    YANDEX_ID_CLIENT_SECRET="compose-policy-yandex-secret" \
+    VK_ID_CLIENT_ID="compose-policy-vk-id" \
+    OAUTH_LOGIN_REDIRECT_BASE_URL="https://compose-policy.example" \
     docker compose --env-file "${blank_env}" -f "${compose_file}" config --format json
 ) >"${rendered}"
 
@@ -91,7 +95,29 @@ for service in services.values():
     assert "DEV_GENERATION_TELEGRAM_REPORTS" not in environment
     assert "TELEGRAM_BOT_TOKEN" not in environment
     assert "TELEGRAM_CHAT_ID" not in environment
+
+# Owner login through VK ID / Яндекс ID: the credentials reach the api container and
+# ONLY it. Until 25.09.2026 compose did not pass them at all, so values in .env never
+# enabled the button; the generation worker inherits the api map and must blank them.
+oauth_login = {
+    "YANDEX_ID_CLIENT_ID": "compose-policy-yandex-id",
+    "YANDEX_ID_CLIENT_SECRET": "compose-policy-yandex-secret",
+    "VK_ID_CLIENT_ID": "compose-policy-vk-id",
+    "OAUTH_LOGIN_REDIRECT_BASE_URL": "https://compose-policy.example",
+}
+for key, value in oauth_login.items():
+    assert api[key] == value, key
+    assert generation_worker.get(key, "") == "", key
+for name, service in services.items():
+    if name == "api":
+        continue
+    environment = service.get("environment", {})
+    for key in ("YANDEX_ID_CLIENT_SECRET", "VK_ID_CLIENT_SECRET"):
+        assert not environment.get(key), f"{name} carries {key}"
 PY
+grep -qx 'YANDEX_ID_CLIENT_ID=' "${env_example}"
+grep -qx 'YANDEX_ID_CLIENT_SECRET=' "${env_example}"
+grep -qx 'OAUTH_LOGIN_REDIRECT_BASE_URL=' "${env_example}"
 
 grep -qx 'USE_PROJECT_MEMORY=true' "${env_example}"
 grep -qx 'USE_MAX_FINALIZATION_COORDINATOR=false' "${env_example}"

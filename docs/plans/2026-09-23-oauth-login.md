@@ -71,10 +71,28 @@
 
 ### Куда положить значения
 
-Прод: `/opt/omnia/apps/llm-gateway/deploy/full/.env` (переменные читает сервис `api`), затем
-`docker compose up -d api generation-worker worker` — миграция `0070` применится штатно при старте
-api. Локально: `apps/api/.env` (см. `apps/api/.env.example`). После выката проверить
-`curl https://yleum.ru/api/auth/oauth/providers` — в ответе должны быть оба провайдера.
+Прод: `/opt/omnia/apps/llm-gateway/deploy/full/.env` — значения записывать через
+`infra/release/update-env-value.sh .env YANDEX_ID_CLIENT_SECRET -` (секрет со stdin, не в argv и
+не в истории shell). **До 25.09.2026 compose не передавал `YANDEX_ID_*`/`VK_ID_*`/
+`OAUTH_LOGIN_REDIRECT_BASE_URL` контейнеру api** (в отличие от `INTEGRATION_YANDEX_*`), и значения
+в `.env` ничего не включали; теперь они доходят до одного `api`, generation-worker перекрывает их
+пустыми (проверка — `infra/release/test-compose-policy.sh`). Применить: `docker compose up -d
+api generation-worker` (пересоздание контейнеров; миграция `0071_oauth_login` уже применена при
+первом старте api после 23.09). Локально: `apps/api/.env` (см. `apps/api/.env.example`). После
+выката проверить `curl https://yleum.ru/api/auth/oauth/providers` — в ответе провайдер с заданными
+реквизитами; `GET /api/auth/oauth/yandex/start` должен отвечать 302 на `https://oauth.yandex.ru/authorize`
+с `redirect_uri=https://yleum.ru/api/auth/oauth/yandex/callback`, `scope=login:email` и `state`, без
+секрета в URL.
+
+### Политика привязки существующего аккаунта (принято 25.09.2026)
+
+`_resolve_user` в `routers/auth_oauth.py`: если связки провайдера ещё нет, аккаунт с тем же email
+привязывается автоматически, и адрес считается подтверждённым (`email_verified_at`). Основание:
+Яндекс ID и VK ID отдают только подтверждённый ими адрес (право `login:email` / `email`), а на
+платформе email — единственный идентификатор аккаунта; отдельная процедура «войти паролем и
+подтвердить привязку» отложена до появления запроса. Поведение закреплено тестом
+`test_existing_account_is_linked_by_verified_email_and_signed_in`; неактивный аккаунт не привязывается
+и войти не может (`test_inactive_account_cannot_sign_in_through_a_provider`).
 
 ## Живая проверка (после выката и настройки)
 
