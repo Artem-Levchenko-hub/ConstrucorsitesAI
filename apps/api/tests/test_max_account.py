@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.config import FREE_GENERATION_LIMIT
+from omnia_api.core.config import FREE_GENERATION_LIMIT, get_settings
 from omnia_api.models.user import User
 from omnia_api.models.wallet import Wallet
 from omnia_api.routers import auth as auth_router
@@ -24,7 +24,7 @@ MAX_REGISTRATION = {
     "terms_accepted": True,
     "privacy_accepted": True,
     "personal_data_accepted": True,
-    "document_version": "2026-07-30",
+    "document_version": get_settings().legal_document_version,
 }
 
 
@@ -47,7 +47,7 @@ async def test_max_registration_requires_separate_legal_acceptances(
             "email": "owner@example.com",
             "password": "secret123",
             "product": "max",
-            "document_version": "2026-07-30",
+            "document_version": get_settings().legal_document_version,
         },
     )
     assert response.status_code == 422

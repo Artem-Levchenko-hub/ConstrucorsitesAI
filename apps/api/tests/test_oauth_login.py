@@ -29,7 +29,7 @@ from omnia_api.routers import auth_oauth
 from omnia_api.services import oauth_login
 
 WEB = "http://web.example.test"
-LEGAL_VERSION = "2026-07-30"
+LEGAL_VERSION = get_settings().legal_document_version
 CONSENT = {
     "terms_accepted": True,
     "privacy_accepted": True,
