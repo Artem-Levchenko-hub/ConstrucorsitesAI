@@ -299,7 +299,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-MAX Studio <no-reply@lead-generator.ru>}
+      SMTP_FROM: ${SMTP_FROM:-Yleum <no-reply@lead-generator.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       LEGAL_OPERATOR_NAME: ${LEGAL_OPERATOR_NAME:-}
       LEGAL_OPERATOR_INN: ${LEGAL_OPERATOR_INN:-}
@@ -543,7 +543,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-MAX Studio <no-reply@lead-generator.ru>}
+      SMTP_FROM: ${SMTP_FROM:-Yleum <no-reply@lead-generator.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
       YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
