@@ -226,7 +226,8 @@ jobs:
         run: |
           mapfile -t files < <(find tests -maxdepth 1 -name 'test_*.py' | sort | awk -v k=$(( ${{ matrix.shard }} - 1 )) 'NR % 3 == k')
           echo "files in shard: ${#files[@]}"
-          uv run --frozen pytest -o addopts='' -q --durations=10 "${files[@]}"
+          # A test that hangs longer than four minutes dumps every thread's stack into the log.
+          uv run --frozen pytest -o addopts='' -o faulthandler_timeout=240 -q --durations=10 "${files[@]}"
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest
