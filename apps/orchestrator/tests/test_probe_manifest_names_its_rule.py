@@ -158,6 +158,80 @@ async def test_a_rehearsal_failure_carries_no_rule(monkeypatch: pytest.MonkeyPat
     assert (result.reason_code, result.reason_detail) == ("probe_owner_read_failed", None)
 
 
+def test_the_missing_columns_are_named_not_merely_counted() -> None:
+    """Живой прогон 4a154055: агент открывал недостающие колонки по одной.
+
+    Две попытки доказательства подряд дали два разных правила — то есть агент
+    чинит то, что ему называют, и сходится. Но каждая попытка стоит полного
+    круга с копией проекта, около тринадцати минут, и прогон закончился по сроку
+    на третьем круге. Проверка знает недостающие колонки поимённо в тот самый
+    момент, когда отказывает, — значит и называть их должна сразу, а не по одной
+    за круг.
+    """
+    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from omnia_orchestrator.services.restoration_adaptation_probe import (
+        validate_probe_contract,
+    )
+    from tests.test_restoration_adaptation_probe import _files
+
+    # Зеркало живого случая: колонка добавлена позже, обязательная, с ДЕЛОВЫМ
+    # умолчанием. Техническим считается только now()/gen_random_uuid() и им
+    # подобные, поэтому такую колонку свидетель обязан задавать сам — и ровно
+    # на ней прогон 4a154055 и споткнулся во второй раз.
+    contract = {
+        "version": 1,
+        "tables": [
+            {
+                "name": "orders",
+                "columns": [
+                    {
+                        "name": "id",
+                        "type": "uuid",
+                        "nullable": False,
+                        "default": "gen_random_uuid()",
+                    },
+                    {"name": "max_user_id", "type": "text", "nullable": False},
+                    {"name": "probe_value", "type": "text", "nullable": False},
+                    {"name": "title", "type": "text", "nullable": False},
+                    {
+                        "name": "status",
+                        "type": "text",
+                        "nullable": False,
+                        "default": "'новая'::text",
+                    },
+                ],
+                "owner_column": "max_user_id",
+                "primary_key": ["id"],
+            }
+        ],
+    }
+    witness = {
+        "entity": "orders",
+        "id_column": "id",
+        "owner_column": "max_user_id",
+        "value_column": "probe_value",
+        "create_values": {},
+    }
+    with pytest.raises(CellIdentityConflict) as failure:
+        validate_probe_contract(_files(witnesses=[witness]), contract)
+
+    message = str(failure.value)
+    assert "misses a required value" in message
+    # Обе недостающие названы сразу, а не по одной за круг.
+    assert "title" in message and "status" in message, f"колонки не названы: {message}"
+
+
+def test_a_named_column_still_fits_the_narrow_field() -> None:
+    """Имена колонок — это схема, а не данные владельца, и поле их вмещает."""
+    proof = RestorationAdaptationProof(
+        **_proof_kwargs(
+            reason_detail="adaptation business witness misses a required value title max_user_id"
+        )
+    )
+
+    assert "max_user_id" in (proof.reason_detail or "")
+
+
 def test_the_platform_accepts_the_new_field() -> None:
     """Приём идёт впереди отправки, иначе ответ будет отвергнут целиком."""
     client = (

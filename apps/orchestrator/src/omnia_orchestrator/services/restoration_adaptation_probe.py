@@ -250,10 +250,19 @@ def _validate_witness(witness: ActivationBusinessWitness, table: DataTable) -> N
     if any(name not in columns for name in witness.create_values):
         raise CellIdentityConflict("adaptation business witness value column is unavailable")
     supplied = reserved | witness.create_values.keys()
-    if any(
-        not column.nullable
+    # Недостающие колонки известны ровно здесь, поэтому здесь их и называем.
+    # Живой прогон 4a154055: агент открывал их по одной, каждая ценой полного
+    # круга с копией проекта (~13 минут), и прогон кончился по сроку раньше,
+    # чем перебрал все. Имя колонки — это схема, а не данные владельца, и оно
+    # уже и так звучит в отчёте для него.
+    missing = [
+        column.name
+        for column in table.columns
+        if not column.nullable
         and column.name not in supplied
         and not technical_default(column)
-        for column in table.columns
-    ):
-        raise CellIdentityConflict("adaptation business witness misses a required value")
+    ]
+    if missing:
+        raise CellIdentityConflict(
+            "adaptation business witness misses a required value " + " ".join(missing)
+        )
